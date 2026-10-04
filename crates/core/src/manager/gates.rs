@@ -1205,7 +1205,7 @@ fn kept_approvals(task: &Task) -> Option<String> {
 fn verify_docs_spec(task: &Task, commit: &str, kept: Option<&str>) -> String {
     let mut spec = format!(
         "Verify the candidate commit {} of task-{} (\"{}\") independently, before it may land. Your checkout is at that commit. The change touches documentation only.
-1. Find every \"done when\" criterion: the task's below and each one the worker listed in its report. For each one, produce your own evidence: quote the document and say where, or run the command that shows it. The worker's claims are not evidence.
+1. Find every \"done when\" criterion: the task's below and each one the worker listed in its report. For each one, produce your own evidence: quote the document and say where, or run the command that shows it. The worker's claims are not evidence. A criterion that builds or tests pass can't change with documentation: once `git show --stat HEAD` shows only documentation files, mark it [met] with that as its evidence.
 2. Check the documents against the code: every path, command, name, number and claim they state must be true of this checkout; links and file references must resolve. Don't run builds, tests or smoke checks for it.
 3. Check hygiene: files the commit should not hold (logs, scratch notes, secrets) and changes the task didn't ask for.
 4. Change no tracked file. Brigadier compares your checkout with the commit after your report and discards a verification that changed it.
@@ -2503,6 +2503,8 @@ mod tests {
     fn a_docs_only_verifier_runs_no_build_or_tests() {
         let task = gated(TaskState::Reviewing, 1, "c1", None, "c1");
         let spec = verify_docs_spec(&task, "c1", None);
+        // A worker's "tests pass" line never holds a change to documentation only.
+        assert!(spec.contains("can't change with documentation"), "{spec}");
         assert!(
             spec.contains("Don't run builds, tests or smoke checks"),
             "{spec}"

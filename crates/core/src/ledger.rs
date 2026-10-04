@@ -480,9 +480,11 @@ fn end_in_dir(platform: &dyn Platform, dir: &Path) -> std::result::Result<(), St
     }
 }
 
-/// Removes a folder Brigadier created, only inside its data directory.
+/// Removes a folder Brigadier created, only inside its data directory or a task's test data
+/// folder in the temp directory.
 fn remove_scratch(data_dir: &Path, dir: &Path) -> std::io::Result<()> {
-    if !dir.starts_with(data_dir) || dir == data_dir {
+    let inside = dir.starts_with(data_dir) && dir != data_dir;
+    if !inside && !test_data_folder(dir) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "not a folder in Brigadier's data directory",
@@ -492,6 +494,20 @@ fn remove_scratch(data_dir: &Path, dir: &Path) -> std::io::Result<()> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         other => other,
     }
+}
+
+/// A task's test data folder (`/tmp/brigadier-test-<last 8 of its id>`, PLAN.md §10.13):
+/// directly in the temp directory, named only that way.
+fn test_data_folder(dir: &Path) -> bool {
+    let in_temp = dir.parent().is_some_and(|parent| {
+        parent == Path::new("/tmp") || parent == std::env::temp_dir().as_path()
+    });
+    let named = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix("brigadier-test-"))
+        .is_some_and(|id| id.len() == 8 && id.chars().all(|c| c.is_ascii_alphanumeric()));
+    in_temp && named
 }
 
 struct OwnerLedger {
@@ -514,5 +530,23 @@ impl brigadier_providers::Ledger for OwnerLedger {
 
     fn holds(&self, artifact: &Artifact) -> bool {
         self.ledger.holds(artifact)
+    }
+}
+
+#[cfg(test)]
+mod test_folder_tests {
+    #[test]
+    fn a_tasks_test_data_folder_may_be_removed_and_nothing_else_outside_the_data_dir() {
+        use super::test_data_folder;
+        use std::path::Path;
+        assert!(test_data_folder(Path::new("/tmp/brigadier-test-40cf6d11")));
+        assert!(!test_data_folder(Path::new(
+            "/tmp/brigadier-test-40cf6d11/sub"
+        )));
+        assert!(!test_data_folder(Path::new("/tmp/brigadier-test-../x")));
+        assert!(!test_data_folder(Path::new("/tmp/other")));
+        assert!(!test_data_folder(Path::new(
+            "/Users/x/brigadier-test-40cf6d11"
+        )));
     }
 }
