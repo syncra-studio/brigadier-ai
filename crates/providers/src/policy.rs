@@ -113,9 +113,10 @@ pub enum ApprovalMode {
     Delegated,
     /// Decline everything (a read-only session such as the orchestrator).
     DeclineAll,
-    /// Nobody is there to ask (an overnight run): allow what stays inside the session's
-    /// access, decline the rest, outward actions and escalations included. The caller lists
-    /// what was declined for the user.
+    /// Nobody is there to ask (an overnight run, PLAN.md §10.8): approve for the user
+    /// whatever the session's access would let them approve, leaving the sandbox included;
+    /// decline what only the user may do (outward actions). The caller also declines what
+    /// [`touches_protected`] finds, and lists what was declined for the report.
     Unattended,
 }
 
@@ -124,11 +125,134 @@ pub fn route(request: &ApprovalRequest, access: &Access, mode: ApprovalMode) -> 
     match mode {
         ApprovalMode::DeclineAll => Route::Deny,
         ApprovalMode::Delegated => route_delegated(request, access),
-        ApprovalMode::Unattended => match route_delegated(request, access) {
-            Route::AskUser => Route::Deny,
-            route => route,
+        ApprovalMode::Unattended => match &request.command {
+            Some(command) if is_outward(command) => Route::Deny,
+            _ => Route::Allow,
         },
     }
+}
+
+/// Programs that delete or move files, judged by the paths they are given.
+const REMOVERS: &[&str] = &["rm", "rmdir", "unlink", "mv", "shred", "trash", "truncate"];
+
+/// Git commands that change a checkout's files (or its index and stash).
+const GIT_TREE_CHANGERS: &[&str] = &[
+    "am",
+    "apply",
+    "checkout",
+    "cherry-pick",
+    "clean",
+    "commit",
+    "merge",
+    "mv",
+    "pull",
+    "rebase",
+    "reset",
+    "restore",
+    "revert",
+    "rm",
+    "stash",
+    "switch",
+];
+
+/// Whether `request` would change files under one of `protected` (the user's own checkout,
+/// outside the run's worktrees): a file edit there, a git command that changes a checkout
+/// run there (`-C`, a `cd` before it, or the request's folder), or a file remover given a path
+/// there. Best effort over the command line, for an overnight run's never-list (PLAN.md
+/// §10.8): a script or interpreter that does the same is not seen.
+pub fn touches_protected(request: &ApprovalRequest, protected: &[std::path::PathBuf]) -> bool {
+    use std::path::{Path, PathBuf};
+    let roots: Vec<PathBuf> = protected
+        .iter()
+        .filter_map(|root| real_path(root))
+        .collect();
+    if roots.is_empty() {
+        return false;
+    }
+    let cwd = request.cwd.as_deref().map(PathBuf::from);
+    let resolve = |word: &str, base: Option<&Path>| -> Option<PathBuf> {
+        let path = match word.strip_prefix("~/") {
+            Some(rest) => PathBuf::from(std::env::var_os("HOME")?).join(rest),
+            None => PathBuf::from(word),
+        };
+        let path = if path.is_absolute() {
+            path
+        } else {
+            base?.join(path)
+        };
+        real_path(&lexically_normal(&path))
+    };
+    let inside = |path: Option<PathBuf>| {
+        path.is_some_and(|path| roots.iter().any(|root| path.starts_with(root)))
+    };
+    if request.kind == ApprovalKind::FileChange {
+        return request
+            .paths
+            .iter()
+            .any(|path| inside(resolve(path, cwd.as_deref())));
+    }
+    let Some(command) = &request.command else {
+        return false;
+    };
+    // Where commands run: the request's folder, then each `cd` in the line, in order.
+    let mut dir = cwd.clone();
+    for words in simple_commands(command) {
+        let words = strip_prefixes(&words);
+        let Some((program, args)) = words.split_first() else {
+            continue;
+        };
+        let name = program.rsplit('/').next().unwrap_or(program);
+        match name {
+            "cd" | "pushd" => {
+                if let Some(target) = args.iter().find(|arg| !arg.starts_with('-')) {
+                    dir = resolve(target, dir.as_deref()).or(dir);
+                }
+            }
+            "git" => {
+                let Some(at) = split_git_globals(args).command else {
+                    continue;
+                };
+                let mut here = dir.clone();
+                let mut globals = args[..at].iter();
+                while let Some(arg) = globals.next() {
+                    if arg == "-C"
+                        && let Some(path) = globals.next()
+                    {
+                        here = resolve(path, here.as_deref());
+                    }
+                }
+                if GIT_TREE_CHANGERS.contains(&args[at].as_str()) && inside(here) {
+                    return true;
+                }
+            }
+            name if REMOVERS.contains(&name) => {
+                let in_dir = inside(dir.clone());
+                for arg in args.iter().filter(|arg| !arg.starts_with('-')) {
+                    if inside(resolve(arg, dir.as_deref())) || (in_dir && !arg.starts_with('/')) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// `path` with `.` and `..` folded away, without touching the file system.
+fn lexically_normal(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut normal = std::path::PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normal.pop();
+            }
+            part => normal.push(part),
+        }
+    }
+    normal
 }
 
 /// [`route`] under Approve for me.
@@ -844,5 +968,120 @@ mod tests {
             Route::AskUser
         );
         assert_eq!(routed(Path::new("scratch/x.md"), root), Route::AskUser);
+    }
+
+    fn command(line: &str, cwd: Option<&Path>, escalation: bool) -> ApprovalRequest {
+        ApprovalRequest {
+            kind: ApprovalKind::Command,
+            tool: "Bash".into(),
+            command: Some(line.into()),
+            cwd: cwd.map(|cwd| cwd.display().to_string()),
+            paths: Vec::new(),
+            escalation,
+            ..write(Path::new("/"))
+        }
+    }
+
+    #[test]
+    fn an_unattended_run_approves_all_but_outward_actions() {
+        let full = Access::Full;
+        let sandboxed = scoped(std::env::temp_dir());
+        for access in [&full, &sandboxed] {
+            let unattended =
+                |request: &ApprovalRequest| route(request, access, ApprovalMode::Unattended);
+            // Leaving the sandbox, widening it, writing elsewhere: approved for the user.
+            assert_eq!(
+                unattended(&command("pnpm install --frozen-lockfile", None, true)),
+                Route::Allow
+            );
+            let widen = ApprovalRequest {
+                kind: ApprovalKind::Permissions,
+                ..command("", None, true)
+            };
+            assert_eq!(unattended(&widen), Route::Allow);
+            assert_eq!(
+                unattended(&write(Path::new("/elsewhere/x.md"))),
+                Route::Allow
+            );
+            // The never-list, however the command is spelled.
+            for line in [
+                "git push origin main",
+                "/usr/bin/git push origin main",
+                "env FOO=1 git -C repo push",
+                "sh -c 'git push'",
+                "bash -lc \"cd x && npm publish\"",
+                "echo $(gh pr create --fill)",
+                "nohup cargo publish",
+                "/opt/homebrew/bin/gh release create v1",
+            ] {
+                assert_eq!(
+                    unattended(&command(line, None, false)),
+                    Route::Deny,
+                    "{line}"
+                );
+                assert_eq!(
+                    unattended(&command(line, None, true)),
+                    Route::Deny,
+                    "{line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn changes_to_the_users_checkout_are_found() {
+        let place = Linked::new("protected");
+        let repo = place.real().join("repo");
+        let worktree = place.real().join("worktree");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        let protected = [repo.clone()];
+        let repo_text = repo.display().to_string();
+        let linked_repo = place.link().join("repo").display().to_string();
+        let touches = |line: &str, cwd: &Path| {
+            touches_protected(&command(line, Some(cwd), false), &protected)
+        };
+        for line in [
+            format!("git -C {repo_text} reset --hard"),
+            format!("git -C {linked_repo} checkout -- ."),
+            format!("cd {repo_text} && git clean -fdx"),
+            format!("sh -c 'cd {repo_text}; git stash'"),
+            format!("/usr/bin/git -C {repo_text} commit -am x"),
+            format!("rm -rf {repo_text}/src"),
+            format!("rm -rf {linked_repo}"),
+            format!("cd {repo_text}/src && rm -f main.rs"),
+            format!("mv {repo_text}/src /tmp/elsewhere"),
+            format!("git -C {}/../repo restore .", worktree.display()),
+        ] {
+            assert!(touches(&line, &worktree), "{line}");
+        }
+        // In the request's folder.
+        assert!(touches("git reset --hard", &repo));
+        assert!(touches("rm -rf src", &repo.join("src")));
+        for line in [
+            "git reset --hard".to_owned(),
+            "rm -rf target".to_owned(),
+            format!("git -C {repo_text} status"),
+            format!("git -C {repo_text} log --oneline"),
+            format!("git -C {repo_text} diff"),
+            format!("cat {repo_text}/src/main.rs"),
+            format!("cp {repo_text}/src/main.rs ."),
+            "rm -rf /tmp/brigadier-test-1234".to_owned(),
+        ] {
+            assert!(!touches(&line, &worktree), "{line}");
+        }
+        assert!(touches_protected(
+            &write(&repo.join("src/new.rs")),
+            &protected
+        ));
+        assert!(touches_protected(
+            &write(&place.link().join("repo/README.md")),
+            &protected
+        ));
+        assert!(!touches_protected(
+            &write(&worktree.join("README.md")),
+            &protected
+        ));
+        assert!(!touches_protected(&write(&repo.join("x")), &[]));
     }
 }

@@ -566,6 +566,7 @@ impl SessionManager {
             // A Brain job hands nothing on: no sub-agents at all (Codex runs without them,
             // Claude without its Agent tool).
             allowed_models: Some(brigadier_providers::AllowedModels::default()),
+            unattended: false,
         };
         let access = spec.access.clone();
         let time = match job.kind {

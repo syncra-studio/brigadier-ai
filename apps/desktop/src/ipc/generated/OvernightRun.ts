@@ -11,6 +11,7 @@ import type { PlanningPhase } from "./PlanningPhase";
 import type { RunGap } from "./RunGap";
 import type { RunMerge } from "./RunMerge";
 import type { RunNotification } from "./RunNotification";
+import type { RunObstacle } from "./RunObstacle";
 import type { RunWorkspace } from "./RunWorkspace";
 import type { SourceSnapshot } from "./SourceSnapshot";
 import type { StopReason } from "./StopReason";
@@ -86,6 +87,10 @@ verifiedCommit: string | null,
  * Times Brigadier wasn't running during the run (the Mac slept, the daemon was down).
  */
 gaps: Array<RunGap>, 
+/**
+ * What got in the way of the work, for the report.
+ */
+obstacles: Array<RunObstacle>, 
 /**
  * The report's message, once written (its id is stable per segment).
  */

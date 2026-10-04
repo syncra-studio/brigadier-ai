@@ -9,6 +9,7 @@
 pub(crate) mod admission;
 mod conductor;
 pub mod directives;
+pub(crate) mod git_guard;
 mod messages;
 mod phase_gates;
 pub(crate) mod policy;
@@ -128,6 +129,7 @@ impl SessionManager {
             planning: None,
             verified_commit: None,
             gaps: Vec::new(),
+            obstacles: Vec::new(),
             report_message_id: None,
             report_outcome: None,
             merged: None,
@@ -503,6 +505,7 @@ impl SessionManager {
             wind_down_at_ms: None,
             planning: None,
             gaps: Vec::new(),
+            obstacles: Vec::new(),
             report_message_id: None,
             report_outcome: None,
             notification: None,

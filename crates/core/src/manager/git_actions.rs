@@ -194,6 +194,7 @@ impl SessionManager {
             owned_cwd: true,
             auto_compact: true,
             allowed_models: None,
+            unattended: false,
         };
         let shown: String = patch.chars().take(PATCH_CHARS).collect();
         let cut = if shown.len() < patch.len() {

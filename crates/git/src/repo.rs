@@ -33,6 +33,11 @@ impl Repo {
         &self.root
     }
 
+    /// The canonical git folder shared by the checkout and its worktrees.
+    pub fn common_dir(&self) -> &Path {
+        &self.common_dir
+    }
+
     pub(crate) fn run<S: AsRef<OsStr>>(&self, args: &[S], read_only: bool) -> Result<Output> {
         self.git.run(Some(&self.root), args, read_only, &[], None)
     }

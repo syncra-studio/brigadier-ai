@@ -1,18 +1,19 @@
 //! What an overnight run may do on the user's behalf (PLAN.md §10.8), enforced in code.
 //!
-//! While a run is active its session works under sandboxed **Approve for me**, whatever the
-//! user saved: plans are decided for them, nothing runs unsandboxed, and anything only the
-//! user may do (an outward command, leaving the sandbox, landing despite failed checks) is
-//! refused at once and listed under "Waiting on you" instead of waiting on an approval card
-//! nobody will answer. Run tasks don't see credentials: their usual locations are unreadable,
-//! the project's secret files aren't copied in, and credential variables are taken out of the
-//! worker's environment.
+//! A run keeps its session's access (full access runs its tasks unsandboxed) and approves for
+//! the user: plans are decided for them and leaving the sandbox is approved. What only the
+//! user may do is refused at once and listed in the report's "What got in the way": outward
+//! actions (the approval route and the command gate), changes to the user's own checkout and
+//! to branches the run doesn't own (the approval route and the git guard), and landing despite
+//! failed checks. Run tasks don't get credentials: the project's secret files aren't copied
+//! in, credential variables are taken out of the worker's environment, and a sandboxed
+//! worker can't read their usual locations.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::model::{ConversationId, OvernightRunId};
-use crate::overnight::{OvernightRun, RunRole, RunTaskContext, RunWorkspace};
+use crate::overnight::{ObstacleKind, OvernightRun, RunRole, RunTaskContext, RunWorkspace};
 use crate::work::Task;
 
 /// A session's active run, as task code needs it without reading the board.
@@ -246,96 +247,119 @@ pub(crate) fn scrubbed_env(names: impl IntoIterator<Item = String>) -> Vec<Strin
     scrubbed
 }
 
-/// Environment a run worker gets on top: git never prompts for or looks up credentials, and
-/// no credential helper (Keychain included) runs on its behalf.
-pub(crate) fn run_env() -> Vec<(String, String)> {
-    [
+/// Environment a run worker gets on top: git never prompts for or looks up credentials, no
+/// credential helper (Keychain included) runs on its behalf, and `guard` (the git guard's
+/// configuration, the run repository's git folder and the worker's own refs) applies the git
+/// guard there.
+pub(crate) fn run_env(guard: Option<(&Path, &Path, &[String])>) -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = [
         ("GIT_TERMINAL_PROMPT", "0"),
         ("GCM_INTERACTIVE", "never"),
-        ("GIT_CONFIG_COUNT", "1"),
         ("GIT_CONFIG_KEY_0", "credential.helper"),
         ("GIT_CONFIG_VALUE_0", ""),
     ]
     .into_iter()
     .map(|(name, value)| (name.to_owned(), value.to_owned()))
-    .collect()
+    .collect();
+    let mut count = 1;
+    if let Some((config, common_dir, owned)) = guard {
+        let (more, total) = super::git_guard::env(config, common_dir, owned, count);
+        env.extend(more);
+        count = total;
+    }
+    env.push(("GIT_CONFIG_COUNT".to_owned(), count.to_string()));
+    env
 }
 
 impl super::super::SessionManager {
-    /// A run worker's approval request, under [`ApprovalMode::Unattended`]: what stays in
-    /// its sandbox is allowed, anything else is declined at once and, when only the user
-    /// could have allowed it, listed under "Waiting on you" for the morning.
+    /// A run worker's approval request, under [`ApprovalMode::Unattended`]: approved for the
+    /// user unless it is on the never-list (an outward action, a change to the user's own
+    /// checkout), which is declined at once and listed in the report's "What got in the way".
+    /// Answered from what the worker started with, before anything is recorded: a run worker
+    /// asks for nearly every command.
     pub(crate) async fn route_unattended(
         &self,
         live: &std::sync::Arc<super::super::workers::TaskLive>,
         cli: &std::sync::Arc<super::super::conversation::Cli>,
         request: brigadier_providers::ApprovalRequest,
-        access: &brigadier_providers::Access,
-        task: &Task,
-        run: &RunTaskContext,
+        run: super::super::workers::RunApprovals,
     ) {
         use brigadier_providers::policy::{self, ApprovalMode, Route};
-        use brigadier_providers::{ApprovalDecision, Decider};
-        let route = policy::route(&request, access, ApprovalMode::Unattended);
-        let what = request
-            .command
-            .clone()
-            .unwrap_or_else(|| request.tool.clone());
-        let outward = request.command.as_deref().is_some_and(policy::is_outward);
-        let decision = match route {
-            Route::Allow => ApprovalDecision::Allow,
-            Route::Deny | Route::AskUser => ApprovalDecision::Deny {
-                message: if outward {
-                    "Declined by Brigadier: this overnight run never acts outside this machine for the user (push, publish, deploy, remote changes). Leave it for the user: say what it needs under needs_user in your report, and finish the rest.".into()
-                } else {
-                    "Declined by Brigadier: stay inside your sandbox (your worktree and scratch folder). Nobody can approve more during this overnight run; if the task truly needs it, say so under needs_user in your report and finish the rest.".into()
-                },
+        use brigadier_providers::{ApprovalDecision, Decider, ProviderEvent};
+        let asked = std::time::Instant::now();
+        // The route ignores the access under Unattended: what the session allows is approved.
+        let declined = if policy::route(
+            &request,
+            &brigadier_providers::Access::Full,
+            ApprovalMode::Unattended,
+        ) == Route::Deny
+        {
+            Some(Declined::Outward)
+        } else if policy::touches_protected(&request, &run.protected) {
+            Some(Declined::Checkout)
+        } else {
+            None
+        };
+        let decision = match declined {
+            None => ApprovalDecision::Allow,
+            Some(Declined::Outward) => ApprovalDecision::Deny {
+                message: "Declined by the overnight rules: this run never acts outside this machine for the user (push, publish, release, deploy, remote changes). Leave it out and finish the rest; if your done-when can't be met without it, say so under needs_user.".into(),
+            },
+            Some(Declined::Checkout) => ApprovalDecision::Deny {
+                message: "Declined by the overnight rules: this run never changes the user's own checkout. Work in your worktree (and your scratch folder) only.".into(),
             },
         };
-        if let Err(err) = cli
+        let answered = cli
             .session
             .answer(request.id.clone(), decision.clone())
-            .await
-        {
+            .await;
+        tracing::debug!(
+            task = %live.id,
+            micros = asked.elapsed().as_micros() as u64,
+            allowed = declined.is_none(),
+            "answered a run worker's approval"
+        );
+        if let Err(err) = answered {
             tracing::warn!(task = %live.id, error = %err, "could not answer an approval");
             return;
         }
-        let allowed = decision == ApprovalDecision::Allow;
-        self.record_worker_resolution(&live.id, request.id.clone(), decision, Decider::Policy)
-            .await;
-        if allowed {
+        // What was allowed leaves no trace beyond the command itself.
+        let Some(declined) = declined else {
             return;
-        }
-        let why = if outward {
-            "to act outside this machine"
-        } else if request.escalation {
-            "to run outside its sandbox"
-        } else {
-            "to reach outside its sandbox"
         };
-        let line = format!(
-            "task-{} wanted {why}: `{}`. The overnight run declined it; do it yourself if it's needed, or tell the run how to go on.",
-            task.number,
-            one_line(&what)
-        );
-        if let Err(err) = self
-            .wait_on_user(
-                &task.conversation_id,
-                task.request_id.clone(),
-                crate::work::WaitingSource::Run {
-                    run_id: run.run_id.clone(),
-                    task_id: Some(task.id.clone()),
-                },
-                &line,
-            )
-            .await
-        {
-            tracing::warn!(task = %task.id, error = %err, "could not list a declined request");
-        }
+        let what = request
+            .command
+            .as_deref()
+            .map(policy::unwrapped_command)
+            .unwrap_or_else(|| {
+                request
+                    .paths
+                    .first()
+                    .cloned()
+                    .unwrap_or(request.tool.clone())
+            });
+        self.record_worker_event(
+            &live.id,
+            ProviderEvent::ApprovalRequested {
+                request: request.clone(),
+            },
+        )
+        .await;
+        self.record_worker_resolution(&live.id, request.id, decision, Decider::Policy)
+            .await;
+        let text = declined.line(&what);
+        self.note_obstacle(
+            &live.conversation_id,
+            &run.run.run_id,
+            ObstacleKind::Declined,
+            &text,
+            Some(run.number),
+        )
+        .await;
     }
 
     /// The command gate during an overnight run: an outward command is refused at once and
-    /// listed for the user. `None` when the session has no active run.
+    /// listed in the report. `None` when the session has no active run.
     pub(crate) async fn unattended_outward(
         &self,
         conversation_id: &ConversationId,
@@ -350,31 +374,70 @@ impl super::super::SessionManager {
             Some(run) => run.run_id.clone(),
             None => self.overnight.active.get(conversation_id)?.id,
         };
-        let who = task
-            .as_ref()
-            .map(|task| format!("task-{}", task.number))
-            .unwrap_or_else(|| "The orchestrator".into());
-        let line = format!(
-            "{who} wanted to run `{}`, which acts outside this machine. The overnight run declined it; run it yourself if it's needed.",
-            one_line(&argv.join(" "))
-        );
-        if let Err(err) = self
-            .wait_on_user(
-                conversation_id,
-                task.as_ref().and_then(|task| task.request_id.clone()),
-                crate::work::WaitingSource::Run {
-                    run_id,
-                    task_id: task.as_ref().map(|task| task.id.clone()),
-                },
-                &line,
-            )
-            .await
-        {
-            tracing::warn!(conversation = %conversation_id, error = %err, "could not list a declined command");
-        }
-        Some(
-            "this overnight run never acts outside this machine for the user; it is listed for them. Say what it needs under needs_user and finish the rest.".into(),
+        let text = Declined::Outward.line(&argv.join(" "));
+        self.note_obstacle(
+            conversation_id,
+            &run_id,
+            ObstacleKind::Declined,
+            &text,
+            task.as_ref().map(|task| task.number),
         )
+        .await;
+        Some(
+            "declined by the overnight rules: this run never acts outside this machine for the user. Leave it out and finish the rest; if your done-when can't be met without it, say so under needs_user.".into(),
+        )
+    }
+
+    /// Lists an obstacle on an active run, or counts it again.
+    pub(crate) async fn note_obstacle(
+        &self,
+        conversation_id: &ConversationId,
+        run_id: &OvernightRunId,
+        kind: ObstacleKind,
+        text: &str,
+        task: Option<u32>,
+    ) {
+        let _held = self.overnight.changes.lock().await;
+        let Ok(board) = self.core.board(conversation_id).await else {
+            return;
+        };
+        let Some(mut run) = board.runs.get(run_id).cloned() else {
+            return;
+        };
+        if !run.state.is_active() {
+            return;
+        }
+        run.note_obstacle(kind, text, task, crate::now_ms());
+        if let Err(err) = self.record_run(&run).await {
+            tracing::warn!(run = %run_id, error = %err, "could not list what got in the way");
+        }
+    }
+}
+
+/// Why a run worker's request was declined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Declined {
+    Outward,
+    Checkout,
+}
+
+impl Declined {
+    /// The report's line, the same for every time it happens: the command's first words.
+    fn line(self, what: &str) -> String {
+        let words: Vec<&str> = what
+            .split_whitespace()
+            .filter(|word| !word.contains('='))
+            .take(2)
+            .collect();
+        let short = one_line(&words.join(" "));
+        match self {
+            Declined::Outward => format!(
+                "`{short}` was declined by the overnight rules: it acts outside this machine"
+            ),
+            Declined::Checkout => format!(
+                "`{short}` was declined by the overnight rules: it changes your own checkout"
+            ),
+        }
     }
 }
 

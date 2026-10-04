@@ -484,7 +484,13 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents) -> Value {
             "allowUnsandboxedCommands": false,
         }),
         Access::Full => {
-            allow.extend(["Bash".to_owned(), "WebFetch".to_owned()]);
+            // An overnight run's worker has no blanket Bash rule: each command that isn't
+            // plainly read-only goes through the permission prompt, where Brigadier answers at
+            // once (PLAN.md §10.8).
+            if !spec.unattended {
+                allow.push("Bash".to_owned());
+            }
+            allow.push("WebFetch".to_owned());
             json!({ "enabled": false })
         }
     };
@@ -1467,6 +1473,7 @@ mod tests {
             owned_cwd: false,
             auto_compact: true,
             allowed_models: Some(allowed(ids, &["claude-opus-5-5", "claude-fable-5-1"])),
+            unattended: false,
         }
     }
 
@@ -1499,6 +1506,7 @@ mod tests {
         );
         let unlimited = SessionSpec {
             allowed_models: None,
+            unattended: false,
             tools: ToolSet::Default,
             ..spec(cwd, &[])
         };

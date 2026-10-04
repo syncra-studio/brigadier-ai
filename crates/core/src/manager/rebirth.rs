@@ -304,6 +304,7 @@ impl SessionManager {
             owned_cwd: false,
             auto_compact: false,
             allowed_models: None,
+            unattended: false,
         };
         let owner = format!("orch:{id}");
         let Started {

@@ -145,6 +145,18 @@ struct TaskLiveState {
     orphaned_at_ms: Option<i64>,
     /// The models the CLI session's sub-agents were held to when it started (PLAN.md §7).
     allowed_models: Option<AllowedModels>,
+    /// An overnight run's worker: what answering its approvals needs, so it reads nothing
+    /// else (PLAN.md §10.8).
+    run_approvals: Option<RunApprovals>,
+}
+
+/// What an overnight run worker's approvals are answered with.
+#[derive(Debug, Clone)]
+pub(crate) struct RunApprovals {
+    pub run: crate::overnight::RunTaskContext,
+    pub number: u32,
+    /// The user's own checkout: run work never changes files there.
+    pub protected: Vec<PathBuf>,
 }
 
 impl TaskLiveState {
@@ -555,16 +567,19 @@ impl SessionManager {
             .clone()
     }
 
-    /// The session's permission level. While an overnight run is active it is Approve for me,
-    /// sandboxed, whatever the user saved (PLAN.md §10.8); the saved level returns with the
-    /// run's end.
+    /// The session's permission level. While an overnight run is active nobody is there to
+    /// ask: the run keeps the session's access and approves for the user, so Ask for approval
+    /// counts as Approve for me until the run ends (PLAN.md §10.8).
     pub(crate) fn permission(&self, id: &ConversationId) -> PermissionLevel {
-        if self.overnight.active.get(id).is_some() {
-            return PermissionLevel::ApproveForMe;
-        }
-        match self.core.conversation(id).map(|c| c.setup) {
+        let saved = match self.core.conversation(id).map(|c| c.setup) {
             Ok(Some(Setup::Session { permission, .. })) => permission,
             _ => PermissionLevel::ApproveForMe,
+        };
+        match saved {
+            PermissionLevel::AskForApproval if self.overnight.active.get(id).is_some() => {
+                PermissionLevel::ApproveForMe
+            }
+            saved => saved,
         }
     }
 
@@ -940,8 +955,7 @@ impl SessionManager {
             title: title.trim().to_owned(),
             kind,
             spec,
-            // A run's tasks never run unsandboxed.
-            access: access_for(kind, permission, run.is_some()),
+            access: access_for(kind, permission),
             // A waiting task's first model is recorded when it starts.
             attempts: if waits {
                 Vec::new()
@@ -1235,6 +1249,10 @@ impl SessionManager {
         secret_values.push(gate_grant.clone());
         let redactor = secrets::redactor(secret_values);
         let allowed_models = self.allowed_models(task).await;
+        let git_guard = match &task.run {
+            Some(_) => self.run_git_guard(&workspace).await,
+            None => None,
+        };
         let spec = SessionSpec {
             cwd: cwd.clone(),
             model: task.route.choice.model.clone(),
@@ -1254,7 +1272,14 @@ impl SessionManager {
                     ),
                 ];
                 if task.run.is_some() {
-                    env.extend(super::overnight::policy::run_env());
+                    let owned: Vec<String> = workspace
+                        .branch
+                        .iter()
+                        .map(|branch| format!("refs/heads/{branch}"))
+                        .collect();
+                    env.extend(super::overnight::policy::run_env(git_guard.as_ref().map(
+                        |(config, common)| (config.as_path(), common.as_path(), &owned[..]),
+                    )));
                 }
                 env
             },
@@ -1277,6 +1302,7 @@ impl SessionManager {
             owned_cwd: true,
             auto_compact: true,
             allowed_models: Some(allowed_models.clone()),
+            unattended: task.run.is_some(),
         };
         let Started { session, events } =
             match self.runtime.start_hosted(&owner, provider, spec).await {
@@ -1315,6 +1341,11 @@ impl SessionManager {
             state.stall_nudged_at_ms = None;
             state.orphaned_at_ms = None;
             state.allowed_models = Some(allowed_models);
+            state.run_approvals = task.run.clone().map(|run| RunApprovals {
+                run,
+                number: task.number,
+                protected: vec![workspace.repo.clone()],
+            });
             if !resumed {
                 state.context = None;
                 state.session_start = None;
@@ -1415,10 +1446,33 @@ impl SessionManager {
         }
     }
 
+    /// The git guard's configuration and the run repository's git folder, for a run worker
+    /// (PLAN.md §10.8). `None`, logged, when they can't be had: the approval route and the
+    /// command gate still hold the never-list.
+    async fn run_git_guard(&self, workspace: &Workspace) -> Option<(PathBuf, PathBuf)> {
+        let dir = self.runtime.platform().paths().data_dir.join("git-guard");
+        let (git, repo) = (self.git.clone(), workspace.repo.clone());
+        let guard = blocking(move || {
+            let config = super::overnight::git_guard::install(&dir)
+                .map_err(|err| Error::Invalid(format!("writing the git guard: {err}")))?;
+            let common = git.open(&repo).map_err(git_error)?.common_dir().to_owned();
+            Ok((config, common))
+        })
+        .await;
+        match guard {
+            Ok(guard) => Some(guard),
+            Err(err) => {
+                tracing::warn!(error = %err, "a run worker starts without its git guard");
+                None
+            }
+        }
+    }
+
     /// B12: what the worker may touch.
     fn worker_access(&self, task: &Task, workspace: &Workspace, cwd: &Path) -> Access {
-        // An overnight run's tasks are never unsandboxed, whatever was recorded.
-        if task.access.unsandboxed && task.run.is_none() {
+        // Full access: like the user's own terminal. An overnight run's never-list is then
+        // held by its approvals and its git guard, not a sandbox (PLAN.md §10.8).
+        if task.access.unsandboxed {
             return Access::Full;
         }
         // A worker working from its scratch folder writes there (Codex needs a writable cwd);
@@ -1967,6 +2021,13 @@ impl SessionManager {
         match &event {
             ProviderEvent::ApprovalRequested { request } => {
                 let request = request.clone();
+                // An overnight run's worker asks for nearly every command: it is answered
+                // before anything is recorded.
+                let run = live.state.lock().await.run_approvals.clone();
+                if let Some(run) = run {
+                    self.route_unattended(live, cli, request, run).await;
+                    return;
+                }
                 self.record_worker_event(&live.id, event).await;
                 self.route_worker_approval(live, cli, request).await;
                 return;
@@ -2195,15 +2256,6 @@ impl SessionManager {
             .access
             .clone()
             .unwrap_or(Access::ReadOnly);
-        // An overnight run's worker: nobody is there to ask, and nothing earlier the user
-        // allowed in this CLI session counts for the run.
-        if let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await
-            && let Some(run) = task.run.clone()
-        {
-            self.route_unattended(live, cli, request, &access, &task, &run)
-                .await;
-            return;
-        }
         let mut route = policy::route(&request, &access, ApprovalMode::Delegated);
         let outward = request.command.as_deref().is_some_and(policy::is_outward);
         // The user already allowed exactly this command for the rest of the CLI session.
@@ -3611,7 +3663,7 @@ pub(crate) fn category(kind: TaskKind) -> brigadier_router::TaskCategory {
 }
 
 /// B12: repository access, network and sandbox per task kind and permission level.
-fn access_for(kind: TaskKind, permission: PermissionLevel, run: bool) -> WorkerAccess {
+fn access_for(kind: TaskKind, permission: PermissionLevel) -> WorkerAccess {
     WorkerAccess {
         repo: match kind {
             TaskKind::Research => RepoAccess::None,
@@ -3619,7 +3671,7 @@ fn access_for(kind: TaskKind, permission: PermissionLevel, run: bool) -> WorkerA
             TaskKind::Scout | TaskKind::Review | TaskKind::Verify => RepoAccess::Read,
         },
         network: true,
-        unsandboxed: permission == PermissionLevel::FullAccess && !run,
+        unsandboxed: permission == PermissionLevel::FullAccess,
     }
 }
 

@@ -808,6 +808,10 @@ pub struct SessionSpec {
     /// limit (raw sessions, orchestrators, Chats). Claude allows exactly these, or runs without
     /// its Agent tool when it can't; Codex runs without sub-agents.
     pub allowed_models: Option<AllowedModels>,
+    /// An overnight run's worker (PLAN.md §10.8): nobody is there to ask, so every command
+    /// that isn't plainly read-only reaches Brigadier's approval route, under full access
+    /// too, and the never-list is judged there whatever the command's spelling.
+    pub unattended: bool,
 }
 
 /// The models a worker's own sub-agents may run on (PLAN.md §7): the router's eligible set for

@@ -298,6 +298,64 @@ pub struct RunGap {
     pub cause: String,
 }
 
+/// Something that got in the way of a run's work, for the report's "What got in the way"
+/// (PLAN.md §10.9). The same thing happening again counts up instead of adding a line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RunObstacle {
+    pub kind: ObstacleKind,
+    /// One plain line: "`git push` was declined by the overnight rules: it acts outside this
+    /// machine".
+    pub text: String,
+    /// The tasks it happened to, by number, each once.
+    pub tasks: Vec<u32>,
+    pub count: u32,
+    pub first_at_ms: i64,
+    pub last_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ObstacleKind {
+    /// Something on the never-list a worker tried, refused at once (PLAN.md §10.8).
+    Declined,
+    /// A worker's session couldn't be resumed, so its task started over.
+    ResumeFailed,
+}
+
+impl OvernightRun {
+    /// Adds an obstacle, or counts it again when the same one is listed.
+    pub fn note_obstacle(&mut self, kind: ObstacleKind, text: &str, task: Option<u32>, at_ms: i64) {
+        let found = self
+            .obstacles
+            .iter_mut()
+            .find(|obstacle| obstacle.kind == kind && obstacle.text == text);
+        let obstacle = match found {
+            Some(obstacle) => {
+                obstacle.count += 1;
+                obstacle.last_at_ms = at_ms;
+                obstacle
+            }
+            None => {
+                self.obstacles.push(RunObstacle {
+                    kind,
+                    text: text.to_owned(),
+                    tasks: Vec::new(),
+                    count: 1,
+                    first_at_ms: at_ms,
+                    last_at_ms: at_ms,
+                });
+                self.obstacles.last_mut().expect("just pushed")
+            }
+        };
+        if let Some(task) = task
+            && !obstacle.tasks.contains(&task)
+        {
+            obstacle.tasks.push(task);
+        }
+    }
+}
+
 /// Phase 0 of a bare goal: the lead writes the plan's phases, another vendor reviews them,
 /// and a fresh judge checks they follow the goal without invented scope.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -535,6 +593,9 @@ pub struct OvernightRun {
     /// Times Brigadier wasn't running during the run (the Mac slept, the daemon was down).
     #[serde(default)]
     pub gaps: Vec<RunGap>,
+    /// What got in the way of the work, for the report.
+    #[serde(default)]
+    pub obstacles: Vec<RunObstacle>,
     /// The report's message, once written (its id is stable per segment).
     #[serde(default)]
     pub report_message_id: Option<String>,
@@ -596,6 +657,7 @@ impl OvernightRun {
             planning: None,
             verified_commit: None,
             gaps: Vec::new(),
+            obstacles: Vec::new(),
             report_message_id: None,
             report_outcome: None,
             merged: None,

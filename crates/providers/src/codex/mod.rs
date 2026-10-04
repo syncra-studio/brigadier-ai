@@ -511,6 +511,7 @@ impl Provider for Codex {
                 rpc,
                 shared,
                 access: spec.access.clone(),
+                unattended: spec.unattended,
                 profiled,
                 effort: spec.effort.clone(),
             });
@@ -660,7 +661,7 @@ async fn open_thread(
     };
     let cwd_text = Some(cwd.display().to_string());
     let sandbox = thread_sandbox(&spec.access);
-    let approval = Some(approval_policy(&spec.access));
+    let approval = Some(approval_policy(&spec.access, spec.unattended));
     let instructions = spec.append_system_prompt.clone();
     // Always named: an omitted tier inherits the resumed thread's or the user's config.
     let service_tier = Some(if spec.fast { FAST_TIER } else { STANDARD_TIER }.to_owned());
@@ -1058,9 +1059,12 @@ impl<R> Profiled<R> {
     }
 }
 
-fn approval_policy(access: &Access) -> p::AskForApproval {
+/// Under full access an overnight run's worker asks for every command Codex doesn't trust as
+/// read-only, so Brigadier judges each one (PLAN.md §10.8).
+fn approval_policy(access: &Access, unattended: bool) -> p::AskForApproval {
     match access {
         Access::ReadOnly => p::AskForApproval::Untrusted,
+        Access::Full if unattended => p::AskForApproval::Untrusted,
         Access::Workspace { .. } | Access::Full | Access::Scoped { .. } => {
             p::AskForApproval::OnRequest
         }
@@ -1422,6 +1426,8 @@ pub struct CodexSession {
     rpc: Arc<Rpc>,
     shared: Arc<Shared>,
     access: Access,
+    /// An overnight run's worker ([`SessionSpec::unattended`]).
+    unattended: bool,
     /// Its sandbox is a permission profile set when the thread opened.
     profiled: bool,
     effort: Option<String>,
@@ -1478,7 +1484,7 @@ impl CodexSession {
                     input: Self::input(input)?,
                     effort,
                     sandbox_policy: (!self.profiled).then(|| sandbox_policy(&self.access)),
-                    approval_policy: Some(approval_policy(&self.access)),
+                    approval_policy: Some(approval_policy(&self.access, self.unattended)),
                     ..Default::default()
                 },
             )
@@ -1751,6 +1757,7 @@ mod tests {
             owned_cwd: false,
             auto_compact: true,
             allowed_models,
+            unattended: false,
         }
     }
 

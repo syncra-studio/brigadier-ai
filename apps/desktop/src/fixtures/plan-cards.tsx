@@ -296,6 +296,7 @@ const proposed: OvernightRun = {
   planning: null,
   verifiedCommit: null,
   gaps: [],
+  obstacles: [],
   reportMessageId: null,
   reportOutcome: null,
   merged: null,
