@@ -60,6 +60,7 @@ pub(crate) fn orchestrator(
             "New worktree: accepted tasks land as commits on the session branch `{branch}` (from `{base}`). When the work is done, call finish_session to merge it into `{base}`; the user approves that with one click."
         ),
     };
+    let unsandboxed = permission == PermissionLevel::FullAccess;
     let permission = match permission {
         PermissionLevel::AskForApproval => {
             "Ask for approval: the user approves every plan and every change. Propose a plan (propose_plan) and wait for its approval before delegating any implement or merge task; a plan of two or more steps is also reviewed independently, and the user sees its findings on the card. Each accept_task also waits for the user's approval.".to_owned()
@@ -71,8 +72,8 @@ pub(crate) fn orchestrator(
             "Full access: like Approve for me, but workers run without the OS sandbox. Be careful.{PLAN_REVIEW}"
         ),
     };
-    // An overnight run works on its own branch under sandboxed Approve for me, whatever the
-    // session's own setup says.
+    // An overnight run works on its own branch and approves for the user; its workers keep the
+    // session's sandbox, or run without one under full access (PLAN §10.8).
     let (environment, permission) = match run {
         Some(run) => (
             format!(
@@ -80,7 +81,12 @@ pub(crate) fn orchestrator(
                 run.branch, run.base
             ),
             format!(
-                "Approve for me, for this run only: Brigadier approves plans and changes on the user's behalf, and every worker stays in its sandbox.{PLAN_REVIEW} Nobody can answer questions or approvals before the morning: decide what the plan and the Rules settle (and note it with note_for_user, kind decided), and list what only the user can do (a key, an account, a push, a product choice the Rules leave open) with note_for_user, kind waiting, then carry on with everything that doesn't depend on it. Never ask the user, and never use request_approval."
+                "Approve for me, for this run only: Brigadier approves plans and changes on the user's behalf, {sandbox} It still refuses what only the user may do: pushing, publishing, deploying, spending, credentials, contacting anyone, and changes outside the run's branch.{PLAN_REVIEW} Nobody can answer questions or approvals before the morning: decide what the plan and the Rules settle (and note it with note_for_user, kind decided), and list what only the user can do (a key, an account, a push, a product choice the Rules leave open) with note_for_user, kind waiting, then carry on with everything that doesn't depend on it. Never ask the user, and never use request_approval.",
+                sandbox = if unsandboxed {
+                    "and workers run without the OS sandbox, as in the session."
+                } else {
+                    "and approves a worker's request to leave its sandbox."
+                }
             ),
         ),
         None => (environment, permission),
@@ -618,5 +624,42 @@ mod environment_tests {
         assert!(run.contains("`brigadier/abc/task-3`"));
         assert!(run.contains("`git stash`"));
         assert!(run.contains("don't use `nice`"));
+    }
+
+    #[test]
+    fn a_runs_orchestrator_hears_the_sessions_sandbox() {
+        let conversation = |permission: &str| -> Conversation {
+            serde_json::from_value(serde_json::json!({
+                "id": "01a106c3-1fb7-7593-a441-486b39799405",
+                "kind": "session",
+                "projectId": null,
+                "title": "textkit",
+                "pinnedAtMs": null,
+                "createdAtMs": 0,
+                "updatedAtMs": 0,
+                "setup": {
+                    "type": "session",
+                    "repo": "/tmp/textkit",
+                    "environment": { "type": "localCheckout", "branch": "main" },
+                    "permission": permission,
+                    "orchestrator": { "provider": "claude", "model": "opus", "effort": "high" },
+                    "workersSeeUncommitted": null,
+                    "planMode": false
+                }
+            }))
+            .unwrap()
+        };
+        let run = crate::overnight::RunWorkspace {
+            base: "main".into(),
+            base_commit: "abc".into(),
+            branch: "overnight/2026-10-04-textkit-1234".into(),
+            path: "/tmp/run".into(),
+        };
+        let full = orchestrator(&conversation("fullAccess"), None, &[], Some(&run));
+        assert!(full.contains("workers run without the OS sandbox"));
+        assert!(!full.contains("stays in its sandbox"));
+        let sandboxed = orchestrator(&conversation("approveForMe"), None, &[], Some(&run));
+        assert!(sandboxed.contains("approves a worker's request to leave its sandbox"));
+        assert!(sandboxed.contains("It still refuses what only the user may do"));
     }
 }
