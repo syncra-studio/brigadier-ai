@@ -54,6 +54,7 @@ jobs:
           test -z "$(git status --porcelain -- apps/desktop/src/ipc/generated)"
       - run: pnpm typecheck
       - run: pnpm lint
+      - run: pnpm test
 
   build:
     name: Build, clippy, smoke (${{ matrix.name }})

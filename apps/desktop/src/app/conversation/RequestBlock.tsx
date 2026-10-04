@@ -16,7 +16,6 @@ import {
 import { type FC, lazy, Suspense, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { WorkerStepRow } from "@/app/conversation/Agents";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { MentionText } from "@/app/conversation/Mentions";
 import { OrchestratorSteps, STEP_ROW } from "@/app/conversation/OrchestratorSteps";
@@ -24,12 +23,15 @@ import {
   type BlockCard,
   type BlockCompaction,
   type BlockOrchestratorStep,
+  type BlockRow,
   type BlockState,
-  type BlockStep,
+  blockSequence,
   isFinal,
   isLive,
   isWorking,
+  type SequenceEntry as Entry,
 } from "@/app/conversation/blocks";
+import { PhaseChecksRow, TaskRow } from "@/app/conversation/TaskRow";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
 import { useViewConversation } from "@/app/conversation/viewContext";
@@ -61,8 +63,8 @@ export type BlockMeta = {
   /** Per text part, in order: the reply's position (infinite while it streams) and model. */
   texts: { position: number; model: ModelChoice | null }[];
   cards: BlockCard[];
-  /** The workers' steps, in order. */
-  steps: BlockStep[];
+  /** The workers' rows, in the order they started. */
+  rows: BlockRow[];
   /** The orchestrator's steps, in order. */
   orchestratorSteps: BlockOrchestratorStep[];
   /** Messages the user steered into the turn, shown as bubbles in the work. */
@@ -174,47 +176,6 @@ const WorkHeader: FC<{
   );
 };
 
-type Entry =
-  | { kind: "text"; index: number; position: number }
-  | { kind: "card"; card: BlockCard; position: number }
-  | { kind: "steer"; text: string; atMs: number; position: number }
-  | { kind: "orchestrator"; steps: BlockOrchestratorStep[]; position: number }
-  | { kind: "compaction"; compaction: BlockCompaction; position: number }
-  | { kind: "steps"; step: BlockStep["kind"]; taskIds: string[]; position: number };
-
-/** The block's replies, cards and worker steps in order; adjacent steps of a kind share a row. */
-function blockSequence(meta: BlockMeta): Entry[] {
-  const entries: Entry[] = [
-    ...meta.texts.map((text, index) => ({ kind: "text" as const, index, position: text.position })),
-    ...meta.cards.map((card) => ({ kind: "card" as const, card, position: card.position })),
-    ...meta.steers.map((steer) => ({ kind: "steer" as const, ...steer })),
-    ...meta.compactions
-      .filter((compaction) => compaction.inTurn)
-      .map((compaction) => ({ kind: "compaction" as const, compaction, position: compaction.position })),
-    ...meta.orchestratorSteps.map((step) => ({
-      kind: "orchestrator" as const,
-      steps: [step],
-      position: step.position,
-    })),
-    ...meta.steps.map((step) => ({
-      kind: "steps" as const,
-      step: step.kind,
-      taskIds: [step.taskId],
-      position: step.position,
-    })),
-  ].toSorted((a, b) => a.position - b.position);
-  const merged: Entry[] = [];
-  for (const entry of entries) {
-    const previous = merged.at(-1);
-    if (entry.kind === "steps" && previous?.kind === "steps" && previous.step === entry.step) {
-      for (const id of entry.taskIds) if (!previous.taskIds.includes(id)) previous.taskIds.push(id);
-    } else if (entry.kind === "orchestrator" && previous?.kind === "orchestrator") {
-      previous.steps.push(...entry.steps);
-    } else merged.push(entry);
-  }
-  return merged;
-}
-
 function entryKey(entry: Entry): string {
   switch (entry.kind) {
     case "text":
@@ -227,8 +188,8 @@ function entryKey(entry: Entry): string {
       return `orchestrator:${entry.position}`;
     case "compaction":
       return `compaction:${entry.compaction.id}`;
-    case "steps":
-      return `steps:${entry.position}`;
+    case "row":
+      return entry.row.type === "task" ? `task:${entry.row.taskId}` : `checks:${entry.row.phaseId}`;
   }
 }
 
@@ -250,7 +211,7 @@ const ReplyText: FC<{ index: number; streaming: boolean }> = ({ index, streaming
   />
 );
 
-/** A reply, card or row of worker steps in the block's work. */
+/** A reply, card or row in the block's work. */
 const SequenceEntry: FC<{ entry: Entry; streaming: boolean }> = ({ entry, streaming }) => {
   switch (entry.kind) {
     case "text":
@@ -270,8 +231,12 @@ const SequenceEntry: FC<{ entry: Entry; streaming: boolean }> = ({ entry, stream
       return <OrchestratorSteps steps={entry.steps} />;
     case "compaction":
       return <CompactionRow compaction={entry.compaction} />;
-    case "steps":
-      return <WorkerStepRow kind={entry.step} taskIds={entry.taskIds} />;
+    case "row":
+      return entry.row.type === "task" ? (
+        <TaskRow taskId={entry.row.taskId} />
+      ) : (
+        <PhaseChecksRow runId={entry.row.runId} phaseId={entry.row.phaseId} />
+      );
   }
 };
 
@@ -396,7 +361,7 @@ function turnPhase(
 ): "idle" | "prework" | "final_answer" {
   if (!live) return "idle";
   const streaming = meta.texts.at(-1)?.position === Number.POSITIVE_INFINITY;
-  const work = meta.steps.length > 0 || meta.orchestratorSteps.length > 0 || meta.cards.length > 0;
+  const work = meta.rows.length > 0 || meta.orchestratorSteps.length > 0 || meta.cards.length > 0;
   if (answering || (!work && streaming)) return "final_answer";
   if (work || meta.texts.some((text) => text.position !== Number.POSITIVE_INFINITY)) return "prework";
   return "idle";
@@ -429,7 +394,7 @@ export const RequestBlock: FC = () => {
   // when the final answer starts.
   const answering =
     meta.state === "working" &&
-    meta.steps.length > 0 &&
+    meta.rows.length > 0 &&
     !workersActive &&
     meta.texts[last]?.position === Number.POSITIVE_INFINITY;
   const done = meta.state === "done" || answering;

@@ -13,11 +13,10 @@ import type {
   RequestState,
   Task,
   UserRequest,
-  WorkerStep,
-  WorkerStepKind,
 } from "@/ipc/generated";
 import type { Board } from "@/state/board";
-import { type PendingMessage, shownIdOf } from "@/state/store";
+import { shownIdOf } from "@/state/shownIds";
+import type { PendingMessage } from "@/state/store";
 
 /**
  * One user request as the thread shows it: the user's message, then one assistant block with
@@ -43,14 +42,19 @@ export type BlockText = {
   model: ModelChoice | null;
 };
 
-/** A worker's step in a block ("task-2 finished"), in the order it happened. */
-export type BlockStep = {
-  taskId: string;
-  kind: WorkerStepKind;
-  position: number;
-};
+/**
+ * A row of a block's work that updates in place: a worker's task, with its checks, fixes and
+ * landing folded into it, or the whole-phase checks of an overnight phase. Checkers never get a
+ * row of their own; they open from the row of what they check.
+ */
+export type BlockRow =
+  | { type: "task"; taskId: string; position: number }
+  | { type: "phaseChecks"; runId: string; phaseId: string; position: number };
 
-/** Something decided on the user's behalf, shown as a quiet row among the orchestrator's. */
+/**
+ * A judgement call made on the user's behalf, shown as a quiet row among the orchestrator's.
+ * Routine outcomes of a task or a plan (landed, sent back, held) show on its own row instead.
+ */
 export type DecidedStep = { type: "decided"; what: string; why: string };
 
 /**
@@ -95,8 +99,8 @@ export type Block = {
   cards: BlockCard[];
   /** Workers the request started, by task number. */
   tasks: string[];
-  /** Their steps, in order. */
-  steps: BlockStep[];
+  /** Its workers' rows, in the order they started. */
+  rows: BlockRow[];
   /** The orchestrator's steps, in order. */
   orchestratorSteps: BlockOrchestratorStep[];
   /** Messages steered into its turn, whose requests it shows too. */
@@ -118,7 +122,6 @@ export type BoardDigest = {
   questions: Readonly<Record<string, Question>>;
   plans: Readonly<Record<string, Plan>>;
   requests: Readonly<Record<string, UserRequest>>;
-  workerSteps: readonly WorkerStep[];
   orchestratorSteps: readonly OrchestratorStep[];
   decisions: readonly Decision[];
   compactions: Readonly<Record<string, Compaction>>;
@@ -141,14 +144,31 @@ export function isFinal(task: Task): boolean {
   return FINAL.has(task.state);
 }
 
-/** A worker whose card stays in view: it failed, or it waits for the user. */
+/**
+ * A worker whose card stays in view: it failed, or it waits for the user. A checker shows on
+ * the row of what it checks, and an overnight run's held change waits for the run, not the user.
+ */
 function keepTask(task: Task): boolean {
+  if (task.gateLink !== null) return false;
   return (
     task.state === "failed" ||
     task.state === "paused" ||
     task.state === "awaitingApproval" ||
-    task.state === "readyToLand"
+    (task.state === "readyToLand" && task.run === null)
   );
+}
+
+/** Steps that belong to a worker's row (accepting, reading or messaging it), not rows of their own. */
+const ON_TASK_ROW: ReadonlySet<OrchestratorStepKind["type"]> = new Set(["accepted", "readReport", "messaged"]);
+
+/** Whether a decision is a judgement call the thread shows, rather than a task's or a plan's routine outcome. */
+export function judgementCall(decision: Decision): boolean {
+  return decision.source.type === "orchestrator" || decision.source.type === "run";
+}
+
+/** An overnight phase's own request: its lead's turns, tasks and reports. */
+export function isRunRequest(requestId: string | null): boolean {
+  return requestId?.startsWith("run-") ?? false;
 }
 
 function keepApproval(approval: Approval): boolean {
@@ -181,7 +201,7 @@ type Placed =
   | { kind: "message"; position: number; message: Message; text: string }
   | { kind: "card"; position: number; requestId: string | null; card: BlockCard }
   | { kind: "task"; position: number; requestId: string | null; id: string }
-  | { kind: "step"; position: number; requestId: string | null; step: BlockStep; atMs: number }
+  | { kind: "row"; position: number; requestId: string | null; row: BlockRow; atMs: number }
   | {
       kind: "orchestrator";
       position: number;
@@ -200,7 +220,7 @@ type Placed =
 
 function createdAt(board: BoardDigest, item: Exclude<Placed, { kind: "message" }>): number {
   if (item.kind === "task") return board.tasks[item.id]?.createdAtMs ?? 0;
-  if (item.kind === "step" || item.kind === "orchestrator" || item.kind === "compaction") return item.atMs;
+  if (item.kind === "row" || item.kind === "orchestrator" || item.kind === "compaction") return item.atMs;
   const { type, id } = item.card;
   const card =
     type === "task"
@@ -231,9 +251,11 @@ export function buildBlocks(
     message,
     text: fullText[message.id] ?? message.text,
   }));
+  // A whole phase's checks share one row, where the first of them started.
+  const phaseChecks = new Map<string, Task>();
   for (const task of Object.values(board.tasks)) {
     placed.push({ kind: "task", position: task.position, requestId: task.requestId, id: task.id });
-    // Routine workers show as chips; one that failed or waits for the user shows its card.
+    // Each worker is one row; one that failed or waits for the user shows its card too.
     if (keepTask(task)) {
       placed.push({
         kind: "card",
@@ -242,17 +264,35 @@ export function buildBlocks(
         card: { type: "task", id: task.id, position: task.position, keep: true },
       });
     }
+    const owner = task.gateLink?.owner;
+    if (!owner) {
+      placed.push({
+        kind: "row",
+        position: task.position,
+        requestId: task.requestId,
+        row: { type: "task", taskId: task.id, position: task.position },
+        atMs: task.createdAtMs,
+      });
+    } else if (owner.type === "phase") {
+      const key = `${owner.runId}:${owner.phaseId}`;
+      const first = phaseChecks.get(key);
+      if (!first || task.position < first.position) phaseChecks.set(key, task);
+    }
   }
-  for (const step of board.workerSteps) {
+  for (const task of phaseChecks.values()) {
+    if (task.gateLink?.owner.type !== "phase") continue;
+    const { runId, phaseId } = task.gateLink.owner;
     placed.push({
-      kind: "step",
-      position: step.position,
-      requestId: step.requestId,
-      step: { taskId: step.taskId, kind: step.kind, position: step.position },
-      atMs: step.atMs,
+      kind: "row",
+      position: task.position,
+      requestId: task.requestId,
+      row: { type: "phaseChecks", runId, phaseId, position: task.position },
+      atMs: task.createdAtMs,
     });
   }
   for (const step of board.orchestratorSteps) {
+    // A phase's lead reads and messages its workers all night: the rows say what came of it.
+    if (ON_TASK_ROW.has(step.kind.type) || isRunRequest(step.requestId)) continue;
     placed.push({
       kind: "orchestrator",
       position: step.position,
@@ -262,6 +302,7 @@ export function buildBlocks(
     });
   }
   for (const decision of board.decisions) {
+    if (!judgementCall(decision)) continue;
     placed.push({
       kind: "orchestrator",
       position: decision.position,
@@ -292,18 +333,6 @@ export function buildBlocks(
       atMs: compaction.startedAtMs,
     });
   }
-  // Workers from before steps were stored show the start they had.
-  const stepped = new Set(board.workerSteps.map((step) => step.taskId));
-  for (const task of Object.values(board.tasks)) {
-    if (stepped.has(task.id)) continue;
-    placed.push({
-      kind: "step",
-      position: task.position,
-      requestId: task.requestId,
-      step: { taskId: task.id, kind: "started", position: task.position },
-      atMs: task.createdAtMs,
-    });
-  }
   for (const approval of Object.values(board.approvals)) {
     placed.push({
       kind: "card",
@@ -321,6 +350,8 @@ export function buildBlocks(
     });
   }
   for (const plan of Object.values(board.plans)) {
+    // A revision replaces the plan it revises in the thread; its card keeps the history.
+    if (plan.state.type === "superseded") continue;
     placed.push({
       kind: "card",
       position: plan.position,
@@ -350,7 +381,7 @@ export function buildBlocks(
         texts: [],
         cards: [],
         tasks: [],
-        steps: [],
+        rows: [],
         orchestratorSteps: [],
         steers: [],
         compactions: [],
@@ -410,7 +441,7 @@ export function buildBlocks(
     if (item.requestId && !blocks.has(key)) continue;
     const block = open(key, 0);
     if (item.kind === "task") block.tasks.push(item.id);
-    else if (item.kind === "step") block.steps.push(item.step);
+    else if (item.kind === "row") block.rows.push(item.row);
     else if (item.kind === "orchestrator") block.orchestratorSteps.push(item.step);
     else if (item.kind === "compaction") block.compactions.push(item.compaction);
     else block.cards.push(item.card);
@@ -450,7 +481,7 @@ export function buildBlocks(
       texts: [],
       cards: [],
       tasks: [],
-      steps: [],
+      rows: [],
       orchestratorSteps: [],
       steers: [],
       compactions: [],
@@ -492,7 +523,7 @@ function joinSteered(blocks: Block[], requests: BoardDigest["requests"]): Block[
       texts: texts.toSorted((a, b) => a.position - b.position),
       cards: [...previous.cards, ...block.cards],
       tasks: [...previous.tasks, ...block.tasks],
-      steps: [...previous.steps, ...block.steps],
+      rows: [...previous.rows, ...block.rows],
       orchestratorSteps: [...previous.orchestratorSteps, ...block.orchestratorSteps],
       compactions: [...previous.compactions, ...block.compactions],
       steers: [
@@ -513,6 +544,56 @@ function joinSteered(blocks: Block[], requests: BoardDigest["requests"]): Block[
     };
   }
   return joined;
+}
+
+/** What a block's work is made of, as its message metadata carries it. */
+export type SequenceSource = {
+  texts: readonly { position: number }[];
+  cards: readonly BlockCard[];
+  steers: readonly { position: number; text: string; atMs: number }[];
+  compactions: readonly BlockCompaction[];
+  orchestratorSteps: readonly BlockOrchestratorStep[];
+  rows: readonly BlockRow[];
+};
+
+/** One line or card of a block's work. */
+export type SequenceEntry =
+  | { kind: "text"; index: number; position: number }
+  | { kind: "card"; card: BlockCard; position: number }
+  | { kind: "steer"; text: string; atMs: number; position: number }
+  | { kind: "orchestrator"; steps: BlockOrchestratorStep[]; position: number }
+  | { kind: "compaction"; compaction: BlockCompaction; position: number }
+  | { kind: "row"; row: BlockRow; position: number };
+
+/**
+ * The block's replies, cards, rows and orchestrator steps in order. Adjacent orchestrator
+ * steps share one line that opens to each, but a decision always stands on its own line.
+ */
+export function blockSequence(source: SequenceSource): SequenceEntry[] {
+  const entries: SequenceEntry[] = [
+    ...source.texts.map((text, index) => ({ kind: "text" as const, index, position: text.position })),
+    ...source.cards.map((card) => ({ kind: "card" as const, card, position: card.position })),
+    ...source.steers.map((steer) => ({ kind: "steer" as const, ...steer })),
+    ...source.compactions
+      .filter((compaction) => compaction.inTurn)
+      .map((compaction) => ({ kind: "compaction" as const, compaction, position: compaction.position })),
+    ...source.orchestratorSteps.map((step) => ({
+      kind: "orchestrator" as const,
+      steps: [step],
+      position: step.position,
+    })),
+    ...source.rows.map((row) => ({ kind: "row" as const, row, position: row.position })),
+  ].toSorted((a, b) => a.position - b.position);
+  const decided = (entry: SequenceEntry) =>
+    entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "decided");
+  const merged: SequenceEntry[] = [];
+  for (const entry of entries) {
+    const previous = merged.at(-1);
+    if (entry.kind === "orchestrator" && previous?.kind === "orchestrator" && !decided(entry) && !decided(previous)) {
+      previous.steps.push(...entry.steps);
+    } else merged.push(entry);
+  }
+  return merged;
 }
 
 /** Whether a block still has work running or waiting. */
@@ -714,7 +795,6 @@ const EMPTY_WORK: BoardDigest = {
   questions: {},
   plans: {},
   requests: {},
-  workerSteps: [],
   orchestratorSteps: [],
   decisions: [],
   compactions: {},

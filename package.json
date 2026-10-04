@@ -7,6 +7,7 @@
     "dev": "pnpm --filter @brigadier/desktop dev",
     "typecheck": "pnpm --filter @brigadier/desktop typecheck",
     "lint": "pnpm --filter @brigadier/desktop lint",
+    "test": "pnpm --filter @brigadier/desktop test",
     "build": "pnpm --filter @brigadier/desktop build",
     "tauri": "pnpm --filter @brigadier/desktop tauri",
     "tauri:dev": "pnpm --filter @brigadier/desktop tauri:dev",

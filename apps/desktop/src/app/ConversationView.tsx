@@ -209,7 +209,7 @@ function signature(
     block.texts.map((text) => [text.messageId, text.position, text.model]),
     block.cards,
     block.tasks,
-    block.steps,
+    block.rows,
     block.orchestratorSteps,
     block.compactions,
     block.steers.map((steer) => [steer.message.id, steer.text]),
@@ -274,7 +274,7 @@ function useItems(
         const meta: BlockMeta = {
           texts: block.texts.map((text) => ({ position: text.position, model: text.model })),
           cards: block.cards,
-          steps: block.steps,
+          rows: block.rows,
           orchestratorSteps: block.orchestratorSteps,
           compactions: block.compactions,
           steers: block.steers.map((steer) => ({
@@ -336,7 +336,6 @@ const EMPTY_DIGEST: BoardDigest & { head: string | null } = {
   questions: {},
   plans: {},
   requests: {},
-  workerSteps: [],
   orchestratorSteps: [],
   decisions: [],
   compactions: {},
@@ -438,7 +437,6 @@ export function ConversationView({
             questions: s.board.questions,
             plans: s.board.plans,
             requests: s.board.requests,
-            workerSteps: s.board.workerSteps,
             orchestratorSteps: s.board.orchestratorSteps,
             decisions: s.board.decisions,
             compactions: s.board.compactions,

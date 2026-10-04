@@ -9,6 +9,7 @@ import {
 import type { FC, ReactNode } from "react";
 
 import type { BlockOrchestratorStep, DecidedStep } from "@/app/conversation/blocks";
+import { plainLine } from "@/app/conversation/rowWords";
 import { WorkerMention } from "@/app/conversation/WorkerChip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { OrchestratorStepKind } from "@/ipc/generated";
@@ -61,7 +62,7 @@ const Words: FC<{ attached?: boolean; children: ReactNode }> = ({ attached, chil
 function label(kind: OrchestratorStepKind | DecidedStep): ReactNode {
   switch (kind.type) {
     case "decided":
-      return <span className="min-w-0 truncate">Decided for you: {kind.what}</span>;
+      return <span className="min-w-0 truncate">Decided for you: {plainLine(kind.what)}</span>;
     case "messaged":
       return (
         <>
@@ -94,14 +95,46 @@ function label(kind: OrchestratorStepKind | DecidedStep): ReactNode {
   }
 }
 
+/** A judgement call made for the user: its line, which opens to why. */
+const DecidedRow: FC<{ what: string; why: string }> = ({ what, why }) => {
+  const line = (
+    <>
+      <CheckCircle aria-hidden className="size-icon-md shrink-0" />
+      <span className="min-w-0 truncate">Decided for you: {plainLine(what)}</span>
+    </>
+  );
+  if (!why) {
+    return (
+      <div data-slot="orchestrator-step" data-kind="decided" className={row}>
+        {line}
+      </div>
+    );
+  }
+  return (
+    <Collapsible data-slot="orchestrator-step" data-kind="decided">
+      <CollapsibleTrigger className={cn(row, "group hover:text-foreground w-full text-start")}>
+        {line}
+        <ChevronRight
+          aria-hidden
+          className="size-icon-xs shrink-0 opacity-0 transition-[rotate,opacity] group-hover:opacity-100 group-data-[state=open]:rotate-90 group-data-[state=open]:opacity-100"
+        />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="text-muted-foreground flex flex-col gap-1 ps-6 pb-1 text-sm wrap-break-word">
+        <span className="text-foreground/80">{plainLine(what)}</span>
+        <span>{plainLine(why)}</span>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+};
+
 const StepRow: FC<{ step: BlockOrchestratorStep }> = ({ step }) => {
+  if (step.kind.type === "decided") return <DecidedRow what={step.kind.what} why={step.kind.why} />;
   const Icon = ICONS[step.kind.type];
   return (
     <div
       data-slot="orchestrator-step"
       data-kind={step.kind.type}
       className={row}
-      title={step.kind.type === "decided" && step.kind.why ? step.kind.why : undefined}
     >
       <Icon aria-hidden className="size-icon-md shrink-0" />
       <span className="flex min-w-0 flex-1 items-center gap-1.5">{label(step.kind)}</span>

@@ -18,9 +18,7 @@ import {
   glyphTone,
   taskStateLabel,
   useWorkerName,
-  WorkerChip,
   WorkerGlyph,
-  WorkerMention,
 } from "@/app/conversation/WorkerChip";
 import { WorkerThread } from "@/app/conversation/WorkerThread";
 import { effortLabel } from "@/components/assistant-ui/elements/model-selector";
@@ -33,7 +31,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useNow } from "@/hooks/use-now";
-import type { Task, WorkerStepKind } from "@/ipc/generated";
+import type { Task } from "@/ipc/generated";
 import { formatAgo } from "@/lib/format";
 import { withResetTime } from "@/lib/routing";
 import { modelName, useModelGroups } from "@/lib/setup";
@@ -46,8 +44,8 @@ import { toast } from "@/state/toasts";
 export const WORKERS_LABEL = "Workers";
 
 /**
- * The session's workers ("agents"): their steps as grey rows inside each request's block, and a
- * side panel listing them all, where one opens to show its live transcript, commands and diff.
+ * The session's workers ("agents"): a side panel listing them all, where one opens to show its
+ * live transcript, commands and diff. In the thread each has one row (TaskRow).
  */
 
 /** Glyphs stacked in a summary row. */
@@ -74,75 +72,6 @@ export function WorkerGlyphs({
     </span>
   );
 }
-
-/** Pills in one activity line; the others go on as "and N other workers". */
-const PILLS = 3;
-
-const STEP_VERBS: Record<WorkerStepKind, [one: string, many: string]> = {
-  started: ["started working", "started working"],
-  waiting: ["is waiting for you", "are waiting for you"],
-  paused: ["paused", "paused"],
-  resumed: ["continued", "continued"],
-  finished: ["finished", "finished"],
-  updated: ["updated", "updated"],
-  landed: ["landed", "landed"],
-  rejected: ["was turned down", "were turned down"],
-  stopped: ["interrupted", "interrupted"],
-  failed: ["failed", "failed"],
-};
-
-/**
- * Workers' steps as one activity line in the thread: each worker as its chip, three at most,
- * then the rest counted, then the verb: "[Scout] started working", "[Scout] [Verify] [Review]
- * and 2 other workers updated", on one line where long names give way. A review of another
- * worker names it too: "[Review] of [Scout] finished". A glyph takes the colour of an
- * interruption or a failure. A chip opens that worker in the panel; "N other workers" opens
- * the list.
- */
-export const WorkerStepRow = memo(function WorkerStepRow({
-  kind,
-  taskIds,
-}: {
-  kind: WorkerStepKind;
-  taskIds: readonly string[];
-}) {
-  const { setPanel } = useContext(AgentsPanelContext);
-  // Only which of them the board has, so their updates re-render their chips, not the line.
-  const ids = useBoard(useShallow((s) => taskIds.filter((id) => s.board?.tasks[id] !== undefined)));
-  const [first] = ids;
-  if (!first) return null;
-  const [one, many] = STEP_VERBS[kind];
-  const tone = glyphTone(kind) ?? null;
-  const others = ids.length - PILLS;
-  return (
-    <div
-      data-slot="worker-step"
-      data-kind={kind}
-      className="text-muted-foreground flex min-h-row-sm min-w-0 items-center gap-1.5 text-sm"
-    >
-      {ids.length === 1 ? (
-        <WorkerMention taskId={first} tone={tone} />
-      ) : (
-        ids.slice(0, PILLS).map((id) => <WorkerChip key={id} taskId={id} tone={tone} />)
-      )}
-      <span className="shrink-0 whitespace-nowrap">
-        {others > 0 && (
-          <>
-            and{" "}
-            <button
-              type="button"
-              onClick={() => setPanel(null)}
-              className="hover:text-foreground transition-colors"
-            >
-              {others} other {others === 1 ? "worker" : "workers"}
-            </button>{" "}
-          </>
-        )}
-        {ids.length === 1 ? one : many}
-      </span>
-    </div>
-  );
-});
 
 /**
  * A worker's live status under its name in the list: at work, its latest reply's first line,
