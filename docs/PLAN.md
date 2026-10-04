@@ -299,10 +299,10 @@ Each phase lists its **goal**, **deliverables**, **key design**, and **done when
 
 **Deliverables**
 - **Review tiers, scaled to risk:**
-  - **Per-task checks (user decision, 2026-10-04, every session):** one reviewer and one verifier per change. A change to documentation only gets a verifier alone, which checks the done-when criteria and the docs against the code without builds, tests or smoke runs. A change to a risky area (a path naming landing, policy, the sandbox or git) gets a second reviewer. A change that couldn't be verified is held; there is no automatic second verifier. A fix round always gets a fresh verifier on the new candidate, and asks again only the reviewers that asked for changes: the verifier checks the fix against the approvals kept.
+  - **Per-task checks (user decision, 2026-10-04, every session):** one reviewer and one verifier per change. A change to documentation only (Markdown and similar prose files, or files under the top-level `docs/`; not `.txt`, which can build things) gets a verifier alone, which checks the done-when criteria and the docs against the code without builds, tests or smoke runs. A change to a risky area (a path naming landing, policy, the sandbox or git) gets a second reviewer. A change that couldn't be verified is held; there is no automatic second verifier. A fix round always gets a fresh verifier on the new candidate, and asks again only the reviewers that asked for changes: the verifier checks the fix against the approvals kept. A fix that turns a documentation change into a code change gets the reviewers a code change gets.
   - Large, risky, or architectural work, including its plan, gets the **fusion panel**: parallel independent reviewers from different vendors, plus an analyst that reports consensus, contradictions, gaps, unique insights, and blind spots.
   - Confirmed issues go back to the original worker to fix.
-  - `/fuse` forces a full panel, and when Brigadier approves on your behalf (Approve for me, Full access), risky plans always get the stricter panel.
+  - `/fuse` forces a full panel.
 - **Verification pipeline** (per project, learned into the Brain):
   - Typecheck, lint, and build.
   - The existing test suite. If a change breaks an existing test, the worker fixes the code; it edits the test only for an intended behaviour change.

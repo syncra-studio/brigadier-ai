@@ -76,21 +76,27 @@ impl SessionManager {
         if docs_only(files) {
             return 0;
         }
-        if let Some(previous) = &task.gate
-            && previous.outcome == Some(GateOutcome::Failed)
-        {
-            return previous
-                .members
-                .iter()
-                .filter(|m| m.role == GateRole::Review)
-                .filter(|m| matches!(m.result, Some(GateResult::Failed { .. })))
-                .count();
-        }
-        if files.iter().any(|file| risky_path(&file.path)) {
+        let needed = if files.iter().any(|file| risky_path(&file.path)) {
             2
         } else {
             1
+        };
+        if let Some(previous) = &task.gate
+            && previous.outcome == Some(GateOutcome::Failed)
+        {
+            let reviewers = previous
+                .members
+                .iter()
+                .filter(|m| m.role == GateRole::Review);
+            // A round that had no reviewer (documentation then) approved nothing to keep.
+            if reviewers.clone().count() == 0 {
+                return needed;
+            }
+            return reviewers
+                .filter(|m| matches!(m.result, Some(GateResult::Failed { .. })))
+                .count();
         }
+        needed
     }
 
     /// Opens a new gate round on the task's candidate. `unreported` lists tracked changes the
@@ -1137,7 +1143,12 @@ fn verify_spec(
     }
     if let Some(why) = retry {
         spec.push_str(&format!(
-            "\nAn earlier verifier could not check this change:\n{why}\nFind a way to run what it couldn't."
+            "\nAn earlier verifier could not check this change:\n{why}\n{}",
+            if sandboxed {
+                "Run what it couldn't if your checkout lets you; what your sandbox refuses is [not run] or [excluded], with its error or rule."
+            } else {
+                "Find a way to run what it couldn't."
+            }
         ));
     }
     spec.push_str(
@@ -1151,14 +1162,15 @@ fn verify_spec(
     spec
 }
 
-/// A change to documentation only: Markdown and other text files, or anything under `docs/`.
+/// A change to documentation only: Markdown and other prose files, or anything under the
+/// top-level `docs/`.
 pub(crate) fn docs_only(files: &[crate::work::FileStat]) -> bool {
-    const TEXT: &[&str] = &["md", "mdx", "markdown", "txt", "rst", "adoc"];
+    // Not `.txt`: `requirements.txt` and `CMakeLists.txt` build things.
+    const TEXT: &[&str] = &["md", "mdx", "markdown", "rst", "adoc"];
     !files.is_empty()
         && files.iter().all(|file| {
             let path = file.path.trim_start_matches("./");
             path.starts_with("docs/")
-                || path.contains("/docs/")
                 || std::path::Path::new(path)
                     .extension()
                     .and_then(|ext| ext.to_str())
@@ -1230,9 +1242,9 @@ fn verify_docs_spec(task: &Task, commit: &str, kept: Option<&str>) -> String {
 /// how a check the sandbox or a rule forbids is given (PLAN.md §10.8).
 pub(crate) fn checks_setup(sandboxed: bool) -> String {
     format!(
-        "Its dependencies are already installed in this checkout: don't reinstall them{}. A smoke run that starts the app or a daemon keeps its data in your test data folder, never the app's real data folder{}. A check the task or the run's Rules forbid (\"don't launch the app\") is not run: give it as \"[excluded] <the check>: <the rule>\".",
+        "Its dependencies are copied into this checkout from the user's while its lockfiles match theirs: don't reinstall them{}. A smoke run that starts the app or a daemon keeps its data in your test data folder, never the app's real data folder{}. A check the task or the run's Rules forbid (\"don't launch the app\") is not run: give it as \"[excluded] <the check>: <the rule>\".",
         if sandboxed {
-            ""
+            " (a check that needs one a changed lockfile left out is [not run], with its error)"
         } else {
             " (install one only if a check says it is missing)"
         },
@@ -1747,7 +1759,15 @@ mod tests {
         ] {
             assert!(!sandboxed.contains(gone), "{gone}: {sandboxed}");
         }
-        assert!(sandboxed.contains("already installed"), "{sandboxed}");
+        assert!(
+            sandboxed.contains("copied into this checkout"),
+            "{sandboxed}"
+        );
+        // Nor when it checks again what an earlier verifier couldn't.
+        let why = "[not run] pnpm test: no node_modules".to_owned();
+        let again = verify_spec(&task, "c1", Some(&why), None, true);
+        assert!(!again.contains("Find a way"), "{again}");
+        assert!(again.contains("what your sandbox refuses is [not run] or [excluded]"));
         assert!(sandboxed.contains("[excluded] <the check>: the sandbox can't open windows"));
         assert!(sandboxed.contains("test data folder"), "{sandboxed}");
         let full = verify_spec(&task, "c1", None, None, false);
@@ -2453,6 +2473,15 @@ mod tests {
         }
         assert!(!risky_path("src/digit.rs") && !risky_path(".github/x.yml"));
         assert!(!docs_only(&[]));
+        // Files that build things, and code in a folder named docs, are not documentation.
+        for code in [
+            "requirements.txt",
+            "CMakeLists.txt",
+            "apps/desktop/src/app/docs/Viewer.tsx",
+        ] {
+            touching(&mut task, &[code]);
+            assert_eq!(SessionManager::panel_size(&task), 1, "{code}");
+        }
     }
 
     #[test]
@@ -2497,6 +2526,19 @@ mod tests {
         task.gate.as_mut().expect("a gate").outcome = Some(GateOutcome::Unverified);
         assert_eq!(kept_approvals(&task), None);
         assert_eq!(SessionManager::panel_size(&task), 2);
+        // A documentation change whose fix touches code: its round had no reviewer, so the
+        // fix gets the reviewers a code change gets.
+        let gate = task.gate.as_mut().expect("a gate");
+        gate.outcome = Some(GateOutcome::Failed);
+        gate.members = vec![checked(
+            "v",
+            GateRole::Verify,
+            GateResult::Failed {
+                findings: vec!["x".into()],
+            },
+        )];
+        touching(&mut task, &["README.md", "src/app.ts"]);
+        assert_eq!(SessionManager::panel_size(&task), 1);
     }
 
     #[test]
