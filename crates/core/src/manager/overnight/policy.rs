@@ -271,6 +271,19 @@ pub(crate) fn run_env(guard: Option<(&Path, &Path, &[String])>) -> Vec<(String, 
     env
 }
 
+/// `request` with the folder it runs in: its own, or else the worker's (relative paths in a
+/// command are resolved against it).
+fn with_cwd(
+    request: &brigadier_providers::ApprovalRequest,
+    cwd: Option<&std::path::Path>,
+) -> brigadier_providers::ApprovalRequest {
+    let mut request = request.clone();
+    if request.cwd.is_none() {
+        request.cwd = cwd.map(|cwd| cwd.to_string_lossy().into_owned());
+    }
+    request
+}
+
 impl super::super::SessionManager {
     /// A run worker's approval request, under [`ApprovalMode::Unattended`]: approved for the
     /// user unless it is on the never-list (an outward action, a change to the user's own
@@ -295,7 +308,8 @@ impl super::super::SessionManager {
         ) == Route::Deny
         {
             Some(Declined::Outward)
-        } else if policy::touches_protected(&request, &run.protected) {
+        } else if policy::touches_protected(&with_cwd(&request, run.cwd.as_deref()), &run.protected)
+        {
             Some(Declined::Checkout)
         } else {
             None
@@ -447,5 +461,42 @@ fn one_line(text: &str) -> String {
     match line.char_indices().nth(160) {
         Some((at, _)) => format!("{}…", &line[..at]),
         None => line,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_command_that_doesnt_say_where_it_runs_is_read_in_the_workers_folder() {
+        let base = std::env::temp_dir().join(format!("brigadier-cwd-{}", std::process::id()));
+        let (repo, worktree) = (base.join("repo"), base.join("worktree"));
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        // As Claude asks: the command alone, no folder.
+        let request = brigadier_providers::ApprovalRequest {
+            id: "1".into(),
+            kind: brigadier_providers::ApprovalKind::Command,
+            tool: "Bash".into(),
+            command: Some("rm -rf ../repo".into()),
+            cwd: None,
+            paths: Vec::new(),
+            reason: None,
+            escalation: false,
+            input: None,
+            grant: None,
+        };
+        let protected = [repo.clone()];
+        let touches = brigadier_providers::policy::touches_protected;
+        assert!(!touches(&request, &protected));
+        assert!(touches(&with_cwd(&request, Some(&worktree)), &protected));
+        // A folder of its own is kept.
+        let elsewhere = brigadier_providers::ApprovalRequest {
+            cwd: Some(base.join("x/y").display().to_string()),
+            ..request
+        };
+        assert!(!touches(&with_cwd(&elsewhere, Some(&worktree)), &protected));
+        std::fs::remove_dir_all(&base).unwrap();
     }
 }

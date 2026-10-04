@@ -137,6 +137,7 @@ const REMOVERS: &[&str] = &["rm", "rmdir", "unlink", "mv", "shred", "trash", "tr
 
 /// Git commands that change a checkout's files (or its index and stash).
 const GIT_TREE_CHANGERS: &[&str] = &[
+    "add",
     "am",
     "apply",
     "checkout",
@@ -146,13 +147,16 @@ const GIT_TREE_CHANGERS: &[&str] = &[
     "merge",
     "mv",
     "pull",
+    "read-tree",
     "rebase",
     "reset",
     "restore",
     "revert",
     "rm",
+    "stage",
     "stash",
     "switch",
+    "update-index",
 ];
 
 /// Whether `request` would change files under one of `protected` (the user's own checkout,
@@ -184,6 +188,14 @@ pub fn touches_protected(request: &ApprovalRequest, protected: &[std::path::Path
     };
     let inside = |path: Option<PathBuf>| {
         path.is_some_and(|path| roots.iter().any(|root| path.starts_with(root)))
+    };
+    // Removing or moving a folder that holds the checkout changes it too.
+    let inside_or_holds = |path: Option<PathBuf>| {
+        path.is_some_and(|path| {
+            roots
+                .iter()
+                .any(|root| path.starts_with(root) || root.starts_with(&path))
+        })
     };
     if request.kind == ApprovalKind::FileChange {
         return request
@@ -227,8 +239,19 @@ pub fn touches_protected(request: &ApprovalRequest, protected: &[std::path::Path
             }
             name if REMOVERS.contains(&name) => {
                 let in_dir = inside(dir.clone());
-                for arg in args.iter().filter(|arg| !arg.starts_with('-')) {
-                    if inside(resolve(arg, dir.as_deref())) || (in_dir && !arg.starts_with('/')) {
+                let operands: Vec<&String> =
+                    args.iter().filter(|arg| !arg.starts_with('-')).collect();
+                for (n, arg) in operands.iter().enumerate() {
+                    // `mv`'s last operand is where things go: a folder holding the checkout
+                    // may receive them.
+                    let into = name == "mv" && operands.len() > 1 && n + 1 == operands.len();
+                    let path = resolve(arg, dir.as_deref());
+                    let hit = if into {
+                        inside(path)
+                    } else {
+                        inside_or_holds(path)
+                    };
+                    if hit || (in_dir && !arg.starts_with('/')) {
                         return true;
                     }
                 }
@@ -1052,9 +1075,20 @@ mod tests {
             format!("cd {repo_text}/src && rm -f main.rs"),
             format!("mv {repo_text}/src /tmp/elsewhere"),
             format!("git -C {}/../repo restore .", worktree.display()),
+            format!("git -C {repo_text} add -A"),
+            format!("git -C {repo_text} update-index --assume-unchanged x"),
+            // A folder that holds the checkout.
+            format!("rm -rf {}", place.real().display()),
+            "rm -rf ..".to_owned(),
+            format!("mv {} /tmp/elsewhere", place.real().display()),
         ] {
             assert!(touches(&line, &worktree), "{line}");
         }
+        // Moving something into a folder that holds the checkout leaves the checkout alone.
+        assert!(!touches(
+            &format!("mv notes.md {}", place.real().display()),
+            &worktree
+        ));
         // In the request's folder.
         assert!(touches("git reset --hard", &repo));
         assert!(touches("rm -rf src", &repo.join("src")));

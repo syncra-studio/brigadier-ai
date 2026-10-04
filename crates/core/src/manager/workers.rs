@@ -159,6 +159,8 @@ pub(crate) struct RunApprovals {
     pub number: u32,
     /// The user's own checkout: run work never changes files there.
     pub protected: Vec<PathBuf>,
+    /// Where the worker works: a request that doesn't say where it runs (Claude's) runs there.
+    pub cwd: Option<PathBuf>,
 }
 
 impl TaskLiveState {
@@ -1360,6 +1362,7 @@ impl SessionManager {
                 run,
                 number: task.number,
                 protected: vec![workspace.repo.clone()],
+                cwd: state.cwd.clone(),
             });
             if !resumed {
                 state.context = None;
