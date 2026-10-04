@@ -2,7 +2,7 @@ import { Agent, ChevronRight, Stop } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { isFinal } from "@/app/conversation/blocks";
+import { isWorking } from "@/app/conversation/blocks";
 import { useAction } from "@/app/conversation/useAction";
 import { Changes, WorkerStripRow, workerStat } from "@/app/conversation/WorkerSummary";
 import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
@@ -13,10 +13,10 @@ import { stopTask } from "@/state/actions";
 import { useBoard } from "@/state/board";
 
 /**
- * The "N background workers" strip on the composer: while any worker of the session is still
- * at work, a line with how many, their total +N −N, Stop all and a chevron; opened, the
- * workers of those requests, one per row (glyph, name and what it is at, which opens it), and
- * the hint to tag them.
+ * The "N background workers" strip on the composer: while any worker of the session is really
+ * at work, a line with how many, the +N −N they haven't landed yet, Stop all and a chevron;
+ * opened, those workers, one per row (glyph, name and what it is at, which opens it), and the
+ * hint to tag them. Checkers count with what they check, and what landed or waits counts not.
  */
 export const BackgroundWorkers: FC<{ conversationId: string }> = ({ conversationId }) => {
   const tasks = useBoard(
@@ -27,13 +27,11 @@ export const BackgroundWorkers: FC<{ conversationId: string }> = ({ conversation
   const diffs = useBoard((s) => s.board?.diffs);
   const action = useAction();
   const [open, setOpen] = useState(false);
-  const alive = tasks.filter((task) => !isFinal(task));
-  if (alive.length === 0) return null;
-  const requests = new Set(alive.map((task) => task.requestId));
-  const listed = tasks
-    .filter((task) => requests.has(task.requestId))
+  const alive = tasks
+    .filter((task) => isWorking(task) && task.gateLink === null)
     .toSorted((a, b) => a.number - b.number);
-  const stats = listed.flatMap((task) => workerStat(task, diffs) ?? []);
+  if (alive.length === 0) return null;
+  const stats = alive.flatMap((task) => workerStat(task, diffs) ?? []);
   const insertions = stats.reduce((sum, stat) => sum + stat.insertions, 0);
   const deletions = stats.reduce((sum, stat) => sum + stat.deletions, 0);
   const summary = `${alive.length} background ${alive.length === 1 ? "worker" : "workers"}`;
@@ -89,7 +87,7 @@ export const BackgroundWorkers: FC<{ conversationId: string }> = ({ conversation
           </p>
         )}
         <CollapsibleContent className="data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up flex flex-col overflow-hidden pb-1">
-          {listed.map((task) => (
+          {alive.map((task) => (
             <WorkerStripRow key={task.id} taskId={task.id} className="ps-5" />
           ))}
         </CollapsibleContent>

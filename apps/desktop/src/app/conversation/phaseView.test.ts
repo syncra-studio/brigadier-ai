@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import { phaseViewOf, phaseWord } from "@/app/conversation/phaseView";
+import { phaseViewOf, phaseWord, runPill } from "@/app/conversation/phaseView";
 import { formatDuration } from "@/lib/format";
-import type { OvernightRun } from "@/ipc/generated";
+import type { OvernightRun, Plan, Task } from "@/ipc/generated";
 
 const runs = night.overnight as unknown as Record<string, OvernightRun>;
 const run = Object.values(runs)[0] as OvernightRun;
@@ -53,4 +53,41 @@ test("a phase still at work is live and has no outcome yet", () => {
   assert.equal(phase.word, "working");
   assert.equal(phase.endedAtMs, null);
   assert.equal(phase.outcome, null);
+});
+
+/** The night's run as it was while `phaseId` was at work. */
+function liveAt(phaseId: string): Record<string, OvernightRun> {
+  return {
+    [run.id]: {
+      ...run,
+      state: "running",
+      finishedAtMs: null,
+      phases: run.phases.map((phase) =>
+        phase.id === phaseId
+          ? { ...phase, state: "running", settledAtMs: null }
+          : phase.id > phaseId
+            ? { ...phase, state: "pending" }
+            : phase,
+      ),
+    },
+  };
+}
+
+const plans = night.plans as unknown as Record<string, Plan>;
+const tasks = night.tasks as unknown as Record<string, Task>;
+
+test("during a run the pill shows the run's phase and the steps of its approved plan", () => {
+  const pill = runPill(liveAt("phase-2"), plans, tasks);
+  assert.ok(pill);
+  assert.equal(pill.label, "Phase 2 of 3 · Fix · 3 of 4 steps");
+  assert.deepEqual(
+    pill.steps.map((step) => step.done),
+    [true, true, false, true],
+  );
+  // A phase without a plan of its own says only where the run is.
+  assert.equal(runPill(liveAt("phase-1"), plans, tasks)?.label, "Phase 1 of 3 · Measure");
+});
+
+test("once the run is over the pill shows nothing of it", () => {
+  assert.equal(runPill(runs, plans, tasks), null);
 });

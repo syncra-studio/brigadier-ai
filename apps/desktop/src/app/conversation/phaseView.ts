@@ -1,4 +1,4 @@
-import type { OvernightPhase, OvernightRun, PhaseState } from "@/ipc/generated";
+import type { OvernightPhase, OvernightRun, PhaseState, Plan, Task } from "@/ipc/generated";
 
 /**
  * An overnight phase as everything that names it says it: the run card, the phase's block in
@@ -121,4 +121,61 @@ export function phaseViewOf(runs: Readonly<Record<string, OvernightRun>>, reques
     }
   }
   return null;
+}
+
+/** A step's task that ended without its work done. */
+const ENDED: ReadonlySet<Task["state"]> = new Set(["stopped", "failed", "rejected"]);
+
+/** A run at work: started and not over yet. */
+export function runActive(run: OvernightRun): boolean {
+  return run.state !== "proposed" && !runOver(run);
+}
+
+/** The composer's pill during a run: where the run is, "Phase 2 of 3 · Fix · 2 of 4 steps". */
+export type RunPill = {
+  runId: string;
+  label: string;
+  /** The active phase's plan steps, done and in all, for the donut and the list. */
+  done: number;
+  total: number;
+  steps: readonly { title: string; done: boolean; active: boolean }[];
+};
+
+/**
+ * Where an active run is, for the pill: its phase at work (Phase 0 while it writes the plan),
+ * and the steps of that phase's approved plan that are done. A lead's plan inside the phase is
+ * that phase's steps, never the run's.
+ */
+export function runPill(
+  runs: Readonly<Record<string, OvernightRun>>,
+  plans: Readonly<Record<string, Plan>>,
+  tasks: Readonly<Record<string, Task>>,
+): RunPill | null {
+  const run = Object.values(runs)
+    .filter(runActive)
+    .toSorted((a, b) => b.createdAtMs - a.createdAtMs)[0];
+  if (!run) return null;
+  if (run.state === "windingDown" || run.state === "reporting")
+    return { runId: run.id, label: "Writing your report", done: 0, total: 0, steps: [] };
+  const index = run.phases.findIndex((phase) => phase.state === "running" || phase.state === "checking");
+  const phase = run.phases[index];
+  const requestId = phase?.requestId ?? run.planning?.requestId ?? null;
+  const where = phase
+    ? `Phase ${phase.number === index + 1 ? `${phase.number} of ${run.phases.length}` : phase.number} · ${phase.name}`
+    : run.planning && run.state === "planning"
+      ? "Phase 0 · Write the plan"
+      : null;
+  if (!where) return null;
+  const plan = Object.values(plans)
+    .filter((candidate) => requestId !== null && candidate.requestId === requestId && candidate.state.type === "approved")
+    .toSorted((a, b) => b.createdAtMs - a.createdAtMs)[0];
+  const steps = (plan?.steps ?? []).map((step) => {
+    const task = step.taskId ? tasks[step.taskId] : undefined;
+    const done = task?.state === "landed" || task?.state === "done";
+    const active = task !== undefined && !done && !ENDED.has(task.state);
+    return { title: step.title, done, active };
+  });
+  const done = steps.filter((step) => step.done).length;
+  const label = steps.length > 0 ? `${where} · ${done} of ${steps.length} steps` : where;
+  return { runId: run.id, label, done, total: steps.length, steps };
 }
