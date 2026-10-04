@@ -45,8 +45,6 @@ import { NEW_CHAT_SCOPE } from "@/state/drafts";
 export type ComposerInputProps = {
   placeholder: string;
   autoFocus: boolean;
-  /** One line (under an action card): it doesn't grow, it scrolls. */
-  line?: boolean;
 };
 
 /**
@@ -57,7 +55,6 @@ export type ComposerInputProps = {
 export default function ComposerEditor({
   placeholder,
   autoFocus,
-  line = false,
 }: ComposerInputProps) {
   const target = useContext(ComposerTargetContext);
   const memory = target?.mentions ?? null;
@@ -87,7 +84,6 @@ export default function ComposerEditor({
       formatter={formatter}
       mentionLook={look}
       onMention={onMention}
-      line={line}
       placeholder={placeholder}
       autoFocus={autoFocus}
       // Esc stops only on a second press (useEscToStop).

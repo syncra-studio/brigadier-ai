@@ -567,9 +567,6 @@ function FixturePage() {
                 action={{ type: "plan", id: "normal" }}
                 more={0}
                 onDismiss={() => calls.push({ method: "dismissPlan" })}
-                message={
-                  <input aria-label="Rail message" className="bg-muted rounded-control p-2" />
-                }
               />
             )}
             {summary ? (

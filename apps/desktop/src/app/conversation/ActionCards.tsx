@@ -21,6 +21,7 @@ import {
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
+import { pendingActionKeys, type PendingAction } from "@/app/conversation/pendingActions";
 import { PlanCardLink } from "@/app/conversation/cards/PlanCardLink";
 import { revealOvernight } from "@/app/conversation/summaryState";
 import { useAction } from "@/app/conversation/useAction";
@@ -39,6 +40,7 @@ import {
   actionButton,
   staggered,
 } from "@/components/assistant-ui/elements/action-card";
+import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -61,17 +63,10 @@ import { ALWAYS_ASK_NOTE } from "@/lib/setup";
 import { answerCard, answerQuestion, decidePlan } from "@/state/actions";
 import { useBoard } from "@/state/board";
 
-/*
- * A pending decision takes the composer's place: the approval card, the question card and
- * "Implement this plan?". Enter and Esc answer it from anywhere in the view. Brigadier keeps a
- * one-line message field in each (the user can always talk to the orchestrator; sending
- * steers or queues as usual).
- */
+/* Pending decisions sit on the rail above the full composer. Their shortcuts leave
+ * text fields, focused controls and open overlays to handle their own keys. */
 
-export type PendingAction = {
-  type: "approval" | "question" | "plan" | "overnight";
-  id: string;
-};
+export type { PendingAction } from "@/app/conversation/pendingActions";
 
 const NOTHING_ASIDE: readonly string[] = [];
 
@@ -122,52 +117,8 @@ const SKIPPED = "Skipped: use your best judgment.";
 export function usePendingActions(
   conversation: Conversation | null,
 ): PendingAction[] {
-  // Plan mode hands the plan to the user whatever the permission level.
-  const decidesPlans =
-    conversation?.setup?.type === "session" &&
-    (conversation.setup.permission === "askForApproval" ||
-      conversation.setup.planMode);
   const keys = useBoard(
-    useShallow((s) => {
-      const board = s.board;
-      if (!board || board.conversationId !== conversation?.id) return [];
-      const waiting: { key: string; position: number }[] = [];
-      for (const approval of Object.values(board.approvals)) {
-        if (approval.state.type === "pending") {
-          waiting.push({
-            key: `approval:${approval.id}`,
-            position: approval.position,
-          });
-        }
-      }
-      for (const question of Object.values(board.questions)) {
-        if (question.answer === null && question.answeredAtMs === null) {
-          waiting.push({
-            key: `question:${question.id}`,
-            position: question.position,
-          });
-        }
-      }
-      if (decidesPlans) {
-        for (const plan of Object.values(board.plans)) {
-          if (plan.state.type === "proposed") {
-            waiting.push({ key: `plan:${plan.id}`, position: plan.position });
-          }
-        }
-      }
-      // An overnight proposal waits for its Start, on its card; it comes after the rest.
-      for (const run of Object.values(board.overnight)) {
-        if (run.state === "proposed") {
-          waiting.push({
-            key: `overnight:${run.id}`,
-            position: Number.MAX_SAFE_INTEGER,
-          });
-        }
-      }
-      return waiting
-        .toSorted((a, b) => a.position - b.position)
-        .map((entry) => entry.key);
-    }),
+    useShallow((s) => pendingActionKeys(conversation, s.board)),
   );
   return keys.map((key) => {
     const [type, id] = key.split(":") as [PendingAction["type"], string];
@@ -188,8 +139,8 @@ function inField(target: EventTarget | null): boolean {
 }
 
 /**
- * Enter and Esc answer the card from anywhere in its view: not from a text field (the card's
- * message field sends), not Enter on a focused button or link (that clicks it), and not while
+ * Enter and Esc answer the card from anywhere in its view: not from a text field (the
+ * composer sends), not Enter on a focused button or link (that clicks it), and not while
  * a menu or dialog is open (they take their keys first). A side chat's keys are its own.
  */
 function useCardKeys(
@@ -225,66 +176,63 @@ function useCardKeys(
   }, [enabled]);
 }
 
-/** The card for one pending decision; `message` is the card's one-line message field. */
+/** One pending decision on the rail, above the composer. */
 export function PendingActionCard({
   action,
   more,
   onDismiss,
-  message,
 }: {
   action: PendingAction;
   /** How many more wait behind this one. */
   more: number;
   onDismiss: () => void;
-  message: ReactNode;
 }) {
   // A card that follows another (rather than the composer) fades its rows in.
   const [shown, setShown] = useState({ id: action.id, follows: false });
   if (shown.id !== action.id) setShown({ id: action.id, follows: true });
   const follows = shown.id !== action.id || shown.follows;
-  const footer = (
-    <div className="flex flex-col gap-2 px-3 pb-3">
-      {more > 0 && (
-        <p className="text-foreground/50 px-1 text-xs">
-          {more} more {more === 1 ? "decision waits" : "decisions wait"} after
-          this one
-        </p>
-      )}
-      {message}
-    </div>
+  const footer = more > 0 ? (
+    <p className="text-foreground/50 px-4 pb-3 text-xs">
+      {more} more {more === 1 ? "decision waits" : "decisions wait"} after this one
+    </p>
+  ) : null;
+  return (
+    <ComposerRailItem label="Waiting for you">{card()}</ComposerRailItem>
   );
-  switch (action.type) {
-    case "approval":
-      return <ApprovalAction key={action.id} id={action.id} footer={footer} />;
-    case "question":
-      return (
-        <QuestionAction
-          key={action.id}
-          id={action.id}
-          onDismiss={onDismiss}
-          footer={footer}
-          stagger={follows}
-        />
-      );
-    case "plan":
-      return (
-        <PlanAction
-          key={action.id}
-          id={action.id}
-          onDismiss={onDismiss}
-          footer={footer}
-          stagger={follows}
-        />
-      );
-    case "overnight":
-      return (
-        <OvernightAction
-          key={action.id}
-          id={action.id}
-          onDismiss={onDismiss}
-          footer={footer}
-        />
-      );
+
+  function card() {
+    switch (action.type) {
+      case "approval":
+        return <ApprovalAction key={action.id} id={action.id} footer={footer} />;
+      case "question":
+        return (
+          <QuestionAction
+            key={action.id}
+            id={action.id}
+            onDismiss={onDismiss}
+            footer={footer}
+            stagger={follows}
+          />
+        );
+      case "plan":
+        return (
+          <PlanAction
+            key={action.id}
+            id={action.id}
+            onDismiss={onDismiss}
+            footer={footer}
+          />
+        );
+      case "overnight":
+        return (
+          <OvernightAction
+            key={action.id}
+            id={action.id}
+            onDismiss={onDismiss}
+            footer={footer}
+          />
+        );
+    }
   }
 }
 
@@ -913,7 +861,6 @@ function PlanAction({
   id: string;
   onDismiss: () => void;
   footer: ReactNode;
-  stagger: boolean;
 }) {
   const plan = useBoard((s) => s.board?.plans[id]);
   const action = useAction();
@@ -927,9 +874,11 @@ function PlanAction({
   });
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2 px-3">
-        <PlanCardLink cardId={id} />
-        <Button type="button" size="xs" variant="ghost" onClick={onDismiss}>
+      <div className="min-h-row flex min-w-0 items-center gap-2 px-3">
+        <div className="min-w-0 flex-1">
+          <PlanCardLink cardId={id} />
+        </div>
+        <Button type="button" size="xs" variant="ghost" className="shrink-0" onClick={onDismiss}>
           Later
         </Button>
       </div>
@@ -961,17 +910,19 @@ function OvernightAction({
   if (!run) return null;
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2 px-3">
+      <div className="min-h-row flex min-w-0 items-center gap-2 px-3">
         <Button
           type="button"
           variant="link"
           size="sm"
-          className="h-auto min-w-0 justify-start px-0 text-start whitespace-normal wrap-anywhere"
+          className="h-auto min-w-0 flex-1 justify-start px-0 text-start"
           onClick={() => revealOvernight(id)}
         >
-          View plan: {run.name}
+          <span className="min-w-0 truncate" title={run.name}>
+            View plan: {run.name}
+          </span>
         </Button>
-        <Button type="button" size="xs" variant="ghost" onClick={onDismiss}>
+        <Button type="button" size="xs" variant="ghost" className="shrink-0" onClick={onDismiss}>
           Later
         </Button>
       </div>

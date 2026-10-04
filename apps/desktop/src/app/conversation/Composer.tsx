@@ -131,6 +131,13 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
           {conversation?.kind === "session" && !archived && (
             <BackgroundWorkers conversationId={conversation.id} />
           )}
+          {current && (
+            <PendingActionCard
+              action={current}
+              more={waiting.length - 1}
+              onDismiss={() => setAsideIds([...putAside, current.id])}
+            />
+          )}
           {pending.length > waiting.length && !archived && (
             <ComposerRailItem label="Waiting for you">
               <WaitingReminder count={pending.length - waiting.length} onShow={() => setAsideIds([])} />
@@ -138,25 +145,7 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
           )}
         </ComposerRail>
         <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col gap-1.5">
-          {current ? (
-            <PendingActionCard
-              action={current}
-              more={waiting.length - 1}
-              onDismiss={() => setAsideIds([...putAside, current.id])}
-              message={
-                // The user can always talk to the orchestrator; this steers or queues as usual,
-                // with the draft's attachments in view.
-                <div className="border-foreground/8 flex flex-col gap-1 border-t pt-2">
-                  <ComposerAttachments />
-                  <div className="flex items-center gap-1">
-                    <ComposerInput placeholder="Message Brigadier" autoFocus={false} line />
-                    <SendControls running={target.running} onResume={target.onResume} compact />
-                  </div>
-                </div>
-              }
-            />
-          ) : (
-          /* The composer's card: lifted, an inner hairline for an edge, and no focus ring. */
+          {/* The composer's card: lifted, an inner hairline for an edge, and no focus ring. */}
           <div
             data-slot="aui_composer-shell"
             className="@container/composer bg-composer rounded-composer shadow-hairline relative flex w-full cursor-text flex-col gap-1 p-2 backdrop-blur-lg"
@@ -212,7 +201,6 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
               <SendControls running={target.running} onResume={target.onResume} />
             </ComposerFooter>
           </div>
-          )}
           <ComposerHint target={target} />
         </ComposerPrimitive.Root>
       </div>
@@ -239,7 +227,7 @@ function ComposerDraft({
  * it doesn't hold up the first paint), a plain field on the same composer text until it loads.
  */
 function ComposerInput(props: ComposerInputProps) {
-  const { placeholder, autoFocus, line = false } = props;
+  const { placeholder, autoFocus } = props;
   return (
     <Suspense
       fallback={
@@ -249,12 +237,7 @@ function ComposerInput(props: ComposerInputProps) {
           cancelOnEscape={false}
           rows={1}
           aria-label="Message input"
-          className={cn(
-            "aui-composer-input caret-primary placeholder:text-muted-foreground/60 w-full resize-none bg-transparent outline-none",
-            line
-              ? "min-h-control-md max-h-control-md px-1 py-1.5 text-sm"
-              : "min-h-composer max-h-composer-max px-2 py-2.5 text-base",
-          )}
+          className="aui-composer-input caret-primary placeholder:text-muted-foreground/60 min-h-composer max-h-composer-max w-full resize-none bg-transparent px-2 py-2.5 text-base outline-none"
         />
       }
     >
@@ -438,12 +421,9 @@ const SEND_TIPS: Record<SendState, string> = {
 function SendControls({
   running,
   onResume,
-  compact = false,
 }: {
   running: boolean;
   onResume: (() => void) | null;
-  /** The one-line field under an action card. */
-  compact?: boolean;
 }) {
   const target = useContext(ComposerTargetContext);
   const conversationId = target?.conversation?.id ?? null;
@@ -454,7 +434,6 @@ function SendControls({
   const canCancel = useAuiState((s) => s.composer.canCancel);
   const armed = useEscToStop(canCancel);
   const dictationOwner = conversationId ?? NEW_CHAT_SCOPE;
-  const { phase } = useDictation(dictationOwner);
   const state: SendState =
     armed
       ? "armed"
@@ -494,8 +473,6 @@ function SendControls({
       </span>
     </TooltipIconButton>
   );
-  // The one-line field under an action card has no footer to give over to dictation.
-  if (phase.type === "recording" && compact) return <DictationBar owner={dictationOwner} compact />;
   return (
     <div className="flex shrink-0 items-center gap-1">
       <DictateButton owner={dictationOwner} />
@@ -604,14 +581,14 @@ function ComposerFooter({ owner, children }: { owner: string; children: ReactNod
  * The recording bar: Cancel, the microphone's waveform, Stop (the text goes to the caret) and
  * "Transcribe and send".
  */
-function DictationBar({ owner, compact = false }: { owner: string; compact?: boolean }) {
+function DictationBar({ owner }: { owner: string }) {
   const aui = useAui();
   const { levels } = useDictation(owner);
   return (
     <div
       data-slot="composer-dictation"
       data-phase="recording"
-      className={cn("flex min-w-0 items-center gap-1", compact ? "shrink-0" : "flex-1")}
+      className="flex min-w-0 flex-1 items-center gap-1"
     >
       <TooltipIconButton
         tooltip="Cancel dictation"
@@ -625,10 +602,7 @@ function DictationBar({ owner, compact = false }: { owner: string; compact?: boo
       </TooltipIconButton>
       <div
         aria-hidden
-        className={cn(
-          "flex h-7 min-w-0 items-center justify-end gap-0.5 overflow-hidden px-1",
-          compact ? "w-24" : "flex-1",
-        )}
+        className="flex h-7 min-w-0 flex-1 items-center justify-end gap-0.5 overflow-hidden px-1"
       >
         {levels.map((level, index) => (
           <span

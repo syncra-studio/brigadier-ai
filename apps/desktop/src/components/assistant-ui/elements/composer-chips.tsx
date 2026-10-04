@@ -385,10 +385,8 @@ export const ChipComposerInput: FC<
     mentionLook?: MentionLook;
     /** Hears each item picked from a menu (it's in the text as a chip by then). */
     onMention?: (item: Unstable_TriggerItem) => void;
-    /** One line (under an action card): it doesn't grow, it scrolls. */
-    line?: boolean;
   }
-> = ({ formatter, mentionLook, onMention, line = false, className, children, ...props }) => {
+> = ({ formatter, mentionLook, onMention, className, children, ...props }) => {
   const [scrolled, setScrolled] = useState(false);
   const editor = useRef<LexicalEditor | null>(null);
   const directivePluginProps = useMemo(
@@ -426,9 +424,7 @@ export const ChipComposerInput: FC<
           "relative w-full cursor-text",
           "[&_.aui-lexical-input]:caret-primary [&_.aui-lexical-input]:whitespace-pre-wrap [&_.aui-lexical-input]:wrap-anywhere [&_.aui-lexical-input]:outline-none",
           "[&_.aui-lexical-placeholder]:text-muted-foreground/60 [&_.aui-lexical-placeholder]:pointer-events-none [&_.aui-lexical-placeholder]:absolute [&_.aui-lexical-placeholder]:inset-0 [&_.aui-lexical-placeholder]:truncate [&_.aui-lexical-placeholder]:select-none",
-          line
-            ? "max-h-control-md text-sm [&_.aui-lexical-input]:min-h-control-md [&_.aui-lexical-input]:px-1 [&_.aui-lexical-input]:py-1.5 [&_.aui-lexical-placeholder]:px-1 [&_.aui-lexical-placeholder]:py-1.5"
-            : "max-h-composer-max data-scrolled:mask-fade-top text-base [&_.aui-lexical-input]:min-h-composer [&_.aui-lexical-input]:px-2 [&_.aui-lexical-input]:py-2.5 [&_.aui-lexical-placeholder]:px-2 [&_.aui-lexical-placeholder]:py-2.5",
+          "max-h-composer-max data-scrolled:mask-fade-top text-base [&_.aui-lexical-input]:min-h-composer [&_.aui-lexical-input]:px-2 [&_.aui-lexical-input]:py-2.5 [&_.aui-lexical-placeholder]:px-2 [&_.aui-lexical-placeholder]:py-2.5",
           className,
         )}
       >

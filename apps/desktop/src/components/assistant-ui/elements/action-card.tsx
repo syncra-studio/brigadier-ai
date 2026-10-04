@@ -11,13 +11,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
-/*
- * The action cards, which take the composer's place while a decision waits: an
- * approval ("Terminal", the justification, the command, Deny / Allow once), a question
- * (numbered answers, the free-text row, Skip) and "Implement this plan?". One shell on the
- * composer's surface with a hairline border; each section pads itself. No enter animation:
- * the card swaps in for the composer as is.
- */
+/* Approval and question content on the composer rail; each section pads itself. */
 
 /** Squircle corners where the engine draws them; each radius grows a quarter to match. */
 const SQUIRCLE = "supports-[corner-shape:superellipse(1.5)]:[corner-shape:superellipse(1.5)]";
@@ -37,17 +31,14 @@ export function ActionCard({
     // oxlint-disable-next-line jsx-a11y/no-static-element-interactions
     <section
       data-slot="action-card"
-      // A click on the card's blank space stays on the card: the composer's form around it
-      // would move focus to the message field, and Enter would then send instead of answer.
+      // A click on the card's blank space keeps the user's current focus.
       onMouseDown={(event) => {
         event.stopPropagation();
         onMouseDown?.(event);
       }}
       className={cn(
         container === "approval" ? "@container/approval-card" : "@container/request-card",
-        // The rail's radius round, or a quarter more on a superellipse where the engine draws one.
-        "bg-composer border-foreground/8 text-foreground flex w-full flex-col rounded-rail border outline-none supports-[corner-shape:superellipse(1.5)]:rounded-[calc(var(--radius-rail)*1.25)]",
-        SQUIRCLE,
+        "text-foreground flex w-full flex-col outline-none",
         className,
       )}
       {...props}
@@ -154,8 +145,7 @@ export function ActionKbd({ children, variant }: { children: ReactNode; variant:
 
 /**
  * The approval's buttons: the choices pushed to the end, [Deny Esc] [Allow once ⏎]. Below
- * 28rem they stack full width and drop their key hints. (Not a form: the card sits in the
- * composer's.)
+ * 28rem they stack full width and drop their key hints.
  */
 export function ActionCardActions({
   leading,
