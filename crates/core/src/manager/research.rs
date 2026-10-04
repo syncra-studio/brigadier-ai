@@ -19,7 +19,7 @@ use brigadier_providers::{
     Access, ApprovalDecision, Origin as SessionOrigin, ProviderEvent, ProviderKind, Role,
     SessionSpec, Started, ToolSet, TurnInput, TurnStatus,
 };
-use brigadier_router::{QualityTier, ResearchNote, TaskCategory};
+use brigadier_router::{MergedModel, QualityTier, ResearchNote, TaskCategory};
 use serde::Deserialize;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
@@ -390,28 +390,23 @@ impl SessionManager {
     }
 
     async fn research_rankings(&self, id: &str, cancel: CancellationToken) {
-        let inputs = self.routing_inputs(None, now_ms()).await;
+        let now = now_ms();
+        let inputs = self.routing_inputs(None, now).await;
         let settings = self.core.settings();
-        let producer = inputs
-            .models
-            .iter()
-            .filter(|model| {
-                !model.excluded
-                    && self.provider_usable(model.provider)
+        let producer = pick_researcher(
+            &inputs.models,
+            &inputs.providers,
+            &inputs.registry,
+            now,
+            |model| {
+                self.provider_usable(model.provider)
                     && crate::routing::availability::model_available(
                         &settings,
                         model.provider,
                         &model.id,
                     )
-            })
-            .max_by(|a, b| {
-                a.tier.cmp(&b.tier).then_with(|| {
-                    a.strengths
-                        .get(&TaskCategory::Research)
-                        .unwrap_or(&5.0)
-                        .total_cmp(b.strengths.get(&TaskCategory::Research).unwrap_or(&5.0))
-                })
-            });
+            },
+        );
         let Some(producer) = producer else {
             self.runtime.registry().finish_refresh(
                 id,
@@ -497,6 +492,33 @@ it. Do not change any other facts."#,
             .registry()
             .finish_refresh(id, revision, &models, reply);
     }
+}
+
+/// The strongest model that may research now: not excluded (Fable never is picked), allowed by
+/// `allowed`, and with no used-up window of its own (a weekly Opus cap, say) even while its
+/// provider has quota left. Ties go to the better research score.
+fn pick_researcher<'a>(
+    models: &'a [MergedModel],
+    providers: &[brigadier_router::ProviderState],
+    registry: &brigadier_router::Registry,
+    now: i64,
+    allowed: impl Fn(&MergedModel) -> bool,
+) -> Option<&'a MergedModel> {
+    models
+        .iter()
+        .filter(|model| {
+            !model.excluded
+                && allowed(model)
+                && brigadier_router::available(model, providers, registry, now)
+        })
+        .max_by(|a, b| {
+            a.tier.cmp(&b.tier).then_with(|| {
+                a.strengths
+                    .get(&TaskCategory::Research)
+                    .unwrap_or(&5.0)
+                    .total_cmp(b.strengths.get(&TaskCategory::Research).unwrap_or(&5.0))
+            })
+        })
 }
 
 /// No repository request is polled until the IPC response has been flushed.
@@ -746,6 +768,61 @@ mod tests {
             })
             .await
             .is_err()
+        );
+    }
+
+    #[test]
+    fn researcher_skips_a_model_whose_own_window_is_used_up() {
+        let registry = brigadier_router::Registry::bundled();
+        let info = |id: &str| brigadier_providers::ModelInfo {
+            id: id.to_owned(),
+            display_name: id.to_owned(),
+            description: String::new(),
+            resolved: None,
+            efforts: vec!["low".into(), "medium".into(), "high".into()],
+            default_effort: Some("medium".into()),
+            is_default: false,
+            input_modalities: vec!["text".into()],
+            fast: None,
+            legacy: false,
+        };
+        let catalog = [info("opus"), info("sonnet")];
+        let models =
+            brigadier_router::merge(&registry, &[(ProviderKind::Claude, &catalog)], &[], &[]);
+        let state = |used_percent: f64| brigadier_router::ProviderState {
+            provider: ProviderKind::Claude,
+            logged_in: true,
+            quota: Some(brigadier_router::ProviderQuota {
+                provider: ProviderKind::Claude,
+                windows: vec![brigadier_router::WindowState {
+                    window: brigadier_providers::QuotaWindow {
+                        id: "seven_day_opus".into(),
+                        label: "Weekly (Opus)".into(),
+                        used_percent,
+                        resets_at_ms: Some(86_400_000),
+                        window_minutes: None,
+                        bucket: None,
+                        model: Some("opus".into()),
+                    },
+                    forecast: None,
+                    heat: brigadier_router::Heat::Cool,
+                }],
+                limit: None,
+                heat: brigadier_router::Heat::Cool,
+                observed_at_ms: None,
+            }),
+        };
+        let pick = |providers: &[brigadier_router::ProviderState]| {
+            pick_researcher(&models, providers, &registry, 0, |_| true)
+                .map(|model| model.id.clone())
+        };
+        assert_eq!(pick(&[state(10.0)]).as_deref(), Some("opus"));
+        assert_eq!(pick(&[state(100.0)]).as_deref(), Some("sonnet"));
+        assert_eq!(
+            pick_researcher(&models, &[state(10.0)], &registry, 0, |model| model.id
+                != "opus")
+            .map(|model| model.id.as_str()),
+            Some("sonnet")
         );
     }
 }
