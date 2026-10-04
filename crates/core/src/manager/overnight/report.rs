@@ -20,7 +20,7 @@ use super::super::decisions::{named, short_words, waiting_run};
 use super::super::gates::{criterion_evidence, without_marker};
 use super::super::{SessionManager, blocking, git_error};
 use super::directives::{Clock, parse};
-use super::wind_down::to_you;
+use super::wind_down::{CUT_OFF, to_you};
 use crate::board::Board;
 use crate::model::{DomainEvent, OvernightRunId, Setup};
 use crate::now_ms;
@@ -849,6 +849,10 @@ fn unverified_why(run: &OvernightRun, phase: &OvernightPhase) -> String {
             "missing: {}{more}",
             one_line(first, MISSING).trim_end_matches('.')
         );
+    }
+    // A phase its checks settled before the run ended says why in a gap of its own.
+    if let Some(gap) = phase.gaps.iter().find(|gap| !gap.starts_with(CUT_OFF)) {
+        return one_line(gap, MISSING).trim_end_matches('.').to_owned();
     }
     match &run.stop {
         Some(StopReason::Stopped) => "you stopped the run".into(),
@@ -1740,6 +1744,30 @@ Got in the way:
             without_titles("Landed task-41 “Record phase 2” on `brigadier/x/session`"),
             "Landed task-41 on `brigadier/x/session`"
         );
+    }
+
+    #[test]
+    fn a_phase_its_checks_settled_says_its_own_gap_not_the_runs_stop() {
+        let (mut run, board) = night();
+        let cut_off = |run: &OvernightRun| {
+            phase_lines(run, &board)
+                .into_iter()
+                .find(|line| line.contains("Phase 2"))
+                .expect("phase 2's line")
+        };
+        assert!(
+            cut_off(&run).contains("you stopped the run"),
+            "{}",
+            cut_off(&run)
+        );
+        // Settled partial by its own checks before the Stop, the run going on to another phase.
+        run.phases[1].gaps = vec!["No reviewer of another vendor was free.".into()];
+        let line = cut_off(&run);
+        assert!(
+            line.contains("No reviewer of another vendor was free"),
+            "{line}"
+        );
+        assert!(!line.contains("stopped the run"), "{line}");
     }
 
     #[test]

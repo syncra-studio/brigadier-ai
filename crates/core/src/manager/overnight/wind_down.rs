@@ -208,9 +208,7 @@ impl SessionManager {
                         }
                         // Cut off by the run's end, it is unfinished, not blocked: it needs nothing.
                         phase.state = PhaseState::Partial;
-                        phase
-                            .gaps
-                            .push(format!("Its whole-phase checks never passed: {reason}."));
+                        phase.gaps.push(format!("{CUT_OFF}{reason}."));
                         phase.settled_at_ms = Some(now_ms());
                     }
                     if let Some(planning) = now.planning.as_mut()
@@ -292,6 +290,9 @@ pub(super) fn to_you(text: &str) -> String {
             text.replace(stored, shown)
         })
 }
+
+/// How the gap of a phase the run's end cut off begins; why the run ended follows.
+pub(super) const CUT_OFF: &str = "Its whole-phase checks never passed: ";
 
 /// Why the run ended, as a phase's gap says it.
 fn stop_words(stop: Option<&StopReason>) -> String {
