@@ -1079,7 +1079,7 @@ impl SessionManager {
             &task,
             subject.as_ref(),
             Origin::New,
-            TurnInput { text, files },
+            TurnInput::with_files(text, files),
         )
         .await
     }
@@ -1431,10 +1431,7 @@ impl SessionManager {
                 &task,
                 subject.as_ref(),
                 Origin::Resume { native_id },
-                TurnInput {
-                    text,
-                    files: Vec::new(),
-                },
+                TurnInput::text(text),
             )
             .await?;
         }
@@ -2242,10 +2239,7 @@ impl SessionManager {
             live.state.lock().await.begin_turn();
             let sent = cli
                 .session
-                .send(TurnInput {
-                    text: "Continue the task.".into(),
-                    files: Vec::new(),
-                })
+                .send(TurnInput::text("Continue the task."))
                 .await;
             if cleared.is_ok() && sent.is_ok() {
                 return;
@@ -2261,13 +2255,7 @@ impl SessionManager {
                 }
             };
             live.state.lock().await.begin_turn();
-            let sent = cli
-                .session
-                .send(TurnInput {
-                    text: text.into(),
-                    files: Vec::new(),
-                })
-                .await;
+            let sent = cli.session.send(TurnInput::text(text)).await;
             if sent.is_ok() {
                 return;
             }
@@ -3072,10 +3060,7 @@ impl SessionManager {
                 false,
             ));
         };
-        let input = TurnInput {
-            text: format!("Message from {from}:\n{text}"),
-            files: Vec::new(),
-        };
+        let input = TurnInput::text(format!("Message from {from}:\n{text}"));
         // A worker still in the turn that reported is sent back all the same: its next
         // report must be taken, and its end of turn must not finish the task. The task is
         // reopened before that turn can end (the end waits for this lock).
@@ -3341,10 +3326,7 @@ impl SessionManager {
                 return self.start_fresh(&live, &task, first).await;
             }
         }
-        let continued = TurnInput {
-            text: "Continue the task.".into(),
-            files: Vec::new(),
-        };
+        let continued = TurnInput::text("Continue the task.");
         // The models the task may use changed while it was paused (a rule added meanwhile):
         // its CLI session starts again, resumed, so its sub-agents follow them.
         let models = self.allowed_models(&task).await;

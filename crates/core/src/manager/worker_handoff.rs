@@ -261,7 +261,7 @@ impl SessionManager {
         // prepared then, as a message starts a paused worker.
         if let Some(mut first) = live.take_held_handover().await {
             if let Some(pending) = pending {
-                let _ = write!(first.text, "\n\nWaiting for you now:\n{pending}");
+                first.append_text(&format!("\n\nWaiting for you now:\n{pending}"));
             }
             return self.start_fresh(live, task, first).await;
         }
@@ -348,7 +348,7 @@ impl SessionManager {
         let files = self
             .worker_files(&task, &PathBuf::from(&workspace.scratch))
             .await;
-        let first = TurnInput { text, files };
+        let first = TurnInput::with_files(text, files);
         match self.task_by_id(&task.conversation_id, &task.id).await {
             // Stopped meanwhile (the user's stop button): nothing starts again.
             Ok(now) if now.state.is_final() => Ok(()),

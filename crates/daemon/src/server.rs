@@ -991,9 +991,10 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             conversation_id,
             message_id,
             text,
+            attachments,
         } => {
             sessions
-                .edit_message(conversation_id, message_id, text)
+                .edit_message(conversation_id, message_id, text, attachments)
                 .await?;
             Response::EditMessage
         }

@@ -682,47 +682,101 @@ pub struct InputFile {
 
 impl InputFile {
     pub fn is_image(&self) -> bool {
-        matches!(
-            self.mime.as_str(),
-            "image/png" | "image/jpeg" | "image/gif" | "image/webp"
-        )
+        is_image_mime(&self.mime)
     }
 }
 
-/// What a turn (or a steer) sends: text, files, or both.
+/// Image formats supported by both provider adapters.
+pub fn is_image_mime(mime: &str) -> bool {
+    matches!(
+        mime,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+    )
+}
+
+/// One ordered piece of a turn's input.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InputPart {
+    Text(String),
+    Image(InputFile),
+}
+
+/// What a turn (or a steer) sends, in model-visible order.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TurnInput {
-    pub text: String,
+    pub parts: Vec<InputPart>,
+    /// Non-image files, named after the message when the adapters serialize it.
     pub files: Vec<InputFile>,
 }
 
 impl TurnInput {
     pub fn text(text: impl Into<String>) -> Self {
         Self {
-            text: text.into(),
+            parts: vec![InputPart::Text(text.into())],
             files: Vec::new(),
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.text.trim().is_empty() && self.files.is_empty()
+    /// The legacy attachment order: images first, then text and non-image file notes.
+    pub fn with_files(text: String, files: Vec<InputFile>) -> Self {
+        let (images, files): (Vec<_>, Vec<_>) = files.into_iter().partition(InputFile::is_image);
+        let mut parts: Vec<_> = images.into_iter().map(InputPart::Image).collect();
+        parts.push(InputPart::Text(text));
+        Self { parts, files }
     }
 
-    /// The text followed by a line per file that is not an image, naming where it is.
-    pub fn text_with_file_notes(&self) -> String {
-        let mut text = self.text.clone();
-        for file in self.files.iter().filter(|file| !file.is_image()) {
-            if !text.is_empty() {
-                text.push('\n');
-            }
-            text.push_str(&format!(
+    /// Finish non-image file notes only after all message text, including handoff follow-ups.
+    pub fn parts_with_file_notes(&self) -> Vec<InputPart> {
+        let mut parts = self.parts.clone();
+        for file in &self.files {
+            let note = format!(
                 "[Attached file \"{}\" ({}): {}]",
                 file.name,
                 file.mime,
                 file.path.display()
-            ));
+            );
+            if let Some(InputPart::Text(last)) = parts.last_mut() {
+                if !last.is_empty() {
+                    last.push('\n');
+                }
+                last.push_str(&note);
+            } else {
+                parts.push(InputPart::Text(note));
+            }
         }
-        text
+        parts
+    }
+
+    pub fn append_text(&mut self, text: &str) {
+        if let Some(InputPart::Text(last)) = self.parts.last_mut() {
+            last.push_str(text);
+        } else {
+            self.parts.push(InputPart::Text(text.into()));
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+            && self.parts.iter().all(|part| match part {
+                InputPart::Text(text) => text.trim().is_empty(),
+                InputPart::Image(_) => false,
+            })
+    }
+
+    /// Add context before the user's ordered message.
+    pub fn prepend_text(&mut self, text: &str) {
+        // Keep legacy row images before all text.
+        let at = self
+            .parts
+            .iter()
+            .position(|part| matches!(part, InputPart::Text(_)))
+            .unwrap_or(self.parts.len());
+        let prefix = format!("{text}\n\n");
+        if let Some(InputPart::Text(first)) = self.parts.get_mut(at) {
+            first.insert_str(0, &prefix);
+        } else {
+            self.parts.push(InputPart::Text(prefix));
+        }
     }
 }
 
@@ -868,4 +922,41 @@ pub enum Artifact {
     /// A short temp folder of a Claude session's own (`/tmp/brigadier-<id>`), for Claude's
     /// temp files and its sandboxed commands' TMPDIR.
     ClaudeTempDir { path: String },
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+
+    #[test]
+    fn handoff_follow_up_precedes_file_notes_in_the_same_text_part() {
+        let file = InputFile {
+            path: "/attachments/readme.txt".into(),
+            name: "readme.txt".into(),
+            mime: "text/plain".into(),
+        };
+        let mut input = TurnInput::with_files("briefing".into(), vec![file]);
+        input.append_text("\n\nWaiting for you now:\nquestion");
+        assert_eq!(input.parts_with_file_notes(), vec![InputPart::Text("briefing\n\nWaiting for you now:\nquestion\n[Attached file \"readme.txt\" (text/plain): /attachments/readme.txt]".into())]);
+    }
+
+    #[test]
+    fn legacy_files_keep_images_first_and_exact_file_notes() {
+        let image = InputFile {
+            path: "/attachments/photo.png".into(),
+            name: "photo.png".into(),
+            mime: "image/png".into(),
+        };
+        let file = InputFile {
+            path: "/attachments/readme.txt".into(),
+            name: "readme.txt".into(),
+            mime: "text/plain".into(),
+        };
+        let mut input = TurnInput::with_files("user".into(), vec![file, image.clone()]);
+        input.prepend_text("context");
+        assert_eq!(input.parts_with_file_notes(), vec![InputPart::Image(image), InputPart::Text("context\n\nuser\n[Attached file \"readme.txt\" (text/plain): /attachments/readme.txt]".into())]);
+        assert!(TurnInput::default().is_empty());
+        assert!(TurnInput::text(" \n").is_empty());
+        assert!(!input.is_empty());
+    }
 }

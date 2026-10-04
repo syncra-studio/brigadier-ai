@@ -20,7 +20,7 @@ use super::conversation::ConvLive;
 use crate::board::Board;
 use crate::model::{ConversationId, ConversationKind, MessageRole};
 use crate::sessions::{branch_of, one_line, parent_of};
-use crate::work::{ApprovalSubject, CardState, PlanState, QuestionKind};
+use crate::work::{ApprovalSubject, AttachmentRef, CardState, PlanState, QuestionKind};
 use crate::{Error, Result, now_ms};
 
 /// Characters of the user's message quoted when the orchestrator is told of a switch.
@@ -37,6 +37,7 @@ impl SessionManager {
         id: ConversationId,
         message_id: String,
         text: String,
+        attachments: Option<Vec<AttachmentRef>>,
     ) -> Result<()> {
         self.admit()?;
         if text.trim().is_empty() {
@@ -68,12 +69,16 @@ impl SessionManager {
                 ))
             }
         };
+        let attachments = edited_attachments(
+            &text,
+            attachments.as_deref().unwrap_or(&original.attachments),
+        );
         let edited = self
             .core
             .append_user_message_under(
                 id.clone(),
                 text,
-                original.attachments.clone(),
+                attachments,
                 original.mentions.clone(),
                 Some(parent),
             )
@@ -298,4 +303,45 @@ fn landed(board: &Board, request: &str) -> bool {
                     ApprovalSubject::Landing { .. } | ApprovalSubject::FinishSession { .. }
                 )
         })
+}
+
+/// Edits remove deliberately deleted inline images instead of invoking the missing-token fallback.
+fn edited_attachments(text: &str, attachments: &[AttachmentRef]) -> Vec<AttachmentRef> {
+    attachments
+        .iter()
+        .filter(|attachment| {
+            !attachment.inline || text.contains(&format!("[image:{}]", attachment.id))
+        })
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editing_keeps_rows_and_only_inline_refs_with_tokens() {
+        let row = AttachmentRef {
+            id: "a".into(),
+            name: "a.png".into(),
+            mime: "image/png".into(),
+            bytes: 1,
+            pasted: false,
+            inline: false,
+        };
+        let mut inline = row.clone();
+        inline.inline = true;
+        let mut removed = inline.clone();
+        removed.id = "b".into();
+        let attachments = vec![row.clone(), inline.clone(), removed];
+        assert_eq!(
+            edited_attachments("keep [image:a] twice [image:a]", &attachments),
+            vec![row.clone(), inline]
+        );
+        assert_eq!(
+            edited_attachments("removed [image:a-longer]", &attachments),
+            vec![row]
+        );
+    }
 }

@@ -704,6 +704,7 @@ impl Core {
             mime,
             bytes: size,
             pasted,
+            inline: false,
         })
     }
 

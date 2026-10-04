@@ -260,7 +260,7 @@ impl SessionManager {
                     &task,
                     subject.as_ref(),
                     brigadier_providers::Origin::New,
-                    TurnInput { text: first, files },
+                    TurnInput::with_files(first, files),
                 )
                 .await
             }

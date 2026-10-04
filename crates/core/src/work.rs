@@ -29,6 +29,9 @@ pub struct AttachmentRef {
     /// they wrote, so it goes to the model as their message.
     #[serde(default)]
     pub pasted: bool,
+    /// A pasted image placed at its `[image:<id>]` token in the message.
+    #[serde(default)]
+    pub inline: bool,
 }
 
 // ----- tasks and workers ------------------------------------------------------------------
@@ -1550,5 +1553,27 @@ mod tests {
         }))
         .expect("an old gate");
         assert!(gate.findings.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::*;
+
+    #[test]
+    fn old_attachment_defaults_to_non_inline() {
+        let attachment: AttachmentRef = serde_json::from_str(
+            r#"{"id":"hash","name":"photo.png","mime":"image/png","bytes":12}"#,
+        )
+        .unwrap();
+        assert!(!attachment.inline);
+        assert!(!attachment.pasted);
+        let mut inline = attachment;
+        inline.inline = true;
+        let saved = serde_json::to_string(&inline).unwrap();
+        assert_eq!(
+            serde_json::from_str::<AttachmentRef>(&saved).unwrap(),
+            inline
+        );
     }
 }

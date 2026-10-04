@@ -360,6 +360,10 @@ pub enum Request {
         conversation_id: ConversationId,
         message_id: String,
         text: String,
+        /// When omitted, reuse the original refs and drop removed inline tokens.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        attachments: Option<Vec<AttachmentRef>>,
     },
     /// Answers a request again from its user message (same limits as editing).
     Regenerate {
@@ -1409,5 +1413,36 @@ impl From<brigadier_core::Error> for IpcError {
             code,
             message: err.to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod inline_edit_tests {
+    use super::*;
+
+    #[test]
+    fn edit_attachments_are_optional_and_preserve_inline_refs() {
+        let old: Request = serde_json::from_value(serde_json::json!({
+            "method": "editMessage", "conversationId": "conv", "messageId": "message", "text": "edited"
+        })).unwrap();
+        assert!(matches!(
+            old,
+            Request::EditMessage {
+                attachments: None,
+                ..
+            }
+        ));
+        let new: Request = serde_json::from_value(serde_json::json!({
+            "method": "editMessage", "conversationId": "conv", "messageId": "message", "text": "[image:a]",
+            "attachments": [{"id":"a", "name":"a.png", "mime":"image/png", "bytes":1, "inline":true}]
+        })).unwrap();
+        let Request::EditMessage {
+            attachments: Some(refs),
+            ..
+        } = new
+        else {
+            panic!("expected refs")
+        };
+        assert!(refs[0].inline);
     }
 }

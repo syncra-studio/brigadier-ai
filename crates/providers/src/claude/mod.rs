@@ -1135,28 +1135,37 @@ impl ClaudeSession {
         }
     }
 
+    async fn input_content(input: &TurnInput) -> Result<Vec<Value>> {
+        let mut content = Vec::with_capacity(input.parts.len());
+        for part in &input.parts_with_file_notes() {
+            match part {
+                crate::InputPart::Text(text) if !text.trim().is_empty() => {
+                    content.push(json!({ "type": "text", "text": text }));
+                }
+                crate::InputPart::Text(_) => {}
+                crate::InputPart::Image(file) => {
+                    let bytes = tokio::fs::read(&file.path).await.map_err(|err| {
+                        Error::Invalid(format!("attachment {}: {err}", file.path.display()))
+                    })?;
+                    content.push(json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": file.mime,
+                            "data": BASE64.encode(bytes),
+                        },
+                    }));
+                }
+            }
+        }
+        Ok(content)
+    }
+
     async fn write_message(&self, input: TurnInput) -> Result<()> {
         if input.is_empty() {
             return Err(Error::Invalid("the message is empty".into()));
         }
-        let mut content = Vec::with_capacity(input.files.len() + 1);
-        for file in input.files.iter().filter(|file| file.is_image()) {
-            let bytes = tokio::fs::read(&file.path).await.map_err(|err| {
-                Error::Invalid(format!("attachment {}: {err}", file.path.display()))
-            })?;
-            content.push(json!({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": file.mime,
-                    "data": BASE64.encode(bytes),
-                },
-            }));
-        }
-        let text = input.text_with_file_notes();
-        if !text.trim().is_empty() {
-            content.push(json!({ "type": "text", "text": text }));
-        }
+        let content = Self::input_content(&input).await?;
         // Told before writing, so the parser knows of it before Claude can answer.
         let _ = self.parser.send(ParserCommand::WroteMessage);
         let written = self.process.write_line(&parse::user_message(content)).await;
@@ -1349,6 +1358,41 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn inline_content_preserves_text_image_text_order() {
+        let dir = Temp::new();
+        let path = dir.path().join("image.png");
+        std::fs::write(&path, [1, 2, 3]).unwrap();
+        let file = crate::InputFile {
+            path,
+            name: "image.png".into(),
+            mime: "image/png".into(),
+        };
+        let input = TurnInput {
+            parts: vec![
+                crate::InputPart::Text("before".into()),
+                crate::InputPart::Image(file.clone()),
+                crate::InputPart::Text("between".into()),
+                crate::InputPart::Image(file),
+                crate::InputPart::Text("after".into()),
+            ],
+            files: Vec::new(),
+        };
+        let content = ClaudeSession::input_content(&input).await.unwrap();
+        assert_eq!(
+            content
+                .iter()
+                .map(|part| part["type"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["text", "image", "text", "image", "text"]
+        );
+        assert_eq!(content[0]["text"], "before");
+        assert_eq!(content[2]["text"], "between");
+        assert_eq!(content[4]["text"], "after");
+        assert_eq!(content[1]["source"]["data"], "AQID");
+        assert_eq!(content[1], content[3]);
+    }
 
     /// A fresh folder, removed after the test.
     struct Temp(PathBuf);

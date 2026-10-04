@@ -29,9 +29,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use brigadier_providers::{
-    Access, ApprovalDecision, Artifact, Decider, ErrorKind, InputFile, ItemStatus, LimitHit,
-    McpServer, Origin, ProviderEvent, ProviderKind, ProviderSession, Role as ProviderRole,
-    SessionSpec, Started, ToolSet, TurnInput, TurnStatus,
+    Access, ApprovalDecision, Artifact, Decider, ErrorKind, InputFile, InputPart, ItemStatus,
+    LimitHit, McpServer, Origin, ProviderEvent, ProviderKind, ProviderSession,
+    Role as ProviderRole, SessionSpec, Started, ToolSet, TurnInput, TurnStatus,
 };
 use brigadier_store::StreamPage;
 use tokio::sync::mpsc;
@@ -744,10 +744,7 @@ impl SessionManager {
         let steered = match (&state.cli, state.busy) {
             (Some(cli), true) => cli
                 .session
-                .steer(TurnInput {
-                    text: text.clone(),
-                    files: Vec::new(),
-                })
+                .steer(TurnInput::text(text.clone()))
                 .await
                 .is_ok(),
             _ => false,
@@ -1358,7 +1355,7 @@ impl SessionManager {
                 text.len(),
             )
             .await;
-            input.text = format!("{text}\n\n{}", input.text);
+            input.prepend_text(text.as_ref());
             reborn = Some((plan, record));
         } else if reseed {
             let transcript = self.reseed_text(&conv.id, &users).await;
@@ -1371,7 +1368,7 @@ impl SessionManager {
                     transcript.len(),
                 )
                 .await;
-                input.text = format!("{transcript}\n\n{}", input.text);
+                input.prepend_text(&transcript);
             }
         }
         // What changed in its instructions since the session last heard (the date, a setting,
@@ -1384,7 +1381,7 @@ impl SessionManager {
                 .map(|note| note.text.as_str())
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            input.text = format!("{text}\n\n{}", input.text);
+            input.prepend_text(&text);
         }
         for message in &users {
             self.log_user_injection(&conv, message).await;
@@ -1770,37 +1767,54 @@ impl SessionManager {
     ) -> TurnInput {
         let mut parts = Vec::new();
         let mut files = Vec::new();
+        let mut copied = HashMap::new();
+        let mut ordered = Vec::new();
         for message in users {
-            let mut text = self.full_text(message).await;
-            for attachment in &message.attachments {
+            let user_text = self.full_text(message).await;
+            let plan = image_plan(&user_text, &message.attachments, &copied);
+            for attachment in &plan.copies {
+                copied.insert(
+                    attachment.id.clone(),
+                    self.attachment_file(conv, attachment).await,
+                );
+            }
+            let mut inline = inline_image_parts(&user_text, &plan.tokens, &copied);
+            for attachment in &plan.rows {
                 if attachment.pasted
                     && let Ok(pasted) = self.core.read_blob_text(attachment.id.clone()).await
                 {
-                    push_block(&mut text, &pasted_inline(&pasted, attachment, conv.kind));
+                    push_input_block(&mut inline, &pasted_inline(&pasted, attachment, conv.kind));
                     continue;
                 }
                 if conv.kind == ConversationKind::Chat && !is_image(&attachment.mime) {
-                    text.push_str(&self.inline_attachment(attachment).await);
+                    append_input_text(&mut inline, &self.inline_attachment(attachment).await);
                     continue;
                 }
                 if is_image(&attachment.mime)
-                    && let Some(file) = self.attachment_file(conv, attachment).await
+                    && let Some(Some(file)) = copied.get(&attachment.id)
                 {
-                    files.push(file);
+                    files.push(InputFile {
+                        path: file.path.clone(),
+                        name: attachment.name.clone(),
+                        mime: attachment.mime.clone(),
+                    });
                 }
                 if conv.kind == ConversationKind::Session {
-                    text.push_str(&format!(
-                        "\n[attachment {} \"{}\" ({}, {} bytes){}]",
-                        attachment.id,
-                        attachment.name,
-                        attachment.mime,
-                        attachment.bytes,
-                        if is_image(&attachment.mime) {
-                            ""
-                        } else {
-                            "; pass its id to delegate_task so a worker can read it"
-                        }
-                    ));
+                    append_input_text(
+                        &mut inline,
+                        &format!(
+                            "\n[attachment {} \"{}\" ({}, {} bytes){}]",
+                            attachment.id,
+                            attachment.name,
+                            attachment.mime,
+                            attachment.bytes,
+                            if is_image(&attachment.mime) {
+                                ""
+                            } else {
+                                "; pass its id to delegate_task so a worker can read it"
+                            }
+                        ),
+                    );
                 }
             }
             for mention in &message.mentions {
@@ -1809,21 +1823,24 @@ impl SessionManager {
                         if let Ok(tasks) = self.core.tasks(&conv.id).await
                             && let Some(task) = tasks.iter().find(|t| &t.id == id)
                         {
-                            text.push_str(&format!(
-                                "\n[mentions task-{}: {}]",
-                                task.number, task.title
-                            ));
+                            append_input_text(
+                                &mut inline,
+                                &format!("\n[mentions task-{}: {}]", task.number, task.title),
+                            );
                         }
                     }
                     Mention::File { path } => {
-                        text.push_str(&format!("\n[mentions the file {path}]"));
+                        append_input_text(&mut inline, &format!("\n[mentions the file {path}]"));
                     }
                     Mention::Chat { id, title } => {
-                        text.push_str(&self.mentioned_chat(id, title).await);
+                        append_input_text(&mut inline, &self.mentioned_chat(id, title).await);
                     }
                 }
             }
-            parts.push(text);
+            if !ordered.is_empty() {
+                ordered.push(InputPart::Text("\n\n".into()));
+            }
+            ordered.append(&mut inline);
         }
         if let Ok(board) = self.core.board(&conv.id).await
             && let Some(run) = board
@@ -1848,9 +1865,26 @@ impl SessionManager {
             parts.push(PLAN_MODE_NOTE.into());
         }
         parts.extend(notes.iter().cloned());
+        if !parts.is_empty() {
+            if !ordered.is_empty() {
+                ordered.push(InputPart::Text("\n\n".into()));
+            }
+            ordered.push(InputPart::Text(parts.join("\n\n")));
+        }
+        // Row images keep today's image-first order. Inline images stay in the user text.
+        let mut merged: Vec<_> = files.into_iter().map(InputPart::Image).collect();
+        // Joining adjacent text preserves today's single text block for ordinary turns.
+        for part in ordered {
+            match (merged.last_mut(), part) {
+                (Some(InputPart::Text(previous)), InputPart::Text(text)) => {
+                    previous.push_str(&text)
+                }
+                (_, part) => merged.push(part),
+            }
+        }
         TurnInput {
-            text: parts.join("\n\n"),
-            files,
+            parts: merged,
+            files: Vec::new(),
         }
     }
 
@@ -4124,11 +4158,112 @@ fn pasted_inline(text: &str, attachment: &AttachmentRef, kind: ConversationKind)
     )
 }
 
+/// Image placement and attachment work for one message. Copy candidates exclude cached ids.
+struct ImagePlan<'a> {
+    tokens: Vec<(std::ops::Range<usize>, &'a AttachmentRef)>,
+    rows: Vec<&'a AttachmentRef>,
+    copies: Vec<&'a AttachmentRef>,
+}
+
+fn image_plan<'a>(
+    text: &str,
+    attachments: &'a [AttachmentRef],
+    copied: &HashMap<String, Option<InputFile>>,
+) -> ImagePlan<'a> {
+    let mut tokens = Vec::new();
+    let mut used = HashSet::new();
+    let mut cursor = 0;
+    while let Some(offset) = text[cursor..].find("[image:") {
+        let start = cursor + offset;
+        let id_start = start + 7;
+        // A nested opening bracket means this token is incomplete. Resume there so a real
+        // token after the malformed prefix can still match.
+        let Some(boundary) = text[id_start..].find(['[', ']']) else {
+            break;
+        };
+        let end = id_start + boundary;
+        if text.as_bytes()[end] == b'[' {
+            cursor = end;
+            continue;
+        }
+        let id = &text[id_start..end];
+        if let Some(attachment) = attachments
+            .iter()
+            .find(|a| a.inline && a.id == id && is_image(&a.mime))
+        {
+            tokens.push((start..end + 1, attachment));
+            used.insert(id);
+        }
+        cursor = end + 1;
+    }
+    let rows = attachments
+        .iter()
+        .filter(|a| !(a.inline && is_image(&a.mime) && used.contains(a.id.as_str())))
+        .collect();
+    let mut seen: HashSet<_> = copied.keys().map(String::as_str).collect();
+    let copies = attachments
+        .iter()
+        .filter(|a| is_image(&a.mime) && seen.insert(a.id.as_str()))
+        .collect();
+    ImagePlan {
+        tokens,
+        rows,
+        copies,
+    }
+}
+
+/// Materialize the plan's ordered parts without changing any unmatched text.
+fn inline_image_parts(
+    text: &str,
+    tokens: &[(std::ops::Range<usize>, &AttachmentRef)],
+    files: &HashMap<String, Option<InputFile>>,
+) -> Vec<InputPart> {
+    let mut parts = Vec::new();
+    let mut cursor = 0;
+    for (number, (range, attachment)) in tokens.iter().enumerate() {
+        parts.push(InputPart::Text(format!(
+            "{}[pasted image {} here: {}, attachment id {}]",
+            &text[cursor..range.start],
+            number + 1,
+            attachment.name,
+            attachment.id
+        )));
+        if let Some(Some(file)) = files.get(&attachment.id) {
+            parts.push(InputPart::Image(InputFile {
+                path: file.path.clone(),
+                name: attachment.name.clone(),
+                mime: attachment.mime.clone(),
+            }));
+        }
+        cursor = range.end;
+    }
+    parts.push(InputPart::Text(text[cursor..].into()));
+    parts
+}
+
+fn append_input_text(parts: &mut Vec<InputPart>, text: &str) {
+    if let Some(InputPart::Text(last)) = parts.last_mut() {
+        last.push_str(text);
+    } else {
+        parts.push(InputPart::Text(text.into()));
+    }
+}
+
+/// Preserve push_block's replacement of whitespace-only user text, without byte slicing.
+fn push_input_block(parts: &mut Vec<InputPart>, block: &str) {
+    if parts
+        .iter()
+        .all(|part| matches!(part, InputPart::Text(text) if text.trim().is_empty()))
+    {
+        parts.clear();
+        parts.push(InputPart::Text(block.into()));
+    } else {
+        append_input_text(parts, &format!("\n\n{block}"));
+    }
+}
+
 fn is_image(mime: &str) -> bool {
-    matches!(
-        mime,
-        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
-    )
+    brigadier_providers::model::is_image_mime(mime)
 }
 
 /// A file name that is safe inside a folder.
@@ -4211,6 +4346,143 @@ fn setup_choice(conversation: &crate::model::Conversation) -> Option<ModelChoice
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn image_ref(id: &str, inline: bool, mime: &str) -> AttachmentRef {
+        AttachmentRef {
+            id: id.into(),
+            name: format!("{id}.png"),
+            mime: mime.into(),
+            bytes: 3,
+            pasted: false,
+            inline,
+        }
+    }
+
+    fn image_files(attachments: &[AttachmentRef]) -> HashMap<String, Option<InputFile>> {
+        attachments
+            .iter()
+            .map(|a| {
+                (
+                    a.id.clone(),
+                    Some(InputFile {
+                        path: std::path::PathBuf::from(format!("/attachments/{}", a.id)),
+                        name: a.name.clone(),
+                        mime: a.mime.clone(),
+                    }),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn inline_images_follow_token_order_and_number_each_occurrence() {
+        let attachments = vec![
+            image_ref("a", true, "image/png"),
+            image_ref("b", true, "image/jpeg"),
+        ];
+        let files = image_files(&attachments);
+        let text = "before [image:a] between [image:b] again [image:a] after";
+        let plan = image_plan(text, &attachments, &HashMap::new());
+        let parts = inline_image_parts(text, &plan.tokens, &files);
+        assert_eq!(
+            parts,
+            vec![
+                InputPart::Text("before [pasted image 1 here: a.png, attachment id a]".into()),
+                InputPart::Image(files["a"].clone().unwrap()),
+                InputPart::Text(" between [pasted image 2 here: b.png, attachment id b]".into()),
+                InputPart::Image(files["b"].clone().unwrap()),
+                InputPart::Text(" again [pasted image 3 here: a.png, attachment id a]".into()),
+                InputPart::Image(files["a"].clone().unwrap()),
+                InputPart::Text(" after".into()),
+            ]
+        );
+        assert_eq!(plan.tokens.len(), 3);
+        let plan = image_plan("[image:a]", &attachments, &files);
+        let one = inline_image_parts("[image:a]", &plan.tokens, &files);
+        assert_eq!(one.len(), 3);
+        assert_eq!(one[1], InputPart::Image(files["a"].clone().unwrap()));
+        let text = "é [image:unknown] [image:a] [image:unfinished";
+        let plan = image_plan(text, &attachments, &files);
+        let mixed = inline_image_parts(text, &plan.tokens, &files);
+        assert_eq!(
+            mixed[0],
+            InputPart::Text(
+                "é [image:unknown] [pasted image 1 here: a.png, attachment id a]".into()
+            )
+        );
+        assert_eq!(mixed[2], InputPart::Text(" [image:unfinished".into()));
+    }
+
+    #[test]
+    fn unknown_row_unsupported_and_unclosed_tokens_stay_literal() {
+        let attachments = vec![
+            image_ref("row", false, "image/png"),
+            image_ref("svg", true, "image/svg+xml"),
+        ];
+        let text = "literal [image:unknown] [image:row] [image:svg] [image:] [image:unfinished";
+        let files = image_files(&attachments);
+        let plan = image_plan(text, &attachments, &files);
+        let parts = inline_image_parts(text, &plan.tokens, &files);
+        assert_eq!(parts, vec![InputPart::Text(text.into())]);
+        assert!(plan.tokens.is_empty());
+    }
+
+    #[test]
+    fn missing_tokens_fall_back_and_rows_with_the_same_id_remain_attachments() {
+        let attachments = vec![
+            image_ref("a", false, "image/png"),
+            image_ref("a", true, "image/png"),
+            image_ref("missing", true, "image/png"),
+        ];
+        let files = image_files(&attachments);
+        let plan = image_plan("[image:a] again [image:a]", &attachments, &HashMap::new());
+        assert_eq!(plan.rows, vec![&attachments[0], &attachments[2]]);
+        assert_eq!(plan.copies, vec![&attachments[0], &attachments[2]]);
+        let parts = inline_image_parts("[image:a] again [image:a]", &plan.tokens, &files);
+        assert_eq!(parts[1], InputPart::Image(files["a"].clone().unwrap()));
+        assert_eq!(parts[3], parts[1]);
+        let next = image_plan("no token", &attachments, &files);
+        assert_eq!(next.rows, attachments.iter().collect::<Vec<_>>());
+        assert!(next.copies.is_empty());
+        let failed = HashMap::from([("a".into(), None)]);
+        let next = image_plan("[image:a]", &attachments, &failed);
+        assert_eq!(next.copies, vec![&attachments[2]]);
+    }
+
+    #[test]
+    fn whitespace_only_text_with_a_pasted_attachment_preserves_the_whole_paste() {
+        let attachment = AttachmentRef {
+            mime: "text/plain".into(),
+            pasted: true,
+            ..image_ref("text", false, "text/plain")
+        };
+        for text in [" \n", "                    ", "\u{2003}"] {
+            let plan = image_plan(text, std::slice::from_ref(&attachment), &HashMap::new());
+            let mut parts = inline_image_parts(text, &plan.tokens, &HashMap::new());
+            let pasted = pasted_inline("é", &attachment, ConversationKind::Chat);
+            push_input_block(&mut parts, &pasted);
+            assert_eq!(parts, vec![InputPart::Text("é".into())]);
+            push_input_block(&mut parts, "another paste");
+            assert_eq!(parts, vec![InputPart::Text("é\n\nanother paste".into())]);
+        }
+    }
+
+    #[test]
+    fn an_unclosed_token_does_not_swallow_a_following_image() {
+        let attachments = vec![image_ref("a", true, "image/png")];
+        let files = image_files(&attachments);
+        let text = "[image:x [image:a]";
+        let plan = image_plan(text, &attachments, &files);
+        assert_eq!(plan.tokens.len(), 1);
+        assert_eq!(
+            inline_image_parts(text, &plan.tokens, &files),
+            vec![
+                InputPart::Text("[image:x [pasted image 1 here: a.png, attachment id a]".into()),
+                InputPart::Image(files["a"].clone().unwrap()),
+                InputPart::Text(String::new()),
+            ]
+        );
+    }
 
     #[test]
     fn a_reply_that_ends_on_a_question_asks_the_user() {

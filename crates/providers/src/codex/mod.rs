@@ -1446,23 +1446,23 @@ impl CodexSession {
         if input.is_empty() {
             return Err(Error::Invalid("the message is empty".into()));
         }
-        let mut items: Vec<p::UserInput> = input
-            .files
-            .iter()
-            .filter(|file| file.is_image())
-            .map(|file| p::UserInput::LocalImageUserInput {
-                detail: None,
-                path: file.path.display().to_string(),
-                type_: p::LocalImageUserInputType::LocalImage,
-            })
-            .collect();
-        let text = input.text_with_file_notes();
-        if !text.trim().is_empty() {
-            items.push(p::UserInput::TextUserInput {
-                text,
-                text_elements: Vec::new(),
-                type_: p::TextUserInputType::Text,
-            });
+        let mut items = Vec::with_capacity(input.parts.len());
+        for part in &input.parts_with_file_notes() {
+            match part {
+                crate::InputPart::Image(file) => items.push(p::UserInput::LocalImageUserInput {
+                    detail: None,
+                    path: file.path.display().to_string(),
+                    type_: p::LocalImageUserInputType::LocalImage,
+                }),
+                crate::InputPart::Text(text) if !text.trim().is_empty() => {
+                    items.push(p::UserInput::TextUserInput {
+                        text: text.clone(),
+                        text_elements: Vec::new(),
+                        type_: p::TextUserInputType::Text,
+                    });
+                }
+                crate::InputPart::Text(_) => {}
+            }
         }
         Ok(items)
     }
@@ -1736,6 +1736,41 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inline_input_preserves_text_image_text_order() {
+        let file = crate::InputFile {
+            path: PathBuf::from("/attachments/image.png"),
+            name: "image.png".into(),
+            mime: "image/png".into(),
+        };
+        let input = TurnInput {
+            parts: vec![
+                crate::InputPart::Text("before".into()),
+                crate::InputPart::Image(file.clone()),
+                crate::InputPart::Text("between".into()),
+                crate::InputPart::Image(file),
+                crate::InputPart::Text("after".into()),
+            ],
+            files: Vec::new(),
+        };
+        let items = CodexSession::input(&input).unwrap();
+        let json: Vec<_> = items
+            .iter()
+            .map(|item| serde_json::to_value(item).unwrap())
+            .collect();
+        assert_eq!(
+            json.iter()
+                .map(|part| part["type"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["text", "localImage", "text", "localImage", "text"]
+        );
+        assert_eq!(json[0]["text"], "before");
+        assert_eq!(json[2]["text"], "between");
+        assert_eq!(json[4]["text"], "after");
+        assert_eq!(json[1]["path"], "/attachments/image.png");
+        assert_eq!(json[1], json[3]);
+    }
 
     fn spec(tools: ToolSet, allowed_models: Option<AllowedModels>) -> SessionSpec {
         SessionSpec {
