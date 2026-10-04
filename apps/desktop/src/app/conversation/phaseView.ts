@@ -17,6 +17,18 @@ export const PHASE_MARKS: Record<PhaseState, string> = {
   skipped: "–",
 };
 
+/**
+ * A morning report split at its `### Details` heading: what shows, and the details the thread
+ * folds (the whole-phase checks, workers and models, provider usage). Null when it has none.
+ */
+export function splitReport(text: string): { head: string; details: string } | null {
+  const at = text.search(/^### Details[ \t]*$/m);
+  const end = at < 0 ? -1 : text.indexOf("\n", at);
+  if (end < 0) return null;
+  const details = text.slice(end + 1).trim();
+  return details ? { head: text.slice(0, at).trimEnd(), details } : null;
+}
+
 /** Whether the run is over: nothing more happens in any of its phases. */
 export function runOver(run: OvernightRun): boolean {
   return run.state === "finished" || run.state === "superseded";

@@ -1,6 +1,7 @@
 import {
   ActionBarPrimitive,
   MessagePrimitive,
+  type TextMessagePartProps,
   useAuiState,
 } from "@assistant-ui/react";
 import {
@@ -32,7 +33,7 @@ import {
   isWorking,
   type SequenceEntry as Entry,
 } from "@/app/conversation/blocks";
-import { type PhaseView, phaseViewOf } from "@/app/conversation/phaseView";
+import { type PhaseView, phaseViewOf, splitReport } from "@/app/conversation/phaseView";
 import { PhaseChecksRow, TaskRow } from "@/app/conversation/TaskRow";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
@@ -40,6 +41,7 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import { WorkerMention } from "@/app/conversation/WorkerChip";
 import {
   BranchPicker,
+  MarkdownBlock,
   MessageError,
   MessageText,
   StreamingMessageText,
@@ -218,12 +220,31 @@ function CardEntry({ card }: { card: BlockCard }) {
 }
 
 /** One reply of the block; text that still streams fades in word by word. */
-const ReplyText: FC<{ index: number; streaming: boolean }> = ({ index, streaming }) => (
+const ReplyText: FC<{ index: number; streaming: boolean; report?: boolean }> = ({ index, streaming, report = false }) => (
   <MessagePrimitive.PartByIndex
     index={index}
-    components={{ Text: streaming ? StreamingMessageText : MessageText }}
+    components={{ Text: report ? ReportText : streaming ? StreamingMessageText : MessageText }}
   />
 );
+
+/** A run's morning report: what it came to in view, its details folded under "Details". */
+const ReportText: FC<TextMessagePartProps> = (props) => {
+  const report = splitReport(props.text);
+  if (!report) return <MessageText {...props} />;
+  return (
+    <div className="flex flex-col gap-3">
+      <MarkdownBlock text={report.head} />
+      <details data-slot="report-details">
+        <summary className="text-muted-foreground rounded-control cursor-pointer text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring">
+          Details
+        </summary>
+        <div className="pt-2">
+          <MarkdownBlock text={report.details} />
+        </div>
+      </details>
+    </div>
+  );
+};
 
 /** A reply, card or row in the block's work. */
 const SequenceEntry: FC<{ entry: Entry; streaming: boolean }> = ({ entry, streaming }) => {
@@ -401,6 +422,11 @@ export const RequestBlock: FC = () => {
       (task) => task.requestId !== null && !!requestIds?.includes(task.requestId) && !isFinal(task),
     ),
   );
+  // A run's morning report folds its details.
+  const report = useBoard((s) => {
+    const id = meta?.answerId;
+    return !!id && Object.values(s.board?.overnight ?? {}).some((run) => run.reportMessageId === id);
+  });
   if (!meta) return null;
 
   // A phase is live until it settles, whatever still waits on the user: that waits in the panel.
@@ -496,7 +522,7 @@ export const RequestBlock: FC = () => {
               data-slot="aui_assistant-message-content"
               className="text-foreground leading-relaxed wrap-break-word"
             >
-              <ReplyText index={answer} streaming={answering} />
+              <ReplyText index={answer} streaming={answering} report={report && !answering} />
             </div>
           )}
         </>

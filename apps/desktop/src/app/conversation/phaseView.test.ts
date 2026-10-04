@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import { phaseViewOf, phaseWord, runPill } from "@/app/conversation/phaseView";
+import { phaseViewOf, phaseWord, runPill, splitReport } from "@/app/conversation/phaseView";
 import { formatDuration } from "@/lib/format";
 import type { OvernightRun, Plan, Task } from "@/ipc/generated";
 
@@ -90,4 +90,16 @@ test("during a run the pill shows the run's phase and the steps of its approved 
 
 test("once the run is over the pill shows nothing of it", () => {
   assert.equal(runPill(runs, plans, tasks), null);
+});
+
+test("a report shows down to its Details heading and folds the rest", () => {
+  const report = "**Run** finished.\n\n### What got in the way\n- Held task-3\n\n### Details\n#### Workers and models\n- task-1 · opus\n";
+  assert.deepEqual(splitReport(report), {
+    head: "**Run** finished.\n\n### What got in the way\n- Held task-3",
+    details: "#### Workers and models\n- task-1 · opus",
+  });
+  // Only the heading itself folds: a line that merely mentions it doesn't, nor an empty fold.
+  assert.equal(splitReport("See ### Details below.\n"), null);
+  assert.equal(splitReport("Done.\n\n### Details\n"), null);
+  assert.equal(splitReport("Done.\n\n### Details"), null);
 });
