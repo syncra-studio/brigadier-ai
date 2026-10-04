@@ -4,6 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { WORKERS_LABEL, WorkerGlyphs } from "@/app/conversation/Agents";
 import { isFinal, isWorking } from "@/app/conversation/blocks";
+import { TaskActivity } from "@/app/conversation/WorkerActivity";
 import {
   AgentsPanelContext,
   useWorkerName,
@@ -18,8 +19,8 @@ import { refreshWorkerDiffs } from "@/state/actions";
 import { useBoard } from "@/state/board";
 
 /**
- * The session's workers summed up: rows of glyph, name, state and +N −N in the pinned summary's
- * Workers section and on the composer's background-workers strip.
+ * The session's workers summed up: glyph, name, state and diff totals in the pinned summary's
+ * Workers section; glyph, name and live activity on the composer's background-workers strip.
  */
 
 /** What a worker is at, in plain words ("is working", "is awaiting instruction"). */
@@ -174,8 +175,7 @@ export const WorkerSummaryRow = memo(function WorkerSummaryRow({
 
 /**
  * One worker on the composer's background-workers strip: its glyph, name and state in words
- * ("is working" live while it works) as one quiet button that opens it, its kind and model on
- * hover, then its +N −N.
+ * as a quiet button that opens it, its kind and model on hover, then its live activity.
  */
 export const WorkerStripRow = memo(function WorkerStripRow({
   taskId,
@@ -194,29 +194,17 @@ export const WorkerStripRow = memo(function WorkerStripRow({
     <div
       data-slot="worker-strip-row"
       data-state={task.state}
-      className={cn("flex min-h-control-sm min-w-0 items-center gap-2 text-sm", className)}
+      className={cn("flex min-h-control-sm min-w-0 flex-col items-start text-sm", className)}
     >
       <Tooltip>
         <TooltipTrigger asChild>
           <button
             type="button"
             onClick={() => setPanel(task.id)}
-            className="hover:bg-foreground/5 rounded-control focus-visible:ring-ring/50 -mx-1 flex h-control-xs min-w-0 items-center gap-1.5 px-1 text-start outline-none transition-colors focus-visible:ring-1"
+            className="hover:bg-foreground/5 rounded-control focus-visible:ring-ring/50 -mx-1 flex h-control-xs min-w-0 max-w-full items-center gap-1.5 px-1 text-start outline-none transition-colors focus-visible:ring-1"
           >
             <WorkerGlyph taskId={task.id} className="size-icon-sm" />
             <span className="text-foreground min-w-0 truncate">{name}</span>
-            <span
-              className={cn(
-                "shrink-0 whitespace-nowrap",
-                isWorking(task)
-                  ? "shimmer"
-                  : task.state === "failed"
-                    ? "text-destructive"
-                    : "text-muted-foreground",
-              )}
-            >
-              {stateLine(task)}
-            </span>
           </button>
         </TooltipTrigger>
         <TooltipContent side="top" className="flex-col gap-0.5">
@@ -227,9 +215,7 @@ export const WorkerStripRow = memo(function WorkerStripRow({
           </span>
         </TooltipContent>
       </Tooltip>
-      <span className="ms-auto">
-        <WorkerChanges task={task} />
-      </span>
+      <TaskActivity taskId={taskId} className="w-full ps-5 pb-1" />
     </div>
   );
 });

@@ -35,6 +35,7 @@ import {
   type SequenceEntry as Entry,
 } from "@/app/conversation/blocks";
 import { type PhaseView, phaseViewOf, splitReport } from "@/app/conversation/phaseView";
+import { activelyWorking } from "@/app/conversation/taskActivity";
 import { PhaseChecksRow, TaskRow } from "@/app/conversation/TaskRow";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
@@ -349,10 +350,10 @@ const SteerBubble: FC<{ text: string; atMs: number; attachments: readonly Attach
  * the worker it waits for ("Waiting for [Add tests]").
  */
 const ActivityRow: FC<{ requestIds: string[] }> = ({ requestIds }) => {
-  const { label, worker } = useBoard(
-    useShallow((s): { label: string | null; worker: string | null } => {
+  const { label, worker, activeWork } = useBoard(
+    useShallow((s): { label: string | null; worker: string | null; activeWork: boolean } => {
       const board = s.board;
-      if (!board) return { label: null, worker: null };
+      if (!board) return { label: null, worker: null, activeWork: false };
       const turn =
         board.runRequest !== null &&
         requestIds.includes(board.runRequest) &&
@@ -360,16 +361,26 @@ const ActivityRow: FC<{ requestIds: string[] }> = ({ requestIds }) => {
       if (turn) {
         // Streaming text shows itself.
         const doing = board.doing || (board.streaming?.text ? null : "Thinking");
-        return { label: doing, worker: null };
+        return { label: doing, worker: null, activeWork: true };
       }
       const working = Object.values(board.tasks)
-        .filter((task) => task.requestId !== null && requestIds.includes(task.requestId) && isWorking(task))
+        .filter((task) =>
+          task.requestId !== null && requestIds.includes(task.requestId) &&
+          (isWorking(task) || task.state === "paused"),
+        )
         .toSorted((a, b) => a.number - b.number);
       const [first] = working;
-      if (working.length === 1 && first) return { label: "Waiting for", worker: first.id };
+      if (working.length === 1 && first) {
+        return {
+          label: "Waiting for",
+          worker: first.id,
+          activeWork: activelyWorking({ task: first, activity: board.activity[first.id] }),
+        };
+      }
       return {
         label: working.length > 1 ? `Waiting for ${working.length} workers` : null,
         worker: null,
+        activeWork: working.some((task) => activelyWorking({ task, activity: board.activity[task.id] })),
       };
     }),
   );
@@ -377,14 +388,14 @@ const ActivityRow: FC<{ requestIds: string[] }> = ({ requestIds }) => {
   if (worker) {
     return (
       <div data-slot="request-activity" className="flex min-w-0 items-center gap-1.5 text-sm">
-        <span className="shimmer shrink-0">{label}</span>
+        <span className={cn("shrink-0", activeWork && "shimmer")}>{label}</span>
         <WorkerMention taskId={worker} />
       </div>
     );
   }
   return (
     // As wide as its words, so the sweep crosses them rather than the whole row.
-    <div data-slot="request-activity" className="shimmer w-fit max-w-full truncate text-sm">
+    <div data-slot="request-activity" className={cn("w-fit max-w-full truncate text-sm", activeWork && "shimmer")}>
       {label}
     </div>
   );

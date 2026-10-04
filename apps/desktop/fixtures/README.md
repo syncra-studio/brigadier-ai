@@ -43,3 +43,11 @@ app. Query switches: `density=compact`; `sidebar=0` (sidebar closed); `run=live`
 or `run=none` (a normal session, whose plan is the context card's Plan section); `plans=N` (N more
 plans: the latest shows, the rest sit under Earlier plans).
 `window.night` holds the stores and `revealPlan`/`revealOvernight` for probes.
+
+# Worker activity
+
+`http://localhost:1426/fixtures/worker-activity.html` holds synthetic board data and serves
+the rendering test in `src/app/conversation/WorkerActivity.test.ts`, run by `pnpm test`.
+It renders task rows and the expanded background-workers strip with a fixed clock,
+including live activity, waits, checks and a completed worker. This standalone entry
+is absent from the production build.

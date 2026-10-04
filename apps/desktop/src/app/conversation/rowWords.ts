@@ -1,3 +1,4 @@
+import { taskWaitWords } from "@/app/conversation/taskActivity";
 import type { Decision, DecisionWords, Gate, GateOwner, GateRole, Task } from "@/ipc/generated";
 
 /**
@@ -54,6 +55,10 @@ export function writes(task: Task): boolean {
 
 /** A worker's state in a word or two, the same on its row wherever it shows. */
 export function taskState(task: Task): RowState {
+  const wait = task.quotaWait || task.state === "queued" || task.state === "blocked" || task.state === "paused"
+    ? taskWaitWords(task)
+    : null;
+  if (wait) return { word: wait.split(":", 1)[0]!, tone: "quiet" };
   switch (task.state) {
     case "queued":
     case "starting":

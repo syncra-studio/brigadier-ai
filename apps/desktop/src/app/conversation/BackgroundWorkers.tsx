@@ -13,10 +13,10 @@ import { stopTask } from "@/state/actions";
 import { useBoard } from "@/state/board";
 
 /**
- * The "N background workers" strip on the composer: while any worker of the session is really
- * at work, a line with how many, the +N −N they haven't landed yet, Stop all and a chevron;
- * opened, those workers, one per row (glyph, name and what it is at, which opens it), and the
- * hint to tag them. Checkers count with what they check, and what landed or waits counts not.
+ * The "N background workers" strip on the composer counts queued, starting, running,
+ * blocked, paused and reviewing workers, with their unlanded +N −N, Stop all and a chevron.
+ * Opened, it shows each worker's name and activity or wait reason, plus the hint to tag them.
+ * Checkers count with what they check; finished workers do not count.
  */
 export const BackgroundWorkers: FC<{ conversationId: string }> = ({ conversationId }) => {
   const tasks = useBoard(
@@ -28,7 +28,7 @@ export const BackgroundWorkers: FC<{ conversationId: string }> = ({ conversation
   const action = useAction();
   const [open, setOpen] = useState(false);
   const alive = tasks
-    .filter((task) => isWorking(task) && task.gateLink === null)
+    .filter((task) => (isWorking(task) || task.state === "paused") && task.gateLink === null)
     .toSorted((a, b) => a.number - b.number);
   if (alive.length === 0) return null;
   const stats = alive.flatMap((task) => workerStat(task, diffs) ?? []);

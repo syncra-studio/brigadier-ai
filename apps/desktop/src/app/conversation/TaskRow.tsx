@@ -17,6 +17,8 @@ import {
   taskRowDetail,
   taskState,
 } from "@/app/conversation/rowWords";
+import { taskActivityLines } from "@/app/conversation/taskActivity";
+import { TaskActivity } from "@/app/conversation/WorkerActivity";
 import { AgentsPanelContext, useWorkerName, WorkerChip, WorkerGlyph, WorkerLine } from "@/app/conversation/WorkerChip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { Gate, PhaseState, Task } from "@/ipc/generated";
@@ -118,47 +120,53 @@ function rowFacts(board: Board | null | undefined, taskId: string): { word: stri
   const task = board?.tasks[taskId];
   if (!board || !task) return { word: null, tone: "quiet", detail: "" };
   const state = taskState(task);
-  return { word: state.word, tone: state.tone, detail: taskRowDetail(task, checkersOf(board.tasks, [`task:${taskId}`])) };
+  const source = (id: string) => ({ task: board.tasks[id], activity: board.activity[id] });
+  const activity = taskActivityLines(source(taskId), task.gate?.members.map((member) => source(member.taskId)) ?? [], 0);
+  const tone = state.tone === "live" && !activity.firstWorking && !activity.secondWorking ? "quiet" : state.tone;
+  const word = (task.state === "running" || task.state === "starting") && /^Waiting\b/i.test(board.activity[taskId] ?? "")
+    ? board.activity[taskId]!
+    : state.word;
+  return { word, tone, detail: taskRowDetail(task, checkersOf(board.tasks, [`task:${taskId}`])) };
 }
 
 export const TaskRow = memo(function TaskRow({ taskId }: { taskId: string }) {
   const { setPanel } = useContext(AgentsPanelContext);
   const name = useWorkerName(taskId);
-  const working = useBoard((s) => {
-    const task = s.board?.tasks[taskId];
-    return task ? isWorking(task) : false;
-  });
   const { word, tone, detail } = useBoard(useShallow((s) => rowFacts(s.board, taskId)));
+  const working = tone === "live";
   const gate = useBoard((s) => s.board?.tasks[taskId]?.gate ?? null);
   const checkerIds = useCheckerIds([`task:${taskId}`]);
   const decided = useBoard((s) => (s.board ? taskDecisions(s.board.decisions, taskId).length : 0));
   if (name === null || word === null) return null;
   const opens = checkerIds.length > 0 || decided > 0;
   const line = (
-    <div data-slot="task-row" className={STEP_ROW}>
-      <button
-        type="button"
-        onClick={() => setPanel(taskId)}
-        title={name}
-        className="hover:text-foreground focus-visible:ring-ring/50 rounded-control flex min-w-0 items-center gap-1.5 outline-none focus-visible:ring-1"
-      >
-        <WorkerGlyph taskId={taskId} working={working} className="size-icon-sm shrink-0" />
-        <span className="text-foreground/90 min-w-0 truncate">{name}</span>
-      </button>
-      {/* Capped so a narrow thread truncates the detail, never the task's title. */}
-      <span className="flex max-w-3/5 min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap">
-        <span aria-hidden>·</span>
-        <span className={cn("shrink-0", TONES[tone])}>{word}</span>
-        {detail && (
-          <>
-            <span aria-hidden>·</span>
-            <span className="min-w-0 truncate" title={detail}>
-              {detail}
-            </span>
-          </>
-        )}
-      </span>
-      {opens && <Opener label={`Show the checks of ${name}`} />}
+    <div className="min-w-0">
+      <div data-slot="task-row" className={STEP_ROW}>
+        <button
+          type="button"
+          onClick={() => setPanel(taskId)}
+          title={name}
+          className="hover:text-foreground focus-visible:ring-ring/50 rounded-control flex min-w-0 items-center gap-1.5 outline-none focus-visible:ring-1"
+        >
+          <WorkerGlyph taskId={taskId} working={working} className="size-icon-sm shrink-0" />
+          <span className="text-foreground/90 min-w-0 truncate">{name}</span>
+        </button>
+        {/* Capped so a narrow thread truncates the detail, never the task's title. */}
+        <span className="flex max-w-3/5 min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap">
+          <span aria-hidden>·</span>
+          <span aria-live="polite" className={cn("min-w-0 truncate", TONES[tone])}>{word}</span>
+          {detail && (
+            <>
+              <span aria-hidden>·</span>
+              <span className="min-w-0 truncate" title={detail}>
+                {detail}
+              </span>
+            </>
+          )}
+        </span>
+        {opens && <Opener label={`Show the checks of ${name}`} />}
+      </div>
+      <TaskActivity taskId={taskId} className="ps-6 pb-1" />
     </div>
   );
   if (!opens) return line;
