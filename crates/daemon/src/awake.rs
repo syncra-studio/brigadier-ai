@@ -466,7 +466,7 @@ mod lid {
     }
 
     /// Whether sleep is disabled system-wide now (`SleepDisabled` in `pmset -g`). A dry run
-    /// reads it as on, so the hold it takes is its own.
+    /// reads it as off, so the hold it takes is its own.
     pub async fn sleep_disabled() -> Option<bool> {
         if dry_run().is_some() {
             return Some(false);

@@ -341,7 +341,6 @@ fn relanding_in(board: &Board, request: &str) -> bool {
         .any(|task| task.request_id.as_deref() == Some(request) && relanding_pending(task))
 }
 
-/// Whether a plan of the request waits for the orchestrator's revision after its review.
 /// The overnight run a request belongs to: its phases', its Phase 0's and its report's
 /// requests are named `run-<short run id>-…`.
 pub(crate) fn run_of_request<'a>(board: &'a Board, request: &str) -> Option<&'a OvernightRun> {
@@ -369,6 +368,7 @@ fn ended_run_state(board: &Board, request: &crate::work::UserRequest) -> Option<
     })
 }
 
+/// Whether a plan of the request waits for the orchestrator's revision after its review.
 fn awaits_revision(board: &Board, request: &str) -> bool {
     board
         .plans

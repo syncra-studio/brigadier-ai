@@ -610,8 +610,8 @@ pub struct Task {
     /// The user request it was delegated for.
     #[serde(default)]
     pub request_id: Option<String>,
-    /// The overnight run it works for: then it runs under the run's restrictions (sandboxed,
-    /// nothing outward, the run's branch), whatever the session's own setup says.
+    /// The overnight run it works for: then it runs under the run's rules (the session's
+    /// access, nothing on the never-list, the run's branch), whatever else the session says.
     #[serde(default)]
     pub run: Option<crate::overnight::RunTaskContext>,
     /// What the orchestrator sent the worker after its spec (`message_worker`), oldest first:

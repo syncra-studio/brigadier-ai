@@ -117,8 +117,8 @@ outputs: Array<ArtifactRef>,
  */
 requestId: string | null, 
 /**
- * The overnight run it works for: then it runs under the run's restrictions (sandboxed,
- * nothing outward, the run's branch), whatever the session's own setup says.
+ * The overnight run it works for: then it runs under the run's rules (the session's
+ * access, nothing on the never-list, the run's branch), whatever else the session says.
  */
 run: RunTaskContext | null, 
 /**
