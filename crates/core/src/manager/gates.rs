@@ -47,6 +47,8 @@ pub(crate) enum Recheck {
     /// A verifier only: the same change, already reviewed, on a new commit (a clean replay
     /// onto a target that moved) or verified again after a verifier couldn't.
     Verify,
+    /// A candidate replayed during landing: verification must be full.
+    Rebased { review: bool },
 }
 
 /// Why a gate round could not open.
@@ -99,6 +101,13 @@ impl SessionManager {
         needed
     }
 
+    fn reviewer_count(task: &Task, recheck: Recheck) -> usize {
+        match recheck {
+            Recheck::Full | Recheck::Rebased { review: true } => Self::panel_size(task),
+            Recheck::Verify | Recheck::Rebased { review: false } => 0,
+        }
+    }
+
     /// Opens a new gate round on the task's candidate. `unreported` lists tracked changes the
     /// worker didn't report; `retry` says why an earlier verifier couldn't check the change.
     /// `relanding`: the user already approved this change (a clean replay, and a retry of its
@@ -141,17 +150,11 @@ impl SessionManager {
         // Its checkers get the session's access (see `access_for`).
         let sandboxed =
             self.permission(&task.conversation_id) != crate::model::PermissionLevel::FullAccess;
-        let reviewers = match recheck {
-            Recheck::Full => Self::panel_size(&task),
-            Recheck::Verify => 0,
-        };
-        let docs = task
-            .candidate
-            .as_ref()
-            .is_some_and(|candidate| docs_only(&candidate.diff_stat.files));
+        let reviewers = Self::reviewer_count(&task, recheck);
+        let mut scope = open_gate_scope(&task, recheck, self.verification_scope(&task)).await;
         let kept = match recheck {
-            Recheck::Full => kept_approvals(&task),
-            Recheck::Verify => None,
+            Recheck::Full | Recheck::Rebased { review: true } => kept_approvals(&task),
+            Recheck::Verify | Recheck::Rebased { review: false } => None,
         };
         // A big change without a plan is noted once, on its first round: a fix the checks
         // asked for may make it bigger, and the plan can't be added to the change anyway.
@@ -168,21 +171,15 @@ impl SessionManager {
                     &task.conversation_id,
                     format!("Verify task-{}", task.number),
                     TaskKind::Verify,
-                    if docs {
-                        verify_docs_spec(&task, &candidate.commit, kept.as_deref())
-                    } else {
-                        let mut spec = verify_spec(
-                            &task,
-                            &candidate.commit,
-                            retry.as_ref().map(|(why, _)| why),
-                            plan.as_deref(),
-                            sandboxed,
-                        );
-                        if let Some(kept) = &kept {
-                            spec.push_str(&format!("\n{kept}"));
-                        }
-                        spec
-                    },
+                    verify_gate_spec(
+                        &task,
+                        &candidate.commit,
+                        &mut scope,
+                        retry.as_ref().map(|(why, _)| why),
+                        plan.as_deref(),
+                        sandboxed,
+                        kept.as_deref(),
+                    ),
                     None,
                     Some(author.clone()),
                     retry.iter().map(|(_, before)| before.clone()).collect(),
@@ -277,24 +274,20 @@ impl SessionManager {
                 return Err(err.into());
             }
         };
-        let relanding = round_relanding(recheck, retry.is_some(), task.gate.as_ref());
-        let retrying = retry.is_some();
         let installed = self
             .update_task_if(
                 &task.conversation_id,
                 &task.id,
                 |now| still_checks(now, &candidate.commit),
                 |t| {
-                    t.gate = Some(Gate {
+                    t.gate = Some(task_gate(
+                        &task,
+                        recheck,
+                        retry.is_some(),
                         round,
-                        commit: Some(candidate.commit.clone()),
                         members,
-                        outcome: None,
-                        relanding,
-                        retry: retrying,
-                        overridden: false,
-                        findings: Vec::new(),
-                    });
+                        scope.clone(),
+                    ));
                     if let Some(first) = first {
                         t.review = Some(first);
                     }
@@ -1098,6 +1091,31 @@ fn review_spec(task: &Task, commit: &str, unreported: &[String], plan: Option<&s
     spec
 }
 
+/// The verifier opened for this gate. Docs policy is independent of scope failures and replays.
+fn verify_gate_spec(
+    task: &Task,
+    commit: &str,
+    scope: &mut crate::work::VerificationScope,
+    retry: Option<&String>,
+    plan: Option<&str>,
+    sandboxed: bool,
+    kept: Option<&str>,
+) -> String {
+    if task
+        .candidate
+        .as_ref()
+        .is_some_and(|c| docs_only(&c.diff_stat.files))
+    {
+        return verify_docs_spec(task, commit, kept);
+    }
+    let spec = verify_spec(task, commit, retry, plan, sandboxed);
+    let mut spec = super::verification_scope::scoped_spec(spec, scope, sandboxed);
+    if let Some(kept) = kept {
+        spec.push_str(&format!("\n{kept}"));
+    }
+    spec
+}
+
 /// What a verifier reads first.
 fn verify_spec(
     task: &Task,
@@ -1186,7 +1204,7 @@ pub(crate) fn docs_only(files: &[crate::work::FileStat]) -> bool {
 /// A path in an area where a mistake costs the most (user decision, 2026-10-04): landing,
 /// policy, the sandbox, git. Matched by whole words of the path (`git_actions.rs`,
 /// `crates/git/`), so `.github/` or `digit.rs` don't count.
-fn risky_path(path: &str) -> bool {
+pub(super) fn risky_path(path: &str) -> bool {
     path.to_ascii_lowercase()
         .split(|c: char| !c.is_ascii_alphanumeric())
         .any(|word| matches!(word, "landing" | "policy" | "sandbox" | "git"))
@@ -1645,6 +1663,51 @@ fn short(commit: &str) -> &str {
     &commit[..commit.len().min(10)]
 }
 
+/// Resolve checks at gate opening. A replay keeps full checks even when a later
+/// candidate inspection would otherwise return a small, eligible change.
+async fn open_gate_scope(
+    task: &Task,
+    recheck: Recheck,
+    determine: impl std::future::Future<Output = crate::work::VerificationScope>,
+) -> crate::work::VerificationScope {
+    if round_rebased(recheck, task.gate.as_ref()) {
+        crate::work::VerificationScope::Full {
+            reason: "Candidate rebased during landing".into(),
+        }
+    } else {
+        determine.await
+    }
+}
+
+/// The exact gate record installed by open_gate, shared with its round-transition tests.
+fn task_gate(
+    task: &Task,
+    recheck: Recheck,
+    retry: bool,
+    round: u32,
+    members: Vec<GateMember>,
+    verification_scope: crate::work::VerificationScope,
+) -> Gate {
+    Gate {
+        verification_scope,
+        rebased: round_rebased(recheck, task.gate.as_ref()),
+        round,
+        commit: task.candidate.as_ref().map(|c| c.commit.clone()),
+        members,
+        outcome: None,
+        relanding: round_relanding(recheck, retry, task.gate.as_ref()),
+        retry,
+        overridden: false,
+        findings: Vec::new(),
+    }
+}
+
+/// A verification retry retains the candidate's rebase history, including non-clean replays.
+fn round_rebased(recheck: Recheck, previous: Option<&Gate>) -> bool {
+    matches!(recheck, Recheck::Rebased { .. })
+        || (recheck == Recheck::Verify && previous.is_some_and(|g| g.rebased || g.relanding))
+}
+
 /// Whether a new round lands its change as soon as it passes: a verify-only round on a
 /// change the user already approved (a clean replay), and a retry of such a round's
 /// verification, which checks the same change again.
@@ -1652,7 +1715,8 @@ fn round_relanding(recheck: Recheck, retry: bool, previous: Option<&Gate>) -> bo
     match recheck {
         Recheck::Verify if retry => previous.is_some_and(|gate| gate.relanding),
         Recheck::Verify => true,
-        Recheck::Full => false,
+        Recheck::Full | Recheck::Rebased { review: true } => false,
+        Recheck::Rebased { review: false } => true,
     }
 }
 
@@ -1702,6 +1766,8 @@ mod tests {
             })
         };
         let mut gate = Gate {
+            verification_scope: Default::default(),
+            rebased: false,
             round: 1,
             commit: Some("c1".into()),
             members: vec![
@@ -2210,6 +2276,8 @@ mod tests {
                 .collect(),
         };
         let gate = Gate {
+            verification_scope: Default::default(),
+            rebased: false,
             round: 2,
             commit: Some("c2".into()),
             members: vec![
@@ -2263,6 +2331,8 @@ mod tests {
         .expect("a task");
         task.state = state;
         task.gate = Some(Gate {
+            verification_scope: Default::default(),
+            rebased: false,
             round,
             commit: Some(commit.into()),
             members: Vec::new(),
@@ -2647,5 +2717,202 @@ mod tests {
             "{spec}"
         );
         assert!(!spec.contains("install"), "{spec}");
+    }
+    #[test]
+    fn scope_does_not_change_reviewers_or_retained_approvals() {
+        let mut task = gated(TaskState::Reviewing, 1, "c1", None, "c1");
+        touching(&mut task, &["src/app.rs"]);
+        task.gate = None;
+        assert_eq!(SessionManager::reviewer_count(&task, Recheck::Full), 1);
+        assert_eq!(SessionManager::reviewer_count(&task, Recheck::Verify), 0);
+        touching(&mut task, &["src/policy.rs"]);
+        assert_eq!(SessionManager::reviewer_count(&task, Recheck::Full), 2);
+        let mut prior = gated(
+            TaskState::Reviewing,
+            1,
+            "c1",
+            Some(GateOutcome::Failed),
+            "c1",
+        )
+        .gate
+        .unwrap();
+        prior.members = vec![GateMember {
+            task_id: TaskId("approved-review".into()),
+            role: GateRole::Review,
+            result: Some(GateResult::Passed),
+            avoid: Vec::new(),
+        }];
+        task.gate = Some(prior);
+        assert_eq!(SessionManager::reviewer_count(&task, Recheck::Full), 0);
+        assert!(kept_approvals(&task).is_some());
+        assert_eq!(SessionManager::reviewer_count(&task, Recheck::Verify), 0);
+        assert_eq!(
+            SessionManager::reviewer_count(&task, Recheck::Rebased { review: false }),
+            0
+        );
+    }
+
+    #[test]
+    fn old_gates_default_to_full_verification() {
+        let task = gated(TaskState::Reviewing, 1, "c1", None, "c1");
+        let mut json = serde_json::to_value(task.gate.unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("verificationScope");
+        json.as_object_mut().unwrap().remove("rebased");
+        let gate: Gate = serde_json::from_value(json).unwrap();
+        assert_eq!(gate.verification_scope, Default::default());
+        assert!(!gate.rebased);
+    }
+    #[test]
+    fn open_gate_keeps_docs_policy_through_rebase_retry_and_scope_failure() {
+        let mut task = gated(TaskState::Reviewing, 1, "c1", None, "c1");
+        touching(&mut task, &["README.md"]);
+        for recheck in [
+            Recheck::Rebased { review: true },
+            Recheck::Rebased { review: false },
+        ] {
+            let mut scope = crate::work::VerificationScope::Full {
+                reason: "Candidate rebased during landing".into(),
+            };
+            let gate = task_gate(&task, recheck, false, 2, Vec::new(), scope.clone());
+            assert!(gate.rebased);
+            task.gate = Some(serde_json::from_value(serde_json::to_value(gate).unwrap()).unwrap());
+            assert!(round_rebased(Recheck::Verify, task.gate.as_ref()));
+            let spec = verify_gate_spec(&task, "c1", &mut scope, None, None, true, None);
+            assert!(spec.contains("Don't run builds, tests or smoke checks"));
+            scope = crate::work::VerificationScope::Full {
+                reason: "Candidate scope unavailable".into(),
+            };
+            assert!(
+                verify_gate_spec(&task, "c1", &mut scope, None, None, true, None)
+                    .contains("Don't run builds, tests or smoke checks")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn open_gate_persists_nonclean_rebase_across_verify_only_rounds() {
+        let mut task = gated(TaskState::Reviewing, 1, "c1", None, "c1");
+        touching(&mut task, &["crates/core/src/internal.rs"]);
+        let small = || {
+            std::future::ready(crate::work::VerificationScope::Scoped {
+                reason: "Small change".into(),
+                crates: vec!["brigadier-core".into()],
+                desktop: true,
+            })
+        };
+        let scope = open_gate_scope(&task, Recheck::Rebased { review: true }, small()).await;
+        assert!(matches!(scope, crate::work::VerificationScope::Full { .. }));
+        let gate = task_gate(
+            &task,
+            Recheck::Rebased { review: true },
+            false,
+            2,
+            Vec::new(),
+            scope,
+        );
+        assert!(!gate.relanding);
+        assert!(gate.rebased);
+        task.gate = Some(gate);
+        for round in 3..5 {
+            // Reload the persisted event exactly as a later re-accept does.
+            task = serde_json::from_value(serde_json::to_value(task).unwrap()).unwrap();
+            assert!(round_rebased(Recheck::Verify, task.gate.as_ref()));
+            assert_eq!(SessionManager::reviewer_count(&task, Recheck::Verify), 0);
+            let scope = open_gate_scope(&task, Recheck::Verify, small()).await;
+            assert!(matches!(scope, crate::work::VerificationScope::Full { .. }));
+            let gate = task_gate(&task, Recheck::Verify, true, round, Vec::new(), scope);
+            assert!(gate.rebased);
+            assert!(!gate.relanding);
+            let mut scope = gate.verification_scope.clone();
+            assert!(
+                verify_gate_spec(&task, "c1", &mut scope, None, None, false, None)
+                    .contains("2. Run the project's checks")
+            );
+            task.gate = Some(gate);
+        }
+        assert!(!round_rebased(Recheck::Full, task.gate.as_ref()));
+    }
+
+    #[test]
+    fn scoped_checks_replace_the_real_verifier_checklist_only() {
+        let task = gated(TaskState::Reviewing, 1, "c1", None, "c1");
+        for sandboxed in [false, true] {
+            let original = verify_spec(&task, "c1", None, Some("Check its plan"), sandboxed);
+            let mut scope = crate::work::VerificationScope::Scoped {
+                reason: "Small change".into(),
+                crates: vec!["brigadier-desktop".into()],
+                desktop: true,
+            };
+            let scoped = super::super::verification_scope::scoped_spec(
+                original.clone(),
+                &mut scope,
+                sandboxed,
+            );
+            assert!(matches!(
+                scope,
+                crate::work::VerificationScope::Scoped { .. }
+            ));
+            assert!(
+                scoped.starts_with(
+                    original
+                        .split("2. Run the project's checks")
+                        .next()
+                        .unwrap()
+                )
+            );
+            assert!(scoped.ends_with(original.split_once("\n3. Check hygiene").unwrap().1));
+            for expected in [
+                "every command named in the task's done-when criteria",
+                "cargo build -p brigadier-desktop",
+                "cargo test -p brigadier-desktop",
+                "cargo clippy --all-targets -p brigadier-desktop",
+                "pnpm typecheck",
+                "pnpm lint",
+                "pnpm test",
+                "pnpm build",
+                "--bin gen-ts",
+                "diff -ru",
+                "Check its plan",
+                "a check you did not run yourself is never [met]",
+            ] {
+                assert!(scoped.contains(expected), "{expected}");
+            }
+            assert!(!scoped.contains("2. Run the project's checks"));
+            assert!(
+                scoped.find("stage-sidecar --debug").unwrap() < scoped.find("cargo build").unwrap()
+            );
+            assert!(scoped.contains(&checks_setup(sandboxed)));
+        }
+    }
+    #[tokio::test]
+    async fn open_gate_recomputes_scope_instead_of_reusing_the_previous_round() {
+        let mut task = gated(TaskState::Reviewing, 1, "c1", None, "c1");
+        let inspections = std::cell::Cell::new(0);
+        let inspections = &inspections;
+        let inspect = |desktop| async move {
+            inspections.set(inspections.get() + 1);
+            crate::work::VerificationScope::Scoped {
+                reason: "Small change".into(),
+                crates: vec!["brigadier-core".into()],
+                desktop,
+            }
+        };
+        let first = open_gate_scope(&task, Recheck::Full, inspect(false)).await;
+        task.gate = Some(task_gate(
+            &task,
+            Recheck::Full,
+            false,
+            1,
+            Vec::new(),
+            first.clone(),
+        ));
+        task.candidate.as_mut().unwrap().commit = "c2".into();
+        let second = open_gate_scope(&task, Recheck::Full, inspect(true)).await;
+        assert_ne!(first, second);
+        assert_eq!(inspections.get(), 2);
+        assert!(matches!(
+            second,
+            crate::work::VerificationScope::Scoped { desktop: true, .. }
+        ));
     }
 }

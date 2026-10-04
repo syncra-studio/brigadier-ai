@@ -223,7 +223,16 @@ pub(crate) fn changes(bytes: &[u8], untracked: &BTreeSet<String>) -> Result<Vec<
 }
 
 pub(crate) fn stat(bytes: &[u8]) -> Result<DiffStat> {
+    read_stat(bytes, false).map(|(stat, _)| stat)
+}
+
+pub(crate) fn stat_with_paths(bytes: &[u8]) -> Result<(DiffStat, Vec<String>)> {
+    read_stat(bytes, true)
+}
+
+fn read_stat(bytes: &[u8], collect_paths: bool) -> Result<(DiffStat, Vec<String>)> {
     let mut result = DiffStat::default();
+    let mut paths = std::collections::BTreeSet::new();
     let mut records = fields(bytes);
     while let Some(record) = records.next() {
         if record.is_empty() {
@@ -234,9 +243,15 @@ pub(crate) fn stat(bytes: &[u8]) -> Result<DiffStat> {
             return Err(Error::Parse("invalid numstat record".into()));
         }
         let path = if parts[2].is_empty() {
-            records
+            let source = records
                 .next()
                 .ok_or_else(|| Error::Parse("missing numstat rename source".into()))?;
+            if collect_paths {
+                if source.is_empty() {
+                    return Err(Error::Parse("empty numstat rename source".into()));
+                }
+                paths.insert(text(source)?.to_owned());
+            }
             text(
                 records
                     .next()
@@ -245,6 +260,12 @@ pub(crate) fn stat(bytes: &[u8]) -> Result<DiffStat> {
         } else {
             parts[2]
         };
+        if collect_paths {
+            if path.is_empty() {
+                return Err(Error::Parse("empty numstat path".into()));
+            }
+            paths.insert(path.to_owned());
+        }
         let binary = parts[0] == "-" && parts[1] == "-";
         let number = |s: &str| {
             if binary {
@@ -272,7 +293,7 @@ pub(crate) fn stat(bytes: &[u8]) -> Result<DiffStat> {
         });
     }
     result.files.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(result)
+    Ok((result, paths.into_iter().collect()))
 }
 
 pub(crate) fn overlaps(a: &str, b: &str) -> bool {
@@ -281,4 +302,30 @@ pub(crate) fn overlaps(a: &str, b: &str) -> bool {
     a == b
         || a.strip_prefix(b).is_some_and(|s| s.starts_with('/'))
         || b.strip_prefix(a).is_some_and(|s| s.starts_with('/'))
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    #[test]
+    fn scope_preserves_rename_endpoints_and_existing_stats() {
+        for bytes in [
+            b"0\t0\t\0crates/git/a.rs\0src/a.rs\0".as_slice(),
+            b"0\t0\t\0src/a.rs\0Cargo.toml\0".as_slice(),
+        ] {
+            let (details, paths) = stat_with_paths(bytes).unwrap();
+            assert_eq!(details, stat(bytes).unwrap());
+            assert_eq!(paths.len(), 2);
+            assert!(paths.iter().any(|p| p == "src/a.rs"));
+        }
+    }
+
+    #[test]
+    fn scope_keeps_binary_and_rejects_unknown_counts() {
+        let (stat, _) = stat_with_paths(b"-\t-\timage.png\0").unwrap();
+        assert!(stat.files[0].binary);
+        assert!(stat_with_paths(b"?\t0\tsrc/a.rs\0").is_err());
+        assert!(stat_with_paths(b"0\t0\t\0old\0").is_err());
+    }
 }

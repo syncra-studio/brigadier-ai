@@ -54,6 +54,7 @@ mod undo;
 mod uninstall;
 mod usage;
 mod usage_view;
+mod verification_scope;
 pub mod warm;
 mod watchdog;
 mod worker_handoff;

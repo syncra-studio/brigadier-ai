@@ -110,6 +110,8 @@ const plans: Plan[] = states.map((item, index) => ({
   gate:
     item.id === "review"
       ? {
+          rebased: false,
+          verificationScope: { type: "full", reason: "Plan review" },
           round: 1,
           commit: null,
           members: [],

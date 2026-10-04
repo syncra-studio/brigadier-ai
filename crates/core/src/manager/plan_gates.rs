@@ -166,6 +166,8 @@ impl SessionManager {
                     })
                     .unwrap_or_default();
                 stored.gate = Some(Gate {
+                    verification_scope: Default::default(),
+                    rebased: false,
                     round,
                     commit: None,
                     members,
@@ -1096,6 +1098,8 @@ mod tests {
 
     fn gate(round: u32, outcome: Option<GateOutcome>, members: Vec<GateMember>) -> Gate {
         Gate {
+            verification_scope: Default::default(),
+            rebased: false,
             round,
             commit: None,
             members,

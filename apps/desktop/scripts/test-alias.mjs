@@ -5,6 +5,7 @@ import { statSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+// Keep package-relative CommonJS imports (including React) in Node's native resolver.
 const src = fileURLToPath(new URL("../src/", import.meta.url));
 
 registerHooks({
@@ -13,7 +14,7 @@ registerHooks({
     if (context.parentURL?.includes("/node_modules/")) return nextResolve(specifier, context);
     const base = specifier.startsWith("@/")
       ? `${src}${specifier.slice(2)}`
-      : specifier.startsWith(".") && context.parentURL?.startsWith("file:")
+      : specifier.startsWith(".") && context.parentURL?.startsWith(pathToFileURL(src).href)
         ? fileURLToPath(new URL(specifier, context.parentURL))
         : null;
     if (base === null) return nextResolve(specifier, context);

@@ -367,6 +367,12 @@ pub struct ReviewRecord {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Gate {
+    /// Checks chosen from this candidate. Missing on events written before scoped checks.
+    #[serde(default)]
+    pub verification_scope: VerificationScope,
+    /// This candidate was rebased during landing; verify retries must keep full checks.
+    #[serde(default)]
+    pub rebased: bool,
     /// From 1, counted per task or plan.
     pub round: u32,
     /// The candidate commit the round checks; none for a plan.
@@ -391,6 +397,28 @@ pub struct Gate {
     /// the revision to answer one by one.
     #[serde(default)]
     pub findings: Vec<Finding>,
+}
+
+/// The checks required for one candidate, and why they were selected.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum VerificationScope {
+    Full {
+        reason: String,
+    },
+    Scoped {
+        reason: String,
+        crates: Vec<String>,
+        desktop: bool,
+    },
+}
+
+impl Default for VerificationScope {
+    fn default() -> Self {
+        Self::Full {
+            reason: "Scope not determined".into(),
+        }
+    }
 }
 
 /// The orchestrator was handed a write task's failed checks (see [`Task::escalated`]).

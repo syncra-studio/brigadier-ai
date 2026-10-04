@@ -1051,6 +1051,8 @@ mod tests {
 
     fn gate(members: Vec<GateMember>) -> Gate {
         Gate {
+            verification_scope: Default::default(),
+            rebased: false,
             round: 1,
             commit: Some("c1".into()),
             members,

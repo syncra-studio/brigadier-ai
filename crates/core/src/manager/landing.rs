@@ -874,9 +874,9 @@ impl SessionManager {
                         // again too when the replay touched paths the target also changed
                         // (B11).
                         let recheck = if clean_fast {
-                            super::gates::Recheck::Verify
+                            super::gates::Recheck::Rebased { review: false }
                         } else {
-                            super::gates::Recheck::Full
+                            super::gates::Recheck::Rebased { review: true }
                         };
                         match self.open_gate(&task, Vec::new(), recheck, None).await {
                             Err(super::gates::NotOpened::Error(err)) => Err(err),

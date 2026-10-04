@@ -36,6 +36,7 @@ test("waits override stale work and never claim Working or shimmer", () => {
 
 test("current gate names reviewer and verifier activities, waits, and extra checks", () => {
   const gate: Gate = { round: 1, commit: null, outcome: null, relanding: false, retry: false, overridden: false, findings: [],
+    rebased: false, verificationScope: { type: "full", reason: "Worker activity test" },
     members: ["review", "verify", "review"].map((role, i) => ({ taskId: `check-${i}`, role: role as "review" | "verify", result: null, avoid: [] })) };
   const reviewer = task({ id: "check-0", route: { ...base.route, choice: { ...base.route.choice, provider: "codex" } } });
   const verifier = task({ id: "check-1", createdAtMs: 31000 });
@@ -103,7 +104,8 @@ test("a user pause says Paused and freezes at updatedAtMs without keeping the cl
 });
 
 test("checker overflow uses singular for one hidden check and plural for two", () => {
-  const gate: Gate = { round: 1, commit: null, outcome: null, relanding: false, retry: false, overridden: false, findings: [], members: [] };
+  const gate: Gate = { round: 1, commit: null, outcome: null, relanding: false, retry: false, overridden: false, findings: [], members: [],
+    rebased: false, verificationScope: { type: "full", reason: "Worker activity test" } };
   for (const [count, expected] of [[3, "Verifier: waiting to start · +1 more check"], [4, "Verifier: waiting to start · +2 more checks"]] as const) {
     const members = Array.from({ length: count }, (_, index) => ({ taskId: `check-${index}`, role: "verify" as const, result: null, avoid: [] }));
     const owner = task({ state: "reviewing", gate: { ...gate, members } });

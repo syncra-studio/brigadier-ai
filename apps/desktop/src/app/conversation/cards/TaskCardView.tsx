@@ -1,6 +1,7 @@
 import { Branch, BranchAlt, Pause, Play, Stop } from "@openai/apps-sdk-ui/components/Icon";
 import { memo, type ReactNode, useState } from "react";
 
+import { ScopedChecks } from "@/app/conversation/cards/ScopedChecks";
 import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
 import { DiffStatView, Lines, Section, short } from "@/app/conversation/cards/common";
 import { useAction } from "@/app/conversation/useAction";
@@ -381,6 +382,7 @@ const GATE_OUTCOME: Record<NonNullable<Gate["outcome"]>["type"], string> = {
 function GateSection({ gate, fixRounds }: { gate: Gate; fixRounds: number }) {
   return (
     <Section title="Checks">
+      <ScopedChecks gate={gate} />
       <p className="flex flex-wrap items-center gap-2 text-sm">
         {gate.outcome === null ? (
           <Badge variant="secondary">Checking</Badge>

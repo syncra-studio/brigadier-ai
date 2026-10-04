@@ -315,6 +315,7 @@ export type { UninstallReport } from "./UninstallReport";
 export type { UninstallStep } from "./UninstallStep";
 export type { UsageView } from "./UsageView";
 export type { UserRequest } from "./UserRequest";
+export type { VerificationScope } from "./VerificationScope";
 export type { WaitingItem } from "./WaitingItem";
 export type { WaitingSource } from "./WaitingSource";
 export type { WindowHistory } from "./WindowHistory";

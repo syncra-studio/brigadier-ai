@@ -35,6 +35,8 @@ const task = (id: string, state: Task["state"], patch: Partial<Task> = {}): Task
   ...patch,
 });
 const gate: Gate = {
+  rebased: false,
+  verificationScope: { type: "full", reason: "Worker activity fixture" },
   round: 1, commit: null, outcome: null, relanding: false, retry: false, overridden: false, findings: [],
   members: ["review", "verify", "review"].map((role, index) => ({
     taskId: `checker-${index}`, role: role as "review" | "verify", result: null, avoid: [],

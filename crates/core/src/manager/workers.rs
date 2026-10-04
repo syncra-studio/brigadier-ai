@@ -3986,6 +3986,8 @@ mod tests {
         task.landing = None;
         task.state = TaskState::Reported;
         task.gate = Some(crate::work::Gate {
+            verification_scope: Default::default(),
+            rebased: false,
             round: 1,
             commit: Some("c1".into()),
             members: Vec::new(),

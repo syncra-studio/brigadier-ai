@@ -610,6 +610,26 @@ impl Repo {
         )?)
     }
 
+    /// Lossless verification input: stats plus all paths, including rename sources.
+    pub fn diff_scope(&self, from: &Oid, to: &Oid) -> Result<(DiffStat, Vec<String>)> {
+        valid_oid(from)?;
+        valid_oid(to)?;
+        parse::stat_with_paths(&self.cmd(
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--numstat",
+                "-z",
+                "--find-renames",
+                &from.0,
+                &to.0,
+                "--",
+            ],
+            true,
+        )?)
+    }
+
     /// The best common ancestor of two commits.
     pub fn merge_base(&self, a: &Oid, b: &Oid) -> Result<Oid> {
         valid_oid(a)?;

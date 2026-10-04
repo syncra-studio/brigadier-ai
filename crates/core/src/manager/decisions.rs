@@ -1377,6 +1377,8 @@ mod tests {
 
     fn round(mut task: Task, round: u32) -> Task {
         task.gate = Some(crate::work::Gate {
+            verification_scope: Default::default(),
+            rebased: false,
             round,
             commit: Some("c1".into()),
             members: Vec::new(),

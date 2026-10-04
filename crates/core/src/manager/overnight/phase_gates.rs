@@ -273,6 +273,8 @@ impl SessionManager {
                     return None;
                 }
                 let gate = Gate {
+                    verification_scope: Default::default(),
+                    rebased: false,
                     round,
                     commit: Some(candidate_now.clone()),
                     members: members.clone(),

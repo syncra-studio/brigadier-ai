@@ -2,6 +2,7 @@
 import type { Finding } from "./Finding";
 import type { GateMember } from "./GateMember";
 import type { GateOutcome } from "./GateOutcome";
+import type { VerificationScope } from "./VerificationScope";
 
 /**
  * One round of independent checks of a change before it lands (reviewers and a verifier, on
@@ -9,6 +10,14 @@ import type { GateOutcome } from "./GateOutcome";
  * a revised plan opens a new round; results of an older round are ignored.
  */
 export type Gate = { 
+/**
+ * Checks chosen from this candidate. Missing on events written before scoped checks.
+ */
+verificationScope: VerificationScope, 
+/**
+ * This candidate was rebased during landing; verify retries must keep full checks.
+ */
+rebased: boolean, 
 /**
  * From 1, counted per task or plan.
  */
