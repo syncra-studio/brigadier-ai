@@ -801,6 +801,11 @@ impl SessionManager {
             MemoryKind::Preference => NodeKind::Preference,
             MemoryKind::Contract => NodeKind::Contract,
         };
+        let before = if personal {
+            self.memory_lines(super::brain_jobs::MEMORY_BYTES).await
+        } else {
+            Vec::new()
+        };
         let (brain, index) = if personal {
             (self.personal_brain().await?, None)
         } else {
@@ -850,6 +855,9 @@ impl SessionManager {
             .map_err(brain_error)
         })
         .await?;
+        if personal {
+            self.told_own_preference(id, &before).await;
+        }
         Ok(format!(
             "Remembered as {node_id}{}.",
             if personal {

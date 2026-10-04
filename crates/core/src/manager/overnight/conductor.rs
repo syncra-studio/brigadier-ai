@@ -407,6 +407,19 @@ impl SessionManager {
         Some(now)
     }
 
+    /// While an overnight run is active in the conversation: its branch, and the restrictions
+    /// Brigadier enforces for it as a lead knows them.
+    pub(crate) async fn run_setting(
+        &self,
+        conversation_id: &ConversationId,
+    ) -> Option<(crate::overnight::RunWorkspace, String)> {
+        let active = self.overnight.active.get(conversation_id)?;
+        let workspace = active.workspace?;
+        let board = self.core.board(conversation_id).await.ok()?;
+        let run = board.runs.get(&active.id)?;
+        Some((workspace, directives_text(run)))
+    }
+
     /// The run branch's tip now.
     pub(crate) async fn run_tip(&self, run: &OvernightRun) -> Result<String> {
         let workspace = run

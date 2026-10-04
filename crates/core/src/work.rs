@@ -1442,6 +1442,36 @@ pub struct ContextInjection {
     /// A short description (`report task-3`, the first words of a message).
     pub label: String,
     pub task_id: Option<TaskId>,
+    /// What this told the session of the parts of its instructions that can change while its
+    /// CLI session lives on (role instructions, or a note about one of them). Logged only once
+    /// the CLI took it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub told: Option<Told>,
+}
+
+/// What an orchestrator or Chat session was told of the parts of its instructions that can
+/// change while its CLI session lives on: a resumed CLI keeps the instructions it started
+/// with. `None`: not told (or not known).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Told {
+    /// The version of the instructions' contract (whether Brigadier's notes replace them).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<u32>,
+    /// Today's date, `YYYY-MM-DD` (UTC).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub today: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_replies: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission: Option<crate::model::PermissionLevel>,
+    /// The overnight run's fingerprint (its branch, sandbox and restrictions); empty: no run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+    /// The user's preferences' fingerprint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferences: Option<String>,
 }
 
 /// One entry of the orchestrator log shown in the Inspector.

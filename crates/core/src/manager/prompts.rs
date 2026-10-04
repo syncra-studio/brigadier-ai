@@ -2,7 +2,7 @@
 //! reads.
 
 use crate::model::{Conversation, Environment, PermissionLevel, Project, Setup};
-use crate::work::{ArtifactRef, Report, Task, TaskKind};
+use crate::work::{ArtifactRef, ContextInjection, InjectionKind, Report, Task, TaskKind, Told};
 
 /// Logged on `orch:<id>` when a conversation's CLI files were removed: the next CLI session
 /// starts over from the transcript instead of resuming.
@@ -11,7 +11,15 @@ pub(crate) const SESSION_RESET: &str = "brigadier: CLI session reset";
 /// Brigadier never shows it.
 pub(crate) const QUIET: &str = "[quiet]";
 
-fn today() -> String {
+/// Today's date (UTC). Development builds take `BRIGADIER_FAKE_TODAY` instead when it is set,
+/// so a check can start a session on another day.
+pub(crate) fn today() -> String {
+    #[cfg(debug_assertions)]
+    if let Ok(day) = std::env::var("BRIGADIER_FAKE_TODAY")
+        && !day.trim().is_empty()
+    {
+        return day.trim().to_owned();
+    }
     date_of(crate::now_ms())
 }
 
@@ -41,58 +49,11 @@ pub(crate) fn orchestrator(
     run: Option<&crate::overnight::RunWorkspace>,
     short: bool,
 ) -> String {
-    let (repo, environment, permission) = match &conversation.setup {
-        Some(Setup::Session {
-            repo,
-            environment,
-            permission,
-            ..
-        }) => (repo.as_str(), environment, *permission),
-        _ => (
-            "(none)",
-            &Environment::LocalCheckout { branch: "?".into() },
-            PermissionLevel::ApproveForMe,
-        ),
+    let repo = match &conversation.setup {
+        Some(Setup::Session { repo, .. }) => repo.as_str(),
+        _ => "(none)",
     };
-    let environment = match environment {
-        Environment::LocalCheckout { branch } => format!(
-            "Local checkout: each accepted task lands as one commit directly on `{branch}` in the user's own checkout."
-        ),
-        Environment::NewWorktree { base, branch, .. } => format!(
-            "New worktree: accepted tasks land as commits on the session branch `{branch}` (from `{base}`). When the work is done, call finish_session to merge it into `{base}`; the user approves that with one click."
-        ),
-    };
-    let unsandboxed = permission == PermissionLevel::FullAccess;
-    let permission = match permission {
-        PermissionLevel::AskForApproval => {
-            "Ask for approval: the user approves every plan and every change. Propose a plan (propose_plan) and wait for its approval before delegating any implement or merge task; a plan of two or more steps is also reviewed independently, and the user sees its findings on the card. Each accept_task also waits for the user's approval.".to_owned()
-        }
-        PermissionLevel::ApproveForMe => format!(
-            "Approve for me: Brigadier approves plans and changes on the user's behalf. Small tasks just go.{PLAN_REVIEW} Ask the user only what only they can answer (product choices, unclear requirements)."
-        ),
-        PermissionLevel::FullAccess => format!(
-            "Full access: like Approve for me, but workers run without the OS sandbox. Be careful.{PLAN_REVIEW}"
-        ),
-    };
-    // An overnight run works on its own branch and approves for the user; its workers keep the
-    // session's sandbox, or run without one under full access (PLAN §10.8).
-    let (environment, permission) = match run {
-        Some(run) => (
-            format!(
-                "Overnight run: the user started an overnight run and is away. Accepted tasks land as commits on the run's own branch `{}` (from `{}`), never on the user's branch; only the user merges verified work, in the morning. Never call finish_session.",
-                run.branch, run.base
-            ),
-            format!(
-                "Approve for me, for this run only: Brigadier approves plans and changes on the user's behalf, {sandbox} It still refuses what only the user may do: pushing, publishing, deploying, spending, credentials, contacting anyone, and changes outside the run's branch.{PLAN_REVIEW} Nobody can answer questions or approvals before the morning: decide what the plan and the Rules settle (and note it with note_for_user, kind decided), and list what only the user can do (a key, an account, a push, a product choice the Rules leave open) with note_for_user, kind waiting, then carry on with everything that doesn't depend on it. Never ask the user, and never use request_approval.",
-                sandbox = if unsandboxed {
-                    "and workers run without the OS sandbox, as in the session."
-                } else {
-                    "and approves a worker's request to leave its sandbox."
-                }
-            ),
-        ),
-        None => (environment, permission),
-    };
+    let (environment, permission) = setting_texts(conversation, run);
     let project = project.map_or("(no project)", |p| p.name.as_str());
     format!(
         r#"You are the orchestrator of a Brigadier session. Today is {today}.
@@ -121,7 +82,8 @@ How to talk to the user:
 - Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show (progress lines like "task-1 finished, waiting on task-2" are noise). This holds right after you delegate, too. Never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
 - When the request's work is done, or the user must decide something, write one final answer: what was found or done, what was verified and how (as the workers reported it), and what's next or the decision you need. Don't repeat what you already told them.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.
-- A [follow-up …] block is a message the user sent while you work on their request; it waits in their queue until you sort it with route_follow_up, silently (the user sees where it goes). If it belongs to this work (a question about the same thing, a detail or a change for it), it joins it: it reaches you at once as the user's message, and your one final answer covers it too. If it is a request of its own, it waits and reaches you on its own once this work is done; don't act on it before.{voice}{orchestrator_voice}{short}{preferences}"#,
+- A [follow-up …] block is a message the user sent while you work on their request; it waits in their queue until you sort it with route_follow_up, silently (the user sees where it goes). If it belongs to this work (a question about the same thing, a detail or a change for it), it joins it: it reaches you at once as the user's message, and your one final answer covers it too. If it is a request of its own, it waits and reaches you on its own once this work is done; don't act on it before.{voice}{orchestrator_voice}
+- {AUTHORITY}{short}{preferences}"#,
         today = today(),
         quiet = QUIET,
         voice = VOICE,
@@ -133,6 +95,70 @@ How to talk to the user:
         },
         preferences = preference_lines(preferences),
     )
+}
+
+/// What the orchestrator's instructions say about where accepted work lands and its
+/// permission level: the session's own, or an overnight run's while one is active.
+pub(crate) fn setting_texts(
+    conversation: &Conversation,
+    run: Option<&crate::overnight::RunWorkspace>,
+) -> (String, String) {
+    let (environment, permission) = match &conversation.setup {
+        Some(Setup::Session {
+            environment,
+            permission,
+            ..
+        }) => (environment, *permission),
+        _ => (
+            &Environment::LocalCheckout { branch: "?".into() },
+            PermissionLevel::ApproveForMe,
+        ),
+    };
+    let unsandboxed = permission == PermissionLevel::FullAccess;
+    // An overnight run works on its own branch and approves for the user; its workers keep the
+    // session's sandbox, or run without one under full access (PLAN §10.8).
+    match run {
+        Some(run) => (
+            format!(
+                "Overnight run: the user started an overnight run and is away. Accepted tasks land as commits on the run's own branch `{}` (from `{}`), never on the user's branch; only the user merges verified work, in the morning. Never call finish_session.",
+                run.branch, run.base
+            ),
+            format!(
+                "Approve for me, for this run only: Brigadier approves plans and changes on the user's behalf, {sandbox} It still refuses what only the user may do: pushing, publishing, deploying, spending, credentials, contacting anyone, and changes outside the run's branch.{PLAN_REVIEW} Nobody can answer questions or approvals before the morning: decide what the plan and the Rules settle (and note it with note_for_user, kind decided), and list what only the user can do (a key, an account, a push, a product choice the Rules leave open) with note_for_user, kind waiting, then carry on with everything that doesn't depend on it. Never ask the user, and never use request_approval.",
+                sandbox = if unsandboxed {
+                    "and workers run without the OS sandbox, as in the session."
+                } else {
+                    "and approves a worker's request to leave its sandbox."
+                }
+            ),
+        ),
+        None => (environment_text(environment), permission_text(permission)),
+    }
+}
+
+fn environment_text(environment: &Environment) -> String {
+    match environment {
+        Environment::LocalCheckout { branch } => format!(
+            "Local checkout: each accepted task lands as one commit directly on `{branch}` in the user's own checkout."
+        ),
+        Environment::NewWorktree { base, branch, .. } => format!(
+            "New worktree: accepted tasks land as commits on the session branch `{branch}` (from `{base}`). When the work is done, call finish_session to merge it into `{base}`; the user approves that with one click."
+        ),
+    }
+}
+
+fn permission_text(permission: PermissionLevel) -> String {
+    match permission {
+        PermissionLevel::AskForApproval => {
+            "Ask for approval: the user approves every plan and every change. Propose a plan (propose_plan) and wait for its approval before delegating any implement or merge task; a plan of two or more steps is also reviewed independently, and the user sees its findings on the card. Each accept_task also waits for the user's approval.".to_owned()
+        }
+        PermissionLevel::ApproveForMe => format!(
+            "Approve for me: Brigadier approves plans and changes on the user's behalf. Small tasks just go.{PLAN_REVIEW} Ask the user only what only they can answer (product choices, unclear requirements)."
+        ),
+        PermissionLevel::FullAccess => format!(
+            "Full access: like Approve for me, but workers run without the OS sandbox. Be careful.{PLAN_REVIEW}"
+        ),
+    }
 }
 
 /// How plans are reviewed when Brigadier approves them on the user's behalf.
@@ -151,8 +177,7 @@ How to write:
 /// What the voice covers for the orchestrator.
 const ORCHESTRATOR_VOICE: &str = "
 - This covers your own prose: replies to the user and your notes (remember, plans, handoff notes). Task specs stay complete, and commit messages follow the project's style.
-- When you write to the user, name a worker by its title, as the user sees it, never as task-N.
-- The user can switch Short replies in Settings at any time. When a [settings] note from Brigadier says they turned it on or off, that note replaces what these instructions say about Short replies, from then on.";
+- When you write to the user, name a worker by its title, as the user sees it, never as task-N.";
 
 /// The Short replies setting (on by default, PLAN.md §7): what the user reads stays a few
 /// lines.
@@ -216,6 +241,290 @@ pub(crate) fn short_replies_note(short: bool) -> String {
     } else {
         "[settings] The user turned Short replies off. From now on, the \"Short replies\" rules no longer apply: write by \"How to write\" alone, with full detail where it helps. Don't mention this note.".to_owned()
     }
+}
+
+/// The instructions' contract: from version 1 on they say that Brigadier's notes replace what
+/// they say about the note's subject. A session that started on an older one hears it once.
+pub(crate) const CONTRACT: u32 = 1;
+
+/// What an orchestrator's instructions say about Brigadier's notes (contract 1).
+const AUTHORITY: &str = "Brigadier tells you when something these instructions say changes after they were written, in a note at the start of a message: [today] for today's date, [settings] for the user's settings (Short replies, the permission level, their preferences), [run] for an overnight run starting, changing or ending. Such a note replaces what these instructions say about it, from then on.";
+
+/// The same for a Chat.
+const CHAT_AUTHORITY: &str = "Brigadier tells you in a note at the start of a message when today's date ([today]) or what you know about the user ([settings]) changed after these instructions were written. Such a note replaces what these instructions say about it, from then on.";
+
+const CONTRACT_LABEL: &str = "notes replace instructions";
+const TODAY_LABEL: &str = "today";
+const PERMISSION_LABEL: &str = "permission level";
+const RUN_LABEL: &str = "overnight run";
+const RUN_OVER_LABEL: &str = "overnight run over";
+const PREFERENCES_LABEL: &str = "preferences";
+
+/// The parts of a session's instructions that can change while its CLI session lives on, as
+/// they are now.
+pub(crate) struct Current {
+    pub chat: bool,
+    pub today: String,
+    pub short_replies: bool,
+    pub permission: PermissionLevel,
+    /// Where accepted work lands and the permission level, as the instructions say them
+    /// without a run.
+    pub plain: (String, String),
+    /// While an overnight run is active: what the instructions say about it, and the
+    /// restrictions Brigadier enforces for it.
+    pub run: Option<(String, String, String)>,
+    pub preferences: Vec<String>,
+}
+
+impl Current {
+    /// A session's: `run` is the active run's branch and the restrictions it enforces.
+    pub(crate) fn session(
+        conversation: &Conversation,
+        run: Option<(&crate::overnight::RunWorkspace, String)>,
+        short_replies: bool,
+        preferences: Vec<String>,
+    ) -> Self {
+        let permission = match &conversation.setup {
+            Some(Setup::Session { permission, .. }) => *permission,
+            _ => PermissionLevel::ApproveForMe,
+        };
+        let run = run.map(|(workspace, restrictions)| {
+            let (environment, permission) = setting_texts(conversation, Some(workspace));
+            (environment, permission, restrictions)
+        });
+        Self {
+            chat: false,
+            today: today(),
+            short_replies,
+            permission,
+            plain: setting_texts(conversation, None),
+            run,
+            preferences,
+        }
+    }
+
+    /// A Chat's: only the date and the user's memories can change.
+    pub(crate) fn chat(memories: Vec<String>) -> Self {
+        Self {
+            chat: true,
+            today: today(),
+            short_replies: false,
+            permission: PermissionLevel::ApproveForMe,
+            plain: (String::new(), String::new()),
+            run: None,
+            preferences: memories,
+        }
+    }
+
+    fn run_fingerprint(&self) -> String {
+        self.run.as_ref().map_or_else(String::new, |(a, b, c)| {
+            fingerprint(&[a.as_str(), b.as_str(), c.as_str()])
+        })
+    }
+
+    /// What role instructions written now tell a new CLI session.
+    pub(crate) fn told(&self) -> Told {
+        let session = !self.chat;
+        Told {
+            contract: Some(CONTRACT),
+            today: Some(self.today.clone()),
+            short_replies: session.then_some(self.short_replies),
+            permission: session.then_some(self.permission),
+            run: session.then(|| self.run_fingerprint()),
+            preferences: Some(preferences_fingerprint(&self.preferences)),
+        }
+    }
+}
+
+/// A short, stable fingerprint of some texts.
+fn fingerprint(parts: &[&str]) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for part in parts {
+        hasher.update(part.as_bytes());
+        hasher.update(&[0]);
+    }
+    hasher.finalize().to_hex()[..16].to_owned()
+}
+
+/// The user's preferences' fingerprint, as [`Told`] keeps it.
+pub(crate) fn preferences_fingerprint(preferences: &[String]) -> String {
+    fingerprint(&preferences.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+/// A note that tells a session what changed in its instructions, its log label, and what it
+/// tells.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Note {
+    pub text: String,
+    pub label: &'static str,
+    pub told: Told,
+}
+
+/// The notes a session needs before its next turn: what changed since it was last `told`
+/// (unknown counts as changed, except a run it can't have heard of), the contract first.
+pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
+    let mut notes = Vec::new();
+    if told.contract.unwrap_or(0) < CONTRACT {
+        notes.push(Note {
+            text: format!(
+                "[instructions] {}",
+                if now.chat { CHAT_AUTHORITY } else { AUTHORITY }
+            ),
+            label: CONTRACT_LABEL,
+            told: Told {
+                contract: Some(CONTRACT),
+                ..Told::default()
+            },
+        });
+    }
+    if told.today.as_deref() != Some(now.today.as_str()) {
+        notes.push(Note {
+            text: format!("[today] It's now {}.", now.today),
+            label: TODAY_LABEL,
+            told: Told {
+                today: Some(now.today.clone()),
+                ..Told::default()
+            },
+        });
+    }
+    if !now.chat {
+        if told.short_replies != Some(now.short_replies) {
+            notes.push(Note {
+                text: short_replies_note(now.short_replies),
+                label: short_replies_label(now.short_replies),
+                told: Told {
+                    short_replies: Some(now.short_replies),
+                    ..Told::default()
+                },
+            });
+        }
+        let run = now.run_fingerprint();
+        let told_run = told.run.as_deref();
+        match &now.run {
+            Some((environment, permission, restrictions)) if told_run != Some(run.as_str()) => {
+                notes.push(Note {
+                    text: format!(
+                        "[run] From now on, for this overnight run (this replaces what your instructions say about where accepted work lands and the permission level):\n{environment}\nPermission level: {permission}\n{restrictions}"
+                    ),
+                    label: RUN_LABEL,
+                    told: Told {
+                        run: Some(run),
+                        ..Told::default()
+                    },
+                });
+            }
+            // A run's instructions are the session's while it runs.
+            Some(_) => {}
+            None if told_run.is_some_and(|run| !run.is_empty()) => {
+                let (environment, permission) = &now.plain;
+                notes.push(Note {
+                    text: format!(
+                        "[run] The overnight run is over: what your instructions or earlier notes say about it no longer applies. From now on:\n{environment}\nPermission level: {permission}"
+                    ),
+                    label: RUN_OVER_LABEL,
+                    told: Told {
+                        run: Some(String::new()),
+                        permission: Some(now.permission),
+                        ..Told::default()
+                    },
+                });
+            }
+            None if told.permission != Some(now.permission) => {
+                notes.push(Note {
+                    text: format!(
+                        "[settings] The user changed the permission level. From now on: {}",
+                        now.plain.1
+                    ),
+                    label: PERMISSION_LABEL,
+                    told: Told {
+                        permission: Some(now.permission),
+                        ..Told::default()
+                    },
+                });
+            }
+            None => {}
+        }
+    }
+    let preferences = preferences_fingerprint(&now.preferences);
+    if told.preferences.as_deref() != Some(preferences.as_str()) {
+        let what = if now.chat {
+            "what you know about the user from earlier conversations"
+        } else {
+            "the user's preferences"
+        };
+        let text = if now.preferences.is_empty() {
+            format!(
+                "[settings] There is nothing saved now as {what}: the list in your instructions no longer applies."
+            )
+        } else {
+            let mut text = format!(
+                "[settings] This is {what} now, in place of the list in your instructions (follow it):"
+            );
+            for preference in &now.preferences {
+                text.push_str("\n- ");
+                text.push_str(preference);
+            }
+            text
+        };
+        notes.push(Note {
+            text,
+            label: PREFERENCES_LABEL,
+            told: Told {
+                preferences: Some(preferences),
+                ..Told::default()
+            },
+        });
+    }
+    notes
+}
+
+/// Fills what `told` doesn't know yet from what an older log entry told.
+pub(crate) fn fill_told(told: &mut Told, older: &Told) {
+    told.contract = told.contract.or(older.contract);
+    if told.today.is_none() {
+        told.today.clone_from(&older.today);
+    }
+    told.short_replies = told.short_replies.or(older.short_replies);
+    told.permission = told.permission.or(older.permission);
+    if told.run.is_none() {
+        told.run.clone_from(&older.run);
+    }
+    if told.preferences.is_none() {
+        told.preferences.clone_from(&older.preferences);
+    }
+}
+
+/// What the current CLI session was last told, from its log's instruction entries (logged at
+/// `at_ms`), newest first. Entries from before told was recorded say less: role instructions
+/// their Short replies setting, contract 0 and the day they were logged; a Short replies note
+/// its setting. Returns it and whether the session's role instructions were reached.
+pub(crate) fn told_from_log<'a>(
+    entries: impl IntoIterator<Item = (i64, &'a ContextInjection)>,
+) -> (Told, bool) {
+    let mut told = Told::default();
+    for (at_ms, entry) in entries {
+        if entry.kind != InjectionKind::Instructions {
+            continue;
+        }
+        let role = entry.label.starts_with(ROLE_INSTRUCTIONS);
+        match &entry.told {
+            Some(said) => fill_told(&mut told, said),
+            None => fill_told(
+                &mut told,
+                &Told {
+                    contract: role.then_some(0),
+                    today: role.then(|| date_of(at_ms)),
+                    short_replies: short_in_label(&entry.label),
+                    ..Told::default()
+                },
+            ),
+        }
+        // Older entries belong to an earlier CLI session.
+        if role {
+            return (told, true);
+        }
+    }
+    (told, false)
 }
 
 /// What the voice covers for a worker, and its report's shape.
@@ -379,7 +688,7 @@ pub(crate) fn environment(env: &WorkerEnvironment<'_>) -> String {
 /// A Chat's role.
 pub(crate) fn chat(memories: &[String]) -> String {
     let mut text = format!(
-        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You are in a plain chat: there is no repository and you cannot edit code. You may search the web when current information helps; say where facts came from.\nWhen the user tells you something about themselves that will matter in later conversations (a preference, their role, what they work on), keep it with the save_memory tool, one short sentence, without announcing it: the user sees what you saved and can remove it.",
+        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You are in a plain chat: there is no repository and you cannot edit code. You may search the web when current information helps; say where facts came from.\nWhen the user tells you something about themselves that will matter in later conversations (a preference, their role, what they work on), keep it with the save_memory tool, one short sentence, without announcing it: the user sees what you saved and can remove it.\n{CHAT_AUTHORITY}",
         today()
     );
     if !memories.is_empty() {
@@ -745,9 +1054,9 @@ mod environment_tests {
         assert!(long.contains("name a worker by its title"));
         assert!(long.contains("Short replies is off"));
         assert!(!full.contains("Short replies is off"));
-        assert!(
-            long.contains("that note replaces what these instructions say about Short replies")
-        );
+        assert!(long.contains(AUTHORITY));
+        assert!(full.contains(AUTHORITY));
+        assert!(chat(&[]).contains(CHAT_AUTHORITY));
     }
 
     #[test]
@@ -765,5 +1074,269 @@ mod environment_tests {
         assert!(on.contains("at most three lines"));
         assert!(!on.contains("Short replies (the user's setting)"));
         assert!(short_replies_note(false).contains("no longer apply"));
+    }
+
+    fn session(permission: &str) -> Conversation {
+        serde_json::from_value(serde_json::json!({
+            "id": "01a106c3-1fb7-7593-a441-486b39799405",
+            "kind": "session",
+            "projectId": null,
+            "title": "textkit",
+            "pinnedAtMs": null,
+            "createdAtMs": 0,
+            "updatedAtMs": 0,
+            "setup": {
+                "type": "session",
+                "repo": "/tmp/textkit",
+                "environment": { "type": "localCheckout", "branch": "main" },
+                "permission": permission,
+                "orchestrator": { "provider": "claude", "model": "opus", "effort": "high" },
+                "workersSeeUncommitted": null,
+                "planMode": false
+            }
+        }))
+        .unwrap()
+    }
+
+    fn workspace() -> crate::overnight::RunWorkspace {
+        crate::overnight::RunWorkspace {
+            base: "main".into(),
+            base_commit: "abc".into(),
+            branch: "overnight/2026-10-04-textkit-1234".into(),
+            path: "/tmp/run".into(),
+        }
+    }
+
+    fn current(permission: &str, run: Option<&str>, preferences: &[&str]) -> Current {
+        let workspace = workspace();
+        let mut current = Current::session(
+            &session(permission),
+            run.map(|restrictions| (&workspace, restrictions.to_owned())),
+            true,
+            preferences.iter().map(|p| (*p).to_owned()).collect(),
+        );
+        current.today = "2026-10-04".into();
+        current
+    }
+
+    fn labels(notes: &[Note]) -> Vec<&'static str> {
+        notes.iter().map(|note| note.label).collect()
+    }
+
+    fn entry(label: &str, told: Option<Told>) -> ContextInjection {
+        ContextInjection {
+            kind: InjectionKind::Instructions,
+            bytes: 10,
+            tokens_estimate: 3,
+            label: label.into(),
+            task_id: None,
+            told,
+        }
+    }
+
+    /// Applies notes the CLI took the way the turn does: what they told fills in over what
+    /// the session knew.
+    fn took(told: &mut Told, notes: &[Note]) {
+        for note in notes {
+            let mut now = note.told.clone();
+            fill_told(&mut now, told);
+            *told = now;
+        }
+    }
+
+    #[test]
+    fn a_session_told_everything_now_needs_no_note() {
+        for now in [
+            current("approveForMe", None, &[]),
+            current(
+                "fullAccess",
+                Some("- The run lasts 60 minutes."),
+                &["Prefers pnpm"],
+            ),
+            Current::chat(vec!["Lives in Chisinau".into()]),
+        ] {
+            assert_eq!(notes(&now.told(), &now), Vec::new());
+        }
+    }
+
+    #[test]
+    fn a_resumed_session_hears_a_new_day_and_nothing_else() {
+        let now = current("approveForMe", None, &["Prefers pnpm"]);
+        let mut told = now.told();
+        told.today = Some("2026-10-03".into());
+        let sent = notes(&told, &now);
+        assert_eq!(labels(&sent), vec![TODAY_LABEL]);
+        assert_eq!(sent[0].text, "[today] It's now 2026-10-04.");
+        took(&mut told, &sent);
+        assert_eq!(told, now.told());
+        // A Chat too.
+        let chat = Current::chat(Vec::new());
+        let mut told = chat.told();
+        told.today = Some("2026-10-01".into());
+        assert_eq!(labels(&notes(&told, &chat)), vec![TODAY_LABEL]);
+    }
+
+    #[test]
+    fn a_session_that_started_on_the_old_contract_hears_the_note_rule_first() {
+        let now = current("approveForMe", None, &[]);
+        // What an entry logged by an older build tells: role instructions with Short replies
+        // on, logged at 2026-10-04 10:00 UTC.
+        let old = entry(ROLE_INSTRUCTIONS_SHORT, None);
+        let (told, reached) = told_from_log([(1_791_108_000_000, &old)]);
+        assert!(reached);
+        assert_eq!(told.contract, Some(0));
+        assert_eq!(told.today.as_deref(), Some("2026-10-04"));
+        assert_eq!(told.short_replies, Some(true));
+        let sent = notes(&told, &now);
+        // It can't know the permission level or preferences it started with: they go once.
+        assert_eq!(
+            labels(&sent),
+            vec![CONTRACT_LABEL, PERMISSION_LABEL, PREFERENCES_LABEL]
+        );
+        assert_eq!(sent[0].text, format!("[instructions] {AUTHORITY}"));
+        let chat = Current::chat(Vec::new());
+        let (told, _) = told_from_log([(1_791_108_000_000, &entry(ROLE_INSTRUCTIONS, None))]);
+        let sent = notes(&told, &chat);
+        assert_eq!(sent[0].text, format!("[instructions] {CHAT_AUTHORITY}"));
+    }
+
+    #[test]
+    fn a_changed_permission_level_is_told_with_the_instructions_own_words() {
+        let before = current("askForApproval", None, &[]);
+        let now = current("fullAccess", None, &[]);
+        let sent = notes(&before.told(), &now);
+        assert_eq!(labels(&sent), vec![PERMISSION_LABEL]);
+        assert!(sent[0].text.starts_with(
+            "[settings] The user changed the permission level. From now on: Full access: like Approve for me, but workers run without the OS sandbox."
+        ));
+    }
+
+    #[test]
+    fn an_overnight_run_is_told_when_it_starts_changes_and_ends() {
+        let plain = current("askForApproval", None, &[]);
+        let run = current("askForApproval", Some("- The run lasts 60 minutes."), &[]);
+        // Started: the run's own words, with its restrictions.
+        let sent = notes(&plain.told(), &run);
+        assert_eq!(labels(&sent), vec![RUN_LABEL]);
+        assert!(
+            sent[0]
+                .text
+                .contains("on the run's own branch `overnight/2026-10-04-textkit-1234`")
+        );
+        assert!(sent[0].text.contains("Never ask the user"));
+        assert!(sent[0].text.ends_with("- The run lasts 60 minutes."));
+        // Its deadline changed: told again.
+        let later = current(
+            "askForApproval",
+            Some("- The report is due at Mon 06:00 (+03:00)."),
+            &[],
+        );
+        let sent = notes(&run.told(), &later);
+        assert_eq!(labels(&sent), vec![RUN_LABEL]);
+        assert!(sent[0].text.contains("due at Mon 06:00"));
+        // Over: the session's own setting is back, the permission level with it.
+        let sent = notes(&later.told(), &plain);
+        assert_eq!(labels(&sent), vec![RUN_OVER_LABEL]);
+        assert!(sent[0].text.starts_with("[run] The overnight run is over"));
+        assert!(
+            sent[0].text.contains(
+                "Local checkout: each accepted task lands as one commit directly on `main`"
+            )
+        );
+        assert!(sent[0].text.contains("Permission level: Ask for approval:"));
+        let mut told = later.told();
+        took(&mut told, &sent);
+        assert_eq!(told, plain.told());
+        // The permission level switched during the run: the run's words for it (its
+        // sandbox), not the session's, which come back with its end.
+        let full = current("fullAccess", Some("- The run lasts 60 minutes."), &[]);
+        let sent = notes(&run.told(), &full);
+        assert_eq!(labels(&sent), vec![RUN_LABEL]);
+        assert!(
+            sent[0]
+                .text
+                .contains("workers run without the OS sandbox, as in the session")
+        );
+        // A session that can't have heard of a run is never told one ended.
+        let mut unknown = plain.told();
+        unknown.run = None;
+        assert_eq!(notes(&unknown, &plain), Vec::new());
+    }
+
+    #[test]
+    fn changed_preferences_are_told_in_full_and_none_left_says_so() {
+        let before = current("approveForMe", None, &["Prefers pnpm"]);
+        let now = current(
+            "approveForMe",
+            None,
+            &["Prefers pnpm", "Writes British English"],
+        );
+        let sent = notes(&before.told(), &now);
+        assert_eq!(labels(&sent), vec![PREFERENCES_LABEL]);
+        assert!(
+            sent[0]
+                .text
+                .ends_with("\n- Prefers pnpm\n- Writes British English")
+        );
+        let none = current("approveForMe", None, &[]);
+        let sent = notes(&before.told(), &none);
+        assert!(
+            sent[0]
+                .text
+                .contains("the list in your instructions no longer applies")
+        );
+    }
+
+    #[test]
+    fn the_log_gives_the_newest_word_on_each_part_since_the_cli_started() {
+        let start = current("askForApproval", None, &[]);
+        let role = entry(ROLE_INSTRUCTIONS_SHORT, Some(start.told()));
+        let today = entry(
+            TODAY_LABEL,
+            Some(Told {
+                today: Some("2026-10-05".into()),
+                ..Told::default()
+            }),
+        );
+        let off = entry(SHORT_REPLIES_OFF, None);
+        let older = entry(
+            TODAY_LABEL,
+            Some(Told {
+                today: Some("1999-01-01".into()),
+                ..Told::default()
+            }),
+        );
+        // Newest first; the entry before the role instructions belongs to an earlier CLI.
+        let (told, reached) = told_from_log([(3, &off), (2, &today), (1, &role), (0, &older)]);
+        assert!(reached);
+        assert_eq!(told.today.as_deref(), Some("2026-10-05"));
+        assert_eq!(told.short_replies, Some(false));
+        assert_eq!(told.permission, Some(PermissionLevel::AskForApproval));
+        assert_eq!(told.contract, Some(CONTRACT));
+        // Not reaching the start: only what the entries said.
+        let (told, reached) = told_from_log([(3, &off)]);
+        assert!(!reached);
+        assert_eq!(told.contract, None);
+    }
+
+    #[test]
+    fn a_note_whose_turn_failed_goes_again_after_a_restart_and_once_it_was_taken_not_again() {
+        let started = current("approveForMe", None, &[]);
+        let mut log = vec![(1, entry(ROLE_INSTRUCTIONS_SHORT, Some(started.told())))];
+        let recovered = |log: &[(i64, ContextInjection)]| {
+            told_from_log(log.iter().rev().map(|(at, entry)| (*at, entry))).0
+        };
+        let mut now = current("fullAccess", None, &[]);
+        now.today = "2026-10-05".into();
+        let first = notes(&recovered(&log), &now);
+        assert_eq!(labels(&first), vec![TODAY_LABEL, PERMISSION_LABEL]);
+        // The turn failed: nothing was logged. After a restart the same notes go again.
+        let retry = notes(&recovered(&log), &now);
+        assert_eq!(retry, first);
+        // The CLI took them: each is logged with what it told.
+        for note in &retry {
+            log.push((2, entry(note.label, Some(note.told.clone()))));
+        }
+        assert_eq!(notes(&recovered(&log), &now), Vec::new());
     }
 }

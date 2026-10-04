@@ -124,9 +124,9 @@ pub(crate) struct Cli {
 #[derive(Default)]
 struct ConvState {
     cli: Option<Arc<Cli>>,
-    /// The Short replies setting the orchestrator's session was last given (its role
-    /// instructions or a later note); unknown until a turn reads it from the log.
-    short_told: Option<bool>,
+    /// What the CLI session was last told of the parts of its instructions that can change
+    /// (its role instructions and later notes); unknown until a turn reads it from the log.
+    told: Option<crate::work::Told>,
     /// A turn is starting or running.
     busy: bool,
     /// The CLI is being closed on purpose (hibernate, archive, fallback).
@@ -1374,22 +1374,16 @@ impl SessionManager {
                 input.text = format!("{transcript}\n\n{}", input.text);
             }
         }
-        // The user switched Short replies since the session last heard: a resumed CLI keeps
-        // its first instructions, so the change goes with this turn.
-        let short_note = if session {
-            self.short_replies_note(&conv).await
-        } else {
-            None
-        };
-        if let Some((_, text, label)) = &short_note {
-            self.log_injection(
-                &conv.id,
-                InjectionKind::Instructions,
-                (*label).into(),
-                None,
-                text.len(),
-            )
-            .await;
+        // What changed in its instructions since the session last heard (the date, a setting,
+        // the overnight run): a resumed CLI keeps its first instructions, so the change goes
+        // with this turn, logged once the CLI took it.
+        let instruction_notes = self.instruction_notes(&conv).await;
+        if !instruction_notes.is_empty() {
+            let text = instruction_notes
+                .iter()
+                .map(|note| note.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n");
             input.text = format!("{text}\n\n{}", input.text);
         }
         for message in &users {
@@ -1416,9 +1410,7 @@ impl SessionManager {
             self.fail_turn(&conv, users, envelopes, &message).await;
             return;
         }
-        if let Some((short, ..)) = short_note {
-            conv.state.lock().await.short_told = Some(short);
-        }
+        self.told_notes(&conv, instruction_notes).await;
         if let Some((_, record)) = reborn {
             tracing::info!(conversation = %conv.id, generation = record.generation, tokens = record.briefing_tokens, trigger = ?record.trigger, "orchestrator reborn");
             self.log_orchestrator(
@@ -1517,7 +1509,7 @@ impl SessionManager {
             .map(|fallback| fallback.choice);
         let mut grant_values = Vec::new();
         let short = self.core.settings().short_replies;
-        let (choice, prompt, mcp) = match (&conversation.setup, conv.kind) {
+        let (choice, prompt, mcp, current) = match (&conversation.setup, conv.kind) {
             (Some(Setup::Session { orchestrator, .. }), _) => {
                 let choice = match fallback {
                     Some(fallback) => fallback,
@@ -1528,17 +1520,20 @@ impl SessionManager {
                     .as_ref()
                     .and_then(|id| self.core.project(id).ok());
                 let preferences = self.memory_lines(super::brain_jobs::MEMORY_BYTES).await;
-                let run = self
-                    .overnight
-                    .active
-                    .get(&conv.id)
-                    .and_then(|active| active.workspace);
+                let run = self.run_setting(&conv.id).await;
                 let prompt = prompts::orchestrator(
                     &conversation,
                     project.as_ref(),
                     &preferences,
-                    run.as_ref(),
+                    run.as_ref().map(|(workspace, _)| workspace),
                     short,
+                );
+                let current = prompts::Current::session(
+                    &conversation,
+                    run.as_ref()
+                        .map(|(workspace, restrictions)| (workspace, restrictions.clone())),
+                    short,
+                    preferences,
                 );
                 let grant = self.grants.issue(
                     &owner,
@@ -1551,6 +1546,7 @@ impl SessionManager {
                     choice,
                     prompt,
                     vec![self.brigadier_server(grant, ORCHESTRATOR_TOOL_TIMEOUT_SECS, false)],
+                    current,
                 )
             }
             (Some(Setup::Chat { .. }) | None, ConversationKind::Chat) => {
@@ -1571,6 +1567,7 @@ impl SessionManager {
                     fallback.unwrap_or(model),
                     prompts::chat(&memories),
                     vec![self.brigadier_server(grant, CHAT_TOOL_TIMEOUT_SECS, false)],
+                    prompts::Current::chat(memories),
                 )
             }
             (Some(Setup::Chat { .. }), ConversationKind::Session) => {
@@ -1658,23 +1655,20 @@ impl SessionManager {
         if reseed_needed {
             conv.state.lock().await.reseed = true;
         }
-        if !resumed {
-            // A resumed CLI keeps the instructions it started with; a new one has the
-            // setting as it is now.
+        if resumed {
+            // A resumed CLI keeps the instructions it started with: the next turn reads from
+            // the log what they and later notes said.
+            conv.state.lock().await.told = None;
+        } else {
+            // A new one has them as they are now.
             let label = if conv.kind == ConversationKind::Session {
-                conv.state.lock().await.short_told = Some(short);
                 prompts::instructions_label(short)
             } else {
                 prompts::ROLE_INSTRUCTIONS
             };
-            self.log_injection(
-                &conv.id,
-                InjectionKind::Instructions,
-                label.into(),
-                None,
-                prompt.len(),
-            )
-            .await;
+            let told = current.told();
+            conv.state.lock().await.told = Some(told.clone());
+            self.log_told(&conv.id, label, prompt.len(), told).await;
         }
         let Started { session, events } = started;
         let cli = Arc::new(Cli {
@@ -3397,56 +3391,113 @@ impl SessionManager {
         None
     }
 
-    /// The note telling the orchestrator its Short replies setting changed, when the session
-    /// last heard otherwise (or it can't tell): the setting, the note and its log label.
-    async fn short_replies_note(
-        &self,
-        conv: &Arc<ConvLive>,
-    ) -> Option<(bool, String, &'static str)> {
-        let short = self.core.settings().short_replies;
-        let known = conv.state.lock().await.short_told;
-        let told = match known {
-            Some(told) => Some(told),
-            None => self.short_told(&conv.id).await,
+    /// The notes the conversation's CLI session needs before its next turn: what changed in
+    /// its instructions since it was last told (see [`prompts::notes`]).
+    async fn instruction_notes(&self, conv: &Arc<ConvLive>) -> Vec<prompts::Note> {
+        let current = match conv.kind {
+            ConversationKind::Session => {
+                let Ok(conversation) = self.core.conversation(&conv.id) else {
+                    return Vec::new();
+                };
+                let run = self.run_setting(&conv.id).await;
+                prompts::Current::session(
+                    &conversation,
+                    run.as_ref()
+                        .map(|(workspace, restrictions)| (workspace, restrictions.clone())),
+                    self.core.settings().short_replies,
+                    self.memory_lines(super::brain_jobs::MEMORY_BYTES).await,
+                )
+            }
+            ConversationKind::Chat => {
+                prompts::Current::chat(self.memory_lines(super::brain_jobs::MEMORY_BYTES).await)
+            }
         };
-        if told == Some(short) {
-            conv.state.lock().await.short_told = Some(short);
-            return None;
-        }
-        Some((
-            short,
-            prompts::short_replies_note(short),
-            prompts::short_replies_label(short),
-        ))
+        let known = conv.state.lock().await.told.clone();
+        let told = match known {
+            Some(told) => told,
+            None => {
+                let told = self.told_from_log(&conv.id).await;
+                conv.state.lock().await.told = Some(told.clone());
+                told
+            }
+        };
+        prompts::notes(&told, &current)
     }
 
-    /// The Short replies setting the conversation's orchestrator session was last given,
-    /// from the log: its role instructions or a later note.
-    async fn short_told(&self, id: &ConversationId) -> Option<bool> {
-        let page = self
-            .core
-            .store()
-            .read_stream(
-                streams::orchestrator(id),
-                StreamPage {
-                    before: None,
-                    kinds: vec!["orchestrator.logged".into()],
-                    limit: 200,
-                },
-            )
-            .await
-            .ok()?;
-        page.iter().find_map(|stored| {
-            match serde_json::from_str::<DomainEvent>(stored.payload.get()).ok()? {
-                DomainEvent::OrchestratorLogged {
+    /// The CLI took a turn carrying `notes`: they are logged, and what they told is now the
+    /// session's. Never called for a turn that failed, so a restart sends them again.
+    async fn told_notes(&self, conv: &Arc<ConvLive>, notes: Vec<prompts::Note>) {
+        for note in notes {
+            if let Some(told) = conv.state.lock().await.told.as_mut() {
+                let mut now = note.told.clone();
+                prompts::fill_told(&mut now, told);
+                *told = now;
+            }
+            self.log_told(&conv.id, note.label, note.text.len(), note.told)
+                .await;
+        }
+    }
+
+    /// The conversation's own session saved a preference (`before`: the user's preferences
+    /// until then): it knows, so its next turn needs no note about it, unless they had
+    /// changed otherwise since it was last told. Kept in memory only: after a restart the
+    /// note goes once.
+    pub(crate) async fn told_own_preference(&self, id: &ConversationId, before: &[String]) {
+        let Ok(conv) = self.conv(id) else {
+            return;
+        };
+        let after = self.memory_lines(super::brain_jobs::MEMORY_BYTES).await;
+        let mut state = conv.state.lock().await;
+        if let Some(told) = state.told.as_mut()
+            && told.preferences.as_deref()
+                == Some(prompts::preferences_fingerprint(before).as_str())
+        {
+            told.preferences = Some(prompts::preferences_fingerprint(&after));
+        }
+    }
+
+    /// What the conversation's current CLI session was last told, from the log: its role
+    /// instructions and the notes since.
+    async fn told_from_log(&self, id: &ConversationId) -> crate::work::Told {
+        let mut entries = Vec::new();
+        let mut before = None;
+        loop {
+            let Ok(page) = self
+                .core
+                .store()
+                .read_stream(
+                    streams::orchestrator(id),
+                    StreamPage {
+                        before,
+                        kinds: vec!["orchestrator.logged".into()],
+                        limit: 500,
+                    },
+                )
+                .await
+            else {
+                break;
+            };
+            let Some(last) = page.last() else {
+                break;
+            };
+            before = Some(last.stream_seq);
+            let mut reached = false;
+            for stored in &page {
+                if let Ok(DomainEvent::OrchestratorLogged {
                     entry: OrchestratorEntry::Injection { injection },
                     ..
-                } if injection.kind == InjectionKind::Instructions => {
-                    prompts::short_in_label(&injection.label)
+                }) = serde_json::from_str::<DomainEvent>(stored.payload.get())
+                    && injection.kind == InjectionKind::Instructions
+                {
+                    reached |= injection.label.starts_with(prompts::ROLE_INSTRUCTIONS);
+                    entries.push((stored.at_ms, injection));
                 }
-                _ => None,
             }
-        })
+            if reached {
+                break;
+            }
+        }
+        prompts::told_from_log(entries.iter().map(|(at, entry)| (*at, entry))).0
     }
 
     /// Marks the conversation's CLI session as gone for good: the next one starts over.
@@ -3607,6 +3658,28 @@ impl SessionManager {
                 tokens_estimate: (bytes as u64).div_ceil(4),
                 label,
                 task_id,
+                told: None,
+            },
+        };
+        self.log_orchestrator(id, entry).await;
+    }
+
+    /// Logs instructions given to the conversation's CLI session, with what they told it.
+    async fn log_told(
+        &self,
+        id: &ConversationId,
+        label: &str,
+        bytes: usize,
+        told: crate::work::Told,
+    ) {
+        let entry = OrchestratorEntry::Injection {
+            injection: ContextInjection {
+                kind: InjectionKind::Instructions,
+                bytes: bytes as u64,
+                tokens_estimate: (bytes as u64).div_ceil(4),
+                label: label.to_owned(),
+                task_id: None,
+                told: Some(told),
             },
         };
         self.log_orchestrator(id, entry).await;
