@@ -289,50 +289,39 @@ Neither exists in a release build.
 
 A session's permission level is picked in the composer; a project remembers the last one used.
 
-- **Ask for approval**: you approve every plan and every change before it lands.
+- **Ask for approval**: you approve every plan and every change before it lands. Workers run
+  in the OS sandbox without network; each step outside it (another folder, a host to reach)
+  asks you on a card. "Allow similar commands" allows the same kind of command (its first
+  words, such as `git push` or `curl`) or the same host for the rest of the conversation.
 - **Approve for me**: Brigadier approves plans and changes on your behalf (a risky plan gets an
-  independent review first) and asks you only what only you can answer.
-- **Full access**: as Approve for me, but workers run without the OS sandbox. They can read,
-  create, change and delete any file your account can, run any command (install software,
-  change settings) and use the internet, without asking. The composer shows a notice while a
-  conversation is in Full access; Settings can turn it off.
+  independent review first) and asks you only what only you can answer. Workers run in the OS
+  sandbox with network; when a command needs more, the CLI's own reviewer decides (Claude's
+  auto mode, Codex's auto-review) and declines what it judges unsafe, which the worker then
+  works around or lists for you.
+- **Full access**: as Approve for me, but workers run like your own terminal (Claude in
+  `bypassPermissions`, Codex with no sandbox and no approvals). They can read, create, change
+  and delete any file your account can, run any command (install software, change settings)
+  and use the internet, without asking. The composer shows a notice while a conversation is in
+  Full access; Settings can turn it off.
 
-At the first two levels workers run in the OS sandbox: they can read the repository and use the
-network, but write only to their own worktree and scratch folder. Outward commands ask you at
-every level (below).
+In the sandbox a worker writes its own worktree and scratch folder, its worktree's git folder
+(so it can commit) and the toolchains' caches (`~/.cargo`, `~/.rustup`, the npm, pnpm, yarn and
+bun caches, `~/Library/Caches`, the temporary folder), so builds, tests and installs just work.
 
-### Outward commands
-
-Pushes, publishes, deploys and cloud commands (`policy::ALWAYS_ASK`) ask you at every permission
-level, for both vendors. Claude asks through its permission rules. For Codex, which runs such
-commands inside its sandbox without asking, and as a second line for Claude, the daemon puts a
-folder of shims (`<data>/gate/bin`: `git`, `gh`, `npm`, `cargo`, `docker`, deploy CLIs, …) first
-on each worker's `PATH`. It holds a shim only for the programs you have on your login `PATH`,
-checked when a worker starts and before each message it is sent, so a program you don't have
-stays missing for workers too (`which` finds nothing, the shell says "command not found"). A
-local command runs the real binary straight away; an outward one waits for your answer on the
-same approval card. A command Claude already asked about is not asked twice.
-
-The gate guards against accidents, not against a hostile agent:
-
-- a program started by absolute path, a script that finds the real binary itself, or code
-  calling an API directly is not seen;
-- a program installed while a worker's turn runs is gated from the worker's next message on;
-- git aliases are resolved (`-c alias.*=…` included), but a `!` shell alias, an external
-  `git-<name>` program (which git runs ahead of an alias of that name) and anything run from
-  git's own exec path (hooks) cannot be inspected, so they ask;
-- a command line or directory that is not UTF-8 is denied;
-- on Windows there are no shims yet;
-- raw sessions started from the Inspector's Providers tab are not gated (the Inspector warns
-  on Codex ones).
+At every level workers never push, publish, deploy or open pull requests on their own: they
+list such steps for you, and you start them (with the session's buttons, or by asking the
+orchestrator in chat). The orchestrator asks your approval only for spending money, using
+credentials or the keychain, or destroying something outside the session's own work. An
+overnight run follows its session's level. Claude workers' sub-agents run only on the models
+their task may use, at every level.
 
 Claude's sandbox lets network traffic out only as HTTP(S) through its proxy, so a push over
-`git://` or `ssh` from a sandboxed Claude worker fails even after you allow it.
+`git://` or `ssh` from a sandboxed Claude worker fails.
 
 ### What still depends on trust
 
-- Workers and orchestrators get grants scoped to their role and task, checked on every MCP and
-  gate call and revoked when the session ends. UI-only requests (such as answering approvals)
+- Workers and orchestrators get grants scoped to their role and task, checked on every MCP call
+  and revoked when the session ends. UI-only requests (such as answering approvals)
   never accept a grant; they need the IPC token in `<data>/run/`. Claude workers cannot read that
   folder, nor can Codex sessions that run in a Brigadier folder (read-only workers and Brain
   jobs), which get a Codex permission profile denying it; a Brain job never runs on Codex
