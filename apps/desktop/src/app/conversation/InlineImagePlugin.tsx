@@ -45,18 +45,15 @@ export function ComposerImage({ chip, images }: { chip: DirectiveChipProps; imag
   );
 }
 
-/** Resolves old pending nodes too, so undo across completion never resurrects an upload. */
+/**
+ * Resolves old pending nodes too, so undo across completion never resurrects an upload. The
+ * composer's own scope cancels its uploads: this editor also remounts within one scope.
+ */
 export function InlineImagePlugin({ images, formatter }: {
   images: InlineImages;
   formatter: Unstable_DirectiveFormatter;
 }) {
   const [editor] = useLexicalComposerContext();
-  useEffect(() => {
-    const dispose = registerInlineImages(editor, images, formatter);
-    return () => {
-      dispose();
-      images.close();
-    };
-  }, [editor, images, formatter]);
+  useEffect(() => registerInlineImages(editor, images, formatter), [editor, images, formatter]);
   return null;
 }

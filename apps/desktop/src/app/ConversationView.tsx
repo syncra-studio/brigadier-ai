@@ -550,6 +550,9 @@ export function ConversationView({
   // oxlint-disable-next-line react-hooks/exhaustive-deps, react/memo-dependencies
   const attachments = useMemo(() => new BlobAttachmentAdapter(), [conversationId]);
   useSyncExternalStore(attachments.inline.subscribe, attachments.inline.snapshot);
+  // Leaving the scope cancels its uploads; an editor remount within it (the compact input
+  // for a pending action) keeps them.
+  useEffect(() => () => attachments.inline.close(), [attachments]);
   const reader = useMemo<AttachmentReader>(() => ({
     read: readAttachment,
     composerRef: (id) => attachments.refOf(id),
