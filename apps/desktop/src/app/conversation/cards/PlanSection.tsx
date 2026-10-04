@@ -2,6 +2,7 @@ import { memo, useId, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { Lines } from "@/app/conversation/cards/common";
+import { earlierPlans } from "@/app/conversation/cards/planHistory";
 import { taskState } from "@/app/conversation/rowWords";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
 import { useAction } from "@/app/conversation/useAction";
@@ -237,29 +238,11 @@ function PlanStepRow({
 }
 
 /**
- * The session's plans before the current one, and the current one's earlier revisions: each its
- * title, state, steps and review, behind one disclosure.
+ * The session's plans before the current one, each with its earlier revisions, and the current
+ * one's earlier revisions: each its title, state, steps and review, behind one disclosure.
  */
 function EarlierPlans({ plan, older }: { plan: Plan; older: readonly string[] }) {
-  const earlier = useBoard(
-    useShallow((s) => {
-      const list: Plan[] = [];
-      const seen = new Set([plan.id]);
-      let id = plan.revises;
-      while (id && !seen.has(id)) {
-        seen.add(id);
-        const before = s.board?.plans[id];
-        if (!before) break;
-        list.push(before);
-        id = before.revises;
-      }
-      for (const olderId of older.toReversed()) {
-        const before = s.board?.plans[olderId];
-        if (before && !seen.has(olderId)) list.push(before);
-      }
-      return list;
-    }),
-  );
+  const earlier = useBoard(useShallow((s) => earlierPlans(s.board?.plans ?? {}, plan, older)));
   if (earlier.length === 0) return null;
   return (
     <details className="text-muted-foreground text-xs">
