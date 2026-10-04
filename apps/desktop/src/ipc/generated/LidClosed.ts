@@ -3,4 +3,4 @@
 /**
  * Staying awake with the lid closed.
  */
-export type LidClosed = "unsupported" | "needsSetup" | "ready" | "active";
+export type LidClosed = "unsupported" | "needsSetup" | "ready" | "lowBattery" | "active";

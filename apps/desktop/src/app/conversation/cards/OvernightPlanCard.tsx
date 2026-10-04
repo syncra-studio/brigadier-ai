@@ -267,8 +267,16 @@ export function OvernightPlanCard({
               {problem.message}
             </p>
           ))}
-          {power?.onBattery && <p className="text-warning">On battery: plug in to be safe</p>}
-          {power?.lidWillPause && <p className="text-warning">Lid closed will pause the run</p>}
+          {power?.onBattery && !power.lowBattery && (
+            <p className="text-warning">On battery: plug in to be safe</p>
+          )}
+          {power?.lidWillPause && (
+            <p className="text-warning">
+              {power.lowBattery
+                ? "The battery is low: closing the lid will pause the run. Plug it in."
+                : "Closing the lid will pause the run"}
+            </p>
+          )}
           {power?.lidWillPause && power.offerLidSetup && actions && (
             <Button
               type="button"
@@ -278,7 +286,7 @@ export function OvernightPlanCard({
               disabled={action.busy}
               onClick={() => send("lid", actions.setUpLidClosed)}
             >
-              Set up lid-closed running
+              Keep running with the lid closed
             </Button>
           )}
         </div>

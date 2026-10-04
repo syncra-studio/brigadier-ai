@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import type { Density } from "@/ipc/generated";
 import { setDensity } from "@/state/actions";
 import {
-  KEEP_AWAKE_OPTIONS,
+  keepAwakeOptions,
   lidClosedHint,
   setKeepAwake,
   setKeepAwakeLidClosed,
@@ -64,7 +64,8 @@ export function GeneralPage() {
   const densityAction = useAction();
   const keepAwakeAction = useAction();
   const lidAction = useAction();
-  const chosen = KEEP_AWAKE_OPTIONS.find((option) => option.value === keepAwake);
+  const options = keepAwakeOptions(status?.screenOn ?? false);
+  const chosen = options.find((option) => option.value === keepAwake);
 
   return (
     <SettingsPage title="General">
@@ -89,13 +90,19 @@ export function GeneralPage() {
         <SettingsCard>
           <SettingsRow
             label={GENERAL_ROWS.keepAwake.label}
-            description={chosen ? `${chosen.hint}.` : GENERAL_ROWS.keepAwake.description}
+            description={
+              status?.forRun
+                ? "An overnight run keeps the computer awake, screen on, until it ends. Then this applies again."
+                : chosen
+                  ? `${chosen.hint}.`
+                  : GENERAL_ROWS.keepAwake.description
+            }
             error={keepAwakeAction.error}
           >
             <SettingsSelect
               label={GENERAL_ROWS.keepAwake.label}
               value={keepAwake}
-              options={KEEP_AWAKE_OPTIONS.map((option) => ({
+              options={options.map((option) => ({
                 value: option.value,
                 label: option.label,
                 hint: `${option.hint}.`,

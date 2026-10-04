@@ -26,7 +26,7 @@ import { HEAT_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { loadProviders, openSettings, refreshProviders } from "@/state/actions";
 import {
-  KEEP_AWAKE_OPTIONS,
+  keepAwakeOptions,
   keepAwakeState,
   lidClosedHint,
   loadKeepAwake,
@@ -304,7 +304,8 @@ export function KeepAwakeMenu() {
   const status = useKeepAwake((s) => s.status);
   const settingUp = useKeepAwake((s) => s.settingUp);
   const [error, setError] = useState<string | null>(null);
-  const option = KEEP_AWAKE_OPTIONS.find((entry) => entry.value === keepAwake);
+  const options = keepAwakeOptions(status?.screenOn ?? false);
+  const option = options.find((entry) => entry.value === keepAwake);
   const state = keepAwakeState(keepAwake, status);
   const shownError = error ?? status?.error ?? null;
   const lidId = useId();
@@ -369,7 +370,7 @@ export function KeepAwakeMenu() {
           <Segmented
             label="When to keep the computer awake"
             value={keepAwake}
-            options={KEEP_AWAKE_OPTIONS}
+            options={options}
             fill
             onChange={(value) => run(() => setKeepAwake(value))}
           />
@@ -383,7 +384,7 @@ export function KeepAwakeMenu() {
                 With the lid closed too
               </span>
               <span id={`${lidId}-hint`} className="text-muted-foreground text-xs">
-                {keepAwake === "off"
+                {keepAwake === "off" && !status.forRun
                   ? "Takes effect once keeping awake is on."
                   : lidClosedHint(status, settingUp)}
               </span>

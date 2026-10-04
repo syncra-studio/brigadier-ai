@@ -1,14 +1,16 @@
-//! Keeps the computer awake: while agents work, always, or never (the `keepAwake` setting),
-//! and optionally with the lid closed (`keepAwakeLidClosed`).
+//! Keeps the computer awake, screen on: while agents work, always, or never (the `keepAwake`
+//! setting), and optionally with the lid closed (`keepAwakeLidClosed`). An overnight run holds
+//! both until it ends, whatever the settings say, and leaves them as they were saved.
 //!
-//! - macOS: `caffeinate -i -s -w <pid>` holds the idle and system sleep assertions and ends
-//!   with the daemon. No assertion stops a closed lid from sleeping the computer, so the lid
-//!   option sets `pmset disablesleep 1` instead, through a sudoers rule that allows only
-//!   `pmset disablesleep 0` and `1`, installed once behind an administrator prompt. That
-//!   setting outlives the process (and a reboot), so a marker file records it before it is
-//!   set, a guard process restores it if the daemon dies, and startup restores what a crash
-//!   left behind.
-//! - Linux: `systemd-inhibit` blocks idle and sleep, and the lid switch when asked.
+//! - macOS: `caffeinate -d -i -s -w <pid>` holds the display, idle and system sleep assertions
+//!   and ends with the daemon. No assertion stops a closed lid from sleeping the computer, so
+//!   the lid sets `pmset disablesleep 1` instead, through a sudoers rule that allows only
+//!   `pmset disablesleep 0` and `1`: Brigadier's own, installed once behind an administrator
+//!   prompt, or one another keep-awake app installed. That setting outlives the process (and a
+//!   reboot), so a marker file records it before it is set, a guard process restores it if the
+//!   daemon dies, and startup restores what a crash left behind.
+//! - Linux: `systemd-inhibit` blocks idle and sleep, and the lid switch when asked. The screen
+//!   follows the desktop's own settings.
 //! - Windows: `SetThreadExecutionState` from a thread of its own; the lid follows the power
 //!   plan.
 
@@ -41,6 +43,8 @@ struct State {
     /// first needed.
     #[cfg(target_os = "macos")]
     authorized: Option<bool>,
+    /// Held for an overnight run rather than for the settings.
+    for_run: bool,
     error: Option<String>,
     /// Shut down: nothing keeps the computer awake any more, whatever the settings say.
     stopped: bool,
@@ -71,7 +75,8 @@ impl Awake {
             tokio::select! {
                 () = stop.cancelled() => return Ok(()),
                 _ = tick.tick() => {
-                    self.apply().await;
+                    let mut state = self.state.lock().await;
+                    self.hold(&mut state).await;
                 }
             }
         }
@@ -79,18 +84,25 @@ impl Awake {
 
     /// Starts or stops keeping awake to match the settings now, and says how it stands.
     pub async fn apply(&self) -> KeepAwakeStatus {
+        let mut state = self.state.lock().await;
+        self.hold(&mut state).await;
+        status(&mut state).await
+    }
+
+    async fn hold(&self, state: &mut State) {
         let settings = self.core.settings();
         // An overnight run keeps the computer awake whatever the setting (PLAN.md §10.10):
         // the user left it to work; the setting stays as they saved it.
-        let wanted = self.sessions.overnight_active()
+        let run = self.sessions.overnight_active();
+        let wanted = run
             || match settings.keep_awake {
                 KeepAwake::Off => false,
                 KeepAwake::Always => true,
                 KeepAwake::Agents => self.sessions.agents_working().await,
             };
-        let mut state = self.state.lock().await;
         let wanted = wanted && !state.stopped;
-        let lid_wanted = wanted && settings.keep_awake_lid_closed;
+        let lid_wanted = lid_wanted(wanted, run, settings.keep_awake_lid_closed);
+        state.for_run = wanted && run;
         state.error = None;
 
         let running = state.blocker.as_mut().is_some_and(Blocker::running);
@@ -109,8 +121,7 @@ impl Awake {
         }
 
         #[cfg(target_os = "macos")]
-        self.apply_lid(&mut state, lid_wanted).await;
-        status(&mut state).await
+        self.apply_lid(state, lid_wanted, !run).await;
     }
 
     /// Lets the lid option work without asking again, behind one administrator prompt.
@@ -136,18 +147,23 @@ impl Awake {
         let mut state = self.state.lock().await;
         state.stopped = true;
         state.blocker = None;
+        // A run still under way restarts with the next daemon (the supervisor's), which holds
+        // the lid again: a shut lid mustn't sleep the computer in between.
         #[cfg(target_os = "macos")]
         if let Some(held) = state.lid.take()
-            && let Err(err) = lid::restore(&self.data_dir, held).await
+            && let Err(err) =
+                lid::restore(&self.data_dir, held, !self.sessions.overnight_active()).await
         {
             tracing::warn!(error = %err, "could not restore sleep");
         }
     }
 
+    /// `sleep_closed`: once sleep is back on, sleep now if the lid is already shut, as closing
+    /// it would have (not while a run is under way, unless the battery is low).
     #[cfg(target_os = "macos")]
-    async fn apply_lid(&self, state: &mut State, wanted: bool) {
+    async fn apply_lid(&self, state: &mut State, wanted: bool, sleep_closed: bool) {
         let low = if wanted || state.lid.is_some() {
-            battery::low().await
+            battery::read().await.and_then(|battery| battery.low())
         } else {
             None
         };
@@ -159,7 +175,8 @@ impl Awake {
         let wanted = wanted && low.is_none();
         if !wanted {
             if let Some(held) = state.lid.take()
-                && let Err(err) = lid::restore(&self.data_dir, held).await
+                && let Err(err) =
+                    lid::restore(&self.data_dir, held, sleep_closed || low.is_some()).await
             {
                 tracing::warn!(error = %err, "could not restore sleep");
                 state.error = Some(format!("Could not restore sleep: {err}"));
@@ -191,12 +208,20 @@ impl Awake {
     }
 }
 
+/// Whether to keep going with the lid closed: whenever the computer is kept awake for a run,
+/// else as the lid setting says.
+fn lid_wanted(awake: bool, run: bool, setting: bool) -> bool {
+    awake && (run || setting)
+}
+
 /// Whether the blocker itself holds the lid (Linux's inhibitor does; elsewhere it doesn't).
 fn blocker_lid(lid_wanted: bool) -> bool {
     cfg!(target_os = "linux") && lid_wanted
 }
 
 async fn status(state: &mut State) -> KeepAwakeStatus {
+    #[cfg(target_os = "macos")]
+    let battery = battery::read().await;
     #[cfg(target_os = "macos")]
     let lid_closed = if state.lid.is_some() {
         LidClosed::Active
@@ -209,10 +234,12 @@ async fn status(state: &mut State) -> KeepAwakeStatus {
                 known
             }
         };
-        if authorized {
-            LidClosed::Ready
-        } else {
+        if !authorized {
             LidClosed::NeedsSetup
+        } else if battery.as_ref().and_then(battery::Battery::low).is_some() {
+            LidClosed::LowBattery
+        } else {
+            LidClosed::Ready
         }
     };
     #[cfg(target_os = "linux")]
@@ -226,9 +253,20 @@ async fn status(state: &mut State) -> KeepAwakeStatus {
     KeepAwakeStatus {
         active: state.blocker.is_some(),
         lid_closed,
+        for_run: state.for_run && state.blocker.is_some(),
+        screen_on: cfg!(any(target_os = "macos", windows)),
+        #[cfg(target_os = "macos")]
+        on_battery: battery.is_some_and(|battery| battery.on_battery),
+        #[cfg(not(target_os = "macos"))]
+        on_battery: false,
         error: state.error.clone(),
     }
 }
+
+/// The screen stays on (`-d`), and neither idling (`-i`) nor anything else on power (`-s`)
+/// sleeps the computer.
+#[cfg(target_os = "macos")]
+const CAFFEINATE: [&str; 3] = ["-d", "-i", "-s"];
 
 /// Holds the computer awake until dropped.
 struct Blocker {
@@ -243,7 +281,8 @@ impl Blocker {
     #[cfg(target_os = "macos")]
     fn start(lid: bool) -> std::io::Result<Self> {
         let child = tokio::process::Command::new("/usr/bin/caffeinate")
-            .args(["-i", "-s", "-w", &std::process::id().to_string()])
+            .args(CAFFEINATE)
+            .args(["-w", &std::process::id().to_string()])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -306,12 +345,14 @@ impl Blocker {
 #[allow(unsafe_code)]
 mod windows {
     use windows_sys::Win32::System::Power::{
-        ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
+        ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
     };
 
     pub fn hold() {
         // SAFETY: takes flags only; applies to the calling thread until changed again.
-        unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) };
+        unsafe {
+            SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
+        };
     }
 
     pub fn release() {
@@ -325,24 +366,37 @@ mod battery {
     /// Below this charge, on battery, the lid sleeps the computer again.
     const MIN_PERCENT: u32 = 10;
 
-    /// The charge, when running on battery at or below the minimum.
-    pub async fn low() -> Option<u32> {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Battery {
+        pub on_battery: bool,
+        pub percent: Option<u32>,
+    }
+
+    impl Battery {
+        /// The charge, when running on battery at or below the minimum.
+        pub fn low(&self) -> Option<u32> {
+            self.percent
+                .filter(|percent| self.on_battery && *percent <= MIN_PERCENT)
+        }
+    }
+
+    /// How the computer is powered now (`pmset -g batt`).
+    pub async fn read() -> Option<Battery> {
         let output = tokio::process::Command::new("/usr/bin/pmset")
             .args(["-g", "batt"])
             .output()
             .await
             .ok()?;
-        low_in(&String::from_utf8_lossy(&output.stdout))
+        Some(parse(&String::from_utf8_lossy(&output.stdout)))
     }
 
-    pub(super) fn low_in(report: &str) -> Option<u32> {
-        if !report.contains("'Battery Power'") {
-            return None;
+    pub(super) fn parse(report: &str) -> Battery {
+        Battery {
+            on_battery: report.contains("'Battery Power'"),
+            percent: report
+                .split(|c: char| c.is_whitespace() || c == ';')
+                .find_map(|word| word.strip_suffix('%')?.parse::<u32>().ok()),
         }
-        let percent = report
-            .split(|c: char| c.is_whitespace() || c == ';')
-            .find_map(|word| word.strip_suffix('%')?.parse::<u32>().ok())?;
-        (percent <= MIN_PERCENT).then_some(percent)
     }
 }
 
@@ -421,12 +475,26 @@ mod lid {
             })
     }
 
-    /// Whether sleep can be disabled without a password: sets it to what it already is.
+    /// Whether sleep can be turned off and on again without a password: reads what sudo
+    /// allows, changing nothing. Any rule that allows it will do (Brigadier's, or another
+    /// keep-awake app's).
     pub async fn authorized() -> bool {
-        let Some(current) = sleep_disabled().await else {
+        let Ok(output) = tokio::process::Command::new(SUDO)
+            .args(["-n", "-l"])
+            .stdin(Stdio::null())
+            .output()
+            .await
+        else {
             return false;
         };
-        pmset_disablesleep(current).await.is_ok()
+        let listing = String::from_utf8_lossy(&output.stdout);
+        output.status.success()
+            && ["1", "0"].into_iter().all(|value| {
+                super::sudo::allows_without_password(
+                    &listing,
+                    &format!("{PMSET} disablesleep {value}"),
+                )
+            })
     }
 
     /// Installs the sudoers rule behind an administrator prompt.
@@ -564,9 +632,14 @@ if [ "$(cat "$2" 2>/dev/null)" = "$1" ]; then /usr/bin/sudo -n /usr/bin/pmset di
             .ok()
     }
 
-    /// Enables sleep again; sleeps now if the lid is already closed without an external
-    /// display (restoring the setting alone doesn't).
-    pub async fn restore(data_dir: &Path, mut held: Held) -> Result<(), String> {
+    /// Enables sleep again. With `sleep_closed`, also sleeps now if the lid is already closed
+    /// without an external display: restoring the setting alone doesn't, as macOS looks at
+    /// the lid only when it opens or closes.
+    pub async fn restore(
+        data_dir: &Path,
+        mut held: Held,
+        sleep_closed: bool,
+    ) -> Result<(), String> {
         if !held.owned {
             return Ok(());
         }
@@ -577,11 +650,8 @@ if [ "$(cat "$2" 2>/dev/null)" = "$1" ]; then /usr/bin/sudo -n /usr/bin/pmset di
         pmset_disablesleep(false).await?;
         let _ = std::fs::remove_file(marker(data_dir));
         tracing::info!("sleep restored");
-        if lid_closed_sleeps().await {
-            let _ = tokio::process::Command::new(PMSET)
-                .arg("sleepnow")
-                .output()
-                .await;
+        if sleep_closed {
+            sleep_if_lid_closed().await;
         }
         Ok(())
     }
@@ -601,33 +671,209 @@ if [ "$(cat "$2" 2>/dev/null)" = "$1" ]; then /usr/bin/sudo -n /usr/bin/pmset di
         }
     }
 
-    /// The lid is closed and that would sleep the computer (no external display).
-    async fn lid_closed_sleeps() -> bool {
-        let Ok(output) = tokio::process::Command::new("/usr/sbin/ioreg")
+    /// Sleeps the computer if its lid is shut and that would sleep it (no external display).
+    /// powerd takes a moment to apply sleep coming back on and refuses until then, so a
+    /// refusal, or a lid that doesn't read as sleeping yet, is tried again for a few seconds.
+    async fn sleep_if_lid_closed() {
+        for _ in 0..10 {
+            let Some((closed, sleeps)) = lid_state().await else {
+                return;
+            };
+            if !closed {
+                return;
+            }
+            if sleeps && iokit::sleep_system() {
+                tracing::info!("the lid is closed: sleeping now");
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        tracing::info!("the lid is closed but the computer didn't sleep");
+    }
+
+    /// Whether the lid is closed, and whether that sleeps the computer now.
+    async fn lid_state() -> Option<(bool, bool)> {
+        let output = tokio::process::Command::new("/usr/sbin/ioreg")
             .args(["-r", "-k", "AppleClamshellState", "-d", "1"])
             .output()
             .await
-        else {
-            return false;
-        };
-        let report = String::from_utf8_lossy(&output.stdout);
-        report.contains("\"AppleClamshellState\" = Yes")
-            && report.contains("\"AppleClamshellCausesSleep\" = Yes")
+            .ok()?;
+        Some(super::parse_lid(&String::from_utf8_lossy(&output.stdout)))
+    }
+
+    #[allow(unsafe_code)]
+    mod iokit {
+        #[link(name = "IOKit", kind = "framework")]
+        unsafe extern "C" {
+            fn IOPMFindPowerManagement(main_port: u32) -> u32;
+            fn IOPMSleepSystem(connection: u32) -> i32;
+            fn IOServiceClose(connection: u32) -> i32;
+        }
+
+        /// Asks the computer to sleep now; whether it agreed.
+        pub fn sleep_system() -> bool {
+            // SAFETY: plain mach port values; the connection is closed before returning.
+            unsafe {
+                let connection = IOPMFindPowerManagement(0);
+                if connection == 0 {
+                    return false;
+                }
+                let result = IOPMSleepSystem(connection);
+                IOServiceClose(connection);
+                result == 0
+            }
+        }
     }
 }
 
-#[cfg(all(test, target_os = "macos"))]
-mod tests {
-    use super::battery::low_in;
+/// From `ioreg -r -k AppleClamshellState`: whether the lid is closed, and whether that sleeps
+/// the computer now.
+#[cfg(any(target_os = "macos", test))]
+fn parse_lid(report: &str) -> (bool, bool) {
+    (
+        report.contains("\"AppleClamshellState\" = Yes"),
+        report.contains("\"AppleClamshellCausesSleep\" = Yes"),
+    )
+}
 
+/// Reading `sudo -l`.
+#[cfg(any(target_os = "macos", test))]
+mod sudo {
+    /// Whether the listing lets `command` run as root without a password. Entries are
+    /// `(runas) [TAG: …] command, command`, wrapped onto lines indented further; a tag holds
+    /// for the commands after it in the entry. `ALL` or the bare program allow any arguments.
+    pub fn allows_without_password(listing: &str, command: &str) -> bool {
+        let program = command.split_whitespace().next().unwrap_or_default();
+        let command = command.split_whitespace().collect::<Vec<_>>().join(" ");
+        let Some((_, rules)) = listing.split_once("may run the following commands") else {
+            return false;
+        };
+        // Joins each entry's wrapped lines: an entry starts 4 spaces in, its rest 8.
+        let mut entries: Vec<String> = Vec::new();
+        for line in rules.lines().skip(1) {
+            if line.starts_with("        ") {
+                if let Some(entry) = entries.last_mut() {
+                    entry.push(' ');
+                    entry.push_str(line.trim());
+                }
+            } else if line.starts_with("    ") {
+                entries.push(line.trim().to_owned());
+            }
+        }
+        entries.iter().any(|entry| {
+            let Some(rest) = entry.strip_prefix('(') else {
+                return false;
+            };
+            let Some((runas, commands)) = rest.split_once(')') else {
+                return false;
+            };
+            let users = runas.split(':').next().unwrap_or_default();
+            if !users
+                .split(',')
+                .any(|user| matches!(user.trim(), "root" | "ALL"))
+            {
+                return false;
+            }
+            let mut no_password = false;
+            commands.split(", ").any(|spec| {
+                let mut words = spec.split_whitespace().peekable();
+                while let Some(tag) = words.next_if(|word| {
+                    word.ends_with(':')
+                        && word[..word.len() - 1]
+                            .chars()
+                            .all(|c| c.is_ascii_uppercase() || c == '_')
+                }) {
+                    match tag {
+                        "NOPASSWD:" => no_password = true,
+                        "PASSWD:" => no_password = false,
+                        _ => {}
+                    }
+                }
+                let spec = words.collect::<Vec<_>>().join(" ");
+                no_password && (spec == "ALL" || spec == program || spec == command)
+            })
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(target_os = "macos")]
     #[test]
     fn low_battery_only_on_battery_power() {
+        use super::battery::parse;
         let on_battery = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1)\t8%; discharging; 0:20 remaining present: true";
-        assert_eq!(low_in(on_battery), Some(8));
+        assert_eq!(parse(on_battery).low(), Some(8));
+        assert!(parse(on_battery).on_battery);
         let charged =
             "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1)\t54%; discharging;";
-        assert_eq!(low_in(charged), None);
+        assert_eq!(parse(charged).low(), None);
         let plugged = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t5%; charging;";
-        assert_eq!(low_in(plugged), None);
+        assert_eq!(parse(plugged).low(), None);
+        assert!(!parse(plugged).on_battery);
+        // A desktop Mac: no battery at all.
+        assert_eq!(parse("Now drawing from 'AC Power'\n").low(), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keeps_the_screen_on_and_the_computer_awake() {
+        assert_eq!(CAFFEINATE, ["-d", "-i", "-s"]);
+    }
+
+    #[test]
+    fn a_run_keeps_going_with_the_lid_closed_whatever_the_setting() {
+        assert!(lid_wanted(true, true, false));
+        assert!(lid_wanted(true, false, true));
+        assert!(!lid_wanted(true, false, false));
+        // Nothing keeps the computer awake (shut down, say): neither does the lid.
+        assert!(!lid_wanted(false, true, true));
+    }
+
+    #[test]
+    fn reads_the_lid() {
+        let closed = r#"| |   "AppleClamshellState" = Yes
+| |   "AppleClamshellCausesSleep" = Yes"#;
+        assert_eq!(parse_lid(closed), (true, true));
+        let external = r#""AppleClamshellState" = Yes
+"AppleClamshellCausesSleep" = No"#;
+        assert_eq!(parse_lid(external), (true, false));
+        assert_eq!(parse_lid(r#""AppleClamshellState" = No"#), (false, false));
+    }
+
+    /// `sudo -n -l` on a Mac with another keep-awake app's rule; the listing wraps at 80
+    /// columns, mid-command.
+    const LISTING: &str = "Matching Defaults entries for someone on host:
+    env_reset, env_keep+=BLOCKSIZE, env_keep+=\"COLORFGBG COLORTERM\",
+    lecture_file=/etc/sudo_lecture, !log_allowed
+
+User someone may run the following commands on host:
+    (ALL) ALL
+    (root) NOPASSWD: /usr/bin/pmset disablesleep 1, /usr/bin/pmset disablesleep
+        0
+";
+
+    #[test]
+    fn finds_a_password_free_rule_in_sudo_listing() {
+        use super::sudo::allows_without_password as allows;
+        assert!(allows(LISTING, "/usr/bin/pmset disablesleep 1"));
+        assert!(allows(LISTING, "/usr/bin/pmset disablesleep 0"));
+        // Allowed only with the password.
+        assert!(!allows(LISTING, "/usr/bin/pmset sleepnow"));
+        let admin_only = "User someone may run the following commands on host:\n    (ALL) ALL\n";
+        assert!(!allows(admin_only, "/usr/bin/pmset disablesleep 1"));
+        let everything =
+            "User someone may run the following commands on host:\n    (ALL : ALL) NOPASSWD: ALL\n";
+        assert!(allows(everything, "/usr/bin/pmset disablesleep 1"));
+        let program = "User someone may run the following commands on host:\n    (root) SETENV: NOPASSWD: /usr/bin/pmset\n";
+        assert!(allows(program, "/usr/bin/pmset disablesleep 0"));
+        let other_user =
+            "User someone may run the following commands on host:\n    (nobody) NOPASSWD: ALL\n";
+        assert!(!allows(other_user, "/usr/bin/pmset disablesleep 1"));
+        let back_to_password = "User someone may run the following commands on host:\n    (root) NOPASSWD: /bin/ls, PASSWD: /usr/bin/pmset disablesleep 1\n";
+        assert!(!allows(back_to_password, "/usr/bin/pmset disablesleep 1"));
+        assert!(!allows("", "/usr/bin/pmset disablesleep 1"));
     }
 }

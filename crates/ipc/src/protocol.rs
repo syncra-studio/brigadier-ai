@@ -1228,6 +1228,16 @@ pub struct KeepAwakeStatus {
     /// Sleep is being prevented now.
     pub active: bool,
     pub lid_closed: LidClosed,
+    /// An overnight run keeps the computer awake (and going with the lid closed, when it can)
+    /// until it ends, whatever the settings say.
+    #[serde(default)]
+    pub for_run: bool,
+    /// Keeping awake also keeps the screen on here (not on Linux: the desktop decides).
+    #[serde(default)]
+    pub screen_on: bool,
+    /// Running on battery power now.
+    #[serde(default)]
+    pub on_battery: bool,
     /// Why keeping awake (or the lid-closed part of it) isn't working, when it isn't.
     pub error: Option<String>,
 }
@@ -1264,6 +1274,8 @@ pub enum LidClosed {
     NeedsSetup,
     /// Can be turned on without asking.
     Ready,
+    /// Can, but not now: the battery is too low, so closing the lid sleeps the computer.
+    LowBattery,
     /// Closing the lid doesn't sleep the computer now.
     Active,
 }

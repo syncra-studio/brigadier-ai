@@ -35,32 +35,43 @@ export async function setKeepAwakeLidClosed(on: boolean): Promise<void> {
     await loadKeepAwake();
     return;
   }
+  const status = await setUpLidClosed();
+  if (status.lidClosed === "needsSetup") {
+    await setSetting("keepAwakeLidClosed", false);
+  }
+}
+
+/**
+ * Lets the computer keep working with the lid closed, behind one administrator password,
+ * without changing the setting: an overnight run uses it for as long as it runs.
+ */
+export async function setUpLidClosed(): Promise<KeepAwakeStatus> {
   useKeepAwake.setState({ settingUp: true });
   try {
     const { status } = await request({ method: "setUpLidClosed" });
     useKeepAwake.setState({ status });
-    if (status.lidClosed === "needsSetup") {
-      await setSetting("keepAwakeLidClosed", false);
-    }
+    return status;
   } finally {
     useKeepAwake.setState({ settingUp: false });
   }
 }
 
-/** The choices from least to most awake, as the rail's menu and Settings offer them. */
-export const KEEP_AWAKE_OPTIONS: readonly {
+/**
+ * The choices from least to most awake, as the rail's menu and Settings offer them.
+ * `screenOn`: keeping awake keeps the screen on too (macOS, Windows), as the daemon says.
+ */
+export function keepAwakeOptions(screenOn: boolean): readonly {
   value: KeepAwake;
   label: string;
   hint: string;
-}[] = [
-  { value: "off", label: "Off", hint: "The computer sleeps as it normally would" },
-  {
-    value: "agents",
-    label: "While agents work",
-    hint: "Stays awake while an agent is working, then sleeps as usual",
-  },
-  { value: "always", label: "Always", hint: "Stays awake until you turn this off" },
-];
+}[] {
+  const awake = screenOn ? "The screen stays on and the computer doesn't sleep" : "The computer doesn't sleep";
+  return [
+    { value: "off", label: "Off", hint: "The computer sleeps as it normally would" },
+    { value: "agents", label: "While agents work", hint: `${awake} while an agent is working` },
+    { value: "always", label: "Always", hint: `${awake} until you turn this off` },
+  ];
+}
 
 /** How keeping awake stands right now, in a few words: awake or not, and why. */
 export function keepAwakeState(
@@ -69,10 +80,8 @@ export function keepAwakeState(
 ): { awake: boolean; text: string } {
   if (!status) return { awake: false, text: "Checking…" };
   if (status.active) {
-    return {
-      awake: true,
-      text: status.lidClosed === "active" ? "Awake, even with the lid closed" : "Awake now",
-    };
+    const lid = status.lidClosed === "active" ? ", even with the lid closed" : "";
+    return { awake: true, text: status.forRun ? `Awake for the overnight run${lid}` : `Awake now${lid}` };
   }
   switch (keepAwake) {
     case "agents":
@@ -90,8 +99,12 @@ export function lidClosedHint(status: KeepAwakeStatus | null, settingUp: boolean
   switch (status?.lidClosed) {
     case "needsSetup":
       return "Asks for your administrator password once.";
+    case "lowBattery":
+      return "The battery is low, so closing the lid sleeps the computer. Plug it in.";
     case "active":
-      return "Sleep is off, even with the lid closed. Keep it plugged in.";
+      return status.forRun
+        ? "The overnight run keeps going with the lid closed until it ends. Keep it plugged in."
+        : "Sleep is off, even with the lid closed. Keep it plugged in.";
     case "ready":
       return "Applied whenever the computer is kept awake. Best plugged in.";
     default:

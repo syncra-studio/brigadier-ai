@@ -5,7 +5,7 @@ import { request } from "@/ipc/client";
 import type { OvernightRun, TaskId } from "@/ipc/generated";
 import { loadConversation, loadFullText, openConversation, switchBranch } from "@/state/actions";
 import { type Board, updateBoard, useBoard } from "@/state/board";
-import { setKeepAwakeLidClosed, useKeepAwake } from "@/state/keepAwake";
+import { setUpLidClosed, useKeepAwake } from "@/state/keepAwake";
 import { emptyThread, useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
@@ -33,7 +33,9 @@ export type OvernightDetails = {
   verifiedSha?: string;
   /** Use the conductor's remaining work, including intentionally skipped/deferred phases. */
   remainingPhaseIds: readonly string[];
-  power?: { onBattery?: boolean; lidWillPause: boolean; offerLidSetup: boolean };
+  /** What Start can't hold, from the daemon's keep-awake status: a run keeps the computer
+   * awake, screen on, and going with the lid closed whenever the lid can be held. */
+  power?: { onBattery?: boolean; lidWillPause: boolean; offerLidSetup: boolean; lowBattery?: boolean };
 };
 
 export type OvernightCardModel = {
@@ -137,8 +139,10 @@ export function useOvernightCards(conversationId: string): readonly OvernightCar
   return useMemo(() => board ? runs.map((run, index) => {
     const model = projectOvernight(run, board, reports[index]);
     if (status && run.state === "proposed") model.details.power = {
-      lidWillPause: status.lidClosed !== "active",
+      onBattery: status.onBattery,
+      lidWillPause: status.lidClosed !== "active" && status.lidClosed !== "ready",
       offerLidSetup: status.lidClosed === "needsSetup",
+      lowBattery: status.lidClosed === "lowBattery",
     };
     const active = run.phases.find((phase) => phase.state === "running" || phase.state === "checking");
     if (run.state === "waitingQuota" && active && leadQuota?.resetsAtMs) {
@@ -206,9 +210,8 @@ export const overnightActions: OvernightActions = {
       }));
     })().catch((error: unknown) => toast(String(error), { tone: "error" }));
   },
-  async setUpLidClosed() {
-    await setKeepAwakeLidClosed(true);
-  },
+  // Only for the runs: the saved lid setting stays as it is.
+  setUpLidClosed,
 };
 
 export function overnightCommand(run: OvernightRun): OvernightCommand {

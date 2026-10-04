@@ -10,6 +10,19 @@ export type KeepAwakeStatus = {
  */
 active: boolean, lidClosed: LidClosed, 
 /**
+ * An overnight run keeps the computer awake (and going with the lid closed, when it can)
+ * until it ends, whatever the settings say.
+ */
+forRun: boolean, 
+/**
+ * Keeping awake also keeps the screen on here (not on Linux: the desktop decides).
+ */
+screenOn: boolean, 
+/**
+ * Running on battery power now.
+ */
+onBattery: boolean, 
+/**
  * Why keeping awake (or the lid-closed part of it) isn't working, when it isn't.
  */
 error: string | null, };
