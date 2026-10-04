@@ -42,6 +42,15 @@ fn route_delegated(request: &ApprovalRequest, access: &Access) -> Route {
     if request.escalation || request.kind == ApprovalKind::Permissions {
         return Route::AskUser;
     }
+    // Reaching a host from a sandbox without network (Ask for approval) is the user's call.
+    if request.tool == NETWORK_TOOL {
+        return match access {
+            Access::Scoped { network: true, .. } | Access::Workspace { .. } | Access::Full => {
+                Route::Allow
+            }
+            Access::Scoped { network: false, .. } | Access::ReadOnly => Route::AskUser,
+        };
+    }
     match access {
         Access::ReadOnly => Route::AskUser,
         Access::Workspace { .. } | Access::Full => Route::Allow,
@@ -642,6 +651,32 @@ mod tests {
         similar.allow(&command("git push origin main", None, true));
         assert!(similar.covers(&command("git push -u origin topic", None, true)));
         assert!(!similar.covers(&command("git reset --hard", None, true)));
+    }
+
+    #[test]
+    fn network_access_asks_only_from_a_sandbox_without_network() {
+        let request = ApprovalRequest {
+            kind: ApprovalKind::Tool,
+            tool: NETWORK_TOOL.into(),
+            paths: Vec::new(),
+            ..write(Path::new("/"))
+        };
+        let offline = scoped(PathBuf::from("/"));
+        assert_eq!(
+            route(&request, &offline, ApprovalMode::Delegated),
+            Route::AskUser
+        );
+        let online = Access::Scoped {
+            write_cwd: false,
+            writable_roots: Vec::new(),
+            network: true,
+            deny_read: Vec::new(),
+            unix_sockets: Vec::new(),
+        };
+        assert_eq!(
+            route(&request, &online, ApprovalMode::Delegated),
+            Route::Allow
+        );
     }
 
     #[test]
