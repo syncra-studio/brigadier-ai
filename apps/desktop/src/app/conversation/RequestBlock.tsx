@@ -28,9 +28,11 @@ import {
   blockSequence,
   isFinal,
   isLive,
+  isRunRequest,
   isWorking,
   type SequenceEntry as Entry,
 } from "@/app/conversation/blocks";
+import { type PhaseView, phaseViewOf } from "@/app/conversation/phaseView";
 import { PhaseChecksRow, TaskRow } from "@/app/conversation/TaskRow";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
@@ -116,6 +118,12 @@ function headerLabel(state: BlockState, elapsed: number, quota = false): string 
   }
 }
 
+/** A phase's header: "Phase 1 · Measure — ✓ verified · 2h 31m", ticking only while it works. */
+function phaseLabel(phase: PhaseView, elapsed: number): string {
+  const state = phase.mark ? `${phase.mark} ${phase.word}` : phase.word;
+  return phase.startedAtMs === null ? `${phase.title} — ${state}` : `${phase.title} — ${state} · ${formatDuration(elapsed)}`;
+}
+
 /** A live turn shows no header until it has worked this long (only "Thinking"). */
 const HEADER_AFTER_MS = 2000;
 
@@ -126,21 +134,27 @@ const HEADER_AFTER_MS = 2000;
  */
 const WorkHeader: FC<{
   meta: BlockMeta;
+  /** An overnight phase's block: its header comes from the phase's record. */
+  phase: PhaseView | null;
   open: boolean;
   foldable: boolean;
   /** Its messages wait for quota, and no worker of it runs meanwhile. */
   quota: boolean;
   /** Called with the header, before the fold opens or closes. */
   onToggle: (header: HTMLElement) => void;
-}> = ({ meta, open, foldable, quota, onToggle }) => {
-  const elapsed = useElapsed(meta.startedAtMs, meta.endedAtMs, isLive(meta.state));
-  if (meta.state === "working" && !foldable && !quota && elapsed < HEADER_AFTER_MS) return null;
-  const label = headerLabel(meta.state, elapsed, quota);
+}> = ({ meta, phase, open, foldable, quota, onToggle }) => {
+  const elapsed = useElapsed(
+    phase?.startedAtMs ?? meta.startedAtMs,
+    phase ? phase.endedAtMs : meta.endedAtMs,
+    phase ? !phase.settled : isLive(meta.state),
+  );
+  if (!phase && meta.state === "working" && !foldable && !quota && elapsed < HEADER_AFTER_MS) return null;
+  const label = phase ? phaseLabel(phase, elapsed) : headerLabel(meta.state, elapsed, quota);
   const text = (
     <span
       className={cn(
         "text-sm",
-        meta.state === "failed" ? "text-destructive" : "text-muted-foreground",
+        meta.state === "failed" && !phase ? "text-destructive" : "text-muted-foreground",
       )}
     >
       {label}
@@ -379,8 +393,9 @@ export const RequestBlock: FC = () => {
   const fold = useFold();
   const quotaWait = useViewConversation()?.quotaWait ?? null;
   const requestIds = meta?.requestIds;
-  const phaseTitle = useBoard((s) => meta?.requestId.startsWith("run-")
-    ? s.board?.requests[meta.requestId]?.preview : undefined);
+  const phase = useBoard(
+    useShallow((s) => (meta && s.board && isRunRequest(meta.requestId) ? phaseViewOf(s.board.overnight, meta.requestId) : null)),
+  );
   const workersActive = useBoard((s) =>
     Object.values(s.board?.tasks ?? {}).some(
       (task) => task.requestId !== null && !!requestIds?.includes(task.requestId) && !isFinal(task),
@@ -388,7 +403,8 @@ export const RequestBlock: FC = () => {
   );
   if (!meta) return null;
 
-  const live = isLive(meta.state);
+  // A phase is live until it settles, whatever still waits on the user: that waits in the panel.
+  const live = phase ? !phase.settled : isLive(meta.state);
   const last = meta.texts.length - 1;
   // The final answer is streaming: the workers it waited for are all over. The work folds now,
   // when the final answer starts.
@@ -397,8 +413,9 @@ export const RequestBlock: FC = () => {
     meta.rows.length > 0 &&
     !workersActive &&
     meta.texts[last]?.position === Number.POSITIVE_INFINITY;
-  const done = meta.state === "done" || answering;
-  const answer = done && last >= 0 ? last : null;
+  const done = phase ? phase.settled : meta.state === "done" || answering;
+  // A settled phase folds to its outcome; its lead's replies go into the fold.
+  const answer = done && last >= 0 && !phase ? last : null;
   const sequence = blockSequence(meta);
   const folded = sequence.filter((entry) =>
     entry.kind === "text"
@@ -407,9 +424,11 @@ export const RequestBlock: FC = () => {
   );
   const kept = meta.cards.filter((card) => card.keep);
   const foldable = done && folded.length > 0;
+  const outcome = done ? (phase?.outcome ?? null) : null;
   const shown = foldable && fold.state !== null;
-  const phase = turnPhase(meta, live, answering);
+  const turn = turnPhase(meta, live, answering);
   const header =
+    phase !== null ||
     foldable ||
     meta.state === "stopped" ||
     meta.state === "failed" ||
@@ -422,16 +441,16 @@ export const RequestBlock: FC = () => {
       id={meta.answerId ? `message-${meta.answerId}` : undefined}
       tabIndex={-1}
       data-state={meta.state}
-      data-turn-phase={phase}
+      data-turn-phase={turn}
       data-turn-live={live ? "true" : undefined}
       data-turn-steers={String(meta.steers.length)}
       className="group/answer relative flex flex-col gap-2 px-2"
     >
-      {phaseTitle && <p className="text-sm font-medium">{phaseTitle}</p>}
       <ModelChanged model={meta.texts[last]?.model ?? null} picked={meta.picked} />
       {header && (
         <WorkHeader
           meta={meta}
+          phase={phase}
           open={fold.open}
           foldable={foldable}
           quota={quotaWait !== null && meta.state === "working" && !workersActive}
@@ -465,6 +484,11 @@ export const RequestBlock: FC = () => {
           {kept.map((card) => (
             <CardEntry key={`${card.type}:${card.id}`} card={card} />
           ))}
+          {outcome && (
+            <p data-slot="phase-outcome" className="text-foreground text-sm leading-relaxed wrap-break-word">
+              {outcome}
+            </p>
+          )}
           {answer !== null && (
             <div
               data-slot="aui_assistant-message-content"
@@ -486,13 +510,14 @@ export const RequestBlock: FC = () => {
               }
             />
           ))}
-          {meta.state === "working" && <ActivityRow requestIds={meta.requestIds} />}
+          {(meta.state === "working" || (phase !== null && live)) && <ActivityRow requestIds={meta.requestIds} />}
         </div>
       )}
-      {!live && meta.session && <TurnDiff requestId={meta.requestId} />}
+      {/* A run's work is merged from its card, never undone behind the run's back. */}
+      {!live && meta.session && !isRunRequest(meta.requestId) && <TurnDiff requestId={meta.requestId} />}
       {!meta.session && <TurnMemories requestIds={meta.requestIds} />}
       <MessageError />
-      {!live && last >= 0 && (
+      {!live && last >= 0 && !phase && (
         <AnswerActions
           session={meta.session}
           rework={meta.rework}

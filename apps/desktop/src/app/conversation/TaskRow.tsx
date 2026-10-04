@@ -19,7 +19,7 @@ import {
 } from "@/app/conversation/rowWords";
 import { AgentsPanelContext, useWorkerName, WorkerChip, WorkerGlyph } from "@/app/conversation/WorkerChip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import type { Gate, Task } from "@/ipc/generated";
+import type { Gate, PhaseState, Task } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { type Board, useBoard } from "@/state/board";
 
@@ -172,13 +172,15 @@ export const PhaseChecksRow = memo(function PhaseChecksRow({ runId, phaseId }: {
   const owner = `phase:${runId}:${phaseId}`;
   const checkerIds = useCheckerIds([owner]);
   const gate = useBoard((s) => s.board?.overnight[runId]?.phases.find((phase) => phase.id === phaseId)?.gate ?? null);
+  // Phase 0 keeps no round of its own: its judge's verdict settles the planning phase.
+  const planning = useBoard((s) => (phaseId === PLANNING_PHASE ? (s.board?.overnight[runId]?.planning?.state ?? null) : null));
   const counted = useBoard((s) => (s.board ? checksCount(checkersOf(s.board.tasks, [owner])) : ""));
   const working = useBoard((s) => checkerIds.some((id) => {
     const task: Task | undefined = s.board?.tasks[id];
     return task ? isWorking(task) : false;
   }));
   if (checkerIds.length === 0) return null;
-  const outcome = working ? "checking" : gateWord(gate);
+  const outcome = working ? "checking" : gate || !planning ? gateWord(gate) : planningWord(planning);
   return (
     <Collapsible data-slot="phase-checks-row">
       <div className={STEP_ROW}>
@@ -197,6 +199,24 @@ export const PhaseChecksRow = memo(function PhaseChecksRow({ runId, phaseId }: {
     </Collapsible>
   );
 });
+
+/** The phase id of Phase 0, where the plan is written and judged. */
+const PLANNING_PHASE = "phase-0";
+
+/** Phase 0's checks in a word, from what the planning phase came to. */
+function planningWord(state: PhaseState): string {
+  switch (state) {
+    case "verified":
+      return "passed";
+    case "partial":
+    case "blocked":
+      return "found gaps";
+    case "skipped":
+      return "skipped";
+    default:
+      return "checking";
+  }
+}
 
 /** A finished round of checks in a word. */
 export function gateWord(gate: Gate | null): string {
