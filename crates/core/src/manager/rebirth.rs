@@ -113,6 +113,14 @@ phase's scope, its \"done when\" criteria and the user's Rules below are fixed: 
 them, add nothing the plan doesn't ask for, and never undo what is settled. Don't greet anyone or \
 mention this briefing.";
 
+const MID_PHASE_FRAMING: &str = "[Brigadier briefing: only you see this] You are the \
+orchestrator of this Brigadier session, leading one phase of an overnight run, and you continue \
+leading it from this briefing. Brigadier replaced your earlier context with it so you have room to \
+work. The phase's scope, its \"done when\" criteria and the user's Rules below are fixed: work \
+within them, add nothing the plan doesn't ask for, and never undo what is settled. What is settled \
+below stays settled: don't ask it again. Don't greet anyone or mention this briefing; the current \
+turn follows it.";
+
 const FRAMING: &str = "[Brigadier briefing: only you see this] You are the orchestrator of this \
 Brigadier session, continuing the conversation summarized below. Brigadier replaced your earlier \
 context with this briefing so you have room to work; the user sees one unbroken conversation. \
@@ -423,10 +431,21 @@ impl SessionManager {
             0,
         );
         let mut brain = self.brain_part(id, carried).await;
-        let exchanges = self.recent_exchanges(id, carried).await;
+        // A lead reborn mid-phase (its context full, its cache expired, its CLI lost) keeps
+        // leading it: the phase's briefing as it is now goes with its handoff, and only this
+        // phase's messages are carried.
+        let led = self.led_phase(id).await;
+        let (framing, phase) = match &led {
+            Some((brief, _)) => (MID_PHASE_FRAMING, Part::new("phase", brief.clone(), 1)),
+            None => (FRAMING, Part::new("phase", String::new(), 0)),
+        };
+        let exchanges = self
+            .recent_exchanges(id, carried, led.as_ref().map(|(_, since)| *since))
+            .await;
         let (target, max) = briefing_budget();
 
-        let fixed = FRAMING.len()
+        let fixed = framing.len()
+            + phase.text.len()
             + handoff_part.text.len()
             + decisions.text.len()
             + state.text.len()
@@ -490,9 +509,10 @@ impl SessionManager {
                 .then(|| format!("{taken} of {total_exchanges} exchanges"))
         });
 
-        let framing = Part::new("framing", FRAMING.into(), 0);
+        let framing = Part::new("framing", framing.into(), 0);
         let parts = [
             framing,
+            phase,
             handoff_part,
             decisions,
             state,
@@ -531,7 +551,7 @@ impl SessionManager {
                 .map(|hash| hash.to_string()),
             None => None,
         };
-        let decisions_part = &parts[2];
+        let part = |name: &str| parts.iter().find(|part| part.name == name);
         let record = RebirthRecord {
             id: plan
                 .prep
@@ -554,9 +574,9 @@ impl SessionManager {
             briefing_blob,
             briefing_tokens: (text.len() / BYTES_PER_TOKEN) as u64,
             sections,
-            decisions: decisions_part.items,
+            decisions: part("decisions").map_or(0, |part| part.items),
             decisions_in_full,
-            recent_messages: parts[5].items,
+            recent_messages: part("recent").map_or(0, |part| part.items),
             old_native_id: plan
                 .prep
                 .as_ref()
@@ -1052,7 +1072,12 @@ impl SessionManager {
 
     /// The branch's latest exchanges (a user message and what followed it), newest first,
     /// each as the text carried verbatim. `carried` are left out: the turn carries them.
-    async fn recent_exchanges(&self, id: &ConversationId, carried: &[Message]) -> Vec<Exchange> {
+    async fn recent_exchanges(
+        &self,
+        id: &ConversationId,
+        carried: &[Message],
+        since_ms: Option<i64>,
+    ) -> Vec<Exchange> {
         let branch = match self.core.head(id).await {
             Ok(Some(head)) => self.core.branch(id, &head).await.unwrap_or_default(),
             _ => Vec::new(),
@@ -1069,7 +1094,9 @@ impl SessionManager {
             current.clear();
         };
         for message in &branch[start..] {
-            if carried.contains(&message.id.as_str()) {
+            if carried.contains(&message.id.as_str())
+                || since_ms.is_some_and(|since| message.created_at_ms < since)
+            {
                 continue;
             }
             let who = match message.role {

@@ -302,17 +302,7 @@ impl SessionManager {
         else {
             return;
         };
-        let briefing = format!(
-            "[Overnight run \u{201c}{name}\u{201d} · Phase 0: write the plan]\nThe user gave a goal without a plan. Your job in this phase is the plan only: its phases, each with its exact scope, \"done when\" criteria anyone can check by running something or reading the code, and the phases it builds on. Scouts and research may look around the repository first; nothing is changed in Phase 0. Propose the phases with propose_phases. Another vendor reviews them and a fresh judge checks them against the goal before any phase starts, so put in only what the goal asks for: no invented scope, nothing the Rules exclude.\n\nThe goal, in the user's words:\n{goal}\n\nRules and settled decisions, verbatim:\n{rules}\n\n{directives}",
-            name = run.name,
-            goal = run.words,
-            rules = if run.rules.trim().is_empty() {
-                "(none given)".into()
-            } else {
-                run.rules.clone()
-            },
-            directives = directives_text(&run),
-        );
+        let briefing = planning_brief(&run);
         let kickoff = format!(
             "[overnight · phase 0] Write this run's plan now, as your briefing describes, and propose it with propose_phases. Don't write to the user: reply with exactly {} until the plan is proposed.",
             super::super::prompts::QUIET
@@ -418,6 +408,34 @@ impl SessionManager {
         let board = self.core.board(conversation_id).await.ok()?;
         let run = board.runs.get(&active.id)?;
         Some((workspace, directives_text(run)))
+    }
+
+    /// While a phase of the conversation's active run (Phase 0 too) is being led: its
+    /// briefing as it is now, and when the phase started.
+    pub(crate) async fn led_phase(
+        &self,
+        conversation_id: &ConversationId,
+    ) -> Option<(String, i64)> {
+        let active = self.overnight.active.get(conversation_id)?;
+        let board = self.core.board(conversation_id).await.ok()?;
+        let run = board.runs.get(&active.id)?;
+        match run.state {
+            OvernightState::Planning => {
+                let planning = run.planning.as_ref()?;
+                (planning.state == PhaseState::Running && planning.lead.is_some())
+                    .then(|| (planning_brief(run), planning.started_at_ms))
+            }
+            OvernightState::Running => {
+                let phase = run.phases.iter().find(|phase| {
+                    phase.state == PhaseState::Running && phase.start_commit.is_some()
+                })?;
+                Some((
+                    self.phase_brief(run, phase).await,
+                    phase.started_at_ms.unwrap_or(0),
+                ))
+            }
+            _ => None,
+        }
     }
 
     /// The run branch's tip now.
@@ -1169,6 +1187,21 @@ fn pick_next(run: &OvernightRun, verified_before: &[u32]) -> Pick {
         return Pick::Phase(phase.id.clone());
     }
     Pick::End(StopReason::Done)
+}
+
+/// Everything Phase 0's lead starts from: the goal, the Rules and the restrictions.
+fn planning_brief(run: &OvernightRun) -> String {
+    format!(
+        "[Overnight run \u{201c}{name}\u{201d} · Phase 0: write the plan]\nThe user gave a goal without a plan. Your job in this phase is the plan only: its phases, each with its exact scope, \"done when\" criteria anyone can check by running something or reading the code, and the phases it builds on. Scouts and research may look around the repository first; nothing is changed in Phase 0. Propose the phases with propose_phases. Another vendor reviews them and a fresh judge checks them against the goal before any phase starts, so put in only what the goal asks for: no invented scope, nothing the Rules exclude.\n\nThe goal, in the user's words:\n{goal}\n\nRules and settled decisions, verbatim:\n{rules}\n\n{directives}",
+        name = run.name,
+        goal = run.words,
+        rules = if run.rules.trim().is_empty() {
+            "(none given)".into()
+        } else {
+            run.rules.clone()
+        },
+        directives = directives_text(run),
+    )
 }
 
 /// The restrictions Brigadier enforces, as the lead should know them.
