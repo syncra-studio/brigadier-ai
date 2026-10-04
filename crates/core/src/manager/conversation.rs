@@ -109,9 +109,6 @@ pub(crate) struct Cli {
     /// The conversation's own model choice it was started for (none for a task, or a Chat on
     /// the default model): a different one in the setup means the user changed it since.
     pub chosen: Option<ModelChoice>,
-    /// The Short replies setting an orchestrator was started with (none for a task or a
-    /// Chat): a different one in Settings means the user changed it since.
-    pub short_replies: Option<bool>,
     pub session: Arc<dyn ProviderSession>,
     /// The cleanup-ledger owner (`orch:…`, `chat:…`, `task:…`).
     pub owner: String,
@@ -127,6 +124,9 @@ pub(crate) struct Cli {
 #[derive(Default)]
 struct ConvState {
     cli: Option<Arc<Cli>>,
+    /// The Short replies setting the orchestrator's session was last given (its role
+    /// instructions or a later note); unknown until a turn reads it from the log.
+    short_told: Option<bool>,
     /// A turn is starting or running.
     busy: bool,
     /// The CLI is being closed on purpose (hibernate, archive, fallback).
@@ -1374,6 +1374,24 @@ impl SessionManager {
                 input.text = format!("{transcript}\n\n{}", input.text);
             }
         }
+        // The user switched Short replies since the session last heard: a resumed CLI keeps
+        // its first instructions, so the change goes with this turn.
+        let short_note = if session {
+            self.short_replies_note(&conv).await
+        } else {
+            None
+        };
+        if let Some((_, text, label)) = &short_note {
+            self.log_injection(
+                &conv.id,
+                InjectionKind::Instructions,
+                (*label).into(),
+                None,
+                text.len(),
+            )
+            .await;
+            input.text = format!("{text}\n\n{}", input.text);
+        }
         for message in &users {
             self.log_user_injection(&conv, message).await;
         }
@@ -1397,6 +1415,9 @@ impl SessionManager {
             let message = format!("The CLI did not take the turn: {err}");
             self.fail_turn(&conv, users, envelopes, &message).await;
             return;
+        }
+        if let Some((short, ..)) = short_note {
+            conv.state.lock().await.short_told = Some(short);
         }
         if let Some((_, record)) = reborn {
             tracing::info!(conversation = %conv.id, generation = record.generation, tokens = record.briefing_tokens, trigger = ?record.trigger, "orchestrator reborn");
@@ -1449,21 +1470,20 @@ impl SessionManager {
         self.settle_requests(&conv.id).await;
     }
 
-    /// The user changed the model, effort or Fast, or the Short replies setting, since the CLI
-    /// started: close it while nothing runs, so the next turn resumes the conversation on the
-    /// new choice and instructions, taking effect on the next message.
+    /// The user changed the model, effort or Fast since the CLI started: close it while nothing
+    /// runs, so the next turn resumes the conversation on the new choice, taking effect on the
+    /// next message.
     async fn retire_changed_cli(&self, conv: &Arc<ConvLive>) {
         let Ok(conversation) = self.core.conversation(&conv.id) else {
             return;
         };
         let wanted = setup_choice(&conversation);
-        let short = self.core.settings().short_replies;
         let cli = {
             let mut state = conv.state.lock().await;
-            let changed = state.cli.as_ref().is_some_and(|cli| {
-                (cli.chosen.is_some() && cli.chosen != wanted)
-                    || cli.short_replies.is_some_and(|started| started != short)
-            });
+            let changed = state
+                .cli
+                .as_ref()
+                .is_some_and(|cli| cli.chosen.is_some() && cli.chosen != wanted);
             if !changed || state.busy || state.closing {
                 return;
             }
@@ -1638,11 +1658,19 @@ impl SessionManager {
         if reseed_needed {
             conv.state.lock().await.reseed = true;
         }
-        if resume.is_none() {
+        if !resumed {
+            // A resumed CLI keeps the instructions it started with; a new one has the
+            // setting as it is now.
+            let label = if conv.kind == ConversationKind::Session {
+                conv.state.lock().await.short_told = Some(short);
+                prompts::instructions_label(short)
+            } else {
+                prompts::ROLE_INSTRUCTIONS
+            };
             self.log_injection(
                 &conv.id,
                 InjectionKind::Instructions,
-                "role instructions".into(),
+                label.into(),
                 None,
                 prompt.len(),
             )
@@ -1654,7 +1682,6 @@ impl SessionManager {
             meter: TokenMeter::new(resumed && choice.provider == ProviderKind::Codex),
             model: choice,
             chosen: setup_choice(&conversation),
-            short_replies: (conv.kind == ConversationKind::Session).then_some(short),
             session,
             owner,
             ended: CancellationToken::new(),
@@ -3368,6 +3395,58 @@ impl SessionManager {
             }
         }
         None
+    }
+
+    /// The note telling the orchestrator its Short replies setting changed, when the session
+    /// last heard otherwise (or it can't tell): the setting, the note and its log label.
+    async fn short_replies_note(
+        &self,
+        conv: &Arc<ConvLive>,
+    ) -> Option<(bool, String, &'static str)> {
+        let short = self.core.settings().short_replies;
+        let known = conv.state.lock().await.short_told;
+        let told = match known {
+            Some(told) => Some(told),
+            None => self.short_told(&conv.id).await,
+        };
+        if told == Some(short) {
+            conv.state.lock().await.short_told = Some(short);
+            return None;
+        }
+        Some((
+            short,
+            prompts::short_replies_note(short),
+            prompts::short_replies_label(short),
+        ))
+    }
+
+    /// The Short replies setting the conversation's orchestrator session was last given,
+    /// from the log: its role instructions or a later note.
+    async fn short_told(&self, id: &ConversationId) -> Option<bool> {
+        let page = self
+            .core
+            .store()
+            .read_stream(
+                streams::orchestrator(id),
+                StreamPage {
+                    before: None,
+                    kinds: vec!["orchestrator.logged".into()],
+                    limit: 200,
+                },
+            )
+            .await
+            .ok()?;
+        page.iter().find_map(|stored| {
+            match serde_json::from_str::<DomainEvent>(stored.payload.get()).ok()? {
+                DomainEvent::OrchestratorLogged {
+                    entry: OrchestratorEntry::Injection { injection },
+                    ..
+                } if injection.kind == InjectionKind::Instructions => {
+                    prompts::short_in_label(&injection.label)
+                }
+                _ => None,
+            }
+        })
     }
 
     /// Marks the conversation's CLI session as gone for good: the next one starts over.

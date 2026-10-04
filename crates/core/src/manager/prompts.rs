@@ -126,7 +126,11 @@ How to talk to the user:
         quiet = QUIET,
         voice = VOICE,
         orchestrator_voice = ORCHESTRATOR_VOICE,
-        short = if short { SHORT_REPLIES } else { "" },
+        short = if short {
+            SHORT_REPLIES
+        } else {
+            SHORT_REPLIES_OFF_NOW
+        },
         preferences = preference_lines(preferences),
     )
 }
@@ -146,7 +150,9 @@ How to write:
 
 /// What the voice covers for the orchestrator.
 const ORCHESTRATOR_VOICE: &str = "
-- This covers your own prose: replies to the user and your notes (remember, plans, handoff notes). Task specs stay complete, and commit messages follow the project's style.";
+- This covers your own prose: replies to the user and your notes (remember, plans, handoff notes). Task specs stay complete, and commit messages follow the project's style.
+- When you write to the user, name a worker by its title, as the user sees it, never as task-N.
+- The user can switch Short replies in Settings at any time. When a [settings] note from Brigadier says they turned it on or off, that note replaces what these instructions say about Short replies, from then on.";
 
 /// The Short replies setting (on by default, PLAN.md §7): what the user reads stays a few
 /// lines.
@@ -157,6 +163,60 @@ Short replies (the user's setting):
 - Never quote a reviewer's or verifier's text to the user: name what it found in a few words.
 - At the end of an overnight phase, your reply is at most three lines: what changed, the outcome, and what waits on the user.
 - This doesn't shorten plans, handoff notes, task specs, exact commands and error text, evidence the user needs to decide, or instructions about security and order: those stay complete.";
+
+/// The Short replies setting, off.
+const SHORT_REPLIES_OFF_NOW: &str = "
+
+Short replies is off: the user wants fuller answers. Write by \"How to write\" alone.";
+
+/// How the log names role instructions: a Chat's and those without Short replies (sessions
+/// started before the setting existed too), and those with it.
+pub(crate) const ROLE_INSTRUCTIONS: &str = "role instructions";
+const ROLE_INSTRUCTIONS_SHORT: &str = "role instructions, short replies";
+const SHORT_REPLIES_ON: &str = "short replies on";
+const SHORT_REPLIES_OFF: &str = "short replies off";
+
+/// The log label of an orchestrator's role instructions.
+pub(crate) fn instructions_label(short: bool) -> &'static str {
+    if short {
+        ROLE_INSTRUCTIONS_SHORT
+    } else {
+        ROLE_INSTRUCTIONS
+    }
+}
+
+/// The log label of a note that the user switched Short replies.
+pub(crate) fn short_replies_label(short: bool) -> &'static str {
+    if short {
+        SHORT_REPLIES_ON
+    } else {
+        SHORT_REPLIES_OFF
+    }
+}
+
+/// Whether instructions logged under `label` had Short replies on (none: not about it).
+pub(crate) fn short_in_label(label: &str) -> Option<bool> {
+    match label {
+        ROLE_INSTRUCTIONS_SHORT | SHORT_REPLIES_ON => Some(true),
+        ROLE_INSTRUCTIONS | SHORT_REPLIES_OFF => Some(false),
+        _ => None,
+    }
+}
+
+/// Tells a running orchestrator the user switched Short replies: its CLI keeps the
+/// instructions it started with.
+pub(crate) fn short_replies_note(short: bool) -> String {
+    if short {
+        format!(
+            "[settings] The user turned Short replies on. From now on, follow these rules too; don't mention this note.{}",
+            SHORT_REPLIES
+                .trim_start_matches('\n')
+                .trim_start_matches("Short replies (the user's setting):")
+        )
+    } else {
+        "[settings] The user turned Short replies off. From now on, the \"Short replies\" rules no longer apply: write by \"How to write\" alone, with full detail where it helps. Don't mention this note.".to_owned()
+    }
+}
 
 /// What the voice covers for a worker, and its report's shape.
 const WORKER_VOICE: &str = "
@@ -680,7 +740,30 @@ mod environment_tests {
             full.contains("At the end of an overnight phase, your reply is at most three lines")
         );
         let long = orchestrator(&conversation("fullAccess"), None, &[], Some(&run), false);
-        assert!(!long.contains("Short replies"));
+        assert!(!long.contains("Short replies (the user's setting)"));
         assert!(long.contains("How to write:"));
+        assert!(long.contains("name a worker by its title"));
+        assert!(long.contains("Short replies is off"));
+        assert!(!full.contains("Short replies is off"));
+        assert!(
+            long.contains("that note replaces what these instructions say about Short replies")
+        );
+    }
+
+    #[test]
+    fn a_running_orchestrator_hears_short_replies_switched_and_the_log_says_which() {
+        // Sessions started before the setting have plain "role instructions": without it.
+        assert_eq!(short_in_label("role instructions"), Some(false));
+        for short in [true, false] {
+            assert_eq!(short_in_label(instructions_label(short)), Some(short));
+            assert_eq!(short_in_label(short_replies_label(short)), Some(short));
+        }
+        assert_eq!(short_in_label("transcript so far"), None);
+        let on = short_replies_note(true);
+        assert!(on.starts_with("[settings] The user turned Short replies on."));
+        assert!(on.contains("\n- What you write for the user: the outcome in the first line"));
+        assert!(on.contains("at most three lines"));
+        assert!(!on.contains("Short replies (the user's setting)"));
+        assert!(short_replies_note(false).contains("no longer apply"));
     }
 }
