@@ -4,8 +4,8 @@ import { test } from "node:test";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
 import { type Block, type BoardDigest, blockSequence, buildBlocks, judgementCall } from "@/app/conversation/blocks";
 import { reportTexts, shownTexts } from "@/app/conversation/phaseView";
-import { checkersOf, checkResult, checksCount, taskRowDetail, taskState } from "@/app/conversation/rowWords";
-import type { Decision, Message, OrchestratorStep, OvernightRun, Plan, Task, UserRequest } from "@/ipc/generated";
+import { checkersOf, checkResult, checksCount, machineWords, taskRowDetail, taskState } from "@/app/conversation/rowWords";
+import type { Decision, MachineStep, Message, OrchestratorStep, OvernightRun, Plan, Task, UserRequest } from "@/ipc/generated";
 
 // The board of the first real overnight run (2026-10-03), from its stored events
 // (scripts/extract-board-fixture.mjs). Before one row per task, its Phase 1 showed 41 rows and
@@ -18,6 +18,7 @@ const board: BoardDigest = {
   plans: night.plans as unknown as Record<string, Plan>,
   requests: night.requests as unknown as Record<string, UserRequest>,
   orchestratorSteps: night.orchestratorSteps as unknown as OrchestratorStep[],
+  machineSteps: [],
   decisions: night.decisions as unknown as Decision[],
   compactions: {},
   runRequest: null,
@@ -222,6 +223,40 @@ test("a normal session's request reads the same way: one row per task, its check
     entry.kind === "orchestrator" ? entry.steps.filter((step) => step.kind.type === "decided") : [],
   );
   assert.equal(decided.length, 1);
+});
+
+test("machine rows show in their request's block, each on its own line", () => {
+  const request = "machine-request";
+  const user = { ...messages[0]!, id: request, seq: 320, requestId: request, text: "Build it" };
+  const step = (kind: MachineStep["kind"], at: number, command: string | null): MachineStep => ({
+    kind,
+    requestId: request,
+    taskId: null,
+    command,
+    atMs: user.createdAtMs + at,
+    position: 400 + at,
+  });
+  const digest: BoardDigest = {
+    ...board,
+    tasks: {},
+    plans: {},
+    requests: { [request]: { ...Object.values(board.requests)[0]!, id: request, startedAtMs: user.createdAtMs, state: { type: "done" } } },
+    orchestratorSteps: [],
+    decisions: [],
+    machineSteps: [step("waitingToCool", 1, null), step("paused", 2, "cargo test"), step("resumed", 3, "cargo test")],
+  };
+  const block = buildBlocks([user], {}, false, digest, []).find((candidate) => candidate.key === request);
+  assert.ok(block);
+  const rows = sequence(block).flatMap((entry) =>
+    entry.kind === "orchestrator"
+      ? [entry.steps.map((s) => (s.kind.type === "machine" ? machineWords(s.kind.machine, s.kind.command, "the Mac") : ""))]
+      : [],
+  );
+  assert.deepEqual(rows, [
+    ["Waiting for the Mac to cool down"],
+    ["Paused cargo test to let the Mac cool down"],
+    ["Resumed cargo test"],
+  ]);
 });
 
 test("a run's decision shows in the thread unless its kind says it is a phase's outcome", () => {

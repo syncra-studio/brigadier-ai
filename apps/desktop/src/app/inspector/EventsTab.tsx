@@ -72,6 +72,8 @@ function summary(event: DomainEvent): string {
       return `${event.step.kind} ${event.step.taskId}`;
     case "orchestratorStepped":
       return event.step.kind.type;
+    case "machineStepped":
+      return event.step.command ? `${event.step.kind} ${event.step.command}` : event.step.kind;
     case "compactionUpdated":
       return `compaction ${event.compaction.state.type}`;
     case "messageRated":

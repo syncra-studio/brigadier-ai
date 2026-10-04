@@ -4,15 +4,20 @@ import {
   Check,
   CheckCircle,
   ChevronRight,
+  Clock,
   Globe,
+  PauseCircle,
+  PlayCircle,
 } from "@openai/apps-sdk-ui/components/Icon";
 import type { FC, ReactNode } from "react";
 
-import type { BlockOrchestratorStep, DecidedStep } from "@/app/conversation/blocks";
+import type { BlockOrchestratorStep, DecidedStep, MachineWords } from "@/app/conversation/blocks";
+import { machineWords } from "@/app/conversation/rowWords";
 import { WorkerLine, WorkerMention } from "@/app/conversation/WorkerChip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { OrchestratorStepKind } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
+import { useApp } from "@/state/store";
 
 type Kind = BlockOrchestratorStep["kind"]["type"];
 
@@ -24,6 +29,7 @@ const ICONS: Record<Kind, FC<{ className?: string }>> = {
   searchedWeb: Globe,
   readPage: Globe,
   decided: CheckCircle,
+  machine: Clock,
 };
 
 /** How a run of steps sums them up ("Read reports, messaged a worker"). */
@@ -35,6 +41,7 @@ const PLURALS: Record<Kind, [one: string, many: string]> = {
   searchedWeb: ["searched the web", "searched the web"],
   readPage: ["read a page", "read pages"],
   decided: ["decided for you", "decided for you"],
+  machine: ["waited for the computer", "waited for the computer"],
 };
 
 /** A grey line of the thread's work. */
@@ -58,7 +65,7 @@ const Words: FC<{ attached?: boolean; children: ReactNode }> = ({ attached, chil
 );
 
 /** A step's line; a worker it names is its chip ("Accepted [Add tests]’s change"). */
-function label(kind: OrchestratorStepKind | DecidedStep): ReactNode {
+function label(kind: OrchestratorStepKind | DecidedStep | MachineWords): ReactNode {
   switch (kind.type) {
     case "decided":
       return <span className="min-w-0 truncate">Decided for you: <WorkerLine text={kind.what} /></span>;
@@ -91,8 +98,32 @@ function label(kind: OrchestratorStepKind | DecidedStep): ReactNode {
       return <span className="min-w-0 truncate">Searched the web for {kind.query}</span>;
     case "readPage":
       return <span className="min-w-0 truncate">Read {hostOf(kind.url)}</span>;
+    case "machine":
+      return <span className="min-w-0 truncate">{machineWords(kind.machine, kind.command, "the computer")}</span>;
   }
 }
+
+const MACHINE_ICONS: Record<MachineWords["machine"], FC<{ className?: string }>> = {
+  waitingToCool: Clock,
+  waitingForBuild: Clock,
+  paused: PauseCircle,
+  resumed: PlayCircle,
+};
+
+/** A grey row about the machine; it names the worker when it is about one. */
+const MachineRow: FC<{ kind: MachineWords }> = ({ kind }) => {
+  const mac = useApp((s) => s.info?.platform === "macos");
+  const Icon = MACHINE_ICONS[kind.machine];
+  return (
+    <div data-slot="orchestrator-step" data-kind="machine" className={row}>
+      <Icon aria-hidden className="size-icon-md shrink-0" />
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        {kind.taskId && <WorkerMention taskId={kind.taskId} />}
+        <span className="min-w-0 truncate">{machineWords(kind.machine, kind.command, mac ? "the Mac" : "the computer")}</span>
+      </span>
+    </div>
+  );
+};
 
 /** A judgement call made for the user: its line, which opens to why. */
 const DecidedRow: FC<{ what: string; why: string }> = ({ what, why }) => {
@@ -128,6 +159,7 @@ const DecidedRow: FC<{ what: string; why: string }> = ({ what, why }) => {
 
 const StepRow: FC<{ step: BlockOrchestratorStep }> = ({ step }) => {
   if (step.kind.type === "decided") return <DecidedRow what={step.kind.what} why={step.kind.why} />;
+  if (step.kind.type === "machine") return <MachineRow kind={step.kind} />;
   const Icon = ICONS[step.kind.type];
   return (
     <div

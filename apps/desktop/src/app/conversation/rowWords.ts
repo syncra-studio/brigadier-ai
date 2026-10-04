@@ -1,5 +1,5 @@
 import { taskWaitWords } from "@/app/conversation/taskActivity";
-import type { Decision, DecisionWords, Gate, GateOwner, GateRole, Task } from "@/ipc/generated";
+import type { Decision, DecisionWords, Gate, GateOwner, GateRole, MachineStepKind, Task } from "@/ipc/generated";
 
 /**
  * The words of a worker's row in the thread ("Router: quota penalty · Landed · checked by
@@ -202,4 +202,21 @@ export function namedTasks(text: string, tasks: Readonly<Record<string, Task>>, 
     if (!task) return whole;
     return quoted ? quoted.trimStart() : `“${workerName(tasks, task, depth)}”`;
   });
+}
+
+/**
+ * A row about the machine ("Paused cargo test to let the Mac cool down"); `machine` is how
+ * the OS's computer is called ("the Mac").
+ */
+export function machineWords(kind: MachineStepKind, command: string | null, machine: string): string {
+  switch (kind) {
+    case "waitingToCool":
+      return `Waiting for ${machine} to cool down`;
+    case "waitingForBuild":
+      return "Waiting for another build to finish";
+    case "paused":
+      return `Paused ${command ?? "a build"} to let ${machine} cool down`;
+    case "resumed":
+      return `Resumed ${command ?? "a build"}`;
+  }
 }

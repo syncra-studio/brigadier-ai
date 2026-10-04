@@ -6,6 +6,8 @@ import type {
   Compaction,
   CompactionState,
   Decision,
+  MachineStep,
+  MachineStepKind,
   Message,
   ModelChoice,
   OrchestratorStep,
@@ -59,12 +61,20 @@ export type BlockRow =
  */
 export type DecidedStep = { type: "decided"; what: string; why: string };
 
+/** A row about the machine: work waiting for it to cool down, a build paused or resumed. */
+export type MachineWords = {
+  type: "machine";
+  machine: MachineStepKind;
+  command: string | null;
+  taskId: string | null;
+};
+
 /**
  * Something the orchestrator did ("Sent message to …"), or Brigadier decided for the user, in
  * the order it happened.
  */
 export type BlockOrchestratorStep = {
-  kind: OrchestratorStepKind | DecidedStep;
+  kind: OrchestratorStepKind | DecidedStep | MachineWords;
   position: number;
 };
 
@@ -125,6 +135,7 @@ export type BoardDigest = {
   plans: Readonly<Record<string, Plan>>;
   requests: Readonly<Record<string, UserRequest>>;
   orchestratorSteps: readonly OrchestratorStep[];
+  machineSteps: readonly MachineStep[];
   decisions: readonly Decision[];
   compactions: Readonly<Record<string, Compaction>>;
   runRequest: string | null;
@@ -302,6 +313,18 @@ export function buildBlocks(
       position: step.position,
       requestId: step.requestId,
       step: { kind: step.kind, position: step.position },
+      atMs: step.atMs,
+    });
+  }
+  for (const step of board.machineSteps) {
+    placed.push({
+      kind: "orchestrator",
+      position: step.position,
+      requestId: step.requestId,
+      step: {
+        kind: { type: "machine", machine: step.kind, command: step.command, taskId: step.taskId },
+        position: step.position,
+      },
       atMs: step.atMs,
     });
   }
@@ -588,12 +611,13 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
     })),
     ...source.rows.map((row) => ({ kind: "row" as const, row, position: row.position })),
   ].toSorted((a, b) => a.position - b.position);
-  const decided = (entry: SequenceEntry) =>
-    entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "decided");
+  const alone = (entry: SequenceEntry) =>
+    entry.kind === "orchestrator" &&
+    entry.steps.some((step) => step.kind.type === "decided" || step.kind.type === "machine");
   const merged: SequenceEntry[] = [];
   for (const entry of entries) {
     const previous = merged.at(-1);
-    if (entry.kind === "orchestrator" && previous?.kind === "orchestrator" && !decided(entry) && !decided(previous)) {
+    if (entry.kind === "orchestrator" && previous?.kind === "orchestrator" && !alone(entry) && !alone(previous)) {
       previous.steps.push(...entry.steps);
     } else merged.push(entry);
   }
@@ -800,6 +824,7 @@ const EMPTY_WORK: BoardDigest = {
   plans: {},
   requests: {},
   orchestratorSteps: [],
+  machineSteps: [],
   decisions: [],
   compactions: {},
   runRequest: null,

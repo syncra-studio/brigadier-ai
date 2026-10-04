@@ -9,6 +9,7 @@ import type {
   Decision,
   DiffStat,
   EventEnvelope,
+  MachineStep,
   MemoryChange,
   MessageQueue,
   Notice,
@@ -64,6 +65,8 @@ export type Board = {
   workerSteps: WorkerStep[];
   /** Every orchestrator step (messaged a worker, read a report, …), in stream order. */
   orchestratorSteps: OrchestratorStep[];
+  /** Every row about the machine (waiting for it to cool down, a build paused), in stream order. */
+  machineSteps: MachineStep[];
   /** What was decided on the user's behalf, in stream order. */
   decisions: Decision[];
   /** What only the user can do and is not done yet, by id. */
@@ -209,6 +212,7 @@ export function emptyBoard(conversationId: string): Board {
     requests: {},
     workerSteps: [],
     orchestratorSteps: [],
+    machineSteps: [],
     decisions: [],
     waiting: {},
     compactions: {},
@@ -252,6 +256,7 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "branchSwitched",
   "workerStepped",
   "orchestratorStepped",
+  "machineStepped",
   "compactionUpdated",
   "messageRated",
   "memoryUpdated",
@@ -297,6 +302,7 @@ export function boardFromView(
     requests: byId(view.requests),
     workerSteps: view.workerSteps,
     orchestratorSteps: view.orchestratorSteps,
+    machineSteps: view.machineSteps ?? [],
     decisions: view.decisions,
     waiting: byId(view.waiting),
     compactions: byId(view.compactions),
@@ -458,6 +464,10 @@ function applyToBoard(board: Board, envelope: EventEnvelope): Board {
             ...board,
             orchestratorSteps: [...board.orchestratorSteps, { ...event.step, position: streamSeq }],
           };
+    case "machineStepped":
+      return board.machineSteps.some((step) => step.position === streamSeq)
+        ? board
+        : { ...board, machineSteps: [...board.machineSteps, { ...event.step, position: streamSeq }] };
     case "decidedForYou":
       // Applied again after a view read: a decision is kept once.
       return board.decisions.some((decision) => decision.id === event.decision.id)
