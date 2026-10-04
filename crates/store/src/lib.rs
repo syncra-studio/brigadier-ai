@@ -14,7 +14,8 @@
 //!   renumbers anything, and a `seq` is never reused.
 //! - **Blobs.** Large payloads live in a content-addressed store on disk ([`BlobStore`]). The
 //!   writer indexes every blob hash an event payload mentions, and [`Store::gc_blobs`] deletes
-//!   the blobs no remaining event mentions (the rule is on [`BlobStore`]).
+//!   the blobs no remaining event mentions (the rule is on [`BlobStore`]);
+//!   [`Store::delete_streams_and_blobs`] takes a permanent Delete's own blobs at once.
 //!
 //! Nothing here ever blocks a Tokio worker thread.
 
@@ -49,6 +50,10 @@ pub const FEED_CAPACITY: usize = 4096;
 /// covers the gap between storing a blob and appending the event that references it, which
 /// for a composer attachment is as long as the user takes to send the message.
 pub const BLOB_GC_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
+/// How long after its last reference in deleted streams a blob still counts as theirs (see
+/// [`Store::delete_streams_and_blobs`]). It only absorbs the slack between putting a blob and
+/// stamping the event that references it.
+const OWN_BLOB_MARGIN: Duration = Duration::from_secs(60);
 /// Blobs the writer checks and deletes per command, so appends interleave with a large GC.
 const GC_CHUNK: usize = 256;
 
@@ -286,9 +291,39 @@ impl Store {
     /// the appends around it (through the single writer). Returns how many events were
     /// removed. Other streams and all sequence numbers are untouched; subscribers see nothing
     /// (the feed only carries appends). Blobs the events referenced stay until
-    /// [`Store::gc_blobs`].
+    /// [`Store::gc_blobs`]; [`Store::delete_streams_and_blobs`] takes them too.
     pub async fn delete_streams(&self, streams: Vec<String>) -> Result<u64> {
         self.delete(streams, Vec::new()).await
+    }
+
+    /// [`Store::delete_streams`], then deletes right away each blob those events referenced that
+    /// no remaining event references, unless it was put or touched after its last reference
+    /// there (plus a minute's slack): content that only came from them, which
+    /// [`Store::gc_blobs`] would otherwise keep for [`BLOB_GC_GRACE`]. A blob something else
+    /// put again since, such as an identical attachment waiting in a composer, is kept.
+    pub async fn delete_streams_and_blobs(&self, streams: Vec<String>) -> Result<(u64, GcStats)> {
+        let own = self
+            .reads
+            .run({
+                let streams = streams.clone();
+                move |conn| reader::blob_refs_of(conn, &streams)
+            })
+            .await?;
+        let removed = self.delete_streams(streams).await?;
+        let hashes: Vec<_> = own
+            .into_iter()
+            .filter_map(|(hash, at_ms)| {
+                let last = SystemTime::UNIX_EPOCH
+                    + Duration::from_millis(u64::try_from(at_ms).unwrap_or_default());
+                Some((hash.parse().ok()?, last + OWN_BLOB_MARGIN))
+            })
+            .collect();
+        let found = GcStats {
+            blobs: hashes.len() as u64,
+            ..GcStats::default()
+        };
+        let stats = self.collect_blobs(hashes, found).await?;
+        Ok((removed, stats))
     }
 
     /// Like [`Store::delete_streams`], for every stream whose name starts with one of
@@ -348,17 +383,28 @@ impl Store {
             if entry.modified > cutoff {
                 stats.recent += 1;
             } else {
-                candidates.push(entry.hash);
+                candidates.push((entry.hash, cutoff));
             }
+        }
+        let stats = self.collect_blobs(candidates, stats).await?;
+        tracing::info!(?stats, "blob gc finished");
+        Ok(stats)
+    }
+
+    /// Has the writer delete each blob no event references and nothing put or touched after
+    /// its cutoff, in chunks, adding to `stats`.
+    async fn collect_blobs(
+        &self,
+        candidates: Vec<(BlobHash, SystemTime)>,
+        mut stats: GcStats,
+    ) -> Result<GcStats> {
+        if !self.admitting.load(Ordering::Acquire) {
+            return Err(Error::ShuttingDown);
         }
         for chunk in candidates.chunks(GC_CHUNK) {
             let hashes = chunk.to_vec();
             let collected = self
-                .command(|reply| WriteOp::CollectBlobs {
-                    hashes,
-                    cutoff,
-                    reply,
-                })
+                .command(|reply| WriteOp::CollectBlobs { hashes, reply })
                 .await??;
             stats.referenced += collected.referenced;
             stats.recent += collected.recent;
@@ -366,7 +412,6 @@ impl Store {
             stats.removed_bytes += collected.removed_bytes;
             stats.failed += collected.failed;
         }
-        tracing::info!(?stats, "blob gc finished");
         Ok(stats)
     }
 
@@ -530,3 +575,67 @@ impl Store {
 
 /// Interval for the periodic PASSIVE checkpoint the daemon requests.
 pub const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(30);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn now_ms() -> i64 {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |since| since.as_millis() as i64)
+    }
+
+    #[tokio::test]
+    async fn deleting_streams_takes_only_the_blobs_that_came_from_them() {
+        let dir = std::env::temp_dir().join(format!("brigadier-store-{}", uuid::Uuid::new_v4()));
+        let store = Store::open(StoreConfig {
+            db_path: dir.join("db.sqlite"),
+            blobs_dir: dir.join("blobs"),
+            readers: 1,
+        })
+        .expect("a store");
+        let blobs = store.blobs();
+        let own = blobs
+            .put(b"only the deleted session".to_vec())
+            .await
+            .unwrap();
+        let shared = blobs.put(b"in both sessions".to_vec()).await.unwrap();
+        // Put again (say, attached in another composer) after the deleted session last used it.
+        let put_since = blobs
+            .put(b"attached again elsewhere".to_vec())
+            .await
+            .unwrap();
+        let event = |stream: &str, at_ms: i64, hash: &BlobHash| {
+            NewEvent::new(
+                stream,
+                "message",
+                at_ms,
+                &serde_json::json!({ "blob": hash.as_str() }),
+            )
+            .unwrap()
+        };
+        let (now, earlier) = (now_ms(), now_ms() - 10 * 60 * 1000);
+        store
+            .append(vec![
+                event("conversation:a", now, &own),
+                event("task:a1", now, &shared),
+                event("conversation:a", earlier, &put_since),
+                event("conversation:b", now, &shared),
+            ])
+            .await
+            .unwrap();
+
+        let (removed, stats) = store
+            .delete_streams_and_blobs(vec!["conversation:a".into(), "task:a1".into()])
+            .await
+            .unwrap();
+
+        assert_eq!(removed, 3);
+        assert_eq!((stats.removed, stats.referenced, stats.recent), (1, 1, 1));
+        assert!(blobs.get(own).await.unwrap().is_none());
+        assert!(blobs.get(shared).await.unwrap().is_some());
+        assert!(blobs.get(put_since).await.unwrap().is_some());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

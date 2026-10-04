@@ -617,10 +617,11 @@ impl SessionManager {
         self.core.forget_conversation(id.clone()).await?;
         self.convs_lock().remove(&id);
         let store = self.core.store().clone();
-        let removed = store.delete_streams(purge).await?;
+        // Its own blobs go now, not a day later; then the usual collection of older leftovers.
+        let (removed, own) = store.delete_streams_and_blobs(purge).await?;
         match store.gc_blobs().await {
             Ok(stats) => {
-                tracing::info!(conversation = %id, removed, ?stats, "conversation deleted")
+                tracing::info!(conversation = %id, removed, ?own, ?stats, "conversation deleted")
             }
             Err(err) => tracing::warn!(conversation = %id, error = %err, "could not collect blobs"),
         }

@@ -28,9 +28,9 @@ pub(crate) enum WriteOp {
         prefixes: Vec<String>,
         reply: oneshot::Sender<Result<u64>>,
     },
+    /// Each blob with its own cutoff.
     CollectBlobs {
-        hashes: Vec<BlobHash>,
-        cutoff: SystemTime,
+        hashes: Vec<(BlobHash, SystemTime)>,
         reply: oneshot::Sender<Result<Collected>>,
     },
     Checkpoint {
@@ -64,8 +64,7 @@ enum Mutation {
 
 /// A blob collection request, run after the batch's transaction has committed.
 struct Collection {
-    hashes: Vec<BlobHash>,
-    cutoff: SystemTime,
+    hashes: Vec<(BlobHash, SystemTime)>,
     reply: oneshot::Sender<Result<Collected>>,
 }
 
@@ -110,15 +109,9 @@ impl Sorted {
                 prefixes,
                 reply,
             }),
-            WriteOp::CollectBlobs {
-                hashes,
-                cutoff,
-                reply,
-            } => self.collections.push(Collection {
-                hashes,
-                cutoff,
-                reply,
-            }),
+            WriteOp::CollectBlobs { hashes, reply } => {
+                self.collections.push(Collection { hashes, reply })
+            }
             WriteOp::Checkpoint { reply } => self.checkpoints.push(reply),
             WriteOp::Compact { reply } => self.compactions.push(reply),
             WriteOp::Shutdown { reply } => match self.shutdown {
@@ -271,9 +264,7 @@ impl Writer {
             }
             // Only after the commit: a rolled-back delete must not have freed its blobs.
             for collection in collections {
-                let _ = collection
-                    .reply
-                    .send(self.collect(collection.hashes, collection.cutoff));
+                let _ = collection.reply.send(self.collect(collection.hashes));
             }
             for reply in checkpoints {
                 let _ = reply.send(self.checkpoint("PASSIVE"));
@@ -374,15 +365,15 @@ impl Writer {
         Ok(())
     }
 
-    /// Deletes each blob that no event references and that was not put or touched after
-    /// `cutoff`. Runs on this thread, between batches, so no event can be appended between the
+    /// Deletes each blob that no event references and that was not put or touched after its
+    /// cutoff. Runs on this thread, between batches, so no event can be appended between the
     /// reference check and the delete; the blob lock orders it against concurrent puts.
-    fn collect(&self, hashes: Vec<BlobHash>, cutoff: SystemTime) -> Result<Collected> {
+    fn collect(&self, hashes: Vec<(BlobHash, SystemTime)>) -> Result<Collected> {
         let mut referenced = self
             .conn
             .prepare_cached("SELECT EXISTS (SELECT 1 FROM blob_refs WHERE hash = ?1)")?;
         let mut collected = Collected::default();
-        for hash in hashes {
+        for (hash, cutoff) in hashes {
             if referenced.query_row([hash.as_str()], |row| row.get::<_, bool>(0))? {
                 collected.referenced += 1;
                 continue;

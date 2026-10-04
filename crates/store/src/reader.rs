@@ -170,6 +170,27 @@ pub(crate) fn blob_hashes_of(conn: &Connection, streams: &[String]) -> Result<Ve
     Ok(hashes.into_iter().collect())
 }
 
+/// Every distinct blob hash the events of `streams` reference, with the time of the newest of
+/// those events that references it.
+pub(crate) fn blob_refs_of(conn: &Connection, streams: &[String]) -> Result<Vec<(String, i64)>> {
+    let mut newest = std::collections::BTreeMap::<String, i64>::new();
+    let mut statement = conn.prepare_cached(
+        "SELECT r.hash, MAX(e.at_ms) FROM blob_refs r JOIN events e ON e.seq = r.seq \
+         WHERE e.stream = ?1 GROUP BY r.hash",
+    )?;
+    for stream in streams {
+        let rows = statement.query_map(params![stream], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for row in rows {
+            let (hash, at_ms) = row?;
+            let at = newest.entry(hash).or_insert(at_ms);
+            *at = (*at).max(at_ms);
+        }
+    }
+    Ok(newest.into_iter().collect())
+}
+
 /// Which of `hashes` no stored event references.
 pub(crate) fn unreferenced(conn: &Connection, hashes: &[String]) -> Result<Vec<String>> {
     let mut statement = conn.prepare_cached("SELECT 1 FROM blob_refs WHERE hash = ?1 LIMIT 1")?;
