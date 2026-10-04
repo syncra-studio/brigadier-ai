@@ -22,7 +22,7 @@ use crate::overnight::{
     StopReason,
 };
 use crate::sessions::one_line;
-use crate::work::{DecisionSource, RequestState, TaskKind, TaskState, UserRequest};
+use crate::work::{DecisionKind, DecisionSource, RequestState, TaskKind, TaskState, UserRequest};
 
 /// Commits listed in the report, at most.
 const COMMITS: usize = 60;
@@ -185,7 +185,8 @@ impl SessionManager {
             ));
         }
         if let Ok(view) = self.usage_view(None).await {
-            text.push_str("Account windows at report time (include other activity):\n");
+            // A blank line first: without it the line joins the last bullet above.
+            text.push_str("\nAccount windows at report time (include other activity):\n");
             for provider in view.providers {
                 if let Some(quota) = provider.quota {
                     for window in quota.windows {
@@ -517,8 +518,10 @@ fn render(run: &OvernightRun, board: &Board, commits: &[(String, String)], now: 
             text.push_str("The list is limited to the latest 60; the run branch has them all.\n");
         }
     }
-    // Decided for you: one plain line each; the findings behind them are in the tasks.
+    // Decided for you: one plain line each; the findings behind them are in the tasks. A
+    // phase's outcome is its section's heading already.
     let decided: Vec<String> = run_decisions(run, board)
+        .filter(|decision| decision.kind != DecisionKind::PhaseOutcome)
         .map(|decision| format!("- {}", one_line(&decision.what, DECIDED)))
         .collect();
     if !decided.is_empty() {
@@ -543,10 +546,10 @@ fn render(run: &OvernightRun, board: &Board, commits: &[(String, String)], now: 
     // The details, folded by the app: everything after this heading.
     text.push_str(&format!("\n{DETAILS}\n"));
     if let Some(workspace) = &run.workspace {
-        text.push_str(&format!("Run worktree and handoffs: `{}`; each worker's kept work and handoff are linked from its task.\n", workspace.path));
+        text.push_str(&format!("- Run worktree and handoffs: `{}`; each worker's kept work and handoff are linked from its task.\n", workspace.path));
     }
     for line in &run.directives.ignored {
-        text.push_str(&format!("{line}.\n"));
+        text.push_str(&format!("- {line}.\n"));
     }
     for phase in &run.phases {
         let Some(gate) = &phase.gate else {
@@ -584,13 +587,13 @@ fn render(run: &OvernightRun, board: &Board, commits: &[(String, String)], now: 
         text.push_str("\n#### Workers and models\n");
         for (task, role) in tasks {
             text.push_str(&format!(
-                "- task-{} {} ({}, {} {}): {:?}\n",
+                "- task-{} {} ({}, {} {}): {}\n",
                 task.number,
                 task.title,
                 role_word(role),
                 task.route.choice.provider.label(),
                 task.route.choice.model.as_deref().unwrap_or("default"),
-                task.state
+                state_word(task)
             ));
         }
     }
@@ -774,6 +777,26 @@ fn symbol(state: PhaseState) -> &'static str {
     }
 }
 
+/// A task's state in the words its row in the thread uses (`rowWords.ts`).
+fn state_word(task: &crate::work::Task) -> &'static str {
+    match task.state {
+        TaskState::Queued | TaskState::Starting => "Starting",
+        TaskState::Running | TaskState::Blocked => "Working",
+        TaskState::Paused => "Paused",
+        TaskState::Reported if task.kind.writes() => "Finished",
+        TaskState::Reported => "Reported",
+        TaskState::Reviewing => "Checking",
+        TaskState::AwaitingApproval => "Waiting for you",
+        TaskState::ReadyToLand => "Held",
+        TaskState::Landed => "Landed",
+        TaskState::Done => "Done",
+        TaskState::Rejected => "Turned down",
+        TaskState::Stopped if task.candidate.is_some() && task.landed.is_none() => "Not landed",
+        TaskState::Stopped => "Stopped",
+        TaskState::Failed => "Failed",
+    }
+}
+
 fn role_word(role: RunRole) -> &'static str {
     match role {
         RunRole::Worker => "worker",
@@ -897,11 +920,48 @@ mod tests {
             }))
             .expect("a report"),
         );
+        let mut worker = worker;
+        worker.state = TaskState::ReadyToLand;
+        for (n, (what, kind)) in [
+            ("Verified phase 1 “Measure”", DecisionKind::PhaseOutcome),
+            ("Landed task-3 “Task 3”", DecisionKind::Routine),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            board.decisions.push(crate::work::Decision {
+                id: format!("d{n}"),
+                request_id: None,
+                source: DecisionSource::Task {
+                    task_id: worker.id.clone(),
+                },
+                what: what.into(),
+                kind,
+                why: String::new(),
+                at_ms: 0,
+                position: n as i64,
+            });
+        }
         board.tasks.insert(worker.id.clone(), worker);
         board.tasks.insert(verifier.id.clone(), verifier);
         board.runs.insert(run.id.clone(), run.clone());
         let text = render(&run, &board, &[], 0);
         assert!(!text.contains("— –"), "{text}");
+        // A phase's outcome is its section's heading, not a decision line too.
+        assert!(
+            text.contains("### Decided for you\n- Landed task-3 “Task 3”\n"),
+            "{text}"
+        );
+        assert!(!text.contains("- Verified phase 1"), "{text}");
+        // States in the words of the thread's rows.
+        assert!(
+            text.contains("(task check, Claude Code default): Held\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("(task check, Claude Code default): Done\n"),
+            "{text}"
+        );
         assert!(
             text.contains("### Phase 2 · Re-measure — not reached"),
             "{text}"
