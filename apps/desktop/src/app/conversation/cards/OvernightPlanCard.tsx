@@ -230,7 +230,8 @@ export function OvernightPlanCard({
     return {
       key: phase.id,
       title: `Phase ${phase.number} · ${phase.name}`,
-      status: MARK[phase.state],
+      // A phase the run's end cut off is unfinished, not still at work.
+      status: over && MARK[phase.state] === "active" ? "partial" : MARK[phase.state],
       statusLabel: proposed ? "" : status,
       live: running,
       folded: proposed || (phase.state !== "running" && phase.state !== "checking"),

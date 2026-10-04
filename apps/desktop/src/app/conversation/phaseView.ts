@@ -8,7 +8,7 @@ import type { OvernightPhase, OvernightRun, PhaseState, Plan, Task } from "@/ipc
 
 /** The mark beside a phase's state: what it came to, never colour alone. */
 export const PHASE_MARKS: Record<PhaseState, string> = {
-  pending: "–",
+  pending: "",
   running: "",
   checking: "",
   verified: "✓",
@@ -34,15 +34,20 @@ export function runOver(run: OvernightRun): boolean {
   return run.state === "finished" || run.state === "superseded";
 }
 
+/** The mark beside a phase's state; a phase the run's end cut off reads "◐ unfinished". */
+export function phaseMark(state: PhaseState, over: boolean): string {
+  return over && (state === "running" || state === "checking") ? "◐" : PHASE_MARKS[state];
+}
+
 /** A phase's state in a word or two; `over` once the run has ended. */
 export function phaseWord(state: PhaseState, over: boolean): string {
   switch (state) {
     case "pending":
       return over ? "not reached" : "not started";
     case "running":
-      return over ? "stopped" : "working";
+      return over ? "unfinished" : "working";
     case "checking":
-      return over ? "stopped" : "checking";
+      return over ? "unfinished" : "checking";
     case "verified":
       return "verified";
     case "partial":
@@ -106,7 +111,7 @@ export function phaseViewOf(runs: Readonly<Record<string, OvernightRun>>, reques
       const settled = phaseSettled(phase.state, over);
       return {
         title: `Phase ${phase.number} · ${phase.name}`,
-        mark: PHASE_MARKS[phase.state],
+        mark: phaseMark(phase.state, over),
         word: phaseWord(phase.state, over),
         settled,
         startedAtMs: phase.startedAtMs,
@@ -119,7 +124,7 @@ export function phaseViewOf(runs: Readonly<Record<string, OvernightRun>>, reques
       const settled = phaseSettled(planning.state, over);
       return {
         title: "Phase 0 · Write the plan",
-        mark: PHASE_MARKS[planning.state],
+        mark: phaseMark(planning.state, over),
         word: phaseWord(planning.state, over),
         settled,
         startedAtMs: planning.startedAtMs,

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import { phaseViewOf, phaseWord, runPill, splitReport } from "@/app/conversation/phaseView";
+import { phaseMark, phaseViewOf, phaseWord, runPill, splitReport } from "@/app/conversation/phaseView";
 import { formatDuration } from "@/lib/format";
 import type { OvernightRun, Plan, Task } from "@/ipc/generated";
 
@@ -34,6 +34,12 @@ test("a phase the run never reached reads the same on the card as in the report"
   assert.equal(phaseWord("pending", true), "not reached");
   assert.equal(phaseWord("pending", false), "not started");
   assert.equal(run.phases[2]?.state, "pending");
+  // The report's words (crates/core/src/manager/overnight/report.rs `symbol`): no mark before
+  // "not reached", and "◐ unfinished" for a phase the run's end cut off.
+  assert.equal(phaseMark("pending", true), "");
+  assert.equal(`${phaseMark("running", true)} ${phaseWord("running", true)}`, "◐ unfinished");
+  assert.equal(`${phaseMark("checking", true)} ${phaseWord("checking", true)}`, "◐ unfinished");
+  assert.equal(phaseWord("checking", false), "checking");
 });
 
 test("a phase still at work is live and has no outcome yet", () => {
