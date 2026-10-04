@@ -18,6 +18,8 @@ mod report;
 mod wind_down;
 mod workspace;
 
+pub(crate) use workspace::run_owner;
+
 use std::path::{Path, PathBuf};
 
 use super::{SessionManager, blocking};

@@ -14,9 +14,10 @@ use std::path::{Path, PathBuf};
 use brigadier_providers::Artifact;
 use brigadier_sandbox::removal;
 
-use super::disk::{branch_standing, delete_branch_checked, same_path_in};
+use super::disk::{branch_standing, brigadier_branch, delete_branch_checked, same_path_in};
 use super::{SessionManager, blocking};
 use crate::model::{Conversation, ConversationId, Environment, KeptBranch, ProjectId, Setup};
+use crate::overnight::OvernightRun;
 use crate::storage::{
     BranchChoice, ProjectRemoval, RemovalBranch, RemovalConversation, RemovalWorktree,
     RemoveProjectReport,
@@ -187,7 +188,8 @@ impl SessionManager {
             .iter()
             .filter(|c| c.project_id.as_ref() == Some(id))
         {
-            let tasks = self.core.tasks(&conversation.id).await.unwrap_or_default();
+            let board = self.core.board(&conversation.id).await.unwrap_or_default();
+            let tasks = board.sorted_tasks();
             let running = self.conversation_running(&conversation.id).await;
             if running {
                 working.push(conversation.title.clone());
@@ -202,7 +204,7 @@ impl SessionManager {
                     running,
                 });
             }
-            records.extend(branch_records(conversation, &tasks));
+            records.extend(branch_records(conversation, &tasks, board.runs.values()));
             if let Some(Setup::Session {
                 environment:
                     Environment::NewWorktree {
@@ -217,6 +219,7 @@ impl SessionManager {
                 .iter()
                 .map(|kind| format!("{kind}:{}", conversation.id))
                 .collect();
+            mine.extend(board.runs.values().map(super::overnight::run_owner));
             for task in &tasks {
                 mine.insert(format!("task:{}", task.id));
                 if let Some(path) = task.workspace.as_ref().and_then(|w| w.worktree.as_ref()) {
@@ -377,9 +380,13 @@ pub(super) fn settle_branches(
     (kept, failures)
 }
 
-/// The Brigadier branches a conversation created: its session branch and its tasks' branches,
-/// each with the branch its work goes to.
-pub(super) fn branch_records(conversation: &Conversation, tasks: &[Task]) -> Vec<BranchRecord> {
+/// The Brigadier branches a conversation created: its session branch, its tasks' branches and
+/// its overnight runs' branches, each with the branch its work goes to.
+pub(super) fn branch_records<'r>(
+    conversation: &Conversation,
+    tasks: &[Task],
+    runs: impl IntoIterator<Item = &'r OvernightRun>,
+) -> Vec<BranchRecord> {
     let Some(Setup::Session {
         repo, environment, ..
     }) = &conversation.setup
@@ -407,6 +414,10 @@ pub(super) fn branch_records(conversation: &Conversation, tasks: &[Task]) -> Vec
                 workspace.target.as_ref().unwrap_or(session_target),
             ))
         }))
-        .filter(|record| record.name.starts_with("brigadier/"))
+        .chain(runs.into_iter().filter_map(|run| {
+            let workspace = run.workspace.as_ref()?;
+            Some(record(&workspace.branch, &workspace.base))
+        }))
+        .filter(|record| brigadier_branch(&record.name))
         .collect()
 }

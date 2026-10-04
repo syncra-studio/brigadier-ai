@@ -2,6 +2,7 @@
 //! tip. The user's uncommitted files and the session's own worktree stay out of it; workers'
 //! changes land on its branch, and only the user's Merge brings verified work into the base.
 
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use brigadier_git::WorktreeSpec;
@@ -106,6 +107,93 @@ impl SessionManager {
     }
 }
 
+impl SessionManager {
+    /// A closing session lets go of its runs' worktrees (PLAN.md §10.5 keeps them for
+    /// Continue and Merge while the session lives; Continue after a restore makes the worktree
+    /// again from the run branch). Changes in one are kept as a WIP commit on its run branch
+    /// first; one whose changes can't be kept stays, with everything in it. Each worktree goes
+    /// once, for every run segment that shared it, and never while a run still uses it.
+    pub(crate) async fn release_run_worktrees(&self, runs: &[OvernightRun]) {
+        let ledger = self.runtime.ledger();
+        let held = releasable_worktrees(runs, &ledger.owners(), |path| {
+            std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path))
+        });
+        for worktree in held {
+            let (git, path) = (self.git.clone(), PathBuf::from(&worktree.path));
+            let kept = blocking(move || {
+                if path.exists() {
+                    super::super::disk::keep_changes(&git, &path)?;
+                }
+                Ok(())
+            })
+            .await;
+            if let Err(err) = kept {
+                tracing::error!(worktree = %worktree.path, error = %err, "could not keep a run worktree's changes; it stays");
+                continue;
+            }
+            for owner in &worktree.owners {
+                let leftovers = ledger.dispose(owner).await;
+                if !leftovers.is_clean() {
+                    tracing::warn!(
+                        owner,
+                        ?leftovers,
+                        "some leftovers will be retried at the next launch"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A run worktree that may go, and every ledger owner (one per run segment) holding it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct HeldWorktree {
+    pub path: String,
+    pub owners: Vec<String>,
+}
+
+/// The worktrees `runs`' owners hold, one entry per place (`real` resolves a path through
+/// symbolic links), except a worktree a run still active uses or one an owner outside these
+/// runs holds too.
+pub(crate) fn releasable_worktrees(
+    runs: &[OvernightRun],
+    owners: &[(String, Vec<Artifact>, bool)],
+    real: impl Fn(&str) -> PathBuf,
+) -> Vec<HeldWorktree> {
+    let mine: HashSet<String> = runs.iter().map(run_owner).collect();
+    let in_use: HashSet<PathBuf> = runs
+        .iter()
+        .filter(|run| run.state.is_active())
+        .filter_map(|run| run.workspace.as_ref())
+        .map(|workspace| real(&workspace.path))
+        .collect();
+    let mut held: BTreeMap<PathBuf, HeldWorktree> = BTreeMap::new();
+    let mut foreign = HashSet::new();
+    for (owner, artifacts, _) in owners {
+        for artifact in artifacts {
+            let Artifact::Worktree { path, .. } = artifact else {
+                continue;
+            };
+            let place = real(path);
+            if !mine.contains(owner) {
+                foreign.insert(place);
+                continue;
+            }
+            let entry = held.entry(place).or_insert_with(|| HeldWorktree {
+                path: path.clone(),
+                owners: Vec::new(),
+            });
+            if !entry.owners.contains(owner) {
+                entry.owners.push(owner.clone());
+            }
+        }
+    }
+    held.into_iter()
+        .filter(|(place, _)| !in_use.contains(place) && !foreign.contains(place))
+        .map(|(_, worktree)| worktree)
+        .collect()
+}
+
 /// Who owns a run's worktree and evidence in the cleanup ledger.
 pub(crate) fn run_owner(run: &OvernightRun) -> String {
     format!("overnight:{}", run.id)
@@ -168,5 +256,83 @@ impl SessionManager {
             .and_then(|run| run.workspace.as_ref())
             .map(|workspace| workspace.branch.clone())
             .ok_or_else(|| Error::Invalid("the overnight run has no branch yet".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{ConversationId, OvernightRunId};
+    use crate::overnight::OvernightState;
+
+    fn segment(id: &str, state: OvernightState, path: &str) -> OvernightRun {
+        // The night of 2026-10-03 (the app's fixture of it), as a segment of its own.
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../apps/desktop/src/fixtures/boards/overnight-2026-10-03.json"
+        ))
+        .expect("the fixture");
+        let mut run: OvernightRun = serde_json::from_value(
+            fixture["overnight"]
+                .as_object()
+                .and_then(|runs| runs.values().next())
+                .cloned()
+                .expect("the run"),
+        )
+        .expect("a run");
+        run.id = OvernightRunId(id.into());
+        run.conversation_id = ConversationId("c1".into());
+        run.state = state;
+        run.workspace = Some(RunWorkspace {
+            base: "main".into(),
+            base_commit: "abc".into(),
+            branch: "overnight/2026-10-03-faster-runs-1".into(),
+            path: path.into(),
+        });
+        run
+    }
+
+    fn holds(owner: &str, path: &str) -> (String, Vec<Artifact>, bool) {
+        (
+            owner.into(),
+            vec![Artifact::Worktree {
+                repo: "/repo".into(),
+                path: path.into(),
+            }],
+            false,
+        )
+    }
+
+    #[test]
+    fn segments_sharing_a_worktree_release_it_once_and_never_while_one_runs() {
+        // Continue's second segment works in the first one's worktree (once through a link).
+        let runs = [
+            segment("r1", OvernightState::Finished, "/wt/overnight-1"),
+            segment("r2", OvernightState::Finished, "/link/overnight-1"),
+        ];
+        let owners = [
+            holds("overnight:r1", "/wt/overnight-1"),
+            holds("overnight:r2", "/link/overnight-1"),
+            holds("session:c1", "/wt/session-1"),
+        ];
+        let real = |path: &str| PathBuf::from(path.replace("/link/", "/wt/"));
+        assert_eq!(
+            releasable_worktrees(&runs, &owners, real),
+            [HeldWorktree {
+                path: "/wt/overnight-1".into(),
+                owners: vec!["overnight:r1".into(), "overnight:r2".into()],
+            }]
+        );
+        // While the second segment still runs, the shared worktree stays for both.
+        let running = [
+            runs[0].clone(),
+            segment("r2", OvernightState::Running, "/link/overnight-1"),
+        ];
+        assert!(releasable_worktrees(&running, &owners, real).is_empty());
+        // Nor does it go while an owner beyond these runs holds it.
+        let shared = [
+            holds("overnight:r1", "/wt/overnight-1"),
+            holds("task:t9", "/wt/overnight-1"),
+        ];
+        assert!(releasable_worktrees(&runs[..1], &shared, real).is_empty());
     }
 }

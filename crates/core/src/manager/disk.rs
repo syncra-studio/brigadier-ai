@@ -591,6 +591,12 @@ pub(super) fn keep_changes(git: &brigadier_git::Git, path: &Path) -> Result<()> 
     }
 }
 
+/// Whether Brigadier names branches like this: a session's or worker's `brigadier/…`, or an
+/// overnight run's `overnight/…`.
+pub(super) fn brigadier_branch(name: &str) -> bool {
+    name.starts_with("brigadier/") || name.starts_with("overnight/")
+}
+
 /// Deletes a Brigadier branch at the tip it was listed with, if it is still Brigadier's to
 /// delete: its name, its tip, not checked out, and still merged if it was listed as merged.
 pub(super) fn delete_branch_checked(
@@ -599,7 +605,7 @@ pub(super) fn delete_branch_checked(
     branch: &KeptBranch,
     merged: bool,
 ) -> Result<()> {
-    if !branch.name.starts_with("brigadier/") {
+    if !brigadier_branch(&branch.name) {
         return Err(Error::Invalid(format!(
             "{} is not one of Brigadier's branches",
             branch.name
@@ -638,7 +644,7 @@ pub(super) fn branch_standing(
     recorded: Option<&str>,
     leaving: &[PathBuf],
 ) -> Option<crate::storage::RemovalBranch> {
-    if !name.starts_with("brigadier/") {
+    if !brigadier_branch(name) {
         return None;
     }
     let tip = repo.branch_tip(name).ok()??;

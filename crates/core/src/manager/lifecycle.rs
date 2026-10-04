@@ -370,6 +370,7 @@ impl SessionManager {
         let runs = self.fence_runs(&id).await;
         self.wind_down(&conversation).await;
         self.close_runs(runs, true).await;
+        self.release_conversation_runs(&id).await;
         self.core.set_lifecycle(id, Lifecycle::Archived).await
     }
 
@@ -558,6 +559,7 @@ impl SessionManager {
         let runs = self.fence_runs(&id).await;
         self.wind_down(&conversation).await;
         self.close_runs(runs, false).await;
+        let runs = self.release_conversation_runs(&id).await;
         let tasks = self.core.tasks(&id).await.unwrap_or_default();
         if delete_branches
             && let Some(Setup::Session {
@@ -572,6 +574,14 @@ impl SessionManager {
                 && branch.starts_with("brigadier/")
             {
                 branches.push(branch.clone());
+            }
+            // Its runs' branches, once their worktrees are gone (one per run; Continue keeps it).
+            for run in &runs {
+                if let Some(workspace) = &run.workspace
+                    && !branches.contains(&workspace.branch)
+                {
+                    branches.push(workspace.branch.clone());
+                }
             }
             let (git, repo) = (self.git.clone(), PathBuf::from(repo));
             blocking(move || {
@@ -591,6 +601,7 @@ impl SessionManager {
             self.record_left_branches(super::project_removal::branch_records(
                 &conversation,
                 &tasks,
+                &runs,
             ))
             .await;
         }
@@ -618,6 +629,20 @@ impl SessionManager {
 }
 
 impl SessionManager {
+    /// A closing conversation's run worktrees go (see [`Self::release_run_worktrees`]). Its
+    /// runs, as they stand now.
+    async fn release_conversation_runs(
+        &self,
+        id: &ConversationId,
+    ) -> Vec<crate::overnight::OvernightRun> {
+        let runs: Vec<_> = match self.core.board(id).await {
+            Ok(board) => board.runs.values().cloned().collect(),
+            Err(_) => return Vec::new(),
+        };
+        self.release_run_worktrees(&runs).await;
+        runs
+    }
+
     /// The routing store lets go of a deleted conversation: its turns and its tasks' outcomes.
     async fn forget_routing(&self, id: &ConversationId, tasks: &[Task]) {
         let Some(store) = self.runtime.routing_store().cloned() else {

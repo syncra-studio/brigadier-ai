@@ -86,7 +86,7 @@ function DeleteForm({
                 {
                   value: "keep",
                   label: "Keep unmerged branches",
-                  hint: "The session branch and kept task branches stay in the repository.",
+                  hint: "Its session, task and overnight run branches stay in the repository.",
                 },
                 {
                   value: "delete",
