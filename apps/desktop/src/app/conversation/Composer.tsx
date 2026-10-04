@@ -292,36 +292,41 @@ function FullAccessNotice({ conversation }: { conversation: Conversation }) {
     <section
       aria-label="Full access is on"
       data-slot="full-access-notice"
-      className="animate-rail-open bg-rail border-foreground/10 rounded-surface mb-2 flex items-center gap-3 border px-4 py-3 text-sm motion-reduce:animate-none"
+      className="@container/notice animate-rail-open bg-rail border-foreground/10 rounded-surface mb-2 border px-4 py-3 text-sm motion-reduce:animate-none"
     >
-      <ShieldExclamation className="size-icon-md shrink-0" />
-      <div className="min-w-0 flex-1">
-        <p className="font-medium">Full access is on</p>
-        <p className="text-muted-foreground">
-          Brigadier’s workers can edit any file and run commands with internet access without
-          your approval. This increases the risk of data loss, exposed information, and
-          unexpected changes.{" "}
-          <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={openPermissionsHelp}>
-            Learn more
-          </button>{" "}
-          about elevated risks.
-        </p>
-      </div>
-      <div className="border-foreground/10 flex shrink-0 items-center gap-1 self-stretch border-s ps-3">
-        <Button
-          size="xs"
-          className="rounded-capsule"
-          onClick={() =>
-            void setSetting("showFullAccessNotice", false).catch(
-              (error: unknown) => console.error("couldn't save the setting", error),
-            )
-          }
-        >
-          Don’t show again
-        </Button>
-        <TooltipIconButton tooltip="Close" side="bottom" className="rounded-capsule" onClick={close}>
-          <X />
-        </TooltipIconButton>
+      {/* Narrow, the buttons go under the text, so the text keeps the width to read. */}
+      <div className="flex flex-col gap-2 @lg/notice:flex-row @lg/notice:items-center @lg/notice:gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <ShieldExclamation className="size-icon-md shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">Full access is on</p>
+            <p className="text-muted-foreground">
+              Brigadier’s workers can edit any file and run commands with internet access without
+              your approval. This increases the risk of data loss, exposed information, and
+              unexpected changes.{" "}
+              <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={openPermissionsHelp}>
+                Learn more
+              </button>{" "}
+              about elevated risks.
+            </p>
+          </div>
+        </div>
+        <div className="border-foreground/10 flex shrink-0 items-center justify-end gap-1 @lg/notice:self-stretch @lg/notice:border-s @lg/notice:ps-3">
+          <Button
+            size="xs"
+            className="rounded-capsule"
+            onClick={() =>
+              void setSetting("showFullAccessNotice", false).catch(
+                (error: unknown) => console.error("couldn't save the setting", error),
+              )
+            }
+          >
+            Don’t show again
+          </Button>
+          <TooltipIconButton tooltip="Close" side="bottom" className="rounded-capsule" onClick={close}>
+            <X />
+          </TooltipIconButton>
+        </div>
       </div>
     </section>
   );
