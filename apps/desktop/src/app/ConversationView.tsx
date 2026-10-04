@@ -285,6 +285,7 @@ function useItems(
             position: steer.position,
             text: steer.text,
             atMs: steer.message.createdAtMs,
+            attachments: steer.message.attachments,
           })),
           state: block.state,
           startedAtMs: block.startedAtMs,

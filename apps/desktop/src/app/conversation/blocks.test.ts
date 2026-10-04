@@ -40,7 +40,11 @@ function blockOf(key: string): Block {
 function sequence(block: Block) {
   return blockSequence({
     ...block,
-    steers: block.steers.map((steer) => ({ ...steer, atMs: steer.message.createdAtMs })),
+    steers: block.steers.map((steer) => ({
+      ...steer,
+      atMs: steer.message.createdAtMs,
+      attachments: steer.message.attachments,
+    })),
   });
 }
 

@@ -18,6 +18,7 @@ import { type FC, lazy, Suspense, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { ForkMenu } from "@/app/conversation/ForkMenu";
+import { InlineImageText } from "@/app/conversation/InlineImage";
 import { MentionText } from "@/app/conversation/Mentions";
 import { OrchestratorSteps, STEP_ROW } from "@/app/conversation/OrchestratorSteps";
 import {
@@ -51,7 +52,7 @@ import { RateItem, RateMenu } from "@/components/assistant-ui/rate-menu";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";
-import type { ModelChoice } from "@/ipc/generated";
+import type { AttachmentRef, ModelChoice } from "@/ipc/generated";
 import { formatDuration, formatSentAt } from "@/lib/format";
 import { modelName, sameModel, useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
@@ -72,7 +73,7 @@ export type BlockMeta = {
   /** The orchestrator's steps, in order. */
   orchestratorSteps: BlockOrchestratorStep[];
   /** Messages the user steered into the turn, shown as bubbles in the work. */
-  steers: { position: number; text: string; atMs: number }[];
+  steers: { position: number; text: string; atMs: number; attachments: AttachmentRef[] }[];
   /** Compactions of a Chat's context in the turn, or after it. */
   compactions: BlockCompaction[];
   state: BlockState;
@@ -261,7 +262,7 @@ const SequenceEntry: FC<{ entry: Entry; streaming: boolean }> = ({ entry, stream
     case "card":
       return <CardEntry card={entry.card} />;
     case "steer":
-      return <SteerBubble text={entry.text} atMs={entry.atMs} />;
+      return <SteerBubble text={entry.text} atMs={entry.atMs} attachments={entry.attachments} />;
     case "orchestrator":
       return <OrchestratorSteps steps={entry.steps} />;
     case "compaction":
@@ -318,7 +319,11 @@ const CompactionBlock: FC<{ compaction: BlockCompaction }> = ({ compaction }) =>
 };
 
 /** A follow-up the user sent while the block worked: their bubble, inside the block. */
-const SteerBubble: FC<{ text: string; atMs: number }> = ({ text, atMs }) => {
+const SteerBubble: FC<{ text: string; atMs: number; attachments: readonly AttachmentRef[] }> = ({
+  text,
+  atMs,
+  attachments,
+}) => {
   const { isCopied, copyToClipboard } = useCopyToClipboard();
   const now = useNow(60_000);
   return (
@@ -327,7 +332,7 @@ const SteerBubble: FC<{ text: string; atMs: number }> = ({ text, atMs }) => {
       className="group/steer flex max-w-7/10 min-w-0 flex-col items-end gap-y-1 self-end"
     >
       <div className="bg-muted text-foreground rounded-thread max-w-full min-w-0 px-4 py-2 whitespace-pre-wrap wrap-anywhere">
-        <MentionText text={text} />
+        <InlineImageText text={text} attachments={attachments} Text={MentionText} />
       </div>
       <div className="text-muted-foreground flex items-center gap-1 opacity-0 transition-opacity group-hover/steer:opacity-100 group-focus-within/steer:opacity-100">
         <span className="pe-1 text-xs tabular-nums">{formatSentAt(atMs, now)}</span>
@@ -507,7 +512,12 @@ export const RequestBlock: FC = () => {
           {/* The user's own follow-ups stay in view when the work folds. */}
           {!shown &&
             meta.steers.map((steer) => (
-              <SteerBubble key={`steer:${steer.position}`} text={steer.text} atMs={steer.atMs} />
+              <SteerBubble
+                key={`steer:${steer.position}`}
+                text={steer.text}
+                atMs={steer.atMs}
+                attachments={steer.attachments}
+              />
             ))}
           {kept.map((card) => (
             <CardEntry key={`${card.type}:${card.id}`} card={card} />

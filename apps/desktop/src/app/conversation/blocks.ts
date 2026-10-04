@@ -2,6 +2,7 @@ import type { CardType } from "@/app/conversation/cards/CardBody";
 import { decisionWords } from "@/app/conversation/rowWords";
 import type {
   Approval,
+  AttachmentRef,
   Compaction,
   CompactionState,
   Decision,
@@ -553,7 +554,7 @@ function joinSteered(blocks: Block[], requests: BoardDigest["requests"]): Block[
 export type SequenceSource = {
   texts: readonly { position: number }[];
   cards: readonly BlockCard[];
-  steers: readonly { position: number; text: string; atMs: number }[];
+  steers: readonly { position: number; text: string; atMs: number; attachments: readonly AttachmentRef[] }[];
   compactions: readonly BlockCompaction[];
   orchestratorSteps: readonly BlockOrchestratorStep[];
   rows: readonly BlockRow[];
@@ -563,7 +564,7 @@ export type SequenceSource = {
 export type SequenceEntry =
   | { kind: "text"; index: number; position: number }
   | { kind: "card"; card: BlockCard; position: number }
-  | { kind: "steer"; text: string; atMs: number; position: number }
+  | { kind: "steer"; text: string; atMs: number; attachments: readonly AttachmentRef[]; position: number }
   | { kind: "orchestrator"; steps: BlockOrchestratorStep[]; position: number }
   | { kind: "compaction"; compaction: BlockCompaction; position: number }
   | { kind: "row"; row: BlockRow; position: number };
