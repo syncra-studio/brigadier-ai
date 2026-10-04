@@ -8,6 +8,10 @@
 //! tasks, the orchestrator and a worker's own sub-agents hold none. Sessions without a run
 //! are never capped.
 //!
+//! Waiting tasks are admitted checks first: while a run's verifier waits for a slot, no
+//! other task of that run takes one, and while a reviewer waits, no worker does. A change's
+//! checks so never wait behind new work, and the verifier, which proves it, goes first.
+//!
 //! Checks build and test: a run's verifier also takes the daemon-wide build lease, so one
 //! such check builds at a time, and every run worker runs at low OS priority (the spawn's
 //! `low_priority`), so its builds yield to the user's own work.
@@ -30,6 +34,8 @@ const RECHECK: Duration = Duration::from_secs(20);
 pub(crate) struct Admission {
     /// The tasks of each run executing now.
     held: std::sync::Mutex<HashMap<OvernightRunId, HashSet<TaskId>>>,
+    /// The tasks of each run waiting for a slot, with their [`rank`].
+    waiting: std::sync::Mutex<HashMap<OvernightRunId, HashMap<TaskId, u8>>>,
     /// Signalled whenever a slot or the build lease is given back.
     freed: Notify,
     build: Arc<Semaphore>,
@@ -41,6 +47,7 @@ impl Default for Admission {
     fn default() -> Self {
         Self {
             held: Default::default(),
+            waiting: Default::default(),
             freed: Notify::new(),
             build: Arc::new(Semaphore::new(1)),
             building: Default::default(),
@@ -60,6 +67,51 @@ pub(crate) enum Slot {
 impl Admission {
     fn held(&self) -> std::sync::MutexGuard<'_, HashMap<OvernightRunId, HashSet<TaskId>>> {
         self.held.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn waiting(&self) -> std::sync::MutexGuard<'_, HashMap<OvernightRunId, HashMap<TaskId, u8>>> {
+        self.waiting.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
+/// Which waiting task of a run takes a freed slot first: a verifier (0), then a reviewer (1),
+/// then any other work (2).
+fn rank(task: &Task) -> u8 {
+    match task.kind {
+        TaskKind::Verify => 0,
+        TaskKind::Review => 1,
+        _ => 2,
+    }
+}
+
+/// Whether a task of `rank` gives way to another task waiting for a slot of its run.
+fn outranked(waiting: Option<&HashMap<TaskId, u8>>, task_id: &TaskId, rank: u8) -> bool {
+    waiting.is_some_and(|waiting| {
+        waiting
+            .iter()
+            .any(|(other, other_rank)| other != task_id && *other_rank < rank)
+    })
+}
+
+/// A task's place among its run's waiting tasks, given up when its wait ends however it ends.
+struct Queued<'a> {
+    admission: &'a Admission,
+    run: OvernightRunId,
+    task: TaskId,
+}
+
+impl Drop for Queued<'_> {
+    fn drop(&mut self) {
+        let mut waiting = self.admission.waiting();
+        if let Some(tasks) = waiting.get_mut(&self.run) {
+            tasks.remove(&self.task);
+            if tasks.is_empty() {
+                waiting.remove(&self.run);
+            }
+        }
+        drop(waiting);
+        // A task that gave way to this one may take the slot now.
+        self.admission.freed.notify_waiters();
     }
 }
 
@@ -86,8 +138,15 @@ impl SessionManager {
         if tasks.contains(&task.id) {
             return Ok(Slot::Admitted);
         }
+        let gives_way = || {
+            outranked(
+                self.overnight.admission.waiting().get(&context.run_id),
+                &task.id,
+                rank(task),
+            )
+        };
         match active.max_workers {
-            Some(cap) if tasks.len() >= cap as usize => Ok(Slot::Full { cap }),
+            Some(cap) if tasks.len() >= cap as usize || gives_way() => Ok(Slot::Full { cap }),
             _ => {
                 tasks.insert(task.id.clone());
                 Ok(Slot::Admitted)
@@ -115,6 +174,7 @@ impl SessionManager {
             return Ok(());
         }
         let mut waited = false;
+        let mut queued = None;
         loop {
             if fresh && self.run_winding_down(task) {
                 if waited {
@@ -129,6 +189,21 @@ impl SessionManager {
             match self.try_admit_run_task(task)? {
                 Slot::Admitted => break,
                 Slot::Full { cap } => {
+                    if queued.is_none()
+                        && let Some(context) = &task.run
+                    {
+                        self.overnight
+                            .admission
+                            .waiting()
+                            .entry(context.run_id.clone())
+                            .or_default()
+                            .insert(task.id.clone(), rank(task));
+                        queued = Some(Queued {
+                            admission: &self.overnight.admission,
+                            run: context.run_id.clone(),
+                            task: task.id.clone(),
+                        });
+                    }
                     if !waited {
                         waited = true;
                         self.set_task_blocked(
@@ -144,6 +219,7 @@ impl SessionManager {
                 }
             }
         }
+        drop(queued);
         if task.kind == TaskKind::Verify && !self.holds_build_lease(&task.id) {
             let lease = self.overnight.admission.build.clone();
             let permit = match lease.clone().try_acquire_owned() {
@@ -253,5 +329,28 @@ impl SessionManager {
             )));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_waiting_check_goes_before_new_work_and_the_verifier_first() {
+        let (verifier, reviewer, worker) =
+            (TaskId::generate(), TaskId::generate(), TaskId::generate());
+        let mut waiting = HashMap::new();
+        assert!(!outranked(None, &worker, 2));
+        waiting.insert(reviewer.clone(), 1);
+        assert!(outranked(Some(&waiting), &worker, 2));
+        assert!(!outranked(Some(&waiting), &reviewer, 1));
+        waiting.insert(verifier.clone(), 0);
+        assert!(outranked(Some(&waiting), &reviewer, 1));
+        assert!(!outranked(Some(&waiting), &verifier, 0));
+        // Two of a rank never block each other.
+        let other = TaskId::generate();
+        waiting.insert(other.clone(), 0);
+        assert!(!outranked(Some(&waiting), &verifier, 0));
     }
 }

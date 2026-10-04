@@ -38,9 +38,6 @@ pub(crate) const FIX_ROUNDS: u32 = 2;
 pub(super) const SEND_BACK: &str = "Independent checks of your change found problems, so nothing landed. Fix each one in this worktree, verify the fix for real, then call submit_report again with a complete report (all fields, as before).";
 /// Gate rounds one task may go through (fixes, retries, replays) before Brigadier gives up.
 const MAX_ROUNDS: u32 = 8;
-/// A change this big (lines added and removed, or files) gets two reviewers.
-const RISKY_LINES: u32 = 400;
-const RISKY_FILES: usize = 15;
 
 /// What a new gate round checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,29 +63,34 @@ impl From<Error> for NotOpened {
 }
 
 impl SessionManager {
-    /// How many reviewers check a change: two for risky work (a step of a risky plan, a task
-    /// asked to run at the highest quality, or a big change), one otherwise. The Phase 6
-    /// fusion panel (more reviewers and an analyst) is decided here too.
-    async fn panel_size(&self, task: &Task) -> usize {
-        let big = task.candidate.as_ref().is_some_and(|candidate| {
-            candidate.diff_stat.insertions + candidate.diff_stat.deletions > RISKY_LINES
-                || candidate.diff_stat.files.len() > RISKY_FILES
-        });
-        let highest = task.floor >= brigadier_router::QualityTier::Frontier;
-        let risky_plan = self
-            .core
-            .board(&task.conversation_id)
-            .await
-            .is_ok_and(|board| {
-                board.plans.values().any(|plan| {
-                    plan.risky
-                        && plan
-                            .steps
-                            .iter()
-                            .any(|step| step.task_id.as_ref() == Some(&task.id))
-                })
-            });
-        if big || highest || risky_plan { 2 } else { 1 }
+    /// How many reviewers check a change (user decision, 2026-10-04): none for a change to
+    /// documentation only, which its verifier checks against the code; two for a change to a
+    /// risky area (landing, policy, the sandbox, git); one otherwise. A fix round asks again
+    /// only the reviewers that asked for changes: the others' approvals are kept, and its
+    /// verifier checks the fix against them ([`kept_approvals`]).
+    fn panel_size(task: &Task) -> usize {
+        let Some(candidate) = &task.candidate else {
+            return 1;
+        };
+        let files = &candidate.diff_stat.files;
+        if docs_only(files) {
+            return 0;
+        }
+        if let Some(previous) = &task.gate
+            && previous.outcome == Some(GateOutcome::Failed)
+        {
+            return previous
+                .members
+                .iter()
+                .filter(|m| m.role == GateRole::Review)
+                .filter(|m| matches!(m.result, Some(GateResult::Failed { .. })))
+                .count();
+        }
+        if files.iter().any(|file| risky_path(&file.path)) {
+            2
+        } else {
+            1
+        }
     }
 
     /// Opens a new gate round on the task's candidate. `unreported` lists tracked changes the
@@ -134,8 +136,16 @@ impl SessionManager {
         let sandboxed =
             self.permission(&task.conversation_id) != crate::model::PermissionLevel::FullAccess;
         let reviewers = match recheck {
-            Recheck::Full => self.panel_size(&task).await,
+            Recheck::Full => Self::panel_size(&task),
             Recheck::Verify => 0,
+        };
+        let docs = task
+            .candidate
+            .as_ref()
+            .is_some_and(|candidate| docs_only(&candidate.diff_stat.files));
+        let kept = match recheck {
+            Recheck::Full => kept_approvals(&task),
+            Recheck::Verify => None,
         };
         // A big change without a plan is noted once, on its first round: a fix the checks
         // asked for may make it bigger, and the plan can't be added to the change anyway.
@@ -145,6 +155,60 @@ impl SessionManager {
         let mut checking: Vec<Author> = Vec::new();
         let opened: Result<Option<ReviewRecord>> = async {
             let mut first = None;
+            // The verifier first: it is admitted first, so checks of one change never wait on
+            // each other's slots (PLAN.md §10.7).
+            let verify = self
+                .create_task(
+                    &task.conversation_id,
+                    format!("Verify task-{}", task.number),
+                    TaskKind::Verify,
+                    if docs {
+                        verify_docs_spec(&task, &candidate.commit, kept.as_deref())
+                    } else {
+                        let mut spec = verify_spec(
+                            &task,
+                            &candidate.commit,
+                            retry.as_ref().map(|(why, _)| why),
+                            plan.as_deref(),
+                            sandboxed,
+                        );
+                        if let Some(kept) = &kept {
+                            spec.push_str(&format!("\n{kept}"));
+                        }
+                        spec
+                    },
+                    None,
+                    Some(author.clone()),
+                    retry.iter().map(|(_, before)| before.clone()).collect(),
+                    Some(GateLink {
+                        owner: owner.clone(),
+                        round,
+                        role: GateRole::Verify,
+                    }),
+                    Some(task.clone()),
+                    Vec::new(),
+                    Some(task.areas.clone()),
+                    // Proving a change takes a capable model, not a light one.
+                    Some(brigadier_router::QualityTier::Strong),
+                    Vec::new(),
+                )
+                .await?;
+            members.push(GateMember {
+                task_id: verify.id.clone(),
+                role: GateRole::Verify,
+                result: None,
+                // A hand-off of the second verifier avoids the first one too.
+                avoid: retry
+                    .iter()
+                    .map(|(_, before)| ModelChoice {
+                        provider: before.provider,
+                        model: before.model.clone(),
+                        effort: None,
+                        fast: None,
+                    })
+                    .collect(),
+            });
+            started.push(verify);
             for index in 0..reviewers {
                 let review = self
                     .create_task(
@@ -192,50 +256,6 @@ impl SessionManager {
                 });
                 started.push(review);
             }
-            let verify = self
-                .create_task(
-                    &task.conversation_id,
-                    format!("Verify task-{}", task.number),
-                    TaskKind::Verify,
-                    verify_spec(
-                        &task,
-                        &candidate.commit,
-                        retry.as_ref().map(|(why, _)| why),
-                        plan.as_deref(),
-                        sandboxed,
-                    ),
-                    None,
-                    Some(author.clone()),
-                    retry.iter().map(|(_, before)| before.clone()).collect(),
-                    Some(GateLink {
-                        owner: owner.clone(),
-                        round,
-                        role: GateRole::Verify,
-                    }),
-                    Some(task.clone()),
-                    Vec::new(),
-                    Some(task.areas.clone()),
-                    // Proving a change takes a capable model, not a light one.
-                    Some(brigadier_router::QualityTier::Strong),
-                    Vec::new(),
-                )
-                .await?;
-            members.push(GateMember {
-                task_id: verify.id.clone(),
-                role: GateRole::Verify,
-                result: None,
-                // A hand-off of the second verifier avoids the first one too.
-                avoid: retry
-                    .iter()
-                    .map(|(_, before)| ModelChoice {
-                        provider: before.provider,
-                        model: before.model.clone(),
-                        effort: None,
-                        fast: None,
-                    })
-                    .collect(),
-            });
-            started.push(verify);
             Ok(first)
         }
         .await;
@@ -542,37 +562,8 @@ impl SessionManager {
             }
             Some(GateOutcome::Unverified) => {
                 let reasons = unverified_reasons(&gate);
-                // A verifier that gave up gets a second opinion from another model, once.
-                let verifier = gate
-                    .members
-                    .iter()
-                    .find(|m| m.role == GateRole::Verify)
-                    .and_then(|m| members.iter().find(|t| t.id == m.task_id));
-                if !gate.retry
-                    && let Some(verifier) = verifier
-                {
-                    let before = Author {
-                        provider: verifier.route.choice.provider,
-                        model: verifier.route.choice.model.clone(),
-                    };
-                    match self
-                        .open_gate(
-                            &task,
-                            Vec::new(),
-                            Recheck::Verify,
-                            Some((reasons.clone(), before)),
-                        )
-                        .await
-                    {
-                        Ok(()) => return,
-                        Err(NotOpened::Error(err)) => {
-                            self.landing_problem(&task, &err.to_string(), TaskState::Reported)
-                                .await;
-                            return;
-                        }
-                        Err(NotOpened::Unchanged) => {}
-                    }
-                }
+                // No second verifier (user decision, 2026-10-04): a change that couldn't be
+                // verified is held, and accepting it again verifies it once more.
                 let (user_only, listed) = self.landing_waits(&task, &gate, &members).await;
                 let next = if listed > 0 {
                     format!(
@@ -1157,6 +1148,81 @@ fn verify_spec(
     } else {
         " If a check that is not a [pre-existing] gap can't run until the user does something only they can (a key, a sign-in, a paid account), say exactly what under needs_user. A [pre-existing] gap or an [excluded] check goes under risks only, never under needs_user: needs_user is for what holds this change."
     });
+    spec
+}
+
+/// A change to documentation only: Markdown and other text files, or anything under `docs/`.
+pub(crate) fn docs_only(files: &[crate::work::FileStat]) -> bool {
+    const TEXT: &[&str] = &["md", "mdx", "markdown", "txt", "rst", "adoc"];
+    !files.is_empty()
+        && files.iter().all(|file| {
+            let path = file.path.trim_start_matches("./");
+            path.starts_with("docs/")
+                || path.contains("/docs/")
+                || std::path::Path::new(path)
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| TEXT.contains(&ext.to_ascii_lowercase().as_str()))
+        })
+}
+
+/// A path in an area where a mistake costs the most (user decision, 2026-10-04): landing,
+/// policy, the sandbox, git. Matched by whole words of the path (`git_actions.rs`,
+/// `crates/git/`), so `.github/` or `digit.rs` don't count.
+fn risky_path(path: &str) -> bool {
+    path.to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|word| matches!(word, "landing" | "policy" | "sandbox" | "git"))
+}
+
+/// What a fix round's verifier checks for the reviewers whose approvals are kept: that the fix
+/// keeps what they approved. `None` when no approval is kept (a first round, or every reviewer
+/// asked for changes).
+fn kept_approvals(task: &Task) -> Option<String> {
+    let previous = task.gate.as_ref()?;
+    if previous.outcome != Some(GateOutcome::Failed) {
+        return None;
+    }
+    let approved = previous
+        .members
+        .iter()
+        .filter(|m| m.role == GateRole::Review && m.result == Some(GateResult::Passed))
+        .count();
+    let before = previous.commit.as_deref()?;
+    (approved > 0).then(|| {
+        format!(
+            "{} of the change at {} approved it and {} not asked again: read the fix (`git diff {} HEAD`) and check that it keeps what was approved. Anything it breaks goes in open_questions.",
+            if approved == 1 { "A reviewer" } else { "Its reviewers" },
+            short(before),
+            if approved == 1 { "is" } else { "are" },
+            short(before),
+        )
+    })
+}
+
+/// What the verifier of a change to documentation only reads: the criteria and the docs
+/// against the code, without builds, tests or smoke runs.
+fn verify_docs_spec(task: &Task, commit: &str, kept: Option<&str>) -> String {
+    let mut spec = format!(
+        "Verify the candidate commit {} of task-{} (\"{}\") independently, before it may land. Your checkout is at that commit. The change touches documentation only.
+1. Find every \"done when\" criterion: the task's below and each one the worker listed in its report. For each one, produce your own evidence: quote the document and say where, or run the command that shows it. The worker's claims are not evidence.
+2. Check the documents against the code: every path, command, name, number and claim they state must be true of this checkout; links and file references must resolve. Don't run builds, tests or smoke checks for it.
+3. Check hygiene: files the commit should not hold (logs, scratch notes, secrets) and changes the task didn't ask for.
+4. Change no tracked file. Brigadier compares your checkout with the commit after your report and discards a verification that changed it.
+{JUDGE_THE_CHANGE}",
+        short(commit),
+        task.number,
+        task.title
+    );
+    if let Some(fixes) = fixes_note(task) {
+        spec.push_str(&format!("\n{fixes}"));
+    }
+    if let Some(kept) = kept {
+        spec.push_str(&format!("\n{kept}"));
+    }
+    spec.push_str(
+        "\nEnd with submit_report. done_when: one line per criterion, for every criterion: \"[met] criterion: your evidence\", \"[not met] criterion: what is wrong\", or \"[not checked] criterion: why you couldn't\". checks: noChecks (documentation has no build or tests to run), or failed when a document states something the code contradicts. Put each problem the worker must fix in open_questions, and nothing else.",
+    );
     spec
 }
 
@@ -2335,5 +2401,112 @@ mod tests {
             text.contains("Fix 2:\nFrom the verification (task-5)"),
             "{text}"
         );
+    }
+
+    fn touching(task: &mut Task, paths: &[&str]) {
+        task.candidate
+            .as_mut()
+            .expect("a candidate")
+            .diff_stat
+            .files = paths
+            .iter()
+            .map(|path| crate::work::FileStat {
+                path: (*path).into(),
+                insertions: 1,
+                deletions: 0,
+                binary: false,
+            })
+            .collect();
+    }
+
+    fn checked(id: &str, role: GateRole, result: GateResult) -> GateMember {
+        GateMember {
+            task_id: TaskId(id.into()),
+            role,
+            result: Some(result),
+            avoid: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_change_gets_one_reviewer_none_for_docs_and_two_where_mistakes_cost_most() {
+        let mut task = gated(TaskState::Reviewing, 1, "c1", None, "c1");
+        task.gate = None;
+        touching(
+            &mut task,
+            &["src/app.ts", "src/digit.rs", ".github/workflows/ci.yml"],
+        );
+        assert_eq!(SessionManager::panel_size(&task), 1);
+        touching(&mut task, &["README.md", "docs/PLAN.md", "docs/shot.png"]);
+        assert_eq!(SessionManager::panel_size(&task), 0);
+        touching(&mut task, &["README.md", "src/app.ts"]);
+        assert_eq!(SessionManager::panel_size(&task), 1);
+        for risky in [
+            "crates/core/src/manager/landing.rs",
+            "crates/providers/src/policy.rs",
+            "crates/sandbox/src/lib.rs",
+            "crates/git/src/lib.rs",
+            "src/git_actions.rs",
+        ] {
+            touching(&mut task, &["src/app.ts", risky]);
+            assert_eq!(SessionManager::panel_size(&task), 2, "{risky}");
+        }
+        assert!(!risky_path("src/digit.rs") && !risky_path(".github/x.yml"));
+        assert!(!docs_only(&[]));
+    }
+
+    #[test]
+    fn a_fix_round_asks_again_only_the_reviewers_that_asked_for_changes() {
+        let mut task = gated(
+            TaskState::Reviewing,
+            1,
+            "c1",
+            Some(GateOutcome::Failed),
+            "c2",
+        );
+        touching(&mut task, &["crates/git/src/lib.rs"]);
+        let gate = task.gate.as_mut().expect("a gate");
+        gate.members = vec![
+            checked("v", GateRole::Verify, GateResult::Passed),
+            checked("r1", GateRole::Review, GateResult::Passed),
+            checked(
+                "r2",
+                GateRole::Review,
+                GateResult::Failed {
+                    findings: vec!["x".into()],
+                },
+            ),
+        ];
+        assert_eq!(SessionManager::panel_size(&task), 1);
+        let kept = kept_approvals(&task).expect("an approval kept");
+        assert!(
+            kept.contains("A reviewer of the change at c1 approved it"),
+            "{kept}"
+        );
+        assert!(kept.contains("git diff c1 HEAD"), "{kept}");
+        // Only the verifier asked for changes: no reviewer runs again, its fresh verifier
+        // checks the fix against both kept approvals.
+        let gate = task.gate.as_mut().expect("a gate");
+        gate.members[2].result = Some(GateResult::Passed);
+        gate.members[0].result = Some(GateResult::Failed {
+            findings: vec!["x".into()],
+        });
+        assert_eq!(SessionManager::panel_size(&task), 0);
+        assert!(kept_approvals(&task).is_some_and(|k| k.starts_with("Its reviewers")));
+        // A round that passed or couldn't verify keeps nothing; a first round has nothing.
+        task.gate.as_mut().expect("a gate").outcome = Some(GateOutcome::Unverified);
+        assert_eq!(kept_approvals(&task), None);
+        assert_eq!(SessionManager::panel_size(&task), 2);
+    }
+
+    #[test]
+    fn a_docs_only_verifier_runs_no_build_or_tests() {
+        let task = gated(TaskState::Reviewing, 1, "c1", None, "c1");
+        let spec = verify_docs_spec(&task, "c1", None);
+        assert!(
+            spec.contains("Don't run builds, tests or smoke checks"),
+            "{spec}"
+        );
+        assert!(!spec.contains("install"), "{spec}");
     }
 }
