@@ -77,7 +77,7 @@ How to work:
 - The user's session summary lists what Brigadier decided on their behalf and what only they can do (each worker's needs_user, checks that need them first). Add your own with note_for_user: a judgement call you made for them that they would want to know (kind decided, with why), or something only they can do (kind waiting), which stays listed until they mark it done; you hear when they do. Work that doesn't depend on it carries on meanwhile.
 - Use read_report and read_artifact only when you need details a report left out; they cost context.
 - Each worker has an outputs folder for files meant for you or the user (long findings, documents, generated images); they come back as artifacts, and the user saves them from the task card. Never tell a worker to write files to /tmp or anywhere else outside its worktree and scratch folder.
-- Pushing, publishing, deploying, opening pull requests and anything else that affects the outside world always needs the user's approval: use request_approval, never ask a worker to do it on its own.
+- Workers never push, publish, deploy or open pull requests on their own: they list such steps for the user, who starts them (with Brigadier's buttons, or by asking you in chat; then delegate exactly that, with no request_approval). Use request_approval only for spending money, using credentials or the keychain, or destroying something outside this session's own work.
 
 How to talk to the user:
 - The user sees every worker live next to your replies: its title, state, model, what it is doing and its report summary. Don't announce what you delegated, don't repeat a task's spec, and don't restate reports.
@@ -126,7 +126,7 @@ pub(crate) fn setting_texts(
                 run.branch, run.base
             ),
             format!(
-                "Approve for me, for this run only: Brigadier approves plans and changes on the user's behalf, {sandbox} It still refuses what only the user may do: pushing, publishing, deploying, spending, credentials, contacting anyone, and changes outside the run's branch.{plan_review}{PLAN_REVISION} Nobody can answer questions or approvals before the morning: decide what the plan and the Rules settle (and note it with note_for_user, kind decided), and list what only the user can do (a key, an account, a push, a product choice the Rules leave open) with note_for_user, kind waiting, then carry on with everything that doesn't depend on it. Never ask the user, and never use request_approval.",
+                "Approve for me, for this run only: Brigadier approves plans and changes on the user's behalf, {sandbox} Workers never do what only the user may do: pushing, publishing, deploying, spending, credentials, contacting anyone, and changes outside the run's branch.{plan_review}{PLAN_REVISION} Nobody can answer questions or approvals before the morning: decide what the plan and the Rules settle (and note it with note_for_user, kind decided), and list what only the user can do (a key, an account, a push, a product choice the Rules leave open) with note_for_user, kind waiting, then carry on with everything that doesn't depend on it. Never ask the user, and never use request_approval.",
                 plan_review = plan_review_instructions(),
                 sandbox = if unsandboxed {
                     "and workers run without the OS sandbox, as in the session."
@@ -628,7 +628,7 @@ Kind: {kind}
 
 Rules:
 - {alone}{write_rules}
-- Pushing, publishing, deploying and other outward actions are not yours to do; if one seems needed, say so in the report.
+- Never push, publish, deploy or open pull requests, unless the task says the user asked for exactly that: list such steps under needs user instead. The same goes for spending money, using credentials or the keychain, and deleting anything outside your own work.
 - {needs_user}
 - Files meant for the orchestrator or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Never write files to /tmp or anywhere else outside your worktree, scratch folder and test data folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
 - The orchestrator reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{practices}{VOICE}{WORKER_VOICE}{instructions}{extra}
@@ -643,7 +643,7 @@ The task:
 }
 
 /// What a worker is told about where and how it runs: what was prepared, what it may write,
-/// and, in an overnight run, what Brigadier approves for the user (PLAN.md §10.8).
+/// and, in an overnight run, that nobody is there to ask (PLAN.md §10.8).
 pub(crate) struct WorkerEnvironment<'a> {
     pub access: &'a brigadier_providers::Access,
     /// Folders copied in from the user's checkout.
@@ -676,18 +676,18 @@ pub(crate) fn environment(env: &WorkerEnvironment<'_>) -> String {
         env.test_dir.display()
     ));
     match env.access {
-        Access::Full => lines.push("You run without a sandbox, with the session's full access.".into()),
+        Access::Full => lines.push("You run without a sandbox, with the session's full access: nothing asks for approval.".into()),
         Access::Scoped { .. } | Access::Workspace { .. } | Access::ReadOnly => lines.push(
-            "You run in a sandbox: you can write only to the folders named above as yours. A program that opens windows (a desktop app, a GUI smoke run) can't run in it: give such a check as `[excluded] <the check>: the sandbox can't open windows` and go on.".into(),
+            "You run in a sandbox: you can write to the folders named above as yours, your worktree's git folder and the toolchains' caches. A command that needs more (another folder, the network when it is off) may run outside the sandbox: run it so, and it is approved or declined; if declined, work around it or list it in the report. A program that opens windows (a desktop app, a GUI smoke run) can't run in the sandbox: give such a check as `[excluded] <the check>: the sandbox can't open windows` and go on.".into(),
         ),
     }
     if let Some(repo) = env.run_repo {
         lines.push(format!(
-            "This is an overnight run and nobody is there to ask: Brigadier approves for the user, except what only the user may do. Pushing, publishing, releasing or deploying, credentials, signups or spending, contacting anyone, and changing the user's own checkout ({}) are declined by the overnight rules; leave them out and finish the rest.",
+            "This is an overnight run and nobody is there to answer before the morning. Leave out what only the user may do (pushing, publishing, releasing or deploying, credentials, signups or spending, contacting anyone) and don't change the user's own checkout ({}); list such steps in the report and finish the rest.",
             repo.display()
         ));
         lines.push(format!(
-            "Git changes only your own branch ({}): other branches, tags, `git stash` and pushes are refused. To look at another commit, unpack it into your scratch folder (`git archive <commit> | tar -x -C <folder>`).",
+            "Change only your own branch ({}): leave other branches and tags alone. To look at another commit, unpack it into your scratch folder (`git archive <commit> | tar -x -C <folder>`).",
             env.branch.map_or_else(|| "you have none".to_owned(), |branch| format!("`{branch}`"))
         ));
     }
@@ -1013,10 +1013,11 @@ mod environment_tests {
         let run = note(&brigadier_providers::Access::Full, true);
         assert!(run.contains("without a sandbox"));
         assert!(!run.contains("can't open windows"));
-        assert!(run.contains("declined by the overnight rules"));
+        assert!(run.contains("nothing asks for approval"));
+        assert!(run.contains("nobody is there to answer"));
+        assert!(!run.contains("declined"));
         assert!(run.contains("/Users/me/project"));
         assert!(run.contains("`brigadier/abc/task-3`"));
-        assert!(run.contains("`git stash`"));
         assert!(run.contains("don't use `nice`"));
     }
 
@@ -1083,7 +1084,7 @@ mod environment_tests {
         assert!(!full.contains("stays in its sandbox"));
         let sandboxed = orchestrator(&conversation("approveForMe"), None, &[], Some(&run), true);
         assert!(sandboxed.contains("approves a worker's request to leave its sandbox"));
-        assert!(sandboxed.contains("It still refuses what only the user may do"));
+        assert!(sandboxed.contains("Workers never do what only the user may do"));
         // Short replies reach a run's lead, and its phase-end replies; off, the plain voice
         // stays.
         assert!(
