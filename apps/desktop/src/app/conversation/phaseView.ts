@@ -100,6 +100,21 @@ export type PhaseView = {
   outcome: string | null;
 };
 
+/**
+ * The run's stored words about the user, as said to the user (the daemon's `TO_YOU`, in
+ * `wind_down.rs`): a phase's gaps keep them for its later leads.
+ */
+const TO_YOU: ReadonlyArray<readonly [string, string]> = [
+  ["the user stopped the run", "you stopped the run"],
+  ["the run stopped as the user asked", "the run stopped as you asked"],
+  [" needs the user", " needs you"],
+];
+
+/** `text` with the run's words about the user said to the user. */
+export function toYou(text: string): string {
+  return TO_YOU.reduce((said, [stored, shown]) => said.replaceAll(stored, shown), text);
+}
+
 function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
@@ -114,7 +129,7 @@ function outcomeOf(run: OvernightRun, phase: OvernightPhase, over: boolean): str
       }.`;
     case "partial":
     case "blocked":
-      return phase.gaps[0] ?? `${met} of ${plural(total, "done-when criterion", "done-when criteria")} met.`;
+      return toYou(phase.gaps[0] ?? `${met} of ${plural(total, "done-when criterion", "done-when criteria")} met.`);
     case "skipped":
       return "Skipped, as the run's restrictions said.";
     case "pending":
@@ -156,7 +171,7 @@ export function phaseViewOf(runs: Readonly<Record<string, OvernightRun>>, reques
           ? null
           : planning.state === "verified"
             ? `Wrote and checked a plan of ${plural(run.phases.length, "phase", "phases")}.`
-            : (planning.gaps[0] ?? "The plan wasn't settled."),
+            : toYou(planning.gaps[0] ?? "The plan wasn't settled."),
       };
     }
   }

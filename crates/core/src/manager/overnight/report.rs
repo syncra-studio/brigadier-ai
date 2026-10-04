@@ -20,6 +20,7 @@ use super::super::decisions::{named, short_words, waiting_run};
 use super::super::gates::{criterion_evidence, without_marker};
 use super::super::{SessionManager, blocking, git_error};
 use super::directives::{Clock, parse};
+use super::wind_down::to_you;
 use crate::board::Board;
 use crate::model::{DomainEvent, OvernightRunId, Setup};
 use crate::now_ms;
@@ -650,8 +651,9 @@ fn render(
     // The details, folded by the app: everything after this heading.
     text.push_str(&format!("\n{DETAILS}\n"));
     text.push_str(&details(run, board, commits, usage));
-    // Workers by the names the app shows, also in text written before they were.
-    named(&text, board)
+    // Workers by the names the app shows, also in text written before they were; the run's
+    // words about the user said to the user.
+    named(&to_you(&text), board)
 }
 
 /// "**Name**: stopped by you at 07:04. 1 of 3 phases verified."
@@ -1590,7 +1592,7 @@ Got in the way:
             "- Rejected cause 3 (gate members take run slots in priority order) instead of retrying it tonight; “Gate members take run slots in a fixed…” did not land.\n",
             "- p1-c1 met, checked by “Judge phase 1”: docs/evidence/2026-10-03-overnight-ab-breakdown.md has the per-role table",
             "- Whole-phase checks passed in round 1 on `1dcda64`.\n",
-            "- p2-c1 not checked: the user stopped the run.\n",
+            "- p2-c1 not checked: you stopped the run.\n",
             "- Workers: 6, Claude opus.\n",
             "- Task reviews: 16, Codex gpt-6-astra 10, gpt-6.1-sol 6.\n",
             "- Task verifications: 13, Codex gpt-6.1-sol 10, gpt-6-sol 3.\n",

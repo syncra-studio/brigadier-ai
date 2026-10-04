@@ -27,7 +27,7 @@ test("a partial phase stays settled though something still waits on the user, an
   assert.equal(`${phase.mark} ${phase.word}`, "◐ partial");
   assert.equal(phase.settled, true);
   assert.equal(formatDuration((phase.endedAtMs ?? 0) - (phase.startedAtMs ?? 0)), "1h 53m");
-  assert.equal(phase.outcome, "Its whole-phase checks never passed: the user stopped the run.");
+  assert.equal(phase.outcome, "Its whole-phase checks never passed: you stopped the run.");
 });
 
 test("a phase the run never reached reads the same on the card as in the report", () => {

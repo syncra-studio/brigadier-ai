@@ -272,6 +272,27 @@ fn cutoff_ms(run: &OvernightRun, now: i64) -> i64 {
     }
 }
 
+/// The words of [`stop_words`] that name the user, and how they read to the user. A phase's
+/// gaps and evidence keep the stored words (a later lead reads them too); the report and the
+/// app show these.
+pub(super) const TO_YOU: [(&str, &str); 3] = [
+    ("the user stopped the run", "you stopped the run"),
+    (
+        "the run stopped as the user asked",
+        "the run stopped as you asked",
+    ),
+    (" needs the user", " needs you"),
+];
+
+/// `text` with the run's words about the user (see [`TO_YOU`]) said to the user.
+pub(super) fn to_you(text: &str) -> String {
+    TO_YOU
+        .iter()
+        .fold(text.to_owned(), |text, (stored, shown)| {
+            text.replace(stored, shown)
+        })
+}
+
 /// Why the run ended, as a phase's gap says it.
 fn stop_words(stop: Option<&StopReason>) -> String {
     match stop {
