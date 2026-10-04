@@ -238,9 +238,11 @@ test("a report rendered again shows, and copies, in place of the text it was wri
   assert.ok(stored.includes("### Phase 1 · Measure — ✓ verified"), "the stored report is the old one");
   // Nothing rendered again: the message's own text.
   const fullText = {};
-  assert.equal(shownTexts(fullText, reportTexts({ [run.id]: run })), fullText);
-  const again = "**Faster, leaner overnight runs**: stopped by you at 07:04. 1 of 3 phases verified.";
-  const texts = shownTexts({}, reportTexts({ [run.id]: { ...run, reportText: again } }));
+  assert.equal(shownTexts(fullText, reportTexts({ [run.id]: { ...run, reportText: null } })), fullText);
+  // The fixture's run holds its report as the daemon renders it again.
+  const again = run.reportText ?? "";
+  assert.ok(again.startsWith("**Faster, leaner overnight runs**: stopped by you at 07:04. 1 of 3 phases verified."));
+  const texts = shownTexts({}, reportTexts({ [run.id]: run }));
   const shown = buildBlocks(messages, texts, false, board, [])
     .flatMap((block) => block.texts)
     .find((text) => text.messageId === id);

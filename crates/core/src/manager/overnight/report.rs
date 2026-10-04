@@ -1471,7 +1471,7 @@ mod tests {
                 serde_json::from_value(item.clone()).expect("an item"),
             );
         }
-        let run: OvernightRun = serde_json::from_value(
+        let mut run: OvernightRun = serde_json::from_value(
             fixture["overnight"]
                 .as_object()
                 .and_then(|runs| runs.values().next())
@@ -1479,6 +1479,10 @@ mod tests {
                 .expect("the run"),
         )
         .expect("a run");
+        // The fixture holds the report as rendered again (for the app's page); the run wrote
+        // the first shape of it.
+        run.report_version = 0;
+        run.report_text = None;
         board.runs.insert(run.id.clone(), run.clone());
         let risks = |number: u32, risks: &[&str]| {
             let task = board

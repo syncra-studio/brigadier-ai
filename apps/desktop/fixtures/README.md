@@ -31,7 +31,8 @@ Continue creates another proposal and requires Start.
 overnight run from its stored events (`src/fixtures/boards/overnight-2026-10-03.json`, made by
 `scripts/extract-board-fixture.mjs` from a copy of the database; each decision's `short`, the words
 the daemon's board gives it, comes from what the Rust test `the_nights_fixture_carries_the_boards_short_words`
-prints). Requests are answered in the
+prints, and the run's `reportText`, its report as the daemon renders it again, from what
+`the_night_of_october_3_reads_in_twenty_seconds` prints with `--nocapture`). Requests are answered in the
 page and never reach a daemon; a worker's transcript is not in the fixture. Open Phase 2's header:
 it shows seven rows (the plan, four workers, one judgement call, the lead's reply), where the app
 showed 53 before one row per task. Open a row's chevron for its checks round by round, and the
