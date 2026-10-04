@@ -120,7 +120,7 @@ The user talks to exactly one **orchestrator**. The orchestrator never does work
 - **Lifecycle** (applies to both sessions and chats):
   - **Hibernate:** automatic when idle. CLI processes stop and temp files are cleaned up, but the session stays in the sidebar, ready to continue.
   - **Archive:** hidden in an Archived view. Workers stop and all leftovers are cleaned up. The transcript and artifacts are kept, so the session is restorable; the orchestrator restarts from the Brain and the transcript. Unmerged branches are kept.
-  - **Delete:** permanent. It asks what to do with unmerged branches, and has a "forget what the Brain learned from this session" checkbox, off by default.
+  - **Delete:** permanent. It asks what to do with unmerged branches, and has a "forget what the Brain learned from this session" checkbox, off by default. Its usage and routing records go too (its turns and its tasks' outcomes in `routing.sqlite`).
 - **Permission level** (composer picker, remembered per project):
   - **Ask for approval:** you approve every plan and every change. Sandboxed.
   - **Approve for me** (default): Brigadier approves on your behalf, sandboxed.

@@ -598,6 +598,7 @@ impl SessionManager {
         purge.extend(tasks.iter().map(|task| streams::task(&task.id)));
         self.forget_brain_conversation(&id, conversation.project_id.clone(), forget_brain)
             .await;
+        self.forget_routing(&id, &tasks).await;
         self.core.forget_conversation(id.clone()).await?;
         self.convs_lock().remove(&id);
         let store = self.core.store().clone();
@@ -609,6 +610,24 @@ impl SessionManager {
             Err(err) => tracing::warn!(conversation = %id, error = %err, "could not collect blobs"),
         }
         Ok(())
+    }
+}
+
+impl SessionManager {
+    /// The routing store lets go of a deleted conversation: its turns and its tasks' outcomes.
+    async fn forget_routing(&self, id: &ConversationId, tasks: &[Task]) {
+        let Some(store) = self.runtime.routing_store().cloned() else {
+            return;
+        };
+        let task_ids = tasks.iter().map(|task| task.id.0.clone()).collect();
+        match store.forget_conversation(id.0.clone(), task_ids).await {
+            Ok((turns, outcomes)) => {
+                tracing::info!(conversation = %id, turns, outcomes, "routing forgot a deleted conversation")
+            }
+            Err(err) => {
+                tracing::warn!(conversation = %id, error = %err, "could not forget a deleted conversation's routing records")
+            }
+        }
     }
 }
 

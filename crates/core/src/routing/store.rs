@@ -352,6 +352,34 @@ impl RoutingStore {
         .await
     }
 
+    /// Forgets a deleted conversation: its turns (also those recorded only under one of its
+    /// tasks) and its tasks' outcomes. How many turns and outcomes went.
+    pub async fn forget_conversation(
+        self: &Arc<Self>,
+        conversation_id: String,
+        task_ids: Vec<String>,
+    ) -> Result<(usize, usize)> {
+        self.run(move |conn| {
+            let tx = conn.unchecked_transaction()?;
+            let mut turns = tx.execute(
+                "DELETE FROM turn_usage WHERE conversation_id = ?1",
+                [&conversation_id],
+            )?;
+            let mut outcomes = 0;
+            {
+                let mut task_turns = tx.prepare("DELETE FROM turn_usage WHERE task_id = ?1")?;
+                let mut task_outcomes = tx.prepare("DELETE FROM outcomes WHERE task_id = ?1")?;
+                for task in &task_ids {
+                    turns += task_turns.execute([task])?;
+                    outcomes += task_outcomes.execute([task])?;
+                }
+            }
+            tx.commit()?;
+            Ok((turns, outcomes))
+        })
+        .await
+    }
+
     /// Drops samples and turns older than [`HISTORY_MS`].
     pub async fn prune(self: &Arc<Self>, now_ms: i64) -> Result<()> {
         let before = now_ms - HISTORY_MS;
@@ -361,5 +389,83 @@ impl RoutingStore {
             Ok(())
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn turn(conversation: Option<&str>, task: Option<&str>) -> TurnUsage {
+        TurnUsage {
+            at_ms: 1,
+            provider: ProviderKind::Claude,
+            model: "opus".into(),
+            conversation_id: conversation.map(str::to_owned),
+            project_id: Some("p".into()),
+            task_id: task.map(str::to_owned),
+            input: 1,
+            cached_input: 0,
+            cache_write: 0,
+            output: 1,
+        }
+    }
+
+    fn outcome(task: &str) -> Outcome {
+        serde_json::from_value(serde_json::json!({
+            "projectId": "p",
+            "taskId": task,
+            "provider": "claude",
+            "model": "opus",
+            "category": "implement",
+            "areas": [],
+            "result": "landed",
+            "reviewPassedFirst": null,
+            "reviews": 0,
+            "reworkRounds": 0,
+            "verification": null,
+            "durationMs": 1,
+            "tokens": 1,
+            "quotaPercent": null,
+            "atMs": 1
+        }))
+        .expect("an outcome")
+    }
+
+    #[tokio::test]
+    async fn a_deleted_conversation_leaves_no_turns_or_outcomes() {
+        let dir = std::env::temp_dir().join(format!("brigadier-routing-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = RoutingStore::open(&dir.join("routing.sqlite")).unwrap();
+        // Its orchestrator's turn, a worker's turn, and a turn known only by its task.
+        store.add_turn(turn(Some("c1"), None)).await.unwrap();
+        store.add_turn(turn(Some("c1"), Some("t1"))).await.unwrap();
+        store.add_turn(turn(None, Some("t2"))).await.unwrap();
+        // Another conversation's and a project Brain job's stay.
+        store.add_turn(turn(Some("c2"), Some("t3"))).await.unwrap();
+        store.add_turn(turn(None, None)).await.unwrap();
+        for task in ["t1", "t2", "t3"] {
+            store.put_outcome(outcome(task)).await.unwrap();
+        }
+        let forgotten = store
+            .forget_conversation("c1".into(), vec!["t1".into(), "t2".into()])
+            .await
+            .unwrap();
+        assert_eq!(forgotten, (3, 2));
+        let left = store.turns_since(ProviderKind::Claude, 0).await.unwrap();
+        assert_eq!(left.len(), 2);
+        assert!(
+            left.iter()
+                .all(|turn| turn.conversation_id.as_deref() != Some("c1"))
+        );
+        let outcomes = store.outcomes(None).await.unwrap();
+        assert_eq!(
+            outcomes
+                .iter()
+                .map(|o| o.task_id.as_str())
+                .collect::<Vec<_>>(),
+            ["t3"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
