@@ -1,19 +1,20 @@
-import { ChevronDown } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, memo, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { WORKERS_LABEL, WorkerGlyphs } from "@/app/conversation/Agents";
+import { WORKERS_LABEL } from "@/app/conversation/Agents";
 import { isFinal, isWorking } from "@/app/conversation/blocks";
 import { TaskActivity } from "@/app/conversation/WorkerActivity";
+import { useTaskElapsed } from "@/app/conversation/WorkerThread";
 import {
   AgentsPanelContext,
   useWorkerName,
   WorkerGlyph,
 } from "@/app/conversation/WorkerChip";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { SummaryRowButton, SummarySection } from "@/components/assistant-ui/elements/summary-section";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { DiffStat, Task } from "@/ipc/generated";
 import { modelName, useModelGroups } from "@/lib/setup";
+import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { refreshWorkerDiffs } from "@/state/actions";
 import { useBoard } from "@/state/board";
@@ -124,26 +125,26 @@ export function WorkerDiffs({ conversationId }: { conversationId: string }) {
   return null;
 }
 
-/** How a worker in a summary row is doing: its state in words, then its +N −N. */
-const RowState: FC<{ task: Task }> = ({ task }) => (
-  <>
-    <span
-      className={cn(
-        "shrink-0",
-        task.state === "failed"
-          ? "text-destructive"
-          : isFinal(task)
-            ? "text-muted-foreground"
-            : "text-foreground/70",
-      )}
-    >
-      {stateLine(task)}
-    </span>
-    <WorkerChanges task={task} />
-  </>
-);
+/** How a worker in a summary row is doing: its state in words (shimmering while it works), then how long it has worked. */
+const RowState: FC<{ task: Task }> = ({ task }) => {
+  const elapsed = useTaskElapsed(task);
+  return (
+    <>
+      <span
+        className={cn(
+          "min-w-0 truncate",
+          task.state === "failed" && "text-destructive",
+          isWorking(task) && "shimmer",
+        )}
+      >
+        {stateLine(task)}
+      </span>
+      {elapsed >= 1000 && <span className="shrink-0 tabular-nums">{formatDuration(elapsed)}</span>}
+    </>
+  );
+};
 
-/** One worker in a summary: its glyph (with a dot while it works), name, state and +N −N. */
+/** One worker in a summary: its glyph (with a dot while it works), name and +N −N over its state and time. */
 export const WorkerSummaryRow = memo(function WorkerSummaryRow({
   taskId,
   className,
@@ -156,20 +157,17 @@ export const WorkerSummaryRow = memo(function WorkerSummaryRow({
   const { setPanel } = useContext(AgentsPanelContext);
   if (!task) return null;
   return (
-    <button
-      type="button"
+    <SummaryRowButton
       data-slot="worker-summary-row"
       data-state={task.state}
       onClick={() => setPanel(task.id)}
-      className={cn(
-        "hover:bg-foreground/5 rounded-control flex h-control-sm items-center gap-2 text-start text-sm transition-colors",
-        className,
-      )}
+      icon={<WorkerGlyph taskId={task.id} working={isWorking(task)} />}
+      description={<RowState task={task} />}
+      meta={<WorkerChanges task={task} />}
+      className={className}
     >
-      <WorkerGlyph taskId={task.id} working={isWorking(task)} />
-      <span className="min-w-0 flex-1 truncate">{name}</span>
-      <RowState task={task} />
-    </button>
+      {name}
+    </SummaryRowButton>
   );
 });
 
@@ -220,16 +218,15 @@ export const WorkerStripRow = memo(function WorkerStripRow({
   );
 });
 
-/** Active workers listed in the summary before "N more". */
-const ROWS = 4;
+/** Workers listed in the summary before "Show N more". */
+const ROWS = 5;
 
 /**
- * The pinned summary's Workers section, folding under its title: one line with the stacked
- * glyphs and the counts ("2 working · 7 workers · 37 checks", which opens the list), then a row
- * per worker still at it. Checkers count apart: each opens from the row of what it checks.
+ * The pinned summary's Workers section: a row per worker (its glyph, name, state, time and
+ * +N −N), those still at it first; folded, it says "2 working · 1 done". Checkers are not
+ * listed: each opens from the row of what it checks.
  */
 export function WorkersSummary({ conversationId }: { conversationId: string }) {
-  const { setPanel } = useContext(AgentsPanelContext);
   // Workers by number, each marked active (`a`) or finished (`f`), and whether it works now (`*`).
   const marked = useBoard(
     useShallow((s) =>
@@ -241,63 +238,44 @@ export function WorkersSummary({ conversationId }: { conversationId: string }) {
         : [],
     ),
   );
-  const checks = useBoard((s) =>
-    s.board?.conversationId === conversationId
-      ? Object.values(s.board.tasks).filter((task) => task.gateLink !== null).length
-      : 0,
-  );
-  const { active, all, working } = useMemo(() => {
+  const [all, setAll] = useState(false);
+  const { ordered, working, done } = useMemo(() => {
     const id = (mark: string) => mark.replace(/^[af]\*?/, "");
     return {
-      active: marked.filter((mark) => mark.startsWith("a")).map(id),
-      all: marked.map(id),
-      working: new Set(marked.filter((mark) => mark.includes("*")).map(id)),
+      ordered: [
+        ...marked.filter((mark) => mark.startsWith("a")),
+        ...marked.filter((mark) => mark.startsWith("f")),
+      ].map(id),
+      working: marked.filter((mark) => mark.includes("*")).length,
+      done: marked.filter((mark) => mark.startsWith("f")).length,
     };
   }, [marked]);
-  const [open, setOpen] = useState(true);
-  if (all.length === 0) return null;
-  const waiting = active.length - working.size;
-  const hidden = active.length - ROWS;
-  const counts = [
-    working.size > 0 && `${working.size} working`,
+  if (ordered.length === 0) return null;
+  const waiting = ordered.length - done - working;
+  const summary = [
+    working > 0 && `${working} working`,
     waiting > 0 && `${waiting} waiting`,
-    `${all.length} ${all.length === 1 ? "worker" : "workers"}`,
-    checks > 0 && `${checks} ${checks === 1 ? "check" : "checks"}`,
+    done > 0 && `${done} done`,
   ]
     .filter(Boolean)
     .join(" · ");
+  const hidden = ordered.length - ROWS;
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="flex flex-col gap-1">
-      <CollapsibleTrigger className="group text-muted-foreground hover:text-foreground flex h-control-xs items-center justify-between text-xs transition-colors">
-        {WORKERS_LABEL}
-        <ChevronDown
-          aria-hidden
-          className="size-icon-xs transition-[rotate] group-data-[state=closed]:-rotate-90 motion-reduce:transition-none"
-        />
-      </CollapsibleTrigger>
-      <CollapsibleContent className="flex flex-col">
-        <button
-          type="button"
-          data-slot="workers-summary-counts"
-          onClick={() => setPanel(null)}
-          className="hover:bg-foreground/5 rounded-control -mx-1 flex h-control-sm items-center gap-2 px-1 text-start text-sm transition-colors"
-        >
-          <WorkerGlyphs taskIds={all} working={working} />
-          <span className="min-w-0 flex-1 truncate">{counts}</span>
-        </button>
-        {active.slice(0, ROWS).map((id) => (
-          <WorkerSummaryRow key={id} taskId={id} className="-mx-1 px-1" />
-        ))}
-        {hidden > 0 && (
-          <button
-            type="button"
-            onClick={() => setPanel(null)}
-            className="text-muted-foreground hover:text-foreground flex h-control-sm items-center ps-6 text-start text-sm transition-colors"
-          >
-            {hidden} more
-          </button>
-        )}
-      </CollapsibleContent>
-    </Collapsible>
+    <SummarySection
+      foldKey="workers"
+      title={WORKERS_LABEL}
+      count={ordered.length}
+      summary={summary}
+      aria-label="Session workers"
+    >
+      {(all ? ordered : ordered.slice(0, ROWS)).map((id) => (
+        <WorkerSummaryRow key={id} taskId={id} />
+      ))}
+      {hidden > 0 && (
+        <SummaryRowButton muted onClick={() => setAll(!all)}>
+          {all ? "Show less" : `Show ${hidden} more`}
+        </SummaryRowButton>
+      )}
+    </SummarySection>
   );
 }
