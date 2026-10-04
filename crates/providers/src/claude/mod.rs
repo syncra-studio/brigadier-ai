@@ -474,8 +474,18 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents) -> Value {
                 "allowWrite": paths(writable_roots),
                 "denyRead": paths(deny_read),
             });
+            let mut deny_write = Vec::new();
             if !write_cwd {
-                filesystem["denyWrite"] = json!(paths(&[cwd.to_owned()]));
+                deny_write.push(cwd.to_owned());
+            }
+            // A writer may commit into a repository's git folder, but not plant hooks or
+            // change its config: those run outside the sandbox the next time the user runs git.
+            for root in writable_roots.iter().filter(|root| is_git_dir(root)) {
+                let root = resolved(root);
+                deny_write.extend([root.join("hooks"), root.join("config")]);
+            }
+            if !deny_write.is_empty() {
+                filesystem["denyWrite"] = json!(paths(&deny_write));
             }
             json!({
                 "enabled": true,
@@ -580,6 +590,11 @@ fn paths(paths: &[PathBuf]) -> Vec<String> {
         .iter()
         .map(|path| resolved(path).display().to_string())
         .collect()
+}
+
+/// Whether `path` is a repository's git folder (its `HEAD` and object store).
+fn is_git_dir(path: &Path) -> bool {
+    path.join("HEAD").is_file() && path.join("objects").is_dir()
 }
 
 fn resolved(path: &Path) -> PathBuf {
@@ -1578,6 +1593,35 @@ mod tests {
             json!(["Bash(dangerouslyDisableSandbox:true)"])
         );
         assert_eq!(permission_mode(&with(Access::ReadOnly, true)), "default");
+    }
+
+    #[test]
+    fn a_writer_may_commit_but_not_change_git_hooks_or_config() {
+        let cwd = Temp::new();
+        let git = cwd.path().join("repo.git");
+        std::fs::create_dir_all(git.join("objects")).expect("objects");
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD");
+        let spec = SessionSpec {
+            access: Access::Scoped {
+                write_cwd: true,
+                writable_roots: vec![git.clone()],
+                network: true,
+                deny_read: Vec::new(),
+                unix_sockets: Vec::new(),
+            },
+            ..spec(cwd.path(), &["claude-sonnet-5"])
+        };
+        let models = SubAgents::Only(vec!["claude-sonnet-5".to_owned()]);
+        let filesystem = &settings(&spec, cwd.path(), &models)["sandbox"]["filesystem"];
+        let git = resolved(&git);
+        assert_eq!(filesystem["allowWrite"], json!([git.display().to_string()]));
+        assert_eq!(
+            filesystem["denyWrite"],
+            json!([
+                git.join("hooks").display().to_string(),
+                git.join("config").display().to_string(),
+            ])
+        );
     }
 
     #[test]
