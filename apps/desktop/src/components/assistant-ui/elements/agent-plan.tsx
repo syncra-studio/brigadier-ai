@@ -1,7 +1,7 @@
 import { Check, ChevronRight, Minus, X } from "@openai/apps-sdk-ui/components/Icon";
 import { type ComponentProps, type ReactNode, useId, useState } from "react";
 
-import { paper } from "@/components/assistant-ui/elements/surfaces";
+import { disclosureRow, paper } from "@/components/assistant-ui/elements/surfaces";
 import { Spinner } from "@/components/glyphs/spinner";
 import { cn } from "@/lib/utils";
 
@@ -110,61 +110,78 @@ function StepRow({ step }: { step: AgentPlanStep }) {
   } | null>(null);
   const open = fold?.status === step.status ? fold.open : !step.folded;
   const foldable = step.folded !== undefined && Boolean(step.detail);
-  const title = <span className="min-w-0 flex-1 wrap-anywhere">{step.title}</span>;
+  const icon = (
+    <span className="flex h-(--text-sm--line-height) w-icon-md shrink-0 items-center justify-center">
+      {step.status === "done" ? (
+        <Check className="text-muted-foreground size-icon-sm" />
+      ) : step.status === "active" ? (
+        <Spinner className="text-foreground size-icon-sm animate-spin motion-reduce:animate-none" />
+      ) : step.status === "failed" ? (
+        <X className="text-destructive size-icon-sm" />
+      ) : step.status === "skipped" ? (
+        <Minus className="text-muted-foreground size-icon-sm" />
+      ) : step.status === "partial" ? (
+        <svg aria-hidden viewBox="0 0 16 16" className="text-muted-foreground size-icon-sm">
+          <circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" />
+          <path d="M8 2.5a5.5 5.5 0 0 0 0 11z" fill="currentColor" />
+        </svg>
+      ) : (
+        <span aria-hidden className="bg-foreground/20 size-1.5 rounded-full" />
+      )}
+    </span>
+  );
+  const heading = (
+    <span className="flex min-w-0 flex-1 flex-col">
+      <span className="wrap-anywhere">{step.title}</span>
+      {(step.statusLabel ?? step.status) && (
+        <span role={step.live ? "status" : undefined} className="text-muted-foreground text-xs">
+          {step.statusLabel ?? step.status}
+        </span>
+      )}
+    </span>
+  );
   return (
-    <li className="flex items-start gap-2 text-sm">
-      <span className="flex h-(--text-sm--line-height) w-icon-md shrink-0 items-center justify-center">
-        {step.status === "done" ? (
-          <Check className="text-muted-foreground size-icon-sm" />
-        ) : step.status === "active" ? (
-          <Spinner className="text-foreground size-icon-sm animate-spin motion-reduce:animate-none" />
-        ) : step.status === "failed" ? (
-          <X className="text-destructive size-icon-sm" />
-        ) : step.status === "skipped" ? (
-          <Minus className="text-muted-foreground size-icon-sm" />
-        ) : step.status === "partial" ? (
-          <svg aria-hidden viewBox="0 0 16 16" className="text-muted-foreground size-icon-sm">
-            <circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" />
-            <path d="M8 2.5a5.5 5.5 0 0 0 0 11z" fill="currentColor" />
-          </svg>
-        ) : (
-          <span aria-hidden className="bg-foreground/20 size-1.5 rounded-full" />
-        )}
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col">
-        {foldable ? (
-          <button
-            type="button"
-            aria-expanded={open}
-            aria-controls={id}
-            className="rounded-control flex items-start gap-1 text-start outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            onClick={() => setFold({ status: step.status, open: !open })}
-          >
-            {title}
-            <ChevronRight
-              aria-hidden
-              className={cn("mt-0.5 size-icon-xs shrink-0", open && "rotate-90")}
-            />
-          </button>
-        ) : (
-          title
-        )}
-        {(step.statusLabel ?? step.status) && (
-          <span role={step.live ? "status" : undefined} className="text-muted-foreground text-xs">
-            {step.statusLabel ?? step.status}
-          </span>
-        )}
-        {step.detail && (
-          <div
-            id={id}
-            hidden={foldable && !open}
-            className="text-muted-foreground pt-1 text-xs whitespace-pre-wrap wrap-anywhere"
-          >
-            {step.detail}
+    <li className="flex flex-col text-sm">
+      {foldable ? (
+        // The whole row opens and closes the step: its mark, title, state and chevron.
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={id}
+          className={cn(disclosureRow, "-my-1 flex items-start gap-2 py-1")}
+          onClick={() => setFold({ status: step.status, open: !open })}
+        >
+          {icon}
+          {heading}
+          <ChevronRight
+            aria-hidden
+            className={cn("mt-0.5 size-icon-xs shrink-0", open && "rotate-90")}
+          />
+        </button>
+      ) : (
+        <div className="flex items-start gap-2">
+          {icon}
+          {heading}
+        </div>
+      )}
+      {(step.detail || step.aside) && (
+        <div className="flex gap-2">
+          {/* Under the title, past the step's mark. */}
+          <span aria-hidden className="w-icon-md shrink-0" />
+          <div className="flex min-w-0 flex-1 flex-col">
+            {step.detail && (
+              <div
+                id={id}
+                hidden={foldable && !open}
+                className="text-muted-foreground pt-1 text-xs whitespace-pre-wrap wrap-anywhere"
+              >
+                {step.detail}
+              </div>
+            )}
+            {step.aside && <div className="flex min-w-0 pt-1">{step.aside}</div>}
           </div>
-        )}
-        {step.aside && <div className="flex min-w-0 pt-1">{step.aside}</div>}
-      </div>
+        </div>
+      )}
     </li>
   );
 }

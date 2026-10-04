@@ -6,6 +6,7 @@ import { taskState } from "@/app/conversation/rowWords";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
 import { useAction } from "@/app/conversation/useAction";
 import { AgentPlan, type AgentPlanStepStatus } from "@/components/assistant-ui/elements/agent-plan";
+import { disclosureRow } from "@/components/assistant-ui/elements/surfaces";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -130,7 +131,7 @@ function PlanHistory({ plan }: { plan: Plan }) {
   if (revisions.length === 0) return null;
   return (
     <details className="text-muted-foreground text-xs">
-      <summary className="rounded-control cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring">
+      <summary className={disclosureRow}>
         Earlier revisions ({revisions.length})
       </summary>
       <div className="flex flex-col gap-3 pt-2">
@@ -194,7 +195,7 @@ function ReviewRound({ gate, notes }: { gate: Gate; notes: readonly string[] }) 
       {outcome === "passed" && notes.length > 0 && (
         // An approved plan's notes are for whoever carries it out: behind a disclosure.
         <details className="text-muted-foreground text-xs">
-          <summary className="rounded-control cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring">
+          <summary className={disclosureRow}>
             Review notes
           </summary>
           <div className="pt-1">

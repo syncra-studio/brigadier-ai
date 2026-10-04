@@ -11,6 +11,13 @@ export const field = "bg-foreground/5";
 
 export const fieldInteractive = "bg-foreground/5 transition-colors hover:bg-foreground/10";
 
+/**
+ * A row that opens and closes what it heads (a plan step, a `<summary>`): the whole row is the
+ * target, washed while hovered and pressed, its edges a step outside the text it lines up with.
+ */
+export const disclosureRow =
+  "rounded-control hover:bg-foreground/5 active:bg-foreground/10 -mx-1.5 cursor-pointer px-1.5 text-start outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring";
+
 /** A quiet round icon button. */
 export const ghostButton =
   "text-muted-foreground hover:bg-foreground/10 hover:text-foreground focus-visible:ring-ring/50 inline-flex shrink-0 items-center justify-center rounded-capsule outline-none transition-colors focus-visible:ring-1 disabled:pointer-events-none disabled:opacity-50";

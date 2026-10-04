@@ -20,6 +20,7 @@ import {
   type AgentPlanStep,
   type AgentPlanStepStatus,
 } from "@/components/assistant-ui/elements/agent-plan";
+import { disclosureRow } from "@/components/assistant-ui/elements/surfaces";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { OvernightRun, PhaseState, Plan } from "@/ipc/generated";
@@ -136,7 +137,7 @@ function PhaseWork({
       )}
       {checkerIds.length > 0 && (
         <details>
-          <summary className="rounded-control cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring">
+          <summary className={disclosureRow}>
             Whole-phase checks · {gateWord(gate)}
           </summary>
           <div className="pt-1">
@@ -146,7 +147,7 @@ function PhaseWork({
       )}
       {(details.length > 0 || notes.length > 0) && (
         <details>
-          <summary className="rounded-control cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring">
+          <summary className={disclosureRow}>
             Step details and review notes
           </summary>
           <div className="flex flex-col gap-1.5 pt-1 wrap-anywhere">
@@ -250,7 +251,7 @@ export function OvernightPlanCard({
           )}
           {(phase.scope || phase.doneWhen.length > 0) && (
             <details>
-              <summary className="rounded-control cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring">
+              <summary className={disclosureRow}>
                 What it covers
               </summary>
               <div className="flex flex-col gap-1.5 pt-1">
@@ -421,7 +422,7 @@ export function OvernightPlanCard({
           )}
           {(run.rules || run.sources.length > 0) && (
             <details className="text-muted-foreground">
-              <summary className="cursor-pointer">Rules and sources</summary>
+              <summary className={disclosureRow}>Rules and sources</summary>
               {run.rules && <p className="whitespace-pre-wrap">{run.rules}</p>}
               {run.sources.map((source) => <p key={source.path}>{source.path}{source.sections ? ` · ${source.sections}` : ""}</p>)}
             </details>

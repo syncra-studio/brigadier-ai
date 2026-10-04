@@ -41,6 +41,7 @@ import { useAction } from "@/app/conversation/useAction";
 import { GitActions } from "@/app/conversation/GitActions";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/conversation/WorkerSummary";
+import { disclosureRow } from "@/components/assistant-ui/elements/surfaces";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import {
   DropdownMenu,
@@ -377,7 +378,7 @@ function DecisionRow({ decision }: { decision: Decision }) {
       type="button"
       aria-expanded={open}
       onClick={() => setOpen(!open)}
-      className="rounded-control focus-visible:ring-ring/50 flex items-start gap-2 py-0.5 text-start text-sm outline-none focus-visible:ring-1"
+      className={cn(disclosureRow, "flex items-start gap-2 py-0.5 text-sm")}
     >
       <CheckCircle
         aria-hidden
