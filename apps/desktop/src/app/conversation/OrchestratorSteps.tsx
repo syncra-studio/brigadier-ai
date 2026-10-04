@@ -29,6 +29,10 @@ const ICONS: Record<Kind, FC<{ className?: string }>> = {
   searchedWeb: Globe,
   readPage: Globe,
   decided: CheckCircle,
+  created: Chat,
+  answered: Chat,
+  landed: Check,
+  merged: Check,
   machine: Clock,
 };
 
@@ -41,6 +45,10 @@ const PLURALS: Record<Kind, [one: string, many: string]> = {
   searchedWeb: ["searched the web", "searched the web"],
   readPage: ["read a page", "read pages"],
   decided: ["decided for you", "decided for you"],
+  created: ["started a worker", "started workers"],
+  answered: ["answered a worker", "answered workers"],
+  landed: ["landed commits", "landed commits"],
+  merged: ["merged a branch", "merged branches"],
   machine: ["waited for the computer", "waited for the computer"],
 };
 
@@ -98,6 +106,33 @@ function label(kind: OrchestratorStepKind | DecidedStep | MachineWords): ReactNo
       return <span className="min-w-0 truncate">Searched the web for {kind.query}</span>;
     case "readPage":
       return <span className="min-w-0 truncate">Read {hostOf(kind.url)}</span>;
+    case "created":
+      return (
+        <>
+          <Words>Created</Words>
+          <WorkerMention taskId={kind.taskId} />
+        </>
+      );
+    case "answered":
+      return (
+        <>
+          <Words>Answered</Words>
+          <WorkerMention taskId={kind.taskId} />
+          <span className="min-w-0 truncate">: {kind.answer}</span>
+        </>
+      );
+    case "landed":
+      return (
+        <span className="min-w-0 truncate">
+          Landed {kind.commits} {kind.commits === 1 ? "commit" : "commits"} on {kind.branch}
+        </span>
+      );
+    case "merged":
+      return (
+        <span className="min-w-0 truncate">
+          Merged {kind.branch} into {kind.base}
+        </span>
+      );
     case "machine":
       return <span className="min-w-0 truncate">{machineWords(kind.machine, kind.command, "the computer")}</span>;
   }

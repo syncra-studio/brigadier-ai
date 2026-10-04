@@ -389,6 +389,17 @@ function describe(
           </p>
         ),
       };
+    case "outline":
+      return {
+        icon: <Sparkle />,
+        kind: actor ?? "Plan",
+        title: "Start this plan?",
+        body: (
+          <p className="text-foreground/65 px-4 pb-2 text-sm whitespace-pre-wrap">
+            {subject.outline}
+          </p>
+        ),
+      };
   }
 }
 

@@ -22,6 +22,7 @@ import type { TaskKind } from "./TaskKind";
 import type { TaskState } from "./TaskState";
 import type { TaskWorkspace } from "./TaskWorkspace";
 import type { WorkerAccess } from "./WorkerAccess";
+import type { WorkerRole } from "./WorkerRole";
 
 /**
  * A delegated unit of work and its worker.
@@ -116,6 +117,14 @@ outputs: Array<ArtifactRef>,
  * The user request it was delegated for.
  */
 requestId: string | null, 
+/**
+ * Its part in the request's flow; absent for scouts, research and older tasks.
+ */
+role: WorkerRole | null, 
+/**
+ * The phase of the request's plan it works on (from 1), when the request has phases.
+ */
+phase: number | null, 
 /**
  * The overnight run it works for: then it runs under the run's rules (the session's
  * access, nothing on the never-list, the run's branch), whatever else the session says.

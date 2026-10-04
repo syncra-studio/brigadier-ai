@@ -14,7 +14,7 @@ test("the plan section shows its phases and state, without approval or review wo
     const { emptyBoard, BoardStoreContext } = await server.ssrLoadModule("/src/state/board.ts");
     const plan: Plan = {
       id: "p", conversationId: "c", requestId: "r", position: 0, title: "Small plan",
-      steps: [{ title: "Do it", detail: null, taskId: null }], risky: false,
+      steps: [{ title: "Do it", detail: null, taskId: null, stage: "pending", startedAtMs: null, endedAtMs: null, outline: null }], risky: false,
       state: { type: "approved", by: "brigadier" }, gate: null, revises: null,
       responses: [], reviewNotes: [], reviewSkipReason: "small plan",
       createdAtMs: 0, decidedAtMs: 1,

@@ -99,6 +99,8 @@ const states: { id: string; name: string; state: PlanState; automatic?: boolean 
     state: { type: "rejected", message: "Keep the existing command names." },
   },
 ];
+/** A phase that has not started. */
+const idle = { stage: "pending", startedAtMs: null, endedAtMs: null, outline: null } as const;
 const plans: Plan[] = states.map((item, index) => ({
   id: item.id,
   conversationId: item.automatic ? automatic.id : session.id,
@@ -133,13 +135,15 @@ const plans: Plan[] = states.map((item, index) => ({
       title: "Read the platform code",
       detail: "Find the path and terminal differences.",
       taskId: "worker-done",
+      ...idle,
     },
     {
       title: "Implement Windows path handling without changing the existing macOS behavior",
       detail: "Check both path separators and drive letters.",
       taskId: "worker-live",
+      ...idle,
     },
-    { title: "Verify the build", detail: "Run the platform checks.", taskId: null },
+    { title: "Verify the build", detail: "Run the platform checks.", taskId: null, ...idle },
   ],
 }));
 const old: Plan = {

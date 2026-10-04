@@ -865,6 +865,7 @@ impl SessionManager {
                     format!("merging `{branch}` into `{base}`")
                 }
                 ApprovalSubject::Action { action, .. } => action.clone(),
+                ApprovalSubject::Outline { title, .. } => format!("starting the plan “{title}”"),
             };
             text.push_str(&format!(
                 "Waiting for the user's approval: {}\n",

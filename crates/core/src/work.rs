@@ -63,6 +63,24 @@ impl TaskKind {
     }
 }
 
+/// What a worker does in the request's flow, for its name in the thread ("Lead · Phase 1").
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkerRole {
+    /// Leads a phase: outlines it when it is big, builds it and checks its own work.
+    Lead,
+    /// Works next to the lead on files of its own.
+    Parallel,
+    /// Checks a finished phase with fresh eyes, fixes what it finds and reports.
+    Verifier,
+    /// Fixes what a phase's verifier could not.
+    Fix,
+    /// Resolves conflicts between a phase's branch and where it lands.
+    Merge,
+}
+
 /// How a worker may touch the repository.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -641,6 +659,12 @@ pub struct Task {
     /// The user request it was delegated for.
     #[serde(default)]
     pub request_id: Option<String>,
+    /// Its part in the request's flow; absent for scouts, research and older tasks.
+    #[serde(default)]
+    pub role: Option<WorkerRole>,
+    /// The phase of the request's plan it works on (from 1), when the request has phases.
+    #[serde(default)]
+    pub phase: Option<u32>,
     /// The overnight run it works for: then it runs under the run's rules (the session's
     /// access, nothing on the never-list, the run's branch), whatever else the session says.
     #[serde(default)]
@@ -758,6 +782,12 @@ pub enum ApprovalSubject {
     },
     /// An action the orchestrator asked the user to approve.
     Action { action: String, details: String },
+    /// Ask for approval: start a phase from its lead's outline ("Start this plan?").
+    Outline {
+        task_id: TaskId,
+        title: String,
+        outline: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -812,13 +842,45 @@ pub struct Question {
     pub answered_at_ms: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanStep {
     pub title: String,
     pub detail: Option<String>,
-    /// The task carrying out this step, once delegated.
+    /// The task carrying out this step, once delegated: the phase's lead.
     pub task_id: Option<TaskId>,
+    /// Where the phase stands.
+    #[serde(default)]
+    pub stage: PhaseStage,
+    #[serde(default)]
+    pub started_at_ms: Option<i64>,
+    #[serde(default)]
+    pub ended_at_ms: Option<i64>,
+    /// The lead's outline, once it wrote one.
+    #[serde(default)]
+    pub outline: Option<String>,
+}
+
+/// Where a phase of a request stands, for the "Phase n / m" pill and the side panel's plan.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum PhaseStage {
+    #[default]
+    Pending,
+    /// Its lead reads the code and writes the outline.
+    Outlining,
+    /// Another vendor's model reads the outline (advisory).
+    OutlineReview,
+    /// The outline waits for the go-ahead (the user's, under Ask for approval).
+    AwaitingGoAhead,
+    /// Its lead builds it.
+    Building,
+    /// A fresh verifier checks it.
+    Verifying,
+    /// Its commits are being landed.
+    Landing,
+    Done,
+    Failed,
 }
 
 /// Who approved a plan.
@@ -826,6 +888,9 @@ pub struct PlanStep {
 #[serde(rename_all = "camelCase")]
 pub enum PlanApprover {
     User,
+    /// The orchestrator split the request into phases; each lead's outline gets its own
+    /// go-ahead.
+    Orchestrator,
     /// Approve for me, a plan the orchestrator did not mark risky: approved without review,
     /// and marked as such on the card.
     Brigadier,
@@ -1051,6 +1116,24 @@ pub enum OrchestratorStepKind {
     SearchedWeb { query: String },
     /// "Read {page}" (a Chat).
     ReadPage { url: String },
+    /// "Created {worker} with the instructions: …" (the task holds its spec).
+    Created { task_id: TaskId },
+    /// "Answered {worker}: {answer} — {why}".
+    Answered {
+        task_id: TaskId,
+        question: String,
+        answer: String,
+        why: String,
+    },
+    /// "Landed {commits} commits on {branch}".
+    Landed {
+        task_ids: Vec<TaskId>,
+        commits: u32,
+        branch: String,
+        head: String,
+    },
+    /// "Merged {branch} into {base}".
+    Merged { branch: String, base: String },
 }
 
 /// One step of the orchestrator, where it happened in the conversation.
@@ -1099,6 +1182,9 @@ pub enum DecisionKind {
     Routine,
     /// An overnight phase verified or settled: the run's card shows it, not the thread.
     PhaseOutcome,
+    /// The orchestrator answered a worker's question: the thread shows it as an "Answered"
+    /// row, the morning report lists it.
+    Answer,
 }
 
 /// Something decided on the user's behalf (under "Approve for me" and "Full access"), and

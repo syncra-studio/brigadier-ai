@@ -141,6 +141,13 @@ function describe(
         subtitle: by,
         body: <p className="text-sm whitespace-pre-wrap">{subject.details}</p>,
       };
+    case "outline":
+      return {
+        icon: <Sparkle />,
+        title: "Start this plan?",
+        subtitle: byline(by, subject.title),
+        body: <p className="text-sm whitespace-pre-wrap">{subject.outline}</p>,
+      };
   }
 }
 

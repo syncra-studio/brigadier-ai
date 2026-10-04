@@ -1117,6 +1117,7 @@ mod tests {
             title: title.into(),
             detail: detail.map(Into::into),
             task_id: None,
+            ..Default::default()
         }
     }
 

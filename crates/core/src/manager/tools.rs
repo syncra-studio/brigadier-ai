@@ -569,6 +569,7 @@ impl SessionManager {
                 title: step.title,
                 detail: step.detail,
                 task_id: None,
+                ..Default::default()
             })
             .collect();
         // Checked against the plans as they are, and recorded with the open ones replaced, in

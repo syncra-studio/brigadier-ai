@@ -305,6 +305,9 @@ pub(crate) fn stuck_cards(board: &Board, now: i64, after: i64) -> Vec<StuckCard>
                 format!("Approve or decline merging {branch} into {base}")
             }
             ApprovalSubject::Action { action, .. } => format!("Approve or decline: {action}"),
+            ApprovalSubject::Outline { title, .. } => {
+                format!("Start or decline the plan “{title}”")
+            }
         };
         stuck.push(StuckCard {
             card_id: approval.id.clone(),

@@ -979,6 +979,8 @@ impl SessionManager {
             review: None,
             gate: None,
             gate_link,
+            role: None,
+            phase: None,
             landing: None,
             fix_rounds: 0,
             fixes: Vec::new(),

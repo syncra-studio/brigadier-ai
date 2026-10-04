@@ -251,7 +251,8 @@ impl SessionManager {
             }
             ApprovalSubject::OutwardCommand { .. }
             | ApprovalSubject::Landing { .. }
-            | ApprovalSubject::FinishSession { .. } => {}
+            | ApprovalSubject::FinishSession { .. }
+            | ApprovalSubject::Outline { .. } => {}
         }
         self.waiters
             .answer(&card_id, CardAnswer::Decision(decision.clone()));

@@ -3,4 +3,4 @@
 /**
  * What a decision is, for where the app shows it.
  */
-export type DecisionKind = "routine" | "phaseOutcome";
+export type DecisionKind = "routine" | "phaseOutcome" | "answer";

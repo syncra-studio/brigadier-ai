@@ -6,4 +6,4 @@ import type { TaskId } from "./TaskId";
 /**
  * What an approval card asks.
  */
-export type ApprovalSubject = { "type": "cli", request: ApprovalRequest, } | { "type": "outwardCommand", argv: Array<string>, cwd: string, } | { "type": "landing", taskId: TaskId, branch: string, diffStat: DiffStat, } | { "type": "finishSession", branch: string, base: string, commits: number, diffStat: DiffStat, } | { "type": "action", action: string, details: string, };
+export type ApprovalSubject = { "type": "cli", request: ApprovalRequest, } | { "type": "outwardCommand", argv: Array<string>, cwd: string, } | { "type": "landing", taskId: TaskId, branch: string, diffStat: DiffStat, } | { "type": "finishSession", branch: string, base: string, commits: number, diffStat: DiffStat, } | { "type": "action", action: string, details: string, } | { "type": "outline", taskId: TaskId, title: string, outline: string, };
