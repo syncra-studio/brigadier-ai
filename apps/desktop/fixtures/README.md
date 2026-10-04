@@ -13,9 +13,10 @@ reporting, partial completion and full completion. The active fifth phase remain
 visible past the initial four rows. Expand criteria, use Show N more, open a worker,
 and exercise Start/Stop/Merge/Continue/Read report against the fixture actions.
 
+Normal plans render as the summary context card's Plan section, each in a card of its own here.
 Use `?summary=1` for the actual pinned summary and its thread links. Check a wide
-window and a 320px window: the same normal cards appear beneath the context card,
-and View plan opens the floating summary at narrow widths. Earlier revision links
+window and a 320px window: the plan is a section of the context card, the run's card sits
+beneath it, and View plan opens the floating summary at narrow widths. Earlier revision links
 open the current card, whose history folds. The summary fixture holds only normal plans; the application adapter uses real run records when present.
 
 Check both density modes; Tab through folds, worker/report links and buttons, and use
@@ -36,5 +37,6 @@ run card's Phase 2 for its steps.
 
 The page has the app's window layout (rail, sidebar, top bar), so the summary sits where it does in the
 app. Query switches: `density=compact`; `sidebar=0` (sidebar closed); `run=live` (the run still working)
-or `run=none` (a normal session, whose plan is an ordinary plan card); `plans=N` (N more plan cards).
+or `run=none` (a normal session, whose plan is the context card's Plan section); `plans=N` (N more
+plans: the latest shows, the rest sit under Earlier plans).
 `window.night` holds the stores and `revealPlan`/`revealOvernight` for probes.

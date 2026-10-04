@@ -1,11 +1,11 @@
-import { memo, useState } from "react";
+import { memo, useId, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { Lines } from "@/app/conversation/cards/common";
 import { taskState } from "@/app/conversation/rowWords";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
 import { useAction } from "@/app/conversation/useAction";
-import { AgentPlan, type AgentPlanStepStatus } from "@/components/assistant-ui/elements/agent-plan";
+import { type AgentPlanStepStatus, StepMark } from "@/components/assistant-ui/elements/agent-plan";
 import { disclosureRow } from "@/components/assistant-ui/elements/surfaces";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,24 @@ function stepStatus(state: TaskState | undefined): AgentPlanStepStatus {
       return "failed";
     default:
       return "active";
+  }
+}
+
+/** A plan's state in words, as its badge says it. */
+function planStateWord(state: PlanState): string {
+  switch (state.type) {
+    case "proposed":
+      return "proposed";
+    case "inReview":
+      return "in plan review";
+    case "approved":
+      return state.by === "user" ? "approved by you" : state.by === "brigadier" ? "auto-approved" : "approved after plan review";
+    case "rejected":
+      return "rejected";
+    case "superseded":
+      return "replaced by a revision";
+    case "revising":
+      return "being revised";
   }
 }
 
@@ -107,50 +125,7 @@ function PlanReview({ plan }: { plan: Plan }) {
         </div>
       )}
       {plan.gate && <ReviewRound gate={plan.gate} notes={plan.reviewNotes} />}
-      {plan.revises && <PlanHistory plan={plan} />}
     </>
-  );
-}
-
-function PlanHistory({ plan }: { plan: Plan }) {
-  const revisions = useBoard(
-    useShallow((s) => {
-      const history: Plan[] = [];
-      const seen = new Set([plan.id]);
-      let id = plan.revises;
-      while (id && !seen.has(id)) {
-        seen.add(id);
-        const before = s.board?.plans[id];
-        if (!before) break;
-        history.push(before);
-        id = before.revises;
-      }
-      return history;
-    }),
-  );
-  if (revisions.length === 0) return null;
-  return (
-    <details className="text-muted-foreground text-xs">
-      <summary className={disclosureRow}>
-        Earlier revisions ({revisions.length})
-      </summary>
-      <div className="flex flex-col gap-3 pt-2">
-        {revisions.map((revision) => (
-          <div key={revision.id} className="flex flex-col gap-1 wrap-anywhere">
-            <p className="font-medium">{revision.title}</p>
-            <ol className="list-inside list-decimal">
-              {revision.steps.map((step, index) => (
-                <li key={index}>
-                  {step.title}
-                  {step.detail && ` · ${step.detail}`}
-                </li>
-              ))}
-            </ol>
-            {revision.gate && <ReviewRound gate={revision.gate} notes={revision.reviewNotes} />}
-          </div>
-        ))}
-      </div>
-    </details>
   );
 }
 
@@ -192,17 +167,7 @@ function ReviewRound({ gate, notes }: { gate: Gate; notes: readonly string[] }) 
           </>
         )}
       </p>
-      {outcome === "passed" && notes.length > 0 && (
-        // An approved plan's notes are for whoever carries it out: behind a disclosure.
-        <details className="text-muted-foreground text-xs">
-          <summary className={disclosureRow}>
-            Review notes
-          </summary>
-          <div className="pt-1">
-            <Lines items={notes} />
-          </div>
-        </details>
-      )}
+      {outcome === "passed" && notes.length > 0 && <Lines items={notes} />}
       {findings.length > 0 && <Lines items={findings} />}
       {(outcome === "noResult" || outcome === "unverified") && reasons.length > 0 && (
         <Lines items={reasons} />
@@ -211,22 +176,133 @@ function ReviewRound({ gate, notes }: { gate: Gate; notes: readonly string[] }) 
   );
 }
 
-/** The orchestrator's plan: its steps with the tasks carrying them out, and its approval. */
-export const PlanCardView = memo(function PlanCardView({
-  cardId,
-  className,
+/** How the plan's review reads on its disclosure, before it opens. */
+function reviewWord(plan: Plan): string {
+  switch (plan.gate?.outcome?.type) {
+    case undefined:
+      return plan.gate ? "In review" : "Review";
+    case "passed":
+      return plan.reviewNotes.length > 0
+        ? `Approved in review, ${count(plan.reviewNotes.length, "note")}`
+        : "Approved in review";
+    case "failed":
+      return "Review found problems";
+    default:
+      return "Review";
+  }
+}
+
+/** A step of the plan on one line, its mark and title; it opens to its state, worker and words. */
+function PlanStepRow({
+  title,
+  detail,
+  status,
+  word,
+  taskId,
 }: {
-  cardId: string;
-  /** For the card's own surface, e.g. none inside the summary's card. */
-  className?: string;
+  title: string;
+  detail: string | null;
+  status: AgentPlanStepStatus;
+  word: string;
+  taskId: string | null;
 }) {
-  const plan = useBoard((s) => s.board?.plans[cardId]);
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  return (
+    <li className="flex flex-col">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen(!open)}
+        className={cn(disclosureRow, "flex items-start gap-2 py-0.5 text-sm")}
+      >
+        <StepMark status={status} />
+        <span className={cn("min-w-0 flex-1", open ? "wrap-anywhere" : "truncate")}>{title}</span>
+      </button>
+      <div id={id} hidden={!open} className="flex gap-2 pb-1">
+        {/* Under the title, past the step's mark. */}
+        <span aria-hidden className="w-icon-md shrink-0" />
+        <div className="text-muted-foreground flex min-w-0 flex-1 flex-col gap-1 text-xs">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="shrink-0">{word}</span>
+            {/* The worker carrying it out, by its name. */}
+            {taskId && <WorkerChip taskId={taskId} />}
+          </span>
+          {detail && <p className="whitespace-pre-wrap wrap-anywhere">{detail}</p>}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+/**
+ * The session's plans before the current one, and the current one's earlier revisions: each its
+ * title, state, steps and review, behind one disclosure.
+ */
+function EarlierPlans({ plan, older }: { plan: Plan; older: readonly string[] }) {
+  const earlier = useBoard(
+    useShallow((s) => {
+      const list: Plan[] = [];
+      const seen = new Set([plan.id]);
+      let id = plan.revises;
+      while (id && !seen.has(id)) {
+        seen.add(id);
+        const before = s.board?.plans[id];
+        if (!before) break;
+        list.push(before);
+        id = before.revises;
+      }
+      for (const olderId of older.toReversed()) {
+        const before = s.board?.plans[olderId];
+        if (before && !seen.has(olderId)) list.push(before);
+      }
+      return list;
+    }),
+  );
+  if (earlier.length === 0) return null;
+  return (
+    <details className="text-muted-foreground text-xs">
+      <summary className={disclosureRow}>Earlier plans ({earlier.length})</summary>
+      <div className="flex flex-col gap-3 pt-2">
+        {earlier.map((before) => (
+          <div
+            key={before.id}
+            id={`plan-${before.id}`}
+            tabIndex={-1}
+            className="rounded-control flex flex-col gap-1 outline-none wrap-anywhere focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <p>
+              <span className="text-foreground/80">{before.title}</span> · {planStateWord(before.state)}
+            </p>
+            <ol className="list-inside list-decimal">
+              {before.steps.map((step, index) => (
+                <li key={index}>{step.title}</li>
+              ))}
+            </ol>
+            {before.gate && <ReviewRound gate={before.gate} notes={before.reviewNotes} />}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+/**
+ * The session's plan, a section of the summary's context card: one line per step (each opening
+ * to its state, worker and description), the review behind a disclosure, the approval while it
+ * is proposed, and earlier plans behind another. `planIds` are the session's own plans, oldest
+ * first; the last is the current one.
+ */
+export const PlanSection = memo(function PlanSection({ planIds }: { planIds: readonly string[] }) {
+  const currentId = planIds.at(-1);
+  const plan = useBoard((s) => (currentId ? s.board?.plans[currentId] : undefined));
   // Only what the steps show of their tasks, so unrelated task updates don't rerender the plan.
   const steps = useBoard(
     useShallow((s) =>
       (plan?.steps ?? []).flatMap((step) => {
         const task = step.taskId ? s.board?.tasks[step.taskId] : undefined;
-        return [task?.id ?? null, task?.state ?? null, task ? taskState(task).word : null, task?.number ?? null];
+        return [task?.id ?? null, task?.state ?? null, task ? taskState(task).word : null];
       }),
     ),
   );
@@ -240,55 +316,64 @@ export const PlanCardView = memo(function PlanCardView({
   if (!plan) return null;
 
   const proposed = plan.state.type === "proposed";
+  const reviewed = plan.gate !== null || plan.responses.length > 0;
 
   return (
-    <AgentPlan
+    <section
       data-card="plan"
       id={`plan-${plan.id}`}
-      className={className}
       tabIndex={-1}
-      title={plan.title}
-      badges={
-        <>
+      aria-label={`Plan: ${plan.title}`}
+      className="rounded-control flex flex-col gap-1 outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    >
+      <h3
+        title={plan.title}
+        className="text-muted-foreground flex h-control-xs items-center justify-between gap-2 text-xs"
+      >
+        Plan
+        <span className="flex min-w-0 items-center gap-1.5">
           {plan.risky && <Badge variant="warning">Risky</Badge>}
           <PlanStateBadge state={plan.state} />
-        </>
-      }
-      steps={plan.steps.map((step, index) => {
-        const taskId = steps[index * 4] as string | null | undefined;
-        const state = steps[index * 4 + 1] as TaskState | null | undefined;
-        const word = steps[index * 4 + 2] as string | null | undefined;
-        const number = steps[index * 4 + 3] as number | null | undefined;
-        const status = stepStatus(state ?? undefined);
-        return {
-          key: `${index}`,
-          title: step.title,
-          detail: step.detail,
-          status,
-          // The same words as the worker's row in the thread.
-          statusLabel: word ?? "Planned",
-          // Only the step at work shows its description; the rest open on demand.
-          folded: status !== "active",
-          // The worker carrying it out, named short: the step's title already says what it does.
-          aside: taskId ? <WorkerChip taskId={taskId} label={`task-${number}`} /> : undefined,
-        };
-      })}
-      footer={
-        <>
-          <PlanReview plan={plan} />
-          {plan.state.type === "rejected" && plan.state.message && (
-            <p className="text-muted-foreground text-xs">Rejected: {plan.state.message}</p>
-          )}
-          {proposed && decider === "user" && <PlanDecision plan={plan} />}
-          {proposed && decider === "brigadier" && (
-            <p className="text-muted-foreground text-xs">
-              Brigadier decides this plan for you
-              {plan.risky || plan.steps.length > 1 ? " after an independent review" : ""}.
-            </p>
-          )}
-        </>
-      }
-    />
+        </span>
+      </h3>
+      <ol className="flex flex-col">
+        {plan.steps.map((step, index) => {
+          const taskId = steps[index * 3] as string | null | undefined;
+          const state = steps[index * 3 + 1] as TaskState | null | undefined;
+          const word = steps[index * 3 + 2] as string | null | undefined;
+          return (
+            <PlanStepRow
+              key={index}
+              title={step.title}
+              detail={step.detail}
+              status={stepStatus(state ?? undefined)}
+              // The same words as the worker's row in the thread.
+              word={word ?? "Planned"}
+              taskId={taskId ?? null}
+            />
+          );
+        })}
+      </ol>
+      {reviewed && (
+        <details className="text-muted-foreground text-xs">
+          <summary className={disclosureRow}>{reviewWord(plan)}</summary>
+          <div className="flex flex-col gap-2 pt-1">
+            <PlanReview plan={plan} />
+          </div>
+        </details>
+      )}
+      {plan.state.type === "rejected" && plan.state.message && (
+        <p className="text-muted-foreground text-xs">Rejected: {plan.state.message}</p>
+      )}
+      {proposed && decider === "user" && <PlanDecision plan={plan} />}
+      {proposed && decider === "brigadier" && (
+        <p className="text-muted-foreground text-xs">
+          Brigadier decides this plan for you
+          {plan.risky || plan.steps.length > 1 ? " after an independent review" : ""}.
+        </p>
+      )}
+      <EarlierPlans plan={plan} older={planIds.slice(0, -1)} />
+    </section>
   );
 });
 

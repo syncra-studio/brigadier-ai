@@ -10,7 +10,7 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { OvernightPlanCard } from "@/app/conversation/cards/OvernightPlanCard";
-import { PlanCardView } from "@/app/conversation/cards/PlanCardView";
+import { PlanSection } from "@/app/conversation/cards/PlanSection";
 import { PlanCardLink } from "@/app/conversation/cards/PlanCardLink";
 import { PendingActionCard } from "@/app/conversation/ActionCards";
 import { PinnedSummary, PinnedSummaryToggle, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
@@ -588,7 +588,10 @@ function FixturePage() {
                     className="flex min-w-0 flex-col gap-2"
                   >
                     <h2 className="text-muted-foreground text-sm">{item.name}</h2>
-                    <PlanCardView cardId={item.id} />
+                    {/* As in the summary's context card. */}
+                    <div className="bg-card rounded-summary shadow-summary px-3 py-2.5">
+                      <PlanSection planIds={[item.id]} />
+                    </div>
                   </section>
                 ))}
                 {overnight.map(({ label, model }) => (

@@ -110,26 +110,7 @@ function StepRow({ step }: { step: AgentPlanStep }) {
   } | null>(null);
   const open = fold?.status === step.status ? fold.open : !step.folded;
   const foldable = step.folded !== undefined && Boolean(step.detail);
-  const icon = (
-    <span className="flex h-(--text-sm--line-height) w-icon-md shrink-0 items-center justify-center">
-      {step.status === "done" ? (
-        <Check className="text-muted-foreground size-icon-sm" />
-      ) : step.status === "active" ? (
-        <Spinner className="text-foreground size-icon-sm animate-spin motion-reduce:animate-none" />
-      ) : step.status === "failed" ? (
-        <X className="text-destructive size-icon-sm" />
-      ) : step.status === "skipped" ? (
-        <Minus className="text-muted-foreground size-icon-sm" />
-      ) : step.status === "partial" ? (
-        <svg aria-hidden viewBox="0 0 16 16" className="text-muted-foreground size-icon-sm">
-          <circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" />
-          <path d="M8 2.5a5.5 5.5 0 0 0 0 11z" fill="currentColor" />
-        </svg>
-      ) : (
-        <span aria-hidden className="bg-foreground/20 size-1.5 rounded-full" />
-      )}
-    </span>
-  );
+  const icon = <StepMark status={step.status} />;
   const heading = (
     <span className="flex min-w-0 flex-1 flex-col">
       <span className="wrap-anywhere">{step.title}</span>
@@ -183,5 +164,29 @@ function StepRow({ step }: { step: AgentPlanStep }) {
         </div>
       )}
     </li>
+  );
+}
+
+/** A step's mark: done, at work, failed, skipped, partly done, or still to come. */
+export function StepMark({ status }: { status: AgentPlanStepStatus }) {
+  return (
+    <span className="flex h-(--text-sm--line-height) w-icon-md shrink-0 items-center justify-center">
+      {status === "done" ? (
+        <Check className="text-muted-foreground size-icon-sm" />
+      ) : status === "active" ? (
+        <Spinner className="text-foreground size-icon-sm animate-spin motion-reduce:animate-none" />
+      ) : status === "failed" ? (
+        <X className="text-destructive size-icon-sm" />
+      ) : status === "skipped" ? (
+        <Minus className="text-muted-foreground size-icon-sm" />
+      ) : status === "partial" ? (
+        <svg aria-hidden viewBox="0 0 16 16" className="text-muted-foreground size-icon-sm">
+          <circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" />
+          <path d="M8 2.5a5.5 5.5 0 0 0 0 11z" fill="currentColor" />
+        </svg>
+      ) : (
+        <span aria-hidden className="bg-foreground/20 size-1.5 rounded-full" />
+      )}
+    </span>
   );
 }

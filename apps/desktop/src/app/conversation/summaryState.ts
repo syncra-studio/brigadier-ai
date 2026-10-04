@@ -29,19 +29,25 @@ export function revealOvernight(runId: string): void {
 
 function reveal(elementId: () => string): void {
   const id = elementId();
-  // The card opens at its top, wherever it and the column were left.
-  for (const key of keptScroll.keys())
-    if (key.endsWith(`/${id}`) || key.endsWith("/column")) keptScroll.delete(key);
+  // The session's cards open where the plan is, not where they were left.
+  const session = `${useBoard.getState().board?.conversationId}/`;
+  for (const key of keptScroll.keys()) if (key.startsWith(session)) keptScroll.delete(key);
   if (useSummary.getState().layout === "float")
     useSummary.setState({ floating: true });
   else setPinnedSummary(true);
   requestAnimationFrame(() =>
     requestAnimationFrame(() => {
-      const card = document.getElementById(id);
-      const own = card?.closest<HTMLElement>("[data-slot=summary-card]");
-      own?.firstElementChild?.scrollTo({ top: 0 });
-      (own ?? card)?.scrollIntoView({ block: "nearest" });
-      card?.focus({ preventScroll: true });
+      const target = document.getElementById(id);
+      if (!target) return;
+      // An earlier plan sits behind its disclosure.
+      for (let fold = target.closest("details"); fold; fold = fold.parentElement?.closest("details") ?? null)
+        fold.open = true;
+      // Its top, in its own card; then that card, in the column.
+      const scroller = target.closest("[data-slot=summary-card]")?.firstElementChild;
+      if (scroller && target.offsetHeight > scroller.clientHeight)
+        scroller.scrollTop += target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      target.scrollIntoView({ block: "nearest" });
+      target.focus({ preventScroll: true });
     }),
   );
 }

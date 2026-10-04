@@ -27,7 +27,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { showCard } from "@/app/conversation/ActionCards";
 import { isRunRequest } from "@/app/conversation/blocks";
-import { PlanCardView } from "@/app/conversation/cards/PlanCardView";
+import { PlanSection } from "@/app/conversation/cards/PlanSection";
 import { OvernightPlanCard } from "@/app/conversation/cards/OvernightPlanCard";
 import {
   overnightActions,
@@ -86,7 +86,7 @@ const NO_DECISIONS: readonly Decision[] = [];
 /** How long a reopened summary card keeps restoring its offset while its rows arrive. */
 const RESTORE_MS = 1000;
 
-/** A plan card inside a summary card, which is its surface. */
+/** The run's card inside a summary card, which is its surface. */
 const BARE = "rounded-none border-0 bg-transparent";
 
 /** The branch's +N −N against its base, read again whenever a worker lands. */
@@ -707,7 +707,7 @@ function SummaryCard({
 
 /**
  * A session's summary, pinned at the top end of its thread's pane: the project, the branch (with
- * what it changed, for a worktree session), the workers and the plan, each plan its own card. It
+ * what it changed, for a worktree session), the plan and the workers, and a run's own card. It
  * eases in from the pane's end when pinned and out when unpinned. Where the pane has too little
  * room beside the thread's column it hides, and the same cards float over the thread instead,
  * opened from the top bar.
@@ -828,8 +828,9 @@ function BranchRow({ branch, diff }: { branch: string; diff: DiffStat | null }) 
 }
 
 /**
- * The summary's cards, pinned in the pane or floating from the top bar: the context card, then
- * the run's card, then any other plan. `active` while they can be seen, for their scroll offsets.
+ * The summary's cards, pinned in the pane or floating from the top bar: the context card (with
+ * the session's plan as one of its sections), then the run's card. `active` while they can be
+ * seen, for their scroll offsets.
  */
 function SummaryContent({
   conversation,
@@ -849,8 +850,9 @@ function SummaryContent({
       ? Object.keys(s.board.tasks).length
       : 0,
   );
-  // A run's own plans (Phase 0's, each phase lead's) show inside its card.
-  const plans = useBoard(
+  // The session's own plans, oldest first. A run's own plans (Phase 0's, each phase lead's) show
+  // inside its card instead.
+  const planIds = useBoard(
     useShallow((s) =>
       s.board?.conversationId === conversation.id
         ? Object.values(s.board.plans)
@@ -859,6 +861,9 @@ function SummaryContent({
             .map((plan) => plan.id)
         : [],
     ),
+  );
+  const plans = planIds.filter(
+    (id) => !overnight.some((card) => card.run.planId === id || card.run.planning?.planId === id),
   );
   const run = shownRun(overnight);
   const setup =
@@ -908,9 +913,10 @@ function SummaryContent({
             </GitActions>
           )}
           {pullRequest && <PullRequestRow pullRequest={pullRequest} />}
-          {(workers > 0 || sources || waiting > 0 || decided > 0) && (
+          {(plans.length > 0 || workers > 0 || sources || waiting > 0 || decided > 0) && (
             <div className="border-border border-t" />
           )}
+          {plans.length > 0 && <PlanSection planIds={plans} />}
           <WaitingOnYou conversationId={conversation.id} />
           {workers > 0 && <WorkersSummary conversationId={conversation.id} />}
           <DecidedForYou conversationId={conversation.id} />
@@ -923,13 +929,6 @@ function SummaryContent({
           <OvernightPlanCard model={model} actions={overnightActions} className={BARE} />
         </SummaryCard>
       ))}
-      {plans
-        .filter((id) => !overnight.some((card) => card.run.planId === id || card.run.planning?.planId === id))
-        .map((id) => (
-          <SummaryCard key={id} scrollKey={`${conversation.id}/plan-${id}`} active={active}>
-            <PlanCardView cardId={id} className={BARE} />
-          </SummaryCard>
-        ))}
     </>
   );
 }
