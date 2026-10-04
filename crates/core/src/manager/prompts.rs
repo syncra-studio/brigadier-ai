@@ -69,7 +69,9 @@ How to work:
 - When the user settles something later work must respect (a decision, a convention, a contract), or states a preference, keep it with remember (personal: true for a preference that holds in every project). A rule the user sets for this session only is a decision; a convention is how the project always works, and is shared with its other sessions and exported to AGENTS.md. Do it silently. Plan approvals and ask_user answers are kept for you.
 - search_transcript finds anything said earlier in this conversation, including what is no longer in view.
 - Delegate with delegate_task. Write a complete spec: the worker sees nothing of this conversation. Say what to do, the relevant context, constraints, what "done" means and how to verify it (typecheck, lint, build, existing tests, a runtime check). Use scout tasks to look around the repository and research tasks to check current docs; don't guess about code you haven't had scouted.
-- Run independent tasks in parallel: tasks that change different files. Tasks that would edit the same file run one after another, the later one starting once the earlier one landed; run together, they conflict and need a merge task. Tools return at once; never wait or poll. Reports, worker questions and outcomes arrive later as messages from Brigadier, in blocks like [report task-3 …] … [/report]. Only these and the user's messages reach you.
+- Run independent tasks in parallel: tasks that change different files. Tasks that would edit the same file run one after another, the later one starting once the earlier one landed; run together, they conflict and need a merge task.
+- Once you accepted a plan step's task (its change is in review or verification), delegate the next step right away when both hold: it edits none of the files that task's report lists under Changes, and it doesn't depend on that step's code or decisions (it doesn't call, extend, test or document what that step adds). Otherwise start it once the earlier step landed. If the accepted task is sent back and its fix touches files the started step also touches, the later one needs a merge task.
+- Tools return at once; never wait or poll. Reports, worker questions and outcomes arrive later as messages from Brigadier, in blocks like [report task-3 …] … [/report]. Only these and the user's messages reach you.
 - A worker may ask you a blocking question ([question from task-N]); answer it with message_worker. message_worker also steers a running worker, or sends a reported worker back to fix something.
 - When a write task's report is good, accept it with accept_task and a proper commit message (a short imperative subject line, a blank line, then why). Brigadier then has the change reviewed by a model from another vendor and verified by a fresh worker against each "done when" criterion, then lands it. When they find problems, Brigadier sends the worker back to fix them itself. You hear only the outcome: landed, or a [checks task-N] note when it can't be fixed or verified, which says what to decide. Only when the user explicitly tells you to land a change despite its checks' findings, accept it again with override: true.
 - The user's session summary lists what Brigadier decided on their behalf and what only they can do (each worker's needs_user, checks that need them first). Add your own with note_for_user: a judgement call you made for them that they would want to know (kind decided, with why), or something only they can do (kind waiting), which stays listed until they mark it done; you hear when they do. Work that doesn't depend on it carries on meanwhile.
@@ -1067,6 +1069,13 @@ mod environment_tests {
                 }
                 assert!(!prompt.contains("Larger plans"));
                 assert!(!prompt.contains("forced reviews"));
+                // The next plan step may start while the accepted one is in review, only when
+                // it touches other files and doesn't depend on it.
+                assert!(prompt.contains("delegate the next step right away when both hold"));
+                assert!(prompt.contains("it edits none of the files that task's report lists"));
+                assert!(prompt.contains("it doesn't depend on that step's code or decisions"));
+                assert!(prompt.contains("Otherwise start it once the earlier step landed."));
+                assert!(prompt.contains("the later one needs a merge task"));
             }
         }
         let full = orchestrator(&conversation("fullAccess"), None, &[], Some(&run), true);
