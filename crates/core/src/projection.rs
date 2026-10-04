@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::model::{
     Catalog, Conversation, ConversationId, DomainEvent, Project, ProjectId, Settings,
@@ -9,6 +9,8 @@ use crate::model::{
 pub(crate) struct Projection {
     pub(crate) projects: HashMap<ProjectId, Project>,
     pub(crate) conversations: HashMap<ConversationId, Conversation>,
+    /// Conversations that were deleted: nothing more is recorded on their streams.
+    pub(crate) deleted: HashSet<ConversationId>,
     pub(crate) settings: Settings,
     /// Global seq of the event that last set each last-writer-wins field. Concurrent writers
     /// can resume in a different order than they committed; an older event must not win.
@@ -51,6 +53,7 @@ impl Projection {
             }
             DomainEvent::ConversationDeleted { id } => {
                 self.conversations.remove(id);
+                self.deleted.insert(id.clone());
             }
             DomainEvent::ProjectRemoved { id } => {
                 self.projects.remove(id);

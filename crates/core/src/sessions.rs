@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -1618,6 +1618,16 @@ impl Core {
     }
 
     pub(crate) async fn record(&self, events: Vec<(String, DomainEvent)>) -> Result<Vec<i64>> {
+        {
+            let projection = self.projection();
+            if let Some(id) = events
+                .iter()
+                .find_map(|(stream, _)| deleted_owner(&projection.deleted, stream))
+            {
+                // Something late (a report, a worker's last step) after the delete purged it.
+                return Err(Error::NotFound(format!("conversation {id} was deleted")));
+            }
+        }
         let new = events
             .iter()
             .map(|(stream, event)| to_new_event(stream.clone(), event))
@@ -1629,6 +1639,16 @@ impl Core {
         }
         Ok(stored.iter().map(|event| event.stream_seq).collect())
     }
+}
+
+/// The deleted conversation `stream` belongs to (its transcript, orchestrator or draft).
+fn deleted_owner(deleted: &HashSet<ConversationId>, stream: &str) -> Option<ConversationId> {
+    if deleted.is_empty() {
+        return None;
+    }
+    let (kind, id) = stream.split_once(':')?;
+    let id = ConversationId(id.to_owned());
+    (matches!(kind, "conversation" | "orch" | "draft") && deleted.contains(&id)).then_some(id)
 }
 
 fn to_new_event(stream: String, event: &DomainEvent) -> Result<NewEvent> {

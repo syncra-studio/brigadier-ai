@@ -367,7 +367,9 @@ impl SessionManager {
     pub async fn archive(&self, id: ConversationId) -> Result<Conversation> {
         let conversation = self.core.conversation(&id)?;
         self.delete_side_chats(&id).await;
+        let runs = self.fence_runs(&id).await;
         self.wind_down(&conversation).await;
+        self.close_runs(runs, true).await;
         self.core.set_lifecycle(id, Lifecycle::Archived).await
     }
 
@@ -553,7 +555,9 @@ impl SessionManager {
     ) -> Result<()> {
         let conversation = self.core.conversation(&id)?;
         self.delete_side_chats(&id).await;
+        let runs = self.fence_runs(&id).await;
         self.wind_down(&conversation).await;
+        self.close_runs(runs, false).await;
         let tasks = self.core.tasks(&id).await.unwrap_or_default();
         if delete_branches
             && let Some(Setup::Session {

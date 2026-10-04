@@ -276,6 +276,20 @@ impl SessionManager {
         }
     }
 
+    /// Gives back everything `run_id`'s tasks held: its slots, and the build lease if one of
+    /// them had it. Its waiting tasks find the run over at their next look.
+    pub(crate) fn release_run(&self, run_id: &OvernightRunId) {
+        let admission = &self.overnight.admission;
+        let held = admission.held().remove(run_id).unwrap_or_default();
+        {
+            let mut building = admission.building.lock().unwrap_or_else(|p| p.into_inner());
+            if building.as_ref().is_some_and(|(id, _)| held.contains(id)) {
+                *building = None;
+            }
+        }
+        admission.freed.notify_waiters();
+    }
+
     /// Gives back a run task's slot when no turn of its worker runs (a call that took it
     /// started none).
     pub(crate) async fn release_if_idle(&self, task: &Task) {

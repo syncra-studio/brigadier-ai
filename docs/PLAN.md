@@ -119,8 +119,8 @@ The user talks to exactly one **orchestrator**. The orchestrator never does work
 - **Sidebar:** New chat and Search, then navigation items (Plugins, Scheduled, Usage), then Pinned, then **Projects** (folders with their sessions nested), then **Chats**.
 - **Lifecycle** (applies to both sessions and chats):
   - **Hibernate:** automatic when idle. CLI processes stop and temp files are cleaned up, but the session stays in the sidebar, ready to continue.
-  - **Archive:** hidden in an Archived view. Workers stop and all leftovers are cleaned up. The transcript and artifacts are kept, so the session is restorable; the orchestrator restarts from the Brain and the transcript. Unmerged branches are kept.
-  - **Delete:** permanent. It asks what to do with unmerged branches, and has a "forget what the Brain learned from this session" checkbox, off by default. Its usage and routing records go too (its turns and its tasks' outcomes in `routing.sqlite`).
+  - **Archive:** hidden in an Archived view. Workers stop and all leftovers are cleaned up. The transcript and artifacts are kept, so the session is restorable; the orchestrator restarts from the Brain and the transcript. Unmerged branches are kept. An overnight run of the session ends first, durably, before anything stops: it winds down as if stopped, its phases settle as cut off and its report is written (without a notification), so Continue can follow a restore and nothing of it resumes after a restart.
+  - **Delete:** permanent. It asks what to do with unmerged branches, and has a "forget what the Brain learned from this session" checkbox, off by default. Its usage and routing records go too (its turns and its tasks' outcomes in `routing.sqlite`). A run of it ends first like on archive, without a report; nothing is recorded on a deleted conversation's streams afterwards.
 - **Permission level** (composer picker, remembered per project):
   - **Ask for approval:** you approve every plan and every change. Sandboxed.
   - **Approve for me** (default): Brigadier approves on your behalf, sandboxed.
