@@ -11,6 +11,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "lint": "oxlint --deny-warnings",
     "tauri": "tauri",
+    "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
+    "tauri:debug-app": "tauri build --debug --bundles app --config src-tauri/tauri.dev.conf.json",
     "stage-sidecar": "node scripts/stage-sidecar.mjs"
   },
   "dependencies": {

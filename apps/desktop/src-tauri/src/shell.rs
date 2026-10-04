@@ -40,6 +40,36 @@ pub fn exit_code() -> i32 {
     EXIT_CODE.load(Ordering::Acquire)
 }
 
+/// Whether this process can reach the window server. AppKit aborts the process when it can't
+/// (inside a sandbox that denies it, or over SSH without the desktop session), before any of
+/// Brigadier's own code runs, so the app checks first.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+pub fn window_server_reachable() -> bool {
+    use std::ffi::c_char;
+    unsafe extern "C" {
+        static bootstrap_port: u32;
+        static mach_task_self_: u32;
+        fn bootstrap_look_up(bootstrap: u32, name: *const c_char, port: *mut u32) -> i32;
+        fn mach_port_deallocate(task: u32, name: u32) -> i32;
+    }
+    let mut port = 0;
+    // SAFETY: looks up a fixed, NUL-terminated service name in this process's bootstrap
+    // namespace, writing only the local `port`; the send right it returns is released below.
+    let found = unsafe {
+        bootstrap_look_up(
+            bootstrap_port,
+            c"com.apple.windowserver.active".as_ptr(),
+            &mut port,
+        )
+    } == 0;
+    if found {
+        // SAFETY: `port` is the send right the lookup just gave this task.
+        unsafe { mach_port_deallocate(mach_task_self_, port) };
+    }
+    found
+}
+
 /// The menu-bar item's menu: open, the conversations running now ("Running"), quit.
 fn tray_menu(app: &AppHandle, running: &[RunningChat]) -> tauri::Result<Menu<tauri::Wry>> {
     let open_item = MenuItemBuilder::with_id("open", "Open Brigadier").build(app)?;

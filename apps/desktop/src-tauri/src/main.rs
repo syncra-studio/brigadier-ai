@@ -36,6 +36,13 @@ use crate::launcher::Launcher;
 
 /// Environment variable carrying the timing tolerance (shared with the daemon).
 const TOLERANCE_ENV: &str = "BRIGADIER_BUDGET_TOLERANCE";
+/// The installed app's identity, and the one debug builds take instead (`tauri.dev.conf.json`).
+const RELEASE_IDENTIFIER: &str = "ai.brigadier.app";
+const DEBUG_IDENTIFIER: &str = "ai.brigadier.dev";
+/// The exit code when there's no window server to draw on (1 is a startup error, 2 a smoke
+/// check that failed).
+#[cfg(target_os = "macos")]
+const NO_WINDOW_SERVER: i32 = 3;
 
 pub struct AppState {
     pub bridge: Bridge,
@@ -467,6 +474,15 @@ fn main() {
         .with_writer(std::io::stderr)
         .init();
 
+    #[cfg(target_os = "macos")]
+    if !shell::window_server_reachable() {
+        eprintln!(
+            "brigadier: no window server here (a sandbox or an SSH session), so the app and \
+             --smoke can't start; run it from the logged-in desktop session"
+        );
+        std::process::exit(NO_WINDOW_SERVER);
+    }
+
     let args: Vec<_> = std::env::args().collect();
     overnight_notifications::configure(&args);
     let intent = overnight_notifications::host_id(&args);
@@ -515,6 +531,12 @@ fn main() {
         .unwrap_or_default();
 
     let mut context = tauri::generate_context!();
+    // A debug build never takes the installed app's identity, even when built without
+    // `pnpm tauri:dev` / `tauri:debug-app` (which give the bundle that identity too): a launch
+    // would otherwise be handed to the installed app by the single-instance lock.
+    if cfg!(debug_assertions) && context.config().identifier == RELEASE_IDENTIFIER {
+        context.config_mut().identifier = DEBUG_IDENTIFIER.to_owned();
+    }
     if intent.is_some() {
         for window in &mut context.config_mut().app.windows {
             window.visible = false;

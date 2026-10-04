@@ -8,6 +8,8 @@
     "typecheck": "pnpm --filter @brigadier/desktop typecheck",
     "lint": "pnpm --filter @brigadier/desktop lint",
     "build": "pnpm --filter @brigadier/desktop build",
-    "tauri": "pnpm --filter @brigadier/desktop tauri"
+    "tauri": "pnpm --filter @brigadier/desktop tauri",
+    "tauri:dev": "pnpm --filter @brigadier/desktop tauri:dev",
+    "tauri:debug-app": "pnpm --filter @brigadier/desktop tauri:debug-app"
   }
 }

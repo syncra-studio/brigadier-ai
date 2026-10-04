@@ -84,8 +84,12 @@ docs/          plan and design notes
 
 ```sh
 pnpm install
-pnpm tauri dev          # builds and stages brigadierd, starts Vite and the app
+pnpm tauri:dev          # builds and stages brigadierd, starts Vite and the app
 ```
+
+`pnpm tauri:dev` and `pnpm tauri:debug-app` (a debug `Brigadier Dev.app`) run as
+`ai.brigadier.dev`, so they never hand a launch to an installed Brigadier. Give them their own
+data with `BRIGADIER_DATA_DIR`.
 
 The app launches `brigadierd` detached; closing the window keeps both running in the menu bar.
 Quit from the menu-bar item (or Cmd+Q) to stop the daemon too.
@@ -144,6 +148,10 @@ Launch smoke check against the performance budgets (PLAN.md §4):
 pnpm tauri build
 BRIGADIER_DATA_DIR=$(mktemp -d) target/release/bundle/macos/Brigadier.app/Contents/MacOS/brigadier --smoke
 ```
+
+For a test build, use `pnpm tauri:debug-app` and `target/debug/bundle/macos/Brigadier Dev.app`.
+The check needs the logged-in desktop session: inside a sandbox that blocks the window server, or
+over SSH, it says so and exits with code 3.
 
 It prints a JSON report (also written to `BRIGADIER_SMOKE_REPORT` if set) and exits non-zero if
 a budget for an implemented feature is missed. `BRIGADIER_BUDGET_TOLERANCE` multiplies timing
