@@ -1,4 +1,5 @@
 import { type Unstable_TriggerItem, useAui } from "@assistant-ui/react";
+import { $createDirectiveNodeWithFormatter } from "@assistant-ui/react-lexical";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { mergeRegister } from "@lexical/utils";
 import { Chat } from "@openai/apps-sdk-ui/components/Icon";
@@ -14,7 +15,10 @@ import {
   PASTE_COMMAND,
 } from "lexical";
 import { useCallback, useContext, useEffect, useMemo } from "react";
+import { flushSync } from "react-dom";
 
+import { ComposerImage, InlineImagePlugin } from "@/app/conversation/InlineImagePlugin";
+import { IMAGE_UPLOAD, INLINE_IMAGE, isInlineImage } from "@/lib/inlineImages";
 import { WorkerGlyph, useWorkerName } from "@/app/conversation/WorkerChip";
 import { usePromptHistory } from "@/app/conversation/composerDraft";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
@@ -57,12 +61,19 @@ export default function ComposerEditor({
 }: ComposerInputProps) {
   const target = useContext(ComposerTargetContext);
   const memory = target?.mentions ?? null;
+  const images = target?.queue.attachments.inline;
   const targets = target?.targets;
   useEffect(() => memory?.setWorkers(targets ?? []), [memory, targets]);
   // One formatter per memory: a new one would rebuild every chip.
   const formatter = useMemo(
-    () => chipFormatter((text, at) => memory?.match(text, at) ?? null),
-    [memory],
+    () => chipFormatter((text, at) => memory?.match(text, at) ?? null, images),
+    [memory, images],
+  );
+  const look = useCallback<MentionLook>(
+    (chip) => images && (chip.directiveType === INLINE_IMAGE || chip.directiveType === IMAGE_UPLOAD)
+      ? { icon: null, name: <ComposerImage chip={chip} images={images} /> }
+      : mentionLook(chip),
+    [images],
   );
   const onMention = useCallback(
     (item: Unstable_TriggerItem) => {
@@ -74,7 +85,7 @@ export default function ComposerEditor({
   return (
     <ChipComposerInput
       formatter={formatter}
-      mentionLook={mentionLook}
+      mentionLook={look}
       onMention={onMention}
       line={line}
       placeholder={placeholder}
@@ -83,6 +94,7 @@ export default function ComposerEditor({
       cancelOnEscape={false}
       aria-label="Message input"
     >
+      {images && <InlineImagePlugin images={images} formatter={formatter} />}
       <ComposerKeys />
     </ChipComposerInput>
   );
@@ -106,15 +118,15 @@ const mentionLook: MentionLook = ({ directiveType, directiveId, label }) => {
 /**
  * The composer's keys and paste: ↑ in an empty field edits the last queued message, else
  * walks back through the conversation's prompts (↓ forward); a long paste becomes a
- * "Pasted text" attachment and pasted files attach directly; ⌃⇧D starts dictating at the
- * caret and stops (or cancels) again. The `@` and `/` menus take their keys first.
+ * "Pasted text" attachment; eligible pasted images go inline, other files attach directly.
+ * ⌃⇧D starts dictating at the caret and stops (or cancels) again. The `@` and `/` menus take their keys first.
  */
 function ComposerKeys() {
   const [editor] = useLexicalComposerContext();
   const aui = useAui();
   const pull = usePullQueued();
   const target = useContext(ComposerTargetContext);
-  const history = usePromptHistory(target?.mentions ?? null);
+  const history = usePromptHistory(target?.mentions ?? null, target?.queue.attachments.inline);
   const owner = target?.conversation?.id ?? NEW_CHAT_SCOPE;
   const dictation = useDictation(owner);
   // Dictated text lands at the caret (or at the end, if the field never had one), spaced
@@ -188,12 +200,33 @@ function ComposerKeys() {
           event.preventDefault();
           const attach = files.length > 0 ? files : [pastedTextFile(text)];
           const composer = aui.composer();
-          for (const file of attach) void composer.addAttachment(file);
+          for (const file of attach) {
+            const adapter = target?.queue.attachments;
+            if (!adapter || !isInlineImage(file.type)) {
+              void composer.addAttachment(file);
+              continue;
+            }
+            const key = crypto.randomUUID();
+            // Update the runtime guard before any send path can detach this draft.
+            flushSync(() => adapter.inline.begin(key, file.name));
+            const formatter = chipFormatter(() => null, adapter.inline);
+            let selection = $getSelection();
+            if (!$isRangeSelection(selection)) {
+              $getRoot().selectEnd();
+              selection = $getSelection();
+            }
+            if ($isRangeSelection(selection)) {
+              selection.insertNodes([$createDirectiveNodeWithFormatter(
+                { id: key, type: IMAGE_UPLOAD, label: file.name }, formatter,
+              )]);
+              void adapter.uploadInline(key, file);
+            }
+          }
           return true;
         },
         COMMAND_PRIORITY_NORMAL,
       ),
     );
-  }, [editor, aui, pull, history, owner, canDictate, dictating, opening]);
+  }, [editor, aui, pull, history, owner, canDictate, dictating, opening, target]);
   return null;
 }

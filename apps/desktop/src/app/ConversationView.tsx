@@ -19,6 +19,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -34,6 +35,7 @@ import {
   SidePanelContext,
   useSidePanel,
 } from "@/app/conversation/SidePanel";
+import { queuedImageRefs, reconcileImages } from "@/lib/inlineImages";
 import { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import {
   type Block,
@@ -544,11 +546,14 @@ export function ConversationView({
   );
   const [renaming, setRenaming] = useState(false);
 
-  const [attachments] = useState(() => new BlobAttachmentAdapter());
-  const [reader] = useState<AttachmentReader>(() => ({
+  // A new scope must not inherit uploads or refs from the previous composer.
+  // oxlint-disable-next-line react-hooks/exhaustive-deps, react/memo-dependencies
+  const attachments = useMemo(() => new BlobAttachmentAdapter(), [conversationId]);
+  useSyncExternalStore(attachments.inline.subscribe, attachments.inline.snapshot);
+  const reader = useMemo<AttachmentReader>(() => ({
     read: readAttachment,
     composerRef: (id) => attachments.refOf(id),
-  }));
+  }), [attachments]);
   const [mentions] = useState(() => new MentionMemory());
   const [pulled] = useState(() => new PulledSlot());
   const draftTarget = resolved.target;
@@ -567,7 +572,7 @@ export function ConversationView({
   const submit = useCallback(
     (message: AppendMessage, lane: SendLane) => {
       const text = textOf(message);
-      const refs = attachments.refsOf(message.attachments ?? []);
+      const refs = attachments.messageRefs(text, message.attachments ?? []);
       // A queued message pulled out to edit goes back to its slot, unless steered in now.
       const slot = pulled.take(conversationId);
       if (!text && refs.length === 0) return;
@@ -627,7 +632,7 @@ export function ConversationView({
         const item = queued[find(id)];
         void editQueued(conversationId, id, {
           text,
-          attachments: attachments.refsOf(message.attachments ?? []),
+          attachments: queuedImageRefs(text, item?.attachments ?? [], attachments.messageRefs(text, message.attachments ?? [])),
           mentions: mentionsIn(text, targets, [...mentions.known(), ...(item?.mentions ?? [])]),
         }).catch(fail);
       },
@@ -680,7 +685,10 @@ export function ConversationView({
       const text = textOf(message);
       if (!conversationId || !message.sourceId || !text) return;
       setError(null);
-      await editMessage(conversationId, storedIdOf(message.sourceId), text).catch(fail);
+      const original = items.find((item) => item.id === message.sourceId);
+      const user = original?.block.user;
+      const refs = user?.kind === "message" ? user.message.attachments : undefined;
+      await editMessage(conversationId, storedIdOf(message.sourceId), text, reconcileImages(text, refs)).catch(fail);
     },
     onReload: async (parentId) => {
       if (!conversationId || !parentId) return;
@@ -690,7 +698,7 @@ export function ConversationView({
     isLoading: thread.loading && thread.items.length === 0,
     isRunning: running || waitingForQuota,
     isDisabled: archived,
-    isSendDisabled: conversation === null && resolved.problem !== null,
+    isSendDisabled: attachments.inline.blocked || (conversation === null && resolved.problem !== null),
     queue,
     adapters: { attachments, feedback },
     onNew: async (message) => submit(message, "auto"),

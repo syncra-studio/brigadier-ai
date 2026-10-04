@@ -6,6 +6,7 @@ import type {
   PendingAttachment,
 } from "@assistant-ui/react";
 
+import { InlineImages, inlineRefs } from "@/lib/inlineImages";
 import { isPastedFile } from "@/components/assistant-ui/elements/attachment-tile";
 import type { AttachmentRef } from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";
@@ -26,6 +27,24 @@ function kindOf(mime: string): "image" | "document" | "file" {
  */
 export class BlobAttachmentAdapter implements AttachmentAdapter {
   accept = "*";
+  readonly inline = new InlineImages();
+
+  async uploadInline(key: string, file: File): Promise<void> {
+    try {
+      if (file.size > MAX_BYTES) throw new Error(`File is too large to upload (maximum ${formatBytes(MAX_BYTES)})`);
+      this.inline.complete(key, await addAttachment(file));
+    } catch (error) {
+      this.inline.fail(key, error);
+    }
+  }
+
+  messageRefs(text: string, attachments: readonly { id: string }[]): AttachmentRef[] {
+    return [...this.refsOf(attachments).map((ref) => ({ ...ref, inline: false })), ...inlineRefs(text, this.inline.refs.values())];
+  }
+
+  draftRefs(attachments: readonly { id: string }[]): AttachmentRef[] {
+    return [...this.refsOf(attachments), ...this.inline.refs.values()];
+  }
   private readonly refs = new Map<string, AttachmentRef>();
 
   async *add({ file }: { file: File }): AsyncGenerator<PendingAttachment, void> {

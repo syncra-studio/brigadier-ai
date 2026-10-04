@@ -1,15 +1,16 @@
-import type { TextMessagePartProps, Unstable_TriggerItem } from "@assistant-ui/react";
+import { useAuiState, type TextMessagePartProps, type Unstable_TriggerItem } from "@assistant-ui/react";
 import { Chat, File } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
+import { InlineImageText } from "@/app/conversation/InlineImage";
 import { WorkerChip, WorkerGlyph } from "@/app/conversation/WorkerChip";
 import type { ChipMention } from "@/components/assistant-ui/elements/composer-chips";
 import {
   ComposerMentions,
   type MentionOption,
 } from "@/components/assistant-ui/elements/composer-mentions";
-import type { Conversation, Mention } from "@/ipc/generated";
+import type { AttachmentRef, Conversation, Mention } from "@/ipc/generated";
 import { listFiles } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
@@ -65,7 +66,10 @@ export const MentionText: FC<{ text: string }> = ({ text }) => {
 };
 
 /** A user message's text part, its @-mentioned workers as chips. */
-export const UserMessageText: FC<TextMessagePartProps> = ({ text }) => <MentionText text={text} />;
+export const UserMessageText: FC<TextMessagePartProps> = ({ text }) => {
+  const attachments = useAuiState((s) => s.message.metadata.custom["attachments"]) as AttachmentRef[] | undefined;
+  return <InlineImageText text={text} attachments={attachments ?? []} Text={MentionText} />;
+};
 
 /**
  * Whether `text` has `@name` whole, not as the start of a longer name (`@a.ts` in

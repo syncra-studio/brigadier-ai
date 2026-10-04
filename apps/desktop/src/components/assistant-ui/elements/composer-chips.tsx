@@ -44,6 +44,14 @@ import {
   useState,
 } from "react";
 
+import {
+  IMAGE_UPLOAD,
+  INLINE_IMAGE,
+  imageSegments,
+  imageToken,
+  uploadToken,
+  type InlineImages,
+} from "@/lib/inlineImages";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { cn } from "@/lib/utils";
 
@@ -131,11 +139,17 @@ export function parseChips(text: string, mention: MentionMatcher): Unstable_Dire
  * The composer's directive formatter: a chip's text is what it stands for (`@label`,
  * `` `code` ``, the link), so the message itself stays plain text.
  */
-export function chipFormatter(mention: MentionMatcher): Unstable_DirectiveFormatter {
+export function chipFormatter(
+  mention: MentionMatcher,
+  images?: InlineImages,
+): Unstable_DirectiveFormatter {
   return {
-    serialize: (item) =>
-      item.type === CODE ? `\`${item.label}\`` : item.type === URL_CHIP ? item.label : `@${item.label}`,
-    parse: (text) => parseChips(text, mention),
+    serialize: (item) => {
+      if (item.type === INLINE_IMAGE) return imageToken(item.id);
+      if (item.type === IMAGE_UPLOAD) return uploadToken(item.id);
+      return item.type === CODE ? `\`${item.label}\`` : item.type === URL_CHIP ? item.label : `@${item.label}`;
+    },
+    parse: (text) => imageSegments(text, images, (plain) => parseChips(plain, mention)),
   };
 }
 
@@ -159,6 +173,9 @@ const ComposerChip: FC<DirectiveChipProps> = (chip) => {
         {chip.label}
       </span>
     );
+  }
+  if (chip.directiveType === INLINE_IMAGE || chip.directiveType === IMAGE_UPLOAD) {
+    return <>{look?.(chip)?.name ?? chip.label}</>;
   }
   const url = chip.directiveType === URL_CHIP;
   const custom = url ? null : look?.(chip);
@@ -309,6 +326,10 @@ function ChipsPlugin({
               : -1;
           const pasted = $hasUpdateTag(PASTE_TAG);
           if (!pasted && caret < 0) return;
+          // Images take precedence even inside code or URLs, just as in the backend scanner.
+          if (formatter.parse(node.getTextContent()).some((segment) =>
+            segment.kind === "mention" && (segment.type === INLINE_IMAGE || segment.type === IMAGE_UPLOAD),
+          )) return;
           // One chip per pass: the rest of the text is transformed again.
           const token = completedTokens(node.getTextContent(), pasted ? null : caret)[0];
           if (!token || token.segment.kind !== "mention") return;

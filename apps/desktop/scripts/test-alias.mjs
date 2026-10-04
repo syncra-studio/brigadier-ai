@@ -9,6 +9,8 @@ const src = fileURLToPath(new URL("../src/", import.meta.url));
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
+    // Leave dependency resolution (including CommonJS named exports) to Node.
+    if (context.parentURL?.includes("/node_modules/")) return nextResolve(specifier, context);
     const base = specifier.startsWith("@/")
       ? `${src}${specifier.slice(2)}`
       : specifier.startsWith(".") && context.parentURL?.startsWith("file:")

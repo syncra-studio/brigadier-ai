@@ -20,6 +20,7 @@ export function MessageAttachments({
   className,
   ...props
 }: Omit<ComponentProps<"ul">, "children"> & { attachments: readonly AttachmentRef[] }) {
+  attachments = attachments.filter((ref) => !ref.inline);
   if (attachments.length === 0) return null;
   return (
     <ul

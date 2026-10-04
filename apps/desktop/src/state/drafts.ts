@@ -61,6 +61,8 @@ export function saveDraft(
   attachments: AttachmentRef[],
   mentions: DraftMention[],
 ): void {
+  // Retained undo/history refs must not keep a sent or cleared draft (and its pins) alive.
+  if (text.trim() === "") attachments = attachments.filter((ref) => !ref.inline);
   const drafts = readAll();
   const before = drafts[scope];
   if (text.trim() === "" && attachments.length === 0) {

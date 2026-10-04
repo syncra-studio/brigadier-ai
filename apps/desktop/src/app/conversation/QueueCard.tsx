@@ -8,6 +8,7 @@ import {
 } from "@openai/apps-sdk-ui/components/Icon";
 import { useCallback, useContext } from "react";
 
+import { InlineImageText } from "@/app/conversation/InlineImage";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { useAction } from "@/app/conversation/useAction";
 import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
@@ -59,8 +60,9 @@ export function usePullQueued(): ((index: number) => Promise<void>) | null {
       await deleteQueued(conversationId, item.id);
       target.queue.pulled.set(conversationId, at, item.mentions);
       target.mentions.recall(item.mentions);
+      target.queue.attachments.inline.recall(item.text, item.attachments);
       composer.setText(item.text);
-      for (const ref of item.attachments) {
+      for (const ref of item.attachments.filter((attachment) => !attachment.inline)) {
         await composer.addAttachment(target.queue.attachments.adopt(ref));
       }
     },
@@ -124,7 +126,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
       )}
       <MessageQueue ref={listRef} aria-label="Queued messages">
         {shown.map((item, index) => {
-          const attached = attachmentLabel(item.attachments);
+          const attached = attachmentLabel(item.attachments.filter((attachment) => !attachment.inline));
           return (
             <MessageQueueItem
               key={item.id}
@@ -147,7 +149,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
               <span className="min-w-0 flex-1 truncate" title={item.text || undefined}>
                 {item.text ? (
                   <>
-                    {item.text}
+                    <InlineImageText text={item.text} attachments={item.attachments} />
                     {attached && <span className="text-muted-foreground"> · {attached}</span>}
                   </>
                 ) : (

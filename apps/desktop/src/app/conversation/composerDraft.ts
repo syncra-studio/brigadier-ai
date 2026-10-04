@@ -2,8 +2,9 @@ import { useAui, useAuiState } from "@assistant-ui/react";
 import { useCallback, useEffect, useRef } from "react";
 
 import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
+import type { InlineImages } from "@/lib/inlineImages";
 import type { MentionMemory } from "@/app/conversation/Mentions";
-import type { Mention } from "@/ipc/generated";
+import type { AttachmentRef, Mention } from "@/ipc/generated";
 import { type DraftMention, loadDraft, saveDraft } from "@/state/drafts";
 
 /** How long the composer rests before its draft is kept. */
@@ -52,14 +53,17 @@ export function useComposerDraft(
         .filter(({ at, name }) => draft.text.startsWith(`@${name}`, at))
         .map(({ mention }) => mention),
     );
+    attachments.inline.recall(draft.text, draft.attachments);
     composer.setText(draft.text);
-    for (const ref of draft.attachments) void composer.addAttachment(attachments.adopt(ref));
+    for (const ref of draft.attachments.filter((attachment) => !attachment.inline)) void composer.addAttachment(attachments.adopt(ref));
   }, [aui, attachments, memory, scope]);
 
   const keep = useCallback(() => {
     const state = aui.composer().getState();
-    saveDraft(scope, state.text, attachments.refsOf(state.attachments), mentionsAt(state.text, memory));
+    saveDraft(scope, state.text, attachments.draftRefs(state.attachments), mentionsAt(state.text, memory));
   }, [aui, attachments, memory, scope]);
+
+  useEffect(() => attachments.inline.subscribe(keep), [attachments, keep]);
 
   // Once typing rests; an emptied composer (sent or cleared) lets the draft go at once.
   useEffect(() => {
@@ -78,6 +82,7 @@ export function useComposerDraft(
  */
 export function usePromptHistory(
   memory: MentionMemory | null,
+  images?: InlineImages,
 ): (key: "ArrowUp" | "ArrowDown") => boolean {
   const aui = useAui();
   // How far back the composer shows, and the text it put there.
@@ -96,6 +101,7 @@ export function usePromptHistory(
           text: message.content
             .flatMap((part) => (part.type === "text" ? [part.text] : []))
             .join("\n"),
+          attachments: (message.metadata.custom["attachments"] ?? []) as AttachmentRef[],
           mentions: (message.metadata.custom["mentions"] ?? []) as Mention[],
         }))
         .filter((prompt) => prompt.text.trim() !== "")
@@ -105,10 +111,13 @@ export function usePromptHistory(
       const prompt = back < 0 ? null : prompts[prompts.length - 1 - back];
       const shown = prompt?.text ?? "";
       walk.current = back < 0 ? null : { back, shown };
-      if (prompt) memory?.recall(prompt.mentions);
+      if (prompt) {
+        memory?.recall(prompt.mentions);
+        images?.recall(prompt.text, prompt.attachments);
+      }
       composer.setText(shown);
       return true;
     },
-    [aui, memory],
+    [aui, memory, images],
   );
 }

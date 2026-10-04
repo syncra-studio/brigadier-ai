@@ -606,8 +606,9 @@ export async function editMessage(
   conversationId: string,
   messageId: string,
   text: string,
+  attachments?: AttachmentRef[],
 ): Promise<void> {
-  await request({ method: "editMessage", conversationId, messageId, text });
+  await request({ method: "editMessage", conversationId, messageId, text, ...(attachments ? { attachments } : {}) });
 }
 
 /** Answers a request again, from its user message. */
