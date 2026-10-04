@@ -142,13 +142,16 @@ export const TaskRow = memo(function TaskRow({ taskId }: { taskId: string }) {
         <WorkerGlyph taskId={taskId} working={working} className="size-icon-sm shrink-0" />
         <span className="text-foreground/90 min-w-0 truncate">{name}</span>
       </button>
-      <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+      {/* Capped so a narrow thread truncates the detail, never the task's title. */}
+      <span className="flex max-w-3/5 min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap">
         <span aria-hidden>·</span>
-        <span className={TONES[tone]}>{word}</span>
+        <span className={cn("shrink-0", TONES[tone])}>{word}</span>
         {detail && (
           <>
             <span aria-hidden>·</span>
-            <span>{detail}</span>
+            <span className="min-w-0 truncate" title={detail}>
+              {detail}
+            </span>
           </>
         )}
       </span>

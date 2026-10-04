@@ -172,7 +172,9 @@ export const ComposerCapsule: FC = () => {
 
 /** The capsule of an overnight run: its phase, the phase's steps and the run branch's diff. */
 const RunCapsule: FC<{ conversationId: string; run: RunPill }> = ({ conversationId, run }) => {
-  const diff = useRunDiff(conversationId, run.runId);
+  const runDiff = useRunDiff(conversationId, run.runId);
+  // Nothing landed yet: no "0 files changed".
+  const diff = runDiff && runDiff.files.length > 0 ? runDiff : null;
   return (
     <Capsule>
       <Pill
