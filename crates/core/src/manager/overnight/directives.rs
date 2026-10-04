@@ -548,6 +548,18 @@ fn word(tokens: &[Token], i: usize) -> &str {
     tokens.get(i).map_or("", |token| token.text.as_str())
 }
 
+/// Whether the word at `i` is ruled out by the words before it: "never Fable", "no Fable",
+/// "don't use Fable", "without Fable".
+fn negated(tokens: &[Token], i: usize) -> bool {
+    const NOT: &[&str] = &[
+        "never", "no", "not", "without", "don't", "don’t", "dont", "avoid", "except",
+    ];
+    let before = |back: usize| i.checked_sub(back).map_or("", |at| word(tokens, at));
+    NOT.contains(&before(1))
+        || (matches!(before(1), "use" | "using" | "pick" | "run" | "any")
+            && NOT.contains(&before(2)))
+}
+
 /// The restriction starting at token `i`, if one does.
 fn read_at(tokens: &[Token], i: usize, clock: &Clock) -> Option<Hit> {
     let hit = |kind, value, end: usize| {
@@ -643,6 +655,9 @@ fn read_at(tokens: &[Token], i: usize, clock: &Clock) -> Option<Hit> {
             Value::Ignored(format!("effort {level}")),
             i + 2,
         ),
+        // "Never Fable" is a rule Brigadier already keeps: it stays in the Rules, not
+        // "Ignored".
+        "fable" if negated(tokens, i) => None,
         "fable" => hit(
             DirectiveKind::Ignored,
             Value::Ignored("Fable".into()),
@@ -1114,5 +1129,37 @@ fn conflict(kind: DirectiveKind, message: &str) -> DirectiveProblem {
     DirectiveProblem {
         kind,
         message: message.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_rule_against_fable_is_kept_not_ignored() {
+        let clock = Clock::system();
+        for words in [
+            "Never Fable.",
+            "no fable, effort at most high",
+            "Don't use Fable for anything.",
+            "Work without Fable.",
+        ] {
+            let parsed = parse(words, &clock);
+            assert!(
+                !parsed
+                    .directives
+                    .ignored
+                    .iter()
+                    .any(|line| line.contains("Fable")),
+                "{words}: {:?}",
+                parsed.directives.ignored
+            );
+        }
+        let parsed = parse("Use Fable for the hard parts.", &clock);
+        assert_eq!(
+            parsed.directives.ignored,
+            vec!["Ignored: Fable (Brigadier picks this itself)".to_owned()]
+        );
     }
 }

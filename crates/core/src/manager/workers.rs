@@ -1381,15 +1381,30 @@ impl SessionManager {
             .map_err(|err| Error::Provider(err.to_string()))
     }
 
+    /// Why a worker can't be resumed; a run lists it under What got in the way.
+    async fn cannot_resume(&self, task: &Task) -> Error {
+        if let Some(context) = &task.run {
+            self.note_obstacle(
+                &task.conversation_id,
+                &context.run_id,
+                crate::overnight::ObstacleKind::ResumeFailed,
+                "A worker's session couldn't be resumed, so its work started over.",
+                Some(task.number),
+            )
+            .await;
+        }
+        Error::Invalid(format!(
+            "task-{} cannot be resumed; delegate a new task",
+            task.number
+        ))
+    }
+
     /// Starts a worker whose CLI session stopped (the conversation hibernated) again,
     /// resuming its CLI session.
     async fn revive_worker(&self, live: &Arc<TaskLive>, task: &Task, text: String) -> Result<()> {
-        let native_id = self.last_worker_native_id(task).await.ok_or_else(|| {
-            Error::Invalid(format!(
-                "task-{} cannot be resumed; delegate a new task",
-                task.number
-            ))
-        })?;
+        let Some(native_id) = self.last_worker_native_id(task).await else {
+            return Err(self.cannot_resume(task).await);
+        };
         let subject = match &task.subject {
             Some(id) => self.task_by_id(&task.conversation_id, id).await.ok(),
             None => None,
@@ -3363,12 +3378,9 @@ impl SessionManager {
         task: &Task,
         first: TurnInput,
     ) -> Result<()> {
-        let native_id = self.last_worker_native_id(task).await.ok_or_else(|| {
-            Error::Invalid(format!(
-                "task-{} cannot be resumed; delegate a new task",
-                task.number
-            ))
-        })?;
+        let Some(native_id) = self.last_worker_native_id(task).await else {
+            return Err(self.cannot_resume(task).await);
+        };
         let subject = match &task.subject {
             Some(id) => self.task_by_id(&task.conversation_id, id).await.ok(),
             None => None,

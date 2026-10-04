@@ -1,8 +1,10 @@
 //! The morning report (PLAN.md §10.11): one message at the end of the run, rendered from the
 //! run's records, never from a model's memory of it. Its first three lines say the outcome,
-//! where the work is and what waits on the user; then each phase with every criterion and its
-//! evidence, the commits (which are verified, which are partial work), what was decided for the
-//! user, what waits on them, and what went wrong or was cut short.
+//! where the work is and what waits on the user; then each phase with one line per criterion,
+//! the commits (which are verified, which are partial work), what was decided for the user
+//! (one plain line each), what waits on them, and what got in the way, built from the
+//! conductor's records. Everything after the `### Details` heading (the whole-phase findings,
+//! workers and models, provider usage) the app shows folded.
 //!
 //! It is written once: its message has a stable id per run segment, looked for before it is
 //! appended, and the run records it after. A crash in between finds the message on recovery
@@ -19,10 +21,17 @@ use crate::overnight::{
     CriterionStatus, Deadline, OvernightPhase, OvernightRun, PhaseState, RunNotification, RunRole,
     StopReason,
 };
-use crate::work::{DecisionSource, RequestState, UserRequest};
+use crate::sessions::one_line;
+use crate::work::{DecisionSource, RequestState, TaskKind, TaskState, UserRequest};
 
 /// Commits listed in the report, at most.
 const COMMITS: usize = 60;
+/// A criterion's evidence in the report, at most (the full text is on the phase).
+const EVIDENCE: usize = 240;
+/// A decision's line, at most.
+const DECIDED: usize = 160;
+/// The heading after which the app folds the report.
+pub const DETAILS: &str = "### Details";
 
 impl SessionManager {
     /// Writes the run's report into its conversation, once, and queues its notification.
@@ -55,8 +64,9 @@ impl SessionManager {
             }
         };
         let commits = self.run_commits(run).await;
-        let mut text = render(run, &board, &commits);
-        text.push_str(&self.run_usage(run, &board).await);
+        let now = now_ms();
+        let mut text = render(run, &board, &commits, now);
+        text.push_str(&self.run_usage(run, &board, now).await);
         if let Some(message) = &written {
             // Reconciliation uses the text already posted, not newly rendered facts.
             text = self.full_text(message).await;
@@ -134,8 +144,8 @@ impl SessionManager {
 
     /// Provider-separated observed usage. Window percentages are account snapshots, not
     /// this run's bill. Only turns belonging to this segment's tasks/lead are counted.
-    async fn run_usage(&self, run: &OvernightRun, board: &Board) -> String {
-        let mut text = String::from("\n### Provider usage\n");
+    async fn run_usage(&self, run: &OvernightRun, board: &Board, now: i64) -> String {
+        let mut text = String::from("\n#### Provider usage\n");
         let start = run.started_at_ms.unwrap_or(run.created_at_ms);
         let end = run.finished_at_ms.unwrap_or_else(now_ms);
         for provider in brigadier_providers::ProviderKind::ALL {
@@ -150,7 +160,7 @@ impl SessionManager {
                 ));
                 continue;
             };
-            let mut tokens = 0;
+            let mut tokens: i64 = 0;
             let mut counted = 0;
             for turn in turns.into_iter().filter(|turn| turn.at_ms <= end) {
                 let belongs = match turn.task_id.as_ref() {
@@ -169,8 +179,9 @@ impl SessionManager {
                 }
             }
             text.push_str(&format!(
-                "- {}: {tokens} recorded tokens in {counted} turns (including cached input).\n",
-                provider.label()
+                "- {}: {} tokens in {counted} turns (including cached input).\n",
+                provider.label(),
+                human_count(u64::try_from(tokens).unwrap_or(0))
             ));
         }
         if let Ok(view) = self.usage_view(None).await {
@@ -186,7 +197,7 @@ impl SessionManager {
                             window
                                 .window
                                 .resets_at_ms
-                                .map_or_else(|| "unknown".into(), day_time)
+                                .map_or_else(|| "unknown".into(), |at| day_time(at, now))
                         ));
                     }
                 }
@@ -384,8 +395,8 @@ fn notification_body(run: &OvernightRun, board: &Board) -> String {
     body
 }
 
-/// The report, from the records alone.
-fn render(run: &OvernightRun, board: &Board, commits: &[(String, String)]) -> String {
+/// The report, from the records alone, as of `now`.
+fn render(run: &OvernightRun, board: &Board, commits: &[(String, String)], now: i64) -> String {
     let (worked, verified, partial, blocked) = counts(run);
     let waits = waiting(run, board);
     let mut text = String::new();
@@ -446,7 +457,7 @@ fn render(run: &OvernightRun, board: &Board, commits: &[(String, String)]) -> St
             waits[0]
         )),
     }
-    // Each phase.
+    // Each phase: how it ended, and one line per criterion.
     if let Some(planning) = &run.planning {
         text.push_str(&format!(
             "\n### Phase 0 · Write the plan — {}\n",
@@ -461,11 +472,7 @@ fn render(run: &OvernightRun, board: &Board, commits: &[(String, String)]) -> St
             "\n### Phase {} · {} — {}\n",
             phase.number,
             phase.name,
-            if phase.state == PhaseState::Pending {
-                "– not reached".to_owned()
-            } else {
-                symbol(phase.state).to_owned()
-            }
+            symbol(phase.state)
         ));
         if phase.state == PhaseState::Skipped || phase.state == PhaseState::Pending {
             continue;
@@ -480,27 +487,11 @@ fn render(run: &OvernightRun, board: &Board, commits: &[(String, String)]) -> St
                 "- {} {} ({status}): {}\n",
                 criterion.id,
                 criterion.text,
-                evidence.trim()
+                one_line(evidence, EVIDENCE)
             ));
-        }
-        if let Some(gate) = &phase.gate {
-            text.push_str(&format!(
-                "- Whole-phase checks: {} round{}, last on `{}`; {} fix round{}.\n",
-                gate.round,
-                if gate.round == 1 { "" } else { "s" },
-                gate.commit.as_deref().map_or("?", short),
-                phase.fix_rounds,
-                if phase.fix_rounds == 1 { "" } else { "s" }
-            ));
-            for finding in &gate.findings {
-                text.push_str(&format!("  - Finding {}: {}\n", finding.id, finding.text));
-            }
-        }
-        for response in &phase.responses {
-            text.push_str(&format!("  - Lead's answer: {response}\n"));
         }
         for gap in &phase.gaps {
-            text.push_str(&format!("- Still missing: {gap}\n"));
+            text.push_str(&format!("- Still missing: {}\n", one_line(gap, EVIDENCE)));
         }
     }
     // Commits.
@@ -522,24 +513,13 @@ fn render(run: &OvernightRun, board: &Board, commits: &[(String, String)]) -> St
                 }
             ));
         }
+        if commits.len() == COMMITS {
+            text.push_str("The list is limited to the latest 60; the run branch has them all.\n");
+        }
     }
-    // Decided for you.
-    let decided: Vec<String> = board
-        .decisions
-        .iter()
-        .filter(|decision| match &decision.source {
-            DecisionSource::Run { run_id, .. } => run_id == &run.id,
-            DecisionSource::Task { task_id } => board
-                .tasks
-                .get(task_id)
-                .and_then(|task| task.run.as_ref())
-                .is_some_and(|context| context.run_id == run.id),
-            _ => decision
-                .request_id
-                .as_deref()
-                .is_some_and(|request| request.starts_with(&format!("run-{}-", run.id.short()))),
-        })
-        .map(|decision| format!("- {}: {}", decision.what, decision.why))
+    // Decided for you: one plain line each; the findings behind them are in the tasks.
+    let decided: Vec<String> = run_decisions(run, board)
+        .map(|decision| format!("- {}", one_line(&decision.what, DECIDED)))
         .collect();
     if !decided.is_empty() {
         text.push_str("\n### Decided for you\n");
@@ -553,47 +533,42 @@ fn render(run: &OvernightRun, board: &Board, commits: &[(String, String)]) -> St
         }
         text.push_str("Answer them, then say \"continue\" (or press Continue) to pick the run up on the same branch.\n");
     }
-    // What went wrong or was cut short.
-    let mut risks: Vec<String> = Vec::new();
-    for gap in &run.gaps {
-        risks.push(format!("{}; no work happened then.", gap.cause));
-    }
-    if let (Deadline::At { time }, finished) = (
-        &run.directives.deadline,
-        run.finished_at_ms.unwrap_or_else(now_ms),
-    ) && finished > time.at_ms
-    {
-        risks.push(format!(
-            "This report is late: it was due at {} and written {} minutes after.",
-            time.local_time,
-            (finished - time.at_ms) / 60_000
-        ));
-    }
-    let remaining: Vec<String> = run
-        .phases
-        .iter()
-        .filter(|phase| phase.state == PhaseState::Pending && run.selects(phase.number))
-        .map(|phase| format!("phase {}", phase.number))
-        .collect();
-    if !remaining.is_empty() {
-        risks.push(format!("Not reached: {}.", remaining.join(", ")));
-    }
-    for line in &run.directives.ignored {
-        risks.push(line.clone());
-    }
-    if !risks.is_empty() {
-        text.push_str("\n### Risks and interruptions\n");
-        for risk in &risks {
-            text.push_str(&format!("- {risk}\n"));
+    let in_the_way = in_the_way(run, board, now);
+    if !in_the_way.is_empty() {
+        text.push_str("\n### What got in the way\n");
+        for line in &in_the_way {
+            text.push_str(&format!("- {line}\n"));
         }
     }
+    // The details, folded by the app: everything after this heading.
+    text.push_str(&format!("\n{DETAILS}\n"));
     if let Some(workspace) = &run.workspace {
-        text.push_str(&format!("\nRun worktree and handoffs: `{}`; each worker's kept work and handoff are linked from its task.\n", workspace.path));
+        text.push_str(&format!("Run worktree and handoffs: `{}`; each worker's kept work and handoff are linked from its task.\n", workspace.path));
     }
-    if commits.len() == COMMITS {
-        text.push_str("\nThe commit list is limited to the latest 60; inspect the run branch for its full history.\n");
+    for line in &run.directives.ignored {
+        text.push_str(&format!("{line}.\n"));
     }
-    // Who did the work, folded at the end.
+    for phase in &run.phases {
+        let Some(gate) = &phase.gate else {
+            continue;
+        };
+        text.push_str(&format!(
+            "\n#### Phase {} whole-phase checks\n{} round{}, last on `{}`; {} fix round{}.\n",
+            phase.number,
+            gate.round,
+            if gate.round == 1 { "" } else { "s" },
+            gate.commit.as_deref().map_or("?", short),
+            phase.fix_rounds,
+            if phase.fix_rounds == 1 { "" } else { "s" }
+        ));
+        for finding in &gate.findings {
+            text.push_str(&format!("- Finding {}: {}\n", finding.id, finding.text));
+        }
+        for response in &phase.responses {
+            text.push_str(&format!("- Lead's answer: {response}\n"));
+        }
+    }
+    // Who did the work.
     let mut tasks: Vec<_> = board
         .tasks
         .values()
@@ -606,7 +581,7 @@ fn render(run: &OvernightRun, board: &Board, commits: &[(String, String)]) -> St
         .collect();
     tasks.sort_by_key(|(task, _)| task.number);
     if !tasks.is_empty() {
-        text.push_str("\n### Workers and models\n");
+        text.push_str("\n#### Workers and models\n");
         for (task, role) in tasks {
             text.push_str(&format!(
                 "- task-{} {} ({}, {} {}): {:?}\n",
@@ -622,13 +597,179 @@ fn render(run: &OvernightRun, board: &Board, commits: &[(String, String)]) -> St
     text
 }
 
+/// The decisions taken for the run: its own, its tasks', and those of its requests.
+fn run_decisions<'a>(
+    run: &'a OvernightRun,
+    board: &'a Board,
+) -> impl Iterator<Item = &'a crate::work::Decision> {
+    board
+        .decisions
+        .iter()
+        .filter(move |decision| match &decision.source {
+            DecisionSource::Run { run_id, .. } => run_id == &run.id,
+            DecisionSource::Task { task_id } => board
+                .tasks
+                .get(task_id)
+                .and_then(|task| task.run.as_ref())
+                .is_some_and(|context| context.run_id == run.id),
+            _ => decision
+                .request_id
+                .as_deref()
+                .is_some_and(|request| request.starts_with(&format!("run-{}-", run.id.short()))),
+        })
+}
+
+/// What got in the way of the run, from its records, grouped: what the overnight rules
+/// declined, resumes that failed, checks that couldn't run, changes held unverified, work
+/// stopped before it finished, interruptions, lateness and phases not reached.
+fn in_the_way(run: &OvernightRun, board: &Board, now: i64) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for obstacle in &run.obstacles {
+        lines.push(format!(
+            "{}{}",
+            obstacle.text.trim_end_matches('.'),
+            times_in(obstacle.count, &obstacle.tasks)
+        ));
+    }
+    // Checks the run's verifiers couldn't run, by check, for the tasks they checked.
+    let mut checks: std::collections::BTreeMap<(&str, String), (Vec<u32>, String)> =
+        Default::default();
+    let run_tasks = || {
+        board.tasks.values().filter(|task| {
+            task.run
+                .as_ref()
+                .is_some_and(|context| context.run_id == run.id)
+        })
+    };
+    for verifier in run_tasks().filter(|task| task.kind == TaskKind::Verify) {
+        let Some(report) = &verifier.report else {
+            continue;
+        };
+        let checked = verifier
+            .subject
+            .as_ref()
+            .and_then(|id| board.tasks.get(id))
+            .map_or(verifier.number, |task| task.number);
+        for line in &report.risks {
+            let Some((kind, check, why)) = unrun_check(line) else {
+                continue;
+            };
+            let entry = checks
+                .entry((kind, check.to_lowercase()))
+                .or_insert_with(|| (Vec::new(), format!("{check}: {}", one_line(why, 120))));
+            if !entry.0.contains(&checked) {
+                entry.0.push(checked);
+            }
+        }
+    }
+    for ((kind, _), (mut tasks, what)) in checks {
+        tasks.sort_unstable();
+        lines.push(format!(
+            "{} ({kind}){}",
+            what.trim_end_matches('.'),
+            times_in(0, &tasks)
+        ));
+    }
+    for decision in run_decisions(run, board) {
+        if decision.what.starts_with("Held task-") {
+            lines.push(one_line(&decision.what, DECIDED));
+        }
+    }
+    let stopped: Vec<String> = run_tasks()
+        .filter(|task| task.kind.writes() && task.state == TaskState::Stopped)
+        .map(|task| format!("task-{} \u{201c}{}\u{201d}", task.number, task.title))
+        .collect();
+    if !stopped.is_empty() {
+        lines.push(format!(
+            "Stopped before it finished: {}",
+            stopped.join(", ")
+        ));
+    }
+    for gap in &run.gaps {
+        lines.push(format!("{}; no work happened then", gap.cause));
+    }
+    if let Deadline::At { time } = &run.directives.deadline {
+        let finished = run.finished_at_ms.unwrap_or(now);
+        if finished > time.at_ms {
+            lines.push(format!(
+                "This report is late: it was due at {} and written {} minutes after",
+                time.local_time,
+                (finished - time.at_ms) / 60_000
+            ));
+        }
+    }
+    let remaining: Vec<String> = run
+        .phases
+        .iter()
+        .filter(|phase| phase.state == PhaseState::Pending && run.selects(phase.number))
+        .map(|phase| format!("phase {}", phase.number))
+        .collect();
+    if !remaining.is_empty() {
+        lines.push(format!("Not reached: {}", remaining.join(", ")));
+    }
+    lines.iter_mut().for_each(|line| {
+        if !line.ends_with(['.', '!', '?']) {
+            line.push('.');
+        }
+    });
+    lines
+}
+
+/// A verifier's risk line about a check it couldn't run: what kind of gap, the check, and why.
+fn unrun_check(line: &str) -> Option<(&'static str, &str, &str)> {
+    let line = without_marker(line).trim();
+    let (kind, rest) = [
+        ("[excluded]", "excluded by a rule or the environment"),
+        ("[pre-existing]", "fails before this change too"),
+        ("[not run]", "not run"),
+    ]
+    .into_iter()
+    .find_map(|(marker, kind)| {
+        line.get(..marker.len())
+            .filter(|head| head.eq_ignore_ascii_case(marker))
+            .map(|_| (kind, line[marker.len()..].trim()))
+    })?;
+    let (check, why) = rest.split_once(':').unwrap_or((rest, ""));
+    let check = check.trim();
+    (!check.is_empty()).then_some((kind, check, why.trim()))
+}
+
+/// " (3 times, task-2, task-5)": how often and for which tasks, when it says anything.
+fn times_in(count: u32, tasks: &[u32]) -> String {
+    let mut parts = Vec::new();
+    if count > 1 {
+        parts.push(format!("{count} times"));
+    }
+    parts.extend(tasks.iter().map(|n| format!("task-{n}")));
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", parts.join(", "))
+    }
+}
+
+/// A count of tokens as people read it: 950, 12.3k, 26.6M, 1.2B.
+fn human_count(count: u64) -> String {
+    let scaled = |div: f64, unit: &str| {
+        let value = count as f64 / div;
+        let text = format!("{value:.1}");
+        format!("{}{unit}", text.trim_end_matches(".0"))
+    };
+    match count {
+        0..1_000 => count.to_string(),
+        1_000..1_000_000 => scaled(1e3, "k"),
+        1_000_000..1_000_000_000 => scaled(1e6, "M"),
+        _ => scaled(1e9, "B"),
+    }
+}
+
 fn symbol(state: PhaseState) -> &'static str {
     match state {
         PhaseState::Verified => "✓ verified",
         PhaseState::Partial => "◐ partial",
         PhaseState::Blocked => "✕ blocked",
         PhaseState::Skipped => "– skipped",
-        PhaseState::Pending => "– not reached",
+        PhaseState::Pending => "not reached",
         PhaseState::Running | PhaseState::Checking => "◐ unfinished",
     }
 }
@@ -654,15 +795,24 @@ pub(super) fn evidence_text(line: &str) -> &str {
     }
 }
 
-/// A local time with its weekday, for times that may be days away ("Sat 07:00").
-fn day_time(at_ms: i64) -> String {
-    jiff::Timestamp::from_millisecond(at_ms)
-        .map(|at| {
-            at.to_zoned(jiff::tz::TimeZone::system())
-                .strftime("%a %H:%M")
-                .to_string()
-        })
-        .unwrap_or_else(|_| "?".into())
+/// A local time as people read it next to `now`: "today 07:00", "tomorrow 00:13", or with
+/// its day and date when further ("Sat 10 Oct 00:13").
+fn day_time(at_ms: i64, now_ms: i64) -> String {
+    let zone = jiff::tz::TimeZone::system();
+    let (Ok(at), Ok(now)) = (
+        jiff::Timestamp::from_millisecond(at_ms),
+        jiff::Timestamp::from_millisecond(now_ms),
+    ) else {
+        return "?".into();
+    };
+    let (at, now) = (at.to_zoned(zone.clone()), now.to_zoned(zone));
+    let days = (at.date() - now.date()).get_days();
+    let time = at.strftime("%H:%M");
+    match days {
+        0 => format!("today {time}"),
+        1 => format!("tomorrow {time}"),
+        _ => at.strftime("%a %-d %b %H:%M").to_string(),
+    }
 }
 
 fn status_word(status: CriterionStatus) -> &'static str {
@@ -671,5 +821,141 @@ fn status_word(status: CriterionStatus) -> &'static str {
         CriterionStatus::NotMet => "not met",
         CriterionStatus::NotRun => "not checked",
         CriterionStatus::Blocked => "needs you",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::ConversationId;
+    use crate::overnight::{ObstacleKind, OvernightState};
+    use crate::work::Task;
+
+    fn task(id: &str, number: u32, kind: &str, run: &OvernightRun, subject: Option<&str>) -> Task {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "conversationId": "c",
+            "number": number,
+            "position": 0,
+            "title": format!("Task {number}"),
+            "kind": kind,
+            "spec": "",
+            "access": { "repo": "write", "network": false, "unsandboxed": false },
+            "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
+            "state": "done",
+            "attachments": [],
+            "createdAtMs": 0,
+            "updatedAtMs": 0,
+            "subject": subject,
+            "run": {
+                "runId": run.id.0,
+                "segment": 1,
+                "generation": 1,
+                "role": "check",
+                "rulesHash": ""
+            }
+        }))
+        .expect("a task")
+    }
+
+    #[test]
+    fn the_report_says_what_got_in_the_way_and_folds_the_details() {
+        let mut phases = vec![
+            OvernightPhase::new(1, "Measure", "", &["It is measured.".into()], &[]),
+            OvernightPhase::new(2, "Re-measure", "", &["Again.".into()], &[]),
+        ];
+        phases[0].state = PhaseState::Verified;
+        let mut run = OvernightRun::for_test(ConversationId("c".into()), "Speed", phases);
+        run.state = OvernightState::Finished;
+        run.stop = Some(StopReason::Deadline);
+        for number in [3, 5, 3] {
+            run.note_obstacle(
+                ObstacleKind::Declined,
+                "`git push` was declined by the overnight rules: it acts outside this machine",
+                Some(number),
+                1,
+            );
+        }
+        let mut board = Board::default();
+        let worker = task("t3", 3, "implement", &run, None);
+        let mut verifier = task("t4", 4, "verify", &run, Some("t3"));
+        verifier.report = Some(
+            serde_json::from_value(serde_json::json!({
+                "summary": "",
+                "changes": [],
+                "decisions": [],
+                "verification": [],
+                "openQuestions": [],
+                "risks": [
+                    "[excluded] GUI smoke: the sandbox can't open windows",
+                    "- [not run] e2e: no browser installed",
+                    "The docs are thin."
+                ],
+                "verdict": null,
+                "artifacts": [],
+                "submittedAtMs": 0
+            }))
+            .expect("a report"),
+        );
+        board.tasks.insert(worker.id.clone(), worker);
+        board.tasks.insert(verifier.id.clone(), verifier);
+        board.runs.insert(run.id.clone(), run.clone());
+        let text = render(&run, &board, &[], 0);
+        assert!(!text.contains("— –"), "{text}");
+        assert!(
+            text.contains("### Phase 2 · Re-measure — not reached"),
+            "{text}"
+        );
+        let in_the_way = text
+            .find("### What got in the way")
+            .expect("what got in the way");
+        let details = text.find(DETAILS).expect("details");
+        assert!(in_the_way < details, "{text}");
+        assert!(text.contains(
+            "- `git push` was declined by the overnight rules: it acts outside this machine (3 times, task-3, task-5).\n"
+        ), "{text}");
+        assert!(text.contains(
+            "- GUI smoke: the sandbox can't open windows (excluded by a rule or the environment) (task-3).\n"
+        ), "{text}");
+        assert!(
+            text.contains("- e2e: no browser installed (not run) (task-3).\n"),
+            "{text}"
+        );
+        assert!(!text.contains("The docs are thin"), "{text}");
+        assert!(text.contains("- Not reached: phase 2.\n"), "{text}");
+        assert!(
+            text[details..].contains("#### Workers and models"),
+            "{text}"
+        );
+        assert!(!text[..details].contains("task-4 Task 4"), "{text}");
+    }
+
+    #[test]
+    fn numbers_and_times_read_as_people_say_them() {
+        assert_eq!(human_count(950), "950");
+        assert_eq!(human_count(12_340), "12.3k");
+        assert_eq!(human_count(26_570_557), "26.6M");
+        assert_eq!(human_count(3_000_000), "3M");
+        assert_eq!(human_count(1_234_000_000), "1.2B");
+        let zone = jiff::tz::TimeZone::system();
+        let at = |date: jiff::civil::DateTime| {
+            date.to_zoned(zone.clone())
+                .expect("a local time")
+                .timestamp()
+                .as_millisecond()
+        };
+        let now = at(jiff::civil::date(2026, 10, 4).at(7, 30, 0, 0));
+        assert_eq!(
+            day_time(at(jiff::civil::date(2026, 10, 4).at(9, 5, 0, 0)), now),
+            "today 09:05"
+        );
+        assert_eq!(
+            day_time(at(jiff::civil::date(2026, 10, 5).at(0, 13, 0, 0)), now),
+            "tomorrow 00:13"
+        );
+        assert_eq!(
+            day_time(at(jiff::civil::date(2026, 10, 10).at(0, 13, 0, 0)), now),
+            "Sat 10 Oct 00:13"
+        );
     }
 }
