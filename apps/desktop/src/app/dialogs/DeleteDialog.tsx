@@ -11,7 +11,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { Conversation } from "@/ipc/generated";
+import { formatBytes } from "@/lib/format";
 import { deleteConversation } from "@/state/actions";
+import { compactDatabase } from "@/state/storage";
+import { toast } from "@/state/toasts";
 
 type BranchChoice = "keep" | "delete";
 
@@ -56,8 +59,17 @@ function DeleteForm({
     setBusy(true);
     setError(null);
     try {
-      await deleteConversation(conversation.id, session && branches === "delete", forgetBrain);
+      const compactable = await deleteConversation(
+        conversation.id,
+        session && branches === "delete",
+        forgetBrain,
+      );
       onOpenChange(false);
+      if (compactable !== null) {
+        toast(`Deleted. Compact the database to give back ${formatBytes(compactable)}.`, {
+          actions: [{ label: "Compact", run: () => void compactDatabase() }],
+        });
+      }
     } catch (cause) {
       setError(errorText(cause));
     } finally {

@@ -864,12 +864,21 @@ export async function restore(id: string): Promise<void> {
   storeConversation(conversation);
 }
 
+/**
+ * Deletes a conversation for good. The space compacting the database would give back, when
+ * that is worth offering.
+ */
 export async function deleteConversation(
   id: string,
   deleteBranches: boolean,
   forgetBrain: boolean,
-): Promise<void> {
-  await request({ method: "delete", id, deleteBranches, forgetBrain });
+): Promise<number | null> {
+  const { compactableBytes } = await request({
+    method: "delete",
+    id,
+    deleteBranches,
+    forgetBrain,
+  });
   forgetDraft(id);
   const { selection } = useApp.getState();
   if (selection.type === "conversation" && selection.id === id) {
@@ -880,6 +889,8 @@ export async function deleteConversation(
     const { [id]: _thread, ...threads } = state.threads;
     return { conversations, threads };
   });
+  // An older daemon says nothing about it.
+  return compactableBytes ?? null;
 }
 
 /** What removing a project takes with it. */

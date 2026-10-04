@@ -1243,7 +1243,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => {
             daemon.terminals.close_conversation(&id.0);
             sessions.delete(id, delete_branches, forget_brain).await?;
-            Response::Delete
+            Response::Delete {
+                compactable_bytes: sessions.compactable_bytes().await,
+            }
         }
         Request::RenameConversation { id, title } => Response::RenameConversation {
             conversation: Box::new(core.rename_conversation(id, title).await?),

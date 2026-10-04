@@ -354,6 +354,14 @@ impl SessionManager {
         states
     }
 
+    /// The space "Compact the database" gives back now, when Storage offers it (a delete
+    /// asks, to offer it right away).
+    pub async fn compactable_bytes(&self) -> Option<u64> {
+        let space = self.core.store().free_space().await.ok()?;
+        let bytes = space.free_bytes + space.wal_bytes;
+        (bytes >= COMPACT_MIN_BYTES).then_some(bytes)
+    }
+
     /// The Brain's embedding model is loaded, or a Brain job embeds.
     fn embeddings_busy(&self) -> bool {
         self.brain_work()

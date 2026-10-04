@@ -993,7 +993,10 @@ pub enum Response {
     RemoveProject {
         report: RemoveProjectReport,
     },
-    Delete,
+    Delete {
+        /// The space compacting the database now gives back, when Storage would offer it.
+        compactable_bytes: Option<u64>,
+    },
     RenameConversation {
         conversation: Box<Conversation>,
     },
