@@ -26,6 +26,25 @@ export function inlineRefs(text: string, refs: Iterable<AttachmentRef>): Attachm
   });
 }
 
+/** The daemon's limit per attachment list, draft pins included (MAX_ATTACHMENTS in the core). */
+export const MAX_ATTACHMENTS = 20;
+
+/**
+ * What a draft pins: its row files and the images in its text, then retained images (newest
+ * first, so undo can bring them back) while the daemon's limit allows.
+ */
+export function draftRefs(
+  text: string,
+  rows: readonly AttachmentRef[],
+  retained: Iterable<AttachmentRef>,
+): AttachmentRef[] {
+  const kept = [...retained];
+  const shown = inlineRefs(text, kept);
+  const ids = new Set(shown.map((ref) => ref.id));
+  const older = kept.filter((ref) => !ids.has(ref.id)).toReversed();
+  return [...rows, ...shown, ...older].slice(0, MAX_ATTACHMENTS);
+}
+
 /** Sent edits retain every row ref, even when it shares an inline image's id. */
 export function reconcileImages(text: string, refs: readonly AttachmentRef[]): AttachmentRef[];
 export function reconcileImages(text: string, refs: readonly AttachmentRef[] | undefined): AttachmentRef[] | undefined;

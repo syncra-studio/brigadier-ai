@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { IMAGE_UPLOAD, INLINE_IMAGE, InlineImages, imageSegments, imageToken, imageTokens, inlineRefs, isInlineImage, queuedImageRefs, reconcileImages, uploadToken } from "@/lib/inlineImages";
+import { IMAGE_UPLOAD, INLINE_IMAGE, InlineImages, MAX_ATTACHMENTS, draftRefs, imageSegments, imageToken, imageTokens, inlineRefs, isInlineImage, queuedImageRefs, reconcileImages, uploadToken } from "@/lib/inlineImages";
 import type { AttachmentRef } from "@/ipc/generated";
 
 const ref = (id: string, inline = true, mime = "image/png"): AttachmentRef => ({ id, inline, mime, name: `${id}.png`, bytes: 10, pasted: false });
@@ -115,4 +115,14 @@ test("queue edits take rows only from the edited composer without duplicating or
   ]);
   assert.deepEqual(queuedImageRefs("[image:shared]", original, []), [ref("shared")]);
   assert.deepEqual(queuedImageRefs("no images", original, []), []);
+});
+
+test("draft pins keep the text's images and the newest retained ones within the daemon's limit", () => {
+  const retained = Array.from({ length: 30 }, (_, index) => ref(`r${index}`));
+  const row = ref("row", false);
+  const pinned = draftRefs(`see ${imageToken("r3")} and ${imageToken("r3")}`, [row], retained);
+  assert.equal(pinned.length, MAX_ATTACHMENTS);
+  assert.deepEqual(pinned.slice(0, 4).map((attachment) => attachment.id), ["row", "r3", "r29", "r28"]);
+  assert.equal(pinned.filter((attachment) => attachment.id === "r3").length, 1);
+  assert.deepEqual(draftRefs("", [], [ref("a"), ref("b")]).map((attachment) => attachment.id), ["b", "a"]);
 });

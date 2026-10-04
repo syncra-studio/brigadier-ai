@@ -60,7 +60,7 @@ export function useComposerDraft(
 
   const keep = useCallback(() => {
     const state = aui.composer().getState();
-    saveDraft(scope, state.text, attachments.draftRefs(state.attachments), mentionsAt(state.text, memory));
+    saveDraft(scope, state.text, attachments.draftRefs(state.text, state.attachments), mentionsAt(state.text, memory));
   }, [aui, attachments, memory, scope]);
 
   useEffect(() => attachments.inline.subscribe(keep), [attachments, keep]);

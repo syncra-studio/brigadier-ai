@@ -6,7 +6,7 @@ import type {
   PendingAttachment,
 } from "@assistant-ui/react";
 
-import { InlineImages, inlineRefs } from "@/lib/inlineImages";
+import { InlineImages, draftRefs, inlineRefs } from "@/lib/inlineImages";
 import { isPastedFile } from "@/components/assistant-ui/elements/attachment-tile";
 import type { AttachmentRef } from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";
@@ -42,8 +42,8 @@ export class BlobAttachmentAdapter implements AttachmentAdapter {
     return [...this.refsOf(attachments).map((ref) => ({ ...ref, inline: false })), ...inlineRefs(text, this.inline.refs.values())];
   }
 
-  draftRefs(attachments: readonly { id: string }[]): AttachmentRef[] {
-    return [...this.refsOf(attachments), ...this.inline.refs.values()];
+  draftRefs(text: string, attachments: readonly { id: string }[]): AttachmentRef[] {
+    return draftRefs(text, this.refsOf(attachments), this.inline.refs.values());
   }
   private readonly refs = new Map<string, AttachmentRef>();
 
