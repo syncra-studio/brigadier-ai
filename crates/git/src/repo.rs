@@ -385,13 +385,6 @@ impl Repo {
         message: &str,
         internal: bool,
     ) -> Result<Oid> {
-        valid_oid(tree)?;
-        let mut args = vec!["commit-tree", &tree.0];
-        for parent in parents {
-            valid_oid(parent)?;
-            args.extend(["-p", &parent.0]);
-        }
-        args.extend(["-F", "-"]);
         let env: Environment = if internal {
             ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"]
                 .map(|key| (key.into(), "Brigadier".into()))
@@ -404,11 +397,29 @@ impl Repo {
         } else {
             vec![]
         };
+        self.commit_tree_with(tree, parents, message, &env)
+    }
+
+    /// [`Repo::commit_tree`] with extra environment, such as an original author and date.
+    pub(crate) fn commit_tree_with(
+        &self,
+        tree: &Oid,
+        parents: &[&Oid],
+        message: &str,
+        env: &[(OsString, OsString)],
+    ) -> Result<Oid> {
+        valid_oid(tree)?;
+        let mut args = vec!["commit-tree", &tree.0];
+        for parent in parents {
+            valid_oid(parent)?;
+            args.extend(["-p", &parent.0]);
+        }
+        args.extend(["-F", "-"]);
         parse::oid(&self.git.checked(
             Some(&self.root),
             &args,
             false,
-            &env,
+            env,
             Some(message.as_bytes()),
         )?)
     }
@@ -1316,7 +1327,7 @@ impl Repo {
 
     /// `commit`'s tree with `paths` as they were at `base`: restored where `base` had a file
     /// there, removed otherwise.
-    fn tree_reverting(&self, commit: &Oid, base: &Oid, paths: &[String]) -> Result<Oid> {
+    pub(crate) fn tree_reverting(&self, commit: &Oid, base: &Oid, paths: &[String]) -> Result<Oid> {
         for path in paths {
             valid_path(path)?;
         }

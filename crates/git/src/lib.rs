@@ -364,6 +364,25 @@ pub enum RebaseOutcome {
     },
 }
 
+/// Result of replaying a worker's commit series onto a target tip.
+#[derive(Debug, Clone)]
+pub enum SeriesOutcome {
+    /// The worktree's HEAD is now `tip`; its branch holds the series on `onto`.
+    Replayed {
+        /// New HEAD: the last replayed commit, or `onto` when no commit was left.
+        tip: Oid,
+        /// Commits in the resulting series, after dropping ones left empty.
+        commits: u32,
+        /// HEAD moved; false when the series already sat on `onto` without left-out paths.
+        rewritten: bool,
+    },
+    /// Nothing was changed in the checkout.
+    Conflicts {
+        /// Conflicted paths of the first commit that did not apply.
+        paths: Vec<String>,
+    },
+}
+
 /// Result of preparing a commit that reverts landed commits (the user's Undo).
 #[derive(Debug, Clone)]
 pub enum RevertOutcome {
