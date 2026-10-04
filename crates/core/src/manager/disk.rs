@@ -24,6 +24,7 @@ use super::{SessionManager, blocking, git_error};
 use crate::model::{
     Conversation, ConversationId, Environment, KeptBranch, Lifecycle, Project, Setup, streams,
 };
+use crate::overnight::OvernightRun;
 use crate::storage::{CleanBadge, CleanCategory, CleanItem, ProjectUsage, SharedPart, SharedUsage};
 use crate::work::Task;
 use crate::{Error, Result};
@@ -112,6 +113,7 @@ struct Records {
     projects: Vec<Project>,
     conversations: Vec<Conversation>,
     tasks: HashMap<ConversationId, Vec<Task>>,
+    runs: HashMap<ConversationId, Vec<OvernightRun>>,
     owners: Vec<(String, Vec<Artifact>, bool)>,
     kept: Vec<(String, KeptBranch)>,
 }
@@ -125,6 +127,14 @@ impl Records {
         self.tasks.iter().find_map(|(conversation, tasks)| {
             let task = tasks.iter().find(|task| task.id.0 == id)?;
             Some((self.conversation(&conversation.0)?, task))
+        })
+    }
+
+    /// The overnight run `id` and its session, while the session exists.
+    fn run(&self, id: &str) -> Option<(&Conversation, &OvernightRun)> {
+        self.runs.iter().find_map(|(conversation, runs)| {
+            let run = runs.iter().find(|run| run.id.0 == id)?;
+            Some((self.conversation(&conversation.0)?, run))
         })
     }
 
@@ -240,9 +250,14 @@ impl SessionManager {
     async fn storage_records(&self) -> Result<Records> {
         let catalog = self.core.catalog();
         let mut tasks = HashMap::new();
+        let mut runs = HashMap::new();
         for conversation in &catalog.conversations {
-            if let Ok(list) = self.core.tasks(&conversation.id).await {
-                tasks.insert(conversation.id.clone(), list);
+            if let Ok(board) = self.core.board(&conversation.id).await {
+                tasks.insert(conversation.id.clone(), board.sorted_tasks());
+                runs.insert(
+                    conversation.id.clone(),
+                    board.runs.values().cloned().collect(),
+                );
             }
         }
         Ok(Records {
@@ -250,6 +265,7 @@ impl SessionManager {
             projects: catalog.projects,
             conversations: catalog.conversations,
             tasks,
+            runs,
             owners: self.runtime.ledger().owners(),
             kept: self.kept_branches().await?,
         })
@@ -284,7 +300,7 @@ impl SessionManager {
 
     fn owner_states(&self, records: &Records) -> HashMap<String, OwnerState> {
         let processes = self.runtime.platform().processes();
-        records
+        let mut states: HashMap<String, OwnerState> = records
             .owners
             .iter()
             .map(|(owner, artifacts, disposing)| {
@@ -296,6 +312,8 @@ impl SessionManager {
                             records.conversation(id).is_some()
                         }
                         Some(("task", id)) => records.task(id).is_some(),
+                        // A run's worktree serves Continue and Merge while its session exists.
+                        Some(("overnight", id)) => records.run(id).is_some(),
                         // Commit-message writers, Brain jobs, raw sessions: alive while one of
                         // their processes still runs.
                         _ => artifacts.iter().any(|artifact| match artifact {
@@ -318,7 +336,22 @@ impl SessionManager {
                 };
                 (owner.clone(), state)
             })
-            .collect()
+            .collect();
+        // Run segments share one worktree: it is never offered while a live owner holds it.
+        let live: HashSet<PathBuf> = records
+            .owners
+            .iter()
+            .filter(|(owner, _, _)| states.get(owner) == Some(&OwnerState::Live))
+            .flat_map(|(_, artifacts, _)| worktree_places(artifacts))
+            .collect();
+        for (owner, artifacts, _) in &records.owners {
+            if states.get(owner) == Some(&OwnerState::Orphaned)
+                && worktree_places(artifacts).any(|place| live.contains(&place))
+            {
+                states.insert(owner.clone(), OwnerState::Live);
+            }
+        }
+        states
     }
 
     /// The Brain's embedding model is loaded, or a Brain job embeds.
@@ -449,6 +482,13 @@ impl SessionManager {
                 .await
             }
             Action::Dispose { owner, bytes } => {
+                let records = self
+                    .storage_records()
+                    .await
+                    .map_err(|err| err.to_string())?;
+                if self.owner_states(&records).get(&owner) == Some(&OwnerState::Live) {
+                    return Err("it is in use again".into());
+                }
                 let worktrees: Vec<PathBuf> = self
                     .runtime
                     .ledger()
@@ -724,6 +764,16 @@ fn project_streams(records: &Records, project: &Project) -> Vec<String> {
         }
     }
     list
+}
+
+/// Where the worktrees among `artifacts` are, through symbolic links.
+fn worktree_places(artifacts: &[Artifact]) -> impl Iterator<Item = PathBuf> + '_ {
+    artifacts.iter().filter_map(|artifact| match artifact {
+        Artifact::Worktree { path, .. } => {
+            Some(std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)))
+        }
+        _ => None,
+    })
 }
 
 /// "1 old log file", "3 old log files".
@@ -1117,6 +1167,23 @@ impl Scanner<'_> {
                     "Its session is archived.",
                 ));
             }
+            for run in self
+                .records
+                .runs
+                .get(&conversation.id)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(workspace) = &run.workspace {
+                    candidates.push((
+                        PathBuf::from(repo),
+                        workspace.branch.clone(),
+                        workspace.base.clone(),
+                        None,
+                        "Its session is archived.",
+                    ));
+                }
+            }
         }
         for (repo, kept) in &self.records.kept {
             candidates.push((
@@ -1218,6 +1285,7 @@ impl Scanner<'_> {
                 Some(("task", _)) => "a worker",
                 Some(("brain", _)) => "a Brain job",
                 Some(("gen", _)) => "a commit message writer",
+                Some(("overnight", _)) => "an overnight run",
                 _ => "an Inspector session",
             };
             let (label, reason) = match state {
