@@ -32,12 +32,14 @@ pub(crate) fn date_of(at_ms: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// The orchestrator's role, with the user's preferences from the Personal Brain.
+/// The orchestrator's role, with the user's preferences from the Personal Brain. `short`:
+/// the user's Short replies setting.
 pub(crate) fn orchestrator(
     conversation: &Conversation,
     project: Option<&Project>,
     preferences: &[String],
     run: Option<&crate::overnight::RunWorkspace>,
+    short: bool,
 ) -> String {
     let (repo, environment, permission) = match &conversation.setup {
         Some(Setup::Session {
@@ -119,11 +121,12 @@ How to talk to the user:
 - Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show (progress lines like "task-1 finished, waiting on task-2" are noise). This holds right after you delegate, too. Never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
 - When the request's work is done, or the user must decide something, write one final answer: what was found or done, what was verified and how (as the workers reported it), and what's next or the decision you need. Don't repeat what you already told them.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.
-- A [follow-up …] block is a message the user sent while you work on their request; it waits in their queue until you sort it with route_follow_up, silently (the user sees where it goes). If it belongs to this work (a question about the same thing, a detail or a change for it), it joins it: it reaches you at once as the user's message, and your one final answer covers it too. If it is a request of its own, it waits and reaches you on its own once this work is done; don't act on it before.{voice}{orchestrator_voice}{preferences}"#,
+- A [follow-up …] block is a message the user sent while you work on their request; it waits in their queue until you sort it with route_follow_up, silently (the user sees where it goes). If it belongs to this work (a question about the same thing, a detail or a change for it), it joins it: it reaches you at once as the user's message, and your one final answer covers it too. If it is a request of its own, it waits and reaches you on its own once this work is done; don't act on it before.{voice}{orchestrator_voice}{short}{preferences}"#,
         today = today(),
         quiet = QUIET,
         voice = VOICE,
         orchestrator_voice = ORCHESTRATOR_VOICE,
+        short = if short { SHORT_REPLIES } else { "" },
         preferences = preference_lines(preferences),
     )
 }
@@ -144,6 +147,16 @@ How to write:
 /// What the voice covers for the orchestrator.
 const ORCHESTRATOR_VOICE: &str = "
 - This covers your own prose: replies to the user and your notes (remember, plans, handoff notes). Task specs stay complete, and commit messages follow the project's style.";
+
+/// The Short replies setting (on by default, PLAN.md §7): what the user reads stays a few
+/// lines.
+const SHORT_REPLIES: &str = "
+
+Short replies (the user's setting):
+- What you write for the user: the outcome in the first line, then at most about five short lines or bullets, unless they ask for more. No headings or bold labels.
+- Never quote a reviewer's or verifier's text to the user: name what it found in a few words.
+- At the end of an overnight phase, your reply is at most three lines: what changed, the outcome, and what waits on the user.
+- This doesn't shorten plans, handoff notes, task specs, exact commands and error text, evidence the user needs to decide, or instructions about security and order: those stay complete.";
 
 /// What the voice covers for a worker, and its report's shape.
 const WORKER_VOICE: &str = "
@@ -655,11 +668,19 @@ mod environment_tests {
             branch: "overnight/2026-10-04-textkit-1234".into(),
             path: "/tmp/run".into(),
         };
-        let full = orchestrator(&conversation("fullAccess"), None, &[], Some(&run));
+        let full = orchestrator(&conversation("fullAccess"), None, &[], Some(&run), true);
         assert!(full.contains("workers run without the OS sandbox"));
         assert!(!full.contains("stays in its sandbox"));
-        let sandboxed = orchestrator(&conversation("approveForMe"), None, &[], Some(&run));
+        let sandboxed = orchestrator(&conversation("approveForMe"), None, &[], Some(&run), true);
         assert!(sandboxed.contains("approves a worker's request to leave its sandbox"));
         assert!(sandboxed.contains("It still refuses what only the user may do"));
+        // Short replies reach a run's lead, and its phase-end replies; off, the plain voice
+        // stays.
+        assert!(
+            full.contains("At the end of an overnight phase, your reply is at most three lines")
+        );
+        let long = orchestrator(&conversation("fullAccess"), None, &[], Some(&run), false);
+        assert!(!long.contains("Short replies"));
+        assert!(long.contains("How to write:"));
     }
 }

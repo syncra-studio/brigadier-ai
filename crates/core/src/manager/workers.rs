@@ -1334,6 +1334,7 @@ impl SessionManager {
             meter: TokenMeter::new(continues),
             model: task.route.choice.clone(),
             chosen: None,
+            short_replies: None,
             session,
             owner,
             ended: CancellationToken::new(),

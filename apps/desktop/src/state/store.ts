@@ -190,6 +190,7 @@ export const useApp = create<AppState>()(() => ({
     showContextUsage: true,
     showFullAccessNotice: true,
     enrichBrain: true,
+    shortReplies: true,
     onboarded: false,
     keepAwake: "agents",
     keepAwakeLidClosed: false,

@@ -526,6 +526,9 @@ pub struct Settings {
     pub show_full_access_notice: bool,
     /// Spend quota left over before a usage window resets on deepening the Project Brains.
     pub enrich_brain: bool,
+    /// The orchestrator, an overnight run's leads included, answers the user in a few plain
+    /// lines (PLAN.md §7). Off, it keeps the plain voice without the length limits.
+    pub short_replies: bool,
     /// The first-run setup (agents, then projects) was finished or skipped.
     pub onboarded: bool,
     /// When the computer is kept from sleeping.
@@ -576,6 +579,7 @@ impl Default for Settings {
             show_context_usage: true,
             show_full_access_notice: true,
             enrich_brain: true,
+            short_replies: true,
             onboarded: false,
             keep_awake: KeepAwake::default(),
             keep_awake_lid_closed: false,
@@ -1420,5 +1424,19 @@ mod tests {
                 .unwrap()
                 .contains(r#""usage""#)
         );
+    }
+
+    #[test]
+    fn short_replies_are_on_by_default_and_for_settings_saved_before_them() {
+        assert!(Settings::default().short_replies);
+        // The old hidden `conciseReplies` switch doesn't carry over: the user's choice is
+        // the Settings switch alone.
+        let settings: Settings = serde_json::from_str(
+            r#"{"usage":{"conciseReplies":false},"hibernateAfterMinutes":12}"#,
+        )
+        .unwrap();
+        assert!(settings.short_replies);
+        let settings: Settings = serde_json::from_str(r#"{"shortReplies":false}"#).unwrap();
+        assert!(!settings.short_replies);
     }
 }

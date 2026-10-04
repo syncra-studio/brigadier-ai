@@ -289,6 +289,7 @@ impl SessionManager {
                     .get(id)
                     .and_then(|active| active.workspace)
                     .as_ref(),
+                self.core.settings().short_replies,
             )),
             mcp_servers: Vec::new(),
             tools: ToolSet::None,

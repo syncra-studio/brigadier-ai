@@ -42,6 +42,11 @@ showFullAccessNotice: boolean,
  */
 enrichBrain: boolean, 
 /**
+ * The orchestrator, an overnight run's leads included, answers the user in a few plain
+ * lines (PLAN.md §7). Off, it keeps the plain voice without the length limits.
+ */
+shortReplies: boolean, 
+/**
  * The first-run setup (agents, then projects) was finished or skipped.
  */
 onboarded: boolean, 

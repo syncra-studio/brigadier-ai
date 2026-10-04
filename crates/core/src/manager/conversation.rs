@@ -109,6 +109,9 @@ pub(crate) struct Cli {
     /// The conversation's own model choice it was started for (none for a task, or a Chat on
     /// the default model): a different one in the setup means the user changed it since.
     pub chosen: Option<ModelChoice>,
+    /// The Short replies setting an orchestrator was started with (none for a task or a
+    /// Chat): a different one in Settings means the user changed it since.
+    pub short_replies: Option<bool>,
     pub session: Arc<dyn ProviderSession>,
     /// The cleanup-ledger owner (`orch:…`, `chat:…`, `task:…`).
     pub owner: String,
@@ -1446,20 +1449,21 @@ impl SessionManager {
         self.settle_requests(&conv.id).await;
     }
 
-    /// The user changed the model, effort or Fast since the CLI started: close it while nothing
-    /// runs, so the next turn resumes the conversation on the new choice, taking effect on the
-    /// next message.
+    /// The user changed the model, effort or Fast, or the Short replies setting, since the CLI
+    /// started: close it while nothing runs, so the next turn resumes the conversation on the
+    /// new choice and instructions, taking effect on the next message.
     async fn retire_changed_cli(&self, conv: &Arc<ConvLive>) {
         let Ok(conversation) = self.core.conversation(&conv.id) else {
             return;
         };
         let wanted = setup_choice(&conversation);
+        let short = self.core.settings().short_replies;
         let cli = {
             let mut state = conv.state.lock().await;
-            let changed = state
-                .cli
-                .as_ref()
-                .is_some_and(|cli| cli.chosen.is_some() && cli.chosen != wanted);
+            let changed = state.cli.as_ref().is_some_and(|cli| {
+                (cli.chosen.is_some() && cli.chosen != wanted)
+                    || cli.short_replies.is_some_and(|started| started != short)
+            });
             if !changed || state.busy || state.closing {
                 return;
             }
@@ -1492,6 +1496,7 @@ impl SessionManager {
             .clone()
             .map(|fallback| fallback.choice);
         let mut grant_values = Vec::new();
+        let short = self.core.settings().short_replies;
         let (choice, prompt, mcp) = match (&conversation.setup, conv.kind) {
             (Some(Setup::Session { orchestrator, .. }), _) => {
                 let choice = match fallback {
@@ -1513,6 +1518,7 @@ impl SessionManager {
                     project.as_ref(),
                     &preferences,
                     run.as_ref(),
+                    short,
                 );
                 let grant = self.grants.issue(
                     &owner,
@@ -1648,6 +1654,7 @@ impl SessionManager {
             meter: TokenMeter::new(resumed && choice.provider == ProviderKind::Codex),
             model: choice,
             chosen: setup_choice(&conversation),
+            short_replies: (conv.kind == ConversationKind::Session).then_some(short),
             session,
             owner,
             ended: CancellationToken::new(),

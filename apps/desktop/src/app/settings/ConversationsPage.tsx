@@ -38,6 +38,11 @@ export const CONVERSATIONS_ROWS = {
     description: "Used by projects that have not remembered their own.",
   },
   chat: { label: "Chat model", description: "Used by new Chats." },
+  shortReplies: {
+    label: "Short replies",
+    description:
+      "The orchestrator answers in a few plain lines, overnight runs included. Turn off for fuller answers.",
+  },
   permission: {
     label: "Default permission level",
     description: `A project remembers its own, which wins over this. ${ALWAYS_ASK_NOTE}`,
@@ -91,6 +96,12 @@ export function ConversationsPage() {
             value={chatModel}
             fallback={orchestrator ?? automatic}
           />
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title="Replies">
+        <SettingsCard>
+          <SwitchSetting setting="shortReplies" row={CONVERSATIONS_ROWS.shortReplies} />
         </SettingsCard>
       </SettingsSection>
 
