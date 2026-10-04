@@ -447,6 +447,11 @@ mod lid {
     }
 
     async fn pmset_disablesleep(on: bool) -> Result<(), String> {
+        if dry_run().is_some() {
+            let value = if on { "1" } else { "0" };
+            tracing::info!(command = %format!("{SUDO} -n {PMSET} disablesleep {value}"), "dry run: would change sleep");
+            return Ok(());
+        }
         let output = tokio::process::Command::new(SUDO)
             .args(["-n", PMSET, "disablesleep", if on { "1" } else { "0" }])
             .stdin(Stdio::null())
@@ -460,8 +465,12 @@ mod lid {
         }
     }
 
-    /// Whether sleep is disabled system-wide now (`SleepDisabled` in `pmset -g`).
+    /// Whether sleep is disabled system-wide now (`SleepDisabled` in `pmset -g`). A dry run
+    /// reads it as on, so the hold it takes is its own.
     pub async fn sleep_disabled() -> Option<bool> {
+        if dry_run().is_some() {
+            return Some(false);
+        }
         let output = tokio::process::Command::new(PMSET)
             .arg("-g")
             .output()
@@ -479,6 +488,9 @@ mod lid {
     /// allows, changing nothing. Any rule that allows it will do (Brigadier's, or another
     /// keep-awake app's).
     pub async fn authorized() -> bool {
+        if dry_run().is_some() {
+            return rule_installed();
+        }
         let Ok(output) = tokio::process::Command::new(SUDO)
             .args(["-n", "-l"])
             .stdin(Stdio::null())
@@ -531,8 +543,10 @@ mod lid {
     }
 
     /// A development build started with `BRIGADIER_LID_RULE_DRY_RUN=<file>` looks at that
-    /// stand-in instead of the rule and only says what it would run, so uninstalling can be
-    /// tried without touching the rule an installed Brigadier uses.
+    /// stand-in instead of the rule and only says what it would run, so uninstalling and a
+    /// run's lid hold can be tried without touching the rule an installed Brigadier uses or
+    /// this computer's sleep setting: the stand-in alone says whether the rule is there, and
+    /// sleep is never changed, marked, guarded or slept.
     fn dry_run() -> Option<PathBuf> {
         if !cfg!(debug_assertions) {
             return None;
@@ -598,6 +612,14 @@ mod lid {
             return Ok(Held {
                 guard: None,
                 owned: false,
+            });
+        }
+        if dry_run().is_some() {
+            // Nothing changes, so there is nothing for a guard or a later daemon to undo.
+            pmset_disablesleep(true).await?;
+            return Ok(Held {
+                guard: None,
+                owned: true,
             });
         }
         let marker = marker(data_dir);
@@ -675,6 +697,9 @@ if [ "$(cat "$2" 2>/dev/null)" = "$1" ]; then /usr/bin/sudo -n /usr/bin/pmset di
     /// powerd takes a moment to apply sleep coming back on and refuses until then, so a
     /// refusal, or a lid that doesn't read as sleeping yet, is tried again for a few seconds.
     async fn sleep_if_lid_closed() {
+        if dry_run().is_some() {
+            return;
+        }
         for _ in 0..10 {
             let Some((closed, sleeps)) = lid_state().await else {
                 return;
