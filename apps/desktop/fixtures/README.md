@@ -33,3 +33,8 @@ page and never reach a daemon; a worker's transcript is not in the fixture. Open
 it shows seven rows (the plan, four workers, one judgement call, the lead's reply), where the app
 showed 53 before one row per task. Open a row's chevron for its checks round by round, and the
 run card's Phase 2 for its steps.
+
+The page has the app's window layout (rail, sidebar, top bar), so the summary sits where it does in the
+app. Query switches: `density=compact`; `sidebar=0` (sidebar closed); `run=live` (the run still working)
+or `run=none` (a normal session, whose plan is an ordinary plan card); `plans=N` (N more plan cards).
+`window.night` holds the stores and `revealPlan`/`revealOvernight` for probes.

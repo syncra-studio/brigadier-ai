@@ -9,6 +9,9 @@ export const useSummary = create<{
   floating: boolean;
 }>(() => ({ layout: "beside", floating: false }));
 
+/** Where each summary card, and their column, was scrolled to: `<session>/<card>` → offset. */
+export const keptScroll = new Map<string, number>();
+
 /** Open the same card beside the thread or in the narrow window's summary. */
 export function revealPlan(cardId: string): void {
   reveal(() => {
@@ -25,13 +28,19 @@ export function revealOvernight(runId: string): void {
 }
 
 function reveal(elementId: () => string): void {
+  const id = elementId();
+  // The card opens at its top, wherever it and the column were left.
+  for (const key of keptScroll.keys())
+    if (key.endsWith(`/${id}`) || key.endsWith("/column")) keptScroll.delete(key);
   if (useSummary.getState().layout === "float")
     useSummary.setState({ floating: true });
   else setPinnedSummary(true);
   requestAnimationFrame(() =>
     requestAnimationFrame(() => {
-      const card = document.getElementById(elementId());
-      card?.scrollIntoView({ block: "nearest" });
+      const card = document.getElementById(id);
+      const own = card?.closest<HTMLElement>("[data-slot=summary-card]");
+      own?.firstElementChild?.scrollTo({ top: 0 });
+      (own ?? card)?.scrollIntoView({ block: "nearest" });
       card?.focus({ preventScroll: true });
     }),
   );

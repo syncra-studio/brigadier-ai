@@ -13,7 +13,7 @@ import { OvernightPlanCard } from "@/app/conversation/cards/OvernightPlanCard";
 import { PlanCardView } from "@/app/conversation/cards/PlanCardView";
 import { PlanCardLink } from "@/app/conversation/cards/PlanCardLink";
 import { PendingActionCard } from "@/app/conversation/ActionCards";
-import { PinnedSummary, PinnedSummaryToggle, SummaryPane } from "@/app/conversation/PinnedSummary";
+import { PinnedSummary, PinnedSummaryToggle, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
 import { SlashCommands } from "@/app/conversation/SlashCommands";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import {
@@ -214,13 +214,14 @@ mockIPC((command, payload) => {
   throw new Error(`Unexpected fixture request: ${req.method}`);
 });
 
-// Keep the active phase's link distinct from the normal plan's Windows-path worker.
+// Keep the active phase's link distinct from the normal plan's Windows-path worker. None of the
+// synthetic workers is a check.
 const fixtureBoard = useBoard.getState().board!;
-useBoard.setState({ board: { ...fixtureBoard, tasks: {
+useBoard.setState({ board: { ...fixtureBoard, tasks: Object.fromEntries(Object.entries({
   ...fixtureBoard.tasks,
   "worker-phase-5": { ...fixtureBoard.tasks["worker-live"]!, id: "worker-phase-5",
     title: "Review the whole Windows change", number: 5 },
-} } });
+}).map(([taskId, task]) => [taskId, { ...task, gateLink: task.gateLink ?? null }])) } });
 
 const proposed: OvernightRun = {
   id: "proposed",
@@ -566,9 +567,9 @@ function FixturePage() {
               />
             )}
             {summary ? (
-              <>
+              <SummaryFloat>
                 <div className="flex justify-end">
-                  <PinnedSummaryToggle conversation={session} />
+                  <PinnedSummaryToggle />
                 </div>
                 <SummaryPane summary>
                   <div className="flex h-screen flex-col gap-4 p-4">
@@ -577,7 +578,7 @@ function FixturePage() {
                   </div>
                   <PinnedSummary conversation={session} />
                 </SummaryPane>
-              </>
+              </SummaryFloat>
             ) : (
               <div className="grid grid-cols-1 items-start gap-6 md:grid-cols-2 xl:grid-cols-3">
                 {states.map((item) => (

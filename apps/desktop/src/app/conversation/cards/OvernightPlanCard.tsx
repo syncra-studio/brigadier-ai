@@ -186,9 +186,12 @@ function whereLine(run: OvernightRun, verifiedSha: string | undefined): string {
 export function OvernightPlanCard({
   model,
   actions,
+  className,
 }: {
   model: OvernightCardModel;
   actions: OvernightActions | null;
+  /** For the card's own surface, e.g. none inside the summary's card. */
+  className?: string;
 }) {
   const { run, details } = model;
   const action = useAction();
@@ -289,6 +292,7 @@ export function OvernightPlanCard({
     <AgentPlan
       id={`overnight-${run.id}`}
       data-card="overnight-plan"
+      className={className}
       tabIndex={-1}
       title={`${run.name} · ${deadlineLabel(model)}`}
       badges={

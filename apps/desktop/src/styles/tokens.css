@@ -72,7 +72,7 @@
  *   Radii       rounded-control (buttons, inputs), rounded-surface (menus, popovers),
  *               rounded-dialog, rounded-thread (message bubbles), rounded-composer (the composer
  *               card), rounded-rail (the rail's top corners), rounded-menu (menus), rounded-tooltip,
- *               rounded-capsule,
+ *               rounded-summary (the pinned summary's cards), rounded-capsule,
  *               rounded-document, rounded-page (the page surface), rounded-peek (the sidebar
  *               panel peeking over the content), rounded-nav (sidebar and
  *               Settings navigation rows), rounded-settings (a Settings card),
@@ -154,10 +154,13 @@
   --spacing-composer: 2.75rem;
   /* The composer grows with its text up to a quarter of the window, then scrolls. */
   --spacing-composer-max: 25dvh;
-  /* The pinned summary: its gap to the thread pane's edges, and how far the thread's column
-     moves aside for it in a pane too narrow to keep the column centred beside it (half the card
-     and its gap, so the column centres in what the card leaves). */
-  --spacing-summary-inset: calc(var(--spacing) * 1.5);
+  /* The pinned summary: its gap to the top bar and the thread pane's edges (also the gap
+     between its cards), how short a card may get before the cards scroll together instead (its
+     own height when shorter), and how far the thread's column moves aside for it in a pane too
+     narrow to keep the column centred beside it (half the card and its gap, so the column
+     centres in what the card leaves). */
+  --spacing-summary-inset: calc(var(--spacing) * 3);
+  --spacing-summary-card-min: calc(var(--spacing-row) * 4);
   --spacing-summary-shift: calc((var(--container-summary) + var(--spacing-summary-inset)) / 2);
   /* The room either side of the thread's column below which the pinned summary floats over the
      thread instead, opened from the top bar, and from which it sits beside the column without
@@ -248,8 +251,9 @@
   --container-thread: 52rem;
   --container-settings: 48rem;
   --container-settings-wide: 64rem;
-  /* The pinned summary's card. */
+  /* The pinned summary's cards, and their column with its gap to the pane's edges. */
   --container-summary: 18.75rem;
+  --container-summary-stack: calc(var(--container-summary) + var(--spacing-summary-inset) * 2);
 
   --radius-xs: 0.1875rem;
   --radius-sm: 0.375rem;
@@ -267,6 +271,8 @@
   --radius-rail: 1.25rem;
   /* Menus and tooltips: rounder than cards. */
   --radius-menu: 1.25rem;
+  /* The pinned summary's cards, floating over the thread like menus. */
+  --radius-summary: 1.25rem;
   --radius-tooltip: 1rem;
   --radius-capsule: 9999px;
   /* The page surface; sidebar and Settings navigation rows; a Settings card. */
@@ -310,7 +316,7 @@
   --shadow-hairline: inset 0 0 1px 0 oklch(1 0 0 / 20%);
   --shadow-tooltip: 0 8px 18px oklch(0 0 0 / 25%);
   --shadow-menu: 0 12px 32px oklch(0 0 0 / 35%);
-  --shadow-summary: 0 3px 7.5px oklch(0 0 0 / 4%), 0 0 20px oklch(0 0 0 / 5%);
+  --shadow-summary: 0 0 0 0.5px oklch(1 0 0 / 16%), 0 3px 7.5px oklch(0 0 0 / 4%), 0 0 20px oklch(0 0 0 / 5%);
   /* A switch's thumb; the page surface's hairline edge and soft drop. */
   --shadow-thumb: 0 1px 2px oklch(0 0 0 / 20%);
   --shadow-page: 0 0 0 0.5px oklch(1 0 0 / 6%), 0 4px 16px oklch(0 0 0 / 5%);
@@ -570,6 +576,7 @@
   --radius-bubble: 1.125rem;
   --radius-rail: 1rem;
   --radius-menu: 1rem;
+  --radius-summary: 1rem;
   --radius-tooltip: 0.75rem;
   --radius-nav: 0.625rem;
   --radius-settings: 1rem;

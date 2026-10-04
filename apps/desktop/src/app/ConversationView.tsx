@@ -24,7 +24,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { ChatActions, RenameDialog } from "@/app/conversation/ChatActions";
-import { PinnedSummary, PinnedSummaryToggle, SummaryPane } from "@/app/conversation/PinnedSummary";
+import { PinnedSummary, PinnedSummaryToggle, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
 import { WorkerDiffs } from "@/app/conversation/WorkerSummary";
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
 import {
@@ -753,44 +753,47 @@ export function ConversationView({
                       className="relative flex h-full min-h-0"
                     >
                       <div className={cn("flex h-full min-w-0 flex-1 flex-col", fullscreen && "hidden")}>
-                        {!embedded && (
-                          <TopBar onRename={conversation && !archived ? () => setRenaming(true) : undefined}>
-                            {conversation && (
-                              <ChatActions conversation={conversation} onRename={() => setRenaming(true)} />
-                            )}
-                            {conversation && summary && <PinnedSummaryToggle conversation={conversation} />}
-                            <PanelButtonsRoom besidePanel />
-                          </TopBar>
-                        )}
-                        {error && (
-                          <p
-                            role="alert"
-                            className="bg-destructive/10 text-destructive border-destructive/20 flex items-center gap-2 border-b px-4 py-2 text-sm"
-                          >
-                            <span className="min-w-0 flex-1">{error}</span>
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              aria-label="Dismiss"
-                              onClick={() => setError(null)}
+                        {/* The summary's popover, where it floats: opened in the top bar, under it. */}
+                        <SummaryFloat>
+                          {!embedded && (
+                            <TopBar onRename={conversation && !archived ? () => setRenaming(true) : undefined}>
+                              {conversation && (
+                                <ChatActions conversation={conversation} onRename={() => setRenaming(true)} />
+                              )}
+                              {conversation && summary && <PinnedSummaryToggle />}
+                              <PanelButtonsRoom besidePanel />
+                            </TopBar>
+                          )}
+                          {error && (
+                            <p
+                              role="alert"
+                              className="bg-destructive/10 text-destructive border-destructive/20 flex items-center gap-2 border-b px-4 py-2 text-sm"
                             >
-                              <X />
-                            </Button>
-                          </p>
-                        )}
-                        <SummaryPane summary={summary}>
-                          {conversation && summary && <PinnedSummary conversation={conversation} />}
-                          {conversation?.kind === "session" && <WorkerDiffs conversationId={conversation.id} />}
-                          <Thread
-                            components={THREAD_COMPONENTS}
-                            // One placeholder, in every conversation.
-                            placeholder="Do anything"
-                            // A session's work comes before its answer, and is followed once it
-                            // reaches the composer; a Chat's answer fills the room made for it.
-                            scrollMode={conversation?.kind === "chat" ? "chat" : "session"}
-                            scrollKey={conversation?.id}
-                          />
-                        </SummaryPane>
+                              <span className="min-w-0 flex-1">{error}</span>
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                aria-label="Dismiss"
+                                onClick={() => setError(null)}
+                              >
+                                <X />
+                              </Button>
+                            </p>
+                          )}
+                          <SummaryPane summary={summary}>
+                            {conversation && summary && <PinnedSummary conversation={conversation} />}
+                            {conversation?.kind === "session" && <WorkerDiffs conversationId={conversation.id} />}
+                            <Thread
+                              components={THREAD_COMPONENTS}
+                              // One placeholder, in every conversation.
+                              placeholder="Do anything"
+                              // A session's work comes before its answer, and is followed once it
+                              // reaches the composer; a Chat's answer fills the room made for it.
+                              scrollMode={conversation?.kind === "chat" ? "chat" : "session"}
+                              scrollKey={conversation?.id}
+                            />
+                          </SummaryPane>
+                        </SummaryFloat>
                       </div>
                       {!embedded && <SidePanel conversationId={conversationId} />}
                       {!embedded && <PanelButtons />}

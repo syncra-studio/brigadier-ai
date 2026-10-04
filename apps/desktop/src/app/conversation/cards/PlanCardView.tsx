@@ -211,7 +211,14 @@ function ReviewRound({ gate, notes }: { gate: Gate; notes: readonly string[] }) 
 }
 
 /** The orchestrator's plan: its steps with the tasks carrying them out, and its approval. */
-export const PlanCardView = memo(function PlanCardView({ cardId }: { cardId: string }) {
+export const PlanCardView = memo(function PlanCardView({
+  cardId,
+  className,
+}: {
+  cardId: string;
+  /** For the card's own surface, e.g. none inside the summary's card. */
+  className?: string;
+}) {
   const plan = useBoard((s) => s.board?.plans[cardId]);
   // Only what the steps show of their tasks, so unrelated task updates don't rerender the plan.
   const steps = useBoard(
@@ -237,6 +244,7 @@ export const PlanCardView = memo(function PlanCardView({ cardId }: { cardId: str
     <AgentPlan
       data-card="plan"
       id={`plan-${plan.id}`}
+      className={className}
       tabIndex={-1}
       title={plan.title}
       badges={

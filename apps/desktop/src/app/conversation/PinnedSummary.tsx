@@ -36,7 +36,7 @@ import {
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
 import { plainLine } from "@/app/conversation/rowWords";
-import { useSummary } from "@/app/conversation/summaryState";
+import { keptScroll, useSummary } from "@/app/conversation/summaryState";
 import { useAction } from "@/app/conversation/useAction";
 import { GitActions } from "@/app/conversation/GitActions";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
@@ -50,6 +50,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   Popover,
+  PopoverAnchor,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
@@ -83,6 +84,9 @@ const NO_DECISIONS: readonly Decision[] = [];
 
 /** How long a reopened summary card keeps restoring its offset while its rows arrive. */
 const RESTORE_MS = 1000;
+
+/** A plan card inside a summary card, which is its surface. */
+const BARE = "rounded-none border-0 bg-transparent";
 
 /** The branch's +N −N against its base, read again whenever a worker lands. */
 function useSessionDiff(
@@ -603,63 +607,32 @@ export function SummaryPane({
 }
 
 /**
- * A session's summary, pinned at the top end of its thread's pane: the project, the branch (with
- * what it changed, for a worktree session), the workers and the plan. It eases in from the pane's
- * end when pinned and out when unpinned, and hides where the pane has too little room beside the
- * thread's column (it floats from the top bar there instead).
+ * An element of the summary that reopens where it was scrolled to, kept under `key`. While it is
+ * `active`, every scroll counts, a clamp too (so a card that stops overflowing forgets its
+ * offset). Just after it shows it is restoring instead: rows that read asynchronously (the
+ * branch's diff, a pull request) may not be there yet, so the offset is applied again as they
+ * arrive, until it is reached, the element is scrolled by hand, or a moment has passed.
  */
-export function PinnedSummary({
-  conversation,
-}: {
-  conversation: Conversation;
-}) {
-  const shown = useApp((s) => s.pinnedSummary);
-  const float = useSummary((s) => s.layout === "float");
-  const visible = shown && !float;
-  const card = useRef<HTMLElement>(null);
-  // The card stays for its easing in and out; what it shows is kept only while it can be seen.
-  const [content, setContent] = useState(visible);
-  if (visible && !content) setContent(true);
-  useEffect(() => {
-    if (visible || !content) return;
-    let current = true;
-    // Reading the card's animations applies the hiding first, so its easing out is among them.
-    const easing = card.current?.getAnimations() ?? [];
-    void Promise.allSettled(easing.map((animation) => animation.finished)).then(
-      () => current && setContent(false),
-    );
-    return () => {
-      current = false;
-    };
-  }, [visible, content]);
-  // Where the card was scrolled to, so it reopens there. While it shows, every scroll counts, a
-  // clamp too (so a card that stops overflowing forgets its offset). Just after it shows it is
-  // restoring instead: rows that read asynchronously (the branch's diff, a pull request) may not
-  // be there yet, so the offset is applied again as they arrive, until it is reached, the card is
-  // scrolled by hand, or a moment has passed.
-  const scrolled = useRef({ conversationId: conversation.id, top: 0 });
+function useKeptScroll(key: string, active: boolean) {
+  const ref = useRef<HTMLDivElement>(null);
   const restoring = useRef(false);
   const onScroll = (event: UIEvent<HTMLElement>) => {
     const { scrollTop } = event.currentTarget;
-    if (!visible) return;
+    if (!active) return;
     if (restoring.current) {
-      if (scrollTop !== scrolled.current.top) return;
+      if (scrollTop !== keptScroll.get(key)) return;
       restoring.current = false;
     }
-    scrolled.current = { conversationId: conversation.id, top: scrollTop };
+    if (scrollTop > 0) keptScroll.set(key, scrollTop);
+    else keptScroll.delete(key);
   };
   useLayoutEffect(() => {
-    const element = card.current;
-    if (!visible || !content || !element) return;
-    if (scrolled.current.conversationId !== conversation.id) {
-      scrolled.current = { conversationId: conversation.id, top: 0 };
-    }
-    const { top } = scrolled.current;
-    if (top === 0) return;
+    const element = ref.current;
+    const top = keptScroll.get(key) ?? 0;
+    if (!active || !element || top === 0) return;
     restoring.current = true;
     const restore = () => {
-      if (restoring.current && element.scrollTop !== top)
-        element.scrollTop = top;
+      if (restoring.current && element.scrollTop !== top) element.scrollTop = top;
     };
     const stop = () => {
       restoring.current = false;
@@ -669,31 +642,166 @@ export function PinnedSummary({
     observer.observe(element);
     if (element.firstElementChild) observer.observe(element.firstElementChild);
     const timer = setTimeout(stop, RESTORE_MS);
-    for (const type of ["wheel", "pointerdown", "keydown"])
-      element.addEventListener(type, stop);
+    for (const type of ["wheel", "pointerdown", "keydown"]) element.addEventListener(type, stop);
     return () => {
       stop();
       observer.disconnect();
       clearTimeout(timer);
-      for (const type of ["wheel", "pointerdown", "keydown"])
-        element.removeEventListener(type, stop);
+      for (const type of ["wheel", "pointerdown", "keydown"]) element.removeEventListener(type, stop);
     };
-  }, [visible, content, conversation.id]);
+  }, [active, key]);
+  return { ref, onScroll };
+}
+
+/**
+ * The summary's column of cards, pinned in the pane or floating from the top bar: inset from the
+ * top bar and the pane's end, each card as tall as what it shows. Where the cards can't all fit at
+ * their least height the column scrolls too, so every card stays reachable.
+ */
+const STACK =
+  "pointer-events-none flex max-h-full min-h-0 w-summary-stack max-w-full flex-col gap-summary-inset overflow-y-auto p-summary-inset";
+
+/**
+ * One of the summary's cards, floating over the thread: as tall as what it shows, and scrolling
+ * on its own once the column has no room left for all of it. It shrinks no shorter than
+ * `--spacing-summary-card-min` (or its own height, when that is less).
+ */
+function SummaryCard({
+  scrollKey,
+  active,
+  children,
+}: {
+  scrollKey: string;
+  active: boolean;
+  children: ReactNode;
+}) {
+  const { ref, onScroll } = useKeptScroll(scrollKey, active);
+  const [height, setHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const content = ref.current?.firstElementChild;
+    if (!content) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const size = entry?.borderBoxSize[0]?.blockSize;
+      if (size !== undefined) setHeight(size);
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [ref]);
+  return (
+    <div
+      data-slot="summary-card"
+      style={
+        height === null
+          ? undefined
+          : { minHeight: `min(${height}px, var(--spacing-summary-card-min))` }
+      }
+      className="bg-card rounded-summary shadow-summary pointer-events-auto flex min-w-0 flex-col overflow-hidden"
+    >
+      <div ref={ref} onScroll={onScroll} className="min-h-0 overflow-y-auto">
+        <div className="flex min-w-0 flex-col">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A session's summary, pinned at the top end of its thread's pane: the project, the branch (with
+ * what it changed, for a worktree session), the workers and the plan, each plan its own card. It
+ * eases in from the pane's end when pinned and out when unpinned. Where the pane has too little
+ * room beside the thread's column it hides, and the same cards float over the thread instead,
+ * opened from the top bar.
+ */
+export function PinnedSummary({
+  conversation,
+}: {
+  conversation: Conversation;
+}) {
+  const shown = useApp((s) => s.pinnedSummary);
+  const float = useSummary((s) => s.layout === "float");
+  const visible = shown && !float;
+  // The cards stay for their easing in and out; what they show is kept only while they can be seen.
+  const [content, setContent] = useState(visible);
+  if (visible && !content) setContent(true);
+  const { ref: stack, onScroll } = useKeptScroll(`${conversation.id}/column`, visible && content);
+  useEffect(() => {
+    if (visible || !content) return;
+    let current = true;
+    // Reading the column's animations applies the hiding first, so its easing out is among them.
+    const easing = stack.current?.getAnimations() ?? [];
+    void Promise.allSettled(easing.map((animation) => animation.finished)).then(
+      () => current && setContent(false),
+    );
+    return () => {
+      current = false;
+    };
+  }, [visible, content, stack]);
   if (conversation.setup?.type !== "session") return null;
 
   return (
-    <div className="pointer-events-none absolute inset-y-summary-inset end-summary-inset z-10 flex w-summary max-w-full items-start">
-      <aside
-        ref={card}
+    <>
+      <div className="pointer-events-none absolute inset-y-0 end-0 z-10 flex max-w-full flex-col">
+        <aside
+          ref={stack}
+          aria-label="Session summary"
+          aria-hidden={!visible || undefined}
+          data-state={shown ? "open" : "closed"}
+          onScroll={onScroll}
+          className={cn(
+            STACK,
+            "summary-hidden:invisible summary-hidden:translate-x-full summary-hidden:scale-80 summary-hidden:opacity-0 origin-top-right motion-safe:group-data-settled/pane:transition-[opacity,translate,scale,visibility] motion-safe:group-data-settled/pane:duration-300 motion-safe:group-data-settled/pane:ease-summary-card",
+          )}
+        >
+          {content && <SummaryContent conversation={conversation} active={visible} />}
+        </aside>
+      </div>
+      {float && <FloatingSummary conversation={conversation} />}
+    </>
+  );
+}
+
+/**
+ * The summary where it floats: the same column of cards over the thread, at the pane's top end
+ * under the top bar, reaching at most the window's bottom inset. The top bar's button, Escape or a
+ * click elsewhere closes it.
+ */
+function FloatingSummary({ conversation }: { conversation: Conversation }) {
+  const { ref, onScroll } = useKeptScroll(`${conversation.id}/column`, true);
+  return (
+    <>
+      <PopoverAnchor className="pointer-events-none absolute end-0 top-0 size-0" />
+      <PopoverContent
+        ref={ref}
+        side="bottom"
+        align="end"
+        sideOffset={0}
         aria-label="Session summary"
-        aria-hidden={!visible || undefined}
-        data-state={shown ? "open" : "closed"}
         onScroll={onScroll}
-        className="summary-hidden:invisible summary-hidden:translate-x-full summary-hidden:scale-80 summary-hidden:opacity-0 pointer-events-auto flex max-h-full w-full origin-top-right flex-col overflow-y-auto motion-safe:group-data-settled/pane:transition-[opacity,translate,scale,visibility] motion-safe:group-data-settled/pane:duration-300 motion-safe:group-data-settled/pane:ease-summary-card"
+        // Focus the summary itself, not its first button (whose tip would open with it).
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
+        }}
+        className={cn(
+          STACK,
+          "text-foreground max-w-(--radix-popover-content-available-width) max-h-(--radix-popover-content-available-height) rounded-none bg-transparent shadow-none ring-0",
+        )}
       >
-        {content && <SummaryContent conversation={conversation} />}
-      </aside>
-    </div>
+        <SummaryContent conversation={conversation} active />
+      </PopoverContent>
+    </>
+  );
+}
+
+/**
+ * The summary's popover where it floats, around the top bar (its button) and the pane (where it
+ * opens). Elsewhere it stays closed and holds nothing.
+ */
+export function SummaryFloat({ children }: { children: ReactNode }) {
+  const floating = useSummary((s) => s.floating);
+  return (
+    <Popover open={floating} onOpenChange={(open) => useSummary.setState({ floating: open })}>
+      {children}
+    </Popover>
   );
 }
 
@@ -718,8 +826,17 @@ function BranchRow({ branch, diff }: { branch: string; diff: DiffStat | null }) 
   );
 }
 
-/** The summary itself, pinned in the pane or floating from the top bar. */
-function SummaryContent({ conversation }: { conversation: Conversation }) {
+/**
+ * The summary's cards, pinned in the pane or floating from the top bar: the context card, then
+ * the run's card, then any other plan. `active` while they can be seen, for their scroll offsets.
+ */
+function SummaryContent({
+  conversation,
+  active,
+}: {
+  conversation: Conversation;
+  active: boolean;
+}) {
   const overnight = useOvernightCards(conversation.id);
   const project = useApp((s) =>
     conversation.projectId
@@ -767,62 +884,60 @@ function SummaryContent({ conversation }: { conversation: Conversation }) {
       : setup.repo;
 
   return (
-    <div className="flex min-w-0 flex-col gap-3">
-      <div className="bg-card border-border rounded-2xl shadow-summary flex flex-col gap-2 border px-3 py-2.5">
-        <div className="flex h-control-xs items-center gap-2">
-          <h2 className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
-            {project ?? setup.repo}
-          </h2>
-          {conversation.projectId && (
-            <ProjectActions
-              projectId={conversation.projectId}
-              path={checkout}
-            />
+    <>
+      <SummaryCard scrollKey={`${conversation.id}/context`} active={active}>
+        <div className="flex flex-col gap-2 px-3 py-2.5">
+          <div className="flex h-control-xs items-center gap-2">
+            <h2 className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
+              {project ?? setup.repo}
+            </h2>
+            {conversation.projectId && (
+              <ProjectActions
+                projectId={conversation.projectId}
+                path={checkout}
+              />
+            )}
+          </div>
+          {run?.workspace ? (
+            // The run's card merges its verified work: no second way to merge here.
+            <BranchRow branch={run.workspace.branch} diff={diff} />
+          ) : (
+            <GitActions conversationId={conversation.id}>
+              <BranchRow branch={setup.environment.branch} diff={diff} />
+            </GitActions>
           )}
+          {pullRequest && <PullRequestRow pullRequest={pullRequest} />}
+          {(workers > 0 || sources || waiting > 0 || decided > 0) && (
+            <div className="border-border border-t" />
+          )}
+          <WaitingOnYou conversationId={conversation.id} />
+          {workers > 0 && <WorkersSummary conversationId={conversation.id} />}
+          <DecidedForYou conversationId={conversation.id} />
+          <Sources conversationId={conversation.id} />
         </div>
-        {run?.workspace ? (
-          // The run's card merges its verified work: no second way to merge here.
-          <BranchRow branch={run.workspace.branch} diff={diff} />
-        ) : (
-          <GitActions conversationId={conversation.id}>
-            <BranchRow branch={setup.environment.branch} diff={diff} />
-          </GitActions>
-        )}
-        {pullRequest && <PullRequestRow pullRequest={pullRequest} />}
-        {(workers > 0 || sources || waiting > 0 || decided > 0) && (
-          <div className="border-border border-t" />
-        )}
-        <WaitingOnYou conversationId={conversation.id} />
-        {workers > 0 && <WorkersSummary conversationId={conversation.id} />}
-        <DecidedForYou conversationId={conversation.id} />
-        <Sources conversationId={conversation.id} />
-      </div>
+      </SummaryCard>
       {/* The run's card sits right under the context card, before any other plan. */}
       {overnight.map((model) => (
-        <OvernightPlanCard
-          key={model.run.id}
-          model={model}
-          actions={overnightActions}
-        />
+        <SummaryCard key={model.run.id} scrollKey={`${conversation.id}/overnight-${model.run.id}`} active={active}>
+          <OvernightPlanCard model={model} actions={overnightActions} className={BARE} />
+        </SummaryCard>
       ))}
       {plans
         .filter((id) => !overnight.some((card) => card.run.planId === id || card.run.planning?.planId === id))
         .map((id) => (
-          <PlanCardView key={id} cardId={id} />
+          <SummaryCard key={id} scrollKey={`${conversation.id}/plan-${id}`} active={active}>
+            <PlanCardView cardId={id} className={BARE} />
+          </SummaryCard>
         ))}
-    </div>
+    </>
   );
 }
 
 /**
  * The top bar's summary button. Where the pane keeps the summary beside the thread it pins and
- * unpins it; where the summary floats, it opens it over the thread, under the button.
+ * unpins it; where the summary floats, it opens it over the thread, under the top bar.
  */
-export function PinnedSummaryToggle({
-  conversation,
-}: {
-  conversation: Conversation;
-}) {
+export function PinnedSummaryToggle() {
   const pinned = useApp((s) => s.pinnedSummary);
   const float = useSummary((s) => s.layout === "float");
   const floating = useSummary((s) => s.floating);
@@ -840,33 +955,15 @@ export function PinnedSummaryToggle({
     );
   }
   return (
-    <Popover
-      open={floating}
-      onOpenChange={(open) => useSummary.setState({ floating: open })}
-    >
-      <PopoverTrigger asChild>
-        <TooltipIconButton
-          tooltip="Toggle summary"
-          size="icon-md"
-          aria-pressed={floating}
-          className={cn(floating && "bg-muted")}
-        >
-          <Tasks />
-        </TooltipIconButton>
-      </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        aria-label="Session summary"
-        // Focus the summary itself, not its first button (whose tip would open with it).
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          if (event.currentTarget instanceof HTMLElement)
-            event.currentTarget.focus();
-        }}
-        className="text-foreground w-summary max-w-(--radix-popover-content-available-width) max-h-(--radix-popover-content-available-height) overflow-y-auto border-0 bg-transparent p-0 shadow-none ring-0"
+    <PopoverTrigger asChild>
+      <TooltipIconButton
+        tooltip="Toggle summary"
+        size="icon-md"
+        aria-pressed={floating}
+        className={cn(floating && "bg-muted")}
       >
-        <SummaryContent conversation={conversation} />
-      </PopoverContent>
-    </Popover>
+        <Tasks />
+      </TooltipIconButton>
+    </PopoverTrigger>
   );
 }

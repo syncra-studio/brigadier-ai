@@ -53,8 +53,9 @@ const twMerge = extendTailwindMerge({
         "traffic-lights",
         "setup",
         "setup-card",
+        "summary-inset",
       ],
-      container: ["thread", "setup", "summary", "settings", "settings-wide"],
+      container: ["thread", "setup", "summary", "summary-stack", "settings", "settings-wide"],
       radius: [
         "document",
         "control",
@@ -70,6 +71,7 @@ const twMerge = extendTailwindMerge({
         "peek",
         "nav",
         "settings",
+        "summary",
       ],
       shadow: ["hairline", "menu", "tooltip", "summary", "thumb", "page", "peek"],
       text: ["code", "code-inline", "page-title", "label", "nav-title"],
