@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { Lines } from "@/app/conversation/cards/common";
 import { earlierPlans } from "@/app/conversation/cards/planHistory";
+import { planProgress, planStepStatus } from "@/app/conversation/planProgress";
 import { taskState } from "@/app/conversation/rowWords";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
 import { useAction } from "@/app/conversation/useAction";
@@ -11,28 +12,12 @@ import { disclosureRow } from "@/components/assistant-ui/elements/surfaces";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Gate, GateMember, Plan, PlanState, TaskState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 import { decidePlan } from "@/state/actions";
-
-function stepStatus(state: TaskState | undefined): AgentPlanStepStatus {
-  switch (state) {
-    case undefined:
-    case "queued":
-      return "pending";
-    case "landed":
-    case "done":
-      return "done";
-    case "failed":
-    case "rejected":
-    case "stopped":
-      return "failed";
-    default:
-      return "active";
-  }
-}
 
 /** A plan's state in words, as its badge says it. */
 function planStateWord(state: PlanState): string {
@@ -49,31 +34,6 @@ function planStateWord(state: PlanState): string {
       return "replaced by a revision";
     case "revising":
       return "being revised";
-  }
-}
-
-function PlanStateBadge({ state }: { state: PlanState }) {
-  switch (state.type) {
-    case "proposed":
-      return <Badge variant="warning">Proposed</Badge>;
-    case "inReview":
-      return <Badge variant="secondary">In plan review</Badge>;
-    case "approved":
-      return state.by === "user" ? (
-        <Badge variant="success">Approved by you</Badge>
-      ) : state.by === "brigadier" ? (
-        <Badge variant="success" data-auto-approved>
-          Auto-approved by Brigadier
-        </Badge>
-      ) : (
-        <Badge variant="success">Approved after plan review</Badge>
-      );
-    case "rejected":
-      return <Badge variant="destructive">Rejected</Badge>;
-    case "superseded":
-      return <Badge variant="outline">Superseded</Badge>;
-    case "revising":
-      return <Badge variant="warning">Being revised</Badge>;
   }
 }
 
@@ -178,18 +138,21 @@ function ReviewRound({ gate, notes }: { gate: Gate; notes: readonly string[] }) 
 }
 
 /** How the plan's review reads on its disclosure, before it opens. */
-function reviewWord(plan: Plan): string {
-  switch (plan.gate?.outcome?.type) {
+function reviewWord(gate: Gate | null): string {
+  const round = gate?.round;
+  if (!round) return "Review findings from the previous round";
+  switch (gate?.outcome?.type) {
     case undefined:
-      return plan.gate ? "In review" : "Review";
+      return `Review round ${round}: in progress`;
     case "passed":
-      return plan.reviewNotes.length > 0
-        ? `Approved in review, ${count(plan.reviewNotes.length, "note")}`
-        : "Approved in review";
+      return `Approved after ${count(round, "review")}`;
     case "failed":
-      return "Review found problems";
-    default:
-      return "Review";
+      return `Review round ${round}: changes requested`;
+    case "superseded":
+      return `Review round ${round}: stopped early`;
+    case "noResult":
+    case "unverified":
+      return `Review round ${round}: could not finish`;
   }
 }
 
@@ -211,25 +174,25 @@ function PlanStepRow({
   const [open, setOpen] = useState(false);
   return (
     <li className="flex flex-col">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={id}
-        onClick={() => setOpen(!open)}
-        className={cn(disclosureRow, "flex items-start gap-2 py-0.5 text-sm")}
-      >
-        <StepMark status={status} />
-        <span className={cn("min-w-0 flex-1", open ? "wrap-anywhere" : "truncate")}>{title}</span>
-      </button>
+      <div className="flex min-w-0 items-start gap-2">
+        <button
+          type="button"
+          title={title}
+          aria-expanded={open}
+          aria-controls={id}
+          onClick={() => setOpen(!open)}
+          className={cn(disclosureRow, "flex min-w-0 flex-1 items-start gap-2 py-0.5 text-start text-sm")}
+        >
+          <StepMark status={status} />
+          <span className={cn("min-w-0 flex-1", open ? "wrap-anywhere" : "truncate")}>{title}</span>
+        </button>
+        {taskId && <WorkerChip taskId={taskId} className="max-w-32" />}
+      </div>
       <div id={id} hidden={!open} className="flex gap-2 pb-1">
         {/* Under the title, past the step's mark. */}
         <span aria-hidden className="w-icon-md shrink-0" />
         <div className="text-muted-foreground flex min-w-0 flex-1 flex-col gap-1 text-xs">
-          <span className="flex min-w-0 items-center gap-1.5">
-            <span className="shrink-0">{word}</span>
-            {/* The worker carrying it out, by its name. */}
-            {taskId && <WorkerChip taskId={taskId} />}
-          </span>
+          <span>{word}</span>
           {detail && <p className="whitespace-pre-wrap wrap-anywhere">{detail}</p>}
         </div>
       </div>
@@ -275,10 +238,16 @@ function EarlierPlans({ plan, older }: { plan: Plan; older: readonly string[] })
  * The session's plan, a section of the summary's context card: one line per step (each opening
  * to its state, worker and description), the review behind a disclosure, the approval while it
  * is proposed, and earlier plans behind another. `planIds` are the session's own plans, oldest
- * first; the last is the current one.
+ * first; `currentPlanId` selects the active request's newest plan.
  */
-export const PlanSection = memo(function PlanSection({ planIds }: { planIds: readonly string[] }) {
-  const currentId = planIds.at(-1);
+export const PlanSection = memo(function PlanSection({
+  planIds,
+  currentPlanId,
+}: {
+  planIds: readonly string[];
+  currentPlanId?: string;
+}) {
+  const currentId = currentPlanId ?? planIds.at(-1);
   const plan = useBoard((s) => (currentId ? s.board?.plans[currentId] : undefined));
   // Only what the steps show of their tasks, so unrelated task updates don't rerender the plan.
   const steps = useBoard(
@@ -289,6 +258,9 @@ export const PlanSection = memo(function PlanSection({ planIds }: { planIds: rea
       }),
     ),
   );
+  const reviewGate = useBoard((s) =>
+    plan?.gate ?? (plan?.revises ? s.board?.plans[plan.revises]?.gate ?? null : null),
+  );
   // Who decides a proposed plan: the user under Ask for approval or in plan mode.
   const decider = useApp((s) => {
     const conversation = plan ? s.conversations[plan.conversationId] : null;
@@ -298,6 +270,13 @@ export const PlanSection = memo(function PlanSection({ planIds }: { planIds: rea
   });
   if (!plan) return null;
 
+  const progress = planProgress(
+    plan,
+    plan.steps.map((_, index) => (steps[index * 3 + 1] ?? undefined) as TaskState | undefined),
+  );
+  const variant = progress.tone === "failed" ? "destructive"
+    : progress.tone === "done" ? "success"
+    : progress.tone === "warning" ? "warning" : "secondary";
   const proposed = plan.state.type === "proposed";
   const reviewed = plan.gate !== null || plan.responses.length > 0;
 
@@ -311,12 +290,27 @@ export const PlanSection = memo(function PlanSection({ planIds }: { planIds: rea
     >
       <h3
         title={plan.title}
-        className="text-muted-foreground flex h-control-xs items-center justify-between gap-2 text-xs"
+        className="text-muted-foreground flex min-h-control-xs flex-wrap items-start justify-between gap-2 text-xs"
       >
         Plan
-        <span className="flex min-w-0 items-center gap-1.5">
-          {plan.risky && <Badge variant="warning">Risky</Badge>}
-          <PlanStateBadge state={plan.state} />
+        <span className="flex min-w-0 flex-1 flex-wrap justify-end gap-1.5">
+          {plan.risky && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Why this plan is risky"
+                  className="rounded-capsule outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  <Badge variant="warning">Risky</Badge>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Risky plans get two independent reviewers.</TooltipContent>
+            </Tooltip>
+          )}
+          <Badge variant={variant} className="h-auto min-h-pill max-w-full whitespace-normal text-start wrap-anywhere">
+            {progress.label}
+          </Badge>
         </span>
       </h3>
       <ol className="flex flex-col">
@@ -329,9 +323,9 @@ export const PlanSection = memo(function PlanSection({ planIds }: { planIds: rea
               key={index}
               title={step.title}
               detail={step.detail}
-              status={stepStatus(state ?? undefined)}
+              status={planStepStatus(state ?? undefined)}
               // The same words as the worker's row in the thread.
-              word={word ?? "Planned"}
+              word={word ?? "Not started"}
               taskId={taskId ?? null}
             />
           );
@@ -339,7 +333,7 @@ export const PlanSection = memo(function PlanSection({ planIds }: { planIds: rea
       </ol>
       {reviewed && (
         <details className="text-muted-foreground text-xs">
-          <summary className={disclosureRow}>{reviewWord(plan)}</summary>
+          <summary className={disclosureRow}>{reviewWord(reviewGate)}</summary>
           <div className="flex flex-col gap-2 pt-1">
             <PlanReview plan={plan} />
           </div>
@@ -355,7 +349,7 @@ export const PlanSection = memo(function PlanSection({ planIds }: { planIds: rea
           {plan.risky || plan.steps.length > 1 ? " after an independent review" : ""}.
         </p>
       )}
-      <EarlierPlans plan={plan} older={planIds.slice(0, -1)} />
+      <EarlierPlans plan={plan} older={planIds.filter((id) => id !== currentId)} />
     </section>
   );
 });

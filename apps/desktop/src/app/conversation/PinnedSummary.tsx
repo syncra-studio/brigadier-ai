@@ -35,6 +35,7 @@ import {
   useOvernightCards,
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
+import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgress";
 import { decisionWords, workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
 import { useAction } from "@/app/conversation/useAction";
@@ -867,6 +868,10 @@ function SummaryContent({
   const plans = planIds.filter(
     (id) => !overnight.some((card) => card.run.planId === id || card.run.planning?.planId === id),
   );
+  const currentPlanId = useBoard((s) => {
+    if (s.board?.conversationId !== conversation.id) return null;
+    return contextPlanId(s.board.plans, plans, activePlanRequest(s.board.requests));
+  });
   const run = shownRun(overnight);
   const setup =
     conversation.setup?.type === "session" ? conversation.setup : null;
@@ -915,12 +920,16 @@ function SummaryContent({
             </GitActions>
           )}
           {pullRequest && <PullRequestRow pullRequest={pullRequest} />}
-          {(plans.length > 0 || workers > 0 || sources || waiting > 0 || decided > 0) && (
+          {(currentPlanId !== null || workers > 0 || sources || waiting > 0 || decided > 0) && (
             <div className="border-border border-t" />
           )}
-          {plans.length > 0 && <PlanSection planIds={plans} />}
+          {currentPlanId && <PlanSection planIds={plans} currentPlanId={currentPlanId} />}
           <WaitingOnYou conversationId={conversation.id} />
-          {workers > 0 && <WorkersSummary conversationId={conversation.id} />}
+          {workers > 0 && (
+            <section className={cn(currentPlanId && "border-border mt-1 border-t pt-2")} aria-label="Session workers">
+              <WorkersSummary conversationId={conversation.id} />
+            </section>
+          )}
           <DecidedForYou conversationId={conversation.id} />
           <Sources conversationId={conversation.id} />
         </div>

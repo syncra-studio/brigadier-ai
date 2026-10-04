@@ -115,13 +115,6 @@ export const WorkerChip = memo(function WorkerChip({
           data-slot="worker-chip"
           data-task={`task-${number}`}
           onClick={() => setPanel(taskId)}
-          onKeyDown={(event) => {
-            // Escape closes the open hover only, not what holds the chip (a card it denies).
-            if (event.key === "Escape" && open) {
-              event.stopPropagation();
-              setOpen(false);
-            }
-          }}
           className={cn(
             "bg-muted/60 border-border text-foreground hover:bg-muted rounded-capsule inline-flex h-control-xs max-w-2xs min-w-0 shrink items-center gap-1.5 border ps-2 pe-2.5 align-middle text-sm leading-normal transition-colors",
             // A ring for keyboard focus only, as on buttons.
@@ -137,7 +130,16 @@ export const WorkerChip = memo(function WorkerChip({
           <span className="min-w-0 truncate">{label ?? name}</span>
         </button>
       </TooltipTrigger>
-      <TooltipContent side="top" className="flex-col gap-0.5">
+      <TooltipContent
+        side="top"
+        className="flex-col gap-0.5"
+        onEscapeKeyDown={(event) => {
+          // Radix handles Escape in document capture, before the chip's key handlers.
+          // Consume this Escape for the tooltip; the next reaches the enclosing popup.
+          event.preventDefault();
+          setOpen(false);
+        }}
+      >
         <span className="wrap-break-word">{name}</span>
         <span className="text-muted-foreground text-xs">{stateLabel}</span>
       </TooltipContent>

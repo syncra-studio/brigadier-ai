@@ -1,15 +1,24 @@
-import { Check, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Check, Clock, X } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useContext, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { isRunRequest } from "@/app/conversation/blocks";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { useRunDiff } from "@/app/conversation/overnightAdapter";
 import { type RunPill, runPill } from "@/app/conversation/phaseView";
+import {
+  activePlanRequest,
+  capsuleMode,
+  currentRequestPlan,
+  planProgress,
+  planStepStatus,
+} from "@/app/conversation/planProgress";
+import { WorkerChip } from "@/app/conversation/WorkerChip";
+import { StepMark } from "@/components/assistant-ui/elements/agent-plan";
 import { mono } from "@/components/assistant-ui/elements/surfaces";
 import { Spinner } from "@/components/glyphs/spinner";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { DiffStat, FileStat, Plan, Task, TaskState } from "@/ipc/generated";
+import type { DiffStat, FileStat } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { type Board, useBoard } from "@/state/board";
 
@@ -50,16 +59,6 @@ export function useRequestDiff(requestId: string | null): DiffStat | null {
   };
 }
 
-/** The request still at work (its orchestrator turn or its workers), if any. */
-function runningRequest(board: Board | null, conversationId: string): string | null {
-  if (!board || board.conversationId !== conversationId) return null;
-  return (
-    Object.values(board.requests)
-      .filter((request) => request.state.type === "working" && request.steeredInto === null)
-      .toSorted((a, b) => b.startedAtMs - a.startedAtMs)[0]?.id ?? null
-  );
-}
-
 /** Something waits for the user's decision: the capsule makes room for its card. */
 function anyPending(board: Board | null, conversationId: string): boolean {
   if (!board || board.conversationId !== conversationId) return false;
@@ -70,25 +69,6 @@ function anyPending(board: Board | null, conversationId: string): boolean {
   );
 }
 
-type StepStatus = "pending" | "active" | "done" | "failed";
-
-function stepStatus(state: TaskState | undefined): StepStatus {
-  switch (state) {
-    case undefined:
-    case "queued":
-      return "pending";
-    case "landed":
-    case "done":
-      return "done";
-    case "failed":
-    case "rejected":
-    case "stopped":
-      return "failed";
-    default:
-      return "active";
-  }
-}
-
 /** Where the session's active run is, if one is at work. */
 function useRunPill(conversationId: string): RunPill | null {
   const runs = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.overnight : null));
@@ -97,27 +77,20 @@ function useRunPill(conversationId: string): RunPill | null {
   return useMemo(() => (runs && plans && tasks ? runPill(runs, plans, tasks) : null), [runs, plans, tasks]);
 }
 
-/** The request's plan being carried out, with each step's status. */
-function useRunningPlan(requestId: string | null): { plan: Plan; steps: StepStatus[] } | null {
-  const plan = useBoard((s) =>
-    Object.values(s.board?.plans ?? {})
-      .filter(
-        (candidate) =>
-          requestId !== null &&
-          candidate.requestId === requestId &&
-          (candidate.state.type === "approved" || candidate.state.type === "inReview"),
-      )
-      .toSorted((a, b) => b.createdAtMs - a.createdAtMs)[0],
-  );
+/** The newest revision belongs to this request, regardless of its lifecycle. */
+function useRunningPlan(requestId: string | null) {
+  const plan = useBoard((s) => currentRequestPlan(s.board?.plans ?? {}, requestId));
   const states = useBoard(
     useShallow((s) =>
-      (plan?.steps ?? []).map((step) =>
-        step.taskId ? (s.board?.tasks[step.taskId] as Task | undefined)?.state : undefined,
-      ),
+      (plan?.steps ?? []).map((step) => step.taskId ? s.board?.tasks[step.taskId]?.state : undefined),
     ),
   );
-  if (!plan || plan.steps.length === 0) return null;
-  return { plan, steps: states.map(stepStatus) };
+  const taskIds = useBoard(
+    useShallow((s) =>
+      (plan?.steps ?? []).map((step) => step.taskId && s.board?.tasks[step.taskId] ? step.taskId : null),
+    ),
+  );
+  return plan ? { plan, states, taskIds } : null;
 }
 
 const Pill: FC<{ tip: ReactNode; children: ReactNode }> = ({ tip, children }) => (
@@ -143,7 +116,7 @@ const Donut: FC<{ done: number; total: number }> = ({ done, total }) => (
   </span>
 );
 
-const StepGlyph: FC<{ status: StepStatus }> = ({ status }) => {
+const StepGlyph: FC<{ status: ReturnType<typeof planStepStatus> }> = ({ status }) => {
   switch (status) {
     case "done":
       return <Check className="text-muted-foreground size-icon-xs" />;
@@ -157,17 +130,19 @@ const StepGlyph: FC<{ status: StepStatus }> = ({ status }) => {
 };
 
 /**
- * The capsule above the composer while a request works: "Step n / m" of its plan and "N files
- * changed +a −d" of what its workers landed, updated on every landing. During an overnight run
- * it shows the run instead ("Phase 2 of 3 · Fix · 2 of 4 steps") and the run branch's diff. It
- * makes room for a pending decision and goes when the request stops working or the run ends.
+ * The active request's plan progress and landed diff. Overnight runs keep their phase capsule.
  */
 export const ComposerCapsule: FC = () => {
   const conversationId = useContext(ComposerTargetContext)?.conversation?.id ?? "";
   const pending = useBoard((s) => anyPending(s.board, conversationId));
   const run = useRunPill(conversationId);
-  if (pending) return null;
-  return run ? <RunCapsule conversationId={conversationId} run={run} /> : <RequestCapsule conversationId={conversationId} />;
+  const request = useBoard((s) =>
+    s.board?.conversationId === conversationId ? activePlanRequest(s.board.requests) : null,
+  );
+  const plan = useBoard((s) => currentRequestPlan(s.board?.plans ?? {}, request?.id ?? null));
+  const mode = capsuleMode(run !== null, pending, request, plan);
+  if (mode === null) return null;
+  return mode === "run" && run ? <RunCapsule conversationId={conversationId} run={run} /> : <RequestCapsule conversationId={conversationId} />;
 };
 
 /** The capsule of an overnight run: its phase, the phase's steps and the run branch's diff. */
@@ -206,7 +181,7 @@ const Capsule: FC<{ children: ReactNode }> = ({ children }) => (
   <div className="pointer-events-none absolute inset-x-0 bottom-full mb-1.5 flex justify-center">
     <div
       data-slot="composer-capsule"
-      className="border-border/80 bg-background/70 text-muted-foreground rounded-capsule animate-in fade-in slide-in-from-bottom-1 pointer-events-auto flex items-center gap-2 border px-3 py-1.5 text-xs backdrop-blur-sm duration-150 motion-reduce:animate-none"
+      className="max-w-full border-border/80 bg-background/70 text-muted-foreground rounded-capsule animate-in fade-in slide-in-from-bottom-1 pointer-events-auto flex items-center gap-2 border px-3 py-1.5 text-xs backdrop-blur-sm duration-150 motion-reduce:animate-none"
     >
       {children}
     </div>
@@ -215,36 +190,53 @@ const Capsule: FC<{ children: ReactNode }> = ({ children }) => (
 
 /** A request's capsule outside a run: its plan's step and what its workers landed. */
 const RequestCapsule: FC<{ conversationId: string }> = ({ conversationId }) => {
-  const requestId = useBoard((s) => runningRequest(s.board, conversationId));
+  const requestId = useBoard((s) =>
+    s.board?.conversationId === conversationId ? activePlanRequest(s.board.requests)?.id ?? null : null,
+  );
   const diff = useRequestDiff(requestId);
   const running = useRunningPlan(requestId);
-  // A run's phase speaks through the run's capsule; once the run is over, nothing of it shows.
-  if (!requestId || isRunRequest(requestId) || (!diff && !running)) return null;
-
-  const done = running?.steps.filter((status) => status === "done").length ?? 0;
-  const total = running?.plan.steps.length ?? 0;
+  if (!requestId || (!diff && !running)) return null;
+  const progress = running ? planProgress(running.plan, running.states) : null;
   return (
     <Capsule>
-      {running && (
-        <Pill
-          tip={
-            <ol className="flex flex-col gap-1">
-              {running.plan.steps.map((step, index) => (
-                <li key={step.title} className="flex items-center gap-1.5">
-                  <StepGlyph status={running.steps[index] ?? "pending"} />
-                  <span className={cn(running.steps[index] !== "active" && "text-muted-foreground")}>
-                    {step.title}
-                  </span>
-                </li>
-              ))}
+      {running && progress && (
+        <Popover key={running.plan.id}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="rounded-control flex min-w-0 items-center gap-1.5 text-start outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              {progress.status === "review" ? (
+                <Clock aria-hidden className="size-icon-xs shrink-0" />
+              ) : (
+                <StepMark status={progress.status} />
+              )}
+              <span className="text-foreground min-w-0 wrap-anywhere tabular-nums">{progress.label}</span>
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            side="top"
+            aria-label={`Plan steps: ${running.plan.title}`}
+            className="max-h-(--radix-popover-content-available-height) w-sm max-w-(--radix-popover-content-available-width) overflow-y-auto p-3 text-start text-sm"
+          >
+            <ol className="flex flex-col gap-2">
+              {running.plan.steps.map((step, index) => {
+                const status = planStepStatus(running.states[index]);
+                const taskId = running.taskIds[index];
+                return (
+                  <li key={index} className="flex items-start gap-2">
+                    <StepMark status={status} />
+                    <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
+                      <span className={cn("wrap-anywhere", status !== "active" && "text-muted-foreground")}>{step.title}</span>
+                      <span className="sr-only">{status === "pending" ? "Not started" : status === "active" ? "Running" : status === "done" ? "Done" : "Failed"}</span>
+                      {taskId && <WorkerChip taskId={taskId} />}
+                    </div>
+                  </li>
+                );
+              })}
             </ol>
-          }
-        >
-          <Donut done={done} total={total} />
-          <span className="text-foreground tabular-nums">
-            Step {Math.min(done + 1, total)} / {total}
-          </span>
-        </Pill>
+          </PopoverContent>
+        </Popover>
       )}
       {running && diff && <span aria-hidden>·</span>}
       {diff && <DiffPill diff={diff} />}
