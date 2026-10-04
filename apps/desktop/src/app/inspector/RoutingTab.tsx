@@ -57,6 +57,7 @@ function PreviewSection() {
   // What routing depends on besides the question: the providers' state and the user's rules.
   const providers = useApp((s) => s.providers.view?.providers);
   const rules = useApp((s) => s.settings.routingOverrides);
+  const rankingsRevision = useApp((s) => s.rankingsRevision);
   // The open conversation's project, to begin with.
   const [projectId, setProjectId] = useState<string | null>(
     () => selectedConversation(useApp.getState())?.projectId ?? null,
@@ -78,9 +79,9 @@ function PreviewSection() {
       }
     });
   };
-  // Read again whenever the question, a provider's state or a rule changes.
+  // Read again whenever the question, a provider's state, a rule or the models' ratings change.
   // oxlint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(run, [projectId, areas, providers, rules]);
+  useEffect(run, [projectId, areas, providers, rules, rankingsRevision]);
   const list = Object.values(projects).toSorted((a, b) => a.name.localeCompare(b.name));
 
   return (

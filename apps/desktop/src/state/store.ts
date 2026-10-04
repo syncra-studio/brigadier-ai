@@ -173,6 +173,8 @@ export type AppState = {
     diagnostics: Diagnostics | null;
   };
   providers: ProvidersState;
+  /** Counts `rankingsChanged` events: views showing model ratings read them again on a change. */
+  rankingsRevision: number;
 };
 
 export const useApp = create<AppState>()(() => ({
@@ -216,6 +218,7 @@ export const useApp = create<AppState>()(() => ({
     diagnostics: null,
   },
   providers: { view: null, selected: null, transcripts: {} },
+  rankingsRevision: 0,
 }));
 
 export const emptyThread: Thread = {
@@ -317,12 +320,18 @@ export function mergeMessages(
 export function applyEvents(envelopes: readonly EventEnvelope[]): void {
   if (envelopes.length === 0) return;
   useApp.setState((state) => {
-    let { projects, conversations, threads, pending, settings, providers } = state;
+    let { projects, conversations, threads, pending, settings, providers, rankingsRevision } = state;
     for (const envelope of envelopes) {
-      ({ projects, conversations, threads, pending, settings, providers } = applyEvent(
-        envelope,
-        { projects, conversations, threads, pending, settings, providers },
-      ));
+      ({ projects, conversations, threads, pending, settings, providers, rankingsRevision } =
+        applyEvent(envelope, {
+          projects,
+          conversations,
+          threads,
+          pending,
+          settings,
+          providers,
+          rankingsRevision,
+        }));
     }
     const newest = envelopes.toReversed();
     const events = [...newest, ...state.inspector.events].slice(
@@ -336,6 +345,7 @@ export function applyEvents(envelopes: readonly EventEnvelope[]): void {
       pending,
       settings,
       providers,
+      rankingsRevision,
       inspector: { ...state.inspector, events },
     };
   });
@@ -343,7 +353,13 @@ export function applyEvents(envelopes: readonly EventEnvelope[]): void {
 
 type Slice = Pick<
   AppState,
-  "projects" | "conversations" | "threads" | "pending" | "settings" | "providers"
+  | "projects"
+  | "conversations"
+  | "threads"
+  | "pending"
+  | "settings"
+  | "providers"
+  | "rankingsRevision"
 >;
 
 /** Adds or replaces a raw session in the list, newest first. */
@@ -515,7 +531,10 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "rawEvent":
     case "providerChecked":
       return { ...slice, providers: applyProviderEvent(envelope, slice.providers) };
+    // A refresh ended, the rankings were reset or a newer registry was installed: the ratings,
+    // route previews and refresh state are read again (getUsage in state/usage).
     case "rankingsChanged":
+      return { ...slice, rankingsRevision: slice.rankingsRevision + 1 };
     case "probe":
     // A draft's pinned attachments only matter to blob collection.
     case "draftPinned":

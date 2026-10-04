@@ -69,10 +69,15 @@ export function setUsageShown(shown: boolean): void {
   useUsage.setState({ shown });
 }
 
-/** A provider check changes windows, estimates and balancing: read the view again. */
+/**
+ * A provider check changes windows, estimates and balancing, and a rankings change the models'
+ * ratings: read the view again.
+ */
 export function applyUsageEvents(batch: readonly EventEnvelope[]): void {
   if (!useUsage.getState().shown) return;
-  if (batch.some(({ event }) => event.type === "providerChecked")) void loadUsage();
+  if (batch.some(({ event }) => event.type === "providerChecked" || event.type === "rankingsChanged")) {
+    void loadUsage();
+  }
 }
 
 /**

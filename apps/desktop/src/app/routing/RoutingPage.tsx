@@ -2,7 +2,15 @@ import { ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
 import { useMemo } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { learnedKey, modelSummary, ModelRow, ProjectPicker, RegistryCard } from "@/app/routing/models";
+import {
+  learnedKey,
+  modelSummary,
+  ModelRow,
+  ProjectPicker,
+  ProvenanceBadge,
+  RegistryCard,
+} from "@/app/routing/models";
+import { RANKINGS_ROW, RankingsSection } from "@/app/routing/RankingsSection";
 import { AdvancedRouting, ROUTING_ROWS, RoutingKinds } from "@/app/routing/routing";
 import {
   SettingsAdvanced,
@@ -36,6 +44,7 @@ export const ROUTING_PAGE_ROWS = {
     description:
       "Only models turned on here get tasks. This doesn't change the model you pick for a chat or session.",
   },
+  ratings: RANKINGS_ROW,
   whoDoesWhat: ROUTING_ROWS.simple,
   advanced: {
     label: "Advanced",
@@ -115,6 +124,8 @@ export function RoutingPage() {
           </p>
         </div>
       </SettingsSection>
+
+      <RankingsSection merged={merged} />
 
       <RoutingKinds groups={groups} />
 
@@ -220,6 +231,7 @@ function WorkerRow({
         <span className="flex items-center gap-2">
           {model.displayName}
           {fresh && <Badge variant="warning">New</Badge>}
+          {known && !fable && <ProvenanceBadge provenance={known.ratingProvenance} />}
         </span>
       }
       description={summary || undefined}

@@ -10,6 +10,7 @@ import {
 } from "@/app/settings/parts";
 import { openUrl } from "@/ipc/client";
 import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -21,12 +22,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type {
   Learned,
   MergedModel,
   ModelInfo,
   OverrideRule,
   ProviderKind,
+  RatingProvenance,
   RegistryInfo,
   TaskCategory,
 } from "@/ipc/generated";
@@ -109,6 +112,61 @@ export function bestFor(model: MergedModel): string | null {
 export function modelSummary(info: ModelInfo, merged: MergedModel | undefined): string {
   if (!merged || merged.tier === "unrated") return info.description;
   return [PLAIN_TIERS[merged.tier], bestFor(merged)].filter(Boolean).join(" · ");
+}
+
+/** Where a model's rating comes from, when not the curated registry: a badge's word and its tip. */
+const PROVENANCE: Record<Exclude<RatingProvenance, "curated">, { label: string; hint: string }> = {
+  researchedOverlay: {
+    label: "Researched",
+    hint: "Rated by the latest rankings refresh, which researched it on the web.",
+  },
+  researchNote: {
+    label: "Estimated",
+    hint: "Not in the curated registry: rated from a research run's notes.",
+  },
+  unrated: {
+    label: "Unrated",
+    hint: "Not in the curated registry and not researched yet.",
+  },
+};
+
+/** A small badge saying where a model's rating comes from; nothing for a curated rating. */
+export function ProvenanceBadge({ provenance }: { provenance: RatingProvenance }) {
+  if (provenance === "curated") return null;
+  const { label, hint } = PROVENANCE[provenance];
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {/* Focusable, so the tip shows from the keyboard too. */}
+          <Badge variant="outline" tabIndex={0} aria-label={`${label}: ${hint}`}>
+            {label}
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent>{hint}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+/** A source's address as a link, opened in the browser. */
+export function SourceLink({ url }: { url: string }) {
+  return (
+    <button
+      type="button"
+      className="text-link max-w-full truncate text-start hover:underline"
+      title={url}
+      onClick={() =>
+        openUrl(url).catch((cause: unknown) =>
+          toast(`Couldn't open ${url}: ${cause instanceof Error ? cause.message : String(cause)}`, {
+            tone: "error",
+          }),
+        )
+      }
+    >
+      {url}
+    </button>
+  );
 }
 
 /** The registry in use, in a sentence, with "Check for updates". */
@@ -236,8 +294,11 @@ export function ModelRow({
   return (
     <div data-slot="usage-model" className="@container flex flex-col gap-2 px-4 py-3">
       <div className="flex min-w-0 flex-col gap-0.5">
-        <span className={cn("text-label font-medium", !works && "text-muted-foreground")}>
-          {model.displayName}
+        <span className="flex items-center gap-2">
+          <span className={cn("text-label font-medium", !works && "text-muted-foreground")}>
+            {model.displayName}
+          </span>
+          <ProvenanceBadge provenance={model.ratingProvenance} />
         </span>
         <span className="text-foreground/65 text-xs">{summary}</span>
         {own.length > 0 && (
@@ -332,20 +393,7 @@ function ModelDetails({ model }: { model: MergedModel }) {
             <ul className="flex flex-col gap-0.5">
               {research.sources.map((source) => (
                 <li key={source} className="min-w-0">
-                  <button
-                    type="button"
-                    className="text-link max-w-full truncate text-start hover:underline"
-                    title={source}
-                    onClick={() =>
-                      openUrl(source).catch((cause: unknown) =>
-                        toast(`Couldn't open ${source}: ${cause instanceof Error ? cause.message : String(cause)}`, {
-                          tone: "error",
-                        }),
-                      )
-                    }
-                  >
-                    {source}
-                  </button>
+                  <SourceLink url={source} />
                 </li>
               ))}
             </ul>

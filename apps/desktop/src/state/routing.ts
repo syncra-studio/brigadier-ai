@@ -158,6 +158,7 @@ export function useRoutePreview(
   const rankings = useApp((s) => s.settings.routingRankings);
   const disabledProviders = useApp((s) => s.settings.disabledProviders);
   const hiddenModels = useApp((s) => s.settings.hiddenModels);
+  const rankingsRevision = useApp((s) => s.rankingsRevision);
   const [routes, setRoutes] = useState<RoutePreview[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const asked = useRef(0);
@@ -181,8 +182,9 @@ export function useRoutePreview(
       if (useApp.getState().windowVisible) read();
     }, PREVIEW_EVERY_MS);
     return () => window.clearInterval(timer);
-    // Read again whenever a provider's state, a rule, a ranking or what's available changes.
+    // Read again whenever a provider's state, a rule, a ranking, what's available or the models'
+    // ratings change.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [connected, projectId, areasKey, providers, rules, rankings, disabledProviders, hiddenModels]);
+  }, [connected, projectId, areasKey, providers, rules, rankings, disabledProviders, hiddenModels, rankingsRevision]);
   return { routes, error };
 }
