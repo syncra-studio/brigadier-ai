@@ -86,6 +86,9 @@ impl SessionManager {
                 self.wind_down(&conversation).await;
             }
         }
+        // Run segments share a worktree: whether it stayed shows once every owner went.
+        let mut disposed: Vec<PathBuf> = Vec::new();
+        let mut reported: Vec<PathBuf> = Vec::new();
         for (owner, artifacts, _) in self.runtime.ledger().owners() {
             let worktrees: Vec<PathBuf> = artifacts
                 .iter()
@@ -111,18 +114,22 @@ impl SessionManager {
             .unwrap_or_default();
             if !unkept.is_empty() {
                 outcome.kept_worktrees.extend(unkept);
+                reported.extend(worktrees);
                 continue;
             }
             let leftovers = self.runtime.ledger().dispose(&owner).await;
             outcome.failures.extend(leftovers.failures);
-            // A worktree git couldn't remove stays, and so does the folder holding it: only git
-            // removes worktrees.
-            outcome.kept_worktrees.extend(
-                worktrees
-                    .iter()
-                    .filter(|path| path.exists())
-                    .map(|path| format!("{}: git couldn't remove it", path.display())),
-            );
+            disposed.extend(worktrees);
+        }
+        // A worktree git couldn't remove stays, and so does the folder holding it: only git
+        // removes worktrees.
+        for path in disposed {
+            if path.exists() && !reported.contains(&path) {
+                outcome
+                    .kept_worktrees
+                    .push(format!("{}: git couldn't remove it", path.display()));
+                reported.push(path);
+            }
         }
         outcome
     }

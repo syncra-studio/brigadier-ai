@@ -509,8 +509,9 @@ impl SessionManager {
                     })
                     .collect();
                 let git = self.git.clone();
+                let checked = worktrees.clone();
                 blocking(move || {
-                    for path in &worktrees {
+                    for path in &checked {
                         if path.exists() {
                             keep_changes(&git, path)?;
                         }
@@ -521,8 +522,18 @@ impl SessionManager {
                 .map_err(|err| err.to_string())?;
                 let leftovers = self.runtime.ledger().dispose(&owner).await;
                 if leftovers.is_clean() {
+                    // A worktree another owner still uses stays: its space isn't given back.
+                    let kept = blocking(move || {
+                        Ok(worktrees
+                            .iter()
+                            .filter(|path| path.exists())
+                            .map(|path| removal::allocated_size(path))
+                            .sum::<u64>())
+                    })
+                    .await
+                    .unwrap_or_default();
                     Ok(Cleaned {
-                        reclaimed: bytes,
+                        reclaimed: bytes.saturating_sub(kept),
                         ..Cleaned::default()
                     })
                 } else {
