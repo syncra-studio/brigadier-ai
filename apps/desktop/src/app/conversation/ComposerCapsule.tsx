@@ -12,11 +12,8 @@ import {
   planProgress,
   planStepStatus,
 } from "@/app/conversation/planProgress";
-import { WorkerChip } from "@/app/conversation/WorkerChip";
-import { StepMark } from "@/components/assistant-ui/elements/agent-plan";
 import { mono } from "@/components/assistant-ui/elements/surfaces";
 import { Spinner } from "@/components/glyphs/spinner";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { DiffStat, FileStat } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -85,20 +82,24 @@ function useRunningPlan(requestId: string | null) {
       (plan?.steps ?? []).map((step) => step.taskId ? s.board?.tasks[step.taskId]?.state : undefined),
     ),
   );
-  const taskIds = useBoard(
-    useShallow((s) =>
-      (plan?.steps ?? []).map((step) => step.taskId && s.board?.tasks[step.taskId] ? step.taskId : null),
-    ),
-  );
-  return plan ? { plan, states, taskIds } : null;
+  return plan ? { plan, states } : null;
 }
 
-const Pill: FC<{ tip: ReactNode; children: ReactNode }> = ({ tip, children }) => (
-  <Tooltip>
+const Pill: FC<{ tip: ReactNode; label?: string; children: ReactNode }> = ({ tip, label, children }) => (
+  <Tooltip delayDuration={0}>
     <TooltipTrigger asChild>
-      <span className="flex items-center gap-1.5">
-        {children}
-      </span>
+      {label ? (
+        // A plan's checklist: reachable from the keyboard too.
+        <button
+          type="button"
+          aria-label={label}
+          className="hover:text-foreground rounded-control focus-visible:ring-ring flex min-w-0 items-center gap-1.5 text-start outline-none transition-colors focus-visible:ring-1"
+        >
+          {children}
+        </button>
+      ) : (
+        <span className="flex items-center gap-1.5">{children}</span>
+      )}
     </TooltipTrigger>
     <TooltipContent side="top" className="flex-col items-stretch gap-1 py-1.5">
       {tip}
@@ -106,14 +107,53 @@ const Pill: FC<{ tip: ReactNode; children: ReactNode }> = ({ tip, children }) =>
   </Tooltip>
 );
 
-/** A 12 pt progress donut. */
+/** A plan's whole checklist, as its pill shows it on hover: each step's mark and words. */
+const StepList: FC<{ steps: readonly { title: string; status: ReturnType<typeof planStepStatus> }[] }> = ({ steps }) => (
+  <ol className="flex max-h-(--radix-tooltip-content-available-height) max-w-80 flex-col gap-2 overflow-y-auto px-0.5 py-1 text-start">
+    {steps.map((step, index) => (
+      <li key={index} className="flex min-w-0 items-start gap-2">
+        <span className="flex size-4 shrink-0 items-center justify-center">
+          <StepGlyph status={step.status} />
+        </span>
+        <span
+          className={cn(
+            "min-w-0 max-w-72 leading-4 wrap-break-word",
+            step.status === "done" ? "text-muted-foreground/70" : step.status === "active" ? "text-foreground" : "text-muted-foreground",
+          )}
+        >
+          {step.title}
+        </span>
+        <span className="sr-only">
+          {step.status === "pending" ? "Not started" : step.status === "active" ? "Running" : step.status === "done" ? "Done" : "Failed"}
+        </span>
+      </li>
+    ))}
+  </ol>
+);
+
+/** "Phase N / M": the phase at work, else the first still to do, else the last. */
+function phaseCount(statuses: readonly ReturnType<typeof planStepStatus>[]): string {
+  const at = statuses.indexOf("active");
+  const next = statuses.findIndex((status) => status !== "done");
+  const phase = at >= 0 ? at : next >= 0 ? next : statuses.length - 1;
+  return `Phase ${phase + 1} / ${statuses.length}`;
+}
+
+/** A 12 pt progress ring, filling clockwise from the top as phases finish. */
 const Donut: FC<{ done: number; total: number }> = ({ done, total }) => (
-  <span aria-hidden className="text-link size-icon-xs shrink-0 rounded-full border border-current p-px">
-    <span
-      className="block size-full rounded-full transition-[background] duration-200"
-      style={{ background: `conic-gradient(currentColor ${(done / total) * 100}%, transparent 0)` }}
+  <svg aria-hidden viewBox="0 0 16 16" className="text-link size-icon-xs shrink-0 -rotate-90">
+    <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" className="stroke-2 opacity-25" />
+    <circle
+      cx="8"
+      cy="8"
+      r="6"
+      fill="none"
+      stroke="currentColor"
+      pathLength={100}
+      strokeDasharray={`${total > 0 ? (done / total) * 100 : 0} 100`}
+      className="stroke-2 transition-[stroke-dasharray] duration-200 motion-reduce:transition-none"
     />
-  </span>
+  </svg>
 );
 
 const StepGlyph: FC<{ status: ReturnType<typeof planStepStatus> }> = ({ status }) => {
@@ -125,7 +165,7 @@ const StepGlyph: FC<{ status: ReturnType<typeof planStepStatus> }> = ({ status }
     case "failed":
       return <X className="text-destructive size-icon-xs" />;
     case "pending":
-      return <span className="border-foreground/40 size-icon-xs rounded-full border" />;
+      return <span className="border-foreground/35 size-icon-xs rounded-full border" />;
   }
 };
 
@@ -155,14 +195,12 @@ const RunCapsule: FC<{ conversationId: string; run: RunPill }> = ({ conversation
       <Pill
         tip={
           run.steps.length > 0 ? (
-            <ol className="flex flex-col gap-1">
-              {run.steps.map((step, index) => (
-                <li key={index} className="flex items-center gap-1.5">
-                  <StepGlyph status={step.done ? "done" : step.active ? "active" : "pending"} />
-                  <span className={cn(!step.active && "text-muted-foreground")}>{step.title}</span>
-                </li>
-              ))}
-            </ol>
+            <StepList
+              steps={run.steps.map((step) => ({
+                title: step.title,
+                status: step.done ? "done" : step.active ? "active" : "pending",
+              }))}
+            />
           ) : (
             run.label
           )
@@ -197,46 +235,38 @@ const RequestCapsule: FC<{ conversationId: string }> = ({ conversationId }) => {
   const running = useRunningPlan(requestId);
   if (!requestId || (!diff && !running)) return null;
   const progress = running ? planProgress(running.plan, running.states) : null;
+  const statuses = running ? running.plan.steps.map((_, index) => planStepStatus(running.states[index])) : [];
   return (
     <Capsule>
       {running && progress && (
-        <Popover key={running.plan.id}>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className="rounded-control flex min-w-0 items-center gap-1.5 text-start outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              {progress.status === "review" ? (
-                <Clock aria-hidden className="size-icon-xs shrink-0" />
-              ) : (
-                <StepMark status={progress.status} />
-              )}
-              <span className="text-foreground min-w-0 wrap-anywhere tabular-nums">{progress.label}</span>
-            </button>
-          </PopoverTrigger>
-          <PopoverContent
-            side="top"
-            aria-label={`Plan steps: ${running.plan.title}`}
-            className="max-h-(--radix-popover-content-available-height) w-sm max-w-(--radix-popover-content-available-width) overflow-y-auto p-3 text-start text-sm"
-          >
-            <ol className="flex flex-col gap-2">
-              {running.plan.steps.map((step, index) => {
-                const status = planStepStatus(running.states[index]);
-                const taskId = running.taskIds[index];
-                return (
-                  <li key={index} className="flex items-start gap-2">
-                    <StepMark status={status} />
-                    <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
-                      <span className={cn("wrap-anywhere", status !== "active" && "text-muted-foreground")}>{step.title}</span>
-                      <span className="sr-only">{status === "pending" ? "Not started" : status === "active" ? "Running" : status === "done" ? "Done" : "Failed"}</span>
-                      {taskId && <WorkerChip taskId={taskId} />}
-                    </div>
-                  </li>
-                );
-              })}
-            </ol>
-          </PopoverContent>
-        </Popover>
+        <Pill
+          label={`Plan steps: ${running.plan.title}`}
+          tip={
+            <StepList
+              steps={running.plan.steps.map((step, index) => ({
+                title: step.title,
+                status: planStepStatus(running.states[index]),
+              }))}
+            />
+          }
+        >
+          {progress.status === "review" ? (
+            <>
+              <Clock aria-hidden className="size-icon-xs shrink-0" />
+              <span className="text-foreground min-w-0 truncate">{progress.label}</span>
+            </>
+          ) : progress.status === "failed" ? (
+            <>
+              <X aria-hidden className="text-destructive size-icon-xs shrink-0" />
+              <span className="text-foreground min-w-0 truncate">{progress.label}</span>
+            </>
+          ) : (
+            <>
+              <Donut done={statuses.filter((status) => status === "done").length} total={statuses.length} />
+              <span className="text-foreground whitespace-nowrap tabular-nums">{phaseCount(statuses)}</span>
+            </>
+          )}
+        </Pill>
       )}
       {running && diff && <span aria-hidden>·</span>}
       {diff && <DiffPill diff={diff} />}
