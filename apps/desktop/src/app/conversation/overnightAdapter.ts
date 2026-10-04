@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { openNotificationSettings, request } from "@/ipc/client";
@@ -129,13 +129,30 @@ export function shownRun(models: readonly OvernightCardModel[]): OvernightRun | 
 }
 
 /**
- * The run branch's +N −N for the context card: git's diff from the run's base to the branch's
- * tip, from the daemon's `getRunDiff` (`{ method: "getRunDiff", conversationId, runId }` →
- * `{ diff: DiffStat | null }`). Until the daemon answers it, the card shows the branch without
- * numbers rather than an estimate summed from the workers' changes.
+ * The run branch's +N −N for the context card and the run pill: git's diff from the run's base
+ * to the branch's tip while the run works, and to its verified tip once it's over (none when
+ * nothing was verified). Read again on each landing and whenever the run changes state or tip.
  */
-export function useRunDiff(_conversationId: string, _runId: string | null): DiffStat | null {
-  return null;
+export function useRunDiff(conversationId: string, runId: string | null): DiffStat | null {
+  const key = useBoard((s) => {
+    const run = runId && s.board?.conversationId === conversationId ? s.board.overnight[runId] : undefined;
+    if (!run) return null;
+    const landed = Object.values(s.board?.tasks ?? {}).filter((task) => task.state === "landed").length;
+    return `${run.state}:${run.verifiedCommit ?? ""}:${landed}`;
+  });
+  const [stat, setStat] = useState<DiffStat | null>(null);
+  useEffect(() => {
+    if (!runId || key === null) return;
+    let current = true;
+    request({ method: "getRunDiff", conversationId, runId })
+      .then(({ diff }) => current && setStat(diff))
+      // The card shows the branch alone when git can't tell.
+      .catch(() => current && setStat(null));
+    return () => {
+      current = false;
+    };
+  }, [conversationId, runId, key]);
+  return runId && key !== null ? stat : null;
 }
 
 export function useOvernightCards(conversationId: string): readonly OvernightCardModel[] {

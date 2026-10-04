@@ -90,6 +90,8 @@ mockIPC((command, payload) => {
   switch (req.method) {
     case "getPullRequest":
       return { method: req.method, pullRequest: null };
+    case "getRunDiff":
+      return { method: req.method, diff: null };
     default:
       return { method: req.method };
   }
