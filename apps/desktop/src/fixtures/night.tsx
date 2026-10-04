@@ -130,6 +130,8 @@ mockIPC((command, payload) => {
       return { method: req.method, pullRequest: null };
     case "getRunDiff":
       return { method: req.method, diff: null };
+    case "listFiles":
+      return { method: req.method, files: [], truncated: false };
     default:
       return { method: req.method };
   }
