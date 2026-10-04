@@ -790,6 +790,7 @@ impl SessionManager {
                     id,
                     request,
                     DecisionSource::Orchestrator,
+                    crate::work::DecisionKind::Routine,
                     what.to_owned(),
                     args.why.unwrap_or_default(),
                 )

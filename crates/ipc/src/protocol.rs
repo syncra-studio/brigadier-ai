@@ -485,6 +485,12 @@ pub enum Request {
         command_id: String,
         verified_commit: String,
     },
+    /// What a run's branch changed since its base: up to the branch tip while it works, up to
+    /// the verified tip once it finished.
+    GetRunDiff {
+        conversation_id: ConversationId,
+        run_id: OvernightRunId,
+    },
     /// Notifications of finished overnight runs the app hasn't shown yet.
     PendingOvernightNotifications,
     /// A native submission was refused; retain the report and pending notification.
@@ -940,6 +946,10 @@ pub enum Response {
     },
     MergeOvernight {
         run: Box<OvernightRun>,
+    },
+    GetRunDiff {
+        /// Absent before the run has a branch, and for a finished run with nothing verified.
+        diff: Option<DiffStat>,
     },
     PendingOvernightNotifications {
         notifications: Vec<PendingRunNotification>,

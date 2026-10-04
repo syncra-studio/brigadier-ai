@@ -27,8 +27,8 @@ use crate::board::Board;
 use crate::model::{ConversationId, DomainEvent, OvernightRunId, PermissionLevel};
 use crate::sessions::one_line;
 use crate::work::{
-    CardId, CardState, Decision, DecisionSource, InjectionKind, Plan, PlanState, ResolvedBy, Task,
-    TaskId, TaskState, WaitingItem, WaitingSource,
+    CardId, CardState, Decision, DecisionKind, DecisionSource, InjectionKind, Plan, PlanState,
+    ResolvedBy, Task, TaskId, TaskState, WaitingItem, WaitingSource,
 };
 use crate::{Error, Result, now_ms};
 
@@ -51,8 +51,15 @@ impl SessionManager {
         if self.permission(conversation_id) == PermissionLevel::AskForApproval {
             return;
         }
-        self.record_decision(conversation_id, request_id, source, what, why)
-            .await;
+        self.record_decision(
+            conversation_id,
+            request_id,
+            source,
+            DecisionKind::Routine,
+            what,
+            why,
+        )
+        .await;
     }
 
     /// Logs a decision about a task (its landing, a fix round, a declined permission, a
@@ -93,6 +100,7 @@ impl SessionManager {
         conversation_id: &ConversationId,
         request_id: Option<String>,
         source: DecisionSource,
+        kind: DecisionKind,
         what: String,
         why: String,
     ) {
@@ -100,6 +108,7 @@ impl SessionManager {
             id: uuid::Uuid::now_v7().to_string(),
             request_id,
             source,
+            kind,
             what: one_line(&what, LINE_CHARS),
             why: one_line(&why, WHY_CHARS),
             at_ms: now_ms(),
@@ -1327,6 +1336,7 @@ mod tests {
                     id: "d1".into(),
                     request_id: None,
                     source: DecisionSource::Orchestrator,
+                    kind: DecisionKind::Routine,
                     what: "Kept the old API".into(),
                     why: String::new(),
                     at_ms: 2,

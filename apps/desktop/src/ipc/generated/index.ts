@@ -74,6 +74,7 @@ export type { DaemonMetrics } from "./DaemonMetrics";
 export type { Deadline } from "./Deadline";
 export type { Decider } from "./Decider";
 export type { Decision } from "./Decision";
+export type { DecisionKind } from "./DecisionKind";
 export type { DecisionSource } from "./DecisionSource";
 export type { Density } from "./Density";
 export type { Diagnostics } from "./Diagnostics";

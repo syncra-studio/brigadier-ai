@@ -1056,6 +1056,17 @@ pub enum DecisionSource {
     },
 }
 
+/// What a decision is, for where the app shows it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum DecisionKind {
+    /// A decision of the work: a landing, a fix round, a plan, a judgement call.
+    #[default]
+    Routine,
+    /// An overnight phase verified or settled: the run's card shows it, not the thread.
+    PhaseOutcome,
+}
+
 /// Something decided on the user's behalf (under "Approve for me" and "Full access"), and
 /// why: the summary card's "Decided for you", and a quiet row in the request's thread.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -1068,6 +1079,9 @@ pub struct Decision {
     pub source: DecisionSource,
     /// What was decided, in one line ("Landed task-3 “Add the flag”").
     pub what: String,
+    /// Where the app shows it.
+    #[serde(default)]
+    pub kind: DecisionKind,
     /// Why, in a sentence or two; empty when the line says it all.
     #[serde(default)]
     pub why: String,

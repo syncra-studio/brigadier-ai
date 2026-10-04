@@ -651,9 +651,9 @@ impl SessionManager {
                 else {
                     return;
                 };
-                self.run_decided(
+                self.phase_outcome_decided(
                     &now,
-                    Some(phase_id),
+                    phase_id,
                     request,
                     format!("Verified phase {number} \u{201c}{}\u{201d}", phase.name),
                     format!(
@@ -746,9 +746,9 @@ impl SessionManager {
                     .iter()
                     .filter(|c| c.status == CriterionStatus::Met)
                     .count();
-                self.run_decided(
+                self.phase_outcome_decided(
                     &now,
-                    Some(phase_id),
+                    phase_id,
                     request,
                     format!(
                         "Settled phase {number} \u{201c}{}\u{201d} as {}",

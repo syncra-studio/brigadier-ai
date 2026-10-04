@@ -1137,6 +1137,12 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                     .await?,
             ),
         },
+        Request::GetRunDiff {
+            conversation_id,
+            run_id,
+        } => Response::GetRunDiff {
+            diff: sessions.run_diff_stat(&conversation_id, &run_id).await?,
+        },
         Request::PendingOvernightNotifications => Response::PendingOvernightNotifications {
             notifications: sessions
                 .pending_overnight_notifications()

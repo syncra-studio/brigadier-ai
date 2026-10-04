@@ -874,6 +874,46 @@ impl SessionManager {
         what: String,
         why: String,
     ) {
+        self.run_decided_as(
+            run,
+            phase_id,
+            request,
+            crate::work::DecisionKind::Routine,
+            what,
+            why,
+        )
+        .await;
+    }
+
+    /// [`Self::run_decided`] for a phase that verified or settled: the run's card shows it.
+    pub(crate) async fn phase_outcome_decided(
+        &self,
+        run: &OvernightRun,
+        phase_id: &str,
+        request: Option<String>,
+        what: String,
+        why: String,
+    ) {
+        self.run_decided_as(
+            run,
+            Some(phase_id),
+            request,
+            crate::work::DecisionKind::PhaseOutcome,
+            what,
+            why,
+        )
+        .await;
+    }
+
+    async fn run_decided_as(
+        &self,
+        run: &OvernightRun,
+        phase_id: Option<&str>,
+        request: Option<String>,
+        kind: crate::work::DecisionKind,
+        what: String,
+        why: String,
+    ) {
         self.record_decision(
             &run.conversation_id,
             request,
@@ -881,6 +921,7 @@ impl SessionManager {
                 run_id: run.id.clone(),
                 phase_id: phase_id.map(str::to_owned),
             },
+            kind,
             what,
             why,
         )

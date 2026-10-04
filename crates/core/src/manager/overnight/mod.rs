@@ -240,6 +240,36 @@ impl SessionManager {
         Ok(run)
     }
 
+    /// What a run's branch changed since its base, for its card and pill: while the run works,
+    /// up to the branch tip; once it finished, up to the verified tip Merge takes (none when
+    /// nothing is verified). Absent before the run has a branch.
+    pub async fn run_diff_stat(
+        &self,
+        conversation_id: &ConversationId,
+        run_id: &OvernightRunId,
+    ) -> Result<Option<crate::work::DiffStat>> {
+        let board = self.core.board(conversation_id).await?;
+        let run = board
+            .runs
+            .get(run_id)
+            .ok_or_else(|| Error::NotFound(format!("overnight run {run_id}")))?;
+        let Some(workspace) = run.workspace.clone() else {
+            return Ok(None);
+        };
+        let Some(Setup::Session { repo, .. }) = self.core.conversation(conversation_id)?.setup
+        else {
+            return Ok(None);
+        };
+        let finished = run.state.is_final().then(|| run.verified_commit.clone());
+        let git = self.git.clone();
+        blocking(move || {
+            let repo = git.open(Path::new(&repo)).map_err(super::git_error)?;
+            let stat = run_diff(&repo, &workspace, finished).map_err(super::git_error)?;
+            Ok(stat.map(|stat| super::landing::diff_stat_of(&stat)))
+        })
+        .await
+    }
+
     /// Names the session after the run it starts, unless the user named it themselves: a
     /// title Brigadier took from the user's words ("/overnight Make overnight runs…") gives
     /// way to the plan's name.
@@ -811,6 +841,25 @@ fn name_of(plan: &ProposedPlan, words: &str) -> String {
     }
 }
 
+/// What the run branch changed from its base commit: up to the branch tip, or for a finished
+/// run (`finished`, with its verified tip) up to that tip.
+fn run_diff(
+    repo: &brigadier_git::Repo,
+    workspace: &crate::overnight::RunWorkspace,
+    finished: Option<Option<String>>,
+) -> brigadier_git::Result<Option<brigadier_git::DiffStat>> {
+    let tip = match finished {
+        Some(Some(verified)) => brigadier_git::Oid(verified),
+        Some(None) => return Ok(None),
+        None => match repo.branch_tip(&workspace.branch)? {
+            Some(tip) => tip,
+            None => return Ok(None),
+        },
+    };
+    let base = brigadier_git::Oid(workspace.base_commit.clone());
+    repo.diff_stat(&base, &tip).map(Some)
+}
+
 /// Whether `title` is one Brigadier gave the session, from the user's `words` or before any.
 fn words_title(title: &str, words: &str) -> bool {
     let start = title.trim_end_matches('…').trim();
@@ -819,8 +868,84 @@ fn words_title(title: &str, words: &str) -> bool {
 }
 
 #[cfg(test)]
-mod title_tests {
+mod tests {
     use super::words_title;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_runs_diff_is_its_branch_while_it_works_and_its_verified_tip_after() {
+        use super::run_diff;
+        use crate::overnight::RunWorkspace;
+
+        let dir = std::fs::canonicalize(std::env::temp_dir())
+            .expect("a temp dir")
+            .join(format!(
+                "brigadier-run-diff-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
+        let root = dir.join("repo");
+        let env: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os()
+            .filter(|(key, _)| !key.to_string_lossy().starts_with("GIT_"))
+            .chain(
+                [
+                    ("GIT_CONFIG_GLOBAL", "/dev/null"),
+                    ("GIT_CONFIG_NOSYSTEM", "1"),
+                    ("GIT_AUTHOR_NAME", "Test"),
+                    ("GIT_AUTHOR_EMAIL", "test@example.com"),
+                    ("GIT_COMMITTER_NAME", "Test"),
+                    ("GIT_COMMITTER_EMAIL", "test@example.com"),
+                ]
+                .map(|(k, v)| (k.into(), v.into())),
+            )
+            .collect();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .env_clear()
+                .envs(env.iter().map(|(k, v)| (k, v)))
+                .output()
+                .expect("git runs");
+            assert!(out.status.success(), "{args:?}: {out:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        };
+        std::fs::create_dir_all(&root).expect("a repo dir");
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("a.txt"), "one\n").expect("a file");
+        git(&["add", "."]);
+        git(&["commit", "-qm", "Start"]);
+        let base = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-qb", "overnight/x"]);
+        std::fs::write(root.join("a.txt"), "one\ntwo\n").expect("a file");
+        git(&["commit", "-qam", "Verified work"]);
+        let verified = git(&["rev-parse", "HEAD"]);
+        std::fs::write(root.join("b.txt"), "x\ny\nz\n").expect("a file");
+        git(&["add", "."]);
+        git(&["commit", "-qm", "Later work"]);
+        let repo = brigadier_git::Git::new("git".into(), env.clone())
+            .open(&root)
+            .expect("the repo");
+        let workspace = RunWorkspace {
+            base: "main".into(),
+            base_commit: base,
+            branch: "overnight/x".into(),
+            path: String::new(),
+        };
+        let working = run_diff(&repo, &workspace, None)
+            .expect("a diff")
+            .expect("some");
+        assert_eq!((working.insertions, working.files.len()), (4, 2));
+        let done = run_diff(&repo, &workspace, Some(Some(verified)))
+            .expect("a diff")
+            .expect("some");
+        assert_eq!((done.insertions, done.files.len()), (1, 1));
+        assert!(
+            run_diff(&repo, &workspace, Some(None))
+                .expect("no error")
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn only_a_title_taken_from_the_users_words_gives_way_to_the_run_name() {

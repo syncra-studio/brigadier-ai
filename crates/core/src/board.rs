@@ -191,6 +191,13 @@ impl Board {
             DomainEvent::DecidedForYou { decision } => {
                 let mut decision = decision.clone();
                 decision.position = stream_seq;
+                // Recorded before decisions had a kind: a run's phase outcomes by their words.
+                if matches!(decision.source, crate::work::DecisionSource::Run { .. })
+                    && (decision.what.starts_with("Verified phase ")
+                        || decision.what.starts_with("Settled phase "))
+                {
+                    decision.kind = crate::work::DecisionKind::PhaseOutcome;
+                }
                 self.decisions.push(decision);
             }
             DomainEvent::WaitingOnYou { item } => {
