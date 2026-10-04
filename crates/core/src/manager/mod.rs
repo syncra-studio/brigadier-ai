@@ -27,6 +27,8 @@ mod fallback;
 #[cfg(debug_assertions)]
 pub mod fault;
 mod files;
+#[cfg(test)]
+mod flow;
 mod fork;
 mod gates;
 mod git_actions;

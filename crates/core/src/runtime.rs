@@ -109,6 +109,9 @@ pub struct Runtime {
     /// Counts the provider overviews recorded: work waiting for quota looks again when it
     /// moves (a login, a limit, a fresh usage read).
     checked: tokio::sync::watch::Sender<u64>,
+    /// Tests: scripted stand-ins for the Claude and Codex CLIs.
+    #[cfg(test)]
+    fakes: Option<[Arc<dyn Provider>; 2]>,
 }
 
 impl Runtime {
@@ -118,6 +121,27 @@ impl Runtime {
         core: Arc<Core>,
         platform: Arc<dyn Platform>,
         spawner: Spawner,
+    ) -> Result<Arc<Self>> {
+        Self::start_with(core, platform, spawner, None).await
+    }
+
+    /// [`Runtime::start`] with scripted CLIs (Claude's, then Codex's) in place of the real
+    /// ones.
+    #[cfg(test)]
+    pub(crate) async fn start_faked(
+        core: Arc<Core>,
+        platform: Arc<dyn Platform>,
+        spawner: Spawner,
+        fakes: [Arc<dyn Provider>; 2],
+    ) -> Result<Arc<Self>> {
+        Self::start_with(core, platform, spawner, Some(fakes)).await
+    }
+
+    async fn start_with(
+        core: Arc<Core>,
+        platform: Arc<dyn Platform>,
+        spawner: Spawner,
+        #[cfg_attr(not(test), allow(unused_variables))] fakes: Option<[Arc<dyn Provider>; 2]>,
     ) -> Result<Arc<Self>> {
         let env = {
             let platform = platform.clone();
@@ -177,6 +201,8 @@ impl Runtime {
             pumps: TaskTracker::new(),
             cache_dir: data_dir.join("cache"),
             recordings_dir: record::recordings_dir(&data_dir),
+            #[cfg(test)]
+            fakes,
         });
         runtime.load().await?;
         runtime.sweep().await;
@@ -388,6 +414,13 @@ impl Runtime {
     }
 
     fn provider(&self, kind: ProviderKind) -> Arc<dyn Provider> {
+        #[cfg(test)]
+        if let Some([claude, codex]) = &self.fakes {
+            return match kind {
+                ProviderKind::Claude => claude.clone(),
+                ProviderKind::Codex => codex.clone(),
+            };
+        }
         match kind {
             ProviderKind::Claude => self.claude.clone(),
             ProviderKind::Codex => self.codex.clone(),
