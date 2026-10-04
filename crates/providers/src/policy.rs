@@ -34,13 +34,20 @@ pub const ALWAYS_ASK: &[&[&str]] = &[
     &["gh", "issue", "close"],
     &["gh", "issue", "comment"],
     &["gh", "issue", "edit"],
-    &["gh", "release"],
+    &["gh", "release", "create"],
+    &["gh", "release", "delete"],
+    &["gh", "release", "delete-asset"],
+    &["gh", "release", "edit"],
+    &["gh", "release", "upload"],
     &["gh", "repo", "create"],
     &["gh", "repo", "delete"],
     &["gh", "repo", "edit"],
     &["gh", "repo", "rename"],
     &["gh", "workflow", "run"],
-    &["gh", "secret"],
+    &["gh", "secret", "set"],
+    &["gh", "secret", "delete"],
+    &["gh", "secret", "remove"],
+    // Only a request that writes: see [`gh_api_writes`].
     &["gh", "api"],
     &["npm", "publish"],
     &["npm", "unpublish"],
@@ -358,11 +365,61 @@ pub fn real_path(path: &std::path::Path) -> Option<std::path::PathBuf> {
 /// every simple command in the line is checked, including those inside `sh -c '…'` wrappers,
 /// subshells and command substitutions.
 pub fn is_outward(command: &str) -> bool {
-    simple_commands(command).iter().any(|words| {
-        ALWAYS_ASK
+    simple_commands(command)
+        .iter()
+        .any(|words| words_outward(words))
+}
+
+/// Whether one simple command is an [`ALWAYS_ASK`] command. git is judged by its subcommand,
+/// as the gate does (`git stash push` and `git log --grep push` stay local; an alias is left to
+/// the gate, which resolves it), and `gh api` only when it writes.
+fn words_outward(words: &[String]) -> bool {
+    if let Some((program, rest)) = strip_prefixes(words).split_first() {
+        match program.rsplit('/').next().unwrap_or(program) {
+            // An unknown global option hides where the subcommand is: matched loosely below.
+            "git" if !split_git_globals(rest).unknown_option => {
+                return classify_git(rest) == ArgvVerdict::Outward;
+            }
+            "gh" if rest.first().is_some_and(|command| command == "api") => {
+                return gh_api_writes(&rest[1..]);
+            }
+            _ => {}
+        }
+    }
+    ALWAYS_ASK
+        .iter()
+        .any(|pattern| matches_pattern(words, pattern))
+}
+
+/// Whether a `gh api` call (its arguments after `api`) changes anything: a method other than
+/// GET or HEAD, or, without `--method`, any field or input, which makes gh send a POST.
+fn gh_api_writes(args: &[String]) -> bool {
+    let mut method = None;
+    let mut fields = false;
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        let word = word.as_str();
+        if word == "-X" || word == "--method" {
+            method = Some(words.next().map_or("", String::as_str));
+        } else if let Some(value) = word
+            .strip_prefix("--method=")
+            .or_else(|| word.strip_prefix("-X"))
+        {
+            method = Some(value);
+        } else if ["-f", "-F", "--field", "--raw-field", "--input"].contains(&word)
+            || ["-f", "-F", "--field=", "--raw-field=", "--input="]
+                .iter()
+                .any(|flag| word.starts_with(flag))
+        {
+            fields = true;
+        }
+    }
+    match method {
+        Some(method) => !["GET", "HEAD"]
             .iter()
-            .any(|pattern| matches_pattern(words, pattern))
-    })
+            .any(|read| method.eq_ignore_ascii_case(read)),
+        None => fields,
+    }
 }
 
 /// The script of a `sh -c '…'` wrapper (`/bin/zsh -lc 'npm test'` → `npm test`), else the
@@ -611,10 +668,7 @@ pub fn classify_argv(argv: &[String]) -> ArgvVerdict {
             let mut words = Vec::with_capacity(argv.len());
             words.push(name.to_owned());
             words.extend(args.iter().cloned());
-            if ALWAYS_ASK
-                .iter()
-                .any(|pattern| matches_pattern(&words, pattern))
-            {
+            if words_outward(&words) {
                 ArgvVerdict::Outward
             } else {
                 ArgvVerdict::Local
@@ -1049,6 +1103,66 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn only_a_real_outward_command_asks_under_full_access() {
+        let full = |line: &str| {
+            route(
+                &command(line, None, false),
+                &Access::Full,
+                ApprovalMode::Delegated,
+            )
+        };
+        // The words of an outward command, but nothing leaves the machine.
+        for line in [
+            "git stash push -m wip",
+            "git log --grep push",
+            "git -C repo stash push",
+            "cd repo && git stash push 2>&1 | tail -3",
+            "gh api repos/o/r/actions/runs",
+            "gh api -X GET search/issues -f q=bug",
+            "gh api --method=head repos/o/r",
+            "gh release view v1",
+            "gh release list",
+            "gh secret list",
+        ] {
+            assert!(!is_outward(line), "{line}");
+            assert_eq!(full(line), Route::Allow, "{line}");
+        }
+        for line in [
+            "git push origin main",
+            "git -C repo push",
+            "cd repo && git push 2>&1 | tail -3",
+            "sudo git push",
+            "git --unknown-option push",
+            "gh api -X POST repos/o/r/issues",
+            "gh api repos/o/r/issues -f title=bug",
+            "gh api graphql -F query=@q.graphql",
+            "gh api --method=DELETE repos/o/r",
+            "gh api -XPATCH repos/o/r",
+            "gh api repos/o/r/contents/x --input body.json",
+            "gh release create v1",
+            "gh release upload v1 x.zip",
+            "gh secret set TOKEN",
+        ] {
+            assert!(is_outward(line), "{line}");
+            assert_eq!(full(line), Route::AskUser, "{line}");
+        }
+        let argv = |line: &str| line.split(' ').map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(
+            classify_argv(&argv("gh api repos/o/r/pulls")),
+            ArgvVerdict::Local
+        );
+        assert_eq!(
+            classify_argv(&argv("gh api -X POST repos/o/r/pulls")),
+            ArgvVerdict::Outward
+        );
+        assert_eq!(
+            classify_argv(&argv("gh release download v1")),
+            ArgvVerdict::Local
+        );
+        assert_eq!(classify_argv(&argv("git stash push")), ArgvVerdict::Local);
     }
 
     #[test]
