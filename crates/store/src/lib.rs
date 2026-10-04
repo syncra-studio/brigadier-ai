@@ -50,10 +50,6 @@ pub const FEED_CAPACITY: usize = 4096;
 /// covers the gap between storing a blob and appending the event that references it, which
 /// for a composer attachment is as long as the user takes to send the message.
 pub const BLOB_GC_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
-/// How long after its last reference in deleted streams a blob still counts as theirs (see
-/// [`Store::delete_streams_and_blobs`]). It only absorbs the slack between putting a blob and
-/// stamping the event that references it.
-const OWN_BLOB_MARGIN: Duration = Duration::from_secs(60);
 /// Blobs the writer checks and deletes per command, so appends interleave with a large GC.
 const GC_CHUNK: usize = 256;
 
@@ -297,8 +293,9 @@ impl Store {
     }
 
     /// [`Store::delete_streams`], then deletes right away each blob those events referenced that
-    /// no remaining event references, unless it was put or touched after its last reference
-    /// there (plus a minute's slack): content that only came from them, which
+    /// no remaining event references, unless it was put or touched after the millisecond of its
+    /// last reference there (an event is stamped when it is appended, after the blobs it
+    /// references were put): content that only came from them, which
     /// [`Store::gc_blobs`] would otherwise keep for [`BLOB_GC_GRACE`]. A blob something else
     /// put again since, such as an identical attachment waiting in a composer, is kept.
     pub async fn delete_streams_and_blobs(&self, streams: Vec<String>) -> Result<(u64, GcStats)> {
@@ -313,9 +310,11 @@ impl Store {
         let hashes: Vec<_> = own
             .into_iter()
             .filter_map(|(hash, at_ms)| {
+                // The end of that millisecond: a file time is finer than an event's.
                 let last = SystemTime::UNIX_EPOCH
-                    + Duration::from_millis(u64::try_from(at_ms).unwrap_or_default());
-                Some((hash.parse().ok()?, last + OWN_BLOB_MARGIN))
+                    + Duration::from_millis(u64::try_from(at_ms).unwrap_or_default() + 1)
+                    - Duration::from_nanos(1);
+                Some((hash.parse().ok()?, last))
             })
             .collect();
         let found = GcStats {
@@ -626,16 +625,26 @@ mod tests {
             .await
             .unwrap();
 
+        // Attached again elsewhere just after the deleted session last used it.
+        let soon = blobs.put(b"attached again at once".to_vec()).await.unwrap();
+        store
+            .append(vec![event("conversation:a", now_ms(), &soon)])
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        blobs.put(b"attached again at once".to_vec()).await.unwrap();
+
         let (removed, stats) = store
             .delete_streams_and_blobs(vec!["conversation:a".into(), "task:a1".into()])
             .await
             .unwrap();
 
-        assert_eq!(removed, 3);
-        assert_eq!((stats.removed, stats.referenced, stats.recent), (1, 1, 1));
+        assert_eq!(removed, 4);
+        assert_eq!((stats.removed, stats.referenced, stats.recent), (1, 1, 2));
         assert!(blobs.get(own).await.unwrap().is_none());
         assert!(blobs.get(shared).await.unwrap().is_some());
         assert!(blobs.get(put_since).await.unwrap().is_some());
+        assert!(blobs.get(soon).await.unwrap().is_some());
         let _ = std::fs::remove_dir_all(dir);
     }
 }
