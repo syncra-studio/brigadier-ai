@@ -262,6 +262,8 @@ mod tests {
                 ])
                 .args(args)
                 .current_dir(self.base.join(dir))
+                // A bare `git` (and git in the hooks) is the real one, never the command gate.
+                .env("PATH", crate::test_git::path())
                 .env_remove("GIT_DIR")
                 .env("GIT_CONFIG_NOSYSTEM", "1")
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -371,12 +373,8 @@ mod tests {
         let remote = place.base.join("remote.git");
         let remote = remote.to_str().unwrap();
         let before = place.git(false, "git", &["rev-parse", "main"], "remote.git");
-        let git = Command::new("sh")
-            .args(["-c", "command -v git"])
-            .output()
-            .unwrap();
-        let absolute = String::from_utf8_lossy(&git.stdout).trim().to_owned();
-        for program in ["git", absolute.as_str()] {
+        let absolute = crate::test_git::git().to_str().unwrap();
+        for program in ["git", absolute] {
             for args in [
                 &["push", "origin", "task-1"][..],
                 &["push", "--no-verify", "origin", "task-1:main"],

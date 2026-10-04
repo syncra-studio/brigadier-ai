@@ -15,6 +15,8 @@ pub mod routing;
 pub mod runtime;
 mod sessions;
 pub mod storage;
+#[cfg(all(test, unix))]
+mod test_git;
 pub mod tools;
 pub mod work;
 
