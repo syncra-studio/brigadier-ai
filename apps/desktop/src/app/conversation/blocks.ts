@@ -161,17 +161,11 @@ function keepTask(task: Task): boolean {
 /** Steps that belong to a worker's row (accepting, reading or messaging it), not rows of their own. */
 const ON_TASK_ROW: ReadonlySet<OrchestratorStepKind["type"]> = new Set(["accepted", "readReport", "messaged"]);
 
-/**
- * A run's decision that only says how a phase came out ("Verified phase 1 “Measure”", "Settled
- * phase 2 “Fix” as partial"): the phase's header says that already. Matched on the daemon's
- * words until decisions carry a kind.
- */
-const PHASE_OUTCOME = /^(Verified|Settled) phase \d+ /;
-
 /** Whether a decision is a judgement call the thread shows, rather than a task's, plan's or phase's routine outcome. */
 export function judgementCall(decision: Decision): boolean {
   if (decision.source.type === "orchestrator") return true;
-  return decision.source.type === "run" && !PHASE_OUTCOME.test(decision.what);
+  // A phase's outcome ("Verified phase 1 “Measure”") is said by the phase's header already.
+  return decision.source.type === "run" && decision.kind !== "phaseOutcome";
 }
 
 /** An overnight phase's own request: its lead's turns, tasks and reports. */

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import { type Block, type BoardDigest, blockSequence, buildBlocks } from "@/app/conversation/blocks";
+import { type Block, type BoardDigest, blockSequence, buildBlocks, judgementCall } from "@/app/conversation/blocks";
 import { checkersOf, checkResult, checksCount, taskRowDetail, taskState } from "@/app/conversation/rowWords";
 import type { Decision, Message, OrchestratorStep, Plan, Task, UserRequest } from "@/ipc/generated";
 
@@ -217,4 +217,15 @@ test("a normal session's request reads the same way: one row per task, its check
     entry.kind === "orchestrator" ? entry.steps.filter((step) => step.kind.type === "decided") : [],
   );
   assert.equal(decided.length, 1);
+});
+
+test("a run's decision shows in the thread unless its kind says it is a phase's outcome", () => {
+  const verified = board.decisions.find((decision) => decision.kind === "phaseOutcome");
+  assert.ok(verified, "the night's “Verified phase 1” decision");
+  assert.equal(judgementCall(verified), false);
+  // The kind decides, not the words: a run's call that happens to read like an outcome still shows.
+  assert.equal(judgementCall({ ...verified, kind: "routine" }), true);
+  const routine = board.decisions.find((decision) => decision.source.type === "task");
+  assert.ok(routine);
+  assert.equal(judgementCall(routine), false);
 });
