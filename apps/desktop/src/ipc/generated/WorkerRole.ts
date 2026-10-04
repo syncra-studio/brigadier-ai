@@ -3,4 +3,4 @@
 /**
  * What a worker does in the request's flow, for its name in the thread ("Lead · Phase 1").
  */
-export type WorkerRole = "lead" | "parallel" | "verifier" | "fix" | "merge";
+export type WorkerRole = "lead" | "parallel" | "verifier" | "fix" | "merge" | "reviewer";

@@ -426,10 +426,9 @@ impl SessionManager {
         approve: bool,
         message: Option<String>,
     ) -> Result<()> {
-        // A review still running is moot once the user decides.
         let plan = self
             .change_plan(&conversation_id, &card_id, |plan| {
-                if !matches!(plan.state, PlanState::Proposed | PlanState::InReview { .. }) {
+                if plan.state != PlanState::Proposed {
                     return Err(Error::Invalid("this plan was already decided".into()));
                 }
                 plan.state = if approve {
@@ -477,9 +476,9 @@ impl SessionManager {
                 steps.join("\n")
             ),
         );
-        let mut text = if approve {
+        let text = if approve {
             format!(
-                "[decision] The user approved the plan \"{}\". Go ahead, and pass each step's number as `step` when you delegate it.",
+                "[decision] The user approved the plan \"{}\". Go ahead, and pass each phase's number as `phase` when you delegate its lead.",
                 plan.title
             )
         } else {
@@ -491,7 +490,6 @@ impl SessionManager {
                     .unwrap_or_else(|| ".".into())
             )
         };
-        text.push_str(&super::plan_gates::review_for_decision(&plan));
         self.deliver_for(
             &conversation_id,
             Envelope {
@@ -521,6 +519,22 @@ impl SessionManager {
                 // The landing that asked is gone; `recover` tells the orchestrator to accept
                 // the task again.
                 ApprovalSubject::Landing { .. } => {}
+                // Nothing would start on a click any more: the orchestrator asks again.
+                ApprovalSubject::Outline { title, .. } => {
+                    self.deliver_for(
+                        conversation_id,
+                        Envelope {
+                            kind: InjectionKind::Decision,
+                            label: "outline".into(),
+                            task_id: approval.task_id.clone(),
+                            text: format!(
+                                "[not decided] The user had not answered whether to start the plan “{title}” when Brigadier restarted. Call approve_outline again if its lead still waits."
+                            ),
+                        },
+                        approval.request_id.clone(),
+                    )
+                    .await;
+                }
                 // Nothing would merge on a click any more: the orchestrator asks again.
                 ApprovalSubject::FinishSession { branch, base, .. } => {
                     self.deliver_for(

@@ -74,8 +74,6 @@ const states: { id: string; name: string; state: PlanState; automatic?: boolean 
     state: { type: "proposed" },
     automatic: true,
   },
-  { id: "review", name: "Normal · in review", state: { type: "inReview", taskId: "reviewer" } },
-  { id: "revising", name: "Normal · being revised", state: { type: "revising" } },
   {
     id: "approved-user",
     name: "Normal · approved by you",
@@ -83,14 +81,8 @@ const states: { id: string; name: string; state: PlanState; automatic?: boolean 
   },
   {
     id: "approved-auto",
-    name: "Normal · approved after review",
-    state: { type: "approved", by: "review" },
-    automatic: true,
-  },
-  {
-    id: "approved-brigadier",
     name: "Normal · auto-approved",
-    state: { type: "approved", by: "brigadier" },
+    state: { type: "approved", by: "orchestrator" },
     automatic: true,
   },
   {
@@ -107,27 +99,7 @@ const plans: Plan[] = states.map((item, index) => ({
   requestId: null,
   position: index,
   title: "Windows support",
-  risky: false,
   state: item.state,
-  gate:
-    item.id === "review"
-      ? {
-          rebased: false,
-          verificationScope: { type: "full", reason: "Plan review" },
-          round: 1,
-          commit: null,
-          members: [],
-          outcome: null,
-          relanding: false,
-          retry: false,
-          overridden: false,
-          findings: [{ id: "F1", text: "Check the path handling on Windows.", by: "reviewer" }],
-        }
-      : null,
-  revises: item.id === "revising" ? "older" : null,
-  responses: [],
-  reviewNotes: [],
-  reviewSkipReason: null,
   createdAtMs: now,
   decidedAtMs: null,
   steps: [
@@ -150,7 +122,7 @@ const old: Plan = {
   ...plans[0]!,
   id: "older",
   position: -1,
-  title: "Windows support · earlier revision",
+  title: "Windows support · earlier plan",
   state: { type: "superseded" },
 };
 const board = emptyBoard(session.id);

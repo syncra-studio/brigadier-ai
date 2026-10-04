@@ -7,12 +7,11 @@ use brigadier_providers::ProviderKind;
 use super::SessionManager;
 use super::prompts;
 use super::workers::route_label;
-use crate::model::{ConversationId, DomainEvent, PermissionLevel, Setup};
+use crate::model::{ConversationId, DomainEvent};
 use crate::tools::{NoteKind, OrchestratorCall, ToolReply, WorkerCall};
 use crate::work::{
-    ApprovalSubject, AttachmentRef, CardId, DecisionSource, InjectionKind, OrchestratorStep,
-    OrchestratorStepKind, Plan, PlanApprover, PlanState, PlanStep, QuestionKind, Task, TaskId,
-    TaskKind, WaitingSource,
+    ApprovalSubject, AttachmentRef, DecisionSource, InjectionKind, OrchestratorStep,
+    OrchestratorStepKind, QuestionKind, Task, TaskId, TaskKind, WaitingSource, WorkerRole,
 };
 use crate::{Error, Result, now_ms};
 
@@ -53,9 +52,29 @@ impl SessionManager {
     ) -> Result<String> {
         match call {
             OrchestratorCall::DelegateTask(args) => {
+                // In plan mode a lead may outline the work (it stops at its outline); nothing
+                // merges.
                 if args.kind.writes() {
-                    self.check_plan_gate(id).await?;
+                    self.check_overnight_proposal(id).await?;
                 }
+                if args.kind == TaskKind::Merge {
+                    self.check_plan_mode(id).await?;
+                }
+                let role = match (args.kind, args.role) {
+                    (TaskKind::Implement, None) => Some(WorkerRole::Lead),
+                    (TaskKind::Merge, None) => Some(WorkerRole::Merge),
+                    (
+                        TaskKind::Implement,
+                        Some(role @ (WorkerRole::Lead | WorkerRole::Parallel | WorkerRole::Fix)),
+                    ) => Some(role),
+                    (TaskKind::Merge, Some(WorkerRole::Merge)) => Some(WorkerRole::Merge),
+                    (_, None) => None,
+                    (kind, Some(role)) => {
+                        return Err(Error::Invalid(format!(
+                            "a {kind:?} task can't be a {role:?}: leads, parallel workers and fixes are implement tasks; Brigadier starts verifiers and reviewers itself"
+                        )));
+                    }
+                };
                 let subject = match (&args.subject, args.kind) {
                     (Some(reference), _) => Some(self.find_task(id, reference).await?),
                     (None, TaskKind::Review) => {
@@ -84,8 +103,9 @@ impl SessionManager {
                         "the subject task has nothing to review yet".into(),
                     ));
                 }
-                if let Some(step) = args.step {
-                    self.plan_step(id, step).await?;
+                if let Some(phase) = args.phase {
+                    let request = self.request_for(id, None).await;
+                    self.phase_step(id, request, phase).await?;
                 }
                 let pin = pin(args.provider.as_deref(), args.model, args.effort)?;
                 let areas = task_areas(&args.areas)?;
@@ -112,7 +132,7 @@ impl SessionManager {
                         model: s.route.choice.model.clone(),
                     });
                 let task = self
-                    .create_task(
+                    .create_task_as(
                         id,
                         args.title,
                         args.kind,
@@ -126,14 +146,26 @@ impl SessionManager {
                         areas,
                         floor,
                         needs,
+                        super::workers::TaskExtra {
+                            role,
+                            phase: args.phase,
+                            ..Default::default()
+                        },
                     )
                     .await?;
-                if let Some(step) = args.step {
-                    // A task that redoes a step takes it over.
-                    let (mut plan, index) = self.plan_step(id, step).await?;
-                    plan.steps[index].task_id = Some(task.id.clone());
-                    self.store_plan(&plan).await?;
+                // A lead of a phase takes it over (a new lead redoes it).
+                if let Some(phase) = args.phase
+                    && role == Some(WorkerRole::Lead)
+                {
+                    self.assign_phase(&task, phase).await?;
                 }
+                self.orchestrator_step(
+                    id,
+                    OrchestratorStepKind::Created {
+                        task_id: task.id.clone(),
+                    },
+                )
+                .await;
                 if let Some(wait) = &task.quota_wait {
                     return Ok(format!(
                         "Created task-{} ({:?}), but no model it may use can take it now: {}. It \
@@ -265,7 +297,8 @@ impl SessionManager {
             }
             OrchestratorCall::Remember(args) => self.remember_tool(id, args).await,
             OrchestratorCall::SearchTranscript(args) => self.search_transcript_tool(id, args).await,
-            OrchestratorCall::ProposePlan(args) => self.propose_plan(id, args).await,
+            OrchestratorCall::PlanPhases(args) => self.plan_phases(id, args).await,
+            OrchestratorCall::ApproveOutline(args) => self.approve_outline(id, args).await,
             OrchestratorCall::RequestApproval(args) => {
                 self.open_approval(
                     id,
@@ -432,6 +465,10 @@ impl SessionManager {
                 self.worker_question(&conversation_id, &task_id, args.question)
                     .await
             }
+            WorkerCall::SubmitOutline(args) => {
+                self.submit_outline(&conversation_id, &task_id, args.outline)
+                    .await
+            }
             WorkerCall::SubmitReport(args) => {
                 self.worker_report(&conversation_id, &task_id, args).await
             }
@@ -445,335 +482,16 @@ impl SessionManager {
         }
     }
 
-    /// The latest approved plan and the index of its step `number` (from 1).
-    async fn plan_step(&self, id: &ConversationId, number: u32) -> Result<(Plan, usize)> {
-        let board = self.core.board(id).await?;
-        let plan = board
-            .plans
-            .values()
-            .filter(|plan| matches!(plan.state, PlanState::Approved { .. }))
-            .max_by_key(|plan| plan.created_at_ms)
-            .cloned()
-            .ok_or_else(|| Error::Invalid("`step` needs an approved plan; there is none".into()))?;
-        let index = (number as usize)
-            .checked_sub(1)
-            .filter(|index| *index < plan.steps.len())
-            .ok_or_else(|| {
-                Error::Invalid(format!(
-                    "the plan \"{}\" has steps 1 to {}; there is no step {number}",
-                    plan.title,
-                    plan.steps.len()
-                ))
-            })?;
-        Ok((plan, index))
-    }
-
-    /// In plan mode nothing changes until the user approves a plan: write tasks, accepting
-    /// and finishing are refused, whatever the permission level.
+    /// In plan mode nothing changes until the user turns it off: landing, merging and
+    /// finishing are refused, whatever the permission level.
     async fn check_plan_mode(&self, id: &ConversationId) -> Result<()> {
         self.check_overnight_proposal(id).await?;
         if self.plan_mode(id) {
             return Err(Error::Invalid(
-                "Plan mode is on: change nothing yet. Scouts and research may look around; call propose_plan and wait for the user's decision. Implement and merge tasks, accept_task and finish_session work again once the user approves a plan.".into(),
+                "Plan mode is on: change nothing yet. Scouts and research may look around, and a lead may write its outline (it stops there). Merge tasks, landing and finish_session work again once the user turns plan mode off.".into(),
             ));
         }
         Ok(())
-    }
-
-    /// Under "Ask for approval", write tasks wait for an approved plan, and for the user's
-    /// decision on a newer plan still open. Otherwise they wait while a plan of their request
-    /// is in its review, or being revised after it.
-    async fn check_plan_gate(&self, id: &ConversationId) -> Result<()> {
-        self.check_plan_mode(id).await?;
-        let conversation = self.core.conversation(id)?;
-        if !matches!(conversation.setup, Some(Setup::Session { .. })) {
-            return Ok(());
-        }
-        let permission = self.permission(id);
-        let board = self.core.board(id).await?;
-        if permission != PermissionLevel::AskForApproval {
-            let request = self.request_for(id, None).await;
-            return match super::plan_gates::review_blocks_writes(
-                board.plans.values(),
-                request.as_deref(),
-            ) {
-                Some(why) => Err(Error::Invalid(why)),
-                None => Ok(()),
-            };
-        }
-        if let Some(open) = board.plans.values().find(|plan| {
-            matches!(
-                plan.state,
-                PlanState::Proposed | PlanState::InReview { .. } | PlanState::Revising
-            )
-        }) {
-            return Err(Error::Invalid(format!(
-                "The plan \"{}\" is waiting for the user's decision: wait for it before starting implement or merge tasks.",
-                open.title
-            )));
-        }
-        let approved = board
-            .plans
-            .values()
-            .any(|plan| matches!(plan.state, PlanState::Approved { .. }));
-        if approved {
-            Ok(())
-        } else {
-            Err(Error::Invalid(
-                "This session asks the user to approve plans first: call propose_plan and wait for the user's decision before starting implement or merge tasks.".into(),
-            ))
-        }
-    }
-
-    async fn propose_plan(
-        &self,
-        id: &ConversationId,
-        args: crate::tools::ProposePlan,
-    ) -> Result<String> {
-        self.propose_plan_reviewed(id, args, false)
-            .await
-            .map(|(reply, _)| reply)
-    }
-
-    /// [`Self::propose_plan`]; `reviewed`: the plan is reviewed by another vendor even with one
-    /// step (an overnight run's Phase 0). Returns the reply and the plan's id.
-    pub(crate) async fn propose_plan_reviewed(
-        &self,
-        id: &ConversationId,
-        args: crate::tools::ProposePlan,
-        reviewed: bool,
-    ) -> Result<(String, Option<CardId>)> {
-        use super::plan_gates::{PLAN_ROUNDS, parse_responses, repeats_rejected, review_round};
-        if args.steps.is_empty() {
-            return Err(Error::Invalid("a plan needs at least one step".into()));
-        }
-        // In plan mode the user decides the plan, whatever the permission level.
-        let permission = if self.plan_mode(id) {
-            PermissionLevel::AskForApproval
-        } else {
-            self.permission(id)
-        };
-        let user_decides = permission == PermissionLevel::AskForApproval;
-        let request_id = self.request_for(id, None).await;
-        // A revision names the plan whose review asked for changes and answers each finding.
-        let revises = args
-            .revises
-            .as_deref()
-            .map(str::trim)
-            .filter(|revises| !revises.is_empty())
-            .map(str::to_owned);
-        let steps: Vec<PlanStep> = args
-            .steps
-            .into_iter()
-            .map(|step| PlanStep {
-                title: step.title,
-                detail: step.detail,
-                task_id: None,
-                ..Default::default()
-            })
-            .collect();
-        // Checked against the plans as they are, and recorded with the open ones replaced, in
-        // one step: a review result can't send a plan back for revision in between. The
-        // reviewers of replaced plans stop after it (their stopping reaches the plans).
-        let mut moot: Vec<TaskId> = Vec::new();
-        let held = self.plans.lock().await;
-        let recorded: Result<(Plan, usize, u32, bool)> = async {
-            let board = self.core.board(id).await?;
-            let previous = match &revises {
-                Some(revises) => {
-                    let previous = board
-                        .plans
-                        .get(&CardId(revises.clone()))
-                        .ok_or_else(|| Error::Invalid(format!("there is no plan {revises}")))?;
-                    if previous.state != PlanState::Revising {
-                        return Err(Error::Invalid(format!(
-                            "the plan \"{}\" is not waiting for a revision: `revises` names only a plan whose review asked for changes. Propose this plan without it.",
-                            previous.title
-                        )));
-                    }
-                    Some(previous.clone())
-                }
-                None => {
-                    if !args.responses.is_empty() {
-                        return Err(Error::Invalid(
-                            "`responses` answer the findings of the plan named in `revises`: name it"
-                                .into(),
-                        ));
-                    }
-                    if let Some(revising) = board
-                        .plans
-                        .values()
-                        .find(|p| p.state == PlanState::Revising && p.request_id == request_id)
-                    {
-                        return Err(Error::Invalid(format!(
-                            "The plan \"{}\" is being revised after its review: propose the revision with revises: \"{}\" and one response per finding.",
-                            revising.title, revising.id
-                        )));
-                    }
-                    None
-                }
-            };
-            let responses = match &previous {
-                Some(previous) => parse_responses(
-                    &args.responses,
-                    previous
-                        .gate
-                        .as_ref()
-                        .map_or(&[][..], |gate| gate.findings.as_slice()),
-                )
-                .map_err(Error::Invalid)?,
-                None => Vec::new(),
-            };
-            // A plan that ran out of review rounds isn't proposed again unchanged.
-            if let Some(rejected) = repeats_rejected(&board.plans, request_id.as_deref(), &steps) {
-                return Err(Error::Invalid(format!(
-                    "These are the steps of the plan \"{}\", which was not approved after {PLAN_ROUNDS} review rounds: don't propose it again. Ask the user how to proceed (ask_user), or rescope the work into a different, smaller plan.",
-                    rejected.title
-                )));
-            }
-            // A new plan replaces the ones still open (a revision, the plan it revises).
-            for open in board.plans.values() {
-                if matches!(
-                    open.state,
-                    PlanState::Proposed | PlanState::InReview { .. } | PlanState::Revising
-                ) {
-                    let (_, stop) = self
-                        .change_plan_only(id, &open.id, |plan| {
-                            if matches!(
-                                plan.state,
-                                PlanState::Proposed | PlanState::InReview { .. } | PlanState::Revising
-                            ) {
-                                plan.state = PlanState::Superseded;
-                                plan.decided_at_ms = Some(now_ms());
-                            }
-                            Ok(())
-                        })
-                        .await?;
-                    moot.extend(stop);
-                }
-            }
-            let mut plan = Plan {
-                id: CardId::generate(),
-                conversation_id: id.clone(),
-                request_id: request_id.clone(),
-                position: 0,
-                title: args.title,
-                steps,
-                risky: args.risky,
-                state: PlanState::Proposed,
-                gate: None,
-                review_skip_reason: None,
-                revises: previous.as_ref().map(|previous| previous.id.clone()),
-                responses,
-                review_notes: Vec::new(),
-                created_at_ms: now_ms(),
-                decided_at_ms: None,
-            };
-            // A new plan after an approved one of the same request is reviewed again when its
-            // steps differ.
-            let after_approved = plan.revises.is_none()
-                && board.plans.values().any(|p| {
-                    matches!(p.state, PlanState::Approved { .. }) && p.request_id == request_id
-                });
-            let reviewers = prepare_plan_review(
-                &mut plan,
-                &board.plans,
-                permission,
-                self.overnight.active.get(id).is_none()
-                    && matches!(self.core.conversation(id)?.setup, Some(Setup::Session { .. })),
-                self.plan_mode(id),
-                reviewed,
-            );
-            let round = review_round(&plan, &board.plans);
-            self.store_plan(&plan).await?;
-            Ok((plan, reviewers, round, after_approved))
-        }
-        .await;
-        drop(held);
-        for member in moot {
-            let _ = Box::pin(self.stop_task(member)).await;
-        }
-        let (plan, reviewers, round, after_approved) = recorded?;
-        if reviewers == 0 {
-            if !user_decides {
-                self.decided_for_plan(
-                    &plan,
-                    format!("Approved the plan \u{201c}{}\u{201d}", plan.title),
-                    if plan.review_skip_reason.is_some() {
-                        "Approved without review: small plan".into()
-                    } else if after_approved {
-                        "Its steps are those of the plan already approved.".into()
-                    } else {
-                        "A one-step plan that isn't marked risky needs no review.".into()
-                    },
-                )
-                .await;
-            }
-            return Ok((
-                if user_decides {
-                    "The plan is shown to the user. Wait for their decision (it arrives as a message) before starting implement or merge tasks.".into()
-                } else {
-                    "Approved on the user's behalf. Go ahead, and pass each step's number as `step` when you delegate it.".into()
-                },
-                Some(plan.id),
-            ));
-        }
-        let started = match self
-            .open_plan_gate(&plan, round, Vec::new(), reviewers, !user_decides)
-            .await
-        {
-            Ok(started) => started,
-            Err(err) if user_decides => {
-                return Ok((
-                    format!(
-                        "The plan is shown to the user (its independent review could not start: {err}). Wait for their decision (it arrives as a message) before starting implement or merge tasks."
-                    ),
-                    Some(plan.id),
-                ));
-            }
-            Err(err) => {
-                let reason = err.to_string();
-                self.change_plan(id, &plan.id, |plan| {
-                    if plan.state == PlanState::Proposed {
-                        plan.state = PlanState::Rejected {
-                            message: Some(format!("The review could not start: {reason}")),
-                        };
-                        plan.decided_at_ms = Some(now_ms());
-                    }
-                    Ok(())
-                })
-                .await?;
-                return Err(Error::Invalid(format!(
-                    "the plan needs an independent review, which could not start: {reason}"
-                )));
-            }
-        };
-        let who = started
-            .iter()
-            .map(|task| format!("task-{}", task.number))
-            .collect::<Vec<_>>()
-            .join(" and ");
-        let reviewed = if round > 1 {
-            format!(
-                "The revision goes to the last review round ({round} of {PLAN_ROUNDS}), by {who}"
-            )
-        } else if started.len() > 1 {
-            format!("The plan is risky, so two independent reviewers ({who}) check it")
-        } else {
-            format!("An independent reviewer ({who}) checks the plan")
-        };
-        Ok((
-            if user_decides {
-                format!(
-                    "The plan is shown to the user. {reviewed}; its findings show on the user's card. Wait for the user's decision (it arrives as a message) before starting implement or merge tasks."
-                )
-            } else {
-                format!(
-                    "{reviewed} before Brigadier approves it on the user's behalf. The outcome arrives as a message; don't start write tasks before it."
-                )
-            },
-            Some(plan.id),
-        ))
     }
 
     /// `note_for_user`: a judgement call for "Decided for you", or something only the user
@@ -911,162 +629,9 @@ fn messaged(task: &mut Task, text: String, answered: bool) {
     }
 }
 
-/// Select the proposal's review before storing it, including any durable exemption.
-fn prepare_plan_review(
-    plan: &mut Plan,
-    plans: &std::collections::HashMap<CardId, Plan>,
-    permission: PermissionLevel,
-    interactive: bool,
-    plan_mode: bool,
-    forced: bool,
-) -> usize {
-    use super::plan_gates::{reviewers_for, small_plan};
-    let reviewers = if interactive && !plan_mode && !forced && small_plan(plan, plans) {
-        plan.review_skip_reason = Some("small plan".into());
-        0
-    } else {
-        reviewers_for(plan, plans).max(usize::from(forced))
-    };
-    if reviewers == 0 && !plan_mode && permission != PermissionLevel::AskForApproval {
-        plan.state = PlanState::Approved {
-            by: PlanApprover::Brigadier,
-        };
-        plan.decided_at_ms = Some(now_ms());
-    }
-    reviewers
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn proposal() -> Plan {
-        // Old events without the new field must still load.
-        serde_json::from_value(serde_json::json!({
-            "id": "p", "conversationId": "c", "requestId": "r", "position": 0,
-            "title": "Small plan", "steps": [
-                {"title": "A", "detail": null, "taskId": null},
-                {"title": "B", "detail": null, "taskId": null},
-                {"title": "C", "detail": null, "taskId": null}
-            ], "risky": false, "state": {"type": "proposed"},
-            "createdAtMs": 0, "decidedAtMs": null
-        }))
-        .expect("old plan event")
-    }
-
-    #[test]
-    fn small_proposals_skip_review_but_respect_the_permission() {
-        for permission in [
-            PermissionLevel::ApproveForMe,
-            PermissionLevel::FullAccess,
-            PermissionLevel::AskForApproval,
-        ] {
-            let mut plan = proposal();
-            assert!(plan.review_skip_reason.is_none());
-            assert_eq!(
-                prepare_plan_review(
-                    &mut plan,
-                    &Default::default(),
-                    permission,
-                    true,
-                    false,
-                    false
-                ),
-                0
-            );
-            assert!(plan.gate.is_none());
-            assert_eq!(plan.review_skip_reason.as_deref(), Some("small plan"));
-            assert_eq!(
-                plan.state,
-                if permission == PermissionLevel::AskForApproval {
-                    PlanState::Proposed
-                } else {
-                    PlanState::Approved {
-                        by: PlanApprover::Brigadier,
-                    }
-                }
-            );
-            let stored = serde_json::to_value(&plan).unwrap();
-            let restored: Plan = serde_json::from_value(stored).unwrap();
-            assert_eq!(plan, restored);
-            assert_eq!(
-                super::super::plan_gates::rerun_of(&restored, &Default::default(), true),
-                None
-            );
-        }
-    }
-
-    #[test]
-    fn small_shortcut_excludes_risk_size_overnight_plan_mode_and_forced_reviews() {
-        for (risky, steps, interactive, plan_mode, forced, expected) in [
-            (true, 3, true, false, false, 2),
-            (false, 4, true, false, false, 1),
-            (false, 3, false, false, false, 1), // Overnight phase.
-            (false, 1, false, false, true, 1),  // Phase 0 / propose_phases.
-            (false, 3, true, true, false, 1),
-            (false, 3, true, false, true, 1),
-        ] {
-            let mut plan = proposal();
-            plan.risky = risky;
-            plan.steps.resize(steps, plan.steps[0].clone());
-            assert_eq!(
-                prepare_plan_review(
-                    &mut plan,
-                    &Default::default(),
-                    PermissionLevel::FullAccess,
-                    interactive,
-                    plan_mode,
-                    forced
-                ),
-                expected
-            );
-            assert!(plan.review_skip_reason.is_none());
-            assert_eq!(plan.state, PlanState::Proposed);
-        }
-    }
-
-    #[test]
-    fn any_earlier_proposal_prevents_the_small_plan_shortcut() {
-        use crate::work::{Gate, GateOutcome};
-        for state in [
-            PlanState::Rejected { message: None },
-            PlanState::Revising,
-            PlanState::Superseded,
-        ] {
-            let mut previous = proposal();
-            previous.id = CardId("previous".into());
-            previous.state = state;
-            previous.gate = Some(Gate {
-                round: super::super::plan_gates::PLAN_ROUNDS,
-                commit: None,
-                verification_scope: Default::default(),
-                rebased: false,
-                members: Vec::new(),
-                outcome: Some(GateOutcome::Failed),
-                relanding: false,
-                retry: false,
-                overridden: false,
-                findings: Vec::new(),
-            });
-            let mut next = proposal();
-            if previous.state == PlanState::Revising {
-                next.revises = Some(previous.id.clone());
-            }
-            let plans = [(previous.id.clone(), previous)].into_iter().collect();
-            assert_eq!(
-                prepare_plan_review(
-                    &mut next,
-                    &plans,
-                    PermissionLevel::ApproveForMe,
-                    true,
-                    false,
-                    false
-                ),
-                1
-            );
-            assert!(next.review_skip_reason.is_none());
-        }
-    }
 
     #[test]
     fn answering_a_question_keeps_brigadiers_fix_loop_and_a_steer_ends_it() {

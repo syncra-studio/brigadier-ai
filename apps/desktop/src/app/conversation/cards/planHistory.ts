@@ -1,10 +1,8 @@
 import type { Plan } from "@/ipc/generated";
 
 /**
- * What a session's Plan section lists under "Earlier plans", newest first: the current plan's
- * earlier revisions, then each plan before it (`older`, oldest first) with the revisions it
- * replaced. A revision's newer plan is superseded and kept from the session's own plans, so
- * this is the only place its history shows.
+ * What a session's Plan section lists under "Earlier plans", newest first: each plan before the
+ * current one (`older`, oldest first).
  */
 export function earlierPlans(
   plans: Readonly<Record<string, Plan>>,
@@ -13,16 +11,11 @@ export function earlierPlans(
 ): Plan[] {
   const list: Plan[] = [];
   const seen = new Set([plan.id]);
-  const walk = (from: string | null) => {
-    for (let id = from; id && !seen.has(id); ) {
-      seen.add(id);
-      const before = plans[id];
-      if (!before) break;
-      list.push(before);
-      id = before.revises;
-    }
-  };
-  walk(plan.revises);
-  for (const olderId of older.toReversed()) walk(olderId);
+  for (const id of older.toReversed()) {
+    const before = plans[id];
+    if (!before || seen.has(id)) continue;
+    seen.add(id);
+    list.push(before);
+  }
   return list;
 }

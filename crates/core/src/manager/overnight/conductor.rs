@@ -268,7 +268,7 @@ impl SessionManager {
         };
         let briefing = self.phase_brief(&run, &phase).await;
         let kickoff = format!(
-            "[overnight · phase {n}] Lead phase {n} (\u{201c}{name}\u{201d}) now, as your briefing describes. Plan it (propose_plan when it takes more than one step), delegate its work with complete specs that name the criteria ids each task serves, and accept good reports with accept_task. When every task of the phase has landed or ended, call phase_done. Don't write to the user: reply with exactly {quiet} unless the phase is done.",
+            "[overnight · phase {n}] Lead phase {n} (\u{201c}{name}\u{201d}) now, as your briefing describes. Give it one lead (delegate_task, kind implement) with a complete brief that names the criteria ids it serves; a lead of big work sends an outline for your go-ahead (approve_outline), and accept good reports with accept_task. When every task of the phase has landed or ended, call phase_done. Don't write to the user: reply with exactly {quiet} unless the phase is done.",
             n = phase.number,
             name = phase.name,
             quiet = super::super::prompts::QUIET,
@@ -677,7 +677,7 @@ impl SessionManager {
             && phase.fix_rounds > 0
             && !force
         {
-            super::super::plan_gates::parse_responses(&args.responses, &gate.findings)
+            super::phase_gates::parse_responses(&args.responses, &gate.findings)
                 .map_err(Error::Invalid)?;
         }
         let candidate = self.run_tip(&run).await?;
@@ -712,8 +712,7 @@ impl SessionManager {
         ))
     }
 
-    /// `propose_phases`: Phase 0's plan, reviewed by another vendor as a plan card (even a
-    /// single phase), then judged against the goal.
+    /// `propose_phases`: Phase 0's plan, judged against the goal.
     pub(crate) async fn propose_phases(
         &self,
         id: &ConversationId,
@@ -756,24 +755,14 @@ impl SessionManager {
             .phases
             .iter()
             .enumerate()
-            .map(|(index, phase)| crate::tools::PlanStepInput {
+            .map(|(index, phase)| crate::work::PlanStep {
                 title: format!("Phase {} · {}", index + 1, phase.name.trim()),
                 detail: Some(phase_detail(phase)),
+                ..Default::default()
             })
             .collect();
-        let (reply, plan_id) = self
-            .propose_plan_reviewed(
-                id,
-                crate::tools::ProposePlan {
-                    title: args.name.clone(),
-                    steps,
-                    risky: false,
-                    revises: args.revises.clone(),
-                    responses: args.responses.clone(),
-                },
-                true,
-            )
-            .await?;
+        let plan = self.record_phases(id, args.name.clone(), steps).await?;
+        let plan_id = Some(plan.id.clone());
         let proposed: Vec<crate::overnight::ProposedPhase> = args
             .phases
             .iter()
@@ -801,11 +790,12 @@ impl SessionManager {
             })
             .await;
         }
-        Ok(reply)
+        // A judge checks the phases against the goal before any starts.
+        self.planning_plan_decided(&plan).await;
+        Ok("Recorded the phases. A judge checks them against the goal before any phase starts; the outcome arrives as a message.".into())
     }
 
-    /// A plan's review ended: when it was Phase 0's plan, a judge checks the approved phases
-    /// against the goal, or Phase 0 ends blocked when the review never approved them.
+    /// Phase 0's plan was recorded: a judge checks its phases against the goal.
     /// Boxed with a named type: it starts a judge, a task whose result comes back through
     /// the gates.
     pub(crate) fn planning_plan_decided<'a>(

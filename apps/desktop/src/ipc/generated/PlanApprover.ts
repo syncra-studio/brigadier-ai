@@ -3,4 +3,4 @@
 /**
  * Who approved a plan.
  */
-export type PlanApprover = "user" | "orchestrator" | "brigadier" | "review";
+export type PlanApprover = "user" | "orchestrator";

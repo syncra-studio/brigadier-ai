@@ -52,9 +52,8 @@ use crate::runtime::{is_delta, merge_delta};
 use crate::sessions::push_block;
 use crate::tools::Role;
 use crate::work::{
-    AttachmentRef, CardId, Compaction, CompactionState, ContextInjection, InjectionKind,
-    OrchestratorEntry, OrchestratorStepKind, QueuedMessage, QuotaWait, RequestState, RunState,
-    Task, TaskId,
+    AttachmentRef, Compaction, CompactionState, ContextInjection, InjectionKind, OrchestratorEntry,
+    OrchestratorStepKind, QueuedMessage, QuotaWait, RequestState, RunState, Task, TaskId,
 };
 use crate::{Error, Result, now_ms};
 
@@ -80,7 +79,7 @@ const PASTE_HEAD_BYTES: usize = 150_000;
 const PASTE_TAIL_BYTES: usize = 50_000;
 const ENDED_UNEXPECTEDLY: &str = "The CLI session ended unexpectedly.";
 /// Sent with every turn while the session is in plan mode.
-const PLAN_MODE_NOTE: &str = "[plan mode] The user turned plan mode on: work out a plan and change nothing. Scouts and research may look around; then call propose_plan and wait for the user's decision. Implement and merge tasks, accept_task and finish_session are refused until the user approves a plan.";
+const PLAN_MODE_NOTE: &str = "[plan mode] The user turned plan mode on: change nothing. Scouts and research may look around; for work to do, delegate its lead, which writes an outline and stops. Show the user the outline in plain words and wait: once they turn plan mode off or tell you to go, call approve_outline. Merging, landing and finish_session are refused until then.";
 
 /// Where a sent message went.
 #[derive(Debug, Clone)]
@@ -171,9 +170,6 @@ struct ConvState {
     /// Reported write tasks the orchestrator was reminded to decide on (see
     /// [`SessionManager::remind_undecided`]): once each.
     reminded: HashSet<TaskId>,
-    /// Plans whose revision the orchestrator was asked for again (see
-    /// [`SessionManager::remind_revision`]): once each.
-    revision_reminded: HashSet<CardId>,
     /// The running turn's last reply.
     last_reply: Option<String>,
     /// Requests whose last turn ended asking the user something in its reply: until the user
@@ -2646,11 +2642,6 @@ impl SessionManager {
                 }
             }
         }
-        if status == TurnStatus::Completed
-            && let Some(request) = &served
-        {
-            self.remind_revision(conv, request).await;
-        }
         self.set_run(&conv.id, RunState::Idle, None).await;
         self.settle_requests(&conv.id).await;
         if status == TurnStatus::Completed
@@ -2663,42 +2654,6 @@ impl SessionManager {
             self.lead_turn_ended(&conv.id);
         }
         self.kick(conv);
-    }
-
-    /// A turn of `request` ended while a plan of it still waits for its revision: the
-    /// orchestrator is asked for it again, once per plan, unless it asked the user something
-    /// (in its reply, or with ask_user). After that the request waits for a decision without
-    /// holding anything back (see [`SessionManager::settle_requests`]).
-    async fn remind_revision(&self, conv: &Arc<ConvLive>, request: &str) {
-        let Ok(board) = self.core.board(&conv.id).await else {
-            return;
-        };
-        if super::requests::needs_user(&board, request)
-            || super::requests::ended_run_request(&board, request)
-        {
-            return;
-        }
-        let Some((plan, text)) = self.revision_reminder(&board, request) else {
-            return;
-        };
-        let mut state = conv.state.lock().await;
-        // A turn of the request comes anyway: it is reminded after that one, if still due.
-        let carried = state
-            .inbox
-            .iter()
-            .any(|(_, of)| of.as_deref() == Some(request));
-        if carried || state.asked_user.contains(request) || !state.revision_reminded.insert(plan) {
-            return;
-        }
-        state.inbox.push((
-            Envelope {
-                kind: InjectionKind::Reminder,
-                label: "revision".into(),
-                task_id: None,
-                text,
-            },
-            Some(request.to_owned()),
-        ));
     }
 
     /// A request over while reported changes still wait for the orchestrator's decision: it

@@ -25,15 +25,11 @@ export function planStepStatus(state: TaskState | undefined): PlanStepStatus {
   }
 }
 
-/** Lifecycle comes first: review work is not execution of the plan's steps. */
+/** Lifecycle comes first: a plan's steps only run once it is approved. */
 export function planProgress(plan: Plan, states: readonly (TaskState | undefined)[]): PlanProgress {
   switch (plan.state.type) {
     case "proposed":
       return { label: "Plan proposed", status: "review", tone: "warning" };
-    case "inReview":
-      return { label: "Plan in review", status: "review", tone: "live" };
-    case "revising":
-      return { label: "Revising plan", status: "review", tone: "warning" };
     case "rejected":
       return { label: "Plan rejected", status: "failed", tone: "failed" };
     case "superseded":

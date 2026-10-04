@@ -106,7 +106,6 @@ export type { FileChangeKind } from "./FileChangeKind";
 export type { FileRef } from "./FileRef";
 export type { FileStat } from "./FileStat";
 export type { Finding } from "./Finding";
-export type { FindingResponse } from "./FindingResponse";
 export type { Fixture } from "./Fixture";
 export type { FolderCheck } from "./FolderCheck";
 export type { FolderEntry } from "./FolderEntry";

@@ -887,38 +887,14 @@ impl SessionManager {
             }
         }
         let mut plans = board.sorted_plans();
-        plans.retain(|plan| {
-            matches!(
-                plan.state,
-                PlanState::Proposed
-                    | PlanState::InReview { .. }
-                    | PlanState::Revising
-                    | PlanState::Approved { .. }
-            )
-        });
+        plans.retain(|plan| matches!(plan.state, PlanState::Proposed | PlanState::Approved { .. }));
         if let Some(plan) = plans.last() {
             items += 1;
             let state = match &plan.state {
-                PlanState::Proposed => "waiting for the user".to_owned(),
-                PlanState::InReview { .. } => "in its independent review".to_owned(),
-                PlanState::Revising => format!(
-                    "its review asked for changes: revise it with propose_plan, revises \"{}\" and a response per finding",
-                    plan.id
-                ),
-                _ => "approved".to_owned(),
+                PlanState::Proposed => "waiting for the user",
+                _ => "its phases",
             };
             text.push_str(&format!("Plan \"{}\" ({state}):\n", plan.title));
-            if plan.state == PlanState::Revising
-                && let Some(gate) = &plan.gate
-            {
-                for finding in &gate.findings {
-                    text.push_str(&format!(
-                        "  {}: {}\n",
-                        finding.id,
-                        one_line(&finding.text, 300)
-                    ));
-                }
-            }
             for (number, step) in plan.steps.iter().enumerate() {
                 let task = step
                     .task_id
@@ -926,7 +902,12 @@ impl SessionManager {
                     .and_then(|task| board.tasks.get(task))
                     .map(|task| format!(" → task-{}", task.number))
                     .unwrap_or_default();
-                text.push_str(&format!("  {}. {}{task}\n", number + 1, step.title));
+                text.push_str(&format!(
+                    "  {}. {}{task} ({:?})\n",
+                    number + 1,
+                    step.title,
+                    step.stage
+                ));
             }
         }
         let mut tasks: Vec<_> = board.tasks.values().collect();

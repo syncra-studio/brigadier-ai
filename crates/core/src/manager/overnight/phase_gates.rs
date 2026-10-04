@@ -24,7 +24,6 @@ use super::super::conversation::Envelope;
 use super::super::gates::{
     FIX_ROUNDS, criterion_evidence, review_result, verify_result, without_marker,
 };
-use super::super::plan_gates::record_findings;
 use super::super::workers::TaskExtra;
 use super::policy::PLANNING_PHASE;
 use crate::model::OvernightRunId;
@@ -34,8 +33,8 @@ use crate::overnight::{
     RunRole, RunTaskContext,
 };
 use crate::work::{
-    Gate, GateLink, GateMember, GateOutcome, GateOwner, GateResult, GateRole, InjectionKind,
-    Report, ReviewVerdict, Task, TaskKind,
+    Finding, FindingResponse, Gate, GateLink, GateMember, GateOutcome, GateOwner, GateResult,
+    GateRole, InjectionKind, Report, ReviewVerdict, Task, TaskKind,
 };
 
 /// Rounds of whole-phase checks one phase may go through (fixes, a candidate that moved)
@@ -163,6 +162,7 @@ impl SessionManager {
                     run: Some(context(RunRole::PhaseVerifier)),
                     category: None,
                     request: phase.request_id.clone(),
+                    ..TaskExtra::default()
                 },
             )
             .await;
@@ -214,6 +214,7 @@ impl SessionManager {
                         run: Some(context(RunRole::PhaseReviewer)),
                         category: None,
                         request: phase.request_id.clone(),
+                        ..TaskExtra::default()
                     },
                 )
                 .await;
@@ -492,6 +493,7 @@ impl SessionManager {
                     }),
                     category: Some(brigadier_router::TaskCategory::Orchestrate),
                     request: phase.request_id.clone(),
+                    ..TaskExtra::default()
                 },
             )
             .await;
@@ -842,6 +844,7 @@ impl SessionManager {
                     }),
                     category: Some(brigadier_router::TaskCategory::Orchestrate),
                     request: Some(planning.request_id.clone()),
+                    ..TaskExtra::default()
                 },
             )
             .await;
@@ -1570,9 +1573,184 @@ fn is_ask(line: &str) -> bool {
             .any(|nothing| text.starts_with(nothing)))
 }
 
+// ----- findings and the lead's answers to them -------------------------------------------
+
+/// Adds a reviewer's findings to its round's, numbered on from the last (F1, F2, …), so an
+/// id shown or answered never changes as later results arrive.
+pub(crate) fn record_findings(findings: &mut Vec<Finding>, member: &GateMember) {
+    let Some(GateResult::Failed { findings: found }) = &member.result else {
+        return;
+    };
+    if findings.iter().any(|known| known.by == member.task_id) {
+        return;
+    }
+    let next = findings
+        .iter()
+        .filter_map(|finding| finding.id.get(1..)?.parse::<usize>().ok())
+        .max()
+        .unwrap_or(0);
+    for (index, text) in found
+        .iter()
+        .map(|text| text.trim())
+        .filter(|text| !text.is_empty())
+        .enumerate()
+    {
+        findings.push(Finding {
+            id: format!("F{}", next + index + 1),
+            text: text.to_owned(),
+            by: member.task_id.clone(),
+        });
+    }
+}
+
+/// The revision's answer to each finding, from lines like "F1 accepted: what changed" or
+/// "F2 declined: why". Every finding needs exactly one answer, and a decline its reason.
+pub(crate) fn parse_responses(
+    lines: &[String],
+    findings: &[Finding],
+) -> std::result::Result<Vec<FindingResponse>, String> {
+    const FORM: &str = "\"F1 accepted: what you changed\" or \"F2 declined: why\"";
+    let mut responses: Vec<FindingResponse> = Vec::new();
+    for line in lines.iter().flat_map(|text| text.lines()) {
+        let line = line.trim().trim_start_matches(['-', '*', ' ']);
+        if line.is_empty() {
+            continue;
+        }
+        let (id, rest) = line
+            .split_once(|c: char| c.is_whitespace() || c == ':')
+            .ok_or_else(|| format!("\"{line}\" is not a response: write {FORM}"))?;
+        let id = id.trim().to_uppercase();
+        let finding = findings
+            .iter()
+            .find(|finding| finding.id == id)
+            .ok_or_else(|| {
+                format!(
+                    "\"{line}\" answers no finding of the review (they are {})",
+                    ids(findings)
+                )
+            })?;
+        let rest = rest.trim_start_matches([':', ' ', '\t']);
+        let lower = rest.to_lowercase();
+        let (accepted, word) = ["accepted", "accept", "declined", "decline"]
+            .iter()
+            .find(|word| lower.starts_with(*word))
+            .map(|word| (word.starts_with("accept"), word.len()))
+            .ok_or_else(|| format!("\"{line}\" neither accepts nor declines {id}: write {FORM}"))?;
+        let note = rest[word..]
+            .trim_start_matches([':', '-', ' ', '\t', '—', '–'])
+            .trim()
+            .to_owned();
+        if !accepted && note.is_empty() {
+            return Err(format!("{id} is declined without a reason: say why"));
+        }
+        if responses.iter().any(|known| known.id == id) {
+            return Err(format!("{id} is answered twice"));
+        }
+        responses.push(FindingResponse {
+            id,
+            finding: finding.text.clone(),
+            accepted,
+            note,
+        });
+    }
+    let unanswered: Vec<&str> = findings
+        .iter()
+        .filter(|finding| !responses.iter().any(|r| r.id == finding.id))
+        .map(|finding| finding.id.as_str())
+        .collect();
+    if !unanswered.is_empty() {
+        return Err(format!(
+            "every finding of the review needs a response; unanswered: {}. Add one line each: {FORM}",
+            unanswered.join(", ")
+        ));
+    }
+    responses.sort_by_key(|r| r.id[1..].parse::<u32>().unwrap_or(u32::MAX));
+    Ok(responses)
+}
+
+fn ids(findings: &[Finding]) -> String {
+    if findings.is_empty() {
+        return "none".into();
+    }
+    findings
+        .iter()
+        .map(|finding| finding.id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn finding(id: &str, text: &str) -> Finding {
+        Finding {
+            id: id.into(),
+            text: text.into(),
+            by: crate::model::TaskId("r".into()),
+        }
+    }
+
+    fn lines(text: &[&str]) -> Vec<String> {
+        text.iter().map(|line| (*line).to_owned()).collect()
+    }
+
+    #[test]
+    fn responses_answer_each_finding() {
+        let findings = [finding("F1", "No rollback"), finding("F2", "Too broad")];
+        let responses = parse_responses(
+            &lines(&[
+                "- f2 declined: the scope is what the user asked for",
+                "F1 accepted: added step 4, a rollback",
+            ]),
+            &findings,
+        )
+        .expect("parsed");
+        assert_eq!(
+            responses,
+            vec![
+                FindingResponse {
+                    id: "F1".into(),
+                    finding: "No rollback".into(),
+                    accepted: true,
+                    note: "added step 4, a rollback".into(),
+                },
+                FindingResponse {
+                    id: "F2".into(),
+                    finding: "Too broad".into(),
+                    accepted: false,
+                    note: "the scope is what the user asked for".into(),
+                },
+            ]
+        );
+        // Several lines in one string, and "F1: accepted" read the same.
+        let joined = parse_responses(
+            &lines(&["F1: accepted\nF2 decline - not needed"]),
+            &findings,
+        )
+        .expect("parsed");
+        assert!(joined[0].accepted && !joined[1].accepted);
+        assert_eq!(joined[1].note, "not needed");
+    }
+
+    #[test]
+    fn an_unanswered_or_bad_response_is_refused() {
+        let findings = [finding("F1", "No rollback"), finding("F2", "Too broad")];
+        let err = parse_responses(&lines(&["F1 accepted: done"]), &findings).unwrap_err();
+        assert!(err.contains("unanswered: F2"), "{err}");
+        let err = parse_responses(&lines(&["F1 accepted", "F2 declined"]), &findings).unwrap_err();
+        assert!(err.contains("without a reason"), "{err}");
+        let err = parse_responses(&lines(&["F3 accepted: x"]), &findings).unwrap_err();
+        assert!(err.contains("answers no finding"), "{err}");
+        let err = parse_responses(&lines(&["F1 maybe later"]), &findings).unwrap_err();
+        assert!(err.contains("neither accepts nor declines"), "{err}");
+        let err = parse_responses(
+            &lines(&["F1 accepted", "F1 declined: no", "F2 accepted"]),
+            &findings,
+        )
+        .unwrap_err();
+        assert!(err.contains("twice"), "{err}");
+    }
 
     #[test]
     fn a_line_names_a_criterion_only_by_its_whole_id() {

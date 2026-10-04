@@ -60,7 +60,7 @@ use crate::tools::Role;
 use crate::work::{
     ApprovalSubject, ArtifactKind, ArtifactRef, AttachmentRef, Attempt, AttemptEnd, GateLink,
     GateOwner, GateRole, InjectionKind, QuestionKind, QuotaWait, RepoAccess, Report, Route, Task,
-    TaskId, TaskKind, TaskState, TaskWorkspace, WaitingSource, WorkerAccess,
+    TaskId, TaskKind, TaskState, TaskWorkspace, WaitingSource, WorkerAccess, WorkerRole,
 };
 use crate::{Error, Result, now_ms};
 
@@ -979,8 +979,8 @@ impl SessionManager {
             review: None,
             gate: None,
             gate_link,
-            role: None,
-            phase: None,
+            role: extra.role,
+            phase: extra.phase,
             landing: None,
             fix_rounds: 0,
             fixes: Vec::new(),
@@ -1240,7 +1240,7 @@ impl SessionManager {
             Role::Worker {
                 conversation_id: conversation_id.clone(),
                 task_id: task.id.clone(),
-                checks: task.gate_link.is_some(),
+                checks: task.gate_link.is_some() || task.role == Some(WorkerRole::Reviewer),
             },
         );
         // B7: the grant is a secret too.
@@ -2149,6 +2149,10 @@ impl SessionManager {
                 return;
             }
         }
+        // A lead that sent its outline ends its turn to wait for the go-ahead.
+        if Self::waits_for_go_ahead(&task) {
+            return;
+        }
         if nudge {
             let text = match self.keep_last_message(live, task.number).await {
                 Some(_) => {
@@ -2481,6 +2485,13 @@ impl SessionManager {
         if task.state.is_final() {
             return Err(Error::Invalid("the task has already ended".into()));
         }
+        // A review someone waits for goes to them (a worker's request_review, an outline's
+        // review for the orchestrator), not to the orchestrator as a report of its own.
+        let reviewing = reviewing
+            || (task.role == Some(WorkerRole::Reviewer)
+                && self
+                    .reviews
+                    .settle(&task.id, Ok(super::phases::review_text(&report))));
         // The report is in the orchestrator's inbox before the task counts as reported, so
         // its request never looks over in between.
         let queued = if reviewing || relanding {
@@ -3024,6 +3035,9 @@ impl SessionManager {
         }
         self.dispose_task(&task, stopped_state(&task)).await;
         drop(settled);
+        // Whoever waits for its review hears it gave none.
+        self.reviews
+            .settle(&task.id, Err("the reviewer was stopped".into()));
         // A landing's or plan's reviewer stopped before its verdict releases what it was
         // reviewing, as one that failed does: otherwise it would wait for a verdict that never
         // comes.
@@ -3303,6 +3317,10 @@ impl SessionManager {
             self.gate_member_failed(task, reason).await;
             return;
         }
+        // Whoever waits for its review hears why there is none.
+        if self.reviews.settle(&task.id, Err(reason.to_owned())) {
+            return;
+        }
         self.deliver(
             &task.conversation_id,
             Envelope {
@@ -3541,6 +3559,10 @@ pub(crate) struct TaskExtra {
     /// The request it belongs to, instead of the one the orchestrator serves now (a phase's
     /// checks belong to the phase).
     pub request: Option<String>,
+    /// Its part in the request's flow.
+    pub role: Option<WorkerRole>,
+    /// The phase of the request's plan it works on.
+    pub phase: Option<u32>,
 }
 
 pub(crate) fn category(kind: TaskKind) -> brigadier_router::TaskCategory {

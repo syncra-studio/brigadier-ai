@@ -21,7 +21,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer};
 
 use crate::model::{ConversationId, ProjectId, TaskId};
-use crate::work::{ChecksResult, ReviewVerdict, TaskKind};
+use crate::work::{ChecksResult, ReviewVerdict, TaskKind, WorkerRole};
 
 /// What a grant allows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,10 +128,15 @@ pub struct DelegateTask {
     /// it on one that can, hand-offs included.
     #[serde(default)]
     pub image_generation: bool,
-    /// For a task that carries out a step of the approved plan: that step's number (1 is the
-    /// first step). The user follows the plan's progress by it.
+    /// For a task that works on a phase of the request's plan (`plan_phases`): that phase's
+    /// number (1 is the first). The user follows the plan's progress by it.
+    #[serde(default, alias = "step")]
+    pub phase: Option<u32>,
+    /// Its part in the request: "lead" (one per phase, the default for implement tasks),
+    /// "parallel" (a stream of its own files next to the lead) or "fix" (what a phase's
+    /// verifier left).
     #[serde(default)]
-    pub step: Option<u32>,
+    pub role: Option<WorkerRole>,
 }
 
 /// `message_worker`: answer a worker's blocking question, or steer a running worker.
@@ -328,41 +333,38 @@ pub struct RecordNodes {
     pub nodes: Vec<NodeInput>,
 }
 
-/// One step of a proposed plan.
+/// One phase of a request's plan.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PlanStepInput {
-    /// The step, in a few words.
+    /// The phase, in a few words.
     pub title: String,
-    /// What it involves, if the title is not enough.
+    /// Its scope and "done when", if the title is not enough.
     #[serde(default)]
     pub detail: Option<String>,
 }
 
-/// First, non-risky interactive proposals up to this size need no independent review.
-pub const SMALL_PLAN_STEPS: usize = 3;
-
-/// `propose_plan`: show a plan card. Under "Ask for approval" the user approves it before any
-/// write task starts.
+/// `plan_phases`: split a big request into phases that must run one after another. Each
+/// phase gets one lead; nothing is reviewed or approved here.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ProposePlan {
-    /// What the plan achieves.
+pub struct PlanPhases {
+    /// What the request achieves.
     pub title: String,
-    /// The steps, in order.
-    pub steps: Vec<PlanStepInput>,
-    /// True for big, risky or architectural plans: they get two independent reviewers.
-    /// Non-risky plans of two or more steps normally get one; eligible first small
-    /// interactive plans skip review.
+    /// The phases, in order.
+    pub phases: Vec<PlanStepInput>,
+}
+
+/// `approve_outline`: let a lead build from its outline, with your corrections.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApproveOutline {
+    /// The lead's task, e.g. "task-3".
+    pub task: String,
+    /// What the lead must change in its outline: the review findings you agree with and
+    /// anything the brief implies. Leave it out when the outline is right as it is.
     #[serde(default)]
-    pub risky: bool,
-    /// The id of the plan this one revises after its review asked for changes.
-    #[serde(default)]
-    pub revises: Option<String>,
-    /// With `revises`: one line per finding of that review, "F1 accepted: what changed" or
-    /// "F2 declined: why".
-    #[serde(default)]
-    pub responses: Vec<String>,
+    pub corrections: Option<String>,
 }
 
 /// `request_approval`: ask the user to approve what only they may decide (money, credentials,
@@ -520,7 +522,8 @@ pub enum OrchestratorCall {
     QueryBrain(QueryBrain),
     Remember(Remember),
     SearchTranscript(SearchTranscript),
-    ProposePlan(ProposePlan),
+    PlanPhases(PlanPhases),
+    ApproveOutline(ApproveOutline),
     RequestApproval(RequestApproval),
     AcceptTask(AcceptTask),
     FinishSession(FinishSession),
@@ -545,7 +548,8 @@ impl OrchestratorCall {
             Self::QueryBrain(_) => "query_brain",
             Self::Remember(_) => "remember",
             Self::SearchTranscript(_) => "search_transcript",
-            Self::ProposePlan(_) => "propose_plan",
+            Self::PlanPhases(_) => "plan_phases",
+            Self::ApproveOutline(_) => "approve_outline",
             Self::RequestApproval(_) => "request_approval",
             Self::AcceptTask(_) => "accept_task",
             Self::FinishSession(_) => "finish_session",
@@ -566,6 +570,17 @@ impl OrchestratorCall {
 pub struct AskOrchestrator {
     /// The question, with the context the orchestrator needs to answer it.
     pub question: String,
+}
+
+/// `submit_outline`: a lead's plan for its phase, written after reading the code. The lead then
+/// waits for the go-ahead.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SubmitOutline {
+    /// The outline: the steps in order with the files each touches, how each "done when"
+    /// will be checked, risks, and any question for the orchestrator with your
+    /// recommendation.
+    pub outline: String,
 }
 
 /// A file the worker saved in its scratch folder, attached to its report.
@@ -683,6 +698,7 @@ fn empty_item(item: &str) -> bool {
 #[derive(Debug, Clone)]
 pub enum WorkerCall {
     AskOrchestrator(AskOrchestrator),
+    SubmitOutline(SubmitOutline),
     SubmitReport(SubmitReport),
     CodeSearch(CodeSearch),
     CodeRefs(CodeRefs),
@@ -694,6 +710,7 @@ impl WorkerCall {
     pub fn name(&self) -> &'static str {
         match self {
             Self::AskOrchestrator(_) => "ask_orchestrator",
+            Self::SubmitOutline(_) => "submit_outline",
             Self::SubmitReport(_) => "submit_report",
             Self::CodeSearch(_) => "code_search",
             Self::CodeRefs(_) => "code_refs",

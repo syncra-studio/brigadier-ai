@@ -171,7 +171,7 @@ export const PlanSection = memo(function PlanSection({
             "text-xs",
             statuses.includes("failed") || plan.state.type === "rejected"
               ? "text-destructive"
-              : plan.state.type === "proposed" || plan.state.type === "revising"
+              : plan.state.type === "proposed"
                 ? "text-warning"
                 : allDone
                   ? "text-success"

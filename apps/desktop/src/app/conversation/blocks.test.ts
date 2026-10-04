@@ -178,7 +178,6 @@ function normalSession() {
     ...approved,
     id: "separate",
     requestId: request,
-    revises: null,
     title: "A separate plan",
     position: approved.position + 1,
     steps: [],

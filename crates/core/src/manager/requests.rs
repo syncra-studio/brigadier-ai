@@ -171,10 +171,6 @@ impl SessionManager {
                 RequestState::Stopped | RequestState::Failed { .. }
             ) {
                 request.state.clone()
-            } else if awaits_revision(&board, id) {
-                // Its plan waits for a revision its turns ended without (they were asked for
-                // it again once): a decision is due, and nothing runs meanwhile.
-                RequestState::Waiting
             } else {
                 RequestState::Done
             };
@@ -368,14 +364,6 @@ fn ended_run_state(board: &Board, request: &crate::work::UserRequest) -> Option<
     })
 }
 
-/// Whether a plan of the request waits for the orchestrator's revision after its review.
-fn awaits_revision(board: &Board, request: &str) -> bool {
-    board
-        .plans
-        .values()
-        .any(|p| p.request_id.as_deref() == Some(request) && p.state == PlanState::Revising)
-}
-
 /// Whether something the request opened waits for the user: a card, a task, or something
 /// only the user can do ("Waiting on you").
 pub(super) fn needs_user(board: &Board, request: &str) -> bool {
@@ -389,9 +377,10 @@ pub(super) fn needs_user(board: &Board, request: &str) -> bool {
             .questions
             .values()
             .any(|q| of(&q.request_id) && q.answer.is_none() && q.answered_at_ms.is_none())
-        || board.plans.values().any(|p| {
-            of(&p.request_id) && matches!(p.state, PlanState::Proposed | PlanState::InReview { .. })
-        })
+        || board
+            .plans
+            .values()
+            .any(|p| of(&p.request_id) && p.state == PlanState::Proposed)
         || tasks_in(board, request, |state| {
             matches!(
                 state,
@@ -452,7 +441,6 @@ mod tests {
         assert!(!ended_run_request(&board, "01a0fefa-user-message"));
     }
     use crate::model::ConversationId;
-    use crate::work::{CardId, Plan};
 
     #[test]
     fn a_held_change_is_named_held_not_running() {
@@ -512,36 +500,5 @@ mod tests {
         task.state = TaskState::Stopped;
         board.tasks.insert(task.id.clone(), task);
         assert!(!relanding_in(&board, "r1"));
-    }
-
-    #[test]
-    fn a_plan_waiting_for_its_revision_is_found() {
-        let plan = |request: &str, state| Plan {
-            id: CardId(format!("{request}-plan")),
-            conversation_id: ConversationId("c".into()),
-            request_id: Some(request.into()),
-            position: 0,
-            title: "Plan".into(),
-            steps: Vec::new(),
-            risky: false,
-            state,
-            gate: None,
-            review_skip_reason: None,
-            revises: None,
-            responses: Vec::new(),
-            review_notes: Vec::new(),
-            created_at_ms: 0,
-            decided_at_ms: None,
-        };
-        let mut board = Board::default();
-        for plan in [
-            plan("r1", PlanState::Revising),
-            plan("r2", PlanState::Superseded),
-        ] {
-            board.plans.insert(plan.id.clone(), plan);
-        }
-        assert!(awaits_revision(&board, "r1"));
-        assert!(!awaits_revision(&board, "r2"));
-        assert!(!awaits_revision(&board, "r3"));
     }
 }

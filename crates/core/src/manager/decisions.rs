@@ -27,7 +27,7 @@ use crate::board::Board;
 use crate::model::{ConversationId, DomainEvent, OvernightRunId, PermissionLevel};
 use crate::sessions::one_line;
 use crate::work::{
-    CardId, CardState, Decision, DecisionKind, DecisionSource, DecisionWords, InjectionKind, Plan,
+    CardId, CardState, Decision, DecisionKind, DecisionSource, DecisionWords, InjectionKind,
     PlanState, ResolvedBy, Task, TaskId, TaskState, WaitingItem, WaitingSource,
 };
 use crate::{Error, Result, now_ms};
@@ -73,20 +73,6 @@ impl SessionManager {
             request,
             DecisionSource::Task {
                 task_id: task.id.clone(),
-            },
-            what,
-            why,
-        )
-        .await;
-    }
-
-    /// Logs a decision about a plan, under the plan's request.
-    pub(crate) async fn decided_for_plan(&self, plan: &Plan, what: String, why: String) {
-        self.decided_for_you(
-            &plan.conversation_id,
-            plan.request_id.clone(),
-            DecisionSource::Plan {
-                plan_id: plan.id.clone(),
             },
             what,
             why,
@@ -467,9 +453,10 @@ fn card_open(board: &Board, card: &CardId) -> bool {
             .questions
             .get(card)
             .is_some_and(|question| question.answer.is_none() && question.answered_at_ms.is_none())
-        || board.plans.get(card).is_some_and(|plan| {
-            matches!(plan.state, PlanState::Proposed | PlanState::InReview { .. })
-        })
+        || board
+            .plans
+            .get(card)
+            .is_some_and(|plan| plan.state == PlanState::Proposed)
 }
 
 /// What makes two items the same: their source, and their text in lower case, without

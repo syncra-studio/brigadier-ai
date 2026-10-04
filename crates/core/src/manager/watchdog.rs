@@ -641,16 +641,7 @@ impl SessionManager {
             .tasks
             .values()
             .filter(|task| task.state == TaskState::Reviewing)
-            .filter_map(|task| task.gate.as_ref().map(|gate| (Some(task), gate)))
-            .chain(
-                board
-                    .plans
-                    .values()
-                    .filter(|plan| {
-                        matches!(plan.state, PlanState::Proposed | PlanState::InReview { .. })
-                    })
-                    .filter_map(|plan| plan.gate.as_ref().map(|gate| (None, gate))),
-            );
+            .filter_map(|task| task.gate.as_ref().map(|gate| (Some(task), gate)));
         for (owner, gate) in rounds {
             match gate_stuck(gate, &board.tasks, now, timing.grace) {
                 Some(GateStuck::Undecided) => {

@@ -236,15 +236,9 @@ impl SessionManager {
             }
         }
         let of = |id: &Option<String>| id.as_deref() == Some(request);
-        // Its plans close first, so their reviewers stopping below tells the orchestrator
-        // nothing.
+        // Its plans close first.
         for plan in board.plans.values() {
-            if of(&plan.request_id)
-                && matches!(
-                    plan.state,
-                    PlanState::Proposed | PlanState::InReview { .. } | PlanState::Revising
-                )
-            {
+            if of(&plan.request_id) && plan.state == PlanState::Proposed {
                 let closed = self
                     .change_plan(&conv.id, &plan.id, |plan| {
                         plan.state = PlanState::Superseded;

@@ -160,12 +160,6 @@ impl SessionManager {
                     .await;
                 self.dispose_task(&task, TaskState::Stopped).await;
             }
-            // A plan's review stopped with the restart runs again.
-            if conversation.lifecycle != Lifecycle::Archived {
-                let manager = self.arc();
-                let id = conversation.id.clone();
-                self.spawn(async move { manager.rerun_plan_reviews(&id).await });
-            }
             self.expire_stale_cards(&conversation.id).await;
             // What waits for the user matches the tasks and reports as they are now.
             self.reconcile_waiting(&conversation.id).await;

@@ -8,20 +8,18 @@ function plan(state: PlanState, id = "plan", createdAtMs = 1): Plan {
   return {
     id, conversationId: "session", requestId: "request", position: createdAtMs,
     title: "Plan", steps: ["First", "Second", "Third"].map((title, index) => ({ title, detail: null, taskId: `task-${index}`, stage: "pending" as const, startedAtMs: null, endedAtMs: null, outline: null })),
-    risky: false, state, gate: null, revises: null, responses: [], reviewNotes: [], reviewSkipReason: null, createdAtMs, decidedAtMs: null,
+    state, createdAtMs, decidedAtMs: null,
   };
 }
 function request(state: UserRequest["state"], id = "request", startedAtMs = 1): UserRequest {
   return { id, conversationId: "session", preview: "Request", state, startedAtMs, endedAtMs: null, steeredInto: null, steeredAfter: null, undo: null };
 }
-const approved = plan({ type: "approved", by: "review" });
+const approved = plan({ type: "approved", by: "orchestrator" });
 const label = (states: (TaskState | undefined)[]) => planProgress(approved, states).label;
 
 test("each plan lifecycle takes precedence over its steps", () => {
   const cases: [PlanState, string, string][] = [
     [{ type: "proposed" }, "Plan proposed", "review"],
-    [{ type: "inReview", taskId: "reviewer" }, "Plan in review", "review"],
-    [{ type: "revising" }, "Revising plan", "review"],
     [{ type: "approved", by: "user" }, "Approved, not started", "pending"],
     [{ type: "rejected", message: null }, "Plan rejected", "failed"],
     [{ type: "superseded" }, "Plan superseded", "pending"],
@@ -56,14 +54,14 @@ test("progress names the real running index, simultaneous workers and failures",
 
 test("active request transitions preserve all plan lifecycles until the request ends", () => {
   const working = request({ type: "working" });
-  for (const state of [{ type: "proposed" }, { type: "inReview", taskId: "reviewer" }, { type: "revising" }, { type: "approved", by: "review" }, { type: "rejected", message: null }] as const) {
+  for (const state of [{ type: "proposed" }, { type: "approved", by: "orchestrator" }, { type: "rejected", message: null }] as const) {
     const current = plan(state);
     const active = activePlanRequest({ request: working });
     assert.equal(currentRequestPlan({ plan: current }, active?.id ?? null), current);
     assert.equal(capsuleMode(false, true, active, current), "request");
   }
   const waiting = request({ type: "waiting" });
-  for (const state of [{ type: "proposed" }, { type: "revising" }] as const) {
+  for (const state of [{ type: "proposed" }] as const) {
     const current = plan(state);
     assert.equal(activePlanRequest({ request: waiting }), waiting);
     assert.equal(capsuleMode(false, true, waiting, current), "request");
@@ -77,8 +75,8 @@ test("active request transitions preserve all plan lifecycles until the request 
   }
 });
 
-test("revision replaces an approved predecessor immediately, including tied timestamps", () => {
-  const revision = { ...plan({ type: "proposed" }, "revision", 2), revises: approved.id };
+test("a newer plan replaces an approved one immediately, including tied timestamps", () => {
+  const revision = plan({ type: "proposed" }, "revision", 2);
   assert.equal(currentRequestPlan({ approved, revision }, "request"), revision);
   const tied = { ...revision, createdAtMs: approved.createdAtMs };
   assert.equal(currentRequestPlan({ approved, tied }, "request"), tied);

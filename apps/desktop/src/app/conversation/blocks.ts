@@ -201,8 +201,6 @@ function keepApproval(approval: Approval): boolean {
 function keepPlan(plan: Plan): boolean {
   switch (plan.state.type) {
     case "proposed":
-    case "inReview":
-    case "revising":
     case "rejected":
       return true;
     case "approved":
@@ -377,7 +375,7 @@ export function buildBlocks(
     });
   }
   for (const plan of Object.values(board.plans)) {
-    // A revision replaces the plan it revises in the thread; its card keeps the history.
+    // A superseded plan no longer shows in the thread.
     if (plan.state.type === "superseded") continue;
     placed.push({
       kind: "card",

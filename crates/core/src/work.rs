@@ -79,6 +79,8 @@ pub enum WorkerRole {
     Fix,
     /// Resolves conflicts between a phase's branch and where it lands.
     Merge,
+    /// Reads a lead's outline or a phase's change for the other vendor (advisory).
+    Reviewer,
 }
 
 /// How a worker may touch the repository.
@@ -884,33 +886,35 @@ pub enum PhaseStage {
 }
 
 /// Who approved a plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum PlanApprover {
     User,
     /// The orchestrator split the request into phases; each lead's outline gets its own
     /// go-ahead.
     Orchestrator,
-    /// Approve for me, a plan the orchestrator did not mark risky: approved without review,
-    /// and marked as such on the card.
-    Brigadier,
-    /// Approved on the user's behalf after a cross-vendor plan review.
-    Review,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+/// Plans approved by Brigadier or after a review, before phases, read as the orchestrator's.
+impl<'de> Deserialize<'de> for PlanApprover {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match String::deserialize(deserializer)?.as_str() {
+            "user" => Self::User,
+            _ => Self::Orchestrator,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
 pub enum PlanState {
+    /// Waiting for the user's decision (a plan proposed before phases, under Ask for
+    /// approval).
     Proposed,
-    /// Reviewers from another vendor are checking it (`task_id`: the first; all are on its
-    /// gate).
-    InReview {
-        task_id: TaskId,
-    },
     Approved {
         by: PlanApprover,
     },
@@ -919,9 +923,36 @@ pub enum PlanState {
     },
     /// A newer plan replaced it.
     Superseded,
-    /// Its review asked for changes: the orchestrator revises it (`propose_plan` with
-    /// `revises`), answering each finding.
+}
+
+/// A plan's state as any version stored it: plans that were in review or being revised
+/// before phases read as superseded, since nothing reviews plans any more.
+#[derive(Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum StoredPlanState {
+    Proposed,
+    InReview,
+    Approved { by: PlanApprover },
+    Rejected { message: Option<String> },
+    Superseded,
     Revising,
+}
+
+impl<'de> Deserialize<'de> for PlanState {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match StoredPlanState::deserialize(deserializer)? {
+            StoredPlanState::Proposed => Self::Proposed,
+            StoredPlanState::Approved { by } => Self::Approved { by },
+            StoredPlanState::Rejected { message } => Self::Rejected { message },
+            StoredPlanState::InReview | StoredPlanState::Superseded | StoredPlanState::Revising => {
+                Self::Superseded
+            }
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -934,25 +965,9 @@ pub struct Plan {
     pub request_id: Option<String>,
     pub position: i64,
     pub title: String,
+    /// Its phases, in order.
     pub steps: Vec<PlanStep>,
-    /// Big, risky or architectural, as the orchestrator judged it.
-    pub risky: bool,
     pub state: PlanState,
-    /// Why independent review was skipped, if eligible at proposal time.
-    #[serde(default)]
-    pub review_skip_reason: Option<String>,
-    /// Its current review round (reviewers from other vendors than the orchestrator's).
-    #[serde(default)]
-    pub gate: Option<Gate>,
-    /// The plan it revises after that plan's review asked for changes.
-    #[serde(default)]
-    pub revises: Option<CardId>,
-    /// Its answer to each finding of the plan it revises.
-    #[serde(default)]
-    pub responses: Vec<FindingResponse>,
-    /// What the reviewers noted when they approved it.
-    #[serde(default)]
-    pub review_notes: Vec<String>,
     pub created_at_ms: i64,
     pub decided_at_ms: Option<i64>,
 }
@@ -1643,27 +1658,40 @@ mod tests {
     }
 
     #[test]
-    fn a_plan_in_review_stored_before_plan_gates_still_reads() {
-        let plan: Plan = serde_json::from_value(serde_json::json!({
-            "id": "p1",
-            "conversationId": "c1",
-            "position": 3,
-            "title": "Rework the API",
-            "steps": [{ "title": "Change it", "detail": null, "taskId": null }],
-            "risky": true,
-            "state": { "type": "inReview", "taskId": "t1" },
-            "createdAtMs": 1,
-            "decidedAtMs": null,
-        }))
-        .expect("an old plan");
-        assert_eq!(
-            plan.state,
-            PlanState::InReview {
-                task_id: TaskId("t1".into())
-            }
-        );
-        assert!(plan.gate.is_none() && plan.revises.is_none());
-        assert!(plan.responses.is_empty() && plan.review_notes.is_empty());
+    fn a_plan_stored_before_phases_still_reads() {
+        let old = |state: serde_json::Value| -> Plan {
+            serde_json::from_value(serde_json::json!({
+                "id": "p1",
+                "conversationId": "c1",
+                "position": 3,
+                "title": "Rework the API",
+                "steps": [{ "title": "Change it", "detail": null, "taskId": null }],
+                "risky": true,
+                "gate": { "round": 1, "members": [{ "taskId": "t2", "role": "review" }] },
+                "revises": "p0",
+                "responses": [],
+                "reviewNotes": ["fine"],
+                "reviewSkipReason": null,
+                "state": state,
+                "createdAtMs": 1,
+                "decidedAtMs": null,
+            }))
+            .expect("an old plan")
+        };
+        let in_review = old(serde_json::json!({ "type": "inReview", "taskId": "t1" }));
+        assert_eq!(in_review.state, PlanState::Superseded);
+        assert_eq!(in_review.steps[0].stage, PhaseStage::Pending);
+        let revising = old(serde_json::json!({ "type": "revising" }));
+        assert_eq!(revising.state, PlanState::Superseded);
+        for by in ["review", "brigadier"] {
+            let approved = old(serde_json::json!({ "type": "approved", "by": by }));
+            assert_eq!(
+                approved.state,
+                PlanState::Approved {
+                    by: PlanApprover::Orchestrator
+                }
+            );
+        }
         let gate: Gate = serde_json::from_value(serde_json::json!({
             "round": 1,
             "members": [{ "taskId": "t2", "role": "review" }],

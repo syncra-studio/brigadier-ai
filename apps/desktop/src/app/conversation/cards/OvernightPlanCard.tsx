@@ -41,18 +41,7 @@ function usePhasePlan(requestId: string | null, planId: string | null): Plan | u
   return useBoard((s) => {
     const plans = Object.values(s.board?.plans ?? {});
     const own = planId ? s.board?.plans[planId] : undefined;
-    // A revised plan shows as its newest revision.
-    const current = (plan: Plan): Plan => {
-      const seen = new Set([plan.id]);
-      let newest = plan;
-      for (;;) {
-        const next = plans.find((candidate) => candidate.revises === newest.id);
-        if (!next || seen.has(next.id)) return newest;
-        seen.add(next.id);
-        newest = next;
-      }
-    };
-    if (own) return current(own);
+    if (own) return own;
     return plans
       .filter((plan) => requestId !== null && plan.requestId === requestId && plan.state.type !== "superseded")
       .toSorted((a, b) => b.createdAtMs - a.createdAtMs)[0];
@@ -63,8 +52,8 @@ const NUL = "\u0000";
 
 /**
  * A phase's work inside the run card: one line per step of its plan (or per worker, without a
- * plan), each opening its worker, then its whole-phase checks and the plan's details and review
- * notes behind disclosures.
+ * plan), each opening its worker, then its whole-phase checks and the plan's step details behind
+ * disclosures.
  */
 function PhaseWork({
   runId,
@@ -101,7 +90,6 @@ function PhaseWork({
   );
   const gate = useBoard((s) => s.board?.overnight[runId]?.phases.find((phase) => phase.id === phaseId)?.gate ?? null);
   const details = plan?.steps.filter((step) => step.detail) ?? [];
-  const notes = plan?.reviewNotes ?? [];
   return (
     <div className="flex flex-col gap-1.5 whitespace-normal">
       {lines.length > 0 && (
@@ -145,19 +133,16 @@ function PhaseWork({
           </div>
         </details>
       )}
-      {(details.length > 0 || notes.length > 0) && (
+      {details.length > 0 && (
         <details>
           <summary className={disclosureRow}>
-            Step details and review notes
+            Step details
           </summary>
           <div className="flex flex-col gap-1.5 pt-1 wrap-anywhere">
             {details.map((step) => (
               <p key={step.title}>
                 <span className="text-foreground/80">{step.title}:</span> {plainLine(step.detail ?? "")}
               </p>
-            ))}
-            {notes.map((note, index) => (
-              <p key={index}>Review note: {plainLine(note)}</p>
             ))}
           </div>
         </details>
@@ -285,7 +270,7 @@ export function OvernightPlanCard({
         run.goal
       ),
       status: running ? "active" : "pending",
-      statusLabel: running ? "Writing and reviewing the plan" : "Ready to plan",
+      statusLabel: running ? "Writing the plan" : "Ready to plan",
       folded: !running,
     });
 

@@ -372,10 +372,8 @@ impl SessionManager {
         };
         let task_id = match &link.owner {
             GateOwner::Task { task_id } => task_id,
-            GateOwner::Plan { plan_id } => {
-                self.plan_member_done(member, plan_id, &link, None).await;
-                return;
-            }
+            // A plan review from before phases: nothing waits for it.
+            GateOwner::Plan { .. } => return,
             GateOwner::Phase { run_id, phase_id } => {
                 self.phase_member_done(member, run_id, phase_id, &link, None)
                     .await;
@@ -417,11 +415,7 @@ impl SessionManager {
         };
         let task_id = match &link.owner {
             GateOwner::Task { task_id } => task_id,
-            GateOwner::Plan { plan_id } => {
-                self.plan_member_done(member, plan_id, &link, Some(reason))
-                    .await;
-                return;
-            }
+            GateOwner::Plan { .. } => return,
             GateOwner::Phase { run_id, phase_id } => {
                 self.phase_member_done(member, run_id, phase_id, &link, Some(reason))
                     .await;
@@ -894,9 +888,7 @@ impl SessionManager {
         };
         let task_id = match &link.owner {
             GateOwner::Task { task_id } => task_id,
-            GateOwner::Plan { plan_id } => {
-                return self.plan_gate_avoid(member, plan_id, link.round).await;
-            }
+            GateOwner::Plan { .. } => return (None, Vec::new()),
             GateOwner::Phase { run_id, phase_id } => {
                 return self.phase_gate_avoid(member, run_id, phase_id).await;
             }

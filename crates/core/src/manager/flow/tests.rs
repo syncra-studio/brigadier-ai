@@ -183,3 +183,133 @@ async fn a_real_store_loads_and_recovers() {
     assert!(tasks > 0, "the store holds tasks");
     flow.stop().await;
 }
+
+/// What every scripted CLI was asked, in order.
+type Heard = Arc<std::sync::Mutex<Vec<String>>>;
+
+fn is_reviewer(turn: &Turn) -> bool {
+    turn.prompt.contains("Kind: review")
+}
+
+/// A lead outlines big work and waits; one reviewer from the other vendor reads the outline;
+/// the orchestrator sends the go-ahead with its corrections, and the lead builds.
+#[tokio::test]
+async fn an_outline_gets_one_review_from_the_other_vendor_and_a_go_ahead() {
+    let heard: Heard = Arc::default();
+    let log = heard.clone();
+    let flow = Flow::start(
+        "outline",
+        Options::default(),
+        script(move |turn| {
+            log.lock().unwrap().push(turn.input.clone());
+            async move {
+                if turn.is_orchestrator() {
+                    if turn.input.contains("[outline review]") {
+                        assert!(turn.input.contains("Step 2 misses the caller in b.rs"));
+                        let reply = turn
+                            .call(
+                                "approve_outline",
+                                json!({"task": "task-1", "corrections": "Also update b.rs."}),
+                            )
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        return Reply::text("[quiet]");
+                    }
+                    if turn.input.contains("[report task-1") {
+                        return Reply::text("Done: nothing needed changing.");
+                    }
+                    if turn.input.contains("[report") {
+                        return Reply::text("[quiet]");
+                    }
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"title": "Rework the parser", "kind": "implement",
+                                   "spec": "Rework the parser.", "provider": "claude"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                if is_reviewer(&turn) {
+                    assert!(
+                        turn.prompt.contains("1. Read a.rs"),
+                        "the reviewer reads the outline"
+                    );
+                    let reply = turn
+                        .call(
+                            "submit_report",
+                            json!({"summary": "One finding.",
+                                   "open_questions": "Step 2 misses the caller in b.rs"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Reviewed.");
+                }
+                if turn.earlier == 0 {
+                    let reply = turn
+                        .call(
+                            "submit_outline",
+                            json!({"outline": "1. Read a.rs\n2. Change parse()"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Waiting for the go-ahead.");
+                }
+                assert!(turn.input.contains("Go ahead"), "{}", turn.input);
+                assert!(turn.input.contains("Also update b.rs."));
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "Nothing needed changing."}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("Reported.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Rework the parser.").await;
+    let board = flow.settled().await;
+    let lead = Flow::task(&board, 1);
+    let reviewer = Flow::task(&board, 2);
+    assert_eq!(board.tasks.len(), 2, "one lead and one reviewer");
+    assert_eq!(lead.role, Some(crate::work::WorkerRole::Lead));
+    assert_eq!(reviewer.role, Some(crate::work::WorkerRole::Reviewer));
+    assert_ne!(
+        reviewer.route.choice.provider, lead.route.choice.provider,
+        "the review comes from the other vendor"
+    );
+    assert_eq!(lead.state, TaskState::Done);
+    // The request has its one phase: the outline and its stage live there.
+    assert_eq!(board.plans.len(), 1);
+    let plan = board.plans.values().next().unwrap();
+    assert_eq!(plan.steps.len(), 1);
+    assert_eq!(plan.steps[0].task_id.as_ref(), Some(&lead.id));
+    assert!(
+        plan.steps[0]
+            .outline
+            .as_deref()
+            .unwrap()
+            .contains("Change parse()")
+    );
+    assert!(board.approvals.is_empty(), "no cards under Full access");
+    let reviews = heard
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|input| input.contains("[outline review]"))
+        .count();
+    assert_eq!(
+        reviews, 1,
+        "the orchestrator gets the outline once, with its one review"
+    );
+    let events = flow.events().await;
+    assert!(events.iter().any(|event| matches!(
+        event,
+        crate::model::DomainEvent::OrchestratorStepped { step }
+            if matches!(&step.kind, crate::work::OrchestratorStepKind::Created { task_id } if task_id == &lead.id)
+    )));
+    flow.stop().await;
+}

@@ -4,11 +4,11 @@
 use std::sync::{Arc, OnceLock};
 
 use brigadier_core::tools::{
-    AcceptTask, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch, DelegateTask,
-    FinishSession, JobCall, MessageWorker, NoteForUser, OrchestratorCall, PhaseDone,
-    ProposeOvernight, ProposePhases, ProposePlan, QueryBrain, ReadArtifact, RecordNodes, Remember,
-    ReportRef, RequestApproval, Role, RouteFollowUp, SaveMemory, SearchTranscript, SubmitReport,
-    TaskRef, ToolCall, WorkerCall,
+    AcceptTask, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch,
+    DelegateTask, FinishSession, JobCall, MessageWorker, NoteForUser, OrchestratorCall, PhaseDone,
+    PlanPhases, ProposeOvernight, ProposePhases, QueryBrain, ReadArtifact, RecordNodes, Remember,
+    ReportRef, RequestApproval, Role, RouteFollowUp, SaveMemory, SearchTranscript, SubmitOutline,
+    SubmitReport, TaskRef, ToolCall, WorkerCall,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
@@ -67,20 +67,17 @@ const SEARCH_TRANSCRIPT: &str = "Search this conversation's full transcript (the
 messages, your answers, reports and decisions), including what is no longer in your context. \
 Returns the best-matching passages with their dates.";
 
-const PROPOSE_PLAN: &str = "Show the user a plan card for multi-step work: a title and the \
-steps. A first non-risky plan for a request with at most {small_plan_steps} steps skips \
-independent review in an interactive session outside plan mode. Under \"Approve for me\" \
-or \"Full access\" Brigadier approves it without review; under \"Ask for approval\" the user \
-decides, and no write task may start before approval. Larger non-risky plans get one \
-reviewer; set `risky` for big, risky or architectural plans, which get two. The small-plan \
-exception never applies to overnight runs, plan mode or revisions. Other non-risky multi-step \
-plans also get one reviewer unless their steps were already approved; changed steps and \
-plans after exhausted review rounds are reviewed even with one step. Under automatic approval, \
-when a review asks for changes, propose the revised plan with `revises` (the plan's id) and \
-one response per finding (\"F1 accepted: …\", \"F2 declined: why\"). Every reviewer checks \
-the revision again, focusing on prior findings, changed steps and their interactions with \
-the rest of the plan; responses alone never resolve findings. The decision is returned \
-with the tool result or arrives later as a message.";
+const PLAN_PHASES: &str = "Split a big request into phases that must run one after another \
+(each builds on the one before). Most requests are one phase: then skip this and delegate the \
+lead. Records the phases for the user's progress pill; nothing is reviewed or approved here. \
+Then delegate phase 1's lead (delegate_task, kind implement, phase 1), and each next phase once \
+the one before it has landed.";
+
+const APPROVE_OUTLINE: &str = "Give a lead the go-ahead on its outline, after its one advisory \
+review from the other vendor arrived. Put the review findings you agree with, and anything the \
+brief implies, in `corrections`; the brief wins any conflict. Under \"Ask for approval\" this \
+shows the user a \"Start this plan?\" card and the go-ahead goes once they start it. Returns at \
+once.";
 
 const PHASE_DONE: &str = "Only while you lead a phase of an overnight run: say the phase's \
 work is done, or as done as it can get without the user. Call it once every task of the phase \
@@ -91,10 +88,8 @@ call it again once they are fixed, with one response per finding.";
 
 const PROPOSE_PHASES: &str = "Only in Phase 0 of an overnight run (the user gave a goal \
 without a plan): propose the plan's phases, each with its exact scope, \"done when\" criteria \
-anyone can check, and the phases it builds on. It is reviewed by another vendor and judged \
-against the user's goal before any phase starts; nothing beyond the goal belongs in it. When \
-the review asks for changes, propose the revision with `revises` and one response per \
-finding.";
+anyone can check, and the phases it builds on. A judge checks them against the user's goal \
+before any phase starts; nothing beyond the goal belongs in it.";
 
 const REQUEST_APPROVAL: &str = "Ask the user to approve what only they may decide: spending \
 money, using credentials or the keychain, or destroying something outside this session's own \
@@ -152,6 +147,12 @@ cannot settle yourself, such as an unclear requirement or a choice outside your 
 blocks until the answer comes back, which can take minutes. Ask only when you cannot sensibly \
 go on without the answer.";
 
+const SUBMIT_OUTLINE: &str = "Leads only, when the work is multi-step or risky: after \
+reading the code, send your outline (the steps in order with the files each touches, how you \
+will check each \"done when\", risks, and any question with your recommendation), then end your \
+turn. The go-ahead, with any corrections, arrives as your next message; build nothing before \
+it. Small work needs no outline: just do it.";
+
 const SUBMIT_REPORT: &str = "Submit your final structured report. Call it exactly once, as \
 your last action, when the task is done or cannot be done. The orchestrator reads only this \
 report, never your messages: the summary must hold your findings (or name the artifact that \
@@ -174,7 +175,7 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
         Role::Worker { checks: true, .. } => CHECKER.get_or_init(|| {
             worker_tools()
                 .into_iter()
-                .filter(|tool| tool.name != "ask_orchestrator")
+                .filter(|tool| tool.name != "ask_orchestrator" && tool.name != "submit_outline")
                 .collect()
         }),
         Role::BrainJob { .. } => JOB.get_or_init(job_tools),
@@ -214,13 +215,11 @@ fn orchestrator_tools() -> Vec<Tool> {
             SEARCH_TRANSCRIPT,
             input_schema::<SearchTranscript>(),
         ),
-        Tool::new(
-            "propose_plan",
-            PROPOSE_PLAN.replace(
-                "{small_plan_steps}",
-                &brigadier_core::tools::SMALL_PLAN_STEPS.to_string(),
-            ),
-            Arc::new(input_schema::<ProposePlan>()),
+        tool("plan_phases", PLAN_PHASES, input_schema::<PlanPhases>()),
+        tool(
+            "approve_outline",
+            APPROVE_OUTLINE,
+            input_schema::<ApproveOutline>(),
         ),
         tool(
             "propose_overnight",
@@ -259,6 +258,11 @@ fn worker_tools() -> Vec<Tool> {
             "ask_orchestrator",
             ASK_ORCHESTRATOR,
             input_schema::<AskOrchestrator>(),
+        ),
+        tool(
+            "submit_outline",
+            SUBMIT_OUTLINE,
+            input_schema::<SubmitOutline>(),
         ),
         tool(
             "submit_report",
@@ -338,7 +342,8 @@ pub fn parse_call(
                 "search_transcript" => {
                     OrchestratorCall::SearchTranscript(args::<SearchTranscript>(name, arguments)?)
                 }
-                "propose_plan" => OrchestratorCall::ProposePlan(args(name, arguments)?),
+                "plan_phases" => OrchestratorCall::PlanPhases(args(name, arguments)?),
+                "approve_outline" => OrchestratorCall::ApproveOutline(args(name, arguments)?),
                 "request_approval" => OrchestratorCall::RequestApproval(args(name, arguments)?),
                 "accept_task" => OrchestratorCall::AcceptTask(args(name, arguments)?),
                 "finish_session" => OrchestratorCall::FinishSession(args(name, arguments)?),
@@ -355,6 +360,9 @@ pub fn parse_call(
             let call = match name {
                 "ask_orchestrator" if !checks => {
                     WorkerCall::AskOrchestrator(args::<AskOrchestrator>(name, arguments)?)
+                }
+                "submit_outline" if !checks => {
+                    WorkerCall::SubmitOutline(args::<SubmitOutline>(name, arguments)?)
                 }
                 "submit_report" => WorkerCall::SubmitReport(args::<SubmitReport>(name, arguments)?),
                 "code_search" => WorkerCall::CodeSearch(args::<CodeSearch>(name, arguments)?),
@@ -403,23 +411,19 @@ mod tests {
     }
 
     #[test]
-    fn plan_description_explains_small_plans_and_revision_reviews() {
+    fn phases_are_planned_and_outlines_approved_without_review_rounds() {
         let tools = orchestrator_tools();
-        let plan = tools
+        let names: Vec<_> = tools.iter().map(|tool| tool.name.to_string()).collect();
+        assert!(names.contains(&"plan_phases".to_owned()));
+        assert!(names.contains(&"approve_outline".to_owned()));
+        assert!(!names.contains(&"propose_plan".to_owned()));
+        let approve = tools
             .iter()
-            .find(|tool| tool.name == "propose_plan")
+            .find(|tool| tool.name == "approve_outline")
             .unwrap();
-        let description = plan.description.as_deref().unwrap();
-        assert!(!description.contains("two or more steps"));
-        assert!(description.contains(&format!(
-            "at most {} steps",
-            brigadier_core::tools::SMALL_PLAN_STEPS
-        )));
-        assert!(description.contains("approves it without review"));
-        assert!(description.contains("Larger non-risky plans get one reviewer"));
-        assert!(description.contains("which get two"));
-        assert!(description.contains("prior findings, changed steps and their interactions"));
-        assert!(description.contains("responses alone never resolve findings"));
+        let description = approve.description.as_deref().unwrap();
+        assert!(description.contains("one advisory"));
+        assert!(description.contains("Start this plan?"));
     }
 
     #[test]
