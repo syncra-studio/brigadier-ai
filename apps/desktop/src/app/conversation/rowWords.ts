@@ -178,8 +178,12 @@ export function workerName(tasks: Readonly<Record<string, Task>>, task: Task, de
   return depth < 2 ? namedTasks(task.title, tasks, depth + 1) : task.title;
 }
 
-/** A worker's `task-N`, with the title a line may already quote after it. */
-const TASK_REF = /\btask-(\d+)(\s+[“"][^”"]*[”"])?/g;
+/**
+ * A worker's `task-N` standing on its own, with the title a line may already quote after it; one
+ * inside a branch, path or longer word (`brigadier/x/task-13-fix`, `docs/task-13.md`) is left be,
+ * as the daemon's `named` does.
+ */
+const TASK_REF = /(?<![\p{L}\p{N}_/-])task-(\d+)(?![\p{L}\p{N}_/-]|\.\w)(\s+[“"][^”"]*[”"])?/gu;
 
 /**
  * A line with each `task-N` it names given as that worker's name in quotes ("Landed task-41

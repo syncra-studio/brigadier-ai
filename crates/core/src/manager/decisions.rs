@@ -609,8 +609,8 @@ pub(crate) fn worker_name(task: &Task) -> String {
 }
 
 /// `text` with each "task-N" of the conversation's tasks as the worker's name. A title quoted
-/// right after it ("task-3 “Add the flag”") becomes that name; "task-N" inside a branch, path
-/// or longer word stays as it is.
+/// right after it ("task-3 “Add the flag”") becomes that name; "task-N" inside a branch, path,
+/// file name or longer word stays as it is.
 pub(crate) fn named(text: &str, board: &Board) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -620,9 +620,13 @@ pub(crate) fn named(text: &str, board: &Board) -> String {
             .chars()
             .take_while(char::is_ascii_digit)
             .collect();
-        let after = rest[at + 5 + digits.len()..].chars().next();
+        let mut tail = rest[at + 5 + digits.len()..].chars();
+        let after = tail.next();
+        // A file name's extension ("task-3.diff") makes it a longer word too.
+        let extension = after == Some('.') && tail.next().is_some_and(char::is_alphanumeric);
         let word = before.is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '/' | '-' | '_')))
             && !digits.is_empty()
+            && !extension
             && after.is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '-' | '_' | '/')));
         let task = word
             .then(|| digits.parse::<u32>().ok())
@@ -1173,6 +1177,10 @@ mod tests {
             "Landed \u{201c}Add the flag\u{201d} on `main`"
         );
         assert_eq!(
+            named("Landed task-3.", &board),
+            "Landed \u{201c}Add the flag\u{201d}."
+        );
+        assert_eq!(
             named("Sent task-37 back (task-37's fix 1 of 2).", &board),
             "Sent \u{201c}Gate members take run slots in a fixed\u{2026}\u{201d} back (\u{201c}Gate members take run slots in a fixed\u{2026}\u{201d}'s fix 1 of 2)."
         );
@@ -1180,6 +1188,7 @@ mod tests {
         for kept in [
             "on `brigadier/4158464b/task-3-add-the-flag`",
             "see task-30 and subtask-3 and task-3x",
+            "read task-3.diff and docs/task-3.md",
             "task-",
         ] {
             assert_eq!(named(kept, &board), kept);
