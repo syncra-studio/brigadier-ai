@@ -34,7 +34,8 @@ escalation: boolean,
  */
 input: string | null, 
 /**
- * Set when the user may allow this exact command for the rest of the CLI session
- * ([`ApprovalDecision::AllowSimilar`]): the command as shown.
+ * Set when the user may allow similar requests for the rest of the conversation
+ * ([`ApprovalDecision::AllowSimilar`]): what that covers, as shown (a command's first
+ * words, such as `git push`, or a network host). See [`crate::policy::Similar`].
  */
 grant: string | null, };

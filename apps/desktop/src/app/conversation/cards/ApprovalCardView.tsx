@@ -19,7 +19,7 @@ import {
 import { DECIDERS } from "@/components/transcript/TranscriptRow";
 import { Badge } from "@/components/ui/badge";
 import type { Approval, CardState } from "@/ipc/generated";
-import { ALWAYS_ASK_NOTE } from "@/lib/setup";
+import { NEVER_PUSHES_NOTE } from "@/lib/setup";
 import { useBoard } from "@/state/board";
 
 /** Shell-quotes an argument only where needed, so the exact argv reads unambiguously. */
@@ -107,7 +107,7 @@ function describe(
       return {
         icon: <Globe />,
         title: "Run a command that reaches outside?",
-        subtitle: byline(by, ALWAYS_ASK_NOTE),
+        subtitle: byline(by, NEVER_PUSHES_NOTE),
         body: (
           <>
             <ApprovalCardCode>{subject.argv.map(quote).join(" ")}</ApprovalCardCode>

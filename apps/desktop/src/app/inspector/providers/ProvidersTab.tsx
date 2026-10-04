@@ -4,7 +4,6 @@ import { type ReactNode, useEffect, useState } from "react";
 import { Picker } from "@/app/inspector/providers/Picker";
 import { RawSessionView } from "@/app/inspector/providers/RawSessionView";
 import {
-  CODEX_OUTWARD_WARNING,
   PROVIDER_LABELS,
   QuotaWindows,
   STATE_VARIANTS,
@@ -367,9 +366,6 @@ function StartSessionForm() {
             Start
           </Button>
         </div>
-        {provider === "codex" && access === "workspace" && (
-          <p className="text-warning">{CODEX_OUTWARD_WARNING}</p>
-        )}
         <ActionError error={start.error} />
       </form>
     </Section>

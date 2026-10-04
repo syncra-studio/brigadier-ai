@@ -59,7 +59,7 @@ import type {
   Conversation,
   DiffStat,
 } from "@/ipc/generated";
-import { ALWAYS_ASK_NOTE } from "@/lib/setup";
+import { NEVER_PUSHES_NOTE } from "@/lib/setup";
 import { answerCard, answerQuestion, decidePlan } from "@/state/actions";
 import { useBoard } from "@/state/board";
 
@@ -350,7 +350,7 @@ function describe(
         ) : (
           "Allow Brigadier to run a command that reaches outside?"
         ),
-        detail: ALWAYS_ASK_NOTE,
+        detail: NEVER_PUSHES_NOTE,
         body: (
           <ActionCardCode>{subject.argv.map(quote).join(" ")}</ActionCardCode>
         ),

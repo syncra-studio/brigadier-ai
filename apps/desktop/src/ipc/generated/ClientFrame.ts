@@ -5,8 +5,4 @@ import type { Request } from "./Request";
 /**
  * Frames sent by a client.
  */
-export type ClientFrame = { "type": "hello", token: string, protocol: number, client: ClientInfo, } | { "type": "request", id: number, request: Request, } | { "type": "mcp", grant: string, } | { "type": "gate", grant: string, 
-/**
- * The full command line as the program received it (`argv[0]` included).
- */
-argv: Array<string>, cwd: string, };
+export type ClientFrame = { "type": "hello", token: string, protocol: number, client: ClientInfo, } | { "type": "request", id: number, request: Request, } | { "type": "mcp", grant: string, };

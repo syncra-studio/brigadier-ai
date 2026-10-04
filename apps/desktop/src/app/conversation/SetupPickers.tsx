@@ -47,7 +47,7 @@ import type {
 } from "@/ipc/generated";
 import { openUrl } from "@/ipc/client";
 import {
-  FULL_ACCESS_STILL_ASKS,
+  FULL_ACCESS_NOTE,
   PERMISSION_DETAILS,
   PERMISSION_LABELS,
   PERMISSION_LEVELS,
@@ -271,7 +271,7 @@ function FullAccessDialog({
           ))}
         </ul>
         <p className="text-muted-foreground">
-          {FULL_ACCESS_STILL_ASKS} This comes with risks like loss or exposure of sensitive data
+          {FULL_ACCESS_NOTE} This comes with risks like loss or exposure of sensitive data
           and prompt injection. You can turn this off.{" "}
           <button type="button" className="text-link hover:underline" onClick={openPermissionsHelp}>
             Learn more

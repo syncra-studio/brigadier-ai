@@ -2,7 +2,6 @@ import { ArrowLeft } from "@openai/apps-sdk-ui/components/Icon";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
-  CODEX_OUTWARD_WARNING,
   PROVIDER_LABELS,
   QuotaWindows,
   STATE_VARIANTS,
@@ -176,9 +175,6 @@ function SessionHeader({
         )}
         {session.recording && <span className="font-mono">recording → {session.recording}</span>}
       </div>
-      {live && session.provider === "codex" && session.access.type === "workspace" && (
-        <p className="text-warning">{CODEX_OUTWARD_WARNING}</p>
-      )}
       {session.error && <p className="text-destructive">{session.error}</p>}
       {stats.quota && <QuotaWindows quota={stats.quota} />}
     </div>

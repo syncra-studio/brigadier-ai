@@ -34,24 +34,21 @@ export const PERMISSION_LABELS: Record<PermissionLevel, string> = {
 
 /** One line each. */
 export const PERMISSION_DETAILS: Record<PermissionLevel, string> = {
-  askForApproval: "Always ask to approve plans and land changes",
+  askForApproval: "Ask before plans, landings and each step outside the sandbox",
   approveForMe: "Only ask what only you can answer",
-  fullAccess: "Workers run outside the OS sandbox without asking",
+  fullAccess: "Workers run like your own terminal, without asking",
 };
 
 /** The README's section on permission levels ("Learn more"). */
 export const PERMISSIONS_HELP_URL =
   "https://github.com/stephen-golban/brigadier-ai#permission-levels";
 
-/** Outward actions (push, deploy, publish, credentials) ask at every level. */
-export const ALWAYS_ASK_NOTE = "Pushes, deploys and other outward actions always ask.";
+/** At every level workers leave pushes, deploys and publishing to the user. */
+export const NEVER_PUSHES_NOTE = "Workers never push, deploy or publish; you start those.";
 
-/**
- * The Full access confirmation's line on what still asks. The outward-command gate guards
- * against accidents, not a worker working around it (README, "Outward commands").
- */
-export const FULL_ACCESS_STILL_ASKS =
-  "Pushes, deploys and other outward commands still ask you first, as a guard against accidents rather than a hard limit.";
+/** The Full access confirmation's line on what workers may do. */
+export const FULL_ACCESS_NOTE =
+  "Workers run commands like your own terminal, without asking. They never push, deploy or publish on their own: you start those.";
 
 function unavailable(overview: ProviderOverview): string | null {
   const status = overview.status;

@@ -15,10 +15,6 @@ export const STATE_VARIANTS: Record<RawState, "secondary" | "success" | "warning
   closed: "outline",
 };
 
-/** Codex asks only to leave its sandbox, so outward commands inside it run without asking. */
-export const CODEX_OUTWARD_WARNING =
-  "Codex: outward commands (git push, publish) are not gated in this mode.";
-
 /** Usage windows as bars of what is used, with what is left and when each resets. */
 export function QuotaWindows({ quota }: { quota: QuotaSnapshot }) {
   return (

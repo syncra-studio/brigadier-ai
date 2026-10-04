@@ -3,7 +3,7 @@ import type { RepoAccess } from "./RepoAccess";
 
 /**
  * A worker's sandbox, set per task. Every worker also has a writable scratch folder outside
- * the repository, and the outward-command gate at every permission level.
+ * the repository.
  */
 export type WorkerAccess = { repo: RepoAccess, network: boolean, 
 /**

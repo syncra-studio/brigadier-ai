@@ -17,7 +17,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import type { ModelChoice, PermissionLevel } from "@/ipc/generated";
 import {
-  ALWAYS_ASK_NOTE,
+  NEVER_PUSHES_NOTE,
   builtInDefault,
   modelName,
   PERMISSION_DETAILS,
@@ -45,7 +45,7 @@ export const CONVERSATIONS_ROWS = {
   },
   permission: {
     label: "Default permission level",
-    description: `A project remembers its own, which wins over this. ${ALWAYS_ASK_NOTE}`,
+    description: `A project remembers its own, which wins over this. ${NEVER_PUSHES_NOTE}`,
   },
   contextUsage: {
     label: "Show context window usage",
