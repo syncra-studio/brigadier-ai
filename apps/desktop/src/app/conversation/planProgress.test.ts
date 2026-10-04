@@ -8,7 +8,7 @@ function plan(state: PlanState, id = "plan", createdAtMs = 1): Plan {
   return {
     id, conversationId: "session", requestId: "request", position: createdAtMs,
     title: "Plan", steps: ["First", "Second", "Third"].map((title, index) => ({ title, detail: null, taskId: `task-${index}` })),
-    risky: false, state, gate: null, revises: null, responses: [], reviewNotes: [], createdAtMs, decidedAtMs: null,
+    risky: false, state, gate: null, revises: null, responses: [], reviewNotes: [], reviewSkipReason: null, createdAtMs, decidedAtMs: null,
   };
 }
 function request(state: UserRequest["state"], id = "request", startedAtMs = 1): UserRequest {

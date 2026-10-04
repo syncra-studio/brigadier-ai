@@ -7,7 +7,7 @@ import { createStore } from "zustand/vanilla";
 
 import type { Plan } from "@/ipc/generated";
 
-test("the plan card shows the durable small-plan approval reason", async () => {
+test("the plan card keeps progress alongside the durable small-plan approval reason", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { PlanSection } = await server.ssrLoadModule("/src/app/conversation/cards/PlanSection.tsx");
@@ -25,8 +25,10 @@ test("the plan card shows the durable small-plan approval reason", async () => {
         React.createElement(PlanSection, { planIds: ["p"] })),
     );
     assert.match(render(), /Approved without review: small plan/);
+    assert.match(render(), /Approved, not started/);
     plan.state = { type: "proposed" };
     assert.doesNotMatch(render(), /Approved without review/);
+    assert.match(render(), /Plan proposed/);
     plan.state = { type: "approved", by: "user" };
     assert.match(render(), /Approved by you/);
     plan.state = { type: "approved", by: "brigadier" };
