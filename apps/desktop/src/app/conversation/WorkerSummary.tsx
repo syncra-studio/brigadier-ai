@@ -6,7 +6,6 @@ import { WORKERS_LABEL, WorkerGlyphs } from "@/app/conversation/Agents";
 import { isFinal, isWorking } from "@/app/conversation/blocks";
 import {
   AgentsPanelContext,
-  glyphTone,
   useWorkerName,
   WorkerGlyph,
 } from "@/app/conversation/WorkerChip";
@@ -167,7 +166,7 @@ export const WorkerSummaryRow = memo(function WorkerSummaryRow({
         className,
       )}
     >
-      <WorkerGlyph taskId={task.id} working={isWorking(task)} tone={glyphTone(task.state)} />
+      <WorkerGlyph taskId={task.id} working={isWorking(task)} />
       <span className="min-w-0 flex-1 truncate">{name}</span>
       <RowState task={task} />
     </button>
@@ -205,7 +204,7 @@ export const WorkerStripRow = memo(function WorkerStripRow({
             onClick={() => setPanel(task.id)}
             className="hover:bg-foreground/5 rounded-control focus-visible:ring-ring/50 -mx-1 flex h-control-xs min-w-0 items-center gap-1.5 px-1 text-start outline-none transition-colors focus-visible:ring-1"
           >
-            <WorkerGlyph taskId={task.id} tone={glyphTone(task.state)} className="size-icon-sm" />
+            <WorkerGlyph taskId={task.id} className="size-icon-sm" />
             <span className="text-foreground min-w-0 truncate">{name}</span>
             <span
               className={cn(

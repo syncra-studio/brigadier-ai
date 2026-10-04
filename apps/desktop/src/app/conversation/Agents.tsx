@@ -15,7 +15,6 @@ import { HandoffLine, RouteReason } from "@/app/conversation/cards/RouteDetails"
 import { isStoppable } from "@/app/conversation/cards/TaskCardView";
 import {
   AgentsPanelContext,
-  glyphTone,
   taskStateLabel,
   useWorkerName,
   WorkerGlyph,
@@ -136,7 +135,7 @@ const AgentRow = memo(function AgentRow({ taskId }: { taskId: string }) {
         onClick={() => setPanel(task.id)}
         className="hover:bg-foreground/5 rounded-control flex w-full items-start gap-3 px-2 py-2 text-start transition-colors"
       >
-        <WorkerGlyph taskId={task.id} tone={glyphTone(task.state)} className="size-6" />
+        <WorkerGlyph taskId={task.id} className="size-6" />
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex items-baseline gap-2">
             <span className="min-w-0 flex-1 truncate text-sm">{name}</span>

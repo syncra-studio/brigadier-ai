@@ -99,11 +99,15 @@ function daysAgo(epochMs: number, nowMs: number): number {
   return Math.round((startOfDay(nowMs) - startOfDay(epochMs)) / DAY_MS);
 }
 
-/** When a message was sent, as its hover label: "3:09 AM", "Thursday 3:09 AM", "Sep 18 3:09 AM". */
+/**
+ * When a message was sent, as its hover label: "3:09 AM", "Yesterday 3:09 AM", "Thursday
+ * 3:09 AM", "Sep 18 3:09 AM" (the same words as the day's separator above it).
+ */
 export function formatSentAt(epochMs: number, nowMs: number): string {
   const days = daysAgo(epochMs, nowMs);
   const time = formatTime(epochMs);
   if (days === 0) return time;
+  if (days === 1) return `Yesterday ${time}`;
   if (days < 7) return `${weekdayFormat.format(epochMs)} ${time}`;
   return `${monthDayFormat.format(epochMs)} ${time}`;
 }
@@ -112,7 +116,6 @@ export function formatSentAt(epochMs: number, nowMs: number): string {
 export function formatDaySeparator(epochMs: number, nowMs: number): string {
   const days = daysAgo(epochMs, nowMs);
   if (days === 0) return `Today ${formatTime(epochMs)}`;
-  if (days === 1) return `Yesterday ${formatTime(epochMs)}`;
   return formatSentAt(epochMs, nowMs);
 }
 

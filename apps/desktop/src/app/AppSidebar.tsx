@@ -11,7 +11,6 @@ import {
   Plus,
   Settings,
   SettingsCog,
-  Sleep,
   Trash,
   Unpin,
   X,
@@ -597,24 +596,6 @@ function RowStatus({ conversationId }: { conversationId: string }) {
   );
 }
 
-/** A small moon at the end of a conversation that went idle and stopped its CLIs. */
-function HibernatedMark() {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          data-slot="hibernated-badge"
-          aria-label="Hibernated"
-          className={cn("text-muted-foreground flex shrink-0 items-center", hideOnRowHover)}
-        >
-          <Sleep className="size-icon-sm" />
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="right">Hibernated</TooltipContent>
-    </Tooltip>
-  );
-}
-
 /**
  * A chat or session: its title, its state at the end, and on hover Pin and Archive. A
  * right-click opens its menu (Pin, Rename…, Archive, Delete…).
@@ -631,7 +612,6 @@ const ConversationRow = memo(function ConversationRow({
   nested?: boolean;
 }) {
   const pinned = conversation.pinnedAtMs !== null;
-  const hibernated = conversation.lifecycle === "hibernated";
   const noun = conversation.kind === "chat" ? "chat" : "session";
   const togglePin = () =>
     void setPinned(conversation.id, !pinned).catch((error: unknown) =>
@@ -654,7 +634,6 @@ const ConversationRow = memo(function ConversationRow({
             <span className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
               {conversation.title}
             </span>
-            {hibernated && <HibernatedMark />}
             <RowStatus conversationId={conversation.id} />
           </button>
         </ContextMenuTrigger>

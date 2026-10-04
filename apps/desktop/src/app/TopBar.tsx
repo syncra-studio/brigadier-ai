@@ -87,11 +87,6 @@ export function TopBar({
         ) : (
           <span className="truncate font-medium">{title}</span>
         )}
-        {lifecycle === "hibernated" && (
-          <Badge variant="secondary" className="ms-1" title="Idle: its CLI processes are stopped. Sending a message wakes it.">
-            Hibernated
-          </Badge>
-        )}
         {lifecycle === "archived" && (
           <Badge variant="outline" className="ms-1" title="Archived: restore it from Settings → Archived chats to continue.">
             Archived

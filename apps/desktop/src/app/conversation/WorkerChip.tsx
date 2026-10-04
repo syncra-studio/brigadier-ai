@@ -2,7 +2,7 @@ import { createContext, memo, useContext, useState } from "react";
 
 import { IdGlyph } from "@/components/glyphs/worker-glyphs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { Task, TaskState, WorkerStepKind } from "@/ipc/generated";
+import type { Task, TaskState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { type Board, useBoard } from "@/state/board";
 
@@ -39,13 +39,6 @@ export const TASK_STATE_LABELS: Record<TaskState, string> = {
 /** A task's state in words; a task paused for quota waits for it rather than for the user. */
 export function taskStateLabel(task: Task): string {
   return task.state === "paused" && task.quotaWait ? "Waiting for quota" : TASK_STATE_LABELS[task.state];
-}
-
-/** The colour a worker's glyph takes for how it ended: interrupted or failed. */
-export function glyphTone(state: Task["state"] | WorkerStepKind): string | undefined {
-  if (state === "stopped") return "text-warning";
-  if (state === "failed") return "text-destructive";
-  return undefined;
 }
 
 /**
@@ -88,8 +81,8 @@ export function useWorkerName(taskId: string): string | null {
 /**
  * A worker named in a line: its glyph and name in a pill that truncates a long name, shows it
  * whole with the worker's number and state on hover, and opens the worker in the panel. The
- * glyph takes the colour of the worker's state, or `tone` when the line gives it one (`null`
- * for none). `label` names it shorter where the line says the rest.
+ * glyph keeps the worker's own colour wherever it shows, so one worker never looks like two;
+ * a line that must mark it gives a `tone`. `label` names it shorter where the line says the rest.
  */
 export const WorkerChip = memo(function WorkerChip({
   taskId,
@@ -138,7 +131,7 @@ export const WorkerChip = memo(function WorkerChip({
         >
           <WorkerGlyph
             taskId={taskId}
-            tone={tone === undefined ? glyphTone(state) : (tone ?? undefined)}
+            tone={tone ?? undefined}
             className="size-icon-sm animate-glyph-in motion-reduce:animate-none"
           />
           <span className="min-w-0 truncate">{label ?? name}</span>
