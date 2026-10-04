@@ -3158,7 +3158,7 @@ impl SessionManager {
         if let Some(live) = &live {
             live.close_cli().await;
         }
-        self.dispose_task(&task, TaskState::Stopped).await;
+        self.dispose_task(&task, stopped_state(&task)).await;
         drop(settled);
         // A landing's or plan's reviewer stopped before its verdict releases what it was
         // reviewing, as one that failed does: otherwise it would wait for a verdict that never
@@ -3705,6 +3705,16 @@ pub(crate) fn test_data_dir(id: &TaskId) -> PathBuf {
     }
 }
 
+/// How a stopped task ends: a read task that already reported (a check still ending its turn,
+/// stopped by the orchestrator or a run's end) is done; anything else is stopped.
+fn stopped_state(task: &Task) -> TaskState {
+    if !task.kind.writes() && task.report.is_some() {
+        TaskState::Done
+    } else {
+        TaskState::Stopped
+    }
+}
+
 /// B12: repository access, network and sandbox per task kind and permission level.
 fn access_for(kind: TaskKind, permission: PermissionLevel) -> WorkerAccess {
     WorkerAccess {
@@ -4194,5 +4204,49 @@ mod tests {
         // Without a CLI there is nothing to nudge either.
         assert_eq!(live.nudge_stall(|_| true, "carry on".into()).await, None);
         assert_eq!(live.watch(0).await.nudged_at_ms, None);
+    }
+
+    #[test]
+    fn a_check_stopped_after_its_report_ends_done() {
+        let task = |kind: &str, reported: bool| -> Task {
+            let mut task: Task = serde_json::from_value(serde_json::json!({
+                "id": "t2",
+                "conversationId": "c1",
+                "number": 2,
+                "position": 0,
+                "title": "Review task-1",
+                "kind": kind,
+                "spec": "Review it.",
+                "access": { "repo": "read", "network": false, "unsandboxed": false },
+                "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
+                "state": "reported",
+                "attachments": [],
+                "createdAtMs": 0,
+                "updatedAtMs": 0
+            }))
+            .expect("a task");
+            if reported {
+                task.report = Some(crate::work::Report {
+                    summary: "Approve.".into(),
+                    changes: Vec::new(),
+                    decisions: Vec::new(),
+                    verification: Vec::new(),
+                    done_when: Vec::new(),
+                    open_questions: Vec::new(),
+                    risks: Vec::new(),
+                    needs_user: Vec::new(),
+                    verdict: Some(crate::work::ReviewVerdict::Approve),
+                    checks: None,
+                    artifacts: Vec::new(),
+                    submitted_at_ms: 0,
+                });
+            }
+            task
+        };
+        assert_eq!(stopped_state(&task("review", true)), TaskState::Done);
+        assert_eq!(stopped_state(&task("verify", true)), TaskState::Done);
+        // Stopped before its result, or a change that hasn't landed: stopped.
+        assert_eq!(stopped_state(&task("review", false)), TaskState::Stopped);
+        assert_eq!(stopped_state(&task("implement", true)), TaskState::Stopped);
     }
 }

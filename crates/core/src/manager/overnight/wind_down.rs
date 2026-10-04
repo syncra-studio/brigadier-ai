@@ -162,10 +162,8 @@ impl SessionManager {
                 .collect();
             for task in open {
                 // A check that already gave its result (the last phase's judge, still ending
-                // its turn) is done, not stopped.
-                if !task.kind.writes() && task.report.is_some() {
-                    self.dispose_task(&task, TaskState::Done).await;
-                } else if let Err(err) = Box::pin(self.stop_task(task.id.clone())).await {
+                // its turn) ends done.
+                if let Err(err) = Box::pin(self.stop_task(task.id.clone())).await {
                     tracing::warn!(task = %task.id, error = %err, "could not stop a run task at wind-down");
                 }
                 self.release_run_task(&task.id);
