@@ -115,6 +115,18 @@ export function toYou(text: string): string {
   return TO_YOU.reduce((said, [stored, shown]) => said.replaceAll(stored, shown), text);
 }
 
+/** How the gap of a phase the run's end cut off begins (the daemon's `CUT_OFF`, in `wind_down.rs`). */
+const CUT_OFF = "Its whole-phase checks never passed: ";
+
+/**
+ * Why a settled phase isn't verified: wind-down's gap when the run's end cut it off (it comes
+ * last, after gaps kept from an earlier segment), else the first its checks gave.
+ */
+function phaseGap(gaps: readonly string[]): string | undefined {
+  const last = gaps.at(-1);
+  return last?.startsWith(CUT_OFF) ? last : gaps[0];
+}
+
 function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
@@ -129,7 +141,7 @@ function outcomeOf(run: OvernightRun, phase: OvernightPhase, over: boolean): str
       }.`;
     case "partial":
     case "blocked":
-      return toYou(phase.gaps[0] ?? `${met} of ${plural(total, "done-when criterion", "done-when criteria")} met.`);
+      return toYou(phaseGap(phase.gaps) ?? `${met} of ${plural(total, "done-when criterion", "done-when criteria")} met.`);
     case "skipped":
       return "Skipped, as the run's restrictions said.";
     case "pending":

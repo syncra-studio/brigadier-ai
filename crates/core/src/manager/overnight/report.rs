@@ -850,8 +850,14 @@ fn unverified_why(run: &OvernightRun, phase: &OvernightPhase) -> String {
             one_line(first, MISSING).trim_end_matches('.')
         );
     }
-    // A phase its checks settled before the run ended says why in a gap of its own.
-    if let Some(gap) = phase.gaps.iter().find(|gap| !gap.starts_with(CUT_OFF)) {
+    // The run's end cut the phase off when wind-down's gap is its last (gaps kept from an
+    // earlier segment come before it); a phase its checks settled says why in its own gaps.
+    if let Some(gap) = phase.gaps.first()
+        && !phase
+            .gaps
+            .last()
+            .is_some_and(|last| last.starts_with(CUT_OFF))
+    {
         return one_line(gap, MISSING).trim_end_matches('.').to_owned();
     }
     match &run.stop {
@@ -1768,6 +1774,12 @@ Got in the way:
             "{line}"
         );
         assert!(!line.contains("stopped the run"), "{line}");
+        // Continued, it kept that gap; the user stopped the new attempt before its checks.
+        run.phases[1]
+            .gaps
+            .push(format!("{CUT_OFF}the user stopped the run."));
+        let line = cut_off(&run);
+        assert!(line.contains("you stopped the run"), "{line}");
     }
 
     #[test]
