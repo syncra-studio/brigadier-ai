@@ -56,8 +56,8 @@ use crate::runtime::{is_delta, merge_delta};
 use crate::tools::Role;
 use crate::work::{
     ApprovalSubject, ArtifactKind, ArtifactRef, AttachmentRef, Attempt, AttemptEnd, GateLink,
-    GateOwner, InjectionKind, QuestionKind, QuotaWait, RepoAccess, Report, Route, Task, TaskId,
-    TaskKind, TaskState, TaskWorkspace, WaitingSource, WorkerAccess,
+    GateOwner, GateRole, InjectionKind, QuestionKind, QuotaWait, RepoAccess, Report, Route, Task,
+    TaskId, TaskKind, TaskState, TaskWorkspace, WaitingSource, WorkerAccess,
 };
 use crate::{Error, Result, now_ms};
 
@@ -2535,6 +2535,21 @@ impl SessionManager {
             return Err(Error::Invalid(format!(
                 "The report is {size} bytes; the limit is about {REPORT_MAX_BYTES} (≈800 tokens). Move the details into a file in your outputs folder, name it under `artifacts`, and submit a shorter report."
             )));
+        }
+        // A verifier's "[met]" line counts only with its evidence on that line: refused now, it
+        // puts that right in the same turn instead of its gate leaving the line unchecked.
+        if let Some(GateLink {
+            role: GateRole::Verify,
+            ..
+        }) = &task.gate_link
+        {
+            let bare = super::gates::met_without_evidence(&input.done_when);
+            if !bare.is_empty() {
+                return Err(Error::Invalid(format!(
+                    "Nothing was stored. These done_when lines are [met] but give no evidence on the line itself:\n{}\nWrite each as \"[met] criterion: evidence\", the command you ran and what it showed (or file:line) after a colon, on that line; evidence only under verification doesn't count. Then call submit_report again with the whole report.",
+                    bare.join("\n")
+                )));
+            }
         }
         // Everything it names is stored now, before its folders can go.
         let texts: Vec<String> = std::iter::once(&input.summary)

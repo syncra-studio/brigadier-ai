@@ -1175,7 +1175,7 @@ fn verify_spec(
         ));
     }
     spec.push_str(
-        "\nEnd with submit_report. done_when: one line per criterion, for every criterion (the task's and the worker's, never fewer lines than the worker listed): \"[met] criterion: your evidence\", \"[not met] criterion: what fails\", or \"[not checked] criterion: the command you tried and its error\"; a check you did not run yourself is never [met]. checks: passed (every check you ran passed, apart from failures already on the parent, and the only checks that could not run, if any, are [pre-existing] or [excluded] ones, each named with its evidence or rule), failed (a check ran and failed because of this change), notRun (any other check could not run, after you tried; a check stopped by a missing key, sign-in or service is notRun, not failed; the change never lands on notRun), or noChecks (the project has no checks you could run, apart from [pre-existing] and [excluded] ones). Put each problem the worker must fix in open_questions, and nothing else: any line there sends the change back to the worker.",
+        "\nEnd with submit_report. done_when: one line per criterion, for every criterion (the task's and the worker's, never fewer lines than the worker listed): \"[met] criterion: your evidence\" (the command and what it showed, or file:line, on that line itself; evidence only under verification doesn't count), \"[not met] criterion: what fails\", or \"[not checked] criterion: the command you tried and its error\"; a check you did not run yourself is never [met]. checks: passed (every check you ran passed, apart from failures already on the parent, and the only checks that could not run, if any, are [pre-existing] or [excluded] ones, each named with its evidence or rule), failed (a check ran and failed because of this change), notRun (any other check could not run, after you tried; a check stopped by a missing key, sign-in or service is notRun, not failed; the change never lands on notRun), or noChecks (the project has no checks you could run, apart from [pre-existing] and [excluded] ones). Put each problem the worker must fix in open_questions, and nothing else: any line there sends the change back to the worker.",
     );
     spec.push_str(if task.run.is_some() {
         " If a \"done when\" criterion can't be shown met until the user does something only they can (a key, a sign-in, a paid account), say exactly what under needs_user. A [pre-existing] gap, an [excluded] check or an optional check goes under risks only, never under needs_user: needs_user is for what holds a criterion."
@@ -1336,6 +1336,18 @@ pub(super) fn criterion_evidence(line: &str) -> Option<&str> {
         .filter_map(|separator| text.find(separator).map(|at| at + separator.len()))
         .min()?;
     Some(text[at..].trim()).filter(|evidence| evidence.chars().any(char::is_alphanumeric))
+}
+
+/// A verifier's "[met]" lines that give no evidence after the criterion. Its gate would leave
+/// them unchecked, so its submit_report is refused while it can still put them right.
+pub(super) fn met_without_evidence(done_when: &[String]) -> Vec<&str> {
+    done_when
+        .iter()
+        .filter(|line| {
+            criterion_status(line) == Some(Status::Met) && criterion_evidence(line).is_none()
+        })
+        .map(String::as_str)
+        .collect()
 }
 
 /// A reviewer's result.
@@ -2032,6 +2044,36 @@ mod tests {
         };
         assert!(reason.contains("[met] ok (no evidence given)"), "{reason}");
         assert!(reason.contains("the build works"), "{reason}");
+    }
+
+    #[test]
+    fn a_met_line_with_its_evidence_elsewhere_is_named_at_submit() {
+        // As verifiers wrote them, with the commands and results only under verification.
+        let lines = [
+            "[met] Clippy and fmt pass.",
+            "[met] Repository commit exists (52624e22).",
+            "- [met] the bindings leave no diff: pnpm gen-ts, git diff clean",
+            "[not met] the card shows the label: no label rendered",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            met_without_evidence(&lines),
+            [
+                "[met] Clippy and fmt pass.",
+                "[met] Repository commit exists (52624e22)."
+            ]
+        );
+        let fixed = [
+            "[met] Clippy and fmt pass: cargo clippy -D warnings clean, cargo fmt --check ok",
+            "[met] Repository commit exists: git log shows 52624e22",
+        ]
+        .map(str::to_owned);
+        assert!(met_without_evidence(&fixed).is_empty());
+        let fixed = report(
+            &fixed.each_ref().map(String::as_str),
+            Some(ChecksResult::Passed),
+        );
+        assert_eq!(verify_result(&fixed, 2), GateResult::Passed);
     }
 
     #[test]
