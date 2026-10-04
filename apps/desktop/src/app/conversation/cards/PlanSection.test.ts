@@ -7,7 +7,7 @@ import { createStore } from "zustand/vanilla";
 
 import type { Plan } from "@/ipc/generated";
 
-test("the plan card keeps progress alongside the durable small-plan approval reason", async () => {
+test("the plan section shows its phases and state, without approval or review words", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { PlanSection } = await server.ssrLoadModule("/src/app/conversation/cards/PlanSection.tsx");
@@ -24,18 +24,13 @@ test("the plan card keeps progress alongside the durable small-plan approval rea
       React.createElement(BoardStoreContext.Provider, { value: store },
         React.createElement(PlanSection, { planIds: ["p"] })),
     );
-    assert.match(render(), /Approved without review: small plan/);
-    assert.match(render(), /Approved, not started/);
+    assert.match(render(), /Not started/);
+    assert.match(render(), />Pending</);
+    assert.doesNotMatch(render(), /Approved without review|Auto-approved|Approved by you|Earlier plans/);
     plan.state = { type: "proposed" };
-    assert.doesNotMatch(render(), /Approved without review/);
     assert.match(render(), /Plan proposed/);
     plan.state = { type: "approved", by: "user" };
-    assert.match(render(), /Approved by you/);
-    plan.state = { type: "approved", by: "brigadier" };
-    plan.reviewSkipReason = "another recorded reason";
-    assert.match(render(), /Approved without review: another recorded reason/);
-    plan.reviewSkipReason = null;
-    assert.match(render(), /Auto-approved by Brigadier/);
+    assert.doesNotMatch(render(), /Approved by you/);
   } finally {
     await server.close();
   }
