@@ -49,6 +49,8 @@ function summary(event: DomainEvent): string {
       return event.owner;
     case "cleanupCompleted":
       return event.failures.length === 0 ? "removed" : `${event.failures.length} failed`;
+    case "rankingsChanged":
+      return "model rankings changed";
     case "providerChecked":
       return event.overview.provider;
     case "projectUpdated":

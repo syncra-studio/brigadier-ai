@@ -359,6 +359,19 @@ impl Runtime {
         self.state().overviews.get(&kind).cloned()
     }
 
+    /// Invalidates the routing views after completion, reset or registry supersession.
+    pub async fn rankings_changed(&self) {
+        let result = async {
+            let event = new_event(streams::PROVIDERS, &DomainEvent::RankingsChanged)?;
+            self.core.store().append(vec![event]).await?;
+            Ok::<_, Error>(())
+        }
+        .await;
+        if let Err(error) = result {
+            tracing::warn!(%error, "could not publish rankings.changed");
+        }
+    }
+
     /// Starts a CLI session owned by `owner` (`orch:…`, `task:…`, `chat:…`); everything it
     /// creates is recorded under `owner` in the cleanup ledger.
     pub async fn start_hosted(

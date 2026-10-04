@@ -515,6 +515,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "rawEvent":
     case "providerChecked":
       return { ...slice, providers: applyProviderEvent(envelope, slice.providers) };
+    case "rankingsChanged":
     case "probe":
     // A draft's pinned attachments only matter to blob collection.
     case "draftPinned":

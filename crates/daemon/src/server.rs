@@ -428,6 +428,21 @@ impl Session {
                 });
                 return Ok(Flow::Continue);
             }
+            Request::RefreshRankings => {
+                let daemon = self.daemon.clone();
+                let admitted = self.daemon.sessions.refresh_rankings(async move {
+                    crate::registry::check(&daemon).await;
+                });
+                let (response, start) = match admitted {
+                    Ok((job_id, start)) => (Ok(Response::RefreshRankings { job_id }), start),
+                    Err(error) => (Err(IpcError::from(error)), None),
+                };
+                self.respond(id, response).await?;
+                if let Some(start) = start {
+                    let _ = start.send(());
+                }
+                return Ok(Flow::Continue);
+            }
             Request::Shutdown => {
                 // Stop admission and drain first; acknowledge only once writes are committed.
                 let _ = self.daemon.quit.try_send("quit requested by a client");
@@ -1328,6 +1343,20 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::PreviewRoutes { project_id, areas } => Response::PreviewRoutes {
             routes: daemon.sessions.preview_routes(project_id, areas).await,
         },
+        Request::GetRankingsRefresh => Response::GetRankingsRefresh {
+            refresh: daemon.runtime.registry().rankings_refresh(),
+        },
+        Request::ResetRankings => {
+            daemon
+                .runtime
+                .registry()
+                .reset_rankings()
+                .map_err(|error| brigadier_core::Error::Invalid(error.to_string()))?;
+            daemon.runtime.rankings_changed().await;
+            Response::ResetRankings {
+                refresh: daemon.runtime.registry().rankings_refresh(),
+            }
+        }
         Request::CheckRegistry => {
             crate::registry::check(daemon).await;
             Response::CheckRegistry {
@@ -1457,7 +1486,10 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 .await
                 .map_err(invalid)?,
         },
-        Request::Subscribe { .. } | Request::SetMetricsStreaming { .. } | Request::Shutdown => {
+        Request::Subscribe { .. }
+        | Request::SetMetricsStreaming { .. }
+        | Request::RefreshRankings
+        | Request::Shutdown => {
             return Err(IpcError {
                 code: ErrorCode::Invalid,
                 message: "handled by the session".into(),

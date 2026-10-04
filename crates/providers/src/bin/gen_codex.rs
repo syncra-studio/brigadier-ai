@@ -179,7 +179,7 @@ fn generate(codex: &Path, version: &str, schema_dir: &Path) -> Result<String, Er
     let mut space = typify::TypeSpace::new(&settings);
     space.add_root_schema(root)?;
     let file: syn::File = syn::parse2(space.to_stream())?;
-    let code = prettyplease::unparse(&file)
+    let code = line_docs(&prettyplease::unparse(&file))
         // Newer Codex versions add fields; old bindings must still read their messages.
         .replace("#[serde(deny_unknown_fields)]\n", "");
 
@@ -220,4 +220,35 @@ fn collect_refs(value: &Value, refs: &mut BTreeSet<String>) {
         Value::Array(items) => items.iter().for_each(|item| collect_refs(item, refs)),
         _ => {}
     }
+}
+
+/// Keep rustfmt's item indentation out of Markdown: indented block-doc prose becomes
+/// a Rust code example when rustdoc reads it. Line docs preserve the intended paragraphs.
+fn line_docs(source: &str) -> String {
+    let mut output = String::new();
+    let mut indent = None;
+    for line in source.lines() {
+        let text = if let Some(prefix) = indent {
+            line.strip_prefix(prefix).unwrap_or(line)
+        } else if let Some(text) = line.trim_start().strip_prefix("/**") {
+            indent = Some(&line[..line.len() - line.trim_start().len()]);
+            text
+        } else {
+            output.push_str(line);
+            output.push('\n');
+            continue;
+        };
+        let (text, ended) = match text.strip_suffix("*/") {
+            Some(text) => (text, true),
+            None => (text, false),
+        };
+        output.push_str(indent.unwrap());
+        output.push_str("///");
+        output.push_str(text);
+        output.push('\n');
+        if ended {
+            indent = None;
+        }
+    }
+    output
 }

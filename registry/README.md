@@ -76,3 +76,18 @@ over HTTPS, at most once a day, with `If-None-Match`. They keep a copy in their 
 directory. The copy is **not signed yet**: its integrity rests on HTTPS from GitHub plus the
 checks above. Signing arrives in Phase 10 and will use the same minisign key as the app
 updater.
+
+## On-demand ranking research
+
+The daemon's `refreshRankings` request returns a job id immediately. It checks the published
+registry first, then uses a strong enabled CLI model with read-only web tools to research the
+live catalog. `getRankingsRefresh` reports progress, sources, changed fields and errors;
+`resetRankings` cancels pending research and removes its overlay. `rankings.changed` tells
+clients to reload model summaries and route previews.
+
+Sourced patches may change only tier, category strengths, area modifiers and supported category
+default efforts. They identify a provider and concrete model, never a family. They live in
+`cache/registry/overlay.json`, independently of the published cache and ETag, and apply only
+at their host-captured base revision. A newer published or bundled revision supersedes them.
+Invalid or unsourced models keep their previous ratings. Manual rankings, learning, user rules
+and trials for uncurated models continue to apply.

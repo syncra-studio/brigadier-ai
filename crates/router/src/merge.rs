@@ -22,8 +22,8 @@ use brigadier_providers::{ModelInfo, ProviderKind};
 use crate::load::{MAX_CONTEXT_WINDOW, MIN_CONTEXT_WINDOW};
 use crate::outcome::{Outcome, OutcomeResult};
 use crate::registry::{
-    MergedModel, Modalities, Modality, ModelStatus, QualityTier, Registry, RegistryModel,
-    ResearchNote, TrialState,
+    MergedModel, Modalities, Modality, ModelStatus, QualityTier, RatingProvenance, Registry,
+    RegistryModel, ResearchNote, TrialState,
 };
 use crate::{TaskCategory, table};
 
@@ -105,6 +105,8 @@ fn merge_one(
         resolved: info.resolved.clone(),
         display_name: info.display_name.clone(),
         status: ModelStatus::Unknown,
+        rating_provenance: RatingProvenance::Unrated,
+        default_effort: BTreeMap::new(),
         registry_key: None,
         family: None,
         tier: QualityTier::Unrated,
@@ -153,6 +155,7 @@ fn merge_one(
         .max_by_key(|note| note.at_ms)
     {
         model.status = ModelStatus::Researched;
+        model.rating_provenance = RatingProvenance::ResearchNote;
         model.tier = note.tier.min(RESEARCH_MAX_TIER);
         for (category, strength) in &note.strengths {
             model.strengths.insert(
@@ -179,6 +182,8 @@ fn apply_entry(
     cli_input: &[String],
 ) {
     model.status = status;
+    model.rating_provenance = RatingProvenance::Curated;
+    model.default_effort = entry.default_effort.clone();
     model.registry_key = Some(entry.key.clone());
     model.tier = entry.tier;
     for (category, strength) in &entry.strengths {
@@ -357,6 +362,8 @@ pub(crate) fn from_entry(entry: &RegistryModel, provider: ProviderKind) -> Optio
         display_name: id.clone(),
         id,
         status: ModelStatus::Curated,
+        rating_provenance: RatingProvenance::Unrated,
+        default_effort: BTreeMap::new(),
         registry_key: None,
         family: entry.matches.family.clone(),
         tier: QualityTier::Unrated,

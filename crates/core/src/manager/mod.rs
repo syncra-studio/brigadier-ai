@@ -219,6 +219,10 @@ impl SessionManager {
     /// Ends every live CLI session (their work stays in the log, ready to continue).
     pub async fn shutdown(&self) {
         self.admitting.store(false, Ordering::Release);
+        self.runtime.registry().cancel_refresh();
+        self.research.stop.cancel();
+        self.research.jobs.close();
+        self.research.jobs.wait().await;
         let tasks: Vec<Arc<TaskLive>> = self.tasks_lock().values().cloned().collect();
         let convs: Vec<Arc<ConvLive>> = self.convs_lock().values().cloned().collect();
         let mut closing = tokio::task::JoinSet::new();

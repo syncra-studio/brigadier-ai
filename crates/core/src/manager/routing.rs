@@ -108,7 +108,7 @@ impl SessionManager {
     /// The registry, the merged catalog, what `project`'s outcomes taught and the providers'
     /// states.
     pub(crate) async fn routing_inputs(&self, project: Option<&ProjectId>, now: i64) -> Inputs {
-        let registry = self.runtime.registry().current();
+        let (registry, patches) = self.runtime.registry().rating_snapshot();
         let catalogs: Vec<(
             brigadier_providers::ProviderKind,
             Vec<brigadier_providers::ModelInfo>,
@@ -139,7 +139,12 @@ impl SessionManager {
             None => (Vec::new(), Vec::new()),
         };
         let counts = brigadier_router::outcome_counts(&outcomes);
-        let models = brigadier_router::merge(&registry, &catalogs, &research, &counts);
+        let mut models = brigadier_router::merge(&registry, &catalogs, &research, &counts);
+        for model in &mut models {
+            for patch in &patches {
+                patch.apply(model);
+            }
+        }
         let learned = match project {
             Some(project) => {
                 let own: Vec<_> = outcomes

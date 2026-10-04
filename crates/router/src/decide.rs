@@ -1539,10 +1539,8 @@ fn effort(
     let pinned = query.pin.as_ref().and_then(|pin| pin.effort.as_deref());
     let registry_effort = pick
         .model
-        .registry_key
-        .as_deref()
-        .and_then(|key| query.registry.entry(key))
-        .and_then(|entry| entry.default_effort.get(&query.category))
+        .default_effort
+        .get(&query.category)
         .and_then(|effort| clamp_effort(effort))
         .map(|effort| at_least(query.category, effort));
     let wanted = ranked
@@ -2150,5 +2148,186 @@ mod tests {
             }
         }
         assert!(runs > 0);
+    }
+    fn query<'a>(
+        registry: &'a Registry,
+        models: &'a [MergedModel],
+        providers: &'a [ProviderState],
+    ) -> Query<'a> {
+        Query {
+            category: TaskCategory::Research,
+            areas: &[],
+            floor: QualityTier::Standard,
+            needs: Needs::default(),
+            pin: None,
+            hold_pin: false,
+            avoid: None,
+            distinct_from: vec![],
+            exclude: &[],
+            overrides: &[],
+            rankings: &[],
+            project_id: None,
+            running: &[],
+            trial_slot: false,
+            providers,
+            models,
+            registry,
+            learned: &[],
+            now_ms: 0,
+        }
+    }
+
+    fn sourced_patch(model: &str) -> crate::RatingPatch {
+        serde_json::from_value(serde_json::json!({
+            "provider":"codex", "model":model, "sources":["https://example.com/model"],
+            "tier":"frontier", "strengths":{"research":10,"implement":10},
+            "defaultEffort":{"research":"high"}
+        }))
+        .unwrap()
+    }
+
+    fn routed(query: &Query<'_>) -> Routed {
+        match decide(query) {
+            Decision::Run(route) => route,
+            Decision::Wait(wait) => panic!("unexpected wait: {wait:?}"),
+        }
+    }
+
+    #[test]
+    fn overlay_effort_is_concrete_and_manual_and_pinned_efforts_win() {
+        let registry = Registry::bundled();
+        let catalog = [
+            info("gpt-6-sol", "Sol", None),
+            info("sol-alias", "Alias", Some("gpt-6-sol")),
+            info("gpt-99-sol", "Future Sol", None),
+        ];
+        let original = crate::merge(&registry, &[(ProviderKind::Codex, &catalog)], &[], &[]);
+        let mut models = original.clone();
+        let patch = sourced_patch("gpt-6-sol");
+        for model in &mut models {
+            patch.apply(model);
+        }
+        assert_eq!(models[2], original[2]);
+        let providers = [ProviderState {
+            provider: ProviderKind::Codex,
+            logged_in: true,
+            quota: None,
+        }];
+        let mut q = query(&registry, &models[..1], &providers);
+        assert_eq!(routed(&q).effort.as_deref(), Some("high"));
+        q.models = &models[1..2];
+        assert_eq!(routed(&q).effort.as_deref(), Some("high"));
+        q.pin = Some(Pin {
+            effort: Some("low".into()),
+            ..Default::default()
+        });
+        assert_eq!(routed(&q).effort.as_deref(), Some("low"));
+        let rankings = [Ranking {
+            id: "manual".into(),
+            category: TaskCategory::Research,
+            areas: vec![],
+            project_id: None,
+            manual: true,
+            only: false,
+            updated_at_ms: 0,
+            entries: vec![crate::RankedEntry {
+                target: OverrideTarget::Vendor {
+                    provider: ProviderKind::Codex,
+                },
+                effort: Some("medium".into()),
+            }],
+        }];
+        q.rankings = &rankings;
+        assert_eq!(routed(&q).effort.as_deref(), Some("medium"));
+        q.rankings = &[];
+        q.pin = None;
+        q.models = &original[..1];
+        assert_eq!(
+            routed(&q).effort.as_deref(),
+            original[0]
+                .default_effort
+                .get(&TaskCategory::Research)
+                .map(String::as_str)
+        );
+    }
+
+    #[test]
+    fn overlay_unknown_still_needs_a_low_risk_trial_slot_and_rules_still_win() {
+        let registry = Registry::bundled();
+        let catalog = [info("new-model", "New", None)];
+        let mut models = crate::merge(&registry, &[(ProviderKind::Codex, &catalog)], &[], &[]);
+        sourced_patch("new-model").apply(&mut models[0]);
+        let providers = [ProviderState {
+            provider: ProviderKind::Codex,
+            logged_in: true,
+            quota: None,
+        }];
+        let mut q = query(&registry, &models, &providers);
+        assert!(matches!(decide(&q), Decision::Wait(_)));
+        q.trial_slot = true;
+        assert!(routed(&q).trial);
+        q.category = TaskCategory::Implement;
+        assert!(matches!(decide(&q), Decision::Wait(_)));
+        q.category = TaskCategory::Research;
+        let never = [rule(
+            OverrideEffect::Never,
+            OverrideTarget::Vendor {
+                provider: ProviderKind::Codex,
+            },
+        )];
+        q.overrides = &never;
+        assert!(matches!(decide(&q), Decision::Wait(_)));
+        q.overrides = &[];
+        let learned = [Learned {
+            provider: ProviderKind::Codex,
+            model: "new-model".into(),
+            category: TaskCategory::Research,
+            samples: 5,
+            success_rate: 0.2,
+            review_pass_rate: None,
+            avg_rework: None,
+            verification_pass_rate: None,
+            median_duration_ms: None,
+            median_tokens: None,
+            adjustment: -2.0,
+        }];
+        let before = preview(&q);
+        q.learned = &learned;
+        let after = preview(&q);
+        assert!(after.candidates[0].score < before.candidates[0].score);
+    }
+
+    #[test]
+    fn overlay_preserves_alias_dedup_matching_and_inherited_penalty() {
+        let registry = Registry::bundled();
+        let catalog = [
+            info("gpt-6-sol", "Sol", None),
+            info("sol-alias", "Alias", Some("gpt-6-sol")),
+            info("gpt-99-sol", "Future Sol", None),
+        ];
+        let mut models = crate::merge(&registry, &[(ProviderKind::Codex, &catalog)], &[], &[]);
+        assert_eq!(models[0].status, ModelStatus::Curated);
+        assert_eq!(models[2].status, ModelStatus::Inherited);
+        for model in &mut models {
+            sourced_patch(&model.rating_identity()).apply(model);
+        }
+        assert!(is_model(&models[1], &registry, "gpt-6-sol"));
+        assert!(!is_model(&models[2], &registry, "gpt-6-sol"));
+        let providers = [ProviderState {
+            provider: ProviderKind::Codex,
+            logged_in: true,
+            quota: None,
+        }];
+        let q = query(&registry, &models, &providers);
+        let p = preview(&q);
+        let able: Vec<_> = p
+            .candidates
+            .iter()
+            .filter(|c| c.blocked.is_none())
+            .collect();
+        assert_eq!(able.len(), 2);
+        let inherited = able.iter().find(|c| c.model == "gpt-99-sol").unwrap();
+        let curated = able.iter().find(|c| c.model != "gpt-99-sol").unwrap();
+        assert!(inherited.score < curated.score);
     }
 }

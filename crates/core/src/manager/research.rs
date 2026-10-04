@@ -21,6 +21,7 @@ use brigadier_providers::{
 };
 use brigadier_router::{QualityTier, ResearchNote, TaskCategory};
 use serde::Deserialize;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use super::SessionManager;
 use super::usage::TokenOwner;
@@ -39,12 +40,14 @@ const MAX_SUMMARY_CHARS: usize = 600;
 /// A context window outside this range (in tokens) is left unknown, as the registry's are.
 const CONTEXT_WINDOWS: std::ops::RangeInclusive<i64> = 8_000..=20_000_000;
 
-const RESEARCH_ROLE: &str = "You research one AI model for Brigadier, an app that routes coding tasks between AI models. Use web search to read the model's official release notes or model card and reputable benchmark results. Don't guess: leave out what you can't find. Change nothing on this computer. Your final message is exactly one JSON object and nothing else.";
+const RESEARCH_ROLE: &str = "You research AI models for Brigadier, an app that routes coding tasks between AI models. Use web search to read the model's official release notes or model card and reputable benchmark results. Don't guess: leave out what you can't find. Change nothing on this computer. Your final message is exactly one JSON object and nothing else.";
 
 /// Research in progress and past failures.
 #[derive(Default)]
 pub(crate) struct Research {
     running: Mutex<Option<(ProviderKind, String)>>,
+    pub(super) stop: CancellationToken,
+    pub(super) jobs: TaskTracker,
     failed: Mutex<HashMap<(ProviderKind, String), i64>>,
 }
 
@@ -108,7 +111,7 @@ impl SessionManager {
             .lock()
             .unwrap_or_else(|p| p.into_inner()) = Some((model_provider, model.clone()));
         let manager = self.arc();
-        self.spawn(async move {
+        self.spawn(self.research.jobs.track_future(async move {
             tracing::info!(model = %model, runs_on = %provider, "researching a new model on spare quota");
             let researched = manager.research_model(provider, model_provider, &model).await;
             let key = (model_provider, model.clone());
@@ -132,7 +135,7 @@ impl SessionManager {
                 .running
                 .lock()
                 .unwrap_or_else(|p| p.into_inner()) = None;
-        });
+        }));
     }
 
     /// Models the CLIs list that neither the registry nor research has placed yet (and the
@@ -145,6 +148,8 @@ impl SessionManager {
             .into_iter()
             .filter(|model| {
                 model.status == brigadier_router::ModelStatus::Unknown
+                    && model.rating_provenance
+                        != brigadier_router::RatingProvenance::ResearchedOverlay
                     && !model.excluded
                     && crate::routing::availability::model_available(
                         &settings,
@@ -187,15 +192,56 @@ impl SessionManager {
         of: ProviderKind,
         model: &str,
     ) -> Result<ResearchNote> {
+        let vendor = match of {
+            ProviderKind::Claude => "Anthropic",
+            ProviderKind::Codex => "OpenAI",
+        };
+        let prompt = format!(
+            "Research the model `{model}` from {vendor}, as its {cli} CLI lists it. Reply with \
+             one JSON object: {{\"summary\": \"two or three sentences: what it is, when it was \
+             released, what it is good at\", \"tier\": \"frontier\" | \"strong\" | \"standard\" \
+             | \"light\" (frontier: the vendor's best; strong: a strong coding model; standard: \
+             an everyday model; light: small and fast), \"strengths\": {{\"scout\", \
+             \"research\", \"implement\", \"review\", \"merge\", \"verify\", \"chat\", \
+             \"orchestrate\": 0 to 10 each}}, \"contextWindow\": tokens or null, \
+             \"knowledgeCutoff\": \"YYYY-MM\" or null, \"sources\": [the URLs you read]}}.",
+            cli = of.label()
+        );
+        let (cheap, effort) = self.cheapest(runs_on)?;
+        let reply = self
+            .run_web_research(WebResearch {
+                provider: runs_on,
+                model: cheap,
+                effort: effort.or_else(|| Some("low".into())),
+                prompt,
+                cancel: self.research.stop.clone(),
+                time: RESEARCH_TIME,
+            })
+            .await?;
+        note_from(of, model, &reply)
+    }
+
+    async fn run_web_research(&self, request: WebResearch) -> Result<String> {
+        let WebResearch {
+            provider: runs_on,
+            model: cheap,
+            effort,
+            prompt,
+            cancel,
+            time,
+        } = request;
         let id = uuid::Uuid::now_v7().to_string();
         let owner = format!("research:{id}");
         let scratch = self.owned_dir("scratch", &format!("research-{id}"));
-        self.prepare_owned_dir(&owner, &scratch).await?;
-        let (cheap, effort) = self.cheapest(runs_on)?;
+        if let Err(error) = self.prepare_owned_dir(&owner, &scratch).await {
+            let _ = self.runtime.ledger().dispose(&owner).await;
+            let _ = tokio::fs::remove_dir_all(&scratch).await;
+            return Err(error);
+        }
         let spec = SessionSpec {
             cwd: scratch.clone(),
             model: Some(cheap.clone()),
-            effort: effort.or_else(|| Some("low".into())),
+            effort,
             fast: false,
             origin: SessionOrigin::New,
             access: Access::ReadOnly,
@@ -213,90 +259,37 @@ impl SessionManager {
             allowed_models: None,
             unattended: false,
         };
-        let vendor = match of {
-            ProviderKind::Claude => "Anthropic",
-            ProviderKind::Codex => "OpenAI",
-        };
-        let prompt = format!(
-            "Research the model `{model}` from {vendor}, as its {cli} CLI lists it. Reply with \
-             one JSON object: {{\"summary\": \"two or three sentences: what it is, when it was \
-             released, what it is good at\", \"tier\": \"frontier\" | \"strong\" | \"standard\" \
-             | \"light\" (frontier: the vendor's best; strong: a strong coding model; standard: \
-             an everyday model; light: small and fast), \"strengths\": {{\"scout\", \
-             \"research\", \"implement\", \"review\", \"merge\", \"verify\", \"chat\", \
-             \"orchestrate\": 0 to 10 each}}, \"contextWindow\": tokens or null, \
-             \"knowledgeCutoff\": \"YYYY-MM\" or null, \"sources\": [the URLs you read]}}.",
-            cli = of.label()
-        );
-        let ran = async {
-            let Started {
-                session,
-                mut events,
-            } = self.runtime.start_hosted(&owner, runs_on, spec).await?;
-            let meter = TokenMeter::default();
-            let turn = async {
-                session
-                    .send(TurnInput::text(prompt))
-                    .await
-                    .map_err(|err| Error::Provider(format!("the research didn't start: {err}")))?;
-                let mut last = String::new();
-                while let Some(event) = events.recv().await {
-                    match event {
-                        ProviderEvent::RateLimits { quota } => {
-                            self.runtime.note_quota_snapshot(quota).await;
-                        }
-                        ProviderEvent::Usage { total, last } => {
-                            self.note_tokens(
-                                &meter,
-                                runs_on,
-                                Some(&cheap),
-                                TokenOwner::Upkeep,
-                                &total,
-                                last.as_ref(),
-                            )
-                            .await;
-                        }
-                        ProviderEvent::Message {
-                            role: Role::Assistant,
-                            text,
-                            ..
-                        } => last = text,
-                        ProviderEvent::ApprovalRequested { request } => {
-                            let _ = session
-                                .answer(
-                                    request.id,
-                                    ApprovalDecision::Deny {
-                                        message: "Declined: research only reads the web.".into(),
-                                    },
-                                )
-                                .await;
-                        }
-                        ProviderEvent::TurnCompleted { status, .. } => {
-                            return match status {
-                                TurnStatus::Completed => Ok(last),
-                                _ => {
-                                    Err(Error::Provider("the research turn did not finish".into()))
-                                }
-                            };
-                        }
-                        ProviderEvent::Exited { .. } => {
-                            return Err(Error::Provider("the research CLI exited".into()));
-                        }
-                        _ => {}
+        let meter = TokenMeter::default();
+        let ran = run_web_session(
+            self.runtime.start_hosted(&owner, runs_on, spec),
+            prompt,
+            &cancel,
+            &self.research.stop,
+            time,
+            |event| async {
+                match event {
+                    ProviderEvent::RateLimits { quota } => {
+                        self.runtime.note_quota_snapshot(quota).await;
                     }
+                    ProviderEvent::Usage { total, last } => {
+                        self.note_tokens(
+                            &meter,
+                            runs_on,
+                            Some(&cheap),
+                            TokenOwner::Upkeep,
+                            &total,
+                            last.as_ref(),
+                        )
+                        .await;
+                    }
+                    _ => {}
                 }
-                Err(Error::Provider("the research CLI went away".into()))
-            };
-            let reply = tokio::time::timeout(RESEARCH_TIME, turn)
-                .await
-                .unwrap_or_else(|_| Err(Error::Provider("the research ran out of time".into())));
-            session.close().await;
-            reply
-        }
+            },
+        )
         .await;
         let _ = self.runtime.ledger().dispose(&owner).await;
         let _ = tokio::fs::remove_dir_all(&scratch).await;
-        note_from(of, model, &ran?)
+        ran
     }
 }
 
@@ -350,4 +343,409 @@ fn note_from(provider: ProviderKind, model: &str, reply: &str) -> Result<Researc
             .take(MAX_SOURCES)
             .collect(),
     })
+}
+
+struct WebResearch {
+    provider: ProviderKind,
+    model: String,
+    effort: Option<String>,
+    prompt: String,
+    cancel: CancellationToken,
+    time: Duration,
+}
+
+impl SessionManager {
+    /// The caller sends the start signal only after flushing the job id to the client.
+    pub fn refresh_rankings(
+        &self,
+        check: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> Result<(String, Option<tokio::sync::oneshot::Sender<()>>)> {
+        self.admit()?;
+        let (id, cancel) = self.runtime.registry().admit_refresh();
+        let mut start = None;
+        if let Some(cancel) = cancel {
+            let (tx, acknowledged) = tokio::sync::oneshot::channel();
+            start = Some(tx);
+            let manager = self.arc();
+            let job = id.clone();
+            self.spawn(self.research.jobs.track_future(async move {
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => return,
+                    () = manager.research.stop.cancelled() => return,
+                    checked = after_acknowledgement(acknowledged, check) => {
+                        if let Err(error) = checked {
+                            let revision = manager.runtime.registry().current().revision;
+                            manager.runtime.registry().finish_refresh(&job, revision, &[], Err(error));
+                            manager.runtime.rankings_changed().await;
+                            return;
+                        }
+                    }
+                }
+                manager.research_rankings(&job, cancel).await;
+                manager.runtime.rankings_changed().await;
+            }));
+        }
+        Ok((id, start))
+    }
+
+    async fn research_rankings(&self, id: &str, cancel: CancellationToken) {
+        let inputs = self.routing_inputs(None, now_ms()).await;
+        let settings = self.core.settings();
+        let producer = inputs
+            .models
+            .iter()
+            .filter(|model| {
+                !model.excluded
+                    && self.provider_usable(model.provider)
+                    && crate::routing::availability::model_available(
+                        &settings,
+                        model.provider,
+                        &model.id,
+                    )
+            })
+            .max_by(|a, b| {
+                a.tier.cmp(&b.tier).then_with(|| {
+                    a.strengths
+                        .get(&TaskCategory::Research)
+                        .unwrap_or(&5.0)
+                        .total_cmp(b.strengths.get(&TaskCategory::Research).unwrap_or(&5.0))
+                })
+            });
+        let Some(producer) = producer else {
+            self.runtime.registry().finish_refresh(
+                id,
+                inputs.registry.revision,
+                &[],
+                Err("no enabled, available research model".into()),
+            );
+            return;
+        };
+        let catalogs: Vec<_> = ProviderKind::ALL
+            .into_iter()
+            .map(|provider| {
+                let models = self
+                    .runtime
+                    .overview(provider)
+                    .and_then(|o| o.models)
+                    .map(|c| c.models)
+                    .unwrap_or_default();
+                (provider, models)
+            })
+            .collect();
+        let refs: Vec<_> = catalogs
+            .iter()
+            .map(|(provider, models)| (*provider, models.as_slice()))
+            .collect();
+        let notes: Vec<_> = inputs
+            .models
+            .iter()
+            .filter_map(|model| model.research.clone())
+            .collect();
+        let Some((revision, models)) = self.runtime.registry().capture_refresh(
+            id,
+            &refs,
+            (producer.provider, &producer.id),
+            &notes,
+        ) else {
+            return;
+        };
+        let allowlist: Vec<_> = models
+            .iter()
+            .map(|model| {
+                serde_json::json!({
+                    "provider": model.provider, "catalogId": model.id,
+                    "model": model.rating_identity(), "efforts": model.efforts,
+                    "tier": model.tier, "strengths": model.strengths,
+                    "areaStrengths": model.area_strengths, "defaultEffort": model.default_effort,
+                })
+            })
+            .collect();
+        let prompt = format!(
+            r#"Research current official model cards, release notes and reputable benchmarks for
+EVERY model in this catalog, as of {}. Do not guess. Omit models you cannot source.
+Catalog and prior ratings: {}.
+Reply with exactly one JSON object:
+{{"patches":[{{"provider":"claude or codex","model":"the supplied concrete model identity",
+"sources":["https URLs you actually read"],"tier":"light|standard|strong|frontier",
+"strengths":{{"scout":5}},"areaStrengths":{{"backend":0}},
+"defaultEffort":{{"research":"medium"}}}}]}}.
+Each field is optional except provider, model and sources. Strength categories: scout,
+research, implement, review, merge, verify, chat, orchestrate (0 to 10). Areas: frontend,
+backend, infra, docs, tests (-2 to 2). Default efforts must be in the model's supplied efforts
+list and never above high. Return one patch per concrete identity; equivalent aliases share
+it. Do not change any other facts."#,
+            jiff::Timestamp::now(),
+            serde_json::to_string(&allowlist).unwrap_or_default()
+        );
+        let effort = ["high", "medium", "low"]
+            .into_iter()
+            .find(|effort| producer.efforts.iter().any(|value| value == effort))
+            .map(str::to_owned);
+        let reply = self
+            .run_web_research(WebResearch {
+                provider: producer.provider,
+                model: producer.id.clone(),
+                effort,
+                prompt,
+                cancel,
+                time: Duration::from_secs(15 * 60),
+            })
+            .await
+            .map_err(|error| error.to_string());
+        self.runtime
+            .registry()
+            .finish_refresh(id, revision, &models, reply);
+    }
+}
+
+/// No repository request is polled until the IPC response has been flushed.
+async fn after_acknowledgement(
+    acknowledged: tokio::sync::oneshot::Receiver<()>,
+    check: impl std::future::Future<Output = ()>,
+) -> std::result::Result<(), String> {
+    acknowledged
+        .await
+        .map_err(|_| "the client disconnected before research started".to_owned())?;
+    check.await;
+    Ok(())
+}
+
+/// Both research jobs use the same bounded, read-only turn protocol. Closing is outside the
+/// cancellation race, so reset and shutdown still reap the CLI.
+async fn run_web_session<F, Observe, Observed>(
+    start: F,
+    prompt: String,
+    cancel: &CancellationToken,
+    stop: &CancellationToken,
+    time: Duration,
+    mut observe: Observe,
+) -> Result<String>
+where
+    F: std::future::Future<Output = Result<Started>>,
+    Observe: FnMut(ProviderEvent) -> Observed,
+    Observed: std::future::Future<Output = ()>,
+{
+    let deadline = tokio::time::Instant::now() + time;
+    let Started {
+        session,
+        mut events,
+    } = tokio::select! {
+        biased;
+        () = cancel.cancelled() => return Err(Error::Invalid("research cancelled".into())),
+        () = stop.cancelled() => return Err(Error::Invalid("research cancelled".into())),
+        started = tokio::time::timeout_at(deadline, start) =>
+            started.map_err(|_| Error::Provider("the research startup ran out of time".into()))??,
+    };
+    let turn = async {
+        session
+            .send(TurnInput::text(prompt))
+            .await
+            .map_err(|err| Error::Provider(format!("the research didn't start: {err}")))?;
+        let mut last = String::new();
+        while let Some(event) = events.recv().await {
+            match event {
+                ProviderEvent::Message {
+                    role: Role::Assistant,
+                    text,
+                    ..
+                } => last = text,
+                ProviderEvent::ApprovalRequested { request } => {
+                    session
+                        .answer(
+                            request.id,
+                            ApprovalDecision::Deny {
+                                message: "Declined: research only reads the web.".into(),
+                            },
+                        )
+                        .await
+                        .map_err(|err| Error::Provider(err.to_string()))?;
+                }
+                ProviderEvent::TurnCompleted { status, .. } => {
+                    return match status {
+                        TurnStatus::Completed => Ok(last),
+                        _ => Err(Error::Provider("the research turn did not finish".into())),
+                    };
+                }
+                ProviderEvent::Exited { .. } => {
+                    return Err(Error::Provider("the research CLI exited".into()));
+                }
+                event => observe(event).await,
+            }
+        }
+        Err(Error::Provider("the research CLI went away".into()))
+    };
+    let reply = tokio::select! {
+        biased;
+        () = cancel.cancelled() => Err(Error::Invalid("research cancelled".into())),
+        () = stop.cancelled() => Err(Error::Invalid("research cancelled".into())),
+        reply = tokio::time::timeout_at(deadline, turn) =>
+            reply.unwrap_or_else(|_| Err(Error::Provider("the research ran out of time".into()))),
+    };
+    session.close().await;
+    reply
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use brigadier_providers::{BoxFuture, ProviderSession};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    struct FakeSession {
+        closed: AtomicBool,
+        fail_send: bool,
+    }
+    impl ProviderSession for FakeSession {
+        fn native_id(&self) -> String {
+            "fake".into()
+        }
+        fn send(&self, _: TurnInput) -> BoxFuture<'_, brigadier_providers::Result<()>> {
+            Box::pin(async {
+                if self.fail_send {
+                    Err(brigadier_providers::Error::Invalid("fake failure".into()))
+                } else {
+                    Ok(())
+                }
+            })
+        }
+        fn steer(&self, input: TurnInput) -> BoxFuture<'_, brigadier_providers::Result<()>> {
+            self.send(input)
+        }
+        fn interrupt(&self) -> BoxFuture<'_, brigadier_providers::Result<()>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn answer(
+            &self,
+            _: String,
+            decision: ApprovalDecision,
+        ) -> BoxFuture<'_, brigadier_providers::Result<()>> {
+            assert!(matches!(decision, ApprovalDecision::Deny { .. }));
+            Box::pin(async { Ok(()) })
+        }
+        fn close(&self) -> BoxFuture<'_, ()> {
+            Box::pin(async {
+                self.closed.store(true, Ordering::SeqCst);
+            })
+        }
+        fn is_running(&self) -> bool {
+            !self.closed.load(Ordering::SeqCst)
+        }
+    }
+
+    #[tokio::test]
+    async fn web_runner_closes_on_success_failure_timeout_reset_and_shutdown() {
+        for mode in ["success", "failure", "timeout", "reset", "shutdown"] {
+            let session = Arc::new(FakeSession {
+                closed: AtomicBool::new(false),
+                fail_send: mode == "failure",
+            });
+            let (tx, events) = tokio::sync::mpsc::channel(4);
+            let cancel = CancellationToken::new();
+            let stop = CancellationToken::new();
+            if mode == "success" {
+                tx.send(ProviderEvent::Message {
+                    item_id: "a".into(),
+                    role: Role::Assistant,
+                    text: "{}".into(),
+                })
+                .await
+                .unwrap();
+                tx.send(ProviderEvent::TurnCompleted {
+                    turn_id: None,
+                    status: TurnStatus::Completed,
+                    duration_ms: None,
+                    usage: None,
+                })
+                .await
+                .unwrap();
+            }
+            let trigger = if mode == "reset" {
+                cancel.clone()
+            } else {
+                stop.clone()
+            };
+            let should_cancel = matches!(mode, "reset" | "shutdown");
+            let start = async {
+                if should_cancel {
+                    trigger.cancel();
+                }
+                Ok(Started {
+                    session: session.clone(),
+                    events,
+                })
+            };
+            let result = run_web_session(
+                start,
+                "research".into(),
+                &cancel,
+                &stop,
+                Duration::from_millis(10),
+                |_| async {},
+            )
+            .await;
+            assert_eq!(result.is_ok(), mode == "success", "{mode}: {result:?}");
+            assert!(session.closed.load(Ordering::SeqCst), "{mode}");
+            drop(tx);
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_start_is_not_polled_and_startup_is_bounded() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let stop = CancellationToken::new();
+        let result = run_web_session(
+            async { panic!("cancelled startup was polled") },
+            String::new(),
+            &cancel,
+            &stop,
+            Duration::from_millis(1),
+            |_| async {},
+        )
+        .await;
+        assert!(result.is_err());
+        let result = run_web_session(
+            std::future::pending(),
+            String::new(),
+            &CancellationToken::new(),
+            &stop,
+            Duration::from_millis(1),
+            |_| async {},
+        )
+        .await;
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("startup ran out of time")
+        );
+    }
+    #[tokio::test]
+    async fn refresh_response_is_flushed_before_the_fake_fetch_starts() {
+        let fetched = Arc::new(AtomicBool::new(false));
+        let (response, acknowledged) = tokio::sync::oneshot::channel();
+        let count = fetched.clone();
+        let job = tokio::spawn(after_acknowledgement(acknowledged, async move {
+            count.store(true, Ordering::SeqCst);
+        }));
+        tokio::task::yield_now().await;
+        assert!(!fetched.load(Ordering::SeqCst));
+        response.send(()).unwrap();
+        job.await.unwrap().unwrap();
+        assert!(fetched.load(Ordering::SeqCst));
+
+        let (response, acknowledged) = tokio::sync::oneshot::channel();
+        drop(response);
+        assert!(
+            after_acknowledgement(acknowledged, async {
+                panic!("disconnected client fetched")
+            })
+            .await
+            .is_err()
+        );
+    }
 }

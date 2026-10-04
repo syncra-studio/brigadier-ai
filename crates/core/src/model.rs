@@ -1172,6 +1172,8 @@ pub enum DomainEvent {
         owner: String,
         failures: Vec<String>,
     },
+    /// Model ratings changed; reload Usage, model summaries and route previews.
+    RankingsChanged,
     ProviderChecked {
         overview: ProviderOverview,
     },
@@ -1328,6 +1330,7 @@ impl DomainEvent {
             Self::BranchesKept { .. } => "branches.kept",
             Self::CleanupRequested { .. } => "cleanup.requested",
             Self::CleanupCompleted { .. } => "cleanup.completed",
+            Self::RankingsChanged => "rankings.changed",
             Self::ProviderChecked { .. } => "provider.checked",
             Self::ProjectUpdated { .. } => "project.updated",
             Self::ConversationSetUp { .. } => "conversation.setUp",

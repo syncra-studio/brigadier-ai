@@ -123,6 +123,7 @@ impl Projection {
             | DomainEvent::BranchesKept { .. }
             | DomainEvent::CleanupRequested { .. }
             | DomainEvent::CleanupCompleted { .. }
+            | DomainEvent::RankingsChanged
             | DomainEvent::ProviderChecked { .. }
             | DomainEvent::DraftPinned { .. }
             | DomainEvent::BrainJobUpdated { .. }

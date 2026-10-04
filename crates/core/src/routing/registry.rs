@@ -16,6 +16,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::now_ms;
 
+mod refresh;
+pub use refresh::{RankingsRefresh, RankingsRefreshState, RatingChange};
+
 /// The largest registry document read.
 pub const MAX_BYTES: usize = brigadier_router::MAX_REGISTRY_BYTES;
 
@@ -39,6 +42,9 @@ struct State {
     fetched_at_ms: Option<i64>,
     checked_at_ms: Option<i64>,
     error: Option<String>,
+    overlay: Option<refresh::Overlay>,
+    refresh: RankingsRefresh,
+    running: Option<(String, tokio_util::sync::CancellationToken)>,
 }
 
 /// What asking the repository for the registry gave.
@@ -83,6 +89,18 @@ impl RegistryHolder {
         let meta = meta.filter(|meta| {
             source == RegistrySource::Downloaded && meta.revision == registry.revision
         });
+        let overlay: Option<refresh::Overlay> = std::fs::read(dir.join("overlay.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let mut refresh = overlay
+            .as_ref()
+            .map(|overlay| overlay.job.clone())
+            .unwrap_or_default();
+        if let Some(overlay) = &overlay
+            && overlay.base_revision != registry.revision
+        {
+            refresh.state = RankingsRefreshState::Superseded;
+        }
         let fetched_at_ms = meta.as_ref().map(|meta| meta.fetched_at_ms);
         tracing::info!(
             revision = registry.revision,
@@ -98,6 +116,9 @@ impl RegistryHolder {
                 fetched_at_ms,
                 checked_at_ms: None,
                 error: None,
+                overlay,
+                refresh,
+                running: None,
             }),
         })
     }
@@ -130,6 +151,14 @@ impl RegistryHolder {
     /// Takes in what the repository answered. Answers whether the registry in use changed.
     /// Blocking (writes the cache).
     pub fn take(&self, fetched: Fetched) -> bool {
+        self.take_with(fetched, |bytes, meta| self.write(bytes, meta))
+    }
+
+    fn take_with(
+        &self,
+        fetched: Fetched,
+        write: impl FnOnce(&[u8], &Meta) -> std::io::Result<()>,
+    ) -> bool {
         let now = now_ms();
         let (bytes, etag, source) = match fetched {
             Fetched::NotModified => {
@@ -160,9 +189,9 @@ impl RegistryHolder {
             Ok(registry) => registry,
             Err(err) => return refused(&mut self.state(), format!("it doesn't read: {err}")),
         };
-        let current = self.current();
+        let mut state = self.state();
+        let current = state.registry.clone();
         if !registry.is_newer_than(&current) {
-            let mut state = self.state();
             if registry.revision == current.revision {
                 // The same revision under a new ETag: nothing to take, nothing wrong.
                 state.checked_at_ms = Some(now);
@@ -184,12 +213,14 @@ impl RegistryHolder {
             fetched_at_ms: now,
             source,
         };
-        if let Err(err) = self.write(&bytes, &meta) {
-            return refused(&mut self.state(), format!("it could not be saved: {err}"));
+        if let Err(err) = write(&bytes, &meta) {
+            return refused(&mut state, format!("it could not be saved: {err}"));
         }
         tracing::info!(revision = registry.revision, "model registry updated");
-        let mut state = self.state();
         state.registry = Arc::new(registry);
+        if state.overlay.is_some() && state.running.is_none() {
+            state.refresh.state = RankingsRefreshState::Superseded;
+        }
         state.source = RegistrySource::Downloaded;
         state.etag = etag;
         state.fetched_at_ms = Some(now);
@@ -200,13 +231,31 @@ impl RegistryHolder {
 
     /// Writes the document and its meta atomically (a temporary file renamed into place).
     fn write(&self, bytes: &[u8], meta: &Meta) -> std::io::Result<()> {
-        std::fs::create_dir_all(&self.dir)?;
         let meta = serde_json::to_vec_pretty(meta).map_err(std::io::Error::other)?;
-        for (name, contents) in [(DOCUMENT, bytes), (META, meta.as_slice())] {
-            let temporary = self.dir.join(format!(".{name}.tmp"));
-            std::fs::write(&temporary, contents)?;
-            std::fs::rename(&temporary, self.dir.join(name))?;
+        // Publish the document last. If either write fails, the old document still wins;
+        // an unmatched meta is ignored at startup, so it cannot supply a stale ETag.
+        self.write_atomic(META, &meta)?;
+        self.write_atomic(DOCUMENT, bytes)
+    }
+
+    fn write_atomic(&self, name: &str, contents: &[u8]) -> std::io::Result<()> {
+        use std::io::Write;
+        std::fs::create_dir_all(&self.dir)?;
+        let temporary = self
+            .dir
+            .join(format!(".{name}.{}.tmp", uuid::Uuid::now_v7()));
+        let result = (|| {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)?;
+            file.write_all(contents)?;
+            file.sync_all()?;
+            std::fs::rename(&temporary, self.dir.join(name))
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(temporary);
         }
-        Ok(())
+        result
     }
 }

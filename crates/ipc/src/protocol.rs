@@ -671,6 +671,14 @@ pub enum Request {
     },
     /// Asks the repository for a newer model registry now; answers the registry in use after.
     CheckRegistry,
+    /// Starts sourced web research after a registry check; returns the job id immediately.
+    /// If a refresh is already running, returns that job's id instead.
+    RefreshRankings,
+    /// The latest refresh job, its findings and whether its saved overlay is in use.
+    GetRankingsRefresh,
+    /// Cancels a running refresh and removes its overlay, restoring published ratings.
+    /// User rankings and learned outcomes are kept.
+    ResetRankings,
     /// Development builds only: makes a provider refuse work as if a usage window ran out, for
     /// one task or conversation, after its next `afterToolCalls` tool calls (0: at once). The
     /// session's turn fails with a usage-limit error and the provider counts as limited until
@@ -1049,6 +1057,15 @@ pub enum Response {
     },
     CheckRegistry {
         registry: RegistryInfo,
+    },
+    RefreshRankings {
+        job_id: String,
+    },
+    GetRankingsRefresh {
+        refresh: brigadier_core::routing::registry::RankingsRefresh,
+    },
+    ResetRankings {
+        refresh: brigadier_core::routing::registry::RankingsRefresh,
     },
     #[cfg(debug_assertions)]
     DebugInjectLimit,

@@ -49,6 +49,9 @@ pub async fn check(daemon: &Daemon) {
         holder.take(fetched)
     })
     .await;
+    if matches!(result, Ok(true)) {
+        daemon.runtime.rankings_changed().await;
+    }
     if let Err(err) = result {
         tracing::warn!(error = %err, "the registry check stopped");
     }

@@ -6,9 +6,9 @@
 /// The codex-cli version these bindings were generated from.
 pub const SCHEMA_VERSION: &str = "0.158.0";
 
-/**A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).
-
-IMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.*/
+///A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).
+///
+///IMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.
 #[derive(
     ::serde::Deserialize, ::serde::Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd,
 )]
@@ -62,9 +62,9 @@ pub enum Account {
         uses_codex_managed_credentials: bool,
     },
 }
-/**Sparse rolling rate-limit update.
-
-Clients should merge available values into the most recent `account/rateLimits/read` response or refetch that snapshot. Nullable account metadata may be unavailable in a rolling update and does not clear a previously observed value.*/
+///Sparse rolling rate-limit update.
+///
+///Clients should merge available values into the most recent `account/rateLimits/read` response or refetch that snapshot. Nullable account metadata may be unavailable in a rolling update and does not clear a previously observed value.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 pub struct AccountRateLimitsUpdatedNotification {
     #[serde(rename = "rateLimits")]
@@ -327,9 +327,9 @@ pub struct ClientInfo {
     pub title: ::std::option::Option<::std::string::String>,
     pub version: ::std::string::String,
 }
-/**This translation layer make sure that we expose codex error code in camel case.
-
-When an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.*/
+///This translation layer make sure that we expose codex error code in camel case.
+///
+///When an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 pub enum CodexErrorInfo {
     #[serde(rename = "contextWindowExceeded")]
@@ -746,11 +746,11 @@ pub struct CommandExecutionOutputDeltaNotification {
 ///`CommandExecutionRequestApprovalParams`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 pub struct CommandExecutionRequestApprovalParams {
-    /**Unique identifier for this specific approval callback.
-
-    For regular shell/unified_exec approvals, this is null.
-
-    For zsh-exec-bridge subcommand approvals, multiple callbacks can belong to one parent `itemId`, so `approvalId` is a distinct opaque callback id (a UUID) used to disambiguate routing. Stdin approvals also use a distinct callback id; inspect `kind` to distinguish them.*/
+    ///Unique identifier for this specific approval callback.
+    ///
+    ///For regular shell/unified_exec approvals, this is null.
+    ///
+    ///For zsh-exec-bridge subcommand approvals, multiple callbacks can belong to one parent `itemId`, so `approvalId` is a distinct opaque callback id (a UUID) used to disambiguate routing. Stdin approvals also use a distinct callback id; inspect `kind` to distinguish them.
     #[serde(
         rename = "approvalId",
         skip_serializing_if = "::std::option::Option::is_none"
@@ -1374,9 +1374,9 @@ impl ::std::convert::From<InputImageFunctionCallOutputContentItem>
 ///`GetAccountParams`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
 pub struct GetAccountParams {
-    /**When `true`, requests a proactive token refresh before returning.
-
-    In managed auth mode this triggers the normal refresh-token flow. In external auth mode this flag is ignored. Clients should refresh tokens themselves and call `account/login/start` with `chatgptAuthTokens`.*/
+    ///When `true`, requests a proactive token refresh before returning.
+    ///
+    ///In managed auth mode this triggers the normal refresh-token flow. In external auth mode this flag is ignored. Clients should refresh tokens themselves and call `account/login/start` with `chatgptAuthTokens`.
     #[serde(
         rename = "refreshToken",
         skip_serializing_if = "::std::option::Option::is_none"
@@ -1618,9 +1618,9 @@ pub struct InitializeCapabilities {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub extensions:
         ::std::option::Option<::serde_json::Map<::std::string::String, ::serde_json::Value>>,
-    /**Legacy opt-in for the `openai/form` MCP extension.
-
-    New clients should declare `openai/form` in [`Self::extensions`].*/
+    ///Legacy opt-in for the `openai/form` MCP extension.
+    ///
+    ///New clients should declare `openai/form` in [`Self::extensions`].
     #[serde(
         rename = "mcpServerOpenaiFormElicitation",
         skip_serializing_if = "::std::option::Option::is_none"
@@ -2241,9 +2241,9 @@ impl ::std::convert::TryFrom<::std::string::String> for MentionUserInputType {
         value.parse()
     }
 }
-/**Classifies an assistant message as interim commentary or final answer text.
-
-Providers do not emit this consistently, so callers must treat `None` as "phase unknown" and keep compatibility behavior for legacy models.*/
+///Classifies an assistant message as interim commentary or final answer text.
+///
+///Providers do not emit this consistently, so callers must treat `None` as "phase unknown" and keep compatibility behavior for legacy models.
 #[derive(
     ::serde::Deserialize,
     ::serde::Serialize,
@@ -2257,9 +2257,9 @@ Providers do not emit this consistently, so callers must treat `None` as "phase 
     PartialOrd,
 )]
 pub enum MessagePhase {
-    /**Mid-turn assistant text (for example preamble/progress narration).
-
-    Additional tool calls or assistant output may follow before turn completion.*/
+    ///Mid-turn assistant text (for example preamble/progress narration).
+    ///
+    ///Additional tool calls or assistant output may follow before turn completion.
     #[serde(rename = "commentary")]
     Commentary,
     ///The assistant's terminal answer text for the current turn.
@@ -3282,9 +3282,9 @@ impl ::std::convert::TryFrom<::std::string::String> for RateLimitResetCreditStat
 pub struct RateLimitResetCreditsSummary {
     #[serde(rename = "availableCount")]
     pub available_count: i64,
-    /**Detail rows for available reset credits, when the backend provides them.
-
-    `null` means only `availableCount` is known, while an empty array means details were fetched and no available credits were returned. The backend may cap this list, so its length can be less than `availableCount`.*/
+    ///Detail rows for available reset credits, when the backend provides them.
+    ///
+    ///`null` means only `availableCount` is known, while an empty array means details were fetched and no available credits were returned. The backend may cap this list, so its length can be less than `availableCount`.
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub credits: ::std::option::Option<::std::vec::Vec<RateLimitResetCredit>>,
 }
@@ -4070,11 +4070,11 @@ pub struct ThreadDeleteParams {
     #[serde(rename = "threadId")]
     pub thread_id: ::std::string::String,
 }
-/**There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.
-
-If using a non-empty path, the thread_id param will be ignored. Empty string path values are treated as absent.
-
-Prefer using thread_id whenever possible.*/
+///There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.
+///
+///If using a non-empty path, the thread_id param will be ignored. Empty string path values are treated as absent.
+///
+///Prefer using thread_id whenever possible.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
 pub struct ThreadForkParams {
     #[serde(
@@ -4111,9 +4111,9 @@ pub struct ThreadForkParams {
         skip_serializing_if = "::std::option::Option::is_none"
     )]
     pub exclude_turns: ::std::option::Option<bool>,
-    /**Optional last turn id to fork through, inclusive.
-
-    When specified, turns after `last_turn_id` are omitted from the fork. The referenced turn cannot be in progress.*/
+    ///Optional last turn id to fork through, inclusive.
+    ///
+    ///When specified, turns after `last_turn_id` are omitted from the fork. The referenced turn cannot be in progress.
     #[serde(
         rename = "lastTurnId",
         skip_serializing_if = "::std::option::Option::is_none"
@@ -4314,9 +4314,9 @@ pub enum ThreadItem {
         namespace: ::std::option::Option<::std::string::String>,
         output: FunctionCallOutputBody,
     },
-    /**PlanThreadItem
-
-    EXPERIMENTAL - proposed plan item content. The completed plan item is authoritative and may not match the concatenation of `PlanDelta` text.*/
+    ///PlanThreadItem
+    ///
+    ///EXPERIMENTAL - proposed plan item content. The completed plan item is authoritative and may not match the concatenation of `PlanDelta` text.
     #[serde(rename = "plan")]
     Plan {
         id: ::std::string::String,
@@ -4506,9 +4506,9 @@ pub enum ThreadItem {
         action: ::std::option::Option<WebSearchAction>,
         id: ::std::string::String,
         query: ::std::string::String,
-        /**Structured search results returned out-of-band by standalone web search.
-
-        These stay as opaque JSON at the extension/app-server boundary so new result fields and result types can pass through without a Codex release.*/
+        ///Structured search results returned out-of-band by standalone web search.
+        ///
+        ///These stay as opaque JSON at the extension/app-server boundary so new result fields and result types can pass through without a Codex release.
         #[serde(skip_serializing_if = "::std::option::Option::is_none")]
         results: ::std::option::Option<::std::vec::Vec<::serde_json::Value>>,
     },
@@ -4518,9 +4518,9 @@ pub enum ThreadItem {
         id: ::std::string::String,
         path: LegacyAppPathString,
     },
-    /**SleepThreadItem
-
-    Display item emitted by the interruptible `clock.sleep` tool.*/
+    ///SleepThreadItem
+    ///
+    ///Display item emitted by the interruptible `clock.sleep` tool.
     #[serde(rename = "sleep")]
     Sleep {
         #[serde(rename = "durationMs")]
@@ -4567,13 +4567,13 @@ pub enum ThreadItem {
     #[serde(rename = "contextCompaction")]
     ContextCompaction { id: ::std::string::String },
 }
-/**There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.
-
-For non-running threads, the precedence is: history > non-empty path > thread_id. If using history or a non-empty path for a non-running thread, the thread_id param will be ignored.
-
-If thread_id identifies a running thread, app-server rejoins that thread and treats a non-empty path as a consistency check against the active rollout path. Empty string path values are treated as absent.
-
-Prefer using thread_id whenever possible.*/
+///There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.
+///
+///For non-running threads, the precedence is: history > non-empty path > thread_id. If using history or a non-empty path for a non-running thread, the thread_id param will be ignored.
+///
+///If thread_id identifies a running thread, app-server rejoins that thread and treats a non-empty path as a consistency check against the active rollout path. Empty string path values are treated as absent.
+///
+///Prefer using thread_id whenever possible.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
 pub struct ThreadResumeParams {
     #[serde(
@@ -4658,9 +4658,9 @@ pub struct ThreadResumeResponse {
         skip_serializing_if = "::std::vec::Vec::is_empty"
     )]
     pub instruction_sources: ::std::vec::Vec<LegacyAppPathString>,
-    /**Opaque cursor for hydrating paginated items backwards.
-
-    Pass this as `cursor` to `thread/items/list` with `sortDirection: "desc"`. The first page includes the item identified by the cursor.*/
+    ///Opaque cursor for hydrating paginated items backwards.
+    ///
+    ///Pass this as `cursor` to `thread/items/list` with `sortDirection: "desc"`. The first page includes the item identified by the cursor.
     #[serde(
         rename = "itemsBackwardsCursor",
         skip_serializing_if = "::std::option::Option::is_none"
@@ -4682,9 +4682,9 @@ pub struct ThreadResumeResponse {
     )]
     pub service_tier: ::std::option::Option<::std::string::String>,
     pub thread: Thread,
-    /**Opaque cursor for hydrating paginated turns backwards.
-
-    Pass this as `cursor` to `thread/turns/list` with `sortDirection: "desc"`. The first page includes the turn identified by the cursor.*/
+    ///Opaque cursor for hydrating paginated turns backwards.
+    ///
+    ///Pass this as `cursor` to `thread/turns/list` with `sortDirection: "desc"`. The first page includes the turn identified by the cursor.
     #[serde(
         rename = "turnsBackwardsCursor",
         skip_serializing_if = "::std::option::Option::is_none"

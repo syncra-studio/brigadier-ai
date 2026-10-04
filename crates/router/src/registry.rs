@@ -205,6 +205,9 @@ pub struct MergedModel {
     pub resolved: Option<String>,
     pub display_name: String,
     pub status: ModelStatus,
+    pub rating_provenance: RatingProvenance,
+    /// Effective category defaults for this concrete model.
+    pub default_effort: BTreeMap<TaskCategory, String>,
     /// The registry entry it is (or inherits), if any.
     pub registry_key: Option<String>,
     /// Its family word (`opus`, `sol`), the registry's `match.family`: what a user rule about
@@ -223,4 +226,25 @@ pub struct MergedModel {
     pub excluded: bool,
     pub trial: Option<TrialState>,
     pub research: Option<ResearchNote>,
+}
+
+/// Where the effective ratings came from; independent of identity and trial status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum RatingProvenance {
+    Curated,
+    ResearchedOverlay,
+    ResearchNote,
+    Unrated,
+}
+
+impl MergedModel {
+    /// Only the provider's verified resolution groups aliases. Family keys never identify
+    /// a concrete model, and a later alias resolution cannot move an existing patch.
+    pub fn rating_identity(&self) -> String {
+        self.resolved
+            .as_deref()
+            .unwrap_or(&self.id)
+            .to_ascii_lowercase()
+    }
 }

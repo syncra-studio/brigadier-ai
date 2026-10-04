@@ -409,6 +409,9 @@ factors in its details).
   is higher; it is cached in `cache/registry/` in the data directory. It is not signed yet.
   Development builds can point `BRIGADIER_REGISTRY_URL` at another HTTPS address or at plain
   HTTP on 127.0.0.1 or ::1, to try an update against a local copy.
+- **Ranking refresh.** The daemon can research current model cards, release notes and benchmarks
+  on demand through an enabled CLI model. Sourced rating patches persist until reset or a newer
+  registry revision supersedes them; manual rankings, routing rules and trial gates stay in force.
 - **New models.** A model a CLI lists that the registry doesn't know is researched once, on
   spare quota (the Brain enrichment setting), from its release notes and benchmarks, and gets
   one in five scouting, research and verify tasks as a trial until it has three outcomes.

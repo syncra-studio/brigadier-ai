@@ -4,6 +4,7 @@ import type { Modalities } from "./Modalities";
 import type { ModelStatus } from "./ModelStatus";
 import type { ProviderKind } from "./ProviderKind";
 import type { QualityTier } from "./QualityTier";
+import type { RatingProvenance } from "./RatingProvenance";
 import type { ResearchNote } from "./ResearchNote";
 import type { TaskCategory } from "./TaskCategory";
 import type { TrialState } from "./TrialState";
@@ -19,7 +20,11 @@ id: string,
 /**
  * The concrete model an alias resolves to, when the CLI says.
  */
-resolved: string | null, displayName: string, status: ModelStatus, 
+resolved: string | null, displayName: string, status: ModelStatus, ratingProvenance: RatingProvenance, 
+/**
+ * Effective category defaults for this concrete model.
+ */
+defaultEffort: { [key in TaskCategory]?: string }, 
 /**
  * The registry entry it is (or inherits), if any.
  */

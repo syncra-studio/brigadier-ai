@@ -127,7 +127,9 @@ mod outcome;
 mod overrides;
 mod quota;
 mod rankings;
+mod ratings;
 mod registry;
+pub use ratings::{RatingPatch, validate_patches};
 mod table;
 
 use brigadier_providers::ProviderKind;
@@ -153,8 +155,9 @@ pub use rankings::{
     RankedEntry, RankedPlace, Ranking, RankingUse, ranking_for, ranking_text, target_text,
 };
 pub use registry::{
-    Capability, MergedModel, Modalities, Modality, ModelMatch, ModelStatus, QualityTier, Registry,
-    RegistryInfo, RegistryModel, RegistrySource, ResearchNote, TrialState,
+    Capability, MergedModel, Modalities, Modality, ModelMatch, ModelStatus, QualityTier,
+    RatingProvenance, Registry, RegistryInfo, RegistryModel, RegistrySource, ResearchNote,
+    TrialState,
 };
 
 /// What a piece of work is, for routing. Mirrors the core's task kinds plus plain Chats and
