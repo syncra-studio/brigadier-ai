@@ -105,12 +105,7 @@ pub(crate) fn install(dir: &Path) -> std::io::Result<PathBuf> {
     let hooks = dir.join("hooks");
     std::fs::create_dir_all(&hooks)?;
     for hook in HOOKS {
-        write_if_changed(&hooks.join(hook), DISPATCH)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(hooks.join(hook), std::fs::Permissions::from_mode(0o755))?;
-        }
+        write_if_changed(&hooks.join(hook), DISPATCH, true)?;
     }
     let mut config = format!(
         "# Brigadier's git guard for an overnight run's workers (PLAN.md 10.8).\n[core]\n\thooksPath = {}\n[url \"brigadier-push-declined::\"]\n",
@@ -123,7 +118,7 @@ pub(crate) fn install(dir: &Path) -> std::io::Result<PathBuf> {
         ));
     }
     let path = dir.join(GUARD_CONFIG);
-    write_if_changed(&path, &config)?;
+    write_if_changed(&path, &config, false)?;
     Ok(path)
 }
 
@@ -174,13 +169,33 @@ fn quoted(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-fn write_if_changed(path: &Path, content: &str) -> std::io::Result<()> {
+/// Replaces the file in one step, `executable` already when it appears. Workers of a run start
+/// at once and each installs the guard: each stages its own file, so one never renames or
+/// removes another's.
+fn write_if_changed(path: &Path, content: &str, executable: bool) -> std::io::Result<()> {
+    static STAGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     if std::fs::read_to_string(path).is_ok_and(|now| now == content) {
         return Ok(());
     }
-    let staged = path.with_extension("new");
-    std::fs::write(&staged, content)?;
-    std::fs::rename(&staged, path)
+    let staged = path.with_extension(format!(
+        "new-{}-{}",
+        std::process::id(),
+        STAGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let written = std::fs::write(&staged, content).and_then(|()| {
+        #[cfg(unix)]
+        if executable {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))?;
+        }
+        #[cfg(not(unix))]
+        let _ = executable;
+        std::fs::rename(&staged, path)
+    });
+    if written.is_err() {
+        let _ = std::fs::remove_file(&staged);
+    }
+    written
 }
 
 #[cfg(all(test, unix))]
@@ -390,5 +405,32 @@ mod tests {
                 .status
                 .success()
         );
+    }
+
+    #[test]
+    fn workers_starting_at_once_all_get_the_guard() {
+        let dir =
+            std::env::temp_dir().join(format!("brigadier-guard-at-once-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let installs: Vec<_> = (0..16)
+            .map(|_| {
+                let dir = dir.clone();
+                std::thread::spawn(move || install(&dir))
+            })
+            .collect();
+        for handle in installs {
+            handle
+                .join()
+                .unwrap()
+                .expect("each worker installs the guard");
+        }
+        let left: Vec<_> = std::fs::read_dir(dir.join("hooks"))
+            .unwrap()
+            .chain(std::fs::read_dir(&dir).unwrap())
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".new-"))
+            .collect();
+        assert!(left.is_empty(), "staged files left: {left:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
