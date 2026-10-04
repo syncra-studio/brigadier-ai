@@ -989,6 +989,7 @@ impl SessionManager {
             run,
             messages: Vec::new(),
             rework_rounds: 0,
+            native_session: None,
             trial_slot: waits && trial_slot,
             created_at_ms: now,
             updated_at_ms: now,
@@ -1337,7 +1338,7 @@ impl SessionManager {
     /// Starts a worker whose CLI session stopped (the conversation hibernated) again,
     /// resuming its CLI session.
     async fn revive_worker(&self, live: &Arc<TaskLive>, task: &Task, text: String) -> Result<()> {
-        let native_id = self.last_worker_native_id(&task.id).await.ok_or_else(|| {
+        let native_id = self.last_worker_native_id(task).await.ok_or_else(|| {
             Error::Invalid(format!(
                 "task-{} cannot be resumed; delegate a new task",
                 task.number
@@ -1377,29 +1378,41 @@ impl SessionManager {
         Ok(())
     }
 
-    async fn last_worker_native_id(&self, id: &TaskId) -> Option<String> {
-        let page = self
-            .core
-            .store()
-            .read_stream(
-                streams::task(id),
-                brigadier_store::StreamPage {
-                    before: None,
-                    kinds: vec!["worker.event".into()],
-                    limit: 1_000,
-                },
-            )
+    /// The worker's CLI session to resume: the one recorded on the task, else (a task recorded
+    /// before it was kept there) the latest session start in its events, which is then
+    /// recorded.
+    async fn last_worker_native_id(&self, task: &Task) -> Option<String> {
+        if let Some(native_id) = &task.native_session {
+            return Some(native_id.clone());
+        }
+        let native_id = latest_session_start(self.core.store(), &task.id).await?;
+        self.note_native_session(&task.conversation_id, &task.id, &native_id)
+            .await;
+        Some(native_id)
+    }
+
+    /// Records the worker's latest CLI session on its task.
+    async fn note_native_session(
+        &self,
+        conversation_id: &ConversationId,
+        id: &TaskId,
+        native_id: &str,
+    ) {
+        let known = self
+            .task_by_id(conversation_id, id)
             .await
-            .ok()?;
-        page.into_iter().find_map(|stored| {
-            match serde_json::from_str::<DomainEvent>(stored.payload.get()) {
-                Ok(DomainEvent::WorkerEvent {
-                    event: ProviderEvent::SessionStarted { native_id, .. },
-                    ..
-                }) => Some(native_id),
-                _ => None,
-            }
-        })
+            .is_ok_and(|task| task.native_session.as_deref() == Some(native_id));
+        if known {
+            return;
+        }
+        if let Err(err) = self
+            .update_task(conversation_id, id, |t| {
+                t.native_session = Some(native_id.to_owned());
+            })
+            .await
+        {
+            tracing::warn!(task = %id, error = %err, "could not record the worker's session");
+        }
     }
 
     /// B12: what the worker may touch.
@@ -1977,6 +1990,10 @@ impl SessionManager {
             }
             ProviderEvent::TurnStarted { .. } => {
                 live.state.lock().await.last_message = None;
+            }
+            ProviderEvent::SessionStarted { native_id, .. } => {
+                self.note_native_session(&live.conversation_id, &live.id, native_id)
+                    .await;
             }
             ProviderEvent::Message {
                 role: brigadier_providers::Role::Assistant,
@@ -3274,7 +3291,7 @@ impl SessionManager {
         task: &Task,
         first: TurnInput,
     ) -> Result<()> {
-        let native_id = self.last_worker_native_id(&task.id).await.ok_or_else(|| {
+        let native_id = self.last_worker_native_id(task).await.ok_or_else(|| {
             Error::Invalid(format!(
                 "task-{} cannot be resumed; delegate a new task",
                 task.number
@@ -3603,6 +3620,39 @@ fn access_for(kind: TaskKind, permission: PermissionLevel, run: bool) -> WorkerA
         },
         network: true,
         unsandboxed: permission == PermissionLevel::FullAccess && !run,
+    }
+}
+
+/// The native id of the latest session start among a task's worker events, paging back
+/// from the newest until one is found.
+async fn latest_session_start(store: &brigadier_store::Store, id: &TaskId) -> Option<String> {
+    let mut before = None;
+    loop {
+        let page = store
+            .read_stream(
+                streams::task(id),
+                brigadier_store::StreamPage {
+                    before,
+                    kinds: vec!["worker.event".into()],
+                    limit: 1_000,
+                },
+            )
+            .await
+            .ok()?;
+        let oldest = page.iter().map(|stored| stored.stream_seq).min()?;
+        let found = page.iter().find_map(|stored| {
+            match serde_json::from_str::<DomainEvent>(stored.payload.get()) {
+                Ok(DomainEvent::WorkerEvent {
+                    event: ProviderEvent::SessionStarted { native_id, .. },
+                    ..
+                }) => Some(native_id),
+                _ => None,
+            }
+        });
+        if found.is_some() {
+            return found;
+        }
+        before = Some(oldest);
     }
 }
 
@@ -3980,6 +4030,66 @@ mod tests {
         // Haiku allowed again: the limits only widened, so the session stays.
         state.allowed_models = Some(no_haiku);
         assert!(!state.models_changed(&opus));
+    }
+
+    #[tokio::test]
+    async fn a_long_workers_session_is_found_behind_a_thousand_later_events() {
+        let dir = std::env::temp_dir().join(format!("brigadier-resume-{}", uuid::Uuid::new_v4()));
+        let store = tokio::task::spawn_blocking({
+            let dir = dir.clone();
+            move || {
+                brigadier_store::Store::open(brigadier_store::StoreConfig {
+                    db_path: dir.join("db.sqlite"),
+                    blobs_dir: dir.join("blobs"),
+                    readers: 1,
+                })
+            }
+        })
+        .await
+        .expect("joined")
+        .expect("a store");
+        let task = TaskId("t1".into());
+        let event = |event: ProviderEvent| {
+            let event = DomainEvent::WorkerEvent {
+                task_id: task.clone(),
+                event,
+            };
+            brigadier_store::NewEvent::new(streams::task(&task), event.kind(), 0, &event)
+                .expect("an event")
+        };
+        // A task recorded before its session was kept on it: an older session, the latest,
+        // then more than a page of reasoning after it.
+        let mut events = vec![
+            event(ProviderEvent::SessionStarted {
+                native_id: "older".into(),
+                model: None,
+                cwd: None,
+                cli_version: None,
+            }),
+            event(ProviderEvent::SessionStarted {
+                native_id: "latest".into(),
+                model: None,
+                cwd: None,
+                cli_version: None,
+            }),
+        ];
+        events.extend((0..2_500).map(|_| {
+            event(ProviderEvent::ReasoningDelta {
+                item_id: "r".into(),
+                text: "thinking".into(),
+            })
+        }));
+        store.append(events).await.expect("stored");
+        assert_eq!(
+            latest_session_start(&store, &task).await.as_deref(),
+            Some("latest")
+        );
+        assert_eq!(
+            latest_session_start(&store, &TaskId("none".into())).await,
+            None
+        );
+        let _ = store.shutdown().await;
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

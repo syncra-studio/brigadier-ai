@@ -617,6 +617,11 @@ pub struct Task {
     /// message from the orchestrator).
     #[serde(default)]
     pub rework_rounds: u32,
+    /// The native id of the worker's latest CLI session, recorded when it starts: sending the
+    /// task back resumes that session, however long its event stream has grown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub native_session: Option<String>,
     /// It took a trial slot when created and waits to start: it keeps the slot until then.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(skip)]
