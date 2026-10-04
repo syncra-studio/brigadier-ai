@@ -112,6 +112,18 @@ impl Processes for LinuxProcesses {
     fn resume(&self, pid: u32) -> Result<()> {
         unix::resume(pid)
     }
+    fn cpu_time_ms(&self, pid: u32) -> Option<u64> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        // Fields 14 and 15 (utime, stime), counted from the closing parenthesis of comm.
+        let mut fields = stat[stat.rfind(')')? + 1..].split_whitespace().skip(11);
+        let user: u64 = fields.next()?.parse().ok()?;
+        let system: u64 = fields.next()?.parse().ok()?;
+        let ticks_per_sec = sysconf(SysconfVar::CLK_TCK)
+            .ok()
+            .flatten()
+            .filter(|ticks| *ticks > 0)? as u64;
+        Some((user + system) * 1000 / ticks_per_sec)
+    }
     fn in_dir(&self, dir: &std::path::Path) -> Result<Vec<u32>> {
         let dir = dir.canonicalize()?;
         let own = std::process::id();

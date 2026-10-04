@@ -9,7 +9,10 @@
 //!   given back the moment the command ends or leaves its worker's tree, so a worker waiting
 //!   on another one (a nested review) never holds it, and a crashed worker can't keep it.
 //! - **Bounded.** A command holding the lease for [`LEASE_MAX`] is taken for a server or
-//!   watcher the classifier missed: it keeps running and no longer holds the lease.
+//!   watcher the classifier missed: it keeps running and no longer holds the lease. One that
+//!   used no CPU for [`IDLE`] while others wait is blocked on something (the network, or a
+//!   lock a waiting command took in the moment before it was stopped, such as cargo's on a
+//!   shared target folder): it keeps running too, and the next command goes on.
 //! - **Critical heat.** At critical heat for [`CRITICAL_HOLD`], the newest running build is
 //!   paused, then another every [`STEP`], until the heat drops back to serious or below; then
 //!   every paused build goes on, in reverse order.
@@ -22,6 +25,8 @@ use serde::{Deserialize, Serialize};
 
 /// How long a command may hold the lease before it counts as long-running.
 pub(crate) const LEASE_MAX: Duration = Duration::from_secs(10 * 60);
+/// How long the lease holder may use no CPU while others wait before the next one goes on.
+pub(crate) const IDLE: Duration = Duration::from_secs(30);
 /// How long critical heat lasts before builds are paused.
 pub(crate) const CRITICAL_HOLD: Duration = Duration::from_secs(60);
 /// Time between two pauses while the heat stays critical.
@@ -46,6 +51,8 @@ pub(crate) struct Seen {
     pub owner: String,
     /// How a thread row names it.
     pub command: String,
+    /// Its processes used CPU since the last look (or started), so it isn't blocked.
+    pub active: bool,
 }
 
 /// What a thread row says about a command.
@@ -77,9 +84,13 @@ pub(crate) enum Action {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
-    /// Running; `since` it last started running.
-    Running { since: Instant },
-    /// Running past [`LEASE_MAX`]: left alone, holding no lease.
+    /// Running; `since` it last started running, `quiet_since` it last used no CPU.
+    Running {
+        since: Instant,
+        quiet_since: Option<Instant>,
+    },
+    /// Running without the lease (it held it past [`LEASE_MAX`], or idle past [`IDLE`] while
+    /// others waited): left alone.
     LongRunning,
     /// Stopped before it ever ran far, until the lease is free and the machine eased.
     Waiting,
@@ -129,14 +140,16 @@ impl Builds {
                 self.lease = None;
             }
         }
-        // The lease holder that ran too long keeps running without it.
-        if let Some(holder) = self.lease
-            && let Some(build) = self.builds.get_mut(&holder)
-            && let State::Running { since } = build.state
-            && now.duration_since(since) >= LEASE_MAX
-        {
-            build.state = State::LongRunning;
-            self.lease = None;
+        for (proc, seen) in &current {
+            if let Some(build) = self.builds.get_mut(proc)
+                && let State::Running { quiet_since, .. } = &mut build.state
+            {
+                *quiet_since = if seen.active {
+                    None
+                } else {
+                    Some(quiet_since.unwrap_or(now))
+                };
+            }
         }
         // New commands: one runs if it may, the others wait.
         let mut new: Vec<Seen> = current
@@ -153,7 +166,10 @@ impl Builds {
                 .any(|build| build.state == State::Waiting);
             let state = if self.lease.is_none() && !load.strained() && !waiting_before {
                 self.lease = Some(seen.root);
-                State::Running { since: now }
+                State::Running {
+                    since: now,
+                    quiet_since: None,
+                }
             } else {
                 actions.push(Action::Stop(seen.root));
                 actions.push(Action::Note {
@@ -176,6 +192,21 @@ impl Builds {
                     state,
                 },
             );
+        }
+        // The lease holder keeps running without the lease once it ran too long, or sat idle
+        // while others wait.
+        let waiting = self
+            .builds
+            .values()
+            .any(|build| build.state == State::Waiting);
+        if let Some(holder) = self.lease
+            && let Some(build) = self.builds.get_mut(&holder)
+            && let State::Running { since, quiet_since } = build.state
+            && (now.duration_since(since) >= LEASE_MAX
+                || (waiting && quiet_since.is_some_and(|quiet| now.duration_since(quiet) >= IDLE)))
+        {
+            build.state = State::LongRunning;
+            self.lease = None;
         }
         if load.critical() {
             let since = *self.critical_since.get_or_insert(now);
@@ -213,7 +244,10 @@ impl Builds {
                 .filter(|(_, build)| build.state == State::Waiting)
                 .min_by_key(|(_, build)| build.seq)
         {
-            build.state = State::Running { since: now };
+            build.state = State::Running {
+                since: now,
+                quiet_since: None,
+            };
             self.lease = Some(proc);
             actions.push(Action::Continue(proc));
         }
@@ -278,7 +312,10 @@ impl Builds {
             build.state = if long {
                 State::LongRunning
             } else {
-                State::Running { since: now }
+                State::Running {
+                    since: now,
+                    quiet_since: None,
+                }
             };
             actions.push(Action::Continue(proc));
             actions.push(Action::Note {
@@ -326,6 +363,7 @@ mod tests {
             root: proc(pid),
             owner: owner.into(),
             command: format!("cargo test #{pid}"),
+            active: true,
         }
     }
 
@@ -442,6 +480,45 @@ mod tests {
             stops(&actions).is_empty(),
             "the long-running one is left alone"
         );
+    }
+
+    #[test]
+    fn a_lease_holder_idle_while_others_wait_lets_the_next_go_on() {
+        let mut builds = Builds::default();
+        let t0 = Instant::now();
+        let quiet = |pid: u32| Seen {
+            active: false,
+            ..seen(pid, "task:a")
+        };
+        // Idle with nobody waiting: it keeps the lease.
+        builds.tick(vec![quiet(10)], CALM, t0);
+        builds.tick(vec![quiet(10)], CALM, t0 + IDLE * 2);
+        assert_eq!(builds.lease, Some(proc(10)));
+        // Someone waits; the holder works again, then goes quiet (blocked on a lock the
+        // waiting one took): after IDLE of quiet, the waiting one goes on; neither is stopped.
+        builds.tick(
+            vec![seen(10, "task:a"), seen(20, "task:b")],
+            CALM,
+            t0 + IDLE * 2 + Duration::from_secs(2),
+        );
+        let t1 = t0 + IDLE * 2 + Duration::from_secs(4);
+        assert!(
+            builds
+                .tick(vec![quiet(10), seen(20, "task:b")], CALM, t1)
+                .is_empty()
+        );
+        assert!(
+            builds
+                .tick(
+                    vec![quiet(10), seen(20, "task:b")],
+                    CALM,
+                    t1 + IDLE - Duration::from_secs(1)
+                )
+                .is_empty()
+        );
+        let actions = builds.tick(vec![quiet(10), seen(20, "task:b")], CALM, t1 + IDLE);
+        assert_eq!(continues(&actions), vec![20]);
+        assert!(stops(&actions).is_empty());
     }
 
     #[test]

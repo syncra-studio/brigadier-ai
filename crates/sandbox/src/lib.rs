@@ -120,6 +120,9 @@ pub trait Processes: Send + Sync {
     fn suspend(&self, pid: u32) -> Result<()>;
     /// Lets a process [`Processes::suspend`] stopped go on (SIGCONT on Unix).
     fn resume(&self, pid: u32) -> Result<()>;
+    /// The CPU time a process has used so far (user and system), in milliseconds; `None` once
+    /// it has exited or when it isn't the current user's.
+    fn cpu_time_ms(&self, pid: u32) -> Option<u64>;
     /// Wall-clock start time of a process, in milliseconds since the Unix epoch.
     fn start_time_ms(&self, pid: u32) -> Result<f64>;
     /// The current user's processes whose working directory is `dir` or inside it. This finds

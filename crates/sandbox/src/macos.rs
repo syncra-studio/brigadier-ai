@@ -94,6 +94,31 @@ impl Processes for MacProcesses {
     fn resume(&self, pid: u32) -> Result<()> {
         unix::resume(pid)
     }
+    fn cpu_time_ms(&self, pid: u32) -> Option<u64> {
+        let pid = libc::c_int::try_from(pid).ok()?;
+        let size = std::mem::size_of::<libc::proc_taskinfo>();
+        let mut info = std::mem::MaybeUninit::<libc::proc_taskinfo>::zeroed();
+        // SAFETY: `info` is a writable buffer of exactly `size` bytes, which is what
+        // PROC_PIDTASKINFO fills; the return value is checked before `info` is read.
+        #[allow(unsafe_code)]
+        let (written, info) = unsafe {
+            let written = libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTASKINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size as libc::c_int,
+            );
+            (written, info.assume_init())
+        };
+        if written != size as libc::c_int {
+            return None;
+        }
+        // The totals count Mach time units (nanoseconds only on Intel).
+        let (numer, denom) = timebase();
+        let ticks = u128::from(info.pti_total_user + info.pti_total_system);
+        u64::try_from(ticks * u128::from(numer) / u128::from(denom) / 1_000_000).ok()
+    }
     fn in_dir(&self, dir: &Path) -> Result<Vec<u32>> {
         let dir = dir.canonicalize()?;
         let own = std::process::id();
@@ -185,6 +210,24 @@ fn parse_procargs(buffer: &[u8]) -> Option<Vec<String>> {
         .map(|arg| String::from_utf8_lossy(arg).into_owned())
         .collect::<Vec<_>>();
     (!args.is_empty()).then_some(args)
+}
+
+/// The Mach timebase: Mach time units times `numer / denom` are nanoseconds. (libc marks its
+/// Mach bindings deprecated in favour of another crate; this one call doesn't warrant it.)
+#[allow(deprecated)]
+fn timebase() -> (u32, u32) {
+    static TIMEBASE: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
+    *TIMEBASE.get_or_init(|| {
+        let mut info = libc::mach_timebase_info { numer: 0, denom: 0 };
+        // SAFETY: `info` is a writable `mach_timebase_info`, which is all the call fills.
+        #[allow(unsafe_code)]
+        let read = unsafe { libc::mach_timebase_info(&mut info) };
+        if read == 0 && info.denom != 0 {
+            (info.numer, info.denom)
+        } else {
+            (1, 1)
+        }
+    })
 }
 
 /// Every process id on the machine, per `proc_listallpids`.
@@ -610,6 +653,8 @@ mod tests {
         assert!(state().starts_with('T'), "stopped: {}", state());
         MacProcesses.resume(pid).unwrap();
         assert!(!state().starts_with('T'), "running: {}", state());
+        assert!(MacProcesses.cpu_time_ms(pid).is_some());
+        assert!(MacProcesses.cpu_time_ms(std::process::id()).is_some());
         child.kill().unwrap();
         child.wait().unwrap();
     }

@@ -381,6 +381,25 @@ impl Processes for WindowsProcesses {
         unsupported("resuming a process", NAME)
     }
 
+    fn cpu_time_ms(&self, pid: u32) -> Option<u64> {
+        let handle = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION).ok()?;
+        let zero = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+        // SAFETY: `handle` is valid and every out pointer refers to a live FILETIME.
+        if unsafe { GetProcessTimes(handle.0, &mut created, &mut exited, &mut kernel, &mut user) }
+            == 0
+        {
+            return None;
+        }
+        // Kernel and user times count 100 ns intervals.
+        let ticks =
+            |time: FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+        Some((ticks(kernel) + ticks(user)) / 10_000)
+    }
+
     fn in_dir(&self, _dir: &std::path::Path) -> Result<Vec<u32>> {
         // Reading another process's working directory needs its PEB; this arrives with the
         // Windows platform phase. `kill_tree` still ends a CLI's whole tree.

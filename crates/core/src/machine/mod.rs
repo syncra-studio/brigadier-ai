@@ -27,6 +27,9 @@ use self::builds::{Action, Builds, Note, Proc, Seen};
 
 /// How often the watch looks at the machine and at Brigadier's process trees.
 pub(crate) const TICK: Duration = Duration::from_secs(2);
+/// CPU time a command's processes must use between two looks to count as working: 5% of
+/// one core.
+const ACTIVE_CPU_MS: u64 = 100;
 /// How long something waiting for the machine sleeps between looks at whether it is still
 /// wanted.
 pub(crate) const RECHECK: Duration = Duration::from_secs(20);
@@ -47,6 +50,8 @@ pub(crate) struct MachineWatch {
     builds: Mutex<Builds>,
     stopped: Stopped,
     quit: AtomicBool,
+    /// The CPU time each process of a heavy command had used at the last look, in ms.
+    cpu: Mutex<HashMap<u32, u64>>,
 }
 
 impl MachineWatch {
@@ -58,6 +63,7 @@ impl MachineWatch {
             builds: Mutex::new(Builds::default()),
             stopped: Stopped::new(stopped_file),
             quit: AtomicBool::new(false),
+            cpu: Mutex::new(HashMap::new()),
         }
     }
 
@@ -72,11 +78,12 @@ impl MachineWatch {
     pub(crate) fn tick(&self, clis: &[(String, Proc)], now: Instant) -> Vec<Row> {
         let load = self.guard.read();
         let platform = &*self.platform;
-        let seen: Vec<Seen> = clis
+        let mut seen: Vec<Seen> = clis
             .iter()
             .filter(|(_, cli)| still(platform, *cli))
             .flat_map(|(owner, cli)| heavy_under(platform, cli.pid, owner))
             .collect();
+        self.mark_active(&mut seen);
         // Held while acting too, so quitting waits for a round under way and none acts after.
         let mut builds = self.builds.lock().unwrap_or_else(|p| p.into_inner());
         if self.quit.load(Ordering::Acquire) {
@@ -99,6 +106,31 @@ impl MachineWatch {
             }
         }
         rows
+    }
+
+    /// Marks each command whose processes used CPU since the last look, or started since.
+    fn mark_active(&self, seen: &mut [Seen]) {
+        let processes = self.platform.processes();
+        let mut cpu = self.cpu.lock().unwrap_or_else(|p| p.into_inner());
+        let mut now = HashMap::new();
+        for command in seen.iter_mut() {
+            let mut used = 0;
+            let mut started = false;
+            let tree = std::iter::once(command.root.pid)
+                .chain(processes.descendants(command.root.pid).unwrap_or_default());
+            for pid in tree {
+                let Some(ms) = processes.cpu_time_ms(pid) else {
+                    continue;
+                };
+                match cpu.get(&pid) {
+                    Some(before) => used += ms.saturating_sub(*before),
+                    None => started = true,
+                }
+                now.insert(pid, ms);
+            }
+            command.active = started || used >= ACTIVE_CPU_MS;
+        }
+        *cpu = now;
     }
 
     /// The daemon quits: everything stopped goes on, and nothing is stopped after. Blocking.
@@ -239,6 +271,7 @@ pub(crate) fn heavy_under(platform: &dyn Platform, cli: u32, owner: &str) -> Vec
                     root,
                     owner: owner.to_owned(),
                     command: heavy::label(&argv),
+                    active: true,
                 });
             }
             continue;
