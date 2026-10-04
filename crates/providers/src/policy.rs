@@ -381,29 +381,10 @@ pub fn outward_commands(command: &str) -> Vec<(Option<String>, Vec<String>)> {
         if words.first().is_some_and(|program| program == "cd") {
             dir = Some(words.get(1).cloned().unwrap_or_else(|| "~".to_owned()));
         } else if words_outward(words) {
-            found.push((dir.clone(), without_redirections(words)));
+            found.push((dir.clone(), words.to_vec()));
         }
     }
     found
-}
-
-/// `words` without redirections (`> log`, `2>`, `<input`); `2>&1` reaches here as `2>`, as
-/// `&` ends a simple command.
-fn without_redirections(words: &[String]) -> Vec<String> {
-    let mut argv = Vec::with_capacity(words.len());
-    let mut words = words.iter();
-    while let Some(word) = words.next() {
-        let operator = word.trim_start_matches(|c: char| c.is_ascii_digit());
-        if operator.starts_with(['<', '>']) {
-            // A bare operator's target is the next word.
-            if operator.trim_start_matches(['<', '>']).is_empty() {
-                words.next();
-            }
-        } else {
-            argv.push(word.clone());
-        }
-    }
-    argv
 }
 
 /// Whether one simple command is an [`ALWAYS_ASK`] command. git is judged by its subcommand,
@@ -442,12 +423,30 @@ fn gh_api_writes(args: &[String]) -> bool {
             .or_else(|| word.strip_prefix("-X"))
         {
             method = Some(value);
-        } else if ["-f", "-F", "--field", "--raw-field", "--input"].contains(&word)
-            || ["-f", "-F", "--field=", "--raw-field=", "--input="]
-                .iter()
-                .any(|flag| word.starts_with(flag))
+        } else if ["-f", "-F", "--field", "--raw-field", "--input"].contains(&word) {
+            fields = true;
+            words.next();
+        } else if ["-f", "-F", "--field=", "--raw-field=", "--input="]
+            .iter()
+            .any(|flag| word.starts_with(flag))
         {
             fields = true;
+        } else if [
+            "-H",
+            "--header",
+            "--hostname",
+            "--cache",
+            "-q",
+            "--jq",
+            "-t",
+            "--template",
+        ]
+        .contains(&word)
+        {
+            // Option values are data even when they look like a method flag.
+            words.next();
+        } else if word == "--" {
+            break;
         }
     }
     match method {
@@ -522,12 +521,23 @@ fn collect_commands(line: &str, commands: &mut Vec<Vec<String>>, depth: usize) {
     let mut current: Vec<String> = Vec::new();
     let mut word = String::new();
     let mut in_word = false;
+    let mut plain_word = true;
+    let mut redirection_target = false;
     let mut chars = line.chars().peekable();
 
-    let finish_word = |word: &mut String, in_word: &mut bool, current: &mut Vec<String>| {
+    let finish_word = |word: &mut String,
+                       in_word: &mut bool,
+                       plain_word: &mut bool,
+                       redirection_target: &mut bool,
+                       current: &mut Vec<String>| {
         if *in_word {
-            current.push(std::mem::take(word));
+            let word = std::mem::take(word);
+            if !*redirection_target {
+                current.push(word);
+            }
             *in_word = false;
+            *redirection_target = false;
+            *plain_word = true;
         }
     };
 
@@ -535,6 +545,7 @@ fn collect_commands(line: &str, commands: &mut Vec<Vec<String>>, depth: usize) {
         match c {
             '\'' => {
                 in_word = true;
+                plain_word = false;
                 for c in chars.by_ref() {
                     if c == '\'' {
                         break;
@@ -544,6 +555,7 @@ fn collect_commands(line: &str, commands: &mut Vec<Vec<String>>, depth: usize) {
             }
             '"' => {
                 in_word = true;
+                plain_word = false;
                 let mut inner = String::new();
                 while let Some(c) = chars.next() {
                     match c {
@@ -563,6 +575,7 @@ fn collect_commands(line: &str, commands: &mut Vec<Vec<String>>, depth: usize) {
             }
             '\\' => {
                 in_word = true;
+                plain_word = false;
                 if let Some(next) = chars.next() {
                     word.push(next);
                 }
@@ -586,20 +599,60 @@ fn collect_commands(line: &str, commands: &mut Vec<Vec<String>>, depth: usize) {
                 };
                 collect_commands(&inner, commands, depth + 1);
             }
+            '<' | '>' => {
+                // Only unquoted shell syntax redirects. A quoted "> text" or escaped
+                // \> is an ordinary argument, and must survive in an approval pass.
+                if plain_word && in_word && word.chars().all(|c| c.is_ascii_digit()) {
+                    word.clear();
+                    in_word = false;
+                }
+                finish_word(
+                    &mut word,
+                    &mut in_word,
+                    &mut plain_word,
+                    &mut redirection_target,
+                    &mut current,
+                );
+                while chars
+                    .peek()
+                    .is_some_and(|c| matches!(c, '<' | '>' | '&' | '|'))
+                {
+                    chars.next();
+                }
+                redirection_target = true;
+            }
             ';' | '&' | '|' | '\n' => {
-                finish_word(&mut word, &mut in_word, &mut current);
+                finish_word(
+                    &mut word,
+                    &mut in_word,
+                    &mut plain_word,
+                    &mut redirection_target,
+                    &mut current,
+                );
                 if !current.is_empty() {
                     local.push(std::mem::take(&mut current));
                 }
             }
-            c if c.is_whitespace() => finish_word(&mut word, &mut in_word, &mut current),
+            c if c.is_whitespace() => finish_word(
+                &mut word,
+                &mut in_word,
+                &mut plain_word,
+                &mut redirection_target,
+                &mut current,
+            ),
             c => {
                 in_word = true;
                 word.push(c);
             }
         }
     }
-    finish_word(&mut word, &mut in_word, &mut current);
+    finish_word(
+        &mut word,
+        &mut in_word,
+        &mut plain_word,
+        &mut redirection_target,
+        &mut current,
+    );
     if !current.is_empty() {
         local.push(current);
     }
@@ -1202,6 +1255,55 @@ mod tests {
     }
 
     #[test]
+    fn gh_api_option_values_cannot_override_the_method() {
+        for option in [
+            "--template",
+            "-t",
+            "--jq",
+            "-q",
+            "--header",
+            "-H",
+            "--hostname",
+            "--cache",
+            "--input",
+            "--field",
+            "--raw-field",
+            "-f",
+            "-F",
+        ] {
+            let line = format!("gh api repos/o/r/issues -f title=bug {option} '-XGET'");
+            assert!(is_outward(&line), "{line}");
+            let args = simple_commands(&line).pop().unwrap();
+            assert_eq!(classify_argv(&args), ArgvVerdict::Outward, "{line}");
+            assert_eq!(
+                route(
+                    &command(&line, None, false),
+                    &Access::Full,
+                    ApprovalMode::Delegated
+                ),
+                Route::AskUser,
+                "{line}"
+            );
+            assert_eq!(
+                route(
+                    &command(&line, None, false),
+                    &Access::Full,
+                    ApprovalMode::Unattended
+                ),
+                Route::Deny,
+                "{line}"
+            );
+        }
+        for line in [
+            "gh api repos/o/r --template '-XPOST'",
+            "gh api repos/o/r -X GET -f q=bug --template '-XPOST'",
+            "gh api repos/o/r --header '--method=DELETE'",
+        ] {
+            assert!(!is_outward(line), "{line}");
+        }
+    }
+
+    #[test]
     fn outward_commands_are_found_as_the_gate_sees_them() {
         let argv = |words: &[&str]| words.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
         assert_eq!(
@@ -1225,6 +1327,27 @@ mod tests {
             [(Some("~".to_owned()), argv(&["npm", "publish"]))]
         );
         assert!(outward_commands("cd x && git stash push && cargo test").is_empty());
+        for line in [
+            "gh pr comment 123 --body '> quoted text' >out.log 2>&1",
+            "gh pr comment 123 --body \"> quoted text\" 2> error.log",
+        ] {
+            assert_eq!(
+                outward_commands(line),
+                [(
+                    None,
+                    argv(&["gh", "pr", "comment", "123", "--body", "> quoted text"])
+                )],
+                "{line}"
+            );
+        }
+        assert_eq!(
+            outward_commands(r"gh pr comment 123 --body \> > out.log"),
+            [(None, argv(&["gh", "pr", "comment", "123", "--body", ">"]))]
+        );
+        assert_eq!(
+            outward_commands("git push origin main>out.log"),
+            [(None, argv(&["git", "push", "origin", "main"]))]
+        );
     }
 
     #[test]
