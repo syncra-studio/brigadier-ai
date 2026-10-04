@@ -326,7 +326,7 @@ const SteerBubble: FC<{ text: string; atMs: number }> = ({ text, atMs }) => {
       data-slot="request-steer"
       className="group/steer flex max-w-7/10 min-w-0 flex-col items-end gap-y-1 self-end"
     >
-      <div className="bg-muted text-foreground rounded-thread px-4 py-2 whitespace-pre-wrap wrap-break-word">
+      <div className="bg-muted text-foreground rounded-thread max-w-full min-w-0 px-4 py-2 whitespace-pre-wrap wrap-anywhere">
         <MentionText text={text} />
       </div>
       <div className="text-muted-foreground flex items-center gap-1 opacity-0 transition-opacity group-hover/steer:opacity-100 group-focus-within/steer:opacity-100">

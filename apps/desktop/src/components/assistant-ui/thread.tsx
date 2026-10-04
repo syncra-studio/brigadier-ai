@@ -652,11 +652,13 @@ const UserMessageText: FC = () => {
   // Files only: an empty bubble hides itself (and the action bar beside it).
   if (!hasText) return <div className="aui-user-message-content peer empty:hidden" />;
   return (
-    <div className="aui-user-message-content peer bg-muted text-foreground rounded-bubble flex flex-col px-4 py-2.5 empty:hidden">
+    // Capped at the column, and any unbroken run (a terminal's `++++…`, a long path) may
+    // break anywhere: a bubble sized to such a run overflowed the column leftward, clipped.
+    <div className="aui-user-message-content peer bg-muted text-foreground rounded-bubble flex max-w-full min-w-0 flex-col px-4 py-2.5 empty:hidden">
       <div
         ref={ref}
         className={cn(
-          "whitespace-pre-wrap wrap-break-word",
+          "whitespace-pre-wrap wrap-anywhere",
           !expanded && "max-h-user-message overflow-hidden",
         )}
       >

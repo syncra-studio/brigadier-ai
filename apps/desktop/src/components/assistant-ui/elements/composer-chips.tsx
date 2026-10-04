@@ -424,7 +424,7 @@ export const ChipComposerInput: FC<
         onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)}
         className={cn(
           "relative w-full cursor-text",
-          "[&_.aui-lexical-input]:caret-primary [&_.aui-lexical-input]:whitespace-pre-wrap [&_.aui-lexical-input]:break-words [&_.aui-lexical-input]:outline-none",
+          "[&_.aui-lexical-input]:caret-primary [&_.aui-lexical-input]:whitespace-pre-wrap [&_.aui-lexical-input]:wrap-anywhere [&_.aui-lexical-input]:outline-none",
           "[&_.aui-lexical-placeholder]:text-muted-foreground/60 [&_.aui-lexical-placeholder]:pointer-events-none [&_.aui-lexical-placeholder]:absolute [&_.aui-lexical-placeholder]:inset-0 [&_.aui-lexical-placeholder]:truncate [&_.aui-lexical-placeholder]:select-none",
           line
             ? "max-h-control-md text-sm [&_.aui-lexical-input]:min-h-control-md [&_.aui-lexical-input]:px-1 [&_.aui-lexical-input]:py-1.5 [&_.aui-lexical-placeholder]:px-1 [&_.aui-lexical-placeholder]:py-1.5"
