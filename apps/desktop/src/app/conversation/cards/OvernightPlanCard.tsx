@@ -406,10 +406,11 @@ export function OvernightPlanCard({
             {/* The report's own second line, until the work is merged. */}
             {run.merged || !details.outcome?.[1] ? whereLine(run, details.verifiedSha) : details.outcome[1]}
           </p>
+          {/* The report's third line, counted now. */}
           <p className="text-muted-foreground text-xs">
             {details.waiting === 0
-              ? "Nothing waits on you"
-              : `${details.waiting} ${details.waiting === 1 ? "thing waits" : "things wait"} on you`}
+              ? "Nothing waits on you."
+              : `${details.waiting} ${details.waiting === 1 ? "thing waits" : "things wait"} on you.`}
           </p>
         </div>
       )}

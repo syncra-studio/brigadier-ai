@@ -715,37 +715,51 @@ fn merge_line(run: &OvernightRun, commits: &[RunCommit]) -> String {
     }
 }
 
-/// The phase's mark, as the thread's phase headers show it.
-fn mark(state: PhaseState) -> &'static str {
+/// A phase's mark and name, as the run card and the thread's phase headers show them once the
+/// run is over: "✓ Phase 1 · Measure", "Phase 3 · Re-measure" for one not reached.
+fn phase_head(state: PhaseState, title: &str) -> String {
+    let mark = match state {
+        PhaseState::Verified => "✓ ",
+        PhaseState::Partial | PhaseState::Running | PhaseState::Checking => "◐ ",
+        PhaseState::Blocked => "✕ ",
+        PhaseState::Skipped => "– ",
+        PhaseState::Pending => "",
+    };
+    format!("{mark}{title}")
+}
+
+/// A phase's state in a word or two once the run is over, the run card's and the thread's
+/// word for it (`phaseWord` in the app).
+fn phase_word(state: PhaseState) -> &'static str {
     match state {
-        PhaseState::Verified => "✓",
-        PhaseState::Partial | PhaseState::Running | PhaseState::Checking => "◐",
-        PhaseState::Blocked => "✕",
-        PhaseState::Skipped | PhaseState::Pending => "–",
+        PhaseState::Pending => "not reached",
+        PhaseState::Running | PhaseState::Checking => "unfinished",
+        PhaseState::Verified => "verified",
+        PhaseState::Partial => "partial",
+        PhaseState::Blocked => "blocked",
+        PhaseState::Skipped => "skipped",
     }
 }
 
-/// One line per phase: how it ended, why when it isn't verified, and what landed.
+/// One line per phase: its state in the run card's word, why when it isn't verified, and
+/// what landed.
 fn phase_lines(run: &OvernightRun, board: &Board) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(planning) = &run.planning {
-        let head = format!("{} Phase 0 · Write the plan", mark(planning.state));
-        lines.push(match planning.state {
-            PhaseState::Verified => format!("{head}: done."),
-            _ => match planning.gaps.first() {
-                Some(gap) => format!("{head}: not done: {}", sentence(&one_line(gap, MISSING))),
-                None => format!("{head}: not done."),
-            },
+        let head = phase_head(planning.state, "Phase 0 · Write the plan");
+        let word = phase_word(planning.state);
+        lines.push(match (planning.state, planning.gaps.first()) {
+            (PhaseState::Verified, _) | (_, None) => format!("{head}: {word}."),
+            (_, Some(gap)) => format!("{head}: {word}, {}", sentence(&one_line(gap, MISSING))),
         });
     }
     let segments = chain(run, board);
     for phase in &run.phases {
-        let head = format!(
-            "{} Phase {} · {}",
-            mark(phase.state),
-            phase.number,
-            phase.name
+        let head = phase_head(
+            phase.state,
+            &format!("Phase {} · {}", phase.number, phase.name),
         );
+        let word = phase_word(phase.state);
         let (landed, not_landed) = landings(phase, board, &segments);
         let tasks = |verified: bool| match (landed, not_landed) {
             (0, 0) => String::new(),
@@ -757,14 +771,14 @@ fn phase_lines(run: &OvernightRun, board: &Board) -> Vec<String> {
             (n, _) => format!(" {} landed.", plural(n, "task", "tasks")),
         };
         lines.push(match phase.state {
-            PhaseState::Verified => format!("{head}: verified.{}", tasks(true)),
+            PhaseState::Verified => format!("{head}: {word}.{}", tasks(true)),
             PhaseState::Partial => format!(
-                "{head}: not verified, {}.{}",
+                "{head}: {word}, {}.{}",
                 unverified_why(run, phase),
                 tasks(false)
             ),
             PhaseState::Blocked => format!(
-                "{head}: blocked, it needs you: {}",
+                "{head}: {word}, it needs you: {}",
                 sentence(&one_line(
                     phase
                         .gaps
@@ -773,10 +787,9 @@ fn phase_lines(run: &OvernightRun, board: &Board) -> Vec<String> {
                     MISSING
                 ))
             ),
-            PhaseState::Skipped => format!("{head}: skipped."),
-            PhaseState::Pending => format!("{head}: not reached."),
+            PhaseState::Skipped | PhaseState::Pending => format!("{head}: {word}."),
             PhaseState::Running | PhaseState::Checking => {
-                format!("{head}: unfinished.{}", tasks(false))
+                format!("{head}: {word}.{}", tasks(false))
             }
         });
     }
@@ -1541,8 +1554,8 @@ Merge takes phase 1 (`1dcda64`). 2 later commits stay unverified on the branch.
 1 thing waits on you.
 
 - ✓ Phase 1 · Measure: verified. 1 task landed.
-- ◐ Phase 2 · Fix: not verified, you stopped the run. 2 tasks landed, 1 didn't.
-- – Phase 3 · Re-measure: not reached.
+- ◐ Phase 2 · Fix: partial, you stopped the run. 2 tasks landed, 1 didn't.
+- Phase 3 · Re-measure: not reached.
 
 Waiting on you:
 - Bring the phase 2 note commit daf8ac1f4b from brigadier/4158464b/session onto overnight/2026-10-03-faster-leaner-overnight-runs-09cc7d53. It adds the whole note, so on the run branch keep its version of docs/evidence/2026-10-03-overnight-ab-breakdown.md; that version only appends a section.
@@ -1758,7 +1771,7 @@ Got in the way:
         let text = render(&run, &Board::default(), &[], &usage(), 0);
         let (shown, details) = text.split_once(DETAILS).expect("details");
         assert!(
-            shown.contains("- – Phase 2 · Re-measure: not reached.\n"),
+            shown.contains("- Phase 2 · Re-measure: not reached.\n"),
             "{text}"
         );
         assert!(
