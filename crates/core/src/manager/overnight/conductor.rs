@@ -1029,6 +1029,13 @@ impl SessionManager {
     pub(crate) async fn run_finished(&self, run: &OvernightRun) {
         tracing::info!(run = %run.id, stop = ?run.stop, "overnight run finished");
         self.retire_orchestrator(&run.conversation_id).await;
+        // The report answers the run's requests: they settle for good, and nothing owed to
+        // them (a reminder, a late message) starts a turn after the run.
+        if let Ok(conv) = self.conv(&run.conversation_id) {
+            conv.forget_run_requests(&format!("run-{}-", run.id.short()))
+                .await;
+        }
+        self.settle_requests(&run.conversation_id).await;
     }
 }
 

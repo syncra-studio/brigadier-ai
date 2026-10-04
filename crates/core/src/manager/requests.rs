@@ -18,6 +18,7 @@ use super::prompts;
 use super::workers::relanding_pending;
 use crate::board::Board;
 use crate::model::{ConversationId, ConversationKind};
+use crate::overnight::{OvernightRun, OvernightState};
 use crate::work::{CardState, PlanState, RequestState, Task, TaskId, TaskState};
 
 impl SessionManager {
@@ -134,7 +135,11 @@ impl SessionManager {
         for request in board.requests.values() {
             let id = request.id.as_str();
             let outcome = activity.outcomes.get(id);
-            let state = if activity.running.as_deref() == Some(id)
+            let state = if let Some(state) = ended_run_state(&board, request) {
+                // An overnight run's request is over with the run: its report is the answer,
+                // and nothing that comes later works or waits for it again.
+                state
+            } else if activity.running.as_deref() == Some(id)
                 || (activity.carried.contains(id) && outcome.is_none())
                 || tasks_in(&board, id, |state| {
                     matches!(
@@ -337,6 +342,33 @@ fn relanding_in(board: &Board, request: &str) -> bool {
 }
 
 /// Whether a plan of the request waits for the orchestrator's revision after its review.
+/// The overnight run a request belongs to: its phases', its Phase 0's and its report's
+/// requests are named `run-<short run id>-…`.
+pub(crate) fn run_of_request<'a>(board: &'a Board, request: &str) -> Option<&'a OvernightRun> {
+    board
+        .runs
+        .values()
+        .find(|run| request.starts_with(&format!("run-{}-", run.id.short())))
+}
+
+/// Whether the request belongs to an overnight run that has ended (or is writing its report):
+/// nothing new starts or wakes the orchestrator for it.
+pub(crate) fn ended_run_request(board: &Board, request: &str) -> bool {
+    run_of_request(board, request)
+        .is_some_and(|run| run.state == OvernightState::Reporting || run.state.is_final())
+}
+
+/// The state a request of a finished run keeps for good: how it ended, or done.
+fn ended_run_state(board: &Board, request: &crate::work::UserRequest) -> Option<RequestState> {
+    if !run_of_request(board, &request.id).is_some_and(|run| run.state.is_final()) {
+        return None;
+    }
+    Some(match &request.state {
+        RequestState::Stopped | RequestState::Failed { .. } => request.state.clone(),
+        _ => RequestState::Done,
+    })
+}
+
 fn awaits_revision(board: &Board, request: &str) -> bool {
     board
         .plans
@@ -371,6 +403,54 @@ pub(super) fn needs_user(board: &Board, request: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn request(id: &str, state: RequestState) -> crate::work::UserRequest {
+        crate::work::UserRequest {
+            id: id.into(),
+            conversation_id: ConversationId("c".into()),
+            preview: String::new(),
+            state,
+            started_at_ms: 0,
+            ended_at_ms: None,
+            steered_into: None,
+            steered_after: None,
+            undo: None,
+        }
+    }
+
+    #[test]
+    fn a_finished_runs_requests_stay_over_and_wake_nothing() {
+        let mut run = OvernightRun::for_test(ConversationId("c".into()), "Speed", Vec::new());
+        let phase = format!("run-{}-phase-2-g1", run.id.short());
+        let mut board = Board::default();
+        board.runs.insert(run.id.clone(), run.clone());
+        // A running run's phase request lives as usual.
+        assert!(run_of_request(&board, &phase).is_some());
+        assert!(!ended_run_request(&board, &phase));
+        assert_eq!(
+            ended_run_state(&board, &request(&phase, RequestState::Working)),
+            None
+        );
+        // Writing its report: nothing new starts for it any more.
+        run.state = OvernightState::Reporting;
+        board.runs.insert(run.id.clone(), run.clone());
+        assert!(ended_run_request(&board, &phase));
+        // Finished: its requests are done for good, whatever waits or comes later, and keep
+        // a stop.
+        run.state = OvernightState::Finished;
+        board.runs.insert(run.id.clone(), run.clone());
+        assert_eq!(
+            ended_run_state(&board, &request(&phase, RequestState::Waiting)),
+            Some(RequestState::Done)
+        );
+        assert_eq!(
+            ended_run_state(&board, &request(&phase, RequestState::Stopped)),
+            Some(RequestState::Stopped)
+        );
+        // The user's own requests in the same session are not the run's.
+        assert!(run_of_request(&board, "01a0fefa-user-message").is_none());
+        assert!(!ended_run_request(&board, "01a0fefa-user-message"));
+    }
     use crate::model::ConversationId;
     use crate::work::{CardId, Plan};
 

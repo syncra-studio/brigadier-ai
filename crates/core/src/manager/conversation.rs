@@ -406,6 +406,18 @@ impl ConvLive {
             .or_insert(Unanswered::Armed);
     }
 
+    /// An overnight run ended: what was owed to its requests (`run-<short id>-…`) is over.
+    /// Nothing the run left in the inbox or armed for them wakes the orchestrator later.
+    pub async fn forget_run_requests(&self, prefix: &str) {
+        let mut state = self.state.lock().await;
+        state
+            .sent_back
+            .retain(|request, _| !request.starts_with(prefix));
+        state
+            .inbox
+            .retain(|(_, request)| !request.as_deref().is_some_and(|r| r.starts_with(prefix)));
+    }
+
     /// Takes the envelopes `which` picks back out of the inbox, before a turn reads them.
     pub(super) async fn take_envelopes(
         &self,
@@ -1118,6 +1130,18 @@ impl SessionManager {
             self.core.conversation(id).map(|c| c.lifecycle),
             Ok(Lifecycle::Archived)
         );
+        // Nothing wakes the orchestrator for an overnight run that has ended: its report
+        // was the last word, and Continue starts a new segment with requests of its own.
+        if let Some(request) = &request
+            && self
+                .core
+                .board(id)
+                .await
+                .is_ok_and(|board| super::requests::ended_run_request(&board, request))
+        {
+            tracing::info!(conversation = %id, request, label = %envelope.label, "dropped a message for an overnight run that has ended");
+            return None;
+        }
         let mut state = conv.state.lock().await;
         if let Some(task) = &envelope.task_id {
             state.announcing.remove(task);
@@ -2168,7 +2192,16 @@ impl SessionManager {
     /// [`Self::release_narration`]): the orchestrator is asked for its answer. One that works
     /// again waits for its next end.
     async fn remind_unanswered(&self, conv: &Arc<ConvLive>, request: &str) {
-        let over = self.core.board(&conv.id).await.ok().is_some_and(|board| {
+        let board = self.core.board(&conv.id).await.ok();
+        // An overnight run's request is answered by the run's report.
+        if board
+            .as_ref()
+            .is_some_and(|board| super::requests::run_of_request(board, request).is_some())
+        {
+            conv.state.lock().await.sent_back.remove(request);
+            return;
+        }
+        let over = board.is_some_and(|board| {
             board
                 .requests
                 .get(request)
@@ -2582,7 +2615,9 @@ impl SessionManager {
         let Ok(board) = self.core.board(&conv.id).await else {
             return;
         };
-        if super::requests::needs_user(&board, request) {
+        if super::requests::needs_user(&board, request)
+            || super::requests::ended_run_request(&board, request)
+        {
             return;
         }
         let Some((plan, text)) = self.revision_reminder(&board, request) else {
@@ -2618,6 +2653,7 @@ impl SessionManager {
             .requests
             .get(request)
             .is_none_or(|of| of.state != RequestState::Done)
+            || super::requests::ended_run_request(&board, request)
         {
             return;
         }

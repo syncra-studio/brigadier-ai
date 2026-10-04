@@ -566,6 +566,47 @@ impl OvernightRun {
     pub fn phase(&self, id: &str) -> Option<&OvernightPhase> {
         self.phases.iter().find(|phase| phase.id == id)
     }
+
+    /// A running run named `name` with `phases`, for tests.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        conversation_id: ConversationId,
+        name: &str,
+        phases: Vec<OvernightPhase>,
+    ) -> Self {
+        Self {
+            id: OvernightRunId::generate(),
+            conversation_id,
+            segment: 1,
+            predecessor: None,
+            plan_id: None,
+            name: name.into(),
+            words: format!("/overnight {name}"),
+            goal: name.into(),
+            rules: String::new(),
+            sources: Vec::new(),
+            phases,
+            directives: Directives::default(),
+            problems: Vec::new(),
+            revision: 1,
+            generation: 1,
+            state: OvernightState::Running,
+            wind_down_at_ms: None,
+            workspace: None,
+            planning: None,
+            verified_commit: None,
+            gaps: Vec::new(),
+            report_message_id: None,
+            report_outcome: None,
+            merged: None,
+            notification: None,
+            stop: None,
+            commands: Vec::new(),
+            created_at_ms: 0,
+            started_at_ms: Some(0),
+            finished_at_ms: None,
+        }
+    }
 }
 
 /// A plan for an overnight run, as the orchestrator read it from the user's words and files

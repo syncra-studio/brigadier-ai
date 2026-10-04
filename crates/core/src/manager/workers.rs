@@ -792,6 +792,24 @@ impl SessionManager {
         }
         let permission = self.permission(conversation_id);
         let active_run = self.overnight.active.get(conversation_id);
+        // Work filed under an overnight run that has ended starts nothing: read from the board,
+        // so this holds after a restart and once the run's in-memory state is gone.
+        let filed_under = match (&extra.request, &subject) {
+            (Some(request), _) => Some(request.clone()),
+            (None, Some(subject)) => subject.request_id.clone(),
+            (None, None) => self.request_for(conversation_id, None).await,
+        };
+        if let Some(request) = &filed_under
+            && self
+                .core
+                .board(conversation_id)
+                .await
+                .is_ok_and(|board| super::requests::ended_run_request(&board, request))
+        {
+            return Err(Error::Invalid(
+                "The overnight run has ended; nothing new starts for it. If more is wanted, tell the user that Continue on the run's card starts a new segment on the same branch.".into(),
+            ));
+        }
         if subject.is_none()
             && active_run
                 .as_ref()
@@ -3003,9 +3021,11 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Its request must not end without an answer the user sees.
+    /// Its request must not end without an answer the user sees. An overnight run's request
+    /// is answered by the run's report instead.
     async fn sent_back(&self, task: &Task) {
-        if let Some(request) = &task.request_id
+        if task.run.is_none()
+            && let Some(request) = &task.request_id
             && let Ok(conv) = self.conv(&task.conversation_id)
         {
             conv.sent_back(request).await;
