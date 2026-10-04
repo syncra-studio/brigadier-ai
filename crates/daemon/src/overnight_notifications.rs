@@ -32,6 +32,12 @@ pub async fn deliver(
             continue;
         }
         for (_, _, notice) in notices {
+            // Starting the host again changes nothing while notifications are off.
+            if notice.delivery_error.as_deref()
+                == Some(brigadier_core::overnight::NOTIFICATIONS_OFF)
+            {
+                continue;
+            }
             if attempts
                 .get(&notice.id)
                 .is_some_and(|at| at.elapsed() < Duration::from_secs(60))

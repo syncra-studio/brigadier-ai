@@ -514,6 +514,7 @@ function OvernightFixture({ initial }: { initial: OvernightCardModel }) {
       document.getElementById("fixture-report")?.focus();
     },
     setUpLidClosed: () => record("setUpLidClosed"),
+    openNotificationSettings: () => record("openNotificationSettings"),
   };
   return <OvernightPlanCard model={model} actions={actions} />;
 }

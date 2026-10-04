@@ -4,6 +4,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use brigadier_core::overnight::NOTIFICATIONS_OFF;
 use brigadier_ipc::protocol::{PendingRunNotification, Request, Response};
 use tauri::{AppHandle, Manager};
 
@@ -43,6 +44,7 @@ pub fn install(app: &AppHandle, intent: Option<String>) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let mut validated = intent.is_none();
+        let mut asked = false;
         loop {
             let Some(state) = app.try_state::<crate::AppState>() else {
                 return;
@@ -58,31 +60,59 @@ pub fn install(app: &AppHandle, intent: Option<String>) {
                         .iter()
                         .any(|pending| intent.as_ref() == Some(&pending.notification.id));
                 }
-                for pending in notifications.into_iter().filter(|_| validated) {
-                    match submit(&app, &pending).await {
-                        Ok(()) => {
-                            tracing::info!(notification = %pending.notification.id, "run notification submitted as Brigadier");
-                            if let Err(err) = bridge
-                                .request(Request::AckOvernightNotification {
-                                    conversation_id: pending.conversation_id,
-                                    run_id: pending.run_id,
-                                    notification_id: pending.notification.id,
-                                })
-                                .await
+                let notifications: Vec<_> =
+                    notifications.into_iter().filter(|_| validated).collect();
+                let permission = if notifications.is_empty() {
+                    Permission::Unknown
+                } else {
+                    permission().await
+                };
+                if !notifications.is_empty() {
+                    tracing::debug!(
+                        ?permission,
+                        pending = notifications.len(),
+                        "run notifications to show"
+                    );
+                }
+                for pending in notifications {
+                    match permission {
+                        // Says so once, and tries again only once they're back on: submitting
+                        // would only be refused again.
+                        Permission::Off => {
+                            if pending.notification.delivery_error.as_deref()
+                                != Some(NOTIFICATIONS_OFF)
                             {
-                                tracing::warn!(error = ?err, "run notification acknowledgement failed");
+                                tracing::info!(notification = %pending.notification.id, "notifications are off; the run notification waits");
+                                fail(&bridge, pending, NOTIFICATIONS_OFF.to_owned()).await;
                             }
                         }
-                        Err(err) => {
-                            tracing::warn!(error = %err, "run notification was not submitted; report retained");
-                            let _ = bridge
-                                .request(Request::FailOvernightNotification {
-                                    conversation_id: pending.conversation_id,
-                                    run_id: pending.run_id,
-                                    notification_id: pending.notification.id,
-                                    error: err,
-                                })
-                                .await;
+                        // Asks once and waits for the answer; Start normally asked already.
+                        Permission::NotAsked => {
+                            if !asked {
+                                asked = true;
+                                ask_permission();
+                            }
+                        }
+                        Permission::Allowed | Permission::Unknown => {
+                            match submit(&app, &pending).await {
+                                Ok(()) => {
+                                    tracing::info!(notification = %pending.notification.id, "run notification submitted as Brigadier");
+                                    if let Err(err) = bridge
+                                        .request(Request::AckOvernightNotification {
+                                            conversation_id: pending.conversation_id,
+                                            run_id: pending.run_id,
+                                            notification_id: pending.notification.id,
+                                        })
+                                        .await
+                                    {
+                                        tracing::warn!(error = ?err, "run notification acknowledgement failed");
+                                    }
+                                }
+                                Err(err) => {
+                                    tracing::warn!(error = %err, "run notification was not submitted; report retained");
+                                    fail(&bridge, pending, err).await;
+                                }
+                            }
                         }
                     }
                 }
@@ -95,6 +125,58 @@ pub fn install(app: &AppHandle, intent: Option<String>) {
             tokio::time::sleep(Duration::from_secs(5)).await;
         }
     });
+}
+
+/// Records why a run's notification wasn't shown; it stays pending.
+async fn fail(bridge: &crate::bridge::Bridge, pending: PendingRunNotification, error: String) {
+    let _ = bridge
+        .request(Request::FailOvernightNotification {
+            conversation_id: pending.conversation_id,
+            run_id: pending.run_id,
+            notification_id: pending.notification.id,
+            error,
+        })
+        .await;
+}
+
+/// Whether Brigadier may show notifications, as the OS says without asking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+// Only macOS answers anything but Unknown.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub enum Permission {
+    /// Not a bundled macOS app, or another platform: nothing to say.
+    Unknown,
+    NotAsked,
+    Off,
+    Allowed,
+}
+
+pub async fn permission() -> Permission {
+    #[cfg(target_os = "macos")]
+    return mac::permission().await;
+    #[cfg(not(target_os = "macos"))]
+    Permission::Unknown
+}
+
+/// Opens System Settings at Brigadier's notifications.
+pub fn open_settings(app: &AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_opener::OpenerExt;
+        let url = format!(
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id={}",
+            app.config().identifier
+        );
+        app.opener()
+            .open_url(url, None::<&str>)
+            .map_err(|err| err.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("Open your system's notification settings to turn them on for Brigadier.".into())
+    }
 }
 
 /// Starting a run asks for notification permission, while the user is at the Mac: its
@@ -176,6 +258,9 @@ mod mac {
     static APP: OnceLock<AppHandle> = OnceLock::new();
     type Submitted = oneshot::Sender<Result<(), String>>;
     static PENDING: OnceLock<Mutex<HashMap<u64, Submitted>>> = OnceLock::new();
+    static PERMITTED: OnceLock<Mutex<HashMap<u64, oneshot::Sender<i32>>>> = OnceLock::new();
+    /// What the adapter reports for a refusal because notifications are off.
+    const OFF: &str = "notifications-off";
     static NEXT: AtomicU64 = AtomicU64::new(1);
 
     unsafe extern "C" {
@@ -185,6 +270,7 @@ mod mac {
         );
         fn brigadier_notice_data_dir() -> *const c_char;
         fn brigadier_notice_ask();
+        fn brigadier_notice_permission(ticket: u64, callback: extern "C" fn(u64, i32));
         fn brigadier_notice_send(
             identifier: *const c_char,
             title: *const c_char,
@@ -220,6 +306,35 @@ mod mac {
             } else {
                 Err(string(error))
             });
+        }
+    }
+    extern "C" fn permitted(ticket: u64, answer: i32) {
+        if let Some(sender) = PERMITTED
+            .get()
+            .and_then(|pending| pending.lock().ok()?.remove(&ticket))
+        {
+            let _ = sender.send(answer);
+        }
+    }
+    pub async fn permission() -> Permission {
+        let ticket = NEXT.fetch_add(1, Ordering::Relaxed);
+        let (sender, receiver) = oneshot::channel();
+        let pending = PERMITTED.get_or_init(|| Mutex::new(HashMap::new()));
+        match pending.lock() {
+            Ok(mut waiting) => waiting.insert(ticket, sender),
+            Err(_) => return Permission::Unknown,
+        };
+        // SAFETY: a static callback that resolves only its own u64 ticket.
+        unsafe { brigadier_notice_permission(ticket, permitted) };
+        let answer = tokio::time::timeout(Duration::from_secs(5), receiver).await;
+        if let Ok(mut waiting) = pending.lock() {
+            waiting.remove(&ticket);
+        }
+        match answer {
+            Ok(Ok(0)) => Permission::NotAsked,
+            Ok(Ok(1)) => Permission::Off,
+            Ok(Ok(2)) => Permission::Allowed,
+            _ => Permission::Unknown,
         }
     }
     pub fn data_dir() -> Option<std::path::PathBuf> {
@@ -281,5 +396,12 @@ mod mac {
         result
             .map_err(|_| "OS notification submission timed out".to_owned())?
             .map_err(|_| "OS notification completion disappeared".to_owned())?
+            .map_err(|err| {
+                if err == OFF {
+                    NOTIFICATIONS_OFF.to_owned()
+                } else {
+                    err
+                }
+            })
     }
 }

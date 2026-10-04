@@ -220,9 +220,9 @@ export function OvernightPlanCard({
           {finished && !details.verifiedSha && (
             <p className="text-muted-foreground text-xs">No verified work to merge yet.</p>
           )}
-          {finished && run.notification?.deliveryError && (
+          {finished && run.notification?.deliveryError && !details.notificationsOff && (
             <p role="status" className="text-muted-foreground text-xs">
-              Notification couldn’t be delivered: {run.notification.deliveryError}
+              The notification couldn’t be shown: {run.notification.deliveryError}
             </p>
           )}
           {action.error && (
@@ -290,6 +290,25 @@ export function OvernightPlanCard({
             </Button>
           )}
         </div>
+      )}
+      {details.notificationsOff && (
+        <p className="text-warning text-xs" role="status">
+          {finished
+            ? "Notifications are off for Brigadier, so the run’s notification wasn’t shown. "
+            : "Notifications are off for Brigadier, so you won’t hear when the run finishes. "}
+          {actions && (
+            <Button
+              type="button"
+              variant="link"
+              size="xs"
+              className="h-auto px-0 align-baseline"
+              disabled={action.busy}
+              onClick={() => send("notifications", actions.openNotificationSettings)}
+            >
+              Turn them on
+            </Button>
+          )}
+        </p>
       )}
       {running && (
         <p className="text-muted-foreground text-xs" role="status">

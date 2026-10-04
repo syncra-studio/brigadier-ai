@@ -86,6 +86,18 @@ async fn ipc_request(state: State<'_, AppState>, request: Request) -> Result<Res
     state.bridge.request(request).await
 }
 
+/// Whether Brigadier may show notifications, without asking (a run's card says when not).
+#[tauri::command]
+async fn notification_permission() -> overnight_notifications::Permission {
+    overnight_notifications::permission().await
+}
+
+/// Opens the system's notification settings at Brigadier.
+#[tauri::command]
+fn open_notification_settings(app: tauri::AppHandle) -> Result<(), String> {
+    overnight_notifications::open_settings(&app)
+}
+
 #[tauri::command]
 fn ipc_subscribe(state: State<'_, AppState>, channel: Channel<BridgeEvent>) {
     state.bridge.attach_ui(channel);
@@ -614,6 +626,8 @@ fn main() {
             quit_app,
             ipc_request,
             ipc_subscribe,
+            notification_permission,
+            open_notification_settings,
             app_ready,
             startup_finished,
             smoke_finish,

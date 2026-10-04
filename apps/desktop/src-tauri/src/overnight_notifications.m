@@ -6,6 +6,9 @@
 
 typedef void (*Activated)(const char *, const char *, const char *);
 typedef void (*Submitted)(uint64_t, const char *);
+typedef void (*Permitted)(uint64_t, int32_t);
+// What a refusal because notifications are off reports, so Rust can say it plainly.
+static const char *const NOTIFICATIONS_OFF = "notifications-off";
 static Activated activated;
 @interface BrigadierRunNoticeDelegate : NSObject <UNUserNotificationCenterDelegate>
 @end
@@ -49,7 +52,23 @@ void brigadier_notice_ask(void) {
     if (!NSBundle.mainBundle.bundleIdentifier) return;
     [UNUserNotificationCenter.currentNotificationCenter
         requestAuthorizationWithOptions:UNAuthorizationOptionAlert
-                      completionHandler:^(BOOL granted, NSError *error) {}];
+                      completionHandler:^(__unused BOOL granted, __unused NSError *error) {}];
+}
+// Whether Brigadier may show notifications, without asking: -1 not a bundled app, 0 not asked
+// yet, 1 off, 2 allowed.
+void brigadier_notice_permission(uint64_t ticket, Permitted permitted) {
+    if (!NSBundle.mainBundle.bundleIdentifier) {
+        permitted(ticket, -1);
+        return;
+    }
+    [UNUserNotificationCenter.currentNotificationCenter
+        getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings) {
+            switch (settings.authorizationStatus) {
+            case UNAuthorizationStatusNotDetermined: permitted(ticket, 0); break;
+            case UNAuthorizationStatusDenied: permitted(ticket, 1); break;
+            default: permitted(ticket, 2); break;
+            }
+        }];
 }
 void brigadier_notice_send(const char *identifier, const char *title, const char *body,
                           const char *conversation, const char *run, uint64_t ticket,
@@ -68,7 +87,9 @@ void brigadier_notice_send(const char *identifier, const char *title, const char
     UNUserNotificationCenter *center = UNUserNotificationCenter.currentNotificationCenter;
     [center requestAuthorizationWithOptions:UNAuthorizationOptionAlert completionHandler:^(BOOL granted, NSError *error) {
         if (!granted || error) {
-            submitted(ticket, error ? error.localizedDescription.UTF8String : "Notification permission denied");
+            BOOL off = !error || ([error.domain isEqualToString:UNErrorDomain]
+                                  && error.code == UNErrorCodeNotificationsNotAllowed);
+            submitted(ticket, off ? NOTIFICATIONS_OFF : error.localizedDescription.UTF8String);
             return;
         }
         [center addNotificationRequest:request withCompletionHandler:^(NSError *error) {

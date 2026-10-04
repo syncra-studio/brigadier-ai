@@ -215,3 +215,15 @@ export function browserGo(
 export function browserClose(id: string): Promise<void> {
   return invoke("browser_close", { id });
 }
+
+/** Whether Brigadier may show notifications, as the OS says without asking. */
+export type NotificationPermission = "unknown" | "notAsked" | "off" | "allowed";
+
+export function notificationPermission(): Promise<NotificationPermission> {
+  return invoke<NotificationPermission>("notification_permission");
+}
+
+/** Opens the system's notification settings at Brigadier. */
+export function openNotificationSettings(): Promise<void> {
+  return invoke<void>("open_notification_settings");
+}

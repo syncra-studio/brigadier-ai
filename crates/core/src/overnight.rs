@@ -262,6 +262,11 @@ pub struct CriterionResult {
     pub by: Option<TaskId>,
 }
 
+/// The delivery error recorded while notifications are off for Brigadier. The notification
+/// keeps waiting, but the hidden host isn't started again for it: the app delivers it once it
+/// finds notifications back on.
+pub const NOTIFICATIONS_OFF: &str = "Notifications are off for Brigadier.";
+
 /// A run's notification, queued with its report and shown by the app as Brigadier.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

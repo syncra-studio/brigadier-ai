@@ -1,11 +1,12 @@
 import { useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { request } from "@/ipc/client";
+import { openNotificationSettings, request } from "@/ipc/client";
 import type { OvernightRun, TaskId } from "@/ipc/generated";
 import { loadConversation, loadFullText, openConversation, switchBranch } from "@/state/actions";
 import { type Board, updateBoard, useBoard } from "@/state/board";
 import { setUpLidClosed, useKeepAwake } from "@/state/keepAwake";
+import { loadNotificationPermission, useNotifications } from "@/state/notifications";
 import { emptyThread, useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
@@ -36,6 +37,8 @@ export type OvernightDetails = {
   /** What Start can't hold, from the daemon's keep-awake status: a run keeps the computer
    * awake, screen on, and going with the lid closed whenever the lid can be held. */
   power?: { onBattery?: boolean; lidWillPause: boolean; offerLidSetup: boolean; lowBattery?: boolean };
+  /** Notifications are off for Brigadier and this run's notification hasn't been shown. */
+  notificationsOff?: boolean;
 };
 
 export type OvernightCardModel = {
@@ -61,6 +64,7 @@ export type OvernightActions = {
   merge: (command: OvernightCommand, verifiedSha: string) => Promise<unknown>;
   openReport: (conversationId: string, messageId: string) => void;
   setUpLidClosed: () => Promise<unknown>;
+  openNotificationSettings: () => Promise<unknown>;
 };
 
 /** A continuation replaces only its own lineage, including bare goals without plan IDs. */
@@ -125,6 +129,24 @@ export function useOvernightCards(conversationId: string): readonly OvernightCar
   const status = useKeepAwake((s) => s.status);
   const leadQuota = useApp((s) => s.conversations[conversationId]?.quotaWait);
   const runs = useMemo(() => currentRuns(board?.overnight ?? {}), [board?.overnight]);
+  const notifications = useNotifications((s) => s.permission);
+  const hasRuns = runs.length > 0;
+  useEffect(() => {
+    if (!hasRuns) return;
+    // Asking the OS doesn't prompt; checked again while the card can be seen, so turning
+    // notifications on in System Settings (or answering Start's prompt) shows up here.
+    const load = () => {
+      if (!useApp.getState().windowVisible) return;
+      loadNotificationPermission().catch((error: unknown) => console.error("checking notifications failed", error));
+    };
+    load();
+    const timer = window.setInterval(load, 10_000);
+    window.addEventListener("focus", load);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", load);
+    };
+  }, [hasRuns]);
   const reports = useApp(useShallow((s) => runs.map((run) => {
     const message = s.threads[conversationId]?.items.find((item) => item.id === run.reportMessageId);
     return message ? s.threads[conversationId]?.fullText[message.id] ?? message.text : undefined;
@@ -138,6 +160,10 @@ export function useOvernightCards(conversationId: string): readonly OvernightCar
   }, [conversationId, runs, thread]);
   return useMemo(() => board ? runs.map((run, index) => {
     const model = projectOvernight(run, board, reports[index]);
+    const waitsForNotice = run.state === "finished"
+      ? run.notification != null && run.notification.deliveredAtMs == null
+      : run.state !== "superseded";
+    if (notifications === "off" && waitsForNotice) model.details.notificationsOff = true;
     if (status && run.state === "proposed") model.details.power = {
       onBattery: status.onBattery,
       lidWillPause: status.lidClosed !== "active" && status.lidClosed !== "ready",
@@ -153,7 +179,7 @@ export function useOvernightCards(conversationId: string): readonly OvernightCar
       } };
     }
     return model;
-  }) : [], [board, runs, reports, status, leadQuota]);
+  }) : [], [board, runs, reports, status, leadQuota, notifications]);
 }
 
 function seen(command: OvernightCommand): OvernightRun {
@@ -212,6 +238,7 @@ export const overnightActions: OvernightActions = {
   },
   // Only for the runs: the saved lid setting stays as it is.
   setUpLidClosed,
+  openNotificationSettings,
 };
 
 export function overnightCommand(run: OvernightRun): OvernightCommand {
