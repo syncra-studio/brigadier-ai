@@ -9,6 +9,7 @@ import {
   checkResult,
   checkRounds,
   checksCount,
+  decisionWords,
   ownerKey,
   ROLE_LABELS,
   type RowState,
@@ -99,12 +100,15 @@ const TaskDecisions: FC<{ taskId: string }> = ({ taskId }) => {
   if (decisions.length === 0) return null;
   return (
     <ul className="flex flex-col gap-1">
-      {decisions.map((decision) => (
-        <li key={decision.id} className="flex flex-col">
-          <span className="text-foreground/80 wrap-break-word"><WorkerLine text={decision.what} /></span>
-          {decision.why && <span className="wrap-break-word"><WorkerLine text={decision.why} /></span>}
-        </li>
-      ))}
+      {decisions.map((decision) => {
+        const { what, why } = decisionWords(decision);
+        return (
+          <li key={decision.id} className="flex flex-col">
+            <span className="text-foreground/80 wrap-break-word"><WorkerLine text={what} /></span>
+            {why && <span className="wrap-break-word"><WorkerLine text={why} /></span>}
+          </li>
+        );
+      })}
     </ul>
   );
 };

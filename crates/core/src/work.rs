@@ -1089,6 +1089,19 @@ pub struct Decision {
     /// Where it happened in the conversation's stream (set when the board reads it).
     #[serde(default)]
     pub position: i64,
+    /// What the app and the morning report say: `what` and `why` in the current short words,
+    /// also for a decision recorded in an earlier version's longer ones (set when the board
+    /// reads it; a decision recorded now is in them already).
+    #[serde(default)]
+    pub short: Option<DecisionWords>,
+}
+
+/// A decision's line and reason as the user reads them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionWords {
+    pub what: String,
+    pub why: String,
 }
 
 /// Where something only the user can do came from, which also says when it is over without

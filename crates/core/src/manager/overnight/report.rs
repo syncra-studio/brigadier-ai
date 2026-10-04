@@ -16,7 +16,7 @@
 //! recorded with the report, or, for a report from before that was recorded, they come from
 //! its tasks' landings. When those don't add up, the run keeps the report it has.
 
-use super::super::decisions::{named, waiting_run};
+use super::super::decisions::{named, short_words, waiting_run};
 use super::super::gates::{criterion_evidence, without_marker};
 use super::super::{SessionManager, blocking, git_error};
 use super::directives::{Clock, parse};
@@ -1223,7 +1223,10 @@ fn decision_lines(run: &OvernightRun, board: &Board) -> Vec<String> {
             }
             continue;
         }
-        lines.push(sentence(&one_line(&short_decision(decision), DECIDED)));
+        lines.push(sentence(&one_line(
+            &short_words(&decision.what, &decision.why).what,
+            DECIDED,
+        )));
     }
     if declined.0 > 0 {
         declined.1.sort_unstable();
@@ -1238,53 +1241,6 @@ fn decision_lines(run: &OvernightRun, board: &Board) -> Vec<String> {
         ));
     }
     lines
-}
-
-/// A decision in the current short words. Lines in the words of earlier versions (which
-/// carried the checks' findings) say the same in a few words; the findings stay on the task.
-fn short_decision(decision: &Decision) -> String {
-    let what = decision.what.trim();
-    let why = decision.why.trim();
-    if let Some(rest) = what.strip_prefix("Sent task-")
-        && let Some((number, tail)) = rest.split_once(" back to fix what its checks found")
-    {
-        let from = match (
-            why.contains("From the review"),
-            why.contains("From the verification"),
-        ) {
-            (true, true) => "review and verification",
-            (true, false) => "review",
-            (false, true) => "verification",
-            (false, false) => "its checks",
-        };
-        return format!("Sent task-{number} back after {from}{}", tail.trim_end());
-    }
-    if let Some(rest) = what.strip_prefix("Did not land task-") {
-        if let Some(number) = rest.strip_suffix(": the orchestrator decides what happens next") {
-            let reason = if let Some(rounds) = why
-                .strip_prefix("The problems were still there after ")
-                .and_then(|rest| rest.split_once('.'))
-                .map(|(rounds, _)| rounds)
-            {
-                format!("problems left after {rounds}")
-            } else if why.starts_with("Its change is the same one") {
-                "the fix changed nothing".into()
-            } else {
-                "its checks found problems".into()
-            };
-            return format!("Didn't land task-{number}: {reason}");
-        }
-        if let Some(number) = rest.strip_suffix(": its checks could not finish") {
-            return format!("Didn't land task-{number}: its checks couldn't finish");
-        }
-    }
-    if let Some(plan) = what
-        .strip_prefix("Sent the plan ")
-        .and_then(|rest| rest.strip_suffix(" back for revision"))
-    {
-        return format!("Sent the plan {plan} back after review");
-    }
-    what.to_owned()
 }
 
 /// A line without its quoted titles: "Landed task-41 on `b`" from "Landed task-41 “Fix it” on
@@ -1722,16 +1678,6 @@ Got in the way:
 
     #[test]
     fn decisions_read_short_in_old_and_new_words() {
-        let decision = |what: &str, why: &str| Decision {
-            id: "d".into(),
-            request_id: None,
-            source: DecisionSource::Orchestrator,
-            what: what.into(),
-            kind: DecisionKind::Routine,
-            why: why.into(),
-            at_ms: 0,
-            position: 0,
-        };
         for (what, why, short) in [
             (
                 "Sent task-32 back to fix what its checks found (fix 1 of 2)",
@@ -1769,7 +1715,7 @@ Got in the way:
                 "Sent task-6 back: 2 review findings (fix 1 of 2)",
             ),
         ] {
-            assert_eq!(short_decision(&decision(what, why)), short);
+            assert_eq!(short_words(what, why).what, short);
         }
         assert_eq!(
             without_titles("Landed task-41 “Record phase 2” on `brigadier/x/session`"),

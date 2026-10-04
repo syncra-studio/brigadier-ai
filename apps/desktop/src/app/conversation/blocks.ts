@@ -1,4 +1,5 @@
 import type { CardType } from "@/app/conversation/cards/CardBody";
+import { decisionWords } from "@/app/conversation/rowWords";
 import type {
   Approval,
   Compaction,
@@ -310,7 +311,7 @@ export function buildBlocks(
       position: decision.position,
       requestId: decision.requestId,
       step: {
-        kind: { type: "decided", what: decision.what, why: decision.why },
+        kind: { type: "decided", ...decisionWords(decision) },
         position: decision.position,
       },
       atMs: decision.atMs,

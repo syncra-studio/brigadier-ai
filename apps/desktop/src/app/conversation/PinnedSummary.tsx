@@ -35,7 +35,7 @@ import {
   useOvernightCards,
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
-import { workerName } from "@/app/conversation/rowWords";
+import { decisionWords, workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
 import { useAction } from "@/app/conversation/useAction";
 import { WorkerLine } from "@/app/conversation/WorkerChip";
@@ -374,6 +374,7 @@ const DECISIONS = 5;
 /** A decision on one plain line, which opens to its whole text and why. */
 function DecisionRow({ decision }: { decision: Decision }) {
   const [open, setOpen] = useState(false);
+  const { what, why } = decisionWords(decision);
   return (
     <button
       type="button"
@@ -386,10 +387,10 @@ function DecisionRow({ decision }: { decision: Decision }) {
         className="text-muted-foreground mt-0.5 size-icon-sm shrink-0"
       />
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className={open ? "wrap-break-word" : "truncate"}><WorkerLine text={decision.what} /></span>
-        {open && decision.why && (
+        <span className={open ? "wrap-break-word" : "truncate"}><WorkerLine text={what} /></span>
+        {open && why && (
           <span className="text-muted-foreground text-xs wrap-break-word">
-            <WorkerLine text={decision.why} />
+            <WorkerLine text={why} />
           </span>
         )}
       </span>

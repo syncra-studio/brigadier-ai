@@ -76,6 +76,7 @@ export type { Decider } from "./Decider";
 export type { Decision } from "./Decision";
 export type { DecisionKind } from "./DecisionKind";
 export type { DecisionSource } from "./DecisionSource";
+export type { DecisionWords } from "./DecisionWords";
 export type { Density } from "./Density";
 export type { Diagnostics } from "./Diagnostics";
 export type { DictationStatus } from "./DictationStatus";

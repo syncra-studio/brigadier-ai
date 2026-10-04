@@ -29,7 +29,9 @@ Continue creates another proposal and requires Start.
 
 `http://localhost:1426/fixtures/night.html` renders the real thread and side panel of the first
 overnight run from its stored events (`src/fixtures/boards/overnight-2026-10-03.json`, made by
-`scripts/extract-board-fixture.mjs` from a copy of the database). Requests are answered in the
+`scripts/extract-board-fixture.mjs` from a copy of the database; each decision's `short`, the words
+the daemon's board gives it, comes from what the Rust test `the_nights_fixture_carries_the_boards_short_words`
+prints). Requests are answered in the
 page and never reach a daemon; a worker's transcript is not in the fixture. Open Phase 2's header:
 it shows seven rows (the plan, four workers, one judgement call, the lead's reply), where the app
 showed 53 before one row per task. Open a row's chevron for its checks round by round, and the

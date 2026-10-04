@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import { namedTasks, workerName } from "@/app/conversation/rowWords";
-import type { Task } from "@/ipc/generated";
+import { decisionWords, namedTasks, workerName } from "@/app/conversation/rowWords";
+import type { Decision, Task } from "@/ipc/generated";
 
 const tasks = night.tasks as unknown as Record<string, Task>;
 const byNumber = (number: number): Task => {
@@ -35,4 +35,20 @@ test("a line's task-N reads as the worker's name, once where the line already qu
   );
   // A number the session has no worker for stays as it is.
   assert.equal(namedTasks("task-999 is gone", tasks), "task-999 is gone");
+});
+
+test("a decision recorded in older, longer words reads in the board's short ones", () => {
+  const decisions = night.decisions as unknown as Decision[];
+  const sentBack = decisions.find((decision) => decision.what.startsWith("Sent task-5 back"));
+  assert.ok(sentBack);
+  assert.deepEqual(decisionWords(sentBack), {
+    what: "Sent task-5 back after review (fix 1 of 2)",
+    why: "The findings are on its checks.",
+  });
+  for (const decision of decisions) {
+    assert.doesNotMatch(decisionWords(decision).why, /From the (review|verification)|\[not (run|checked)\]/);
+  }
+  // One that arrived since the board was read is in the short words already.
+  const live = { ...sentBack, short: null, what: "Sent task-5 back: 2 review findings (fix 1 of 2)", why: "" };
+  assert.deepEqual(decisionWords(live), { what: live.what, why: "" });
 });

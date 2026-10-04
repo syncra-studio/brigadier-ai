@@ -198,6 +198,10 @@ impl Board {
                 {
                     decision.kind = crate::work::DecisionKind::PhaseOutcome;
                 }
+                decision.short = Some(crate::manager::decisions::short_words(
+                    &decision.what,
+                    &decision.why,
+                ));
                 self.decisions.push(decision);
             }
             DomainEvent::WaitingOnYou { item } => {

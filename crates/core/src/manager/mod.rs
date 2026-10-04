@@ -21,7 +21,7 @@ mod branches;
 mod cards;
 mod cold;
 mod conversation;
-mod decisions;
+pub(crate) mod decisions;
 pub mod disk;
 mod fallback;
 #[cfg(debug_assertions)]
