@@ -1439,7 +1439,7 @@ impl SessionManager {
             writable_roots.push(repo.common_dir().to_owned());
         }
         // Builds and installs write the toolchains' shared caches.
-        for root in toolchain_roots(&self.runtime.cli_env()) {
+        for root in toolchain_roots(self.runtime.cli_env()) {
             if !writable_roots.contains(&root) {
                 writable_roots.push(root);
             }
