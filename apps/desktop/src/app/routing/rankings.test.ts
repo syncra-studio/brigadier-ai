@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   changedModels,
   fieldWords,
+  lastRefresh,
   overlayStatus,
   refreshRunning,
   refreshStatus,
@@ -46,38 +47,54 @@ test("a researched model whose rating didn't change isn't counted as changed", (
     changedModels(changes).map((entry) => entry.model),
     ["a", "c"],
   );
-  assert.equal(refreshStatus(refresh("done", { changes }))?.text, "Updated 2 models.");
-  assert.equal(refreshStatus(refresh("done", { changes: [change("a", ["tier"])] }))?.text, "Updated 1 model.");
-  assert.equal(refreshStatus(refresh("done", { changes: [change("b", [])] }))?.text, "No ratings changed.");
+  assert.equal(refreshStatus(refresh("done", { changes }), null)?.text, "Rankings refreshed. Updated 2 models.");
+  assert.equal(
+    refreshStatus(refresh("done", { changes: [change("a", ["tier"])] }), null)?.text,
+    "Rankings refreshed. Updated 1 model.",
+  );
+  assert.equal(
+    refreshStatus(refresh("done", { changes: [change("b", [])] }), null)?.text,
+    "Rankings refreshed. No ratings changed.",
+  );
 });
 
 test("each state has its own words", () => {
-  assert.equal(refreshStatus(refresh("idle")), null);
-  assert.deepEqual(refreshStatus(refresh("checkingRegistry")), {
+  assert.equal(refreshStatus(refresh("idle"), null), null);
+  assert.deepEqual(refreshStatus(refresh("checkingRegistry"), null), {
     tone: "running",
-    text: "Checking for a newer model list…",
+    text: "Checking for a newer published model list…",
   });
-  const researching = refreshStatus(refresh("researching", { model: "claude-opus-4-5" }));
+  const researching = refreshStatus(refresh("researching"), "Opus 4.5");
   assert.equal(researching?.tone, "running");
-  assert.match(researching?.text ?? "", /^Researching with claude-opus-4-5 since .+…$/);
+  assert.match(researching?.text ?? "", /^Researching the models with Opus 4\.5 since .+…$/);
   assert.equal(
-    refreshStatus(refresh("researching", { startedAtMs: null }))?.text,
-    "Researching with one of your models…",
+    refreshStatus(refresh("researching", { startedAtMs: null }), null)?.text,
+    "Researching the models with one of your models…",
   );
-  assert.equal(refreshStatus(refresh("done"))?.tone, "done");
-  assert.deepEqual(refreshStatus(refresh("failed")), {
-    tone: "error",
-    text: "The refresh failed. The ratings in use didn't change.",
-  });
-  assert.equal(refreshStatus(refresh("cancelled"))?.text, "The refresh was cancelled.");
-  assert.match(refreshStatus(refresh("superseded"))?.text ?? "", /newer curated model list/);
+  const finished = refreshStatus(refresh("done", { finishedAtMs: new Date(2026, 9, 4, 14, 9).getTime() }), null);
+  assert.equal(finished?.tone, "done");
+  assert.match(finished?.text ?? "", /^Rankings refreshed .+\. No ratings changed\.$/);
+  const failed = refreshStatus(refresh("failed"), null);
+  assert.equal(failed?.tone, "error");
+  assert.match(failed?.text ?? "", /ratings didn't change/);
+  assert.match(refreshStatus(refresh("cancelled"), null)?.text ?? "", /stopped/);
+  assert.match(refreshStatus(refresh("superseded"), null)?.text ?? "", /newer published model list/);
 });
 
-test("the ratings in use: researched, no longer applied, or curated", () => {
+test("the last refresh: when, with which model and how it ended", () => {
+  assert.equal(lastRefresh(refresh("idle"), null), null);
+  assert.equal(lastRefresh(refresh("researching"), "Opus 4.5"), null);
+  const finishedAtMs = new Date(2026, 9, 4, 14, 9).getTime();
+  assert.match(lastRefresh(refresh("done", { finishedAtMs }), "Opus 4.5") ?? "", /^.+ with Opus 4\.5: finished\.$/);
+  assert.match(lastRefresh(refresh("failed", { finishedAtMs }), null) ?? "", /: failed\.$/);
+  assert.equal(lastRefresh(refresh("cancelled", { startedAtMs: null }), null), "stopped.");
+});
+
+test("the ratings in use: researched, no longer applied, or published", () => {
   const at = new Date(2026, 9, 3, 9, 30).getTime();
-  assert.match(overlayStatus(refresh("idle", { overlayApplied: true, overlayAtMs: at })), /^Using researched ratings from .+\.$/);
-  assert.match(overlayStatus(refresh("superseded", { overlayAtMs: at })), /no longer applied/);
-  assert.equal(overlayStatus(refresh("idle")), "Using the curated ratings.");
+  assert.match(overlayStatus(refresh("idle", { overlayApplied: true, overlayAtMs: at })), /^Researched ratings from .+\.$/);
+  assert.match(overlayStatus(refresh("superseded", { overlayAtMs: at })), /isn't used/);
+  assert.equal(overlayStatus(refresh("idle")), "The published ratings.");
 });
 
 test("changed fields read as words", () => {

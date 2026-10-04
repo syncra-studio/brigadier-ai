@@ -2,15 +2,13 @@ import { ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
 import { useMemo } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
+import { learnedKey, modelSummary, ModelRow, ProjectPicker } from "@/app/routing/models";
 import {
-  learnedKey,
-  modelSummary,
-  ModelRow,
-  ProjectPicker,
-  ProvenanceBadge,
-  RegistryCard,
-} from "@/app/routing/models";
-import { RANKINGS_ROW, RankingsSection } from "@/app/routing/RankingsSection";
+  RANKINGS_ROWS,
+  RatingsSection,
+  RefreshRankingsButton,
+  RefreshStatusLine,
+} from "@/app/routing/RankingsSection";
 import { AdvancedRouting, ROUTING_ROWS, RoutingKinds } from "@/app/routing/routing";
 import {
   SettingsAdvanced,
@@ -34,6 +32,7 @@ import { isFable } from "@/lib/routing";
 import { useAvailableModelGroups, useModelGroups } from "@/lib/setup";
 import { openSettings } from "@/state/actions";
 import { isNewModel, mayWork, modelAvailable, setModelWorks } from "@/state/providers";
+import { useRankingsRefresh } from "@/state/rankings";
 import { useApp } from "@/state/store";
 import { useUsage, useUsageRefresh } from "@/state/usage";
 
@@ -44,12 +43,12 @@ export const ROUTING_PAGE_ROWS = {
     description:
       "Only models turned on here get tasks. This doesn't change the model you pick for a chat or session.",
   },
-  ratings: RANKINGS_ROW,
+  refresh: RANKINGS_ROWS.refresh,
   whoDoesWhat: ROUTING_ROWS.simple,
   advanced: {
     label: "Advanced",
     description:
-      "The full order and why, backup models, settings per project or area, rules like “never use this model for reviews”, and each model's scores.",
+      "The full order and why, backup models, settings per project or area, rules like “never use this model for reviews”, each model's scores, and where the ratings come from.",
   },
   kinds: ROUTING_ROWS.kinds,
   rules: ROUTING_ROWS.rules,
@@ -58,9 +57,10 @@ export const ROUTING_PAGE_ROWS = {
     description:
       "Brigadier scores each model 0–10 per kind of work from the model registry, then adjusts the scores from how its tasks went.",
   },
+  ratings: RANKINGS_ROWS.ratings,
   registry: {
     label: "Model registry",
-    description: "Where the models' scores come from, and checking it for updates.",
+    description: "The published list the models' ratings start from.",
   },
 } as const;
 
@@ -79,6 +79,7 @@ export function RoutingPage() {
   const available = useAvailableModelGroups();
   const settings = useApp((s) => s.settings);
   const now = useNow(30_000);
+  const rankings = useRankingsRefresh();
   // Adjustments read for another project than the one picked are not shown while it is read.
   const forPicked = view?.projectId === picked;
   const learned = useMemo(
@@ -105,7 +106,9 @@ export function RoutingPage() {
       <SettingsSection
         title={ROUTING_PAGE_ROWS.workers.label}
         description={ROUTING_PAGE_ROWS.workers.description}
+        actions={<RefreshRankingsButton rankings={rankings} />}
       >
+        <RefreshStatusLine rankings={rankings} merged={merged} />
         <div className="flex flex-col gap-4 pt-2">
           {shown.length === 0 ? (
             <p className="text-muted-foreground text-xs">No model is available yet.</p>
@@ -124,8 +127,6 @@ export function RoutingPage() {
           </p>
         </div>
       </SettingsSection>
-
-      <RankingsSection merged={merged} />
 
       <RoutingKinds groups={groups} />
 
@@ -159,7 +160,7 @@ export function RoutingPage() {
             </SettingsCard>
           )}
         </SettingsSection>
-        {view && <RegistryCard registry={view.registry} now={now} />}
+        <RatingsSection rankings={rankings} merged={merged} registry={view?.registry ?? null} now={now} />
       </SettingsAdvanced>
     </SettingsPage>
   );
@@ -231,7 +232,6 @@ function WorkerRow({
         <span className="flex items-center gap-2">
           {model.displayName}
           {fresh && <Badge variant="warning">New</Badge>}
-          {known && !fable && <ProvenanceBadge provenance={known.ratingProvenance} />}
         </span>
       }
       description={summary || undefined}

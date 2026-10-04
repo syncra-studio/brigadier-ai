@@ -10,7 +10,9 @@ import { formatDateTime, formatTime } from "@/lib/format";
 export const RANKINGS_POLL_MS = 2_000;
 
 /** Whether a refresh in this state is still running: the page polls it and keeps the button off. */
-export function refreshRunning(state: RankingsRefreshState): boolean {
+export function refreshRunning(
+  state: RankingsRefreshState,
+): state is "checkingRegistry" | "researching" {
   return state === "checkingRegistry" || state === "researching";
 }
 
@@ -24,50 +26,76 @@ export type RefreshStatus = {
   text: string;
 };
 
-/** What the refresh is doing, or how it ended; `null` when none ran. */
-export function refreshStatus(refresh: RankingsRefresh): RefreshStatus | null {
+/**
+ * What the refresh is doing, or how the last one ended, in one line; `null` when none ran.
+ * `researcher` names the model it researched with.
+ */
+export function refreshStatus(refresh: RankingsRefresh, researcher: string | null): RefreshStatus | null {
   switch (refresh.state) {
     case "idle":
       return null;
     case "checkingRegistry":
-      return { tone: "running", text: "Checking for a newer model list…" };
+      return { tone: "running", text: "Checking for a newer published model list…" };
     case "researching": {
-      const model = refresh.model ?? "one of your models";
+      const model = researcher ?? "one of your models";
       const since = refresh.startedAtMs !== null ? ` since ${formatTime(refresh.startedAtMs)}` : "";
-      return { tone: "running", text: `Researching with ${model}${since}…` };
+      return { tone: "running", text: `Researching the models with ${model}${since}…` };
     }
     case "done": {
       const count = changedModels(refresh.changes).length;
+      const when = refresh.finishedAtMs !== null ? ` ${formatDateTime(refresh.finishedAtMs)}` : "";
       return {
         tone: "done",
         text:
           count === 0
-            ? "No ratings changed."
-            : `Updated ${count} ${count === 1 ? "model" : "models"}.`,
+            ? `Rankings refreshed${when}. No ratings changed.`
+            : `Rankings refreshed${when}. Updated ${count} ${count === 1 ? "model" : "models"}.`,
       };
     }
     case "failed":
-      return { tone: "error", text: "The refresh failed. The ratings in use didn't change." };
+      return {
+        tone: "error",
+        text: "The refresh failed, so the ratings didn't change. The reason is under Advanced.",
+      };
     case "cancelled":
-      return { tone: "warning", text: "The refresh was cancelled." };
+      return { tone: "warning", text: "The refresh was stopped. The ratings didn't change." };
     case "superseded":
       return {
         tone: "warning",
-        text: "A newer curated model list was installed, so the research no longer applies.",
+        text: "A newer published model list came in during the refresh, so its research isn't used.",
       };
   }
 }
 
-/** Which ratings are in use: the researched ones, since when, or the curated ones. */
+/** When the last refresh ran, with which model and how it ended; `null` when none ran. */
+export function lastRefresh(refresh: RankingsRefresh, researcher: string | null): string | null {
+  if (refresh.state === "idle" || refreshRunning(refresh.state)) return null;
+  const at = refresh.finishedAtMs ?? refresh.startedAtMs;
+  const parts = [
+    at !== null ? formatDateTime(at) : null,
+    researcher !== null ? `with ${researcher}` : null,
+  ].filter(Boolean);
+  const ended = OUTCOME[refresh.state];
+  return parts.length > 0 ? `${parts.join(" ")}: ${ended}` : ended;
+}
+
+const OUTCOME: Record<"done" | "failed" | "cancelled" | "superseded", string> = {
+  done: "finished.",
+  failed: "failed.",
+  cancelled: "stopped.",
+  superseded: "replaced by a newer published model list.",
+};
+
+/** Which ratings are in use: the researched ones, since when, or the published ones. */
 export function overlayStatus(refresh: RankingsRefresh): string {
   const at = refresh.overlayAtMs;
   if (refresh.overlayApplied) {
-    return at !== null ? `Using researched ratings from ${formatDateTime(at)}.` : "Using researched ratings.";
+    return at !== null ? `Researched ratings from ${formatDateTime(at)}.` : "Researched ratings.";
   }
   if (at !== null) {
-    return `Using the curated ratings. The research from ${formatDateTime(at)} is no longer applied: a newer curated model list replaced it.`;
+    return `The published ratings. The research from ${formatDateTime(at)} isn't used: a newer published model list replaced it.`;
   }
-  return "Using the curated ratings.";
+  return "The published ratings.";
 }
 
 const EFFORT_PREFIX = "defaultEffort.";

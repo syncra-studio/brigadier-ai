@@ -1,13 +1,7 @@
-import { ChevronDown, ChevronRight, Reload } from "@openai/apps-sdk-ui/components/Icon";
+import { ChevronDown, ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
 import { useState } from "react";
 
-import { useAction } from "@/app/conversation/useAction";
-import {
-  SettingsButton,
-  SettingsCard,
-  SettingsRow,
-  SettingsSection,
-} from "@/app/settings/parts";
+import { SettingsRow } from "@/app/settings/parts";
 import { openUrl } from "@/ipc/client";
 import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import { Badge } from "@/components/ui/badge";
@@ -51,7 +45,7 @@ import { blocksModel, isWorkerRule, mayWork } from "@/state/providers";
 import { addOverride } from "@/state/routing";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
-import { checkRegistry, setUsageProject } from "@/state/usage";
+import { setUsageProject } from "@/state/usage";
 
 /** Categories a model is scored for, as the grid's short heads. */
 const CATEGORY_HEADS: Record<TaskCategory, string> = {
@@ -169,9 +163,11 @@ export function SourceLink({ url }: { url: string }) {
   );
 }
 
-/** The registry in use, in a sentence, with "Check for updates". */
-export function RegistryCard({ registry, now }: { registry: RegistryInfo; now: number }) {
-  const check = useAction();
+/**
+ * The model registry the ratings build on, in a sentence. Refresh rankings checks it for a
+ * newer published list first, so it has no button of its own.
+ */
+export function RegistryRow({ registry, now }: { registry: RegistryInfo; now: number }) {
   const source =
     registry.source === "bundled"
       ? "bundled with this version of Brigadier"
@@ -179,30 +175,20 @@ export function RegistryCard({ registry, now }: { registry: RegistryInfo; now: n
   const checked =
     registry.checkedAtMs !== null ? `checked ${formatAgo(registry.checkedAtMs, now)}` : "not checked yet";
   return (
-    <SettingsSection>
-      <SettingsCard>
-        <SettingsRow
-          label="Model registry"
-          description={
-            <>
-              Revision {registry.revision} ({registry.updated}), {source} · {registry.models}{" "}
-              models · {checked}
-              {registry.error && (
-                <span role="alert" className="text-warning block">
-                  The last check didn't update it: {registry.error}
-                </span>
-              )}
-            </>
-          }
-          error={check.error}
-        >
-          <SettingsButton disabled={check.busy} onClick={() => check.run(checkRegistry)}>
-            <Reload className={check.busy ? "animate-spin motion-reduce:animate-none" : undefined} />
-            Check for updates
-          </SettingsButton>
-        </SettingsRow>
-      </SettingsCard>
-    </SettingsSection>
+    <SettingsRow
+      label="Model registry"
+      description={
+        <>
+          Revision {registry.revision} ({registry.updated}), {source} · {registry.models} models ·{" "}
+          {checked}
+          {registry.error && (
+            <span role="alert" className="text-warning block">
+              The last check didn't update it: {registry.error}
+            </span>
+          )}
+        </>
+      }
+    />
   );
 }
 

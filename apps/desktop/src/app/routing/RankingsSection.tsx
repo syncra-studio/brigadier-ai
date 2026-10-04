@@ -1,11 +1,11 @@
 import { ChevronRight, Reload } from "@openai/apps-sdk-ui/components/Icon";
 import { useState } from "react";
 
-import { useAction } from "@/app/conversation/useAction";
-import { SourceLink } from "@/app/routing/models";
+import { RegistryRow, SourceLink } from "@/app/routing/models";
 import {
   changedModels,
   fieldWords,
+  lastRefresh,
   overlayStatus,
   refreshRunning,
   refreshStatus,
@@ -22,76 +22,114 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { MergedModel, RankingsRefresh, RatingChange } from "@/ipc/generated";
+import type { MergedModel, RankingsRefresh, RatingChange, RegistryInfo } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { useRankingsRefresh } from "@/state/rankings";
+import type { RankingsRefreshView } from "@/state/rankings";
 
-/** The section's row, for Settings search; the section renders this copy. */
-export const RANKINGS_ROW = {
-  label: "Model ratings",
-  description:
-    "Refresh rankings researches the web with one of your enabled models and updates the models' ratings. Your manual rankings are not changed.",
+/** The rankings rows, for Settings search; the page renders this copy. */
+export const RANKINGS_ROWS = {
+  refresh: {
+    label: "Refresh rankings",
+    description:
+      "Looks up the latest on each model on the web with one of your models, then updates how Brigadier rates them. Your own choices stay as they are.",
+  },
+  ratings: {
+    label: "Model ratings",
+    description:
+      "Which ratings are in use, what the last refresh changed and where it read it, and going back to the published ratings.",
+  },
 } as const;
 
 const STATUS_TONES: Record<RefreshStatus["tone"], string> = {
   running: "text-foreground/80",
-  done: "text-foreground",
+  done: "text-foreground/65",
   warning: "text-warning",
   error: "text-destructive",
 };
 
-/**
- * Model ratings: "Refresh rankings" (a web research run that re-rates the models), what it is
- * doing or how it ended, and which ratings are in use, with a way back to the curated ones.
- */
-export function RankingsSection({ merged }: { merged: readonly MergedModel[] | null }) {
-  const { refresh, error, start, reset } = useRankingsRefresh();
-  const starting = useAction();
-  const [resetting, setResetting] = useState(false);
+/** The display name of the model a refresh researched with, when the models list has it. */
+function researcherName(refresh: RankingsRefresh, merged: readonly MergedModel[] | null): string | null {
+  if (refresh.model === null) return null;
+  const model = merged?.find(
+    (entry) =>
+      entry.provider === refresh.provider && (entry.id === refresh.model || entry.resolved === refresh.model),
+  );
+  return model?.displayName ?? refresh.model;
+}
+
+/** "Refresh rankings": starts a refresh, or shows that one is running. */
+export function RefreshRankingsButton({ rankings }: { rankings: RankingsRefreshView }) {
+  const { refresh, starting, start } = rankings;
   const running = refresh !== null && refreshRunning(refresh.state);
-  const status = refresh && refreshStatus(refresh);
   return (
-    <SettingsSection
-      title={RANKINGS_ROW.label}
-      description={RANKINGS_ROW.description}
-      actions={
-        <SettingsButton
-          disabled={running || starting.busy || refresh === null}
-          onClick={() => starting.run(start)}
-        >
-          <Reload
-            className={running || starting.busy ? "animate-spin motion-reduce:animate-none" : undefined}
-          />
-          {running ? "Refreshing…" : "Refresh rankings"}
-        </SettingsButton>
-      }
-    >
-      {(starting.error ?? error) && (
-        <p role="alert" className="text-destructive text-xs">
-          {starting.error ?? error}
+    <SettingsButton disabled={running || starting.busy || refresh === null} onClick={() => starting.run(start)}>
+      <Reload className={running || starting.busy ? "animate-spin motion-reduce:animate-none" : undefined} />
+      {running ? "Refreshing…" : RANKINGS_ROWS.refresh.label}
+    </SettingsButton>
+  );
+}
+
+/** One line under the button: what the refresh is doing, or how the last one ended. */
+export function RefreshStatusLine({
+  rankings,
+  merged,
+}: {
+  rankings: RankingsRefreshView;
+  merged: readonly MergedModel[] | null;
+}) {
+  const { refresh, error, starting } = rankings;
+  const status = refresh && refreshStatus(refresh, researcherName(refresh, merged));
+  const failure = starting.error ?? error;
+  return (
+    <>
+      {failure && (
+        <p role="alert" className="text-destructive px-1 text-xs">
+          {failure}
         </p>
       )}
       {/* Always there, so screen readers hear each change of it. */}
-      <p role="status" aria-live="polite" className={cn("px-1 text-xs", status && STATUS_TONES[status.tone])}>
+      <p role="status" aria-live="polite" className={cn("px-1 text-xs empty:hidden", status && STATUS_TONES[status.tone])}>
         {status?.text}
       </p>
-      {refresh && (
-        <SettingsCard>
-          {refresh.state === "done" && <ChangedModels changes={refresh.changes} merged={merged} />}
-          {refresh.errors.length > 0 && !running && <RefreshErrors refresh={refresh} />}
+    </>
+  );
+}
+
+/**
+ * Under Advanced: which ratings are in use (with a way back to the published ones), the last
+ * refresh with what it changed and its sources, and the model registry they build on.
+ */
+export function RatingsSection({
+  rankings,
+  merged,
+  registry,
+  now,
+}: {
+  rankings: RankingsRefreshView;
+  merged: readonly MergedModel[] | null;
+  registry: RegistryInfo | null;
+  now: number;
+}) {
+  const { refresh, reset } = rankings;
+  const [resetting, setResetting] = useState(false);
+  const running = refresh !== null && refreshRunning(refresh.state);
+  const last = refresh && lastRefresh(refresh, researcherName(refresh, merged));
+  return (
+    <SettingsSection title={RANKINGS_ROWS.ratings.label} description={RANKINGS_ROWS.ratings.description}>
+      <SettingsCard>
+        {refresh && (
           <SettingsRow label="Ratings in use" description={overlayStatus(refresh)}>
             {refresh.overlayApplied && (
-              <SettingsButton onClick={() => setResetting(true)}>Reset to curated ratings</SettingsButton>
+              <SettingsButton onClick={() => setResetting(true)}>Use published ratings</SettingsButton>
             )}
           </SettingsRow>
-        </SettingsCard>
-      )}
-      <ResetRatingsDialog
-        open={resetting}
-        running={running}
-        onOpenChange={setResetting}
-        onConfirm={reset}
-      />
+        )}
+        {last && <SettingsRow label="Last refresh" description={last} />}
+        {refresh?.state === "done" && <ChangedModels changes={refresh.changes} merged={merged} />}
+        {refresh && refresh.errors.length > 0 && !running && <RefreshErrors refresh={refresh} />}
+        {registry && <RegistryRow registry={registry} now={now} />}
+      </SettingsCard>
+      <ResetRatingsDialog open={resetting} running={running} onOpenChange={setResetting} onConfirm={reset} />
     </SettingsSection>
   );
 }
@@ -200,11 +238,10 @@ function ResetRatingsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Reset to curated ratings?</DialogTitle>
+          <DialogTitle>Use the published ratings?</DialogTitle>
           <DialogDescription>
-            The researched ratings are discarded and every model goes back to its curated rating.
-            {running && " The refresh that is running stops."} Your manual rankings stay as they
-            are.
+            The researched ratings are discarded and every model goes back to its published rating.
+            {running && " The refresh that is running stops."} Your own choices stay as they are.
           </DialogDescription>
         </DialogHeader>
         {error && (
@@ -217,7 +254,7 @@ function ResetRatingsDialog({
             Cancel
           </Button>
           <Button type="button" size="sm" disabled={busy} onClick={() => void confirm()}>
-            Reset to curated ratings
+            Use published ratings
           </Button>
         </DialogFooter>
       </DialogContent>

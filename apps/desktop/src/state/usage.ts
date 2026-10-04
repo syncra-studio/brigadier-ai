@@ -80,17 +80,6 @@ export function applyUsageEvents(batch: readonly EventEnvelope[]): void {
   }
 }
 
-/**
- * Asks the repository for a newer registry now, then reads the whole view again: a new
- * revision changes the models' strengths too.
- */
-export async function checkRegistry(): Promise<void> {
-  const { registry } = await request({ method: "checkRegistry" });
-  const view = useUsage.getState().view;
-  if (view) useUsage.setState({ view: { ...view, registry } });
-  await loadUsage();
-}
-
 /** The view is read again this often while a page shows it and the window can be seen. */
 const REFRESH_EVERY_MS = 60_000;
 
