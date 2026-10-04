@@ -48,6 +48,22 @@ struct State {
     disposing: HashSet<String>,
 }
 
+impl State {
+    /// Whether an owner other than `owner`, and not being disposed of, records the worktree at
+    /// `path` too (through symbolic links).
+    fn shares_worktree(&self, owner: &str, path: &str) -> bool {
+        let real = |path: &str| std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
+        let place = real(path);
+        self.artifacts.iter().any(|(other, artifacts)| {
+            other != owner
+                && !self.disposing.contains(other)
+                && artifacts.iter().any(|artifact| {
+                    matches!(artifact, Artifact::Worktree { path, .. } if real(path) == place)
+                })
+        })
+    }
+}
+
 /// What a disposal left behind.
 #[derive(Debug, Default)]
 pub struct Leftovers {
@@ -362,6 +378,11 @@ impl CleanupLedger {
                 Artifact::CodexThread { .. }
                 | Artifact::CodexGeneratedImages { .. }
                 | Artifact::CodexProjectTrust { .. } => codex.push(artifact),
+                // Run segments share one worktree: the last owner using it removes it.
+                Artifact::Worktree { path, .. } if self.state().shares_worktree(owner, path) => {
+                    tracing::info!(owner, path, "left a worktree another owner still uses");
+                    removed.push(artifact);
+                }
                 Artifact::Worktree { repo, path } => {
                     let remover = self
                         .worktrees
@@ -548,5 +569,38 @@ mod test_folder_tests {
         assert!(!test_data_folder(Path::new(
             "/Users/x/brigadier-test-40cf6d11"
         )));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn worktree(path: &str) -> Artifact {
+        Artifact::Worktree {
+            repo: "/repo".into(),
+            path: path.into(),
+        }
+    }
+
+    #[test]
+    fn a_worktree_stays_while_an_owner_not_being_disposed_of_shares_it() {
+        let mut state = State::default();
+        state
+            .artifacts
+            .insert("overnight:r1".into(), vec![worktree("/wt/overnight-1")]);
+        state
+            .artifacts
+            .insert("overnight:r2".into(), vec![worktree("/wt/overnight-1")]);
+        state
+            .artifacts
+            .insert("task:t1".into(), vec![worktree("/wt/task-1")]);
+        state.disposing.insert("overnight:r1".into());
+        // The earlier segment's cleanup (say, retried at launch) leaves the continuation's.
+        assert!(state.shares_worktree("overnight:r1", "/wt/overnight-1"));
+        assert!(!state.shares_worktree("task:t1", "/wt/task-1"));
+        // Once the continuation is being disposed of too, the worktree can go.
+        state.disposing.insert("overnight:r2".into());
+        assert!(!state.shares_worktree("overnight:r1", "/wt/overnight-1"));
     }
 }

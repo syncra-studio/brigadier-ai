@@ -337,7 +337,8 @@ impl SessionManager {
                 (owner.clone(), state)
             })
             .collect();
-        // Run segments share one worktree: it is never offered while a live owner holds it.
+        // Run segments share one worktree: it is never offered while a live owner holds it, not
+        // even by an owner whose cleanup didn't finish.
         let live: HashSet<PathBuf> = records
             .owners
             .iter()
@@ -345,7 +346,7 @@ impl SessionManager {
             .flat_map(|(_, artifacts, _)| worktree_places(artifacts))
             .collect();
         for (owner, artifacts, _) in &records.owners {
-            if states.get(owner) == Some(&OwnerState::Orphaned)
+            if states.get(owner) != Some(&OwnerState::Live)
                 && worktree_places(artifacts).any(|place| live.contains(&place))
             {
                 states.insert(owner.clone(), OwnerState::Live);
