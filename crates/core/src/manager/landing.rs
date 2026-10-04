@@ -108,8 +108,8 @@ impl SessionManager {
         // morning (PLAN.md §10.8).
         if let Some(run) = &task.run {
             let line = format!(
-                "task-{n}'s change failed its checks. The overnight run won't land it anyway; read the findings and decide whether it lands.",
-                n = task.number
+                "{}: its checks failed, so the run won't land it. Read the findings and decide.",
+                super::decisions::worker_name(task)
             );
             if let Err(err) = self
                 .wait_on_user(
@@ -956,7 +956,7 @@ impl SessionManager {
             self.decided_for_task(
                 task,
                 format!("{} on the user's word", landed_line(task, target)),
-                format!("Landed on the user's word despite: {findings}"),
+                "Landed despite its checks' findings.".to_owned(),
             )
             .await;
             self.deliver(
@@ -991,11 +991,16 @@ impl SessionManager {
             task,
             landed_line(task, target),
             format!(
-                "Its change passed independent checks: {review}, and verified against each \"done when\" criterion{}.",
+                "{} and verified{}.",
+                match task.review.as_ref().map(|r| r.cross_vendor) {
+                    Some(true) => "Reviewed by another vendor",
+                    Some(false) => "Reviewed by the same vendor (the only one available)",
+                    None => "Reviewed",
+                },
                 match fixes {
                     0 => String::new(),
-                    1 => ", after one round of fixes".into(),
-                    rounds => format!(", after {rounds} rounds of fixes"),
+                    1 => ", after 1 fix round".into(),
+                    rounds => format!(", after {rounds} fix rounds"),
                 }
             ),
         )

@@ -297,19 +297,15 @@ impl SessionManager {
                 }
                 Some(GateOutcome::Failed) if decides => {
                     let listed = findings_list(&gate.findings, &reviewers);
-                    let found = gate
-                        .findings
-                        .iter()
-                        .map(|f| format!("{}: {}", f.id, f.text))
-                        .collect::<Vec<_>>()
-                        .join(" ");
+                    let found = format!(
+                        "{} review finding{}",
+                        gate.findings.len(),
+                        if gate.findings.len() == 1 { "" } else { "s" }
+                    );
                     if gate.round < PLAN_ROUNDS {
                         decision = Some((
-                            format!(
-                                "Sent the plan \u{201c}{}\u{201d} back for revision",
-                                plan.title
-                            ),
-                            format!("Its independent review asked for changes. {found}"),
+                            format!("Sent the plan \u{201c}{}\u{201d} back: {found}", plan.title),
+                            "The findings are on the plan card.".to_owned(),
                         ));
                         plan.state = PlanState::Revising;
                         Some(revise_text(&plan, &gate, &reviewers))
@@ -317,7 +313,7 @@ impl SessionManager {
                         decision = Some((
                             format!("Did not approve the plan \u{201c}{}\u{201d}", plan.title),
                             format!(
-                                "It still had problems after {PLAN_ROUNDS} review rounds; the orchestrator asks you or makes it smaller. {found}"
+                                "{found} left after {PLAN_ROUNDS} review rounds. The orchestrator asks you or makes it smaller."
                             ),
                         ));
                         plan.state = PlanState::Rejected {
@@ -344,14 +340,7 @@ impl SessionManager {
                         .join("\n");
                     decision = Some((
                         format!("Did not approve the plan \u{201c}{}\u{201d}", plan.title),
-                        format!(
-                            "Its independent review could not run. {}",
-                            reasons
-                                .lines()
-                                .map(|line| line.trim_start_matches("- "))
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                        ),
+                        "Its review couldn't run.".to_owned(),
                     ));
                     plan.state = PlanState::Rejected {
                         message: Some(format!("The review could not run.\n{reasons}")),

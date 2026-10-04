@@ -345,21 +345,19 @@ impl SessionManager {
         let result = match (failed, &member.report, link.role) {
             (Some(reason), _, role) => GateResult::NoResult {
                 reason: format!(
-                    "The phase's {} (task-{}) gave no result: {reason}",
+                    "The phase's {} gave no result: {reason}",
                     match role {
                         GateRole::Verify => "verifier",
                         GateRole::Review => "reviewer",
                         GateRole::Judge => "judge",
                     },
-                    member.number
                 ),
             },
             (None, None, _) => return,
             (None, Some(report), GateRole::Verify) => match self.verifier_changes(member).await {
                 Some(changed) => GateResult::NoResult {
                     reason: format!(
-                        "The phase's verifier (task-{}) changed what it checked ({changed}), so its result was discarded.",
-                        member.number
+                        "The phase's verifier changed what it checked ({changed}), so its result was discarded."
                     ),
                 },
                 None => {
@@ -657,7 +655,7 @@ impl SessionManager {
                     request,
                     format!("Verified phase {number} \u{201c}{}\u{201d}", phase.name),
                     format!(
-                        "A fresh verifier showed each of its {} criteria met, a reviewer from another vendor approved the whole diff, and a fresh judge agreed.",
+                        "All {} criteria met. A fresh verifier, another vendor's reviewer and a judge agreed.",
                         phase.done_when.len()
                     ),
                 )
@@ -690,8 +688,8 @@ impl SessionManager {
                     &now,
                     Some(phase_id),
                     request.clone(),
-                    format!("Sent phase {number} back to its lead to fix what its checks found"),
-                    format!("Fix round {round} of {FIX_ROUNDS}."),
+                    format!("Sent phase {number} back to its lead (fix {round} of {FIX_ROUNDS})"),
+                    "The findings are on the phase's checks.".to_owned(),
                 )
                 .await;
                 self.deliver_for(
@@ -760,13 +758,8 @@ impl SessionManager {
                         }
                     ),
                     format!(
-                        "{met} of {} criteria met. Still missing: {}",
-                        phase.done_when.len(),
-                        if gaps.is_empty() {
-                            "see the phase's checks".to_owned()
-                        } else {
-                            gaps.join("; ")
-                        }
+                        "{met} of {} criteria met. What's missing is in the phase's checks.",
+                        phase.done_when.len()
                     ),
                 )
                 .await;
@@ -939,7 +932,7 @@ impl SessionManager {
                 Some(planning.request_id.clone()),
                 format!("Approved the overnight plan \u{201c}{}\u{201d}", now.name),
                 format!(
-                    "Another vendor reviewed its {} phases and a fresh judge found they follow the goal without invented scope.",
+                    "Another vendor reviewed its {} phases; a judge found they follow the goal.",
                     now.phases.len()
                 ),
             )

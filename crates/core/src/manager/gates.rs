@@ -564,7 +564,9 @@ impl SessionManager {
             Some(GateOutcome::Failed) => {
                 self.landing_waits(&task, &gate, &members).await;
                 let findings = findings_text(&gate, &members);
-                self.send_back_or_escalate(&task, &findings, false).await;
+                let counts = finding_counts(&gate);
+                self.send_back_or_escalate(&task, &findings, &counts, false)
+                    .await;
             }
             Some(GateOutcome::Unverified) => {
                 let reasons = unverified_reasons(&gate);
@@ -589,11 +591,8 @@ impl SessionManager {
                 };
                 self.decided_for_task(
                     &task,
-                    format!(
-                        "Held task-{} \u{201c}{}\u{201d}: its change could not be verified",
-                        task.number, task.title
-                    ),
-                    format!("Nothing lands unverified. {}", one_line_findings(&reasons)),
+                    format!("Held task-{}: its change couldn't be verified", task.number),
+                    format!("Nothing lands unverified. {}", reason_heads(&reasons)),
                 )
                 .await;
                 self.landing_problem(
@@ -614,10 +613,10 @@ impl SessionManager {
                 self.decided_for_task(
                     &task,
                     format!(
-                        "Did not land task-{}: its checks could not finish",
+                        "Didn't land task-{}: its checks couldn't finish",
                         task.number
                     ),
-                    one_line_findings(&reasons),
+                    reason_heads(&reasons),
                 )
                 .await;
                 self.landing_problem(
@@ -681,7 +680,15 @@ impl SessionManager {
 
     /// Sends the worker the gate's findings to fix, or (rounds used up, a fix that changed
     /// nothing, or work the orchestrator took back) hands the decision to the orchestrator.
-    pub(crate) async fn send_back_or_escalate(&self, task: &Task, findings: &str, unchanged: bool) {
+    /// `counts` names how many findings came from which check ("2 review findings"), for
+    /// "Decided for you".
+    pub(crate) async fn send_back_or_escalate(
+        &self,
+        task: &Task,
+        findings: &str,
+        counts: &str,
+        unchanged: bool,
+    ) {
         if task.landing.is_some() && task.fix_rounds < FIX_ROUNDS && !unchanged {
             let text = format!("{SEND_BACK}\n{findings}");
             let sent = match self
@@ -706,11 +713,11 @@ impl SessionManager {
                     self.decided_for_task(
                         task,
                         format!(
-                            "Sent task-{} back to fix what its checks found (fix {} of {FIX_ROUNDS})",
+                            "Sent task-{} back: {counts} (fix {} of {FIX_ROUNDS})",
                             task.number,
                             task.fix_rounds + 1
                         ),
-                        one_line_findings(findings),
+                        "The findings are on its checks.".to_owned(),
                     )
                     .await;
                     return;
@@ -744,23 +751,19 @@ impl SessionManager {
                 if rounds == 1 { "" } else { "s" }
             ),
         };
-        let why = match (unchanged, task.fix_rounds) {
-            (true, _) => {
-                "Its change is the same one its checks found these problems in.".to_owned()
-            }
-            (false, 0) => "Its checks found problems.".to_owned(),
+        let reason = match (unchanged, task.fix_rounds) {
+            (true, _) => "the fix changed nothing".to_owned(),
+            (false, 0) => counts.to_owned(),
             (false, rounds) => format!(
-                "The problems were still there after {rounds} fix round{}.",
+                "problems left after {rounds} fix round{}",
                 if rounds == 1 { "" } else { "s" }
             ),
         };
         self.decided_for_task(
             &task,
-            format!(
-                "Did not land task-{}: the orchestrator decides what happens next",
-                task.number
-            ),
-            format!("{why} {}", one_line_findings(findings)),
+            format!("Didn't land task-{}: {reason}", task.number),
+            "The orchestrator decides what happens next; the findings are on its checks."
+                .to_owned(),
         )
         .await;
         let mut text = format!(
@@ -807,7 +810,9 @@ impl SessionManager {
     /// The worker's fix changed nothing: the orchestrator gets the last round's findings.
     pub(crate) async fn escalate_unchanged(&self, task: &Task) {
         let findings = self.gate_findings(task).await;
-        self.send_back_or_escalate(task, &findings, true).await;
+        let counts = task.gate.as_ref().map(finding_counts).unwrap_or_default();
+        self.send_back_or_escalate(task, &findings, &counts, true)
+            .await;
     }
 
     /// The findings of the task's last gate round, member by member.
@@ -1549,6 +1554,55 @@ pub(super) fn one_line_findings(findings: &str) -> String {
         .join(" ")
 }
 
+/// How many findings a round's checks gave, by check: "2 review findings, 1 verification
+/// finding" ("its checks' findings" when none is listed).
+fn finding_counts(gate: &Gate) -> String {
+    let mut counts: Vec<(GateRole, usize)> = Vec::new();
+    for member in &gate.members {
+        if let Some(GateResult::Failed { findings }) = &member.result {
+            match counts.iter_mut().find(|(role, _)| *role == member.role) {
+                Some((_, count)) => *count += findings.len(),
+                None => counts.push((member.role, findings.len())),
+            }
+        }
+    }
+    let parts: Vec<String> = counts
+        .iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(role, count)| {
+            format!(
+                "{count} {} finding{}",
+                role_name(*role),
+                if *count == 1 { "" } else { "s" }
+            )
+        })
+        .collect();
+    if parts.is_empty() {
+        "its checks' findings".to_owned()
+    } else {
+        parts.join(", ")
+    }
+}
+
+/// Brigadier's own words of each reason ("The project's checks could not run"), without the
+/// check's text after them, as one line.
+fn reason_heads(reasons: &str) -> String {
+    let mut heads: Vec<String> = Vec::new();
+    for line in reasons.lines() {
+        let line = line.trim().trim_start_matches("- ");
+        let head = line.split_once(": ").map_or(line, |(head, _)| head).trim();
+        let head = head.trim_end_matches('.');
+        if !head.is_empty() && !heads.iter().any(|h| h == head) {
+            heads.push(head.to_owned());
+        }
+    }
+    heads
+        .iter()
+        .map(|head| format!("{head}."))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn unverified_reasons(gate: &Gate) -> String {
     gate.members
         .iter()
@@ -1632,6 +1686,47 @@ mod tests {
             artifacts: Vec::new(),
             submitted_at_ms: 0,
         }
+    }
+
+    #[test]
+    fn decided_for_you_counts_findings_and_keeps_only_brigadiers_words() {
+        let member = |id: &str, role, result| GateMember {
+            task_id: TaskId(id.into()),
+            role,
+            result,
+            avoid: Vec::new(),
+        };
+        let failed = |findings: &[&str]| {
+            Some(GateResult::Failed {
+                findings: findings.iter().map(|f| (*f).to_owned()).collect(),
+            })
+        };
+        let mut gate = Gate {
+            round: 1,
+            commit: Some("c1".into()),
+            members: vec![
+                member("r1", GateRole::Review, failed(&["a", "b"])),
+                member("r2", GateRole::Review, failed(&["c"])),
+                member("v", GateRole::Verify, failed(&["d"])),
+            ],
+            outcome: None,
+            relanding: false,
+            retry: false,
+            overridden: false,
+            findings: Vec::new(),
+        };
+        assert_eq!(
+            finding_counts(&gate),
+            "3 review findings, 1 verification finding"
+        );
+        gate.members = vec![member("v", GateRole::Verify, Some(GateResult::Passed))];
+        assert_eq!(finding_counts(&gate), "its checks' findings");
+        assert_eq!(
+            reason_heads(
+                "- The project's checks could not run: pnpm smoke needs a display\n- Left unchecked: c2; c3\n- The project's checks could not run: cargo test"
+            ),
+            "The project's checks could not run. Left unchecked."
+        );
     }
 
     #[test]
