@@ -179,7 +179,7 @@ fn generate(codex: &Path, version: &str, schema_dir: &Path) -> Result<String, Er
     let mut space = typify::TypeSpace::new(&settings);
     space.add_root_schema(root)?;
     let file: syn::File = syn::parse2(space.to_stream())?;
-    let code = line_docs(&prettyplease::unparse(&file))
+    let code = line_doc_comments(&prettyplease::unparse(&file))
         // Newer Codex versions add fields; old bindings must still read their messages.
         .replace("#[serde(deny_unknown_fields)]\n", "");
 
@@ -195,6 +195,38 @@ fn generate(codex: &Path, version: &str, schema_dir: &Path) -> Result<String, Er
          {code}",
         count = wanted.len(),
     ))
+}
+
+/// Multiline block comments on fields inherit their Rust indentation from prettyplease.
+/// Rustdoc treats that indentation as a code block; line comments keep prose as prose.
+fn line_doc_comments(code: &str) -> String {
+    let mut result = String::new();
+    let mut indent = None;
+    for line in code.lines() {
+        let body = if let Some(at) = line.find("/**").filter(|at| line[..*at].trim().is_empty()) {
+            indent = Some(&line[..at]);
+            Some(&line[at + 3..])
+        } else {
+            indent.map(|indent| line.strip_prefix(indent).unwrap_or(line))
+        };
+        if let Some(body) = body {
+            let end = body.strip_suffix("*/");
+            let body = end.unwrap_or(body);
+            result.push_str(indent.unwrap_or_default());
+            result.push_str("///");
+            if !body.is_empty() {
+                result.push(' ');
+                result.push_str(body);
+            }
+            if end.is_some() {
+                indent = None;
+            }
+        } else {
+            result.push_str(line);
+        }
+        result.push('\n');
+    }
+    result
 }
 
 fn read_json(path: &Path) -> Result<Value, Error> {
@@ -222,33 +254,16 @@ fn collect_refs(value: &Value, refs: &mut BTreeSet<String>) {
     }
 }
 
-/// Keep rustfmt's item indentation out of Markdown: indented block-doc prose becomes
-/// a Rust code example when rustdoc reads it. Line docs preserve the intended paragraphs.
-fn line_docs(source: &str) -> String {
-    let mut output = String::new();
-    let mut indent = None;
-    for line in source.lines() {
-        let text = if let Some(prefix) = indent {
-            line.strip_prefix(prefix).unwrap_or(line)
-        } else if let Some(text) = line.trim_start().strip_prefix("/**") {
-            indent = Some(&line[..line.len() - line.trim_start().len()]);
-            text
-        } else {
-            output.push_str(line);
-            output.push('\n');
-            continue;
-        };
-        let (text, ended) = match text.strip_suffix("*/") {
-            Some(text) => (text, true),
-            None => (text, false),
-        };
-        output.push_str(indent.unwrap());
-        output.push_str("///");
-        output.push_str(text);
-        output.push('\n');
-        if ended {
-            indent = None;
-        }
+#[cfg(test)]
+mod tests {
+    use super::line_doc_comments;
+
+    #[test]
+    fn field_doc_paragraphs_do_not_become_indented_code_blocks() {
+        let source = "struct Example {\n    /**First paragraph.\n\n    Prose with `a_field`.\n\n        intentional_code();*/\n    value: bool,\n}\n";
+        assert_eq!(
+            line_doc_comments(source),
+            "struct Example {\n    /// First paragraph.\n    ///\n    /// Prose with `a_field`.\n    ///\n    ///     intentional_code();\n    value: bool,\n}\n"
+        );
     }
-    output
 }
