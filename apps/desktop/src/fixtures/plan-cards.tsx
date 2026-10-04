@@ -592,7 +592,7 @@ function FixturePage() {
                   >
                     <h2 className="text-muted-foreground text-sm">{item.name}</h2>
                     {/* As in the summary's context card. */}
-                    <div className="bg-card rounded-summary shadow-summary px-3 py-2.5">
+                    <div className="bg-popover rounded-summary shadow-summary py-2.5">
                       <PlanSection planIds={[item.id]} />
                     </div>
                   </section>

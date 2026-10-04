@@ -1,11 +1,9 @@
 import { useAui } from "@assistant-ui/react";
 import {
   Branch,
-  CheckCircle,
   Copy,
   DotsHorizontal,
   FolderOpen,
-  HandRaised,
   Link,
   Plus,
   PullRequestClosed,
@@ -25,7 +23,6 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { showCard } from "@/app/conversation/ActionCards";
 import { isRunRequest } from "@/app/conversation/blocks";
 import { PlanSection } from "@/app/conversation/cards/PlanSection";
 import { OvernightPlanCard } from "@/app/conversation/cards/OvernightPlanCard";
@@ -36,14 +33,15 @@ import {
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
 import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgress";
-import { decisionWords, workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
-import { useAction } from "@/app/conversation/useAction";
-import { WorkerLine } from "@/app/conversation/WorkerChip";
 import { GitActions } from "@/app/conversation/GitActions";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/conversation/WorkerSummary";
-import { disclosureRow } from "@/components/assistant-ui/elements/surfaces";
+import {
+  SummaryRow,
+  SummaryRowButton,
+  SummarySection,
+} from "@/components/assistant-ui/elements/summary-section";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import {
   DropdownMenu,
@@ -58,21 +56,16 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { openFolder, openUrl, request } from "@/ipc/client";
-import { Button } from "@/components/ui/button";
 import type {
   Conversation,
-  Decision,
   DiffStat,
   PullRequest,
   PullRequestState,
-  Task,
-  WaitingItem,
 } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import {
   getSessionDiff,
-  resolveWaiting,
   select,
   setPinnedSummary,
   setProjectExpanded,
@@ -80,10 +73,6 @@ import {
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
-
-const NO_TASKS: Readonly<Record<string, Task>> = {};
-const NO_WAITING: readonly WaitingItem[] = [];
-const NO_DECISIONS: readonly Decision[] = [];
 
 /** How long a reopened summary card keeps restoring its offset while its rows arrive. */
 const RESTORE_MS = 1000;
@@ -118,24 +107,6 @@ function useSessionDiff(
   }, [conversationId, worktree, landed]);
   return worktree ? stat : null;
 }
-
-const Section = ({
-  title,
-  action,
-  children,
-}: {
-  title: string;
-  action?: ReactNode;
-  children: ReactNode;
-}) => (
-  <section className="flex flex-col gap-1">
-    <h3 className="text-muted-foreground flex h-control-xs items-center justify-between text-xs">
-      {title}
-      {action}
-    </h3>
-    {children}
-  </section>
-);
 
 /** Web links in `text`, without trailing punctuation. */
 function linksIn(text: string): string[] {
@@ -183,19 +154,10 @@ function openLink(url: string): void {
   );
 }
 
-const SourceRow = ({ url, dim }: { url: string; dim?: boolean }) => (
-  <button
-    type="button"
-    title={url}
-    onClick={() => openLink(url)}
-    className={cn(
-      "hover:bg-foreground/5 rounded-control -mx-1 flex h-control-sm items-center gap-2 px-1 text-start text-sm transition-colors",
-      dim && "text-muted-foreground",
-    )}
-  >
-    <Link aria-hidden className="text-muted-foreground size-icon-sm shrink-0" />
-    <span className="min-w-0 truncate">{hostOf(url)}</span>
-  </button>
+const SourceRow = ({ url }: { url: string }) => (
+  <SummaryRowButton title={url} icon={<Link />} onClick={() => openLink(url)}>
+    {hostOf(url)}
+  </SummaryRowButton>
 );
 
 /** Sources shown before "View all". */
@@ -217,8 +179,10 @@ function Sources({ conversationId }: { conversationId: string }) {
     );
   };
   return (
-    <Section
+    <SummarySection
+      foldKey="sources"
       title="Sources"
+      count={sources.length}
       action={
         <TooltipIconButton tooltip="Add source" size="icon-xs" onClick={add}>
           <Plus />
@@ -230,13 +194,9 @@ function Sources({ conversationId }: { conversationId: string }) {
       ))}
       <Popover>
         <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="text-muted-foreground hover:text-foreground -mx-1 flex h-control-sm items-center gap-2 px-1 text-start text-sm transition-colors"
-          >
-            <Link aria-hidden className="size-icon-sm shrink-0 opacity-60" />
+          <SummaryRowButton muted icon={<Link />}>
             View all
-          </button>
+          </SummaryRowButton>
         </PopoverTrigger>
         <PopoverContent
           align="end"
@@ -257,173 +217,7 @@ function Sources({ conversationId }: { conversationId: string }) {
           ))}
         </PopoverContent>
       </Popover>
-    </Section>
-  );
-}
-
-/** Where an item waiting on the user came from, in a few words. */
-function waitingFrom(
-  item: WaitingItem,
-  tasks: Readonly<Record<string, Task>>,
-): string | null {
-  switch (item.source.type) {
-    case "task":
-    case "landing": {
-      const task = tasks[item.source.taskId];
-      if (!task) return null;
-      return item.source.type === "task"
-        ? `From ${workerName(tasks, task)}`
-        : `Before ${workerName(tasks, task)} can land`;
-    }
-    case "card":
-      return "A card waits for your answer";
-    case "orchestrator":
-      return null;
-    case "run":
-      return "Declined during the overnight run";
-  }
-}
-
-/**
- * One thing only the user can do, on one plain line that opens to its whole text and where it
- * came from; Done (or Show, for a card).
- */
-function WaitingRow({
-  item,
-  conversationId,
-}: {
-  item: WaitingItem;
-  conversationId: string;
-}) {
-  const tasks = useBoard((s) => s.board?.tasks ?? NO_TASKS);
-  const action = useAction();
-  const from = waitingFrom(item, tasks);
-  const [open, setOpen] = useState(false);
-  const { source } = item;
-  return (
-    <div className="flex flex-col gap-0.5 py-0.5">
-      <div className="flex items-start gap-2 text-sm">
-        <HandRaised
-          aria-hidden
-          className="text-muted-foreground mt-0.5 size-icon-sm shrink-0"
-        />
-        <button
-          type="button"
-          aria-expanded={open}
-          onClick={() => setOpen(!open)}
-          className={cn(
-            "rounded-control focus-visible:ring-ring/50 min-w-0 flex-1 text-start outline-none focus-visible:ring-1",
-            open ? "wrap-break-word" : "truncate",
-          )}
-        >
-          <WorkerLine text={item.what} />
-        </button>
-        {source.type === "card" && (
-          <Button
-            size="xs"
-            variant="ghost"
-            onClick={() => showCard(conversationId, source.cardId)}
-          >
-            Show
-          </Button>
-        )}
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={action.busy}
-          onClick={() =>
-            action.run(() => resolveWaiting(conversationId, item.id))
-          }
-        >
-          Done
-        </Button>
-      </div>
-      {open && from && (
-        <span className="text-muted-foreground ps-6 text-xs">{from}</span>
-      )}
-      {action.error && (
-        <span className="text-destructive ps-6 text-xs">{action.error}</span>
-      )}
-    </div>
-  );
-}
-
-/** "Waiting on you": what only the user can do, oldest first, each until they mark it done. */
-function WaitingOnYou({ conversationId }: { conversationId: string }) {
-  const items = useBoard(
-    useShallow((s) =>
-      s.board?.conversationId === conversationId
-        ? Object.values(s.board.waiting).toSorted(
-            (a, b) => a.createdAtMs - b.createdAtMs,
-          )
-        : NO_WAITING,
-    ),
-  );
-  if (items.length === 0) return null;
-  return (
-    <Section title="Waiting on you">
-      {items.map((item) => (
-        <WaitingRow key={item.id} item={item} conversationId={conversationId} />
-      ))}
-    </Section>
-  );
-}
-
-/** Decisions shown before "Show all". */
-const DECISIONS = 5;
-
-/** A decision on one plain line, which opens to its whole text and why. */
-function DecisionRow({ decision }: { decision: Decision }) {
-  const [open, setOpen] = useState(false);
-  const { what, why } = decisionWords(decision);
-  return (
-    <button
-      type="button"
-      aria-expanded={open}
-      onClick={() => setOpen(!open)}
-      className={cn(disclosureRow, "flex items-start gap-2 py-0.5 text-sm")}
-    >
-      <CheckCircle
-        aria-hidden
-        className="text-muted-foreground mt-0.5 size-icon-sm shrink-0"
-      />
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className={open ? "wrap-break-word" : "truncate"}><WorkerLine text={what} /></span>
-        {open && why && (
-          <span className="text-muted-foreground text-xs wrap-break-word">
-            <WorkerLine text={why} />
-          </span>
-        )}
-      </span>
-    </button>
-  );
-}
-
-/** "Decided for you": what Brigadier decided on the user's behalf, newest first. */
-function DecidedForYou({ conversationId }: { conversationId: string }) {
-  const decisions = useBoard((s) =>
-    s.board?.conversationId === conversationId
-      ? s.board.decisions
-      : NO_DECISIONS,
-  );
-  const [all, setAll] = useState(false);
-  if (decisions.length === 0) return null;
-  const newest = decisions.toReversed();
-  return (
-    <Section title="Decided for you">
-      {(all ? newest : newest.slice(0, DECISIONS)).map((decision) => (
-        <DecisionRow key={decision.id} decision={decision} />
-      ))}
-      {newest.length > DECISIONS && (
-        <button
-          type="button"
-          onClick={() => setAll(!all)}
-          className="text-muted-foreground hover:text-foreground -mx-1 flex h-control-sm items-center px-1 text-start text-sm transition-colors"
-        >
-          {all ? "Show fewer" : `Show all ${newest.length}`}
-        </button>
-      )}
-    </Section>
+    </SummarySection>
   );
 }
 
@@ -519,9 +313,10 @@ function usePullRequest(conversationId: string): PullRequest | null {
 function PullRequestRow({ pullRequest }: { pullRequest: PullRequest }) {
   const state = PULL_REQUEST[pullRequest.state];
   return (
-    <button
-      type="button"
+    <SummaryRowButton
       title={`${pullRequest.title}\n${pullRequest.url}`}
+      icon={state.icon}
+      meta={state.label}
       onClick={() =>
         openUrl(pullRequest.url).catch((cause: unknown) =>
           toast(cause instanceof Error ? cause.message : String(cause), {
@@ -529,17 +324,10 @@ function PullRequestRow({ pullRequest }: { pullRequest: PullRequest }) {
           }),
         )
       }
-      className="hover:bg-foreground/5 rounded-control -mx-1 flex h-control-sm items-center gap-2 px-1 text-start text-sm transition-colors [&>svg]:size-icon-md [&>svg]:shrink-0"
     >
-      {state.icon}
-      <span className="min-w-0 flex-1 truncate">
-        <span className="text-muted-foreground">#{pullRequest.number}</span>{" "}
-        {pullRequest.title}
-      </span>
-      <span className="text-muted-foreground shrink-0 text-xs">
-        {state.label}
-      </span>
-    </button>
+      <span className="text-muted-foreground">#{pullRequest.number}</span>{" "}
+      {pullRequest.title}
+    </SummaryRowButton>
   );
 }
 
@@ -699,7 +487,7 @@ function SummaryCard({
           ? undefined
           : { minHeight: `min(${height}px, var(--spacing-summary-card-min))` }
       }
-      className="bg-card rounded-summary shadow-summary pointer-events-auto flex min-w-0 flex-col overflow-hidden"
+      className="bg-popover rounded-summary shadow-summary pointer-events-auto flex min-w-0 flex-col overflow-hidden"
     >
       <div ref={ref} onScroll={onScroll} className="min-h-0 overflow-y-auto">
         <div className="flex min-w-0 flex-col">{children}</div>
@@ -812,21 +600,22 @@ export function SummaryFloat({ children }: { children: ReactNode }) {
 /** The branch the session's work is on, with its +N −N once known. */
 function BranchRow({ branch, diff }: { branch: string; diff: DiffStat | null }) {
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">
-      <Branch
-        aria-hidden
-        className="text-muted-foreground size-icon-md shrink-0"
-      />
-      <span className="min-w-0 flex-1 truncate" title={branch}>
-        {branch}
-      </span>
-      {diff && (diff.insertions > 0 || diff.deletions > 0) && (
-        <span className="shrink-0 text-xs tabular-nums">
-          <span className="text-success">+{diff.insertions}</span>{" "}
-          <span className="text-destructive">−{diff.deletions}</span>
-        </span>
-      )}
-    </div>
+    <SummaryRow
+      title={branch}
+      icon={<Branch />}
+      className="flex-1"
+      meta={
+        diff &&
+        (diff.insertions > 0 || diff.deletions > 0) && (
+          <span>
+            <span className="text-success">+{diff.insertions}</span>{" "}
+            <span className="text-destructive">−{diff.deletions}</span>
+          </span>
+        )
+      }
+    >
+      {branch}
+    </SummaryRow>
   );
 }
 
@@ -847,11 +636,6 @@ function SummaryContent({
     conversation.projectId
       ? (s.projects[conversation.projectId]?.name ?? null)
       : null,
-  );
-  const workers = useBoard((s) =>
-    s.board?.conversationId === conversation.id
-      ? Object.keys(s.board.tasks).length
-      : 0,
   );
   // The session's own plans, oldest first. A run's own plans (Phase 0's, each phase lead's) show
   // inside its card instead.
@@ -880,15 +664,6 @@ function SummaryContent({
   const runDiff = useRunDiff(conversation.id, run?.id ?? null);
   // During and after a run the card shows the run's branch: that is where the work is.
   const diff = run ? runDiff : sessionDiff;
-  const sources = useSources(conversation.id).length > 0;
-  const waiting = useBoard((s) =>
-    s.board?.conversationId === conversation.id
-      ? Object.keys(s.board.waiting).length
-      : 0,
-  );
-  const decided = useBoard((s) =>
-    s.board?.conversationId === conversation.id ? s.board.decisions.length : 0,
-  );
   const pullRequest = usePullRequest(conversation.id);
   if (!setup) return null;
   const checkout =
@@ -899,38 +674,28 @@ function SummaryContent({
   return (
     <>
       <SummaryCard scrollKey={`${conversation.id}/context`} active={active}>
-        <div className="flex flex-col gap-2 px-3 py-2.5">
-          <div className="flex h-control-xs items-center gap-2">
-            <h2 className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
-              {project ?? setup.repo}
-            </h2>
-            {conversation.projectId && (
-              <ProjectActions
-                projectId={conversation.projectId}
-                path={checkout}
-              />
+        <div className="flex flex-col py-2.5">
+          <SummarySection
+            foldKey="project"
+            title={<span title={checkout}>{project ?? setup.repo}</span>}
+            action={
+              conversation.projectId && (
+                <ProjectActions projectId={conversation.projectId} path={checkout} />
+              )
+            }
+          >
+            {run?.workspace ? (
+              // The run's card merges its verified work: no second way to merge here.
+              <BranchRow branch={run.workspace.branch} diff={diff} />
+            ) : (
+              <GitActions conversationId={conversation.id}>
+                <BranchRow branch={setup.environment.branch} diff={diff} />
+              </GitActions>
             )}
-          </div>
-          {run?.workspace ? (
-            // The run's card merges its verified work: no second way to merge here.
-            <BranchRow branch={run.workspace.branch} diff={diff} />
-          ) : (
-            <GitActions conversationId={conversation.id}>
-              <BranchRow branch={setup.environment.branch} diff={diff} />
-            </GitActions>
-          )}
-          {pullRequest && <PullRequestRow pullRequest={pullRequest} />}
-          {(currentPlanId !== null || workers > 0 || sources || waiting > 0 || decided > 0) && (
-            <div className="border-border border-t" />
-          )}
+            {pullRequest && <PullRequestRow pullRequest={pullRequest} />}
+          </SummarySection>
           {currentPlanId && <PlanSection planIds={plans} currentPlanId={currentPlanId} />}
-          <WaitingOnYou conversationId={conversation.id} />
-          {workers > 0 && (
-            <section className={cn(currentPlanId && "border-border mt-1 border-t pt-2")} aria-label="Session workers">
-              <WorkersSummary conversationId={conversation.id} />
-            </section>
-          )}
-          <DecidedForYou conversationId={conversation.id} />
+          <WorkersSummary conversationId={conversation.id} />
           <Sources conversationId={conversation.id} />
         </div>
       </SummaryCard>

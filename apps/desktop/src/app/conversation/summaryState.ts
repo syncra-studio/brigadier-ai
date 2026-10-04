@@ -39,9 +39,11 @@ function reveal(elementId: () => string): void {
     requestAnimationFrame(() => {
       const target = document.getElementById(id);
       if (!target) return;
-      // An earlier plan sits behind its disclosure.
+      // An earlier plan sits behind its disclosure; the Plan section may be folded.
       for (let fold = target.closest("details"); fold; fold = fold.parentElement?.closest("details") ?? null)
         fold.open = true;
+      const section = target.closest<HTMLElement>("[data-slot=summary-section][data-folded]");
+      section?.querySelector<HTMLButtonElement>(":scope > header > button[aria-expanded]")?.click();
       // Its top, in its own card; then that card, in the column.
       const scroller = target.closest("[data-slot=summary-card]")?.firstElementChild;
       if (scroller && target.offsetHeight > scroller.clientHeight)
