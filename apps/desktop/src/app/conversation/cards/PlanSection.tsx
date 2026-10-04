@@ -98,15 +98,18 @@ function statusLine(plan: Plan, statuses: readonly AgentPlanStepStatus[]): strin
 /**
  * The session's plan, a section of the summary's context card: its title and state, one row per
  * phase marked Pending, In progress or Done (each opening to its worker and description), and
- * the approval while it is proposed. It folds itself once every phase is done. `planIds` are the session's own plans, oldest first; `currentPlanId`
- * selects the active request's newest plan.
+ * the approval while it is proposed. It folds itself once every phase is done. `planIds` are the
+ * session's own plans, oldest first; `currentPlanId` selects the plan to show, and
+ * `onShowCurrent`, given while that is an earlier plan, goes back to the current one.
  */
 export const PlanSection = memo(function PlanSection({
   planIds,
   currentPlanId,
+  onShowCurrent,
 }: {
   planIds: readonly string[];
   currentPlanId?: string;
+  onShowCurrent?: (() => void) | undefined;
 }) {
   const currentId = currentPlanId ?? planIds.at(-1);
   const plan = useBoard((s) => (currentId ? s.board?.plans[currentId] : undefined));
@@ -147,6 +150,19 @@ export const PlanSection = memo(function PlanSection({
       className="outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
     >
       <div className="flex flex-col gap-0.5 pb-1">
+        {onShowCurrent && (
+          <p className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-xs">
+            <span>An earlier plan</span>
+            <span aria-hidden>·</span>
+            <button
+              type="button"
+              onClick={onShowCurrent}
+              className="text-link rounded-control focus-visible:ring-ring/50 outline-none hover:underline focus-visible:ring-1"
+            >
+              Show the current plan
+            </button>
+          </p>
+        )}
         <p title={plan.title} className="line-clamp-2 text-label wrap-anywhere">
           {plan.title}
         </p>

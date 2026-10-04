@@ -4,6 +4,7 @@ import {
   Copy,
   DotsHorizontal,
   FolderOpen,
+  HandRaised,
   Link,
   Plus,
   PullRequestClosed,
@@ -23,6 +24,7 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 
+import { showCard } from "@/app/conversation/ActionCards";
 import { isRunRequest } from "@/app/conversation/blocks";
 import { PlanSection } from "@/app/conversation/cards/PlanSection";
 import { OvernightPlanCard } from "@/app/conversation/cards/OvernightPlanCard";
@@ -33,7 +35,10 @@ import {
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
 import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgress";
+import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
+import { useAction } from "@/app/conversation/useAction";
+import { WorkerLine } from "@/app/conversation/WorkerChip";
 import { GitActions } from "@/app/conversation/GitActions";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/conversation/WorkerSummary";
@@ -43,6 +48,7 @@ import {
   SummarySection,
 } from "@/components/assistant-ui/elements/summary-section";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -61,11 +67,14 @@ import type {
   DiffStat,
   PullRequest,
   PullRequestState,
+  Task,
+  WaitingItem,
 } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import {
   getSessionDiff,
+  resolveWaiting,
   select,
   setPinnedSummary,
   setProjectExpanded,
@@ -73,6 +82,9 @@ import {
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
+
+const NO_TASKS: Readonly<Record<string, Task>> = {};
+const NO_WAITING: readonly WaitingItem[] = [];
 
 /** How long a reopened summary card keeps restoring its offset while its rows arrive. */
 const RESTORE_MS = 1000;
@@ -164,6 +176,119 @@ const SourceRow = ({ url }: { url: string }) => (
 const SOURCES = 3;
 
 /** "Sources": the first links, "View all" for every one, and "+" to add one to the message. */
+/** Where an item waiting on the user came from, in a few words. */
+function waitingFrom(
+  item: WaitingItem,
+  tasks: Readonly<Record<string, Task>>,
+): string | null {
+  switch (item.source.type) {
+    case "task":
+    case "landing": {
+      const task = tasks[item.source.taskId];
+      if (!task) return null;
+      return item.source.type === "task"
+        ? `From ${workerName(tasks, task)}`
+        : `Before ${workerName(tasks, task)} can land`;
+    }
+    case "card":
+      return "A card waits for your answer";
+    case "orchestrator":
+      return null;
+    case "run":
+      return "Declined during the overnight run";
+  }
+}
+
+/**
+ * One thing only the user can do, on one row that opens to its whole text and where it came
+ * from; Done (or Show, for a card) at its end.
+ */
+function WaitingRow({
+  item,
+  conversationId,
+}: {
+  item: WaitingItem;
+  conversationId: string;
+}) {
+  const tasks = useBoard((s) => s.board?.tasks ?? NO_TASKS);
+  const action = useAction();
+  const from = waitingFrom(item, tasks);
+  const [open, setOpen] = useState(false);
+  const { source } = item;
+  return (
+    <div className="flex flex-col">
+      <SummaryRow
+        icon={<HandRaised />}
+        description={open && from ? from : undefined}
+        meta={
+          <>
+            {source.type === "card" && (
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => showCard(conversationId, source.cardId)}
+              >
+                Show
+              </Button>
+            )}
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={action.busy}
+              onClick={() =>
+                action.run(() => resolveWaiting(conversationId, item.id))
+              }
+            >
+              Done
+            </Button>
+          </>
+        }
+      >
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          className={cn(
+            "rounded-control focus-visible:ring-ring/50 w-full min-w-0 text-start outline-none focus-visible:ring-1",
+            open ? "whitespace-normal wrap-break-word" : "truncate",
+          )}
+        >
+          <WorkerLine text={item.what} />
+        </button>
+      </SummaryRow>
+      {action.error && (
+        <span role="alert" className="text-destructive ps-6 text-xs">
+          {action.error}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * "Waiting on you": what only the user can do, oldest first, each until they mark it done. The
+ * section is there only while something waits.
+ */
+function WaitingOnYou({ conversationId }: { conversationId: string }) {
+  const items = useBoard(
+    useShallow((s) =>
+      s.board?.conversationId === conversationId
+        ? Object.values(s.board.waiting).toSorted(
+            (a, b) => a.createdAtMs - b.createdAtMs,
+          )
+        : NO_WAITING,
+    ),
+  );
+  if (items.length === 0) return null;
+  return (
+    <SummarySection foldKey="waiting" title="Waiting on you" count={items.length}>
+      {items.map((item) => (
+        <WaitingRow key={item.id} item={item} conversationId={conversationId} />
+      ))}
+    </SummarySection>
+  );
+}
+
 function Sources({ conversationId }: { conversationId: string }) {
   const sources = useSources(conversationId);
   const aui = useAui();
@@ -656,6 +781,15 @@ function SummaryContent({
     if (s.board?.conversationId !== conversation.id) return null;
     return contextPlanId(s.board.plans, plans, activePlanRequest(s.board.requests));
   });
+  // A plan the thread asked to see (an earlier plan's "View plan"), until another plan takes over.
+  const shownPlan = useSummary((s) => s.plan);
+  const planId = shownPlan && plans.includes(shownPlan) ? shownPlan : currentPlanId;
+  const lastCurrent = useRef(currentPlanId);
+  useEffect(() => {
+    if (lastCurrent.current === currentPlanId) return;
+    lastCurrent.current = currentPlanId;
+    useSummary.setState({ plan: null });
+  }, [currentPlanId]);
   const run = shownRun(overnight);
   const setup =
     conversation.setup?.type === "session" ? conversation.setup : null;
@@ -694,7 +828,18 @@ function SummaryContent({
             )}
             {pullRequest && <PullRequestRow pullRequest={pullRequest} />}
           </SummarySection>
-          {currentPlanId && <PlanSection planIds={plans} currentPlanId={currentPlanId} />}
+          <WaitingOnYou conversationId={conversation.id} />
+          {planId && (
+            <PlanSection
+              planIds={plans}
+              currentPlanId={planId}
+              onShowCurrent={
+                planId !== currentPlanId && currentPlanId
+                  ? () => useSummary.setState({ plan: null })
+                  : undefined
+              }
+            />
+          )}
           <WorkersSummary conversationId={conversation.id} />
           <Sources conversationId={conversation.id} />
         </div>

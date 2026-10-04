@@ -7,7 +7,9 @@ import { setPinnedSummary } from "@/state/actions";
 export const useSummary = create<{
   layout: "beside" | "shift" | "float";
   floating: boolean;
-}>(() => ({ layout: "beside", floating: false }));
+  /** A plan the thread asked to see; the Plan section shows it until another plan takes over. */
+  plan: string | null;
+}>(() => ({ layout: "beside", floating: false, plan: null }));
 
 /** Where each summary card, and their column, was scrolled to: `<session>/<card>` → offset. */
 export const keptScroll = new Map<string, number>();
@@ -18,7 +20,10 @@ export function revealPlan(cardId: string): void {
     const run = Object.values(useBoard.getState().board?.overnight ?? {}).find(
       (candidate) => candidate.state !== "superseded" && (candidate.planId === cardId || candidate.planning?.planId === cardId),
     );
-    return run ? `overnight-${run.id}` : `plan-${cardId}`;
+    if (run) return `overnight-${run.id}`;
+    // The Plan section shows one plan: an earlier one takes its place until another takes over.
+    useSummary.setState({ plan: cardId });
+    return `plan-${cardId}`;
   });
 }
 
@@ -39,9 +44,7 @@ function reveal(elementId: () => string): void {
     requestAnimationFrame(() => {
       const target = document.getElementById(id);
       if (!target) return;
-      // An earlier plan sits behind its disclosure; the Plan section may be folded.
-      for (let fold = target.closest("details"); fold; fold = fold.parentElement?.closest("details") ?? null)
-        fold.open = true;
+      // The Plan section may be folded.
       const section = target.closest<HTMLElement>("[data-slot=summary-section][data-folded]");
       section?.querySelector<HTMLButtonElement>(":scope > header > button[aria-expanded]")?.click();
       // Its top, in its own card; then that card, in the column.
