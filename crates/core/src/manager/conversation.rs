@@ -114,9 +114,6 @@ pub(crate) struct Cli {
     pub owner: String,
     /// Cancelled once the session's pump has stored its last event.
     pub ended: CancellationToken,
-    /// Commands the user allowed again for the rest of this CLI session ("Don't ask again for
-    /// this command"), with their escalation flag. In memory only: they end with the session.
-    pub granted: std::sync::Mutex<HashSet<(String, bool)>>,
     /// What each of its turns used, from the CLI's running totals.
     pub meter: TokenMeter,
 }
@@ -1606,14 +1603,13 @@ impl SessionManager {
             env: Vec::new(),
             unset_env: Vec::new(),
             low_priority: false,
-            path_prepend: Vec::new(),
             record_to: None,
             redactor: grant_redactor.clone(),
             owned_cwd: true,
             // An orchestrator is reborn, never compacted.
             auto_compact: conv.kind == ConversationKind::Chat,
             allowed_models: None,
-            unattended: false,
+            auto_review: false,
         };
         let mut resumed = resume.is_some();
         let started = match self
@@ -1676,7 +1672,6 @@ impl SessionManager {
             session,
             owner,
             ended: CancellationToken::new(),
-            granted: Default::default(),
         });
         conv.state.lock().await.cli = Some(cli.clone());
         let manager = self.arc();

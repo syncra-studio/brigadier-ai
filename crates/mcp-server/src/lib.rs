@@ -62,9 +62,7 @@ pub async fn serve<IO>(
 where
     IO: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let role = host
-        .role(&grant)
-        .filter(|role| !matches!(role, Role::Gate { .. }));
+    let role = host.role(&grant);
     let refused = role.is_none();
     let server = BrigadierServer { host, grant, role };
     let running = match server.serve_with_ct(io, cancel).await {

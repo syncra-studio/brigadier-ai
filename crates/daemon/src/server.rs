@@ -51,7 +51,7 @@ pub struct Daemon {
     pub core: Arc<Core>,
     /// Provider sessions and what Brigadier knows about each provider.
     pub runtime: Arc<Runtime>,
-    /// Live sessions, Chats and workers; answers the Brigadier MCP tools and the gate.
+    /// Live sessions, Chats and workers; answers the Brigadier MCP tools.
     pub sessions: Arc<SessionManager>,
     pub store: Store,
     pub metrics: Arc<Metrics>,
@@ -115,7 +115,7 @@ impl Daemon {
 }
 
 /// Accepts connections until shutdown begins. Each connection authenticates on its own task:
-/// the app with the token, CLI sessions' MCP bridges and gate checks with their grant.
+/// the app with the token, CLI sessions' MCP bridges with their grant.
 pub async fn accept_loop(
     daemon: Arc<Daemon>,
     listener: Listener,
@@ -153,12 +153,6 @@ pub async fn accept_loop(
                 Ok(Accepted::Mcp { grant, stream }) => {
                     upgrade::serve_mcp(daemon_for_task, grant, stream).await
                 }
-                Ok(Accepted::Gate {
-                    grant,
-                    argv,
-                    cwd,
-                    check,
-                }) => upgrade::serve_gate(daemon_for_task, grant, argv, cwd, check).await,
                 Err(err) => tracing::warn!(error = %err, "rejected IPC connection"),
             }
         });

@@ -188,13 +188,12 @@ impl SessionManager {
             env: Vec::new(),
             unset_env: Vec::new(),
             low_priority: false,
-            path_prepend: Vec::new(),
             record_to: None,
             redactor: None,
             owned_cwd: true,
             auto_compact: true,
             allowed_models: None,
-            unattended: false,
+            auto_review: false,
         };
         let shown: String = patch.chars().take(PATCH_CHARS).collect();
         let cut = if shown.len() < patch.len() {

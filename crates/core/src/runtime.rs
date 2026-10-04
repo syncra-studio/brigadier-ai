@@ -1333,13 +1333,12 @@ fn spec_for(session: &RawSession, origin: Origin, record_to: Option<PathBuf>) ->
         env: Vec::new(),
         unset_env: Vec::new(),
         low_priority: false,
-        path_prepend: Vec::new(),
         record_to,
         redactor: None,
         owned_cwd: false,
         auto_compact: true,
         allowed_models: None,
-        unattended: false,
+        auto_review: false,
     }
 }
 

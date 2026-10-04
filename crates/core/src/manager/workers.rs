@@ -12,9 +12,12 @@
 //! - **Scratch folder** outside the repository, which is also the worker's TMPDIR. Everything
 //!   is recorded in the cleanup ledger under `task:<id>` before it is created, including any
 //!   process running inside those folders.
-//! - **Access** per task (B12): repository read or write, scratch write and network
-//!   independently, inside the OS sandbox unless the session has Full access. Outward
-//!   commands go through the gate on PATH at every level.
+//! - **Access** per task (B12) and the session's permission level: Full access runs the
+//!   worker like the user's own terminal (no sandbox, nothing asks); Approve for me runs it in
+//!   the OS sandbox and lets the CLI's own reviewer settle what leaves it; Ask for approval
+//!   runs it in the sandbox without network and asks the user for each step outside, once per
+//!   kind of command with "Allow similar commands". The sandbox lets a worker write its
+//!   worktree's git folder and the toolchains' caches, so builds and commits just work.
 //! - **Instructions**: the role and task prompt, plus the repository's `CLAUDE.md` and
 //!   `AGENTS.md` whichever vendor runs it ([`super::instructions`]).
 //! - **Secrets**: the project's gitignored env files are copied in, and their values are
@@ -147,20 +150,6 @@ struct TaskLiveState {
     orphaned_at_ms: Option<i64>,
     /// The models the CLI session's sub-agents were held to when it started (PLAN.md §7).
     allowed_models: Option<AllowedModels>,
-    /// An overnight run's worker: what answering its approvals needs, so it reads nothing
-    /// else (PLAN.md §10.8).
-    run_approvals: Option<RunApprovals>,
-}
-
-/// What an overnight run worker's approvals are answered with.
-#[derive(Debug, Clone)]
-pub(crate) struct RunApprovals {
-    pub run: crate::overnight::RunTaskContext,
-    pub number: u32,
-    /// The user's own checkout: run work never changes files there.
-    pub protected: Vec<PathBuf>,
-    /// Where the worker works: a request that doesn't say where it runs (Claude's) runs there.
-    pub cwd: Option<PathBuf>,
 }
 
 impl TaskLiveState {
@@ -554,10 +543,6 @@ impl TaskLive {
 
     pub async fn redactor(&self) -> Option<Arc<brigadier_providers::redact::Redactor>> {
         self.state.lock().await.redactor.clone()
-    }
-
-    pub async fn cwd(&self) -> Option<PathBuf> {
-        self.state.lock().await.cwd.clone()
     }
 }
 
@@ -1157,10 +1142,9 @@ impl SessionManager {
             .as_ref()
             .map(|p| p.prefs.secret_files.clone())
             .unwrap_or_default();
-        // A successor taking the task over finds the worktree's secrets already in place. An
-        // overnight run's workers get none (PLAN.md §10.8); their values are still redacted.
+        // A successor taking the task over finds the worktree's secrets already in place.
         let mut secret_values = match (&workspace.worktree, &origin) {
-            (Some(worktree), Origin::New) if task.attempts.len() <= 1 && task.run.is_none() => {
+            (Some(worktree), Origin::New) if task.attempts.len() <= 1 => {
                 secrets::copy_secrets(self, &owner, &workspace.repo, worktree, &secret_files)
                     .await?
             }
@@ -1170,13 +1154,10 @@ impl SessionManager {
         let provider = task.route.choice.provider;
         let write = task.kind.writes();
         // Codex cannot run with a read-only cwd: a read-only Codex worker works from its
-        // scratch folder and reads the worktree by path. In a worktree Codex can't keep
-        // anything unreadable, so an overnight run's Codex writer works from its scratch
-        // folder too, with its worktree writable (PLAN.md §10.8).
-        let run_codex = provider == ProviderKind::Codex && task.run.is_some();
+        // scratch folder and reads the worktree by path.
         let cwd = match (&workspace.worktree, provider, write) {
             (Some(worktree), ProviderKind::Claude, _) => worktree.clone(),
-            (Some(worktree), _, true) if !run_codex => worktree.clone(),
+            (Some(worktree), _, true) => worktree.clone(),
             _ => workspace.scratch.clone(),
         };
         let repo_note = match (&workspace.worktree, write) {
@@ -1244,8 +1225,6 @@ impl SessionManager {
         };
         let prompt = prompts::worker(task, &repo_note, &native, &extra);
 
-        // Without the shims the worker's outward commands would run unasked.
-        self.sync_gate().await?;
         let worker_grant = self.grants.issue(
             &owner,
             Role::Worker {
@@ -1254,22 +1233,10 @@ impl SessionManager {
                 checks: task.gate_link.is_some(),
             },
         );
-        let gate_grant = self.grants.issue(
-            &owner,
-            Role::Gate {
-                conversation_id: conversation_id.clone(),
-                task_id: Some(task.id.clone()),
-            },
-        );
-        // B7: the grants are secrets too.
+        // B7: the grant is a secret too.
         secret_values.push(worker_grant.clone());
-        secret_values.push(gate_grant.clone());
         let redactor = secrets::redactor(secret_values);
         let allowed_models = self.allowed_models(task).await;
-        let git_guard = match &task.run {
-            Some(_) => self.run_git_guard(&workspace).await,
-            None => None,
-        };
         let spec = SessionSpec {
             cwd: cwd.clone(),
             model: task.route.choice.model.clone(),
@@ -1280,46 +1247,18 @@ impl SessionManager {
             append_system_prompt: Some(prompt),
             mcp_servers: vec![self.brigadier_server(worker_grant, WORKER_TOOL_TIMEOUT_SECS, true)],
             tools: ToolSet::Lean,
-            env: {
-                let mut env = vec![
-                    ("BRIGADIER_GATE".into(), gate_grant),
-                    (
-                        "TMPDIR".into(),
-                        workspace.scratch.to_string_lossy().into_owned(),
-                    ),
-                ];
-                if task.run.is_some() {
-                    let owned: Vec<String> = workspace
-                        .branch
-                        .iter()
-                        .map(|branch| format!("refs/heads/{branch}"))
-                        .collect();
-                    env.extend(super::overnight::policy::run_env(git_guard.as_ref().map(
-                        |(config, common)| (config.as_path(), common.as_path(), &owned[..]),
-                    )));
-                }
-                env
-            },
-            // A run's workers don't get credentials from the daemon's environment.
-            unset_env: if task.run.is_some() {
-                super::overnight::policy::scrubbed_env(
-                    self.runtime
-                        .cli_env()
-                        .vars()
-                        .into_iter()
-                        .filter_map(|(name, _)| name.into_string().ok()),
-                )
-            } else {
-                Vec::new()
-            },
+            env: vec![(
+                "TMPDIR".into(),
+                workspace.scratch.to_string_lossy().into_owned(),
+            )],
+            unset_env: Vec::new(),
             low_priority: task.run.is_some(),
-            path_prepend: self.config.gate_dir.iter().cloned().collect(),
             record_to: None,
             redactor: redactor.clone(),
             owned_cwd: true,
             auto_compact: true,
             allowed_models: Some(allowed_models.clone()),
-            unattended: task.run.is_some(),
+            auto_review: self.permission(&conversation_id) == PermissionLevel::ApproveForMe,
         };
         let Started { session, events } =
             match self.runtime.start_hosted(&owner, provider, spec).await {
@@ -1337,7 +1276,6 @@ impl SessionManager {
             session,
             owner,
             ended: CancellationToken::new(),
-            granted: Default::default(),
         });
         self.brains.jobs.user_work(provider);
         {
@@ -1358,12 +1296,6 @@ impl SessionManager {
             state.stall_nudged_at_ms = None;
             state.orphaned_at_ms = None;
             state.allowed_models = Some(allowed_models);
-            state.run_approvals = task.run.clone().map(|run| RunApprovals {
-                run,
-                number: task.number,
-                protected: vec![workspace.repo.clone()],
-                cwd: state.cwd.clone(),
-            });
             if !resumed {
                 state.context = None;
                 state.session_start = None;
@@ -1476,32 +1408,9 @@ impl SessionManager {
         }
     }
 
-    /// The git guard's configuration and the run repository's git folder, for a run worker
-    /// (PLAN.md §10.8). `None`, logged, when they can't be had: the approval route and the
-    /// command gate still hold the never-list.
-    async fn run_git_guard(&self, workspace: &Workspace) -> Option<(PathBuf, PathBuf)> {
-        let dir = self.runtime.platform().paths().data_dir.join("git-guard");
-        let (git, repo) = (self.git.clone(), workspace.repo.clone());
-        let guard = blocking(move || {
-            let config = super::overnight::git_guard::install(&dir)
-                .map_err(|err| Error::Invalid(format!("writing the git guard: {err}")))?;
-            let common = git.open(&repo).map_err(git_error)?.common_dir().to_owned();
-            Ok((config, common))
-        })
-        .await;
-        match guard {
-            Ok(guard) => Some(guard),
-            Err(err) => {
-                tracing::warn!(error = %err, "a run worker starts without its git guard");
-                None
-            }
-        }
-    }
-
     /// B12: what the worker may touch.
     fn worker_access(&self, task: &Task, workspace: &Workspace, cwd: &Path) -> Access {
-        // Full access: like the user's own terminal. An overnight run's never-list is then
-        // held by its approvals and its git guard, not a sandbox (PLAN.md §10.8).
+        // Full access: like the user's own terminal.
         if task.access.unsandboxed {
             return Access::Full;
         }
@@ -1516,38 +1425,30 @@ impl SessionManager {
         };
         writable_roots.push(test_data_dir(&task.id));
         if let Some(worktree) = &workspace.worktree
-            && (task.kind == TaskKind::Verify || (in_scratch && task.kind.writes()))
+            && task.kind == TaskKind::Verify
         {
-            // Checks write build output inside the checkout; nothing from it lands. A run's
-            // Codex writer works from its scratch folder and writes its worktree as a root.
+            // Checks write build output inside the checkout; nothing from it lands.
             writable_roots.push(worktree.clone());
         }
-        let mut deny_read = vec![self.runtime.platform().paths().run_dir.clone()];
-        if task.run.is_some() {
-            if let Some(home) = self.runtime.cli_env().home() {
-                deny_read.extend(super::overnight::policy::credential_paths(&home));
-            }
-            // The project's secret files, where they are in the user's checkout.
-            if let Ok(conversation) = self.core.conversation(&task.conversation_id)
-                && let Some(project) = conversation
-                    .project_id
-                    .as_ref()
-                    .and_then(|id| self.core.project(id).ok())
-            {
-                deny_read.extend(
-                    project
-                        .prefs
-                        .secret_files
-                        .iter()
-                        .map(|file| workspace.repo.join(file)),
-                );
+        // A writer commits: its worktree's git folder (the repository's own, which a linked
+        // worktree shares) takes the objects and refs.
+        if task.kind.writes()
+            && let Some(worktree) = &workspace.worktree
+            && let Ok(repo) = self.git.open(worktree)
+        {
+            writable_roots.push(repo.common_dir().to_owned());
+        }
+        // Builds and installs write the toolchains' shared caches.
+        for root in toolchain_roots(&self.runtime.cli_env()) {
+            if !writable_roots.contains(&root) {
+                writable_roots.push(root);
             }
         }
         Access::Scoped {
             write_cwd,
             writable_roots,
             network: task.access.network,
-            deny_read,
+            deny_read: vec![self.runtime.platform().paths().run_dir.clone()],
             unix_sockets: self.socket_path().into_iter().collect(),
         }
     }
@@ -2056,13 +1957,6 @@ impl SessionManager {
         match &event {
             ProviderEvent::ApprovalRequested { request } => {
                 let request = request.clone();
-                // An overnight run's worker asks for nearly every command: it is answered
-                // before anything is recorded.
-                let run = live.state.lock().await.run_approvals.clone();
-                if let Some(run) = run {
-                    self.route_unattended(live, cli, request, run).await;
-                    return;
-                }
                 self.record_worker_event(&live.id, event).await;
                 self.route_worker_approval(live, cli, request).await;
                 return;
@@ -2268,7 +2162,10 @@ impl SessionManager {
         self.spawn(async move { manager.worker_failed(&task, &reason).await });
     }
 
-    /// B7 for worker approvals: routed by the task's access; anything else asks the user.
+    /// B7 for worker approvals: routed by the task's access, then by what the user already
+    /// allowed with "Allow similar commands" in this conversation; anything else asks the user.
+    /// Under Full access and Approve for me hardly anything gets here: the CLI never asks, or
+    /// its own reviewer answers.
     async fn route_worker_approval(
         &self,
         live: &Arc<TaskLive>,
@@ -2283,43 +2180,14 @@ impl SessionManager {
             .clone()
             .unwrap_or(Access::ReadOnly);
         let mut route = policy::route(&request, &access, ApprovalMode::Delegated);
-        let outward = request.command.as_deref().is_some_and(policy::is_outward);
-        // The user already allowed exactly this command for the rest of the CLI session.
+        let mut decider = Decider::Policy;
         if route == PolicyRoute::AskUser
-            && !outward
-            && request.grant.is_some()
-            && let Some(command) = &request.command
-            && cli
-                .granted
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .contains(&(command.clone(), request.escalation))
+            && self
+                .waiters
+                .similar_allowed(&live.conversation_id, &request)
         {
-            if let Err(err) = cli
-                .session
-                .answer(request.id.clone(), ApprovalDecision::Allow)
-                .await
-            {
-                tracing::warn!(task = %live.id, error = %err, "could not answer an approval");
-                return;
-            }
-            self.record_worker_resolution(
-                &live.id,
-                request.id,
-                ApprovalDecision::Allow,
-                Decider::User,
-            )
-            .await;
-            return;
-        }
-        // Approve for me stays sandboxed and stops only for what only the user can decide:
-        // Brigadier declines anything else outside the task's access on the user's behalf.
-        // Outward actions always ask.
-        let declined_for_user = route == PolicyRoute::AskUser
-            && !outward
-            && self.permission(&live.conversation_id) != PermissionLevel::AskForApproval;
-        if declined_for_user {
-            route = PolicyRoute::Deny;
+            route = PolicyRoute::Allow;
+            decider = Decider::User;
         }
         match route {
             PolicyRoute::Allow | PolicyRoute::Deny => {
@@ -2327,7 +2195,7 @@ impl SessionManager {
                     ApprovalDecision::Allow
                 } else {
                     ApprovalDecision::Deny {
-                        message: "Declined by Brigadier: stay inside your sandbox (your worktree and scratch folder). If the task truly needs more, say so in your report.".into(),
+                        message: "This session may not do that.".into(),
                     }
                 };
                 if let Err(err) = cli
@@ -2338,22 +2206,8 @@ impl SessionManager {
                     tracing::warn!(task = %live.id, error = %err, "could not answer an approval");
                     return;
                 }
-                let what = request
-                    .command
-                    .clone()
-                    .unwrap_or_else(|| request.tool.clone());
-                self.record_worker_resolution(&live.id, request.id, decision, Decider::Policy)
+                self.record_worker_resolution(&live.id, request.id, decision, decider)
                     .await;
-                if declined_for_user
-                    && let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await
-                {
-                    self.decided_for_task(
-                        &task,
-                        format!("Declined task-{} a permission: {what}", task.number),
-                        "It was outside the task's sandbox (its worktree and scratch folder). Only outward actions, like a push, ask you.".into(),
-                    )
-                    .await;
-                }
             }
             PolicyRoute::AskUser => {
                 let what = request
@@ -2377,8 +2231,8 @@ impl SessionManager {
         }
     }
 
-    /// Passes the user's answer to the worker's CLI; "Don't ask again for this command" also
-    /// keeps the grant for the rest of the CLI session.
+    /// Passes the user's answer to the worker's CLI; "Allow similar commands" also allows
+    /// similar requests from every worker of the conversation from now on.
     pub(crate) async fn answer_worker_approval(
         &self,
         task_id: &TaskId,
@@ -2396,18 +2250,18 @@ impl SessionManager {
             .cli
             .clone()
             .ok_or_else(|| Error::Invalid("the worker has ended".into()))?;
+        // The CLI's own "for this session" answer exists only for some requests; Brigadier
+        // keeps the wider grant either way.
+        let answer = match &decision {
+            ApprovalDecision::AllowSimilar => ApprovalDecision::Allow,
+            other => other.clone(),
+        };
         cli.session
-            .answer(approval_id.clone(), decision.clone())
+            .answer(approval_id.clone(), answer)
             .await
             .map_err(|err| Error::Provider(err.to_string()))?;
-        if decision == ApprovalDecision::AllowSimilar
-            && request.grant.is_some()
-            && let Some(command) = &request.command
-        {
-            cli.granted
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert((command.clone(), request.escalation));
+        if decision == ApprovalDecision::AllowSimilar {
+            self.waiters.allow_similar(&live.conversation_id, request);
         }
         self.record_worker_resolution(task_id, approval_id, decision, Decider::User)
             .await;
@@ -3001,9 +2855,6 @@ impl SessionManager {
         from: &str,
     ) -> Result<(String, bool)> {
         let live = self.task_live(task);
-        // A program the user installed (or removed) meanwhile, e.g. after the worker said it
-        // was missing.
-        self.sync_gate().await?;
         // What the task may use now, for a worker between turns (routing reads the board, so
         // not under the worker's lock).
         let idle = {
@@ -3715,7 +3566,9 @@ fn stopped_state(task: &Task) -> TaskState {
     }
 }
 
-/// B12: repository access, network and sandbox per task kind and permission level.
+/// B12: repository access, network and sandbox per task kind and permission level. Under
+/// Ask for approval a worker's sandbox has no network: reaching a host asks the user (research
+/// tasks, which live on the web, keep it).
 fn access_for(kind: TaskKind, permission: PermissionLevel) -> WorkerAccess {
     WorkerAccess {
         repo: match kind {
@@ -3723,9 +3576,47 @@ fn access_for(kind: TaskKind, permission: PermissionLevel) -> WorkerAccess {
             TaskKind::Implement | TaskKind::Merge => RepoAccess::Write,
             TaskKind::Scout | TaskKind::Review | TaskKind::Verify => RepoAccess::Read,
         },
-        network: true,
+        network: permission != PermissionLevel::AskForApproval || kind == TaskKind::Research,
         unsandboxed: permission == PermissionLevel::FullAccess,
     }
+}
+
+/// Folders a sandboxed worker's builds, tests and installs write besides its own: the
+/// toolchains' homes and caches (Rust, Node package managers, the system's caches) and the
+/// system temporary folder, those that exist.
+fn toolchain_roots(env: &brigadier_providers::cli::CliEnv) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for name in [
+        "CARGO_HOME",
+        "RUSTUP_HOME",
+        "CARGO_TARGET_DIR",
+        "PNPM_HOME",
+        "npm_config_cache",
+        "TMPDIR",
+    ] {
+        if let Some(value) = env.var(name).filter(|value| !value.is_empty()) {
+            roots.push(PathBuf::from(value));
+        }
+    }
+    if let Some(home) = env.home() {
+        for rest in [
+            ".cargo",
+            ".rustup",
+            ".npm",
+            ".pnpm-store",
+            ".yarn",
+            ".bun",
+            ".cache",
+            ".local/share/pnpm",
+            "Library/pnpm",
+            "Library/Caches",
+        ] {
+            roots.push(home.join(rest));
+        }
+    }
+    roots.retain(|root| root.is_absolute() && root.is_dir());
+    roots.dedup();
+    roots
 }
 
 /// The native id of the latest session start among a task's worker events, paging back

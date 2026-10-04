@@ -122,17 +122,19 @@ pub struct ProjectPrefs {
     pub branch_prefix: Option<String>,
 }
 
-/// How much a session may do on its own (PLAN.md §5). Outward actions always ask.
+/// How much a session may do on its own (PLAN.md §5). Workers never push, publish or deploy
+/// at any level: the user starts those.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum PermissionLevel {
-    /// You approve every plan and every landed change. Sandboxed.
+    /// You approve every plan and every landed change, and each step a worker takes outside
+    /// its sandbox. Sandboxed, without network.
     AskForApproval,
     /// Brigadier approves on your behalf and stops only for questions only you can answer.
-    /// Sandboxed.
+    /// Sandboxed; the CLI's own reviewer settles what leaves the sandbox.
     #[default]
     ApproveForMe,
-    /// Approve for me without the OS sandbox.
+    /// Approve for me without the OS sandbox: workers never ask for anything.
     FullAccess,
 }
 

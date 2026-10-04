@@ -16,14 +16,11 @@
 //!
 //! - `brigadierd mcp`: the stdio bridge CLI sessions start for the Brigadier MCP tools
 //!   ([`bridge`]);
-//! - started through a command-gate link (`git`, `gh`, `npm`, …): the outward-command gate
-//!   ([`gate`]);
 //! - `brigadierd quit`: asks a data directory's daemon to quit ([`quit`]).
 
 mod awake;
 mod bridge;
 mod dictation;
-mod gate;
 mod idle;
 mod logging;
 mod metrics;
@@ -106,12 +103,6 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn main() -> ExitCode {
-    // A command-gate shim (`git`, `gh`, … linked to this binary): decide and exec before any
-    // runtime, logging or store exists, so ungated commands pay almost nothing.
-    #[cfg(unix)]
-    if let Some(program) = gate::shim_program() {
-        return gate::run_shim(program);
-    }
     // `brigadierd mcp`: the stdio MCP bridge a CLI session starts.
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "mcp") {
         return bridge::run(std::env::args_os().skip(2));
@@ -204,9 +195,11 @@ fn start(platform: Arc<dyn Platform>, standby: bool) -> anyhow::Result<ExitCode>
     if standby {
         tracing::info!("the daemon went away during an overnight run; this standby takes over");
     }
-    // Workers' outward commands are gated through these shims; without them they would run
-    // unasked, so failing to create them is fatal.
-    gate::install(&paths.data_dir).context("creating the command gate")?;
+    // Folders of the command gate and git guard earlier versions kept (workers now run as the
+    // permission level says, with nothing on their PATH or in their git config).
+    for old in ["gate", "git-guard"] {
+        let _ = std::fs::remove_dir_all(paths.data_dir.join(old));
+    }
     let started_at_ms = brigadier_core::now_ms();
     tracing::info!(
         pid = std::process::id(),
@@ -296,7 +289,6 @@ async fn run(
         .context("starting the provider runtime")?;
     let manager_config = ManagerConfig {
         daemon_exe: std::env::current_exe().context("locating brigadierd")?,
-        gate_dir: Some(platform.paths().data_dir.join("gate").join("bin")),
     };
     let sessions = SessionManager::start(core.clone(), providers.clone(), spawner, manager_config)
         .await

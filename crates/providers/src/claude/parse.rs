@@ -816,11 +816,15 @@ impl Parser {
             .or_else(|| {
                 str_of(&request, "blocked_path").map(|path| format!("needs access to {path}"))
             });
-        // Brigadier keeps a "don't ask again" grant itself (an allow rule could not beat its
-        // ask rules, and would be broader than the exact command).
-        let grant = str_of(&input, "command")
-            .filter(|command| tool == "Bash" && !policy::is_outward(command))
-            .map(str::to_owned);
+        // Brigadier keeps "Allow similar commands" itself, for the whole conversation: the
+        // command's first words, or the host Claude's sandbox asks to reach.
+        let grant = if tool == policy::NETWORK_TOOL {
+            str_of(&input, "host").map(str::to_owned)
+        } else {
+            str_of(&input, "command")
+                .filter(|_| tool == "Bash")
+                .and_then(policy::command_prefix)
+        };
         out.push(Output::Event(ProviderEvent::ApprovalRequested {
             request: ApprovalRequest {
                 id: request_id.clone(),

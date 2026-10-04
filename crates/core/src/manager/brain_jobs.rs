@@ -558,7 +558,6 @@ impl SessionManager {
             env: vec![("TMPDIR".into(), scratch.to_string_lossy().into_owned())],
             unset_env: Vec::new(),
             low_priority: false,
-            path_prepend: Vec::new(),
             record_to: None,
             redactor: secrets::redactor(vec![grant]),
             owned_cwd: codex,
@@ -566,7 +565,7 @@ impl SessionManager {
             // A Brain job hands nothing on: no sub-agents at all (Codex runs without them,
             // Claude without its Agent tool).
             allowed_models: Some(brigadier_providers::AllowedModels::default()),
-            unattended: false,
+            auto_review: false,
         };
         let access = spec.access.clone();
         let time = match job.kind {

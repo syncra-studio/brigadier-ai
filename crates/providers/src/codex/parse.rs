@@ -288,7 +288,14 @@ impl Parser {
                     .iter()
                     .find_map(|key| params.get(key).and_then(Value::as_str))
                     .unwrap_or(method);
-                out.push(notice(NoticeLevel::Warning, format!("Codex: {message}")));
+                // The auto-reviewer's verdict on each request it settles (Approve for me) is
+                // routine, not a warning.
+                let level = if method == "guardianWarning" {
+                    NoticeLevel::Info
+                } else {
+                    NoticeLevel::Warning
+                };
+                out.push(notice(level, format!("Codex: {message}")));
             }
             "model/rerouted" => out.push(notice(
                 NoticeLevel::Warning,
@@ -540,15 +547,13 @@ impl Parser {
                 };
                 // An approved command runs outside the sandbox (see the adapter's docs).
                 let reason = ask.reason.clone();
-                // Codex's session approval cache (`acceptForSession`) holds this exact command.
+                // "Allow similar commands": Brigadier allows later commands with the same first
+                // words itself; Codex's session cache (`acceptForSession`) holds this one.
                 let grant = ask
                     .command
                     .as_deref()
-                    .filter(|command| {
-                        ask.kind == p::CommandExecutionApprovalKind::Command
-                            && !crate::policy::is_outward(command)
-                    })
-                    .map(crate::policy::unwrapped_command);
+                    .filter(|_| ask.kind == p::CommandExecutionApprovalKind::Command)
+                    .and_then(crate::policy::command_prefix);
                 (
                     ApprovalRequest {
                         id: approval_id.clone(),

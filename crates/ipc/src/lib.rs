@@ -3,9 +3,9 @@
 //! - Transport: a Unix domain socket in a private directory, or a named pipe restricted to the
 //!   current user on Windows. There is no TCP listener.
 //! - Authentication: a per-launch 256-bit token in a private file; the first frame must present
-//!   it within [`transport::AUTH_TIMEOUT`]. CLI sessions' helper processes (the MCP bridge and
-//!   the command gate) never see the token: their first frame carries a role-scoped grant
-//!   instead, which only reaches the MCP tools or the gate question.
+//!   it within [`transport::AUTH_TIMEOUT`]. CLI sessions' helper process (the MCP bridge) never
+//!   sees the token: its first frame carries a role-scoped grant instead, which only reaches
+//!   the MCP tools.
 //! - Framing: length-prefixed JSON, at most [`MAX_FRAME_BYTES`] per frame.
 //! - Types: [`protocol`] and [`metrics`], exported to TypeScript by the `gen-ts` binary.
 
@@ -18,8 +18,8 @@ pub mod transport;
 
 pub use token::Token;
 pub use transport::{
-    Accepted, Connection, GateCheck, Listener, Pending, RawStream, Reader, Writer, connect,
-    connect_blocking, connect_to, read_frame_blocking,
+    Accepted, Connection, Listener, Pending, RawStream, Reader, Writer, connect, connect_blocking,
+    connect_to, read_frame_blocking,
 };
 
 /// Largest frame accepted in either direction.

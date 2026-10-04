@@ -348,7 +348,6 @@ impl SessionManager {
             env: Vec::new(),
             unset_env: Vec::new(),
             low_priority: false,
-            path_prepend: Vec::new(),
             record_to: None,
             redactor: None,
             // The orchestrator's live CLI works in the same folder (a fork finds its session by
@@ -357,7 +356,7 @@ impl SessionManager {
             owned_cwd: false,
             auto_compact: false,
             allowed_models: None,
-            unattended: false,
+            auto_review: false,
         };
         let owner = format!("orch:{id}");
         let Started {

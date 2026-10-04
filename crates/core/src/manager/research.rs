@@ -251,13 +251,12 @@ impl SessionManager {
             env: Vec::new(),
             unset_env: Vec::new(),
             low_priority: false,
-            path_prepend: Vec::new(),
             record_to: None,
             redactor: None,
             owned_cwd: true,
             auto_compact: true,
             allowed_models: None,
-            unattended: false,
+            auto_review: false,
         };
         let meter = TokenMeter::default();
         let ran = run_web_session(

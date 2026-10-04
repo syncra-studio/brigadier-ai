@@ -10,20 +10,17 @@ use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
 use interprocess::local_socket::{ListenerOptions, Name};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::io::AsyncReadExt as _;
 
 use crate::Error;
 use crate::frame::{FrameReader, FrameWriter};
-use crate::protocol::{
-    ClientFrame, ClientInfo, DaemonInfo, GateVerdict, PROTOCOL_VERSION, ServerFrame,
-};
+use crate::protocol::{ClientFrame, ClientInfo, DaemonInfo, PROTOCOL_VERSION, ServerFrame};
 use crate::token::Token;
 
 /// Time a new connection has to present a valid first frame.
 pub const AUTH_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Largest first frame: a hello, an MCP grant, or a gate check carrying a command line (a
-/// Unix command line is at most a few MiB).
+/// Largest first frame: a hello or an MCP grant.
 const MAX_FIRST_FRAME_BYTES: usize = 4 * 1024 * 1024;
 
 /// A connection's raw byte stream, after its first frame.
@@ -112,18 +109,11 @@ pub enum Accepted {
     /// A CLI session's Brigadier MCP bridge (`brigadierd mcp`). The stream carries raw MCP from
     /// here on, starting with the first byte after the frame.
     Mcp { grant: String, stream: RawStream },
-    /// An outward-command gate check, to be answered once through `check`.
-    Gate {
-        grant: String,
-        argv: Vec<String>,
-        cwd: String,
-        check: GateCheck,
-    },
 }
 
 impl Pending {
     /// Reads the first frame within [`AUTH_TIMEOUT`]. A hello must carry the token and the
-    /// protocol version; MCP and gate frames carry a grant the caller checks. Any failure
+    /// protocol version; an MCP frame carries a grant the caller checks. Any failure
     /// drops the connection without a reply.
     ///
     /// The first frame is read unbuffered, so nothing the peer sent after it is lost when the
@@ -156,12 +146,6 @@ impl Pending {
                 })
             }
             Ok(Some(ClientFrame::Mcp { grant })) => Ok(Accepted::Mcp { grant, stream }),
-            Ok(Some(ClientFrame::Gate { grant, argv, cwd })) => Ok(Accepted::Gate {
-                grant,
-                argv,
-                cwd,
-                check: GateCheck { stream },
-            }),
             Ok(Some(ClientFrame::Request { .. })) => {
                 Err(Error::Unauthorized("first frame was not a hello"))
             }
@@ -169,27 +153,6 @@ impl Pending {
             // Oversized or malformed first frames are rejected here too.
             Err(_) => Err(Error::Unauthorized("malformed first frame")),
         }
-    }
-}
-
-/// The daemon's side of a gate check.
-pub struct GateCheck {
-    stream: Stream,
-}
-
-impl GateCheck {
-    /// Resolves when the asking program goes away (it was killed, or its CLI session ended),
-    /// so the question can be withdrawn. The program sends nothing after its check.
-    pub async fn closed(&mut self) {
-        let mut byte = [0u8; 1];
-        let _ = self.stream.read(&mut byte).await;
-    }
-
-    /// Sends the verdict and closes the connection.
-    pub async fn answer(mut self, verdict: &GateVerdict) -> Result<(), Error> {
-        self.stream.write_all(&encode_frame(verdict)?).await?;
-        self.stream.flush().await?;
-        Ok(())
     }
 }
 
@@ -239,8 +202,8 @@ fn encode_frame<T: Serialize>(frame: &T) -> Result<Vec<u8>, Error> {
 }
 
 /// Connects to the daemon for `paths` without an async runtime and sends `first`, a
-/// [`ClientFrame::Mcp`] or [`ClientFrame::Gate`]. For the short-lived helper processes CLI
-/// sessions start (`brigadierd mcp`, the command gate), which never read the token.
+/// [`ClientFrame::Mcp`]. For the short-lived helper process CLI sessions start (`brigadierd
+/// mcp`), which never reads the token.
 pub fn connect_blocking(
     paths: &AppPaths,
     first: &ClientFrame,

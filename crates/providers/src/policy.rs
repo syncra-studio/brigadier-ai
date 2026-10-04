@@ -1,106 +1,13 @@
 //! Brigadier's approval policy for CLI sessions.
 //!
-//! Workers run full-auto inside their CLI's OS sandbox, but "inside the sandbox" is not the same
-//! as "authorized". Two kinds of request always reach a person:
-//!
-//! - actions that affect the outside world ([`ALWAYS_ASK`]: push, publish, deploy, cloud), at
-//!   every permission level (PLAN.md §5);
-//! - requests to leave or widen the sandbox.
-//!
-//! Each adapter makes its CLI ask Brigadier for these (Claude through ask rules and its
-//! permission-prompt tool, Codex through its approval policy), and [`route`] decides what
-//! Brigadier answers on the user's behalf.
+//! What a session may do is set by its permission level and enforced by its CLI (PLAN.md §5):
+//! Full access runs without a sandbox and never asks; Approve for me runs inside the CLI's OS
+//! sandbox and lets the CLI's own reviewer settle what leaves it; Ask for approval asks the
+//! user each time a command needs more than the sandbox allows. Requests that still reach
+//! Brigadier are routed by [`route`]; the user's "Allow similar commands" covers later requests
+//! with the same [`similar_key`] for the rest of the conversation ([`Similar`]).
 
 use crate::model::{Access, ApprovalKind, ApprovalRequest};
-
-/// Commands with effects outside the machine, as program + subcommand words. A command matches
-/// when its program is the first word and the other words follow in order, with anything in
-/// between (`git -C repo push` matches `git push`).
-pub const ALWAYS_ASK: &[&[&str]] = &[
-    &["git", "push"],
-    &["git", "send-pack"],
-    &["git", "send-email"],
-    &["git", "lfs", "push"],
-    &["gh", "gist", "create"],
-    &["gh", "pr", "create"],
-    &["gh", "pr", "merge"],
-    &["gh", "pr", "close"],
-    &["gh", "pr", "reopen"],
-    &["gh", "pr", "edit"],
-    &["gh", "pr", "comment"],
-    &["gh", "pr", "review"],
-    &["gh", "pr", "ready"],
-    &["gh", "issue", "create"],
-    &["gh", "issue", "close"],
-    &["gh", "issue", "comment"],
-    &["gh", "issue", "edit"],
-    &["gh", "release", "create"],
-    &["gh", "release", "delete"],
-    &["gh", "release", "delete-asset"],
-    &["gh", "release", "edit"],
-    &["gh", "release", "upload"],
-    &["gh", "repo", "create"],
-    &["gh", "repo", "delete"],
-    &["gh", "repo", "edit"],
-    &["gh", "repo", "rename"],
-    &["gh", "workflow", "run"],
-    &["gh", "secret", "set"],
-    &["gh", "secret", "delete"],
-    &["gh", "secret", "remove"],
-    // Only a request that writes: see [`gh_api_writes`].
-    &["gh", "api"],
-    &["npm", "publish"],
-    &["npm", "unpublish"],
-    &["pnpm", "publish"],
-    &["yarn", "publish"],
-    &["yarn", "npm", "publish"],
-    &["bun", "publish"],
-    &["cargo", "publish"],
-    &["cargo", "yank"],
-    &["twine", "upload"],
-    &["poetry", "publish"],
-    &["uv", "publish"],
-    &["gem", "push"],
-    &["pod", "trunk", "push"],
-    &["docker", "push"],
-    &["vercel"],
-    &["netlify", "deploy"],
-    &["fly", "deploy"],
-    &["flyctl", "deploy"],
-    &["wrangler", "deploy"],
-    &["wrangler", "publish"],
-    &["firebase", "deploy"],
-    &["heroku"],
-    &["railway", "up"],
-    &["terraform", "apply"],
-    &["terraform", "destroy"],
-    &["pulumi", "up"],
-    &["pulumi", "destroy"],
-    &["kubectl", "apply"],
-    &["kubectl", "delete"],
-    &["helm", "install"],
-    &["helm", "upgrade"],
-    &["helm", "uninstall"],
-    &["aws"],
-    &["gcloud"],
-    &["az"],
-];
-
-/// Claude Code permission rules that make every [`ALWAYS_ASK`] command prompt, even when an
-/// allow rule or the sandbox's auto-allow would run it.
-pub fn claude_ask_rules() -> Vec<String> {
-    let mut rules = Vec::with_capacity(ALWAYS_ASK.len() * 2);
-    for words in ALWAYS_ASK {
-        rules.push(format!("Bash({} *)", words.join(" ")));
-        if let [program, rest @ ..] = words
-            && !rest.is_empty()
-        {
-            // Options between the program and its subcommand (`git -C repo push`).
-            rules.push(format!("Bash({program} * {} *)", rest.join(" ")));
-        }
-    }
-    rules
-}
 
 /// What Brigadier does with an approval request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,11 +27,6 @@ pub enum ApprovalMode {
     Delegated,
     /// Decline everything (a read-only session such as the orchestrator).
     DeclineAll,
-    /// Nobody is there to ask (an overnight run, PLAN.md §10.8): approve for the user
-    /// whatever the session's access would let them approve, leaving the sandbox included;
-    /// decline what only the user may do (outward actions). The caller also declines what
-    /// [`touches_protected`] finds, and lists what was declined for the report.
-    Unattended,
 }
 
 /// Decides who answers `request`.
@@ -132,166 +34,11 @@ pub fn route(request: &ApprovalRequest, access: &Access, mode: ApprovalMode) -> 
     match mode {
         ApprovalMode::DeclineAll => Route::Deny,
         ApprovalMode::Delegated => route_delegated(request, access),
-        ApprovalMode::Unattended => match &request.command {
-            Some(command) if is_outward(command) => Route::Deny,
-            _ => Route::Allow,
-        },
     }
-}
-
-/// Programs that delete or move files, judged by the paths they are given.
-const REMOVERS: &[&str] = &["rm", "rmdir", "unlink", "mv", "shred", "trash", "truncate"];
-
-/// Git commands that change a checkout's files (or its index and stash).
-const GIT_TREE_CHANGERS: &[&str] = &[
-    "add",
-    "am",
-    "apply",
-    "checkout",
-    "cherry-pick",
-    "clean",
-    "commit",
-    "merge",
-    "mv",
-    "pull",
-    "read-tree",
-    "rebase",
-    "reset",
-    "restore",
-    "revert",
-    "rm",
-    "stage",
-    "stash",
-    "switch",
-    "update-index",
-];
-
-/// Whether `request` would change files under one of `protected` (the user's own checkout,
-/// outside the run's worktrees): a file edit there, a git command that changes a checkout
-/// run there (`-C`, a `cd` before it, or the request's folder), or a file remover given a path
-/// there. Best effort over the command line, for an overnight run's never-list (PLAN.md
-/// §10.8): a script or interpreter that does the same is not seen.
-pub fn touches_protected(request: &ApprovalRequest, protected: &[std::path::PathBuf]) -> bool {
-    use std::path::{Path, PathBuf};
-    let roots: Vec<PathBuf> = protected
-        .iter()
-        .filter_map(|root| real_path(root))
-        .collect();
-    if roots.is_empty() {
-        return false;
-    }
-    let cwd = request.cwd.as_deref().map(PathBuf::from);
-    let resolve = |word: &str, base: Option<&Path>| -> Option<PathBuf> {
-        let path = match word.strip_prefix("~/") {
-            Some(rest) => PathBuf::from(std::env::var_os("HOME")?).join(rest),
-            None => PathBuf::from(word),
-        };
-        let path = if path.is_absolute() {
-            path
-        } else {
-            base?.join(path)
-        };
-        real_path(&lexically_normal(&path))
-    };
-    let inside = |path: Option<PathBuf>| {
-        path.is_some_and(|path| roots.iter().any(|root| path.starts_with(root)))
-    };
-    // Removing or moving a folder that holds the checkout changes it too.
-    let inside_or_holds = |path: Option<PathBuf>| {
-        path.is_some_and(|path| {
-            roots
-                .iter()
-                .any(|root| path.starts_with(root) || root.starts_with(&path))
-        })
-    };
-    if request.kind == ApprovalKind::FileChange {
-        return request
-            .paths
-            .iter()
-            .any(|path| inside(resolve(path, cwd.as_deref())));
-    }
-    let Some(command) = &request.command else {
-        return false;
-    };
-    // Where commands run: the request's folder, then each `cd` in the line, in order.
-    let mut dir = cwd.clone();
-    for words in simple_commands(command) {
-        let words = strip_prefixes(&words);
-        let Some((program, args)) = words.split_first() else {
-            continue;
-        };
-        let name = program.rsplit('/').next().unwrap_or(program);
-        match name {
-            "cd" | "pushd" => {
-                if let Some(target) = args.iter().find(|arg| !arg.starts_with('-')) {
-                    dir = resolve(target, dir.as_deref()).or(dir);
-                }
-            }
-            "git" => {
-                let Some(at) = split_git_globals(args).command else {
-                    continue;
-                };
-                let mut here = dir.clone();
-                let mut globals = args[..at].iter();
-                while let Some(arg) = globals.next() {
-                    if arg == "-C"
-                        && let Some(path) = globals.next()
-                    {
-                        here = resolve(path, here.as_deref());
-                    }
-                }
-                if GIT_TREE_CHANGERS.contains(&args[at].as_str()) && inside(here) {
-                    return true;
-                }
-            }
-            name if REMOVERS.contains(&name) => {
-                let in_dir = inside(dir.clone());
-                let operands: Vec<&String> =
-                    args.iter().filter(|arg| !arg.starts_with('-')).collect();
-                for (n, arg) in operands.iter().enumerate() {
-                    // `mv`'s last operand is where things go: a folder holding the checkout
-                    // may receive them.
-                    let into = name == "mv" && operands.len() > 1 && n + 1 == operands.len();
-                    let path = resolve(arg, dir.as_deref());
-                    let hit = if into {
-                        inside(path)
-                    } else {
-                        inside_or_holds(path)
-                    };
-                    if hit || (in_dir && !arg.starts_with('/')) {
-                        return true;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    false
-}
-
-/// `path` with `.` and `..` folded away, without touching the file system.
-fn lexically_normal(path: &std::path::Path) -> std::path::PathBuf {
-    use std::path::Component;
-    let mut normal = std::path::PathBuf::new();
-    for part in path.components() {
-        match part {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normal.pop();
-            }
-            part => normal.push(part),
-        }
-    }
-    normal
 }
 
 /// [`route`] under Approve for me.
 fn route_delegated(request: &ApprovalRequest, access: &Access) -> Route {
-    if let Some(command) = &request.command
-        && is_outward(command)
-    {
-        return Route::AskUser;
-    }
     if request.escalation || request.kind == ApprovalKind::Permissions {
         return Route::AskUser;
     }
@@ -361,102 +108,6 @@ pub fn real_path(path: &std::path::Path) -> Option<std::path::PathBuf> {
     }
 }
 
-/// Whether a shell command line runs any [`ALWAYS_ASK`] command. Errs on the side of asking:
-/// every simple command in the line is checked, including those inside `sh -c '…'` wrappers,
-/// subshells and command substitutions.
-pub fn is_outward(command: &str) -> bool {
-    simple_commands(command)
-        .iter()
-        .any(|words| words_outward(words))
-}
-
-/// The outward commands a command line runs, each as the command gate will see it: its argv
-/// without environment assignments, wrappers and redirections, and the folder the last `cd`
-/// before it in the line moved to (`None` when none did).
-pub fn outward_commands(command: &str) -> Vec<(Option<String>, Vec<String>)> {
-    let mut dir = None;
-    let mut found = Vec::new();
-    for words in simple_commands(command) {
-        let words = strip_prefixes(&words);
-        if words.first().is_some_and(|program| program == "cd") {
-            dir = Some(words.get(1).cloned().unwrap_or_else(|| "~".to_owned()));
-        } else if words_outward(words) {
-            found.push((dir.clone(), words.to_vec()));
-        }
-    }
-    found
-}
-
-/// Whether one simple command is an [`ALWAYS_ASK`] command. git is judged by its subcommand,
-/// as the gate does (`git stash push` and `git log --grep push` stay local; an alias is left to
-/// the gate, which resolves it), and `gh api` only when it writes.
-fn words_outward(words: &[String]) -> bool {
-    if let Some((program, rest)) = strip_prefixes(words).split_first() {
-        match program.rsplit('/').next().unwrap_or(program) {
-            // An unknown global option hides where the subcommand is: matched loosely below.
-            "git" if !split_git_globals(rest).unknown_option => {
-                return classify_git(rest) == ArgvVerdict::Outward;
-            }
-            "gh" if rest.first().is_some_and(|command| command == "api") => {
-                return gh_api_writes(&rest[1..]);
-            }
-            _ => {}
-        }
-    }
-    ALWAYS_ASK
-        .iter()
-        .any(|pattern| matches_pattern(words, pattern))
-}
-
-/// Whether a `gh api` call (its arguments after `api`) changes anything: a method other than
-/// GET or HEAD, or, without `--method`, any field or input, which makes gh send a POST.
-fn gh_api_writes(args: &[String]) -> bool {
-    let mut method = None;
-    let mut fields = false;
-    let mut words = args.iter();
-    while let Some(word) = words.next() {
-        let word = word.as_str();
-        if word == "-X" || word == "--method" {
-            method = Some(words.next().map_or("", String::as_str));
-        } else if let Some(value) = word
-            .strip_prefix("--method=")
-            .or_else(|| word.strip_prefix("-X"))
-        {
-            method = Some(value);
-        } else if ["-f", "-F", "--field", "--raw-field", "--input"].contains(&word) {
-            fields = true;
-            words.next();
-        } else if ["-f", "-F", "--field=", "--raw-field=", "--input="]
-            .iter()
-            .any(|flag| word.starts_with(flag))
-        {
-            fields = true;
-        } else if [
-            "-H",
-            "--header",
-            "--hostname",
-            "--cache",
-            "-q",
-            "--jq",
-            "-t",
-            "--template",
-        ]
-        .contains(&word)
-        {
-            // Option values are data even when they look like a method flag.
-            words.next();
-        } else if word == "--" {
-            break;
-        }
-    }
-    match method {
-        Some(method) => !["GET", "HEAD"]
-            .iter()
-            .any(|read| method.eq_ignore_ascii_case(read)),
-        None => fields,
-    }
-}
-
 /// The script of a `sh -c '…'` wrapper (`/bin/zsh -lc 'npm test'` → `npm test`), else the
 /// command itself.
 pub fn unwrapped_command(command: &str) -> String {
@@ -468,21 +119,6 @@ pub fn unwrapped_command(command: &str) -> String {
         return script.trim().to_owned();
     }
     command.trim().to_owned()
-}
-
-fn matches_pattern(words: &[String], pattern: &[&str]) -> bool {
-    let words = strip_prefixes(words);
-    let Some((program, rest)) = words.split_first() else {
-        return false;
-    };
-    let name = program.rsplit('/').next().unwrap_or(program);
-    if name != pattern[0] {
-        return false;
-    }
-    let mut remaining = rest.iter();
-    pattern[1..]
-        .iter()
-        .all(|wanted| remaining.any(|word| word == wanted))
 }
 
 /// Drops environment assignments and transparent wrappers (`env`, `sudo`, `command`, …).
@@ -699,326 +335,139 @@ fn shell_script(words: &[String]) -> Option<String> {
     rest.get(flag + 1).cloned()
 }
 
-// ----- the command gate: argv-level matching -----------------------------------------------
+/// The tool name Claude asks under for network access from inside its sandbox (its input
+/// names the `host`).
+pub const NETWORK_TOOL: &str = "SandboxNetworkAccess";
 
-/// The environment variable that carries a CLI session's gate grant to the command gate.
-/// Codex's default environment filter drops names containing KEY, SECRET or TOKEN, so this one
-/// avoids them.
-pub const GATE_ENV: &str = "BRIGADIER_GATE";
+/// Programs that only move between folders or filter what another command prints: a command
+/// line's `cd repo && …` or `… | head -5` doesn't count when matching it against "Allow
+/// similar commands".
+const NEUTRAL: &[&str] = &[
+    "cd", "pushd", "popd", "head", "tail", "grep", "sort", "uniq", "wc", "cut", "tr", "jq", "true",
+    "echo",
+];
 
-/// Programs named in [`ALWAYS_ASK`], each once, in order. The command gate shims each of them
-/// on a worker's PATH.
-pub fn gate_programs() -> Vec<&'static str> {
-    let mut programs: Vec<&'static str> = Vec::new();
-    for words in ALWAYS_ASK {
-        if !programs.contains(&words[0]) {
-            programs.push(words[0]);
-        }
+/// What "Allow similar commands" covers for `command`: its first program and, when the next
+/// word is a plain subcommand, that word too (`git push origin main` → `git push`, `curl -sI
+/// https://…` → `curl`, `cargo test -p core` → `cargo test`). `None` for a line with no
+/// program in it.
+pub fn command_prefix(command: &str) -> Option<String> {
+    let words = simple_commands(&unwrapped_command(command))
+        .into_iter()
+        .map(|words| strip_prefixes(&words).to_vec())
+        .find(|words| !words.is_empty() && !NEUTRAL.contains(&program_name(&words[0])))?;
+    Some(prefix_words(&words).join(" "))
+}
+
+/// The words of `command`'s prefix: the program's name, then a plain subcommand if there is one.
+fn prefix_words(words: &[String]) -> Vec<String> {
+    let mut prefix = vec![program_name(&words[0]).to_owned()];
+    if let Some(next) = words.get(1)
+        && next
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_lowercase())
+        && next
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+    {
+        prefix.push(next.clone());
     }
-    programs
+    prefix
 }
 
-/// What the command gate does with a command line, judged from its argv alone.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ArgvVerdict {
-    /// Stays on the machine: runs without asking.
-    Local,
-    /// Affects the outside world (or cannot be judged): the user decides.
-    Outward,
-    /// A git subcommand that is not a git command, so it may be an alias. Look up
-    /// `alias.<name>` with the real git and these global options, then judge
-    /// [`expand_git_alias`]'s result.
-    GitAlias { globals: Vec<String>, name: String },
+/// A program's name without its folder (`/usr/bin/git` → `git`).
+fn program_name(word: &str) -> &str {
+    word.rsplit('/').next().unwrap_or(word)
 }
 
-/// Judges `argv` (`argv[0]` is the program, as invoked) for the command gate.
-///
-/// - git: global options before the subcommand are skipped (`git -C repo push`,
-///   `git -c k=v --git-dir=… push`), the subcommand is matched exactly (so `git log --grep push`
-///   runs), commands that run other commands (`submodule foreach`, `rebase --exec`,
-///   `bisect run`) are judged by what they run, and anything that is not a git command may be
-///   an alias ([`ArgvVerdict::GitAlias`]). An unknown global option asks.
-/// - gh: an unknown top-level command may be an alias or an extension, so it asks.
-/// - everything else: [`ALWAYS_ASK`] matching over the words.
-pub fn classify_argv(argv: &[String]) -> ArgvVerdict {
-    let Some((program, args)) = argv.split_first() else {
-        return ArgvVerdict::Local;
-    };
-    let name = program.rsplit('/').next().unwrap_or(program);
-    match name {
-        "git" => classify_git(args),
-        "gh" if args.first().is_some_and(|command| {
-            !command.starts_with('-') && !GH_COMMANDS.contains(&command.as_str())
-        }) =>
-        {
-            ArgvVerdict::Outward
-        }
-        _ => {
-            let mut words = Vec::with_capacity(argv.len());
-            words.push(name.to_owned());
-            words.extend(args.iter().cloned());
-            if words_outward(&words) {
-                ArgvVerdict::Outward
-            } else {
-                ArgvVerdict::Local
+/// What the user allowed with "Allow similar commands" in one conversation: commands that
+/// start with the same words, and network access to the same hosts. Never persisted.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Similar {
+    prefixes: Vec<Vec<String>>,
+    hosts: Vec<String>,
+}
+
+impl Similar {
+    /// Allows what is similar to `request` from now on. Does nothing for a request that has
+    /// nothing to be similar to (a file change, a permissions request).
+    pub fn allow(&mut self, request: &ApprovalRequest) {
+        if let Some(host) = network_host(request) {
+            if !self.hosts.contains(&host) {
+                self.hosts.push(host);
+            }
+        } else if let Some(prefix) = request.command.as_deref().and_then(command_prefix) {
+            let words: Vec<String> = prefix.split(' ').map(str::to_owned).collect();
+            if !self.prefixes.contains(&words) {
+                self.prefixes.push(words);
             }
         }
     }
+
+    /// Adds everything `other` allows.
+    pub fn merge(&mut self, other: Similar) {
+        for prefix in other.prefixes {
+            if !self.prefixes.contains(&prefix) {
+                self.prefixes.push(prefix);
+            }
+        }
+        for host in other.hosts {
+            if !self.hosts.contains(&host) {
+                self.hosts.push(host);
+            }
+        }
+    }
+
+    /// Whether `request` is similar to one the user allowed: network access to an allowed
+    /// host, or a command line whose every command starts with allowed words.
+    pub fn covers(&self, request: &ApprovalRequest) -> bool {
+        if let Some(host) = network_host(request) {
+            return self.hosts.contains(&host);
+        }
+        if request.kind != ApprovalKind::Command || self.prefixes.is_empty() {
+            return false;
+        }
+        let Some(command) = &request.command else {
+            return false;
+        };
+        let commands: Vec<Vec<String>> = simple_commands(command)
+            .into_iter()
+            .map(|words| strip_prefixes(&words).to_vec())
+            .filter(|words| !words.is_empty())
+            .collect();
+        let mut judged = 0;
+        for words in &commands {
+            if NEUTRAL.contains(&program_name(&words[0])) {
+                continue;
+            }
+            // A shell wrapper is judged by the commands of its script.
+            if shell_script(words).is_some() {
+                continue;
+            }
+            judged += 1;
+            let covered = self.prefixes.iter().any(|prefix| {
+                program_name(&words[0]) == prefix[0]
+                    && prefix[1..]
+                        .iter()
+                        .zip(&words[1..])
+                        .all(|(wanted, word)| wanted == word)
+                    && words.len() >= prefix.len()
+            });
+            if !covered {
+                return false;
+            }
+        }
+        judged > 0
+    }
 }
 
-/// The command line a git alias stands for: `argv` with the alias word replaced by the
-/// alias's words (git's own quoting rules). `None` for a shell alias (`!…`), which runs an
-/// arbitrary command line: the gate asks for those.
-pub fn expand_git_alias(argv: &[String], value: &str) -> Option<Vec<String>> {
-    let value = value.trim();
-    if value.starts_with('!') {
+/// The host of a request for network access from inside the sandbox.
+fn network_host(request: &ApprovalRequest) -> Option<String> {
+    if request.tool != NETWORK_TOOL {
         return None;
     }
-    let (program, args) = argv.split_first()?;
-    let split = split_git_globals(args);
-    let command = split.command?;
-    let mut expanded = Vec::with_capacity(argv.len() + 4);
-    expanded.push(program.clone());
-    expanded.extend(args[..command].iter().cloned());
-    expanded.extend(split_git_cmdline(value));
-    expanded.extend(args[command + 1..].iter().cloned());
-    Some(expanded)
-}
-
-/// Top-level `gh` commands (2.101) and help topics. Anything else is an alias or an
-/// extension.
-#[rustfmt::skip]
-const GH_COMMANDS: &[&str] = &[
-    "accessibility", "actions", "agent-task", "alias", "api", "attestation", "auth", "browse",
-    "cache", "codespace", "completion", "config", "copilot", "discussion", "environment",
-    "exit-codes", "extension", "formatting", "gist", "gpg-key", "help", "issue", "label",
-    "licenses", "mintty", "org", "pr", "preview", "project", "reference", "release", "repo",
-    "ruleset", "run", "search", "secret", "skill", "ssh-key", "status", "telemetry", "variable",
-    "version", "workflow",
-];
-
-/// git's commands (built-ins and the scripts git ships). git never lets an alias shadow a
-/// command, so these skip the alias lookup; any other word is looked up.
-#[rustfmt::skip]
-const GIT_COMMANDS: &[&str] = &[
-    "add", "am", "annotate", "apply", "archimport", "archive", "backfill", "bisect", "blame",
-    "branch", "bugreport", "bundle", "cat-file", "check-attr", "check-ignore", "check-mailmap",
-    "check-ref-format", "checkout", "checkout-index", "cherry", "cherry-pick", "citool", "clean",
-    "clone", "column", "commit", "commit-graph", "commit-tree", "config", "count-objects",
-    "credential", "credential-cache", "credential-osxkeychain", "credential-store",
-    "cvsexportcommit", "cvsimport", "cvsserver", "daemon", "describe", "diagnose", "diff",
-    "diff-files", "diff-index", "diff-pairs", "diff-tree", "difftool", "fast-export", "fast-import",
-    "fetch", "fetch-pack", "filter-branch", "fmt-merge-msg", "for-each-ref", "for-each-repo",
-    "format-patch", "fsck", "fsck-objects", "fsmonitor--daemon", "gc", "get-tar-commit-id", "grep",
-    "gui", "hash-object", "help", "hook", "http-backend", "http-fetch", "http-push", "imap-send",
-    "index-pack", "init", "init-db", "instaweb", "interpret-trailers", "last-modified", "log",
-    "ls-files", "ls-remote", "ls-tree", "mailinfo", "mailsplit", "maintenance", "merge",
-    "merge-base", "merge-file", "merge-index", "merge-octopus", "merge-one-file", "merge-ours",
-    "merge-recursive", "merge-resolve", "merge-subtree", "merge-tree", "mergetool", "mktag",
-    "mktree", "multi-pack-index", "mv", "name-rev", "notes", "p4", "pack-objects", "pack-redundant",
-    "pack-refs", "patch-id", "prune", "prune-packed", "pull", "push", "quiltimport", "range-diff",
-    "read-tree", "rebase", "receive-pack", "reflog", "refs", "remote", "remote-ext", "remote-fd",
-    "remote-ftp", "remote-ftps", "remote-http", "remote-https", "repack", "replace", "replay",
-    "repo", "request-pull", "rerere", "reset", "restore", "rev-list", "rev-parse", "revert", "rm",
-    "send-email", "send-pack", "sh-i18n--envsubst", "shell", "shortlog", "show", "show-branch",
-    "show-index", "show-ref", "sparse-checkout", "stage", "stash", "status", "stripspace",
-    "submodule", "subtree", "svn", "switch", "symbolic-ref", "tag", "unpack-file", "unpack-objects",
-    "update-index", "update-ref", "update-server-info", "upload-archive", "upload-pack", "var",
-    "verify-commit", "verify-pack", "verify-tag", "version", "web--browse", "whatchanged",
-    "worktree", "write-tree",
-];
-
-/// Where git's global options end.
-struct GitSplit {
-    /// Index (in the arguments after `git`) of the subcommand; `None` when there is none.
-    command: Option<usize>,
-    /// A global option this list does not know, so its arguments cannot be told apart.
-    unknown_option: bool,
-}
-
-/// Skips git's global options (git 2.54 `handle_options`).
-fn split_git_globals(args: &[String]) -> GitSplit {
-    const WITH_VALUE: &[&str] = &[
-        "-C",
-        "-c",
-        "--git-dir",
-        "--work-tree",
-        "--namespace",
-        "--super-prefix",
-        "--config-env",
-        "--attr-source",
-        "--shallow-file",
-        "--exec-path",
-    ];
-    const FLAGS: &[&str] = &[
-        "-p",
-        "--paginate",
-        "-P",
-        "--no-pager",
-        "--no-replace-objects",
-        "--no-lazy-fetch",
-        "--no-optional-locks",
-        "--no-advice",
-        "--bare",
-        "--literal-pathspecs",
-        "--no-literal-pathspecs",
-        "--glob-pathspecs",
-        "--noglob-pathspecs",
-        "--icase-pathspecs",
-    ];
-    // Print something and exit, or turn into `git help` / `git version`.
-    const TERMINAL: &[&str] = &[
-        "-h",
-        "--help",
-        "-v",
-        "--version",
-        "--html-path",
-        "--man-path",
-        "--info-path",
-    ];
-    let mut index = 0;
-    while let Some(arg) = args.get(index) {
-        let arg = arg.as_str();
-        if !arg.starts_with('-') {
-            return GitSplit {
-                command: Some(index),
-                unknown_option: false,
-            };
-        }
-        let joined = arg
-            .split_once('=')
-            .is_some_and(|(name, _)| WITH_VALUE.contains(&name) || name == "--list-cmds");
-        if TERMINAL.contains(&arg) || arg.starts_with("--list-cmds=") || arg == "--exec-path" {
-            // `--exec-path` without a value prints the path.
-            return GitSplit {
-                command: None,
-                unknown_option: false,
-            };
-        }
-        if joined || FLAGS.contains(&arg) {
-            index += 1;
-        } else if WITH_VALUE.contains(&arg) {
-            index += 2;
-        } else {
-            return GitSplit {
-                command: None,
-                unknown_option: true,
-            };
-        }
-    }
-    GitSplit {
-        command: None,
-        unknown_option: false,
-    }
-}
-
-fn classify_git(args: &[String]) -> ArgvVerdict {
-    let split = split_git_globals(args);
-    if split.unknown_option {
-        return ArgvVerdict::Outward;
-    }
-    let Some(command) = split.command else {
-        return ArgvVerdict::Local;
-    };
-    let sub = args[command].as_str();
-    let rest = &args[command + 1..];
-    let outward_sub = ALWAYS_ASK.iter().any(|pattern| {
-        pattern[0] == "git"
-            && pattern
-                .get(1)
-                .is_some_and(|wanted| wanted.eq_ignore_ascii_case(sub))
-            && pattern[2..]
-                .iter()
-                .all(|wanted| rest.iter().any(|word| word == wanted))
-    });
-    if outward_sub || git_runs_outward(sub, rest) {
-        return ArgvVerdict::Outward;
-    }
-    if GIT_COMMANDS.contains(&sub) {
-        ArgvVerdict::Local
-    } else {
-        ArgvVerdict::GitAlias {
-            globals: args[..command].to_vec(),
-            name: sub.to_owned(),
-        }
-    }
-}
-
-/// git commands that run a command line of their own.
-fn git_runs_outward(sub: &str, rest: &[String]) -> bool {
-    let command_line = match sub {
-        // `git submodule [--quiet] foreach [--recursive] <command>`
-        "submodule" => match rest.iter().position(|word| word == "foreach") {
-            Some(at) => rest[at + 1..]
-                .iter()
-                .skip_while(|word| word.starts_with('-'))
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(" "),
-            None => return false,
-        },
-        // `git rebase -x <cmd>`, `--exec <cmd>`, `--exec=<cmd>`
-        "rebase" => {
-            let mut commands = Vec::new();
-            let mut words = rest.iter();
-            while let Some(word) = words.next() {
-                if word == "-x" || word == "--exec" {
-                    commands.extend(words.next().cloned());
-                } else if let Some(command) = word.strip_prefix("--exec=") {
-                    commands.push(command.to_owned());
-                } else if let Some(command) = word.strip_prefix("-x")
-                    && !command.is_empty()
-                {
-                    commands.push(command.to_owned());
-                }
-            }
-            commands.join("\n")
-        }
-        // `git bisect run <cmd> [<args>…]`
-        "bisect" if rest.first().is_some_and(|word| word == "run") => rest[1..].join(" "),
-        _ => return false,
-    };
-    is_outward(&command_line)
-}
-
-/// Splits an alias value the way git's `split_cmdline` does: whitespace separates words,
-/// single and double quotes group them, and a backslash escapes the next character (outside
-/// single quotes).
-fn split_git_cmdline(value: &str) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut word = String::new();
-    let mut in_word = false;
-    let mut quote: Option<char> = None;
-    let mut chars = value.chars();
-    while let Some(c) = chars.next() {
-        match (quote, c) {
-            (Some('\''), '\'') | (Some('"'), '"') => quote = None,
-            (Some('"') | None, '\\') => {
-                in_word = true;
-                if let Some(next) = chars.next() {
-                    word.push(next);
-                }
-            }
-            (None, '\'' | '"') => {
-                in_word = true;
-                quote = Some(c);
-            }
-            (None, c) if c.is_whitespace() => {
-                if in_word {
-                    words.push(std::mem::take(&mut word));
-                    in_word = false;
-                }
-            }
-            (_, c) => {
-                in_word = true;
-                word.push(c);
-            }
-        }
-    }
-    if in_word {
-        words.push(word);
-    }
-    words
+    request.grant.clone()
 }
 
 #[cfg(test)]
@@ -1149,272 +598,67 @@ mod tests {
     }
 
     #[test]
-    fn an_unattended_run_approves_all_but_outward_actions() {
-        let full = Access::Full;
-        let sandboxed = scoped(std::env::temp_dir());
-        for access in [&full, &sandboxed] {
-            let unattended =
-                |request: &ApprovalRequest| route(request, access, ApprovalMode::Unattended);
-            // Leaving the sandbox, widening it, writing elsewhere: approved for the user.
-            assert_eq!(
-                unattended(&command("pnpm install --frozen-lockfile", None, true)),
-                Route::Allow
-            );
-            let widen = ApprovalRequest {
-                kind: ApprovalKind::Permissions,
-                ..command("", None, true)
-            };
-            assert_eq!(unattended(&widen), Route::Allow);
-            assert_eq!(
-                unattended(&write(Path::new("/elsewhere/x.md"))),
-                Route::Allow
-            );
-            // The never-list, however the command is spelled.
-            for line in [
-                "git push origin main",
-                "/usr/bin/git push origin main",
-                "env FOO=1 git -C repo push",
-                "sh -c 'git push'",
-                "bash -lc \"cd x && npm publish\"",
-                "echo $(gh pr create --fill)",
-                "nohup cargo publish",
-                "/opt/homebrew/bin/gh release create v1",
-            ] {
-                assert_eq!(
-                    unattended(&command(line, None, false)),
-                    Route::Deny,
-                    "{line}"
-                );
-                assert_eq!(
-                    unattended(&command(line, None, true)),
-                    Route::Deny,
-                    "{line}"
-                );
-            }
+    fn allow_similar_covers_commands_with_the_same_first_words() {
+        assert_eq!(
+            command_prefix("curl -sI https://example.com").as_deref(),
+            Some("curl")
+        );
+        assert_eq!(
+            command_prefix("git push origin main").as_deref(),
+            Some("git push")
+        );
+        assert_eq!(
+            command_prefix("cd repo && FOO=1 cargo test -p core").as_deref(),
+            Some("cargo test")
+        );
+        assert_eq!(
+            command_prefix("/bin/zsh -lc 'npm install left-pad'").as_deref(),
+            Some("npm install")
+        );
+        assert_eq!(
+            command_prefix("python3 script.py").as_deref(),
+            Some("python3")
+        );
+
+        let mut similar = Similar::default();
+        similar.allow(&command("curl -sI https://example.com", None, true));
+        for line in [
+            "curl -sI https://example.com",
+            "curl https://example.org/x | head -1",
+            "cd /tmp && curl -L https://example.net",
+            "/bin/zsh -lc 'curl -s https://example.com'",
+        ] {
+            assert!(similar.covers(&command(line, None, true)), "{line}");
         }
+        for line in [
+            "wget https://example.com",
+            "curl x && rm -rf y",
+            "cd /tmp",
+            "",
+        ] {
+            assert!(!similar.covers(&command(line, None, true)), "{line}");
+        }
+
+        similar.allow(&command("git push origin main", None, true));
+        assert!(similar.covers(&command("git push -u origin topic", None, true)));
+        assert!(!similar.covers(&command("git reset --hard", None, true)));
     }
 
     #[test]
-    fn only_a_real_outward_command_asks_under_full_access() {
-        let full = |line: &str| {
-            route(
-                &command(line, None, false),
-                &Access::Full,
-                ApprovalMode::Delegated,
-            )
+    fn allow_similar_covers_network_access_to_the_same_host() {
+        let network = |host: &str| ApprovalRequest {
+            kind: ApprovalKind::Tool,
+            tool: NETWORK_TOOL.into(),
+            grant: Some(host.into()),
+            ..write(Path::new("/"))
         };
-        // The words of an outward command, but nothing leaves the machine.
-        for line in [
-            "git stash push -m wip",
-            "git log --grep push",
-            "git -C repo stash push",
-            "cd repo && git stash push 2>&1 | tail -3",
-            "gh api repos/o/r/actions/runs",
-            "gh api -X GET search/issues -f q=bug",
-            "gh api --method=head repos/o/r",
-            "gh release view v1",
-            "gh release list",
-            "gh secret list",
-        ] {
-            assert!(!is_outward(line), "{line}");
-            assert_eq!(full(line), Route::Allow, "{line}");
-        }
-        for line in [
-            "git push origin main",
-            "git -C repo push",
-            "cd repo && git push 2>&1 | tail -3",
-            "sudo git push",
-            "git --unknown-option push",
-            "gh api -X POST repos/o/r/issues",
-            "gh api repos/o/r/issues -f title=bug",
-            "gh api graphql -F query=@q.graphql",
-            "gh api --method=DELETE repos/o/r",
-            "gh api -XPATCH repos/o/r",
-            "gh api repos/o/r/contents/x --input body.json",
-            "gh release create v1",
-            "gh release upload v1 x.zip",
-            "gh secret set TOKEN",
-        ] {
-            assert!(is_outward(line), "{line}");
-            assert_eq!(full(line), Route::AskUser, "{line}");
-        }
-        let argv = |line: &str| line.split(' ').map(str::to_owned).collect::<Vec<_>>();
-        assert_eq!(
-            classify_argv(&argv("gh api repos/o/r/pulls")),
-            ArgvVerdict::Local
-        );
-        assert_eq!(
-            classify_argv(&argv("gh api -X POST repos/o/r/pulls")),
-            ArgvVerdict::Outward
-        );
-        assert_eq!(
-            classify_argv(&argv("gh release download v1")),
-            ArgvVerdict::Local
-        );
-        assert_eq!(classify_argv(&argv("git stash push")), ArgvVerdict::Local);
-    }
-
-    #[test]
-    fn gh_api_option_values_cannot_override_the_method() {
-        for option in [
-            "--template",
-            "-t",
-            "--jq",
-            "-q",
-            "--header",
-            "-H",
-            "--hostname",
-            "--cache",
-            "--input",
-            "--field",
-            "--raw-field",
-            "-f",
-            "-F",
-        ] {
-            let line = format!("gh api repos/o/r/issues -f title=bug {option} '-XGET'");
-            assert!(is_outward(&line), "{line}");
-            let args = simple_commands(&line).pop().unwrap();
-            assert_eq!(classify_argv(&args), ArgvVerdict::Outward, "{line}");
-            assert_eq!(
-                route(
-                    &command(&line, None, false),
-                    &Access::Full,
-                    ApprovalMode::Delegated
-                ),
-                Route::AskUser,
-                "{line}"
-            );
-            assert_eq!(
-                route(
-                    &command(&line, None, false),
-                    &Access::Full,
-                    ApprovalMode::Unattended
-                ),
-                Route::Deny,
-                "{line}"
-            );
-        }
-        for line in [
-            "gh api repos/o/r --template '-XPOST'",
-            "gh api repos/o/r -X GET -f q=bug --template '-XPOST'",
-            "gh api repos/o/r --header '--method=DELETE'",
-        ] {
-            assert!(!is_outward(line), "{line}");
-        }
-    }
-
-    #[test]
-    fn outward_commands_are_found_as_the_gate_sees_them() {
-        let argv = |words: &[&str]| words.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
-        assert_eq!(
-            outward_commands("cd ../repo && git push origin main 2>&1 | tail -3"),
-            [(
-                Some("../repo".to_owned()),
-                argv(&["git", "push", "origin", "main"])
-            )]
-        );
-        assert_eq!(
-            outward_commands(
-                "/bin/zsh -lc 'GIT_TRACE=1 git -C x push > out.log; gh pr create --fill'"
-            ),
-            [
-                (None, argv(&["git", "-C", "x", "push"])),
-                (None, argv(&["gh", "pr", "create", "--fill"])),
-            ]
-        );
-        assert_eq!(
-            outward_commands("cd && npm publish <input"),
-            [(Some("~".to_owned()), argv(&["npm", "publish"]))]
-        );
-        assert!(outward_commands("cd x && git stash push && cargo test").is_empty());
-        for line in [
-            "gh pr comment 123 --body '> quoted text' >out.log 2>&1",
-            "gh pr comment 123 --body \"> quoted text\" 2> error.log",
-        ] {
-            assert_eq!(
-                outward_commands(line),
-                [(
-                    None,
-                    argv(&["gh", "pr", "comment", "123", "--body", "> quoted text"])
-                )],
-                "{line}"
-            );
-        }
-        assert_eq!(
-            outward_commands(r"gh pr comment 123 --body \> > out.log"),
-            [(None, argv(&["gh", "pr", "comment", "123", "--body", ">"]))]
-        );
-        assert_eq!(
-            outward_commands("git push origin main>out.log"),
-            [(None, argv(&["git", "push", "origin", "main"]))]
-        );
-    }
-
-    #[test]
-    fn changes_to_the_users_checkout_are_found() {
-        let place = Linked::new("protected");
-        let repo = place.real().join("repo");
-        let worktree = place.real().join("worktree");
-        std::fs::create_dir_all(repo.join("src")).unwrap();
-        std::fs::create_dir_all(&worktree).unwrap();
-        let protected = [repo.clone()];
-        let repo_text = repo.display().to_string();
-        let linked_repo = place.link().join("repo").display().to_string();
-        let touches = |line: &str, cwd: &Path| {
-            touches_protected(&command(line, Some(cwd), false), &protected)
-        };
-        for line in [
-            format!("git -C {repo_text} reset --hard"),
-            format!("git -C {linked_repo} checkout -- ."),
-            format!("cd {repo_text} && git clean -fdx"),
-            format!("sh -c 'cd {repo_text}; git stash'"),
-            format!("/usr/bin/git -C {repo_text} commit -am x"),
-            format!("rm -rf {repo_text}/src"),
-            format!("rm -rf {linked_repo}"),
-            format!("cd {repo_text}/src && rm -f main.rs"),
-            format!("mv {repo_text}/src /tmp/elsewhere"),
-            format!("git -C {}/../repo restore .", worktree.display()),
-            format!("git -C {repo_text} add -A"),
-            format!("git -C {repo_text} update-index --assume-unchanged x"),
-            // A folder that holds the checkout.
-            format!("rm -rf {}", place.real().display()),
-            "rm -rf ..".to_owned(),
-            format!("mv {} /tmp/elsewhere", place.real().display()),
-        ] {
-            assert!(touches(&line, &worktree), "{line}");
-        }
-        // Moving something into a folder that holds the checkout leaves the checkout alone.
-        assert!(!touches(
-            &format!("mv notes.md {}", place.real().display()),
-            &worktree
-        ));
-        // In the request's folder.
-        assert!(touches("git reset --hard", &repo));
-        assert!(touches("rm -rf src", &repo.join("src")));
-        for line in [
-            "git reset --hard".to_owned(),
-            "rm -rf target".to_owned(),
-            format!("git -C {repo_text} status"),
-            format!("git -C {repo_text} log --oneline"),
-            format!("git -C {repo_text} diff"),
-            format!("cat {repo_text}/src/main.rs"),
-            format!("cp {repo_text}/src/main.rs ."),
-            "rm -rf /tmp/brigadier-test-1234".to_owned(),
-        ] {
-            assert!(!touches(&line, &worktree), "{line}");
-        }
-        assert!(touches_protected(
-            &write(&repo.join("src/new.rs")),
-            &protected
-        ));
-        assert!(touches_protected(
-            &write(&place.link().join("repo/README.md")),
-            &protected
-        ));
-        assert!(!touches_protected(
-            &write(&worktree.join("README.md")),
-            &protected
-        ));
-        assert!(!touches_protected(&write(&repo.join("x")), &[]));
+        let mut similar = Similar::default();
+        assert!(!similar.covers(&network("example.com")));
+        similar.allow(&network("example.com"));
+        assert!(similar.covers(&network("example.com")));
+        assert!(!similar.covers(&network("example.org")));
+        // A file change has nothing to be similar to.
+        similar.allow(&write(Path::new("/x")));
+        assert!(!similar.covers(&write(Path::new("/x"))));
     }
 }

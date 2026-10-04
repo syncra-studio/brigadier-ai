@@ -10,6 +10,12 @@
 //! - permission prompts arrive as `can_use_tool` control requests (`--permission-prompt-tool
 //!   stdio`) and Brigadier answers them.
 //!
+//! The permission mode follows the session's access ([`permission_mode`]): full access runs in
+//! `bypassPermissions` with no sandbox and never asks; with [`SessionSpec::auto_review`]
+//! (Approve for me) Claude's `auto` mode lets its classifier decide what leaves the sandbox,
+//! and declines what it judges unsafe to the model instead of asking; otherwise
+//! (`acceptEdits`) leaving the sandbox asks Brigadier.
+//!
 //! Sessions load only the project's settings plus Brigadier's own (`--setting-sources
 //! project`, `--settings`), so the user's personal hooks, plugins and allow rules never apply,
 //! and only Brigadier's MCP servers (`--strict-mcp-config`).
@@ -40,7 +46,7 @@ use crate::model::*;
 use crate::process::{self, CliProcess};
 use crate::record::{self, Direction, Recorder};
 use crate::{
-    BoxFuture, Error, Ledger, Provider, ProviderSession, Replayer, Result, Started, now_ms, policy,
+    BoxFuture, Error, Ledger, Provider, ProviderSession, Replayer, Result, Started, now_ms,
 };
 use parse::{Control, Output, Parser};
 
@@ -216,16 +222,7 @@ impl Claude {
         args.push("--settings".into());
         args.push(settings(spec, cwd, &sub_agents).to_string());
         args.push("--permission-mode".into());
-        args.push(
-            match spec.access {
-                Access::ReadOnly
-                | Access::Scoped {
-                    write_cwd: false, ..
-                } => "default",
-                Access::Workspace { .. } | Access::Full | Access::Scoped { .. } => "acceptEdits",
-            }
-            .into(),
-        );
+        args.push(permission_mode(spec).into());
         // Both spellings of a root behind a symlink (`/tmp` → `/private/tmp`): Claude matches
         // the path as a tool was given it.
         for root in spec.access.writable_roots() {
@@ -409,6 +406,19 @@ fn main_checkout(git_file: &Path) -> Option<PathBuf> {
     common.parent().map(Path::to_owned)
 }
 
+/// Claude's permission mode for a session (see the module docs).
+fn permission_mode(spec: &SessionSpec) -> &'static str {
+    match spec.access {
+        Access::Full => "bypassPermissions",
+        Access::ReadOnly => "default",
+        Access::Workspace { .. } | Access::Scoped { .. } if spec.auto_review => "auto",
+        Access::Scoped {
+            write_cwd: false, ..
+        } => "default",
+        Access::Workspace { .. } | Access::Scoped { .. } => "acceptEdits",
+    }
+}
+
 /// A permission rule path for an absolute path (`//abs/path/**`).
 fn rule_path(path: &Path) -> String {
     format!("/{}/**", path.display())
@@ -416,10 +426,12 @@ fn rule_path(path: &Path) -> String {
 
 /// Brigadier's settings layer for a session, passed with `--settings` (above project settings).
 fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents) -> Value {
-    let mut ask = policy::claude_ask_rules();
-    // Leaving the sandbox always goes through the permission prompt, even if a project rule
-    // would allow the command.
-    ask.push("Bash(dangerouslyDisableSandbox:true)".into());
+    let mut ask: Vec<String> = Vec::new();
+    // Unless Claude's own reviewer decides (auto mode), leaving the sandbox always goes through
+    // the permission prompt, even if a project rule would allow the command.
+    if spec.access != Access::Full && !spec.auto_review {
+        ask.push("Bash(dangerouslyDisableSandbox:true)".into());
+    }
     let mut allow: Vec<String> = spec
         .mcp_servers
         .iter()
@@ -483,24 +495,20 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents) -> Value {
             "autoAllowBashIfSandboxed": false,
             "allowUnsandboxedCommands": false,
         }),
-        Access::Full => {
-            // An overnight run's worker has no blanket Bash rule: each command that isn't
-            // plainly read-only goes through the permission prompt, where Brigadier answers at
-            // once (PLAN.md §10.8).
-            if !spec.unattended {
-                allow.push("Bash".to_owned());
-            }
-            allow.push("WebFetch".to_owned());
-            json!({ "enabled": false })
-        }
+        // Like the user's own terminal: `bypassPermissions` asks for nothing.
+        Access::Full => json!({ "enabled": false }),
     };
     if spec.tools == ToolSet::Web {
         allow.extend(["WebSearch".to_owned(), "WebFetch".to_owned()]);
     }
-    let mut permissions = json!({
-        "ask": ask,
-        "disableBypassPermissionsMode": "disable",
-    });
+    let mut permissions = json!({});
+    if !ask.is_empty() {
+        permissions["ask"] = json!(ask);
+    }
+    // Only full access may run without permission checks.
+    if spec.access != Access::Full {
+        permissions["disableBypassPermissionsMode"] = json!("disable");
+    }
     if !allow.is_empty() {
         permissions["allow"] = json!(allow);
     }
@@ -779,12 +787,7 @@ impl Provider for Claude {
             if !spec.auto_compact {
                 env.push(("DISABLE_AUTO_COMPACT".into(), "1".into()));
             }
-            crate::cli::apply_session_env(
-                &mut process_spec,
-                &env,
-                &spec.unset_env,
-                &spec.path_prepend,
-            );
+            crate::cli::apply_session_env(&mut process_spec, &env, &spec.unset_env);
             process_spec.low_priority = spec.low_priority;
             let process::Spawned { process, stdout } = process::spawn(
                 self.platform.clone(),
@@ -1511,14 +1514,70 @@ mod tests {
             env: Vec::new(),
             unset_env: Vec::new(),
             low_priority: false,
-            path_prepend: Vec::new(),
             record_to: None,
             redactor: None,
             owned_cwd: false,
             auto_compact: true,
             allowed_models: Some(allowed(ids, &["claude-opus-5-5", "claude-fable-5-1"])),
-            unattended: false,
+            auto_review: false,
         }
+    }
+
+    #[test]
+    fn each_permission_level_gets_its_mode_and_rules() {
+        let cwd = Temp::new();
+        let cwd = cwd.path();
+        let scoped = Access::Scoped {
+            write_cwd: true,
+            writable_roots: Vec::new(),
+            network: true,
+            deny_read: Vec::new(),
+            unix_sockets: Vec::new(),
+        };
+        let with = |access: Access, auto_review: bool| SessionSpec {
+            access,
+            auto_review,
+            ..spec(cwd, &["claude-sonnet-5"])
+        };
+        let models = SubAgents::Only(vec!["claude-sonnet-5".to_owned()]);
+        let permissions = |spec: &SessionSpec| settings(spec, cwd, &models)["permissions"].clone();
+
+        // Full access: no permission checks, no sandbox, nothing that asks; the model list
+        // still holds.
+        let full = with(Access::Full, false);
+        assert_eq!(permission_mode(&full), "bypassPermissions");
+        assert!(permissions(&full).get("ask").is_none());
+        assert!(
+            permissions(&full)
+                .get("disableBypassPermissionsMode")
+                .is_none()
+        );
+        assert_eq!(
+            settings(&full, cwd, &models)["sandbox"]["enabled"],
+            json!(false)
+        );
+        assert_eq!(
+            settings(&full, cwd, &models)["availableModels"],
+            json!(["claude-sonnet-5"])
+        );
+
+        // Approve for me: auto mode decides what leaves the sandbox.
+        let auto = with(scoped.clone(), true);
+        assert_eq!(permission_mode(&auto), "auto");
+        assert!(permissions(&auto).get("ask").is_none());
+        assert_eq!(
+            permissions(&auto)["disableBypassPermissionsMode"],
+            json!("disable")
+        );
+
+        // Ask for approval: leaving the sandbox asks.
+        let ask = with(scoped, false);
+        assert_eq!(permission_mode(&ask), "acceptEdits");
+        assert_eq!(
+            permissions(&ask)["ask"],
+            json!(["Bash(dangerouslyDisableSandbox:true)"])
+        );
+        assert_eq!(permission_mode(&with(Access::ReadOnly, true)), "default");
     }
 
     #[test]
@@ -1550,7 +1609,6 @@ mod tests {
         );
         let unlimited = SessionSpec {
             allowed_models: None,
-            unattended: false,
             tools: ToolSet::Default,
             ..spec(cwd, &[])
         };

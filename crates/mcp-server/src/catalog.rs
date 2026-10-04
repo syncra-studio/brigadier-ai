@@ -96,8 +96,10 @@ against the user's goal before any phase starts; nothing beyond the goal belongs
 the review asks for changes, propose the revision with `revises` and one response per \
 finding.";
 
-const REQUEST_APPROVAL: &str = "Ask the user to approve an action Brigadier cannot see on its \
-own. Returns at once; the decision arrives later as a message.";
+const REQUEST_APPROVAL: &str = "Ask the user to approve what only they may decide: spending \
+money, using credentials or the keychain, or destroying something outside this session's own \
+work. Not for pushes, pull requests or deploys the user asked for (just do those) nor for work \
+inside the session. Returns at once; the decision arrives later as a message.";
 
 const ACCEPT_TASK: &str = "Land a finished `implement` or `merge` task as one commit on the \
 session's branch, with your commit message. Call it after reading the task's report. Brigadier \
@@ -177,7 +179,6 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
         }),
         Role::BrainJob { .. } => JOB.get_or_init(job_tools),
         Role::Chat { .. } => CHAT.get_or_init(chat_tools),
-        Role::Gate { .. } => &[],
     }
 }
 
@@ -379,7 +380,6 @@ pub fn parse_call(
             )?))),
             _ => Err(unknown()),
         },
-        Role::Gate { .. } => Err(unknown()),
     }
 }
 

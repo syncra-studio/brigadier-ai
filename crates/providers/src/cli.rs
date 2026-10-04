@@ -96,35 +96,13 @@ impl CliEnv {
     }
 }
 
-/// Adds a session's extra environment to a spawn spec and puts its directories first on PATH.
-pub fn apply_session_env(
-    spec: &mut SpawnSpec,
-    env: &[(String, String)],
-    unset: &[String],
-    path_prepend: &[PathBuf],
-) {
+/// Adds a session's extra environment to a spawn spec.
+pub fn apply_session_env(spec: &mut SpawnSpec, env: &[(String, String)], unset: &[String]) {
     spec.env
         .retain(|(key, _)| !unset.iter().any(|name| key == OsStr::new(name)));
     for (name, value) in env {
         spec.env.retain(|(key, _)| key != OsStr::new(name));
         spec.env.push((name.into(), value.into()));
-    }
-    if path_prepend.is_empty() {
-        return;
-    }
-    let current = spec
-        .env
-        .iter()
-        .find(|(key, _)| key == OsStr::new("PATH"))
-        .map(|(_, value)| value.clone())
-        .unwrap_or_default();
-    let mut dirs: Vec<PathBuf> = path_prepend.to_vec();
-    dirs.extend(
-        std::env::split_paths(&current).filter(|dir| !path_prepend.iter().any(|own| own == dir)),
-    );
-    if let Ok(path) = std::env::join_paths(dirs) {
-        spec.env.retain(|(key, _)| key != OsStr::new("PATH"));
-        spec.env.push(("PATH".into(), path));
     }
 }
 

@@ -9,7 +9,6 @@
 //!
 //! - [`Role::Orchestrator`] may call the orchestrator tools ([`OrchestratorCall`]).
 //! - [`Role::Worker`] may call the worker tools ([`WorkerCall`]) for its own task.
-//! - [`Role::Gate`] may only ask whether an outward command may run ([`ToolHost::ask_outward`]).
 //!
 //! The MCP server (`crates/mcp-server`) maps MCP tool calls onto these types; the session
 //! manager implements [`ToolHost`].
@@ -36,11 +35,6 @@ pub enum Role {
         /// It checks a change or plan in a gate: it decides from what it was given and its
         /// own evidence alone, so it has no `ask_orchestrator`.
         checks: bool,
-    },
-    /// The outward-command gate of a CLI session: it can only ask.
-    Gate {
-        conversation_id: ConversationId,
-        task_id: Option<TaskId>,
     },
     /// A Brain job (skeleton pass, enrichment) of a project: it reads and records nodes.
     BrainJob {
@@ -371,7 +365,8 @@ pub struct ProposePlan {
     pub responses: Vec<String>,
 }
 
-/// `request_approval`: ask the user to approve an action Brigadier cannot see otherwise.
+/// `request_approval`: ask the user to approve what only they may decide (money, credentials,
+/// destroying something outside the session's own work).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RequestApproval {
@@ -776,26 +771,13 @@ impl ToolReply {
     }
 }
 
-/// The user's decision on an outward command.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GateAnswer {
-    Allow,
-    Deny { message: String },
-}
-
-/// Answers tool calls and gate questions. Implemented by the session manager.
+/// Answers tool calls. Implemented by the session manager.
 pub trait ToolHost: Send + Sync {
     /// The role of a live grant; `None` for an unknown or revoked grant.
     fn role(&self, grant: &str) -> Option<Role>;
 
     /// Runs a tool call. The host re-checks the grant and that its role may make this call.
     fn call(&self, grant: &str, call: ToolCall) -> BoxFuture<'_, ToolReply>;
-
-    /// Asks the user whether an outward command (PLAN §5 always-ask list) may run, and waits
-    /// for the answer. `argv` is the full command line as the program received it, `cwd` the
-    /// directory it runs in; an approval is bound to exactly these.
-    fn ask_outward(&self, grant: &str, argv: Vec<String>, cwd: String)
-    -> BoxFuture<'_, GateAnswer>;
 }
 
 #[cfg(test)]

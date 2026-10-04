@@ -1,9 +1,8 @@
 //! The wire protocol between the app and `brigadierd`.
 //!
 //! Frames are length-prefixed JSON (see [`crate::frame`]). The first client frame must be a
-//! [`ClientFrame::Hello`] carrying the per-launch token, or one of the two grant-scoped frames
-//! CLI sessions use ([`ClientFrame::Mcp`], [`ClientFrame::Gate`]); anything else closes the
-//! connection.
+//! [`ClientFrame::Hello`] carrying the per-launch token, or the grant-scoped frame CLI sessions
+//! use ([`ClientFrame::Mcp`]); anything else closes the connection.
 //! Requests carry a client-chosen id echoed on the response. Responses reuse the request's
 //! `method` tag, so TypeScript can pair them with `Extract<Response, { method: M }>`.
 
@@ -79,14 +78,6 @@ pub enum ClientFrame {
     /// frame, a refused grant just closes the connection.
     Mcp {
         grant: String,
-    },
-    /// First and only frame of an outward-command gate check: may `argv` run in `cwd`? The
-    /// grant must be a gate grant. Answered with one [`GateVerdict`].
-    Gate {
-        grant: String,
-        /// The full command line as the program received it (`argv[0]` included).
-        argv: Vec<String>,
-        cwd: String,
     },
 }
 
@@ -1372,16 +1363,6 @@ pub enum DictationUpdate {
         dictation_id: String,
         message: String,
     },
-}
-
-/// The daemon's only frame on a gate connection: the answer to its [`ClientFrame::Gate`]
-/// check. A gate connection carries nothing else, so this is not a [`ServerFrame`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GateVerdict {
-    pub allow: bool,
-    /// Why the command was denied, for the program's stderr.
-    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

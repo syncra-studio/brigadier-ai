@@ -1,32 +1,25 @@
-//! Cards the user answers: approvals (CLI requests, outward commands, landings, finishing a
-//! session, orchestrator actions), questions and plans.
+//! Cards the user answers: approvals (CLI requests, landings, finishing a session,
+//! orchestrator actions), questions and plans.
 //!
 //! A card is an event on the conversation stream; whoever waits for its answer holds a
 //! waiter. Answering a card is a UI-only request: no grant can reach it. Cards still pending
 //! when the daemon starts are expired, since nobody waits for them any more.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
 
+use brigadier_providers::policy::Similar;
 use brigadier_providers::{ApprovalDecision, Decider, ProviderEvent};
 use tokio::sync::oneshot;
 
 use super::SessionManager;
 use super::conversation::Envelope;
 use crate::model::{ConversationId, DomainEvent, Setup};
-use crate::tools::GateAnswer;
 use crate::work::{
     Approval, ApprovalSubject, CardId, CardState, InjectionKind, Plan, PlanApprover, PlanState,
     Question, QuestionKind, TaskId,
 };
 use crate::{Error, Result, now_ms};
-
-/// How long an outward command waits for the user before it is declined.
-const GATE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-/// How long a one-shot pass for an already-approved command stays valid.
-const PASS_TTL_MS: i64 = 2 * 60 * 1000;
 
 /// What a waiting card receives.
 #[derive(Debug, Clone)]
@@ -36,19 +29,12 @@ pub(crate) enum CardAnswer {
     Answered,
 }
 
-/// A command the user already allowed in the CLI's own prompt: the gate lets it through
-/// once, so the user is not asked twice.
-struct Pass {
-    task_id: Option<TaskId>,
-    argv: Vec<String>,
-    cwd: String,
-    expires_ms: i64,
-}
-
 #[derive(Default)]
 pub(crate) struct Waiters {
     cards: Mutex<HashMap<CardId, Vec<oneshot::Sender<CardAnswer>>>>,
-    passes: Mutex<Vec<Pass>>,
+    /// What the user allowed with "Allow similar commands", per conversation: every worker of
+    /// the conversation, a successor after a handoff included, gets it without asking.
+    similar: Mutex<HashMap<ConversationId, Similar>>,
 }
 
 impl Waiters {
@@ -86,25 +72,59 @@ impl Waiters {
         }
     }
 
-    fn add_pass(&self, pass: Pass) {
-        let mut passes = self.passes.lock().unwrap_or_else(|p| p.into_inner());
-        let now = now_ms();
-        passes.retain(|pass| pass.expires_ms > now);
-        passes.push(pass);
+    /// Whether the user already allowed something similar to `request` in the conversation.
+    pub(crate) fn similar_allowed(
+        &self,
+        conversation_id: &ConversationId,
+        request: &brigadier_providers::ApprovalRequest,
+    ) -> bool {
+        self.similar
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(conversation_id)
+            .is_some_and(|similar| similar.covers(request))
     }
 
-    fn consume_pass(&self, task_id: &Option<TaskId>, argv: &[String], cwd: &str) -> bool {
-        let mut passes = self.passes.lock().unwrap_or_else(|p| p.into_inner());
-        let now = now_ms();
-        passes.retain(|pass| pass.expires_ms > now);
-        let found = passes.iter().position(|pass| {
-            &pass.task_id == task_id && pass.cwd == cwd && same_command(&pass.argv, argv)
-        });
-        found.map(|index| passes.remove(index)).is_some()
+    /// Allows requests similar to `request` for the rest of the conversation.
+    pub(crate) fn allow_similar(
+        &self,
+        conversation_id: &ConversationId,
+        request: &brigadier_providers::ApprovalRequest,
+    ) {
+        self.similar
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry(conversation_id.clone())
+            .or_default()
+            .allow(request);
     }
 }
 
 impl SessionManager {
+    /// The conversation's "Allow similar commands" grants, to carry over (a worker handoff
+    /// keeps them anyway: they belong to the conversation, not to a CLI session).
+    pub fn snapshot_grants(&self, conversation_id: &ConversationId) -> Similar {
+        self.waiters
+            .similar
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(conversation_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Puts back grants taken with [`Self::snapshot_grants`], merged into what the
+    /// conversation has now.
+    pub fn restore_grants(&self, conversation_id: &ConversationId, grants: Similar) {
+        self.waiters
+            .similar
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry(conversation_id.clone())
+            .or_default()
+            .merge(grants);
+    }
+
     /// Opens an approval card and returns a receiver for its answer.
     pub(crate) async fn open_approval(
         &self,
@@ -200,34 +220,6 @@ impl SessionManager {
                     .task_id
                     .clone()
                     .ok_or_else(|| Error::Invalid("the card has no task".into()))?;
-                if !matches!(decision, ApprovalDecision::Deny { .. })
-                    && let Some(command) = &request.command
-                    && brigadier_providers::policy::is_outward(command)
-                {
-                    // The CLI asked (its own ask rule); the gate must not ask again, for any
-                    // outward command in the line, as the gate sees it (`cd repo && git push
-                    // 2>&1 | tail` reaches it as `git push` in `repo`). Claude names no cwd: its
-                    // commands run where the worker runs.
-                    let cwd = match &request.cwd {
-                        Some(cwd) => Some(PathBuf::from(cwd)),
-                        None => match self.existing_task_live(&task_id) {
-                            Some(live) => live.cwd().await,
-                            None => None,
-                        },
-                    };
-                    for (dir, argv) in brigadier_providers::policy::outward_commands(command) {
-                        let cwd = match dir {
-                            None => cwd.clone(),
-                            Some(dir) => moved_to(cwd.as_deref(), &dir),
-                        };
-                        self.waiters.add_pass(Pass {
-                            task_id: Some(task_id.clone()),
-                            argv,
-                            cwd: cwd.map(|cwd| resolved(&cwd)).unwrap_or_default(),
-                            expires_ms: now_ms() + PASS_TTL_MS,
-                        });
-                    }
-                }
                 self.answer_worker_approval(&task_id, request, decision.clone())
                     .await?;
             }
@@ -264,83 +256,6 @@ impl SessionManager {
         self.waiters
             .answer(&card_id, CardAnswer::Decision(decision.clone()));
         Ok(())
-    }
-
-    /// Asks the user whether an outward command may run (the gate), bound to exactly this
-    /// command line and folder.
-    pub(crate) async fn ask_outward_command(
-        &self,
-        conversation_id: ConversationId,
-        task_id: Option<TaskId>,
-        argv: Vec<String>,
-        cwd: String,
-    ) -> GateAnswer {
-        // An overnight run: nobody is there to ask, and no earlier pass counts.
-        if let Some(message) = self
-            .unattended_outward(&conversation_id, task_id.as_ref(), &argv)
-            .await
-        {
-            return GateAnswer::Deny { message };
-        }
-        if self
-            .waiters
-            .consume_pass(&task_id, &argv, &resolved(Path::new(&cwd)))
-        {
-            return GateAnswer::Allow;
-        }
-        let subject = ApprovalSubject::OutwardCommand {
-            argv: argv.clone(),
-            cwd,
-        };
-        let (approval, rx) = match self
-            .open_approval(&conversation_id, task_id.clone(), subject)
-            .await
-        {
-            Ok(opened) => opened,
-            Err(err) => {
-                return GateAnswer::Deny {
-                    message: format!("Brigadier could not ask you: {err}"),
-                };
-            }
-        };
-        if let Some(task_id) = &task_id {
-            self.set_task_blocked(
-                task_id,
-                Some(format!("Waiting for approval: {}", argv.join(" "))),
-            )
-            .await;
-        }
-        let answer = tokio::time::timeout(GATE_TIMEOUT, rx).await;
-        if let Some(task_id) = &task_id {
-            self.set_task_blocked(task_id, None).await;
-        }
-        match answer {
-            Ok(Ok(CardAnswer::Decision(
-                ApprovalDecision::Allow | ApprovalDecision::AllowSimilar,
-            ))) => GateAnswer::Allow,
-            Ok(Ok(CardAnswer::Decision(ApprovalDecision::Deny { message }))) => GateAnswer::Deny {
-                message: if message.trim().is_empty() {
-                    "you declined this command".into()
-                } else {
-                    format!("you declined this command: {message}")
-                },
-            },
-            Ok(Ok(CardAnswer::Answered)) | Ok(Err(_)) => GateAnswer::Deny {
-                message: "the approval was withdrawn".into(),
-            },
-            Err(_) => {
-                self.settle_approval(
-                    &approval,
-                    CardState::Expired {
-                        reason: "Nobody answered in 15 minutes.".into(),
-                    },
-                )
-                .await;
-                GateAnswer::Deny {
-                    message: "nobody answered the approval in 15 minutes".into(),
-                }
-            }
-        }
     }
 
     /// Opens a question card for the user.
@@ -653,62 +568,7 @@ impl SessionManager {
     }
 }
 
-/// A folder as a pass is bound to it: resolved through symlinks (`/tmp` is `/private/tmp` on
-/// macOS), so the CLI's spelling and the gate's `getcwd()` compare equal.
-fn resolved(path: &Path) -> String {
-    path.canonicalize()
-        .unwrap_or_else(|_| path.to_owned())
-        .to_string_lossy()
-        .into_owned()
-}
-
-/// The folder `cd <dir>` moves to from `cwd`; `None` when it can't be told (`cd -`, or a
-/// relative folder from an unknown one).
-fn moved_to(cwd: Option<&Path>, dir: &str) -> Option<PathBuf> {
-    let home = || std::env::var_os("HOME").map(PathBuf::from);
-    if dir == "~" {
-        home()
-    } else if let Some(rest) = dir.strip_prefix("~/") {
-        home().map(|home| home.join(rest))
-    } else if dir == "-" {
-        None
-    } else if Path::new(dir).is_absolute() {
-        Some(PathBuf::from(dir))
-    } else {
-        cwd.map(|cwd| cwd.join(dir))
-    }
-}
-
 fn answer_is_yes(answer: &str) -> bool {
     let answer = answer.trim().to_lowercase();
     answer.starts_with("yes") || answer.starts_with("include") || answer.starts_with("show")
-}
-
-/// Whether two command lines are the same command (the program compared by file name).
-fn same_command(a: &[String], b: &[String]) -> bool {
-    let program = |argv: &[String]| {
-        argv.first()
-            .map(|p| p.rsplit('/').next().unwrap_or(p).to_owned())
-    };
-    a.len() == b.len() && program(a) == program(b) && a[1..] == b[1..]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_cd_in_the_line_moves_the_pass_to_its_folder() {
-        let cwd = Path::new("/work/repo");
-        assert_eq!(
-            moved_to(Some(cwd), "../other"),
-            Some(PathBuf::from("/work/repo/../other"))
-        );
-        assert_eq!(moved_to(Some(cwd), "/abs"), Some(PathBuf::from("/abs")));
-        assert_eq!(moved_to(None, "sub"), None);
-        assert_eq!(moved_to(Some(cwd), "-"), None);
-        if let Some(home) = std::env::var_os("HOME") {
-            assert_eq!(moved_to(None, "~/x"), Some(PathBuf::from(home).join("x")));
-        }
-    }
 }

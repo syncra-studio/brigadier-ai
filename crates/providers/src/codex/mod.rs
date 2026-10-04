@@ -4,14 +4,13 @@
 //! server requests Brigadier answers. A command Codex asks about runs outside its sandbox once
 //! approved, so every command and file-change approval is an escalation:
 //!
-//! - Workspace (and full) access use `on-request`: commands run inside the sandbox without
-//!   asking; Codex asks only to leave it, and that goes to the user.
+//! - Full access uses `never` with no sandbox: Codex never asks.
+//! - Workspace and scoped access use `on-request`: commands run inside the sandbox without
+//!   asking; Codex asks only to leave it. With [`SessionSpec::auto_review`] (Approve for me)
+//!   Codex's own auto-reviewer answers those requests (`approvalsReviewer: auto_review`) and
+//!   nothing reaches Brigadier; otherwise they go to the user.
 //! - Read-only access uses `untrusted`: Codex asks before every command, and a read-only
 //!   session (such as an orchestrator) has all of them declined, so nothing runs.
-//!
-//! Codex has no per-session way to make an outward action such as `git push` ask while it runs
-//! inside the sandbox: its exec-policy rules load only from `~/.codex/rules` or from the
-//! `.codex/rules` of a project trusted in `~/.codex/config.toml`.
 //!
 //! The user's personal Codex setup stays out: plugins, apps, hooks, computer and browser use,
 //! memories and `notify` are switched off per process, and the MCP servers from their config are
@@ -217,12 +216,7 @@ impl Codex {
             .collect();
         spec.cwd = Some(cwd.to_owned());
         if let Some(session) = session {
-            crate::cli::apply_session_env(
-                &mut spec,
-                &session.env,
-                &session.unset_env,
-                &session.path_prepend,
-            );
+            crate::cli::apply_session_env(&mut spec, &session.env, &session.unset_env);
             spec.low_priority = session.low_priority;
         }
         let redactor = session.and_then(|session| session.redactor.clone());
@@ -511,7 +505,7 @@ impl Provider for Codex {
                 rpc,
                 shared,
                 access: spec.access.clone(),
-                unattended: spec.unattended,
+                auto_review: spec.auto_review,
                 profiled,
                 effort: spec.effort.clone(),
             });
@@ -661,7 +655,8 @@ async fn open_thread(
     };
     let cwd_text = Some(cwd.display().to_string());
     let sandbox = thread_sandbox(&spec.access);
-    let approval = Some(approval_policy(&spec.access, spec.unattended));
+    let approval = Some(approval_policy(&spec.access));
+    let reviewer = Some(reviewer(spec.auto_review));
     let instructions = spec.append_system_prompt.clone();
     // Always named: an omitted tier inherits the resumed thread's or the user's config.
     let service_tier = Some(if spec.fast { FAST_TIER } else { STANDARD_TIER }.to_owned());
@@ -675,6 +670,7 @@ async fn open_thread(
                         model: spec.model.clone(),
                         sandbox,
                         approval_policy: approval,
+                        approvals_reviewer: reviewer,
                         developer_instructions: instructions,
                         config: Some(config),
                         service_tier: service_tier.clone(),
@@ -697,6 +693,7 @@ async fn open_thread(
                         model: spec.model.clone(),
                         sandbox,
                         approval_policy: approval,
+                        approvals_reviewer: reviewer,
                         developer_instructions: instructions,
                         config: Some(config),
                         exclude_turns: Some(true),
@@ -719,6 +716,7 @@ async fn open_thread(
                         model: spec.model.clone(),
                         sandbox,
                         approval_policy: approval,
+                        approvals_reviewer: reviewer,
                         developer_instructions: instructions,
                         config: Some(config),
                         exclude_turns: Some(true),
@@ -1059,15 +1057,23 @@ impl<R> Profiled<R> {
     }
 }
 
-/// Under full access an overnight run's worker asks for every command Codex doesn't trust as
-/// read-only, so Brigadier judges each one (PLAN.md §10.8).
-fn approval_policy(access: &Access, unattended: bool) -> p::AskForApproval {
+/// When Codex asks: never under full access, to leave the sandbox otherwise, before every
+/// command when read-only.
+fn approval_policy(access: &Access) -> p::AskForApproval {
     match access {
         Access::ReadOnly => p::AskForApproval::Untrusted,
-        Access::Full if unattended => p::AskForApproval::Untrusted,
-        Access::Workspace { .. } | Access::Full | Access::Scoped { .. } => {
-            p::AskForApproval::OnRequest
-        }
+        Access::Full => p::AskForApproval::Never,
+        Access::Workspace { .. } | Access::Scoped { .. } => p::AskForApproval::OnRequest,
+    }
+}
+
+/// Who answers Codex's approval requests: its own auto-reviewer, or Brigadier (and through it
+/// the user). Always named, so a reviewer set in the user's own config never applies.
+fn reviewer(auto_review: bool) -> p::ApprovalsReviewer {
+    if auto_review {
+        p::ApprovalsReviewer::AutoReview
+    } else {
+        p::ApprovalsReviewer::User
     }
 }
 
@@ -1426,8 +1432,8 @@ pub struct CodexSession {
     rpc: Arc<Rpc>,
     shared: Arc<Shared>,
     access: Access,
-    /// An overnight run's worker ([`SessionSpec::unattended`]).
-    unattended: bool,
+    /// [`SessionSpec::auto_review`].
+    auto_review: bool,
     /// Its sandbox is a permission profile set when the thread opened.
     profiled: bool,
     effort: Option<String>,
@@ -1484,7 +1490,8 @@ impl CodexSession {
                     input: Self::input(input)?,
                     effort,
                     sandbox_policy: (!self.profiled).then(|| sandbox_policy(&self.access)),
-                    approval_policy: Some(approval_policy(&self.access, self.unattended)),
+                    approval_policy: Some(approval_policy(&self.access)),
+                    approvals_reviewer: Some(reviewer(self.auto_review)),
                     ..Default::default()
                 },
             )
@@ -1786,13 +1793,12 @@ mod tests {
             env: Vec::new(),
             unset_env: Vec::new(),
             low_priority: false,
-            path_prepend: Vec::new(),
             record_to: None,
             redactor: None,
             owned_cwd: false,
             auto_compact: true,
             allowed_models,
-            unattended: false,
+            auto_review: false,
         }
     }
 

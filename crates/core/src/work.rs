@@ -76,7 +76,7 @@ pub enum RepoAccess {
 }
 
 /// A worker's sandbox, set per task. Every worker also has a writable scratch folder outside
-/// the repository, and the outward-command gate at every permission level.
+/// the repository.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerAccess {
@@ -740,7 +740,8 @@ pub enum CardState {
 pub enum ApprovalSubject {
     /// A worker's CLI asks for a permission Brigadier may not grant on the user's behalf.
     Cli { request: ApprovalRequest },
-    /// An outward command stopped by the command gate, bound to exactly this argv and cwd.
+    /// An outward command stopped by the command gate of earlier versions. Only in recorded
+    /// conversations: nothing asks this way any more.
     OutwardCommand { argv: Vec<String>, cwd: String },
     /// Ask for approval: land a reviewed task on its branch.
     Landing {

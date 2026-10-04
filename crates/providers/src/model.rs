@@ -352,8 +352,9 @@ pub struct ApprovalRequest {
     pub escalation: bool,
     /// The tool input as JSON text, for display.
     pub input: Option<String>,
-    /// Set when the user may allow this exact command for the rest of the CLI session
-    /// ([`ApprovalDecision::AllowSimilar`]): the command as shown.
+    /// Set when the user may allow similar requests for the rest of the conversation
+    /// ([`ApprovalDecision::AllowSimilar`]): what that covers, as shown (a command's first
+    /// words, such as `git push`, or a network host). See [`crate::policy::Similar`].
     #[serde(default)]
     pub grant: Option<String>,
 }
@@ -367,8 +368,9 @@ pub struct ApprovalRequest {
 )]
 pub enum ApprovalDecision {
     Allow,
-    /// Allow, and allow the same command again for the rest of the CLI session without
-    /// asking ("Don't ask again for this command"). Never persisted.
+    /// Allow, and allow similar requests (the same first words of a command, the same network
+    /// host) for the rest of the conversation without asking ("Allow similar commands").
+    /// Never persisted.
     AllowSimilar,
     Deny {
         message: String,
@@ -584,8 +586,7 @@ pub enum ProviderEvent {
     },
 }
 
-/// What a session is allowed to do. The CLI's own OS sandbox enforces it; the always-ask list
-/// ([`crate::policy::ALWAYS_ASK`]) applies at every level.
+/// What a session is allowed to do. The CLI's own OS sandbox enforces it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
     tag = "type",
@@ -614,7 +615,7 @@ pub enum Access {
         network: bool,
         #[ts(as = "Vec<String>")]
         deny_read: Vec<PathBuf>,
-        /// Unix sockets it may connect to (Brigadier's, for the command gate).
+        /// Unix sockets it may connect to.
         #[ts(as = "Vec<String>")]
         unix_sockets: Vec<PathBuf>,
     },
@@ -833,8 +834,7 @@ pub struct SessionSpec {
     /// MCP servers for the session. Only these are loaded.
     pub mcp_servers: Vec<McpServer>,
     pub tools: ToolSet,
-    /// Extra environment for the CLI and everything it starts (the process tag, the command
-    /// gate).
+    /// Extra environment for the CLI and everything it starts (the process tag, TMPDIR).
     pub env: Vec<(String, String)>,
     /// Variables taken out of the CLI's environment, and so out of everything it starts (an
     /// overnight run's workers don't get the user's tokens or SSH agent).
@@ -842,8 +842,6 @@ pub struct SessionSpec {
     /// Runs the CLI, and everything it starts, at low OS priority (an overnight run's
     /// workers: their builds yield to the user's own work).
     pub low_priority: bool,
-    /// Directories put first on the CLI's PATH (the command gate's shims).
-    pub path_prepend: Vec<PathBuf>,
     /// Records the raw stdio exchange to this file (JSONL), for replay fixtures.
     pub record_to: Option<PathBuf>,
     /// Secret values (the project's secret files, the session's grants) replaced in every
@@ -862,10 +860,12 @@ pub struct SessionSpec {
     /// limit (raw sessions, orchestrators, Chats). Claude allows exactly these, or runs without
     /// its Agent tool when it can't; Codex runs without sub-agents.
     pub allowed_models: Option<AllowedModels>,
-    /// An overnight run's worker (PLAN.md §10.8): nobody is there to ask, so every command
-    /// that isn't plainly read-only reaches Brigadier's approval route, under full access
-    /// too, and the never-list is judged there whatever the command's spelling.
-    pub unattended: bool,
+    /// The CLI's own reviewer settles requests to go beyond a sandboxed session's access
+    /// (Approve for me): Claude runs in its auto mode, Codex with its auto-review. What it
+    /// can't settle is declined to the model, which works around it or reports it. Otherwise
+    /// such requests reach Brigadier (Ask for approval). No effect under [`Access::Full`],
+    /// which never asks, or [`Access::ReadOnly`].
+    pub auto_review: bool,
 }
 
 /// The models a worker's own sub-agents may run on (PLAN.md §7): the router's eligible set for

@@ -28,7 +28,6 @@ mod fallback;
 pub mod fault;
 mod files;
 mod fork;
-mod gate;
 mod gates;
 mod git_actions;
 mod instructions;
@@ -75,7 +74,7 @@ use crate::model::{
 };
 use crate::runtime::{Runtime, Spawner};
 use crate::sessions::Origin;
-use crate::tools::{GateAnswer, Grants, Role, ToolCall, ToolHost, ToolReply};
+use crate::tools::{Grants, Role, ToolCall, ToolHost, ToolReply};
 use crate::work::{DiffStat, TaskId, TaskState, WorkerDiff};
 use crate::{Core, Error, Result};
 
@@ -92,9 +91,6 @@ use self::workers::TaskLive;
 pub struct ManagerConfig {
     /// The running `brigadierd`: CLIs start `brigadierd mcp` as their Brigadier MCP server.
     pub daemon_exe: PathBuf,
-    /// The outward-command gate's shim folder, put first on every worker's PATH. The daemon
-    /// creates it empty; the manager keeps it to the gated programs the user has.
-    pub gate_dir: Option<PathBuf>,
 }
 
 pub struct SessionManager {
@@ -477,7 +473,7 @@ impl SessionManager {
         self.data_dir.join(area).join(id)
     }
 
-    /// The IPC socket CLIs' sandboxes must be able to reach (the MCP bridge and gate).
+    /// The IPC socket CLIs' sandboxes must be able to reach (the MCP bridge).
     fn socket_path(&self) -> Option<PathBuf> {
         match &self.runtime.platform().paths().ipc_endpoint {
             brigadier_sandbox::IpcEndpoint::UnixSocket(path) => Some(path.clone()),
@@ -598,31 +594,6 @@ impl ToolHost for SessionManager {
                     manager.chat_call(conversation_id, call).await
                 }
                 _ => ToolReply::error("This tool is not available to this session."),
-            }
-        })
-    }
-
-    fn ask_outward(
-        &self,
-        grant: &str,
-        argv: Vec<String>,
-        cwd: String,
-    ) -> BoxFuture<'_, GateAnswer> {
-        let role = self.grants.resolve(grant);
-        let manager = self.arc();
-        Box::pin(async move {
-            match role {
-                Some(Role::Gate {
-                    conversation_id,
-                    task_id,
-                }) => {
-                    manager
-                        .ask_outward_command(conversation_id, task_id, argv, cwd)
-                        .await
-                }
-                _ => GateAnswer::Deny {
-                    message: "Brigadier does not know this session, so it cannot ask you.".into(),
-                },
             }
         })
     }

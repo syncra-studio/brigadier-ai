@@ -9,7 +9,6 @@
 pub(crate) mod admission;
 mod conductor;
 pub mod directives;
-pub(crate) mod git_guard;
 mod messages;
 mod phase_gates;
 pub(crate) mod policy;
