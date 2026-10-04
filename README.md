@@ -88,8 +88,8 @@ pnpm tauri:dev          # builds and stages brigadierd, starts Vite and the app
 ```
 
 `pnpm tauri:dev` and `pnpm tauri:debug-app` (a debug `Brigadier Dev.app`) run as
-`ai.brigadier.dev`, so they never hand a launch to an installed Brigadier. Give them their own
-data with `BRIGADIER_DATA_DIR`.
+`ai.brigadier.dev`, so they never hand a launch to an installed Brigadier. Any debug build
+keeps its data in `/tmp/brigadier-dev` unless `BRIGADIER_DATA_DIR` names another directory.
 
 The app launches `brigadierd` detached; closing the window keeps both running in the menu bar.
 Quit from the menu-bar item (or Cmd+Q) to stop the daemon too.

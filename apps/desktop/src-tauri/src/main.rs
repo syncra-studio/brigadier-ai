@@ -465,6 +465,16 @@ async fn smoke_finish(
     Ok(report)
 }
 
+/// Where a debug build keeps its data when it is given no data directory: never the installed
+/// app's.
+fn debug_data_dir() -> std::path::PathBuf {
+    if cfg!(unix) {
+        std::path::PathBuf::from("/tmp/brigadier-dev")
+    } else {
+        std::env::temp_dir().join("brigadier-dev")
+    }
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -498,6 +508,12 @@ fn main() {
         } else {
             None
         }
+    });
+    // Nor does a debug build use the installed app's data: without a data directory of its
+    // own it gets a throwaway one.
+    let data_dir = data_dir.or_else(|| {
+        (cfg!(debug_assertions) && std::env::var_os(brigadier_sandbox::DATA_DIR_ENV).is_none())
+            .then(debug_data_dir)
     });
     let platform = match brigadier_sandbox::native(PlatformOptions { data_dir }) {
         Ok(platform) => platform,
