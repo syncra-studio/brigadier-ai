@@ -15,7 +15,9 @@
 //!   waiting while other work goes on. It is over when the user clicks Done (the orchestrator
 //!   hears it), or without them: when its card settles, its task is stopped or reports again
 //!   without it, the change it held lands or a later round of its checks no longer lists it,
-//!   or the user edits its request or asks for a new answer.
+//!   or the user edits its request or asks for a new answer. In an overnight run, only what a
+//!   done-when criterion needs is listed, and marking an item done after its phase settled
+//!   or its run ended wakes nobody.
 
 use std::collections::HashSet;
 
@@ -395,26 +397,48 @@ impl SessionManager {
                 task_id: Some(task_id),
                 ..
             } => number(task_id)
-                .map(|n| format!(" (the overnight run refused it for task-{n})"))
+                .map(|n| format!(" (declined by the overnight rules for task-{n})"))
                 .unwrap_or_default(),
             WaitingSource::Card { .. }
             | WaitingSource::Orchestrator
             | WaitingSource::Run { task_id: None, .. } => String::new(),
         };
-        self.deliver_for(
-            &conversation_id,
-            Envelope {
-                kind: InjectionKind::Decision,
-                label: "user did".into(),
-                task_id: None,
-                text: format!("[decision] The user did: {}{next}", item.what),
-            },
-            item.request_id.clone(),
-        )
-        .await;
+        // Clearing an item of a run that ended, or of a phase that settled, wakes nobody:
+        // nothing is left to do with it (user decision, 2026-10-04).
+        if !over_for_the_lead(&board, &item) {
+            self.deliver_for(
+                &conversation_id,
+                Envelope {
+                    kind: InjectionKind::Decision,
+                    label: "user did".into(),
+                    task_id: None,
+                    text: format!("[decision] The user did: {}{next}", item.what),
+                },
+                item.request_id.clone(),
+            )
+            .await;
+        }
         self.settle_requests(&conversation_id).await;
         Ok(())
     }
+}
+
+/// Whether the lead has nothing left to do with an item the user marked done: its overnight
+/// run ended (or is writing its report), or the phase it was asked for settled.
+fn over_for_the_lead(board: &Board, item: &WaitingItem) -> bool {
+    let run = waiting_run(&item.source, item.request_id.as_deref(), board)
+        .and_then(|run| board.runs.get(&run));
+    let Some(run) = run else {
+        return false;
+    };
+    if run.state == crate::overnight::OvernightState::Reporting || !run.state.is_active() {
+        return true;
+    }
+    item.request_id.as_deref().is_some_and(|request| {
+        run.phases
+            .iter()
+            .any(|phase| phase.request_id.as_deref() == Some(request) && phase.is_settled())
+    })
 }
 
 /// Whether a card still waits for the user.
@@ -1109,6 +1133,46 @@ mod tests {
             3,
         );
         assert_eq!(reconciled_waits(&board, 8, ids()), (Vec::new(), Vec::new()));
+    }
+
+    #[test]
+    fn clearing_an_item_of_a_settled_phase_or_an_ended_run_wakes_nobody() {
+        use crate::overnight::{OvernightPhase, OvernightRun, OvernightState, PhaseState};
+        let mut phase = OvernightPhase::new(1, "Measure", "", &["It is measured.".into()], &[]);
+        let mut run = OvernightRun::for_test(ConversationId("c".into()), "Speed", Vec::new());
+        let request = format!("run-{}-phase-1", run.id.short());
+        phase.request_id = Some(request.clone());
+        phase.state = PhaseState::Running;
+        run.phases = vec![phase];
+        let mut board = Board::default();
+        board.runs.insert(run.id.clone(), run.clone());
+        let mut ask = item(
+            "w1",
+            WaitingSource::Run {
+                run_id: run.id.clone(),
+                task_id: None,
+            },
+            "Set account_id.",
+        );
+        ask.request_id = Some(request);
+        // Its phase still works: the lead hears it.
+        assert!(!over_for_the_lead(&board, &ask));
+        // The phase settled: nobody.
+        run.phases[0].state = PhaseState::Partial;
+        board.runs.insert(run.id.clone(), run.clone());
+        assert!(over_for_the_lead(&board, &ask));
+        // The run writes its report, or finished: nobody either.
+        run.phases[0].state = PhaseState::Running;
+        for state in [OvernightState::Reporting, OvernightState::Finished] {
+            run.state = state;
+            board.runs.insert(run.id.clone(), run.clone());
+            assert!(over_for_the_lead(&board, &ask), "{state:?}");
+        }
+        // An item of no run always reaches the lead.
+        assert!(!over_for_the_lead(
+            &board,
+            &item("w2", WaitingSource::Orchestrator, "Sign in to npm.")
+        ));
     }
 
     #[test]

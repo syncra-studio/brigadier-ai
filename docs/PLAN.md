@@ -708,7 +708,7 @@ Cross-vendor independence is a required gate here. If an eligible other vendor i
 
 ### 10.7 Blocks, questions, quotas and worker admission
 
-Start grants authority to answer questions from the plan/Rules, approve reviewed internal plans and land passing work on the run branch. Record each answer/action in **Decided for you** with a reason. An unsettled choice goes to **Waiting on you** with the exact ask; never invent an account ID, credential or user approval. Nighttime escalation is a durable item, not a blocking pop-up.
+Start grants authority to answer questions from the plan/Rules, approve reviewed internal plans and land passing work on the run branch. Record each answer/action in **Decided for you** with a reason. An unsettled choice goes to **Waiting on you** with the exact ask; never invent an account ID, credential or user approval. Nighttime escalation is a durable item, not a blocking pop-up. **During a run (user decision, 2026-10-04), an item goes to Waiting on you only when the worker says its done-when can't be met without the user;** anything else that got in the way (a declined command, an optional check that couldn't run) goes, grouped, into the report's **What got in the way**. Marking an item done after its phase settled or its run ended wakes nobody.
 
 On a user-only need, skip/stub the affected portion through an environment variable/config placeholder and finish independent work first. The fresh judge marks the phase partial when some criteria were met, or blocked when no usable result can be completed. It assesses the next selected phase's dependencies: independent → proceed with a recorded reason; dependent → wind down and notify immediately, such as “Stopped early at 02:10: phase 2 needs you”. Answering Waiting wakes dependent work during an active run; a finished run resumes through Continue. The answer does not itself approve a prohibited action.
 
@@ -783,7 +783,7 @@ The first three lines say the outcome, where the work is, and what needs the use
 - Per phase: verified/partial/blocked/skipped, every done-when criterion and how it was checked, actual commands/actions and evidence links, full-phase cross-vendor findings and what changed or why a finding was declined.
 - Commits from the recorded start through the actual run tip, including which tip is fully verified and which later commits belong to partial work. Include base/branch and clean-handoff locations.
 - **Decided for you:** each decision and its reason, including moving past an independent block or answering a question from the Rules.
-- **Waiting on you:** exact asks, affected work and how answering/Continue resumes it. No vague “needs credentials” without naming the config/environment variable or missing action.
+- **Waiting on you:** only what a done-when criterion needs from the user (§10.7): exact asks, affected work and how answering/Continue resumes it. No vague “needs credentials” without naming the config/environment variable or missing action.
 - Risks, failed/unrun/pre-existing checks, skipped scope, interruption gaps, deadline/Stop reason, late reporting, cleanup/notification delivery failures and remaining phases.
 - Provider-separated usage/window information retrieved from existing usage records and quota samples. Put worker/model lineage in **collapsed report details**, outside the three outcome lines and phase rows. Do not present an estimate as a subscription bill or mix providers into an unexplained total.
 
