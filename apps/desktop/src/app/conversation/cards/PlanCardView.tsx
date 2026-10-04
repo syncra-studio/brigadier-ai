@@ -2,7 +2,8 @@ import { memo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { Lines } from "@/app/conversation/cards/common";
-import { TASK_STATE_LABELS, WorkerChip } from "@/app/conversation/WorkerChip";
+import { taskState } from "@/app/conversation/rowWords";
+import { WorkerChip } from "@/app/conversation/WorkerChip";
 import { useAction } from "@/app/conversation/useAction";
 import { AgentPlan, type AgentPlanStepStatus } from "@/components/assistant-ui/elements/agent-plan";
 import { Badge } from "@/components/ui/badge";
@@ -89,7 +90,7 @@ function PlanReview({ plan }: { plan: Plan }) {
     <>
       {before && plan.responses.length > 0 && (
         <div className="flex flex-col gap-1">
-          <p className="text-muted-foreground flex flex-wrap items-center gap-1 text-xs">
+          <p className="text-muted-foreground text-xs">
             Round {before.round} reviewed by <Reviewers members={before.members} />:{" "}
             {count(plan.responses.length, "finding")}, {plan.responses.length - declined.length}{" "}
             accepted, {declined.length} declined.
@@ -165,12 +166,7 @@ function ReviewRound({ gate, notes }: { gate: Gate; notes: readonly string[] }) 
   const findings = gate.findings.map((finding) => `${finding.id}: ${finding.text}`);
   return (
     <div className="flex flex-col gap-1">
-      <p
-        className={cn(
-          "text-muted-foreground flex flex-wrap items-center gap-1 text-xs",
-          outcome === null && "shimmer",
-        )}
-      >
+      <p className={cn("text-muted-foreground text-xs", outcome === null && "shimmer")}>
         Round {gate.round}:{" "}
         {outcome === null ? (
           <>
@@ -195,7 +191,17 @@ function ReviewRound({ gate, notes }: { gate: Gate; notes: readonly string[] }) 
           </>
         )}
       </p>
-      {outcome === "passed" && notes.length > 0 && <Lines items={notes} />}
+      {outcome === "passed" && notes.length > 0 && (
+        // An approved plan's notes are for whoever carries it out: behind a disclosure.
+        <details className="text-muted-foreground text-xs">
+          <summary className="rounded-control cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring">
+            Review notes
+          </summary>
+          <div className="pt-1">
+            <Lines items={notes} />
+          </div>
+        </details>
+      )}
       {findings.length > 0 && <Lines items={findings} />}
       {(outcome === "noResult" || outcome === "unverified") && reasons.length > 0 && (
         <Lines items={reasons} />
@@ -212,7 +218,7 @@ export const PlanCardView = memo(function PlanCardView({ cardId }: { cardId: str
     useShallow((s) =>
       (plan?.steps ?? []).flatMap((step) => {
         const task = step.taskId ? s.board?.tasks[step.taskId] : undefined;
-        return [task?.id ?? null, task?.state ?? null];
+        return [task?.id ?? null, task?.state ?? null, task ? taskState(task).word : null, task?.number ?? null];
       }),
     ),
   );
@@ -240,17 +246,22 @@ export const PlanCardView = memo(function PlanCardView({ cardId }: { cardId: str
         </>
       }
       steps={plan.steps.map((step, index) => {
-        const taskId = steps[index * 2] as string | null | undefined;
-        const state = steps[index * 2 + 1] as TaskState | null | undefined;
+        const taskId = steps[index * 4] as string | null | undefined;
+        const state = steps[index * 4 + 1] as TaskState | null | undefined;
+        const word = steps[index * 4 + 2] as string | null | undefined;
+        const number = steps[index * 4 + 3] as number | null | undefined;
+        const status = stepStatus(state ?? undefined);
         return {
           key: `${index}`,
           title: step.title,
           detail: step.detail,
-          status: stepStatus(state ?? undefined),
-          statusLabel: state ? TASK_STATE_LABELS[state] : "Planned",
-          folded: state === "done" || state === "landed",
-          // The worker carrying it out; its state shows on hover and in the step's mark.
-          aside: taskId ? <WorkerChip taskId={taskId} /> : undefined,
+          status,
+          // The same words as the worker's row in the thread.
+          statusLabel: word ?? "Planned",
+          // Only the step at work shows its description; the rest open on demand.
+          folded: status !== "active",
+          // The worker carrying it out, named short: the step's title already says what it does.
+          aside: taskId ? <WorkerChip taskId={taskId} label={`task-${number}`} /> : undefined,
         };
       })}
       footer={

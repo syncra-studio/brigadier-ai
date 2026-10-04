@@ -1,8 +1,12 @@
 import { Moon } from "@openai/apps-sdk-ui/components/Icon";
-import { useRef, useState } from "react";
+import { useContext, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 
+import { phaseWord, runOver } from "@/app/conversation/phaseView";
+import { checkersOf, plainLine, taskState } from "@/app/conversation/rowWords";
+import { ChecksList, gateWord } from "@/app/conversation/TaskRow";
 import { useAction } from "@/app/conversation/useAction";
-import { WorkerChip } from "@/app/conversation/WorkerChip";
+import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import {
   deadlineLabel,
   overnightCommand,
@@ -18,7 +22,8 @@ import {
 } from "@/components/assistant-ui/elements/agent-plan";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { PhaseState } from "@/ipc/generated";
+import type { OvernightRun, PhaseState, Plan } from "@/ipc/generated";
+import { useBoard } from "@/state/board";
 
 const MARK: Record<PhaseState, AgentPlanStepStatus> = {
   pending: "pending",
@@ -29,6 +34,153 @@ const MARK: Record<PhaseState, AgentPlanStepStatus> = {
   blocked: "failed",
   skipped: "skipped",
 };
+
+/** The newest plan a phase's lead wrote (or Phase 0's), which the run card shows inside the phase. */
+function usePhasePlan(requestId: string | null, planId: string | null): Plan | undefined {
+  return useBoard((s) => {
+    const plans = Object.values(s.board?.plans ?? {});
+    const own = planId ? s.board?.plans[planId] : undefined;
+    // A revised plan shows as its newest revision.
+    const current = (plan: Plan): Plan => {
+      const seen = new Set([plan.id]);
+      let newest = plan;
+      for (;;) {
+        const next = plans.find((candidate) => candidate.revises === newest.id);
+        if (!next || seen.has(next.id)) return newest;
+        seen.add(next.id);
+        newest = next;
+      }
+    };
+    if (own) return current(own);
+    return plans
+      .filter((plan) => requestId !== null && plan.requestId === requestId && plan.state.type !== "superseded")
+      .toSorted((a, b) => b.createdAtMs - a.createdAtMs)[0];
+  });
+}
+
+const NUL = "\u0000";
+
+/**
+ * A phase's work inside the run card: one line per step of its plan (or per worker, without a
+ * plan), each opening its worker, then its whole-phase checks and the plan's details and review
+ * notes behind disclosures.
+ */
+function PhaseWork({
+  runId,
+  phaseId,
+  requestId,
+  planId = null,
+}: {
+  runId: string;
+  phaseId: string;
+  requestId: string | null;
+  planId?: string | null;
+}) {
+  const { setPanel } = useContext(AgentsPanelContext);
+  const plan = usePhasePlan(requestId, planId);
+  // Each line as "task id NUL state NUL title", so the card re-renders only when one changes.
+  const lines = useBoard(
+    useShallow((s) => {
+      const tasks = s.board?.tasks ?? {};
+      if (plan && plan.steps.length > 0) {
+        return plan.steps.map((step) => {
+          const task = step.taskId ? tasks[step.taskId] : undefined;
+          return [task?.id ?? "", task ? taskState(task).word : "planned", step.title].join(NUL);
+        });
+      }
+      return Object.values(tasks)
+        .filter((task) => task.gateLink === null && task.run?.runId === runId && task.run.phaseId === phaseId)
+        .toSorted((a, b) => a.number - b.number)
+        .map((task) => [task.id, taskState(task).word, task.title].join(NUL));
+    }),
+  );
+  const owner = `phase:${runId}:${phaseId}`;
+  const checkerIds = useBoard(
+    useShallow((s) => (s.board ? checkersOf(s.board.tasks, [owner]).map((task) => task.id) : [])),
+  );
+  const gate = useBoard((s) => s.board?.overnight[runId]?.phases.find((phase) => phase.id === phaseId)?.gate ?? null);
+  const details = plan?.steps.filter((step) => step.detail) ?? [];
+  const notes = plan?.reviewNotes ?? [];
+  return (
+    <div className="flex flex-col gap-1.5 whitespace-normal">
+      {lines.length > 0 && (
+        <ul className="flex flex-col">
+          {lines.map((line, index) => {
+            const [taskId = "", word = "", title = ""] = line.split(NUL);
+            const text = (
+              <>
+                <span className="text-foreground/80 min-w-0 truncate">{title}</span>
+                <span className="shrink-0">· {word}</span>
+              </>
+            );
+            return (
+              <li key={`${index}:${taskId}`} className="flex min-w-0">
+                {taskId ? (
+                  <button
+                    type="button"
+                    title={title}
+                    onClick={() => setPanel(taskId)}
+                    className="hover:text-foreground rounded-control focus-visible:ring-ring/50 flex min-w-0 items-center gap-1 text-start outline-none focus-visible:ring-1"
+                  >
+                    {text}
+                  </button>
+                ) : (
+                  <span className="flex min-w-0 items-center gap-1" title={title}>
+                    {text}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {checkerIds.length > 0 && (
+        <details>
+          <summary className="rounded-control cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring">
+            Whole-phase checks · {gateWord(gate)}
+          </summary>
+          <div className="pt-1">
+            <ChecksList checkerIds={checkerIds} gates={{ [owner]: gate }} />
+          </div>
+        </details>
+      )}
+      {(details.length > 0 || notes.length > 0) && (
+        <details>
+          <summary className="rounded-control cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring">
+            Step details and review notes
+          </summary>
+          <div className="flex flex-col gap-1.5 pt-1 wrap-anywhere">
+            {details.map((step) => (
+              <p key={step.title}>
+                <span className="text-foreground/80">{step.title}:</span> {plainLine(step.detail ?? "")}
+              </p>
+            ))}
+            {notes.map((note, index) => (
+              <p key={index}>Review note: {plainLine(note)}</p>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** Which verified phases Merge takes: "phase 1", "phases 1 and 2". */
+function mergedPhases(run: OvernightRun): string | null {
+  const numbers = run.phases.filter((phase) => phase.state === "verified").map((phase) => phase.number);
+  if (numbers.length === 0) return null;
+  if (numbers.length === 1) return `phase ${numbers[0]}`;
+  return `phases ${numbers.slice(0, -1).join(", ")} and ${numbers.at(-1)}`;
+}
+
+/** The finished card's second line: what Merge takes, and where the work is. */
+function whereLine(run: OvernightRun, verifiedSha: string | undefined): string {
+  const branch = run.workspace ? `on ${run.workspace.branch}` : "";
+  const phases = mergedPhases(run);
+  if (run.merged) return `Merged into ${run.workspace?.base ?? "the base branch"} · ${branch}`;
+  if (!verifiedSha || !phases) return `Nothing verified to merge yet · ${branch}`;
+  return `Merge takes ${phases} (${verifiedSha.slice(0, 7)}) · ${branch}`;
+}
 
 /** The same AgentPlan surface as a normal plan, with run facts and user-only commands. */
 export function OvernightPlanCard({
@@ -45,6 +197,7 @@ export function OvernightPlanCard({
   const [stopped, setStopped] = useState(false);
   const proposed = run.state === "proposed";
   const finished = run.state === "finished";
+  const over = runOver(run);
   const ending = run.state === "windingDown" || run.state === "reporting";
   const running = !proposed && !finished && run.state !== "superseded";
   const restrictions = restrictionLines(run);
@@ -73,11 +226,7 @@ export function OvernightPlanCard({
       ? `Waiting for ${quota.provider} limits · resets ${new Date(quota.resetsAtMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}`
       : progress?.fixRound
         ? `Fixing ${progress.fixRound}/2`
-        : phase.state === "running"
-          ? "Lead working"
-          : phase.state === "checking"
-            ? "Checking"
-            : phase.state;
+        : phaseWord(phase.state, over);
     return {
       key: phase.id,
       title: `Phase ${phase.number} · ${phase.name}`,
@@ -85,28 +234,29 @@ export function OvernightPlanCard({
       statusLabel: proposed ? "" : status,
       live: running,
       folded: proposed || (phase.state !== "running" && phase.state !== "checking"),
-      detail: (
+      detail: proposed ? (
         <div className="flex flex-col gap-1.5">
           {phase.scope && <p>{phase.scope}</p>}
-          {phase.doneWhen.length > 0 && (
-            <div>
-              <p className="font-medium">Done when</p>
-              <ul className="list-inside list-disc space-y-1">
-                {phase.doneWhen.map((criterion) => (
-                  <li key={criterion.id}>
-                    {criterion.text}
-                    {progress?.criteria?.[criterion.id] && ` · ${progress.criteria[criterion.id]}`}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          <DoneWhen criteria={phase.doneWhen} />
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1.5">
           {Boolean(workerTaskIds?.length) && (
-            <div className="flex flex-wrap gap-1">
-              {workerTaskIds?.map((id) => (
-                <WorkerChip key={id} taskId={id} />
-              ))}
-            </div>
+            <PhaseWork runId={run.id} phaseId={phase.id} requestId={phase.requestId} />
+          )}
+          {(phase.scope || phase.doneWhen.length > 0) && (
+            <details>
+              <summary className="rounded-control cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring">
+                What it covers
+              </summary>
+              <div className="flex flex-col gap-1.5 pt-1">
+                {phase.scope && <p>{phase.scope}</p>}
+                <DoneWhen
+                  criteria={phase.doneWhen}
+                  results={progress?.criteria}
+                />
+              </div>
+            </details>
           )}
         </div>
       ),
@@ -116,7 +266,19 @@ export function OvernightPlanCard({
     steps.push({
       key: "phase-0",
       title: "Phase 0 · Write the plan",
-      detail: run.goal,
+      detail: run.planning ? (
+        <div className="flex flex-col gap-1.5">
+          <PhaseWork
+            runId={run.id}
+            phaseId="phase-0"
+            requestId={run.planning.requestId}
+            planId={run.planning.planId}
+          />
+          <p>{run.goal}</p>
+        </div>
+      ) : (
+        run.goal
+      ),
       status: running ? "active" : "pending",
       statusLabel: running ? "Writing and reviewing the plan" : "Ready to plan",
       folded: !running,
@@ -142,9 +304,9 @@ export function OvernightPlanCard({
       progressLabel="verified"
       footer={
         <div className="flex flex-col gap-2">
-          {!proposed && (
+          {!proposed && !finished && (
             <p className="text-muted-foreground text-xs tabular-nums" role="status">
-              {details.waiting} Waiting · {details.decided} Decided
+              {details.waiting} waiting on you · {details.decided} decided for you
             </p>
           )}
           {ending && (
@@ -217,9 +379,6 @@ export function OvernightPlanCard({
               )}
             </div>
           )}
-          {finished && !details.verifiedSha && (
-            <p className="text-muted-foreground text-xs">No verified work to merge yet.</p>
-          )}
           {finished && run.notification?.deliveryError && !details.notificationsOff && (
             <p role="status" className="text-muted-foreground text-xs">
               The notification couldn’t be shown: {run.notification.deliveryError}
@@ -233,11 +392,18 @@ export function OvernightPlanCard({
         </div>
       }
     >
-      {finished && details.outcome && (
-        <div className="flex flex-col gap-1 text-sm" role="status">
-          {details.outcome.map((line, index) => (
-            <p key={index}>{line}</p>
-          ))}
+      {finished && (
+        // What came of it, where the work is and what Merge takes, and (live) what waits on the user.
+        <div className="flex flex-col gap-0.5" role="status">
+          {details.outcome?.[0] && <p className="text-sm">{details.outcome[0]}</p>}
+          <p className="text-muted-foreground truncate text-xs" title={run.workspace?.branch}>
+            {whereLine(run, details.verifiedSha)}
+          </p>
+          <p className="text-muted-foreground text-xs">
+            {details.waiting === 0
+              ? "Nothing waits on you"
+              : `${details.waiting} ${details.waiting === 1 ? "thing waits" : "things wait"} on you`}
+          </p>
         </div>
       )}
       {proposed && (
@@ -326,5 +492,29 @@ export function OvernightPlanCard({
         </p>
       )}
     </AgentPlan>
+  );
+}
+
+/** A phase's done-when criteria, each with what its checks found once they ran. */
+function DoneWhen({
+  criteria,
+  results,
+}: {
+  criteria: readonly { id: string; text: string }[];
+  results?: Readonly<Record<string, string>> | undefined;
+}) {
+  if (criteria.length === 0) return null;
+  return (
+    <div>
+      <p className="font-medium">Done when</p>
+      <ul className="list-inside list-disc space-y-1">
+        {criteria.map((criterion) => (
+          <li key={criterion.id}>
+            {criterion.text}
+            {results?.[criterion.id] && ` · ${results[criterion.id]}`}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

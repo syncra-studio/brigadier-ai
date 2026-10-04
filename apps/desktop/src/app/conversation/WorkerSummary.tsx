@@ -1,7 +1,8 @@
-import { ChevronDown, ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
+import { ChevronDown } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, memo, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 
-import { useWorkerIds, WORKERS_LABEL, WorkerGlyphs } from "@/app/conversation/Agents";
+import { WORKERS_LABEL, WorkerGlyphs } from "@/app/conversation/Agents";
 import { isFinal, isWorking } from "@/app/conversation/blocks";
 import {
   AgentsPanelContext,
@@ -241,26 +242,48 @@ export const WorkerStripRow = memo(function WorkerStripRow({
 const ROWS = 4;
 
 /**
- * The pinned summary's Workers section, folding under its title: the stacked glyphs with how
- * many work and how many are done (it opens the list), a row per active worker, and the
- * finished ones behind "Completed".
+ * The pinned summary's Workers section, folding under its title: one line with the stacked
+ * glyphs and the counts ("2 working · 7 workers · 37 checks", which opens the list), then a row
+ * per worker still at it. Checkers count apart: each opens from the row of what it checks.
  */
 export function WorkersSummary({ conversationId }: { conversationId: string }) {
   const { setPanel } = useContext(AgentsPanelContext);
-  const { active, finished } = useWorkerIds(conversationId);
-  const workingIds = useBoard((s) =>
-    active
-      .filter((id) => {
-        const task = s.board?.tasks[id];
-        return task !== undefined && isWorking(task);
-      })
-      .join(" "),
+  // Workers by number, each marked active (`a`) or finished (`f`), and whether it works now (`*`).
+  const marked = useBoard(
+    useShallow((s) =>
+      s.board?.conversationId === conversationId
+        ? Object.values(s.board.tasks)
+            .filter((task) => task.gateLink === null)
+            .toSorted((a, b) => a.number - b.number)
+            .map((task) => `${isFinal(task) ? "f" : "a"}${isWorking(task) ? "*" : ""}${task.id}`)
+        : [],
+    ),
   );
-  const working = useMemo(() => new Set(workingIds.split(" ").filter(Boolean)), [workingIds]);
+  const checks = useBoard((s) =>
+    s.board?.conversationId === conversationId
+      ? Object.values(s.board.tasks).filter((task) => task.gateLink !== null).length
+      : 0,
+  );
+  const { active, all, working } = useMemo(() => {
+    const id = (mark: string) => mark.replace(/^[af]\*?/, "");
+    return {
+      active: marked.filter((mark) => mark.startsWith("a")).map(id),
+      all: marked.map(id),
+      working: new Set(marked.filter((mark) => mark.includes("*")).map(id)),
+    };
+  }, [marked]);
   const [open, setOpen] = useState(true);
-  if (active.length + finished.length === 0) return null;
+  if (all.length === 0) return null;
   const waiting = active.length - working.size;
   const hidden = active.length - ROWS;
+  const counts = [
+    working.size > 0 && `${working.size} working`,
+    waiting > 0 && `${waiting} waiting`,
+    `${all.length} ${all.length === 1 ? "worker" : "workers"}`,
+    checks > 0 && `${checks} ${checks === 1 ? "check" : "checks"}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="flex flex-col gap-1">
       <CollapsibleTrigger className="group text-muted-foreground hover:text-foreground flex h-control-xs items-center justify-between text-xs transition-colors">
@@ -277,17 +300,8 @@ export function WorkersSummary({ conversationId }: { conversationId: string }) {
           onClick={() => setPanel(null)}
           className="hover:bg-foreground/5 rounded-control -mx-1 flex h-control-sm items-center gap-2 px-1 text-start text-sm transition-colors"
         >
-          <WorkerGlyphs taskIds={[...active, ...finished]} working={working} />
-          <span className="min-w-0 flex-1 truncate">
-            {active.length > 0
-              ? [working.size > 0 && `${working.size} working`, waiting > 0 && `${waiting} waiting`]
-                  .filter(Boolean)
-                  .join(" · ")
-              : `${finished.length} done`}
-          </span>
-          {active.length > 0 && finished.length > 0 && (
-            <span className="text-muted-foreground shrink-0">{finished.length} done</span>
-          )}
+          <WorkerGlyphs taskIds={all} working={working} />
+          <span className="min-w-0 flex-1 truncate">{counts}</span>
         </button>
         {active.slice(0, ROWS).map((id) => (
           <WorkerSummaryRow key={id} taskId={id} className="-mx-1 px-1" />
@@ -300,23 +314,6 @@ export function WorkersSummary({ conversationId }: { conversationId: string }) {
           >
             {hidden} more
           </button>
-        )}
-        {finished.length > 0 && (
-          <Collapsible>
-            <CollapsibleTrigger className="group text-muted-foreground hover:bg-foreground/5 hover:text-foreground rounded-control -mx-1 flex h-control-sm w-full items-center gap-2 px-1 text-start text-sm transition-colors">
-              <span className="min-w-0 flex-1 truncate">Completed</span>
-              <span className="shrink-0 tabular-nums">{finished.length}</span>
-              <ChevronRight
-                aria-hidden
-                className="size-icon-xs shrink-0 transition-[rotate] group-data-[state=open]:rotate-90 motion-reduce:transition-none"
-              />
-            </CollapsibleTrigger>
-            <CollapsibleContent className="max-h-action-list flex flex-col overflow-y-auto">
-              {finished.map((id) => (
-                <WorkerSummaryRow key={id} taskId={id} className="-mx-1 px-1" />
-              ))}
-            </CollapsibleContent>
-          </Collapsible>
         )}
       </CollapsibleContent>
     </Collapsible>

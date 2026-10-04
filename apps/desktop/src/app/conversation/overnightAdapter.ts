@@ -2,7 +2,7 @@ import { useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { openNotificationSettings, request } from "@/ipc/client";
-import type { OvernightRun, TaskId } from "@/ipc/generated";
+import type { DiffStat, OvernightRun, TaskId } from "@/ipc/generated";
 import { loadConversation, loadFullText, openConversation, switchBranch } from "@/state/actions";
 import { type Board, updateBoard, useBoard } from "@/state/board";
 import { setUpLidClosed, useKeepAwake } from "@/state/keepAwake";
@@ -12,7 +12,10 @@ import { toast } from "@/state/toasts";
 
 /** Run facts translated for the shared card. */
 export type OvernightDetails = {
-  /** Run-scoped counts, never the whole conversation's counts. */
+  /**
+   * What waits on the user and was decided for them: the same counts as the lists in the
+   * context card right above, so the two never disagree.
+   */
   waiting: number;
   decided: number;
   phaseProgress: Readonly<
@@ -76,19 +79,8 @@ export function currentRuns(runs: Readonly<Record<string, OvernightRun>>): Overn
 }
 
 export function projectOvernight(run: OvernightRun, board: Board, report?: string): OvernightCardModel {
-  const belongs = (requestId: string | null) => requestId?.startsWith(`run-${run.id.slice(-8)}-`) ?? false;
-  const ownsTask = (taskId: string) => board.tasks[taskId]?.run?.runId === run.id;
-  const waiting = Object.values(board.waiting).filter((item) => {
-    const source = item.source;
-    if (source.type === "run") return source.runId === run.id;
-    if (source.type === "task" || source.type === "landing") return ownsTask(source.taskId);
-    return belongs(item.requestId);
-  }).length;
-  const decided = board.decisions.filter((item) => {
-    if (item.source.type === "run") return item.source.runId === run.id;
-    if (item.source.type === "task") return ownsTask(item.source.taskId);
-    return belongs(item.requestId);
-  }).length;
+  const waiting = Object.keys(board.waiting).length;
+  const decided = board.decisions.length;
   const phaseProgress: OvernightDetails["phaseProgress"] = Object.fromEntries(run.phases.map((phase) => {
     // Verified phases retained by Continue keep their original request and task ownership.
     const tasks = Object.values(board.tasks).filter((task) =>
@@ -121,6 +113,29 @@ export function projectOvernight(run: OvernightRun, board: Board, report?: strin
     remainingPhaseIds: run.phases.length === 0 ? ["phase-0"] :
       run.phases.filter((phase) => phase.state !== "verified").map((phase) => phase.id),
   } };
+}
+
+/**
+ * The run whose branch the context card shows: the newest one that started and whose work is
+ * not merged yet. During and after a run, that branch is where the session's work is.
+ */
+export function shownRun(models: readonly OvernightCardModel[]): OvernightRun | null {
+  return (
+    models
+      .map((model) => model.run)
+      .filter((run) => run.workspace !== null && run.state !== "proposed" && run.state !== "superseded" && !run.merged)
+      .at(-1) ?? null
+  );
+}
+
+/**
+ * The run branch's +N −N for the context card: git's diff from the run's base to the branch's
+ * tip, from the daemon's `getRunDiff` (`{ method: "getRunDiff", conversationId, runId }` →
+ * `{ diff: DiffStat | null }`). Until the daemon answers it, the card shows the branch without
+ * numbers rather than an estimate summed from the workers' changes.
+ */
+export function useRunDiff(_conversationId: string, _runId: string | null): DiffStat | null {
+  return null;
 }
 
 export function useOvernightCards(conversationId: string): readonly OvernightCardModel[] {

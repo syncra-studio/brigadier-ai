@@ -26,12 +26,16 @@ import {
 import { useShallow } from "zustand/react/shallow";
 
 import { showCard } from "@/app/conversation/ActionCards";
+import { isRunRequest } from "@/app/conversation/blocks";
 import { PlanCardView } from "@/app/conversation/cards/PlanCardView";
 import { OvernightPlanCard } from "@/app/conversation/cards/OvernightPlanCard";
 import {
   overnightActions,
+  shownRun,
   useOvernightCards,
+  useRunDiff,
 } from "@/app/conversation/overnightAdapter";
+import { plainLine } from "@/app/conversation/rowWords";
 import { useSummary } from "@/app/conversation/summaryState";
 import { useAction } from "@/app/conversation/useAction";
 import { GitActions } from "@/app/conversation/GitActions";
@@ -273,7 +277,10 @@ function waitingFrom(
   }
 }
 
-/** One thing only the user can do: what, where it came from, and Done (or Show, for a card). */
+/**
+ * One thing only the user can do, on one plain line that opens to its whole text and where it
+ * came from; Done (or Show, for a card).
+ */
 function WaitingRow({
   item,
   conversationId,
@@ -284,6 +291,7 @@ function WaitingRow({
   const tasks = useBoard((s) => s.board?.tasks ?? NO_TASKS);
   const action = useAction();
   const from = waitingFrom(item, tasks);
+  const [open, setOpen] = useState(false);
   const { source } = item;
   return (
     <div className="flex flex-col gap-0.5 py-0.5">
@@ -292,7 +300,17 @@ function WaitingRow({
           aria-hidden
           className="text-muted-foreground mt-0.5 size-icon-sm shrink-0"
         />
-        <span className="min-w-0 flex-1 wrap-break-word">{item.what}</span>
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          className={cn(
+            "rounded-control focus-visible:ring-ring/50 min-w-0 flex-1 text-start outline-none focus-visible:ring-1",
+            open ? "wrap-break-word" : "truncate",
+          )}
+        >
+          {plainLine(item.what)}
+        </button>
         {source.type === "card" && (
           <Button
             size="xs"
@@ -313,7 +331,7 @@ function WaitingRow({
           Done
         </Button>
       </div>
-      {from && (
+      {open && from && (
         <span className="text-muted-foreground ps-6 text-xs">{from}</span>
       )}
       {action.error && (
@@ -347,22 +365,29 @@ function WaitingOnYou({ conversationId }: { conversationId: string }) {
 /** Decisions shown before "Show all". */
 const DECISIONS = 5;
 
+/** A decision on one plain line, which opens to its whole text and why. */
 function DecisionRow({ decision }: { decision: Decision }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="flex items-start gap-2 py-0.5 text-sm">
+    <button
+      type="button"
+      aria-expanded={open}
+      onClick={() => setOpen(!open)}
+      className="rounded-control focus-visible:ring-ring/50 flex items-start gap-2 py-0.5 text-start text-sm outline-none focus-visible:ring-1"
+    >
       <CheckCircle
         aria-hidden
         className="text-muted-foreground mt-0.5 size-icon-sm shrink-0"
       />
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="wrap-break-word">{decision.what}</span>
-        {decision.why && (
+        <span className={open ? "wrap-break-word" : "truncate"}>{plainLine(decision.what)}</span>
+        {open && decision.why && (
           <span className="text-muted-foreground text-xs wrap-break-word">
-            {decision.why}
+            {plainLine(decision.why)}
           </span>
         )}
       </span>
-    </div>
+    </button>
   );
 }
 
@@ -672,6 +697,27 @@ export function PinnedSummary({
   );
 }
 
+/** The branch the session's work is on, with its +N −N once known. */
+function BranchRow({ branch, diff }: { branch: string; diff: DiffStat | null }) {
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">
+      <Branch
+        aria-hidden
+        className="text-muted-foreground size-icon-md shrink-0"
+      />
+      <span className="min-w-0 flex-1 truncate" title={branch}>
+        {branch}
+      </span>
+      {diff && (diff.insertions > 0 || diff.deletions > 0) && (
+        <span className="shrink-0 text-xs tabular-nums">
+          <span className="text-success">+{diff.insertions}</span>{" "}
+          <span className="text-destructive">−{diff.deletions}</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
 /** The summary itself, pinned in the pane or floating from the top bar. */
 function SummaryContent({ conversation }: { conversation: Conversation }) {
   const overnight = useOvernightCards(conversation.id);
@@ -685,20 +731,25 @@ function SummaryContent({ conversation }: { conversation: Conversation }) {
       ? Object.keys(s.board.tasks).length
       : 0,
   );
+  // A run's own plans (Phase 0's, each phase lead's) show inside its card.
   const plans = useBoard(
     useShallow((s) =>
       s.board?.conversationId === conversation.id
         ? Object.values(s.board.plans)
-            .filter((plan) => plan.state.type !== "superseded")
+            .filter((plan) => plan.state.type !== "superseded" && !isRunRequest(plan.requestId))
             .toSorted((a, b) => a.position - b.position)
             .map((plan) => plan.id)
         : [],
     ),
   );
+  const run = shownRun(overnight);
   const setup =
     conversation.setup?.type === "session" ? conversation.setup : null;
   const worktree = setup?.environment.type === "newWorktree";
-  const diff = useSessionDiff(conversation.id, worktree);
+  const sessionDiff = useSessionDiff(conversation.id, worktree && !run);
+  const runDiff = useRunDiff(conversation.id, run?.id ?? null);
+  // During and after a run the card shows the run's branch: that is where the work is.
+  const diff = run ? runDiff : sessionDiff;
   const sources = useSources(conversation.id).length > 0;
   const waiting = useBoard((s) =>
     s.board?.conversationId === conversation.id
@@ -729,26 +780,14 @@ function SummaryContent({ conversation }: { conversation: Conversation }) {
             />
           )}
         </div>
-        <GitActions conversationId={conversation.id}>
-          <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">
-            <Branch
-              aria-hidden
-              className="text-muted-foreground size-icon-md shrink-0"
-            />
-            <span
-              className="min-w-0 flex-1 truncate"
-              title={setup.environment.branch}
-            >
-              {setup.environment.branch}
-            </span>
-            {diff && (diff.insertions > 0 || diff.deletions > 0) && (
-              <span className="shrink-0 text-xs tabular-nums">
-                <span className="text-success">+{diff.insertions}</span>{" "}
-                <span className="text-destructive">−{diff.deletions}</span>
-              </span>
-            )}
-          </div>
-        </GitActions>
+        {run?.workspace ? (
+          // The run's card merges its verified work: no second way to merge here.
+          <BranchRow branch={run.workspace.branch} diff={diff} />
+        ) : (
+          <GitActions conversationId={conversation.id}>
+            <BranchRow branch={setup.environment.branch} diff={diff} />
+          </GitActions>
+        )}
         {pullRequest && <PullRequestRow pullRequest={pullRequest} />}
         {(workers > 0 || sources || waiting > 0 || decided > 0) && (
           <div className="border-border border-t" />
@@ -758,11 +797,7 @@ function SummaryContent({ conversation }: { conversation: Conversation }) {
         <DecidedForYou conversationId={conversation.id} />
         <Sources conversationId={conversation.id} />
       </div>
-      {plans
-        .filter((id) => !overnight.some((card) => card.run.planId === id || card.run.planning?.planId === id))
-        .map((id) => (
-          <PlanCardView key={id} cardId={id} />
-        ))}
+      {/* The run's card sits right under the context card, before any other plan. */}
       {overnight.map((model) => (
         <OvernightPlanCard
           key={model.run.id}
@@ -770,6 +805,11 @@ function SummaryContent({ conversation }: { conversation: Conversation }) {
           actions={overnightActions}
         />
       ))}
+      {plans
+        .filter((id) => !overnight.some((card) => card.run.planId === id || card.run.planning?.planId === id))
+        .map((id) => (
+          <PlanCardView key={id} cardId={id} />
+        ))}
     </div>
   );
 }
