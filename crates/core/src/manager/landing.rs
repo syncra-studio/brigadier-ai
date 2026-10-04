@@ -955,10 +955,7 @@ impl SessionManager {
             let findings = super::gates::one_line_findings(&self.gate_findings(task).await);
             self.decided_for_task(
                 task,
-                format!(
-                    "Landed task-{} \u{201c}{}\u{201d} on `{target}` on the user's word",
-                    task.number, task.title
-                ),
+                format!("{} on the user's word", landed_line(task, target)),
                 format!("Landed on the user's word despite: {findings}"),
             )
             .await;
@@ -992,10 +989,7 @@ impl SessionManager {
         let fixes = fixes_made(task);
         self.decided_for_task(
             task,
-            format!(
-                "Landed task-{} \u{201c}{}\u{201d} on `{target}`",
-                task.number, task.title
-            ),
+            landed_line(task, target),
             format!(
                 "Its change passed independent checks: {review}, and verified against each \"done when\" criterion{}.",
                 match fixes {
@@ -1467,6 +1461,18 @@ fn is_reported(path: &str, reported: &[String]) -> bool {
     })
 }
 
+/// "Landed task-3 “Add the flag” on `main`", for "Decided for you". An overnight run's tasks
+/// all land on its branch, which the run's card and report already name, so theirs stop at
+/// the title.
+fn landed_line(task: &Task, target: &str) -> String {
+    let landed = format!("Landed task-{} \u{201c}{}\u{201d}", task.number, task.title);
+    if task.run.is_some() {
+        landed
+    } else {
+        format!("{landed} on `{target}`")
+    }
+}
+
 /// What the orchestrator does about a task whose work conflicts with the target.
 fn conflict_step(task: &Task, target: &str) -> String {
     if task.workspace.as_ref().is_some_and(|w| w.on_snapshot) {
@@ -1552,5 +1558,43 @@ mod tests {
         task.fix_rounds = 1;
         task.fixes.clear();
         assert_eq!(fixes_made(&task), 1);
+    }
+
+    #[test]
+    fn a_runs_landing_line_leaves_out_the_branch_its_report_already_names() {
+        let mut task: Task = serde_json::from_value(serde_json::json!({
+            "id": "t1",
+            "conversationId": "c1",
+            "number": 3,
+            "position": 0,
+            "title": "Add avg2",
+            "kind": "implement",
+            "spec": "Add avg2 to src/math.js.",
+            "access": { "repo": "write", "network": false, "unsandboxed": false },
+            "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
+            "state": "readyToLand",
+            "attachments": [],
+            "createdAtMs": 0,
+            "updatedAtMs": 0
+        }))
+        .expect("a task");
+        assert_eq!(
+            landed_line(&task, "main"),
+            "Landed task-3 \u{201c}Add avg2\u{201d} on `main`"
+        );
+        task.run = Some(
+            serde_json::from_value(serde_json::json!({
+                "runId": "r1",
+                "segment": 1,
+                "generation": 1,
+                "role": "worker",
+                "rulesHash": ""
+            }))
+            .expect("a run context"),
+        );
+        assert_eq!(
+            landed_line(&task, "overnight/2026-10-04-textkit-1234"),
+            "Landed task-3 \u{201c}Add avg2\u{201d}"
+        );
     }
 }
