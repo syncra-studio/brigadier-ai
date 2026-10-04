@@ -28,7 +28,7 @@ fi
 
 run() {
   echo "+ $*"
-  "${nice_prefix[@]}" "$@"
+  ${nice_prefix[@]+"${nice_prefix[@]}"} "$@"
 }
 
 if [ ! -f node_modules/.modules.yaml ] || [ ! -f apps/desktop/node_modules/.modules.yaml ]; then
