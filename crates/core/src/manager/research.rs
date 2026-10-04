@@ -412,7 +412,10 @@ impl SessionManager {
                 id,
                 inputs.registry.revision,
                 &[],
-                Err("no enabled, available research model".into()),
+                Err(
+                    "None of your models can do the research right now: turn one on, or wait until its limit resets."
+                        .into(),
+                ),
             );
             return;
         };

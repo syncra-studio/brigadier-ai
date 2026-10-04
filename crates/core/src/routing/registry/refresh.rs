@@ -171,7 +171,7 @@ impl RegistryHolder {
             Ok(reply) if reply.len() <= super::MAX_BYTES => validate_patches(&reply, models),
             Ok(_) => (
                 Vec::new(),
-                vec!["research response exceeds the registry size limit".into()],
+                vec!["The research answer was too long to use".into()],
             ),
             Err(error) => (Vec::new(), vec![error]),
         };
@@ -237,7 +237,7 @@ impl RegistryHolder {
                     state
                         .refresh
                         .errors
-                        .push(format!("overlay could not be saved: {error}"));
+                        .push(format!("The researched ratings couldn't be saved: {error}"));
                 }
             }
         }

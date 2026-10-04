@@ -94,7 +94,7 @@ pub fn validate_patches(reply: &str, models: &[MergedModel]) -> (Vec<RatingPatch
         None => {
             return (
                 Vec::new(),
-                vec!["the research must return a JSON object with a patches array".into()],
+                vec!["The research answer wasn't in the form Brigadier asked for".into()],
             );
         }
     };
@@ -103,22 +103,24 @@ pub fn validate_patches(reply: &str, models: &[MergedModel]) -> (Vec<RatingPatch
         let patch: RatingPatch = match serde_json::from_value(value.clone()) {
             Ok(patch) => patch,
             Err(error) => {
-                errors.push(format!("invalid patch: {error}"));
+                errors.push(format!(
+                    "A finding wasn't in the form Brigadier asked for: {error}"
+                ));
                 continue;
             }
         };
         let matching: Vec<_> = models.iter().filter(|model| patch.applies(model)).collect();
         let error = if matching.is_empty() {
-            Some("identity is outside the captured catalog")
+            Some("not one of your models")
         } else if !patch.sources.iter().any(|source| {
             source.starts_with("https://")
                 && !source.chars().any(char::is_whitespace)
                 && url::Url::parse(source)
                     .is_ok_and(|url| url.scheme() == "https" && url.has_host())
         }) {
-            Some("no parseable HTTPS source")
+            Some("no web page given as its source")
         } else if patch.tier == Some(QualityTier::Unrated) {
-            Some("unrated is not a researched quality tier")
+            Some("\"unrated\" isn't a rating")
         } else if patch
             .strengths
             .values()
@@ -132,18 +134,18 @@ pub fn validate_patches(reply: &str, models: &[MergedModel]) -> (Vec<RatingPatch
                     || matching.iter().any(|model| !model.efforts.contains(effort))
             })
         {
-            Some("rating or effort is outside the model's bounds")
+            Some("a score or effort is out of range")
         } else if patch.tier.is_none()
             && patch.strengths.is_empty()
             && patch.area_strengths.is_empty()
             && patch.default_effort.is_empty()
         {
-            Some("patch has no rating fields")
+            Some("no ratings given")
         } else if patches
             .iter()
             .any(|prior| prior.provider == patch.provider && prior.model == patch.model)
         {
-            Some("duplicate concrete identity")
+            Some("rated twice")
         } else {
             None
         };
@@ -154,7 +156,7 @@ pub fn validate_patches(reply: &str, models: &[MergedModel]) -> (Vec<RatingPatch
         }
     }
     if patches.is_empty() {
-        errors.push("no valid sourced model ratings; previous overlay kept".into());
+        errors.push("No finding could be used, so the ratings didn't change".into());
     }
     (patches, errors)
 }
