@@ -98,9 +98,8 @@ function DeleteForm({
           </div>
           <CheckboxRow
             label="Forget what the Brain learned from this session"
-            note="Phase 4: the Project Brain doesn't exist yet, so there is nothing to forget."
+            note="Brain notes that came only from this session are removed too."
             checked={forgetBrain}
-            disabled
             onCheckedChange={setForgetBrain}
           />
         </>

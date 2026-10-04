@@ -590,7 +590,8 @@ pub enum Request {
         id: ConversationId,
         /// Also delete its unmerged branches (otherwise they are kept).
         delete_branches: bool,
-        /// Forget what the Project Brain learned from it (Phase 4; ignored until then).
+        /// Also forget what the Project Brain learned only from it (its transcript index always
+        /// goes).
         forget_brain: bool,
     },
     RenameConversation {

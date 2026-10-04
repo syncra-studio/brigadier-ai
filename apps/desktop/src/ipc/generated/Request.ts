@@ -72,7 +72,8 @@ deleteBranches: Array<BranchChoice>, keepBrain: boolean, } | { "method": "delete
  */
 deleteBranches: boolean, 
 /**
- * Forget what the Project Brain learned from it (Phase 4; ignored until then).
+ * Also forget what the Project Brain learned only from it (its transcript index always
+ * goes).
  */
 forgetBrain: boolean, } | { "method": "renameConversation", id: ConversationId, title: string, } | { "method": "setPinned", id: ConversationId, pinned: boolean, } | { "method": "appendMessage", conversationId: ConversationId, text: string, } | { "method": "listMessages", conversationId: ConversationId, 
 /**
