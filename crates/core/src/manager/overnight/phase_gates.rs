@@ -137,7 +137,14 @@ impl SessionManager {
                 &run.conversation_id,
                 format!("Verify phase {}", phase.number),
                 TaskKind::Verify,
-                verify_spec(run, &phase, &candidate, retry.as_deref()),
+                verify_spec(
+                    run,
+                    &phase,
+                    &candidate,
+                    retry.as_deref(),
+                    self.permission(&run.conversation_id)
+                        != crate::model::PermissionLevel::FullAccess,
+                ),
                 None,
                 None,
                 // A fresh model: none of the phase's own.
@@ -1040,6 +1047,7 @@ fn verify_spec(
     phase: &OvernightPhase,
     candidate: &str,
     retry: Option<&str>,
+    sandboxed: bool,
 ) -> String {
     let retry = retry.map_or_else(String::new, |why| {
         format!(
@@ -1049,13 +1057,15 @@ fn verify_spec(
     format!(
         "Verify a whole phase independently: you are its fresh verifier, and none of its own workers.\n\n{}
 1. For each criterion above, by its id, produce your own evidence on this checkout: run the command and quote the decisive line, or read the code and say where. Workers' and the lead's claims are not evidence.
-2. Run the project's checks the way the project runs them (README, package scripts, Makefile, CI config): typecheck, lint, build, the existing tests, and a runtime smoke check where there is one. Install missing dependencies in this checkout first.
+2. Run the project's checks the way the project runs them (README, package scripts, Makefile, CI config): typecheck, lint, build and the existing tests. {setup}
 3. Check the phase as a whole: its commits must work together, not just one by one.
 4. Change no tracked file and add no source file: build output goes only into ignored folders. A verification that changed the checkout is discarded.
-5. Before you call a check not run, try it, then try another way; name each command and quote its error. A check that fails or can't run the same way on the phase's start commit (unpack it: `mkdir <scratch>/start && git archive {} | tar -x -C <scratch>/start`) is a gap the project already had: name it under risks as \"[pre-existing] check: evidence from the start commit\". It never excuses an unmet criterion.
-End with submit_report. done_when: exactly one line per criterion, starting with its status and id: \"[met] p1-c1: your evidence\", \"[not met] p1-c2: what fails\", or \"[not checked] p1-c3: the command you tried and its error\". checks: passed, failed, notRun or noChecks, as for any verification. open_questions: each problem a worker must fix, and nothing else. needs_user: exactly what only the user can do (name the config key, environment variable, account or action) before a criterion can be met, or nothing. A problem you notice that no criterion or check of this phase covers goes under risks as a plain line, without a marker.{retry}",
+5. {not_run} A check that fails or can't run the same way on the phase's start commit (unpack it: `mkdir <scratch>/start && git archive {} | tar -x -C <scratch>/start`) is a gap the project already had: name it under risks as \"[pre-existing] check: evidence from the start commit\". It never excuses an unmet criterion.
+End with submit_report. done_when: exactly one line per criterion, starting with its status and id: \"[met] p1-c1: your evidence\", \"[not met] p1-c2: what fails\", or \"[not checked] p1-c3: the command you tried and its error\". checks: passed, failed, notRun or noChecks, as for any verification ([pre-existing] and [excluded] checks don't make it notRun). open_questions: each problem a worker must fix, and nothing else. needs_user: exactly what only the user can do (name the config key, environment variable, account or action) before a criterion can be met, or nothing. A problem you notice that no criterion or check of this phase covers goes under risks as a plain line, without a marker.{retry}",
         phase_text(run, phase, candidate),
         phase.start_commit.as_deref().unwrap_or("HEAD~1"),
+        setup = super::super::gates::checks_setup(sandboxed),
+        not_run = super::super::gates::not_run_step(sandboxed),
     )
 }
 

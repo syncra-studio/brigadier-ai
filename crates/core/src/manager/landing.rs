@@ -467,10 +467,14 @@ impl SessionManager {
                         }
                     })
                     .await?;
-                match self
-                    .open_gate(&task, unreported, super::gates::Recheck::Full, None)
-                    .await
-                {
+                // A held change accepted again unchanged keeps its reviews.
+                let reverify = self.reverify_held(&task, &commit.0).await;
+                let recheck = if reverify.is_some() {
+                    super::gates::Recheck::Verify
+                } else {
+                    super::gates::Recheck::Full
+                };
+                match self.open_gate(&task, unreported, recheck, reverify).await {
                     Ok(()) => {}
                     Err(super::gates::NotOpened::Error(err)) => return Err(err),
                     Err(super::gates::NotOpened::Unchanged) => {

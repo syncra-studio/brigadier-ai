@@ -192,7 +192,7 @@ pub(crate) fn worker(task: &Task, repo_note: &str, instructions: &str, extra: &s
             "merge: resolve the conflicts described below in this worktree, keeping both sides' intent, then verify."
         }
         TaskKind::Verify => {
-            "verify: prove each \"done when\" criterion of the task with your own evidence, run the project's checks (typecheck, lint, build, existing tests, a runtime smoke check) on this worktree, and report exactly what passed and failed. Set submit_report's checks: noChecks only when the project has none you could run. Fix nothing."
+            "verify: prove each \"done when\" criterion of the task with your own evidence, run the checks the task's brief asks for on this worktree, and report exactly what passed and failed. Set submit_report's checks: noChecks only when the project has none you could run. Fix nothing."
         }
     };
     let write_rules = if task.kind.writes() {
@@ -213,6 +213,12 @@ pub(crate) fn worker(task: &Task, repo_note: &str, instructions: &str, extra: &s
     if matches!(task.kind, TaskKind::Implement | TaskKind::Merge) {
         practices.push_str(WORKER_CODE_RULES);
     }
+    // An overnight run's Waiting on you holds only what its done-when needs (PLAN.md §10.11).
+    let needs_user = if task.run.is_some() {
+        "If a \"done when\" criterion can't be met without something only the user can do (a credential, a sign-in, an account, a paid signup), list exactly that under needs_user and finish everything else around it. Anything optional the user could add goes under risks, not needs_user."
+    } else {
+        "If something only the user can do blocks part of the task (a credential, a sign-in, an account, a paid signup), list it under needs_user and finish everything else around it."
+    };
     format!(
         r#"You are a Brigadier worker. Today is {today}. Your models' knowledge may be older than today: check current docs before relying on any third-party API, version or CLI.
 
@@ -223,8 +229,8 @@ Kind: {kind}
 Rules:
 - {alone}{write_rules}
 - Pushing, publishing, deploying and other outward actions are not yours to do; if one seems needed, say so in the report.
-- If something only the user can do blocks part of the task (a credential, a sign-in, an account, a paid signup), list it under needs_user and finish everything else around it.
-- Files meant for the orchestrator or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Never write files to /tmp or anywhere else outside your worktree and scratch folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
+- {needs_user}
+- Files meant for the orchestrator or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Never write files to /tmp or anywhere else outside your worktree, scratch folder and test data folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
 - The orchestrator reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{practices}{VOICE}{WORKER_VOICE}{instructions}{extra}
 
 The task:
@@ -234,6 +240,61 @@ The task:
         title = task.title,
         spec = task.spec,
     )
+}
+
+/// What a worker is told about where and how it runs: what was prepared, what it may write,
+/// and, in an overnight run, what Brigadier approves for the user (PLAN.md §10.8).
+pub(crate) struct WorkerEnvironment<'a> {
+    pub access: &'a brigadier_providers::Access,
+    /// Folders copied in from the user's checkout.
+    pub warmed: &'a [String],
+    pub test_dir: &'a std::path::Path,
+    /// The user's own checkout, for a run task.
+    pub run_repo: Option<&'a std::path::Path>,
+    /// The worker's own branch.
+    pub branch: Option<&'a str>,
+    /// It runs at low OS priority.
+    pub low_priority: bool,
+}
+
+pub(crate) fn environment(env: &WorkerEnvironment<'_>) -> String {
+    use brigadier_providers::Access;
+    let mut lines: Vec<String> = Vec::new();
+    if !env.warmed.is_empty() {
+        lines.push(format!(
+            "Dependencies are already installed: {} {} copied in from the user's checkout. Don't reinstall them.",
+            env.warmed
+                .iter()
+                .map(|folder| format!("`{folder}`"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            if env.warmed.len() == 1 { "was" } else { "were" }
+        ));
+    }
+    lines.push(format!(
+        "Your test data folder, for whatever a test or a smoke run writes outside the checkout (an app's data folder, a test database): {}. Never use an app's real data folder.",
+        env.test_dir.display()
+    ));
+    match env.access {
+        Access::Full => lines.push("You run without a sandbox, with the session's full access.".into()),
+        Access::Scoped { .. } | Access::Workspace { .. } | Access::ReadOnly => lines.push(
+            "You run in a sandbox: you can write only to the folders named above as yours. A program that opens windows (a desktop app, a GUI smoke run) can't run in it: give such a check as `[excluded] <the check>: the sandbox can't open windows` and go on.".into(),
+        ),
+    }
+    if let Some(repo) = env.run_repo {
+        lines.push(format!(
+            "This is an overnight run and nobody is there to ask: Brigadier approves for the user, except what only the user may do. Pushing, publishing, releasing or deploying, credentials, signups or spending, contacting anyone, and changing the user's own checkout ({}) are declined by the overnight rules; leave them out and finish the rest.",
+            repo.display()
+        ));
+        lines.push(format!(
+            "Git changes only your own branch ({}): other branches, tags, `git stash` and pushes are refused. To look at another commit, unpack it into your scratch folder (`git archive <commit> | tar -x -C <folder>`).",
+            env.branch.map_or_else(|| "you have none".to_owned(), |branch| format!("`{branch}`"))
+        ));
+    }
+    if env.low_priority {
+        lines.push("You already run at low priority: don't use `nice`.".into());
+    }
+    format!("How this task runs:\n- {}", lines.join("\n- "))
 }
 
 /// A Chat's role.
@@ -510,5 +571,52 @@ mod tests {
             None
         );
         assert_eq!(late_findings_shown("Done."), None);
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use std::path::Path;
+
+    use super::*;
+
+    fn note(access: &brigadier_providers::Access, run: bool) -> String {
+        environment(&WorkerEnvironment {
+            access,
+            warmed: &[
+                "node_modules".to_owned(),
+                "apps/desktop/node_modules".to_owned(),
+            ],
+            test_dir: Path::new("/tmp/brigadier-test-12345678"),
+            run_repo: run.then_some(Path::new("/Users/me/project")),
+            branch: Some("brigadier/abc/task-3"),
+            low_priority: run,
+        })
+    }
+
+    #[test]
+    fn a_worker_hears_what_was_prepared_and_what_it_may_do() {
+        let sandbox = brigadier_providers::Access::Scoped {
+            write_cwd: true,
+            writable_roots: Vec::new(),
+            network: true,
+            deny_read: Vec::new(),
+            unix_sockets: Vec::new(),
+        };
+        let sandboxed = note(&sandbox, false);
+        assert!(sandboxed.contains("`node_modules`, `apps/desktop/node_modules` were copied in"));
+        assert!(sandboxed.contains("Don't reinstall them"));
+        assert!(sandboxed.contains("/tmp/brigadier-test-12345678"));
+        assert!(sandboxed.contains("can't open windows"));
+        assert!(!sandboxed.contains("overnight"));
+        assert!(!sandboxed.contains("nice"));
+        let run = note(&brigadier_providers::Access::Full, true);
+        assert!(run.contains("without a sandbox"));
+        assert!(!run.contains("can't open windows"));
+        assert!(run.contains("declined by the overnight rules"));
+        assert!(run.contains("/Users/me/project"));
+        assert!(run.contains("`brigadier/abc/task-3`"));
+        assert!(run.contains("`git stash`"));
+        assert!(run.contains("don't use `nice`"));
     }
 }

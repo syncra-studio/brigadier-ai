@@ -130,6 +130,9 @@ impl SessionManager {
         let owner = GateOwner::Task {
             task_id: task.id.clone(),
         };
+        // Its checkers get the session's access (see `access_for`).
+        let sandboxed =
+            self.permission(&task.conversation_id) != crate::model::PermissionLevel::FullAccess;
         let reviewers = match recheck {
             Recheck::Full => self.panel_size(&task).await,
             Recheck::Verify => 0,
@@ -199,6 +202,7 @@ impl SessionManager {
                         &candidate.commit,
                         retry.as_ref().map(|(why, _)| why),
                         plan.as_deref(),
+                        sandboxed,
                     ),
                     None,
                     Some(author.clone()),
@@ -292,6 +296,37 @@ impl SessionManager {
         tokio::fs::metadata(&plan)
             .await
             .is_ok_and(|meta| meta.is_file() && meta.len() > 0)
+    }
+
+    /// For a held change accepted again: when the rebuilt `commit` holds the same files as the
+    /// round that couldn't verify it, its reviews still stand, and only a verifier checks it
+    /// again. Returns why the last verifier couldn't, and who it was (the next one is another
+    /// model).
+    pub(super) async fn reverify_held(
+        &self,
+        task: &Task,
+        commit: &str,
+    ) -> Option<(String, Author)> {
+        let gate = task.gate.as_ref()?;
+        if gate.outcome != Some(GateOutcome::Unverified) {
+            return None;
+        }
+        let before = gate.commit.as_deref()?;
+        if !self.same_tree(task, before, commit).await {
+            return None;
+        }
+        let verifier = gate.members.iter().find(|m| m.role == GateRole::Verify)?;
+        let verifier = self
+            .task_by_id(&task.conversation_id, &verifier.task_id)
+            .await
+            .ok()?;
+        Some((
+            unverified_reasons(gate),
+            Author {
+                provider: verifier.route.choice.provider,
+                model: verifier.route.choice.model.clone(),
+            },
+        ))
     }
 
     /// Whether two commits of the task's repository hold the same files.
@@ -1062,7 +1097,13 @@ fn review_spec(task: &Task, commit: &str, unreported: &[String], plan: Option<&s
 }
 
 /// What a verifier reads first.
-fn verify_spec(task: &Task, commit: &str, retry: Option<&String>, plan: Option<&str>) -> String {
+fn verify_spec(
+    task: &Task,
+    commit: &str,
+    retry: Option<&String>,
+    plan: Option<&str>,
+    sandboxed: bool,
+) -> String {
     // Asked about later messages that don't exist, a verifier asks the orchestrator for them.
     let criteria = if task.messages.is_empty() {
         "the task's below (the orchestrator sent the worker nothing that changes it) and each one the worker listed in its report"
@@ -1072,16 +1113,18 @@ fn verify_spec(task: &Task, commit: &str, retry: Option<&String>, plan: Option<&
     let mut spec = format!(
         "Verify the candidate commit {} of task-{} (\"{}\") independently, before it may land. Your checkout is at that commit.
 1. Find every \"done when\" criterion: {criteria}. For each one, produce your own evidence: run the command and quote the decisive line, or read the code and say where. The worker's claims are not evidence.
-2. Run the project's checks the way the project runs them (see its README, package scripts, Makefile and CI config): typecheck, lint, build, the existing tests, and a runtime smoke check where the project has one. Install missing dependencies in this checkout first.
+2. Run the project's checks the way the project runs them (see its README, package scripts, Makefile and CI config): typecheck, lint, build and the existing tests. {setup}
 3. Check hygiene: files the commit should not hold (logs, scratch notes, debug output, secrets, generated junk), debug code left in, and changes the task didn't ask for.
 4. Change no tracked file and add no source file: build output goes only into the project's ignored folders. Brigadier compares your checkout with the commit after your report and discards a verification that changed it.
-5. Workers often decide too early that a check can't run. Never do that yourself: before you call a check not run, try it, then try another way (install what is missing, use the project's own scripts, read how CI runs it). Name each command you tried and quote its error.
+5. {not_run}
 6. When a check fails, find out whether it fails the same way without this change: unpack the parent commit into your scratch folder (`mkdir <scratch>/parent && git archive HEAD~1 | tar -x -C <scratch>/parent`) and run it there, or read the code. A failure that is already there on the parent is not this change's: it is never [not met], an open question or a failed check for this change. Name it under risks.
 7. When a check can't run here, try it on the parent the same way. If it can't run there either, for the same reason (the same missing key, sign-in or service), it is a gap the project already had, not this change's: name it under risks as \"[pre-existing] <the check>: <your evidence it fails the same way on the parent: the command you ran there and its error>\", one line per check. A check that can't run here but runs on the parent, or one you couldn't try there, goes under risks as \"[not run] the check: the command you tried and its error\".
 {JUDGE_THE_CHANGE}",
         short(commit),
         task.number,
-        task.title
+        task.title,
+        setup = checks_setup(sandboxed),
+        not_run = not_run_step(sandboxed),
     );
     if let Some(fixes) = fixes_note(task) {
         spec.push_str(&format!("\n{fixes}"));
@@ -1107,9 +1150,42 @@ fn verify_spec(task: &Task, commit: &str, retry: Option<&String>, plan: Option<&
         ));
     }
     spec.push_str(
-        "\nEnd with submit_report. done_when: one line per criterion, for every criterion (the task's and the worker's, never fewer lines than the worker listed): \"[met] criterion: your evidence\", \"[not met] criterion: what fails\", or \"[not checked] criterion: the command you tried and its error\"; a check you did not run yourself is never [met]. checks: passed (every check you ran passed, apart from failures already on the parent, and the only checks that could not run, if any, are [pre-existing] ones, each named with its evidence), failed (a check ran and failed because of this change), notRun (any other check could not run, after you tried; a check stopped by a missing key, sign-in or service is notRun, not failed; the change never lands on notRun), or noChecks (the project has no checks you could run, apart from [pre-existing] ones). Put each problem the worker must fix in open_questions, and nothing else: any line there sends the change back to the worker. If a check that is not a [pre-existing] gap can't run until the user does something only they can (a key, a sign-in, a paid account), say exactly what under needs_user. A [pre-existing] gap goes under risks only, never under needs_user: needs_user is for what holds this change.",
+        "\nEnd with submit_report. done_when: one line per criterion, for every criterion (the task's and the worker's, never fewer lines than the worker listed): \"[met] criterion: your evidence\", \"[not met] criterion: what fails\", or \"[not checked] criterion: the command you tried and its error\"; a check you did not run yourself is never [met]. checks: passed (every check you ran passed, apart from failures already on the parent, and the only checks that could not run, if any, are [pre-existing] or [excluded] ones, each named with its evidence or rule), failed (a check ran and failed because of this change), notRun (any other check could not run, after you tried; a check stopped by a missing key, sign-in or service is notRun, not failed; the change never lands on notRun), or noChecks (the project has no checks you could run, apart from [pre-existing] and [excluded] ones). Put each problem the worker must fix in open_questions, and nothing else: any line there sends the change back to the worker.",
     );
+    spec.push_str(if task.run.is_some() {
+        " If a \"done when\" criterion can't be shown met until the user does something only they can (a key, a sign-in, a paid account), say exactly what under needs_user. A [pre-existing] gap, an [excluded] check or an optional check goes under risks only, never under needs_user: needs_user is for what holds a criterion."
+    } else {
+        " If a check that is not a [pre-existing] gap can't run until the user does something only they can (a key, a sign-in, a paid account), say exactly what under needs_user. A [pre-existing] gap or an [excluded] check goes under risks only, never under needs_user: needs_user is for what holds this change."
+    });
     spec
+}
+
+/// The setup of a verifier's checks: what is installed, where a smoke run keeps its data, and
+/// how a check the sandbox or a rule forbids is given (PLAN.md §10.8).
+pub(crate) fn checks_setup(sandboxed: bool) -> String {
+    format!(
+        "Its dependencies are already installed in this checkout: don't reinstall them{}. A smoke run that starts the app or a daemon keeps its data in your test data folder, never the app's real data folder{}. A check the task or the run's Rules forbid (\"don't launch the app\") is not run: give it as \"[excluded] <the check>: <the rule>\".",
+        if sandboxed {
+            ""
+        } else {
+            " (install one only if a check says it is missing)"
+        },
+        if sandboxed {
+            "; in your sandbox it can't open windows, so give it as \"[excluded] <the check>: the sandbox can't open windows\""
+        } else {
+            ""
+        },
+    )
+}
+
+/// How hard a verifier tries a check before calling it not run: in a sandbox, what it
+/// refuses it refuses for the whole check, so there is no other way to try.
+pub(crate) fn not_run_step(sandboxed: bool) -> &'static str {
+    if sandboxed {
+        "Before you call a check not run, run it the way the project runs it; name the command and quote its error."
+    } else {
+        "Workers often decide too early that a check can't run. Never do that yourself: before you call a check not run, try it, then try another way (install what is missing, use the project's own scripts, read how CI runs it). Name each command you tried and quote its error."
+    }
 }
 
 /// A "done when" line's status.
@@ -1195,9 +1271,9 @@ fn pre_existing_gap(line: &str) -> Option<(&str, &str)> {
 }
 
 /// The checks a verifier named under risks as unable to run: those that can't run on the
-/// parent either, for the same reason ("[pre-existing] …", a gap the project already had),
-/// and the others ("[not run] …").
-pub(super) fn unrun_checks(risks: &[String]) -> (Vec<&String>, Vec<&String>) {
+/// parent either, for the same reason ("[pre-existing] …", a gap the project already had) or
+/// that a rule or the environment forbids ("[excluded] …"), and the others ("[not run] …").
+pub(crate) fn unrun_checks(risks: &[String]) -> (Vec<&String>, Vec<&String>) {
     let marked = |line: &String, marker: &str| {
         without_marker(line)
             .get(..marker.len())
@@ -1206,7 +1282,7 @@ pub(super) fn unrun_checks(risks: &[String]) -> (Vec<&String>, Vec<&String>) {
     (
         risks
             .iter()
-            .filter(|line| marked(line, "[pre-existing]"))
+            .filter(|line| marked(line, "[pre-existing]") || marked(line, "[excluded]"))
             .collect(),
         risks
             .iter()
@@ -1272,12 +1348,22 @@ pub(super) fn verify_result(report: &Report, listed: usize) -> GateResult {
             .filter(|line| pre_existing_gap(line).is_none())
             .map(|line| without_marker(line))
             .collect();
+        // Everything that didn't run is excluded by a rule or the environment, or already
+        // failed on the parent: nothing this change could have run is missing.
+        let excluded = gaps.iter().any(|line| {
+            without_marker(line)
+                .to_lowercase()
+                .starts_with("[excluded]")
+        });
         match report.checks {
+            Some(ChecksResult::NotRun) if unrun.is_empty() && excluded && unproven.is_empty() => {
+                None
+            }
             Some(ChecksResult::Passed | ChecksResult::NoChecks)
                 if unrun.is_empty() && !unproven.is_empty() =>
             {
                 Some(format!(
-                    "A check it named as failing on the parent too gave no check or no evidence from the parent: {}",
+                    "A check it named as failing on the parent too (or as excluded) gave no check, or no evidence from the parent (or no rule): {}",
                     unproven.join("; ")
                 ))
             }
@@ -1546,6 +1632,65 @@ mod tests {
             verify_result(&unchecked, 0),
             GateResult::Unverified { .. }
         ));
+    }
+
+    #[test]
+    fn a_check_a_rule_or_the_sandbox_excludes_never_holds_the_change() {
+        let met = ["[met] the note exists: docs/notes.md, 210 lines"];
+        let excluded = "[excluded] pnpm desktop --smoke: the sandbox can't open windows";
+        for checks in [
+            ChecksResult::Passed,
+            ChecksResult::NotRun,
+            ChecksResult::NoChecks,
+        ] {
+            let mut report = report(&met, Some(checks));
+            report.risks = vec![
+                excluded.into(),
+                "[Excluded] daemon start: the task says not to".into(),
+            ];
+            assert_eq!(verify_result(&report, 1), GateResult::Passed, "{checks:?}");
+        }
+        // Without its rule it proves nothing.
+        let mut bare = report(&met, Some(ChecksResult::NotRun));
+        bare.risks = vec!["[excluded] pnpm desktop --smoke".into()];
+        assert!(matches!(
+            verify_result(&bare, 1),
+            GateResult::Unverified { .. }
+        ));
+        // A check that didn't run for another reason still holds it.
+        let mut other = report(&met, Some(ChecksResult::NotRun));
+        other.risks = vec![
+            excluded.into(),
+            "[not run] pnpm test: vitest crashed".into(),
+        ];
+        assert!(matches!(
+            verify_result(&other, 1),
+            GateResult::Unverified { .. }
+        ));
+    }
+
+    #[test]
+    fn a_sandboxed_verifier_is_never_told_to_install_or_try_another_way() {
+        let task = gated(TaskState::Reviewing, 1, "c1", None, "c1");
+        let sandboxed = verify_spec(&task, "c1", None, None, true);
+        for gone in [
+            "Install missing",
+            "another way",
+            "install what is missing",
+            "runtime smoke check",
+        ] {
+            assert!(!sandboxed.contains(gone), "{gone}: {sandboxed}");
+        }
+        assert!(sandboxed.contains("already installed"), "{sandboxed}");
+        assert!(sandboxed.contains("[excluded] <the check>: the sandbox can't open windows"));
+        assert!(sandboxed.contains("test data folder"), "{sandboxed}");
+        let full = verify_spec(&task, "c1", None, None, false);
+        assert!(full.contains("try another way"), "{full}");
+        assert!(!full.contains("can't open windows"), "{full}");
+        assert!(
+            full.contains("[excluded] <the check>: <the rule>"),
+            "{full}"
+        );
     }
 
     #[test]
@@ -2135,11 +2280,11 @@ mod tests {
     #[test]
     fn a_verifier_hears_of_later_messages_only_when_there_are_some() {
         let mut task = gated(TaskState::Reviewing, 1, "c1", None, "c1");
-        let spec = verify_spec(&task, "c1", None, None);
+        let spec = verify_spec(&task, "c1", None, None, true);
         assert!(!spec.contains("later messages"), "{spec}");
         assert!(spec.contains("sent the worker nothing"), "{spec}");
         task.messages = vec!["Also update the README.".into()];
-        let spec = verify_spec(&task, "c1", None, None);
+        let spec = verify_spec(&task, "c1", None, None, true);
         assert!(spec.contains("the orchestrator's later messages"), "{spec}");
     }
 
@@ -2148,7 +2293,7 @@ mod tests {
         let mut task = gated(TaskState::Reviewing, 2, "c2", None, "c2");
         for spec in [
             review_spec(&task, "c2", &[], None),
-            verify_spec(&task, "c2", None, None),
+            verify_spec(&task, "c2", None, None, true),
         ] {
             assert!(spec.contains(JUDGE_THE_CHANGE), "{spec}");
             assert!(!spec.contains("Brigadier sent the worker back"), "{spec}");
@@ -2156,7 +2301,7 @@ mod tests {
         task.fixes = vec!["From the review (task-2):\n- Re-export avg2".into()];
         for spec in [
             review_spec(&task, "c2", &[], None),
-            verify_spec(&task, "c2", None, None),
+            verify_spec(&task, "c2", None, None, true),
         ] {
             assert!(
                 spec.contains("Brigadier sent the worker back once"),
@@ -2168,7 +2313,7 @@ mod tests {
     #[test]
     fn a_verifier_checks_a_failure_against_the_parent_commit() {
         let task = gated(TaskState::Reviewing, 1, "c1", None, "c1");
-        let spec = verify_spec(&task, "c1", None, None);
+        let spec = verify_spec(&task, "c1", None, None, true);
         assert!(spec.contains("git archive HEAD~1"), "{spec}");
         assert!(spec.contains("already there on the parent"), "{spec}");
         assert!(spec.contains("failed because of this change"), "{spec}");

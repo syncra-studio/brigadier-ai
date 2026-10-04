@@ -206,6 +206,11 @@ pub struct TaskWorkspace {
     pub target: Option<String>,
     /// Its scratch folder outside the repository.
     pub scratch: String,
+    /// Dependency installs and build caches copied in from the user's checkout
+    /// (repo-relative folders), which its worker is told not to reinstall.
+    #[serde(default)]
+    #[ts(skip)]
+    pub warmed: Vec<String>,
 }
 
 /// A structured report, the only part of a worker's work that enters the orchestrator's

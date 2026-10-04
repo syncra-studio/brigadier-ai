@@ -91,6 +91,8 @@ pub(crate) struct Workspace {
     /// The branch accepted work lands on.
     pub target: Option<String>,
     pub scratch: PathBuf,
+    /// Folders copied in from the user's checkout (dependency installs, build caches).
+    pub warmed: Vec<String>,
 }
 
 #[derive(Default)]
@@ -1056,6 +1058,7 @@ impl SessionManager {
                     on_snapshot: workspace.on_snapshot,
                     target: workspace.target.clone(),
                     scratch: workspace.scratch.to_string_lossy().into_owned(),
+                    warmed: workspace.warmed.clone(),
                 });
             })
             .await?;
@@ -1142,6 +1145,7 @@ impl SessionManager {
             on_snapshot: recorded.on_snapshot,
             target: recorded.target,
             scratch: PathBuf::from(recorded.scratch),
+            warmed: recorded.warmed,
         };
         let project = conversation
             .project_id
@@ -1213,6 +1217,18 @@ impl SessionManager {
             })
             .await?;
         }
+        let test_dir = test_data_dir(&task.id);
+        self.prepare_owned_dir(&owner, &test_dir).await?;
+        let access = self.worker_access(task, &workspace, &cwd);
+        repo_note.push_str("\n\n");
+        repo_note.push_str(&prompts::environment(&prompts::WorkerEnvironment {
+            access: &access,
+            warmed: &workspace.warmed,
+            test_dir: &test_dir,
+            run_repo: task.run.as_ref().map(|_| workspace.repo.as_path()),
+            branch: workspace.branch.as_deref(),
+            low_priority: task.run.is_some(),
+        }));
         let native = match &workspace.worktree {
             Some(worktree) => instructions::for_worker(provider, worktree).await,
             None => String::new(),
@@ -1228,7 +1244,6 @@ impl SessionManager {
 
         // Without the shims the worker's outward commands would run unasked.
         self.sync_gate().await?;
-        let access = self.worker_access(task, &workspace, &cwd);
         let worker_grant = self.grants.issue(
             &owner,
             Role::Worker {
@@ -1484,6 +1499,7 @@ impl SessionManager {
         } else {
             vec![workspace.scratch.clone()]
         };
+        writable_roots.push(test_data_dir(&task.id));
         if let Some(worktree) = &workspace.worktree
             && (task.kind == TaskKind::Verify || (in_scratch && task.kind.writes()))
         {
@@ -1547,6 +1563,7 @@ impl SessionManager {
                 on_snapshot: false,
                 target: None,
                 scratch,
+                warmed: Vec::new(),
             });
         }
         // An overnight run's work lands on the run's branch, recorded with the task so it
@@ -1650,12 +1667,13 @@ impl SessionManager {
         // and build caches (best effort; see `warm`).
         let warm = task.kind.writes() || matches!(task.kind, TaskKind::Review | TaskKind::Verify);
         let (platform, task_id) = (self.runtime.platform().clone(), task.id.clone());
-        blocking(move || {
+        let warmed = blocking(move || {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(|err| Error::Invalid(err.to_string()))?;
             }
             let repo = git.open(&repo_path).map_err(git_error)?;
             repo.add_worktree(&path, spec).map_err(git_error)?;
+            let mut copied = Vec::new();
             if warm {
                 let started = std::time::Instant::now();
                 match git.open(&path) {
@@ -1670,13 +1688,14 @@ impl SessionManager {
                             ms = started.elapsed().as_millis() as u64,
                             "warmed the task's worktree"
                         );
+                        copied = warmed.copied;
                     }
                     Err(err) => {
                         tracing::warn!(task = %task_id, %err, "couldn't open the worktree to warm it");
                     }
                 }
             }
-            Ok(())
+            Ok(copied)
         })
         .await?;
         Ok(Workspace {
@@ -1687,6 +1706,7 @@ impl SessionManager {
             on_snapshot,
             target: Some(target),
             scratch,
+            warmed,
         })
     }
 
@@ -3659,6 +3679,17 @@ pub(crate) fn category(kind: TaskKind) -> brigadier_router::TaskCategory {
         TaskKind::Review => TaskCategory::Review,
         TaskKind::Merge => TaskCategory::Merge,
         TaskKind::Verify => TaskCategory::Verify,
+    }
+}
+
+/// Where a task's tests and smoke runs keep their data: under the system's temporary folder,
+/// never the app's own data folder (a smoke run of a debug build must not touch it).
+pub(crate) fn test_data_dir(id: &TaskId) -> PathBuf {
+    let name = format!("brigadier-test-{}", &id.0[id.0.len().saturating_sub(8)..]);
+    if cfg!(unix) {
+        PathBuf::from("/tmp").join(name)
+    } else {
+        std::env::temp_dir().join(name)
     }
 }
 
