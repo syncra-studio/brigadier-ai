@@ -405,6 +405,7 @@ dependencies = [
  "brigadier-store",
  "jiff",
  "memchr",
+ "nix 0.31.3",
  "rusqlite",
  "rusqlite_migration",
  "schemars 1.2.2",

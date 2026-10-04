@@ -3583,7 +3583,7 @@ fn access_for(kind: TaskKind, permission: PermissionLevel) -> WorkerAccess {
 
 /// Folders a sandboxed worker's builds, tests and installs write besides its own: the
 /// toolchains' homes and caches (Rust, Node package managers, the system's caches) and the
-/// system temporary folder, those that exist.
+/// system temporary folder, those that exist, and pnpm's store lock folder.
 fn toolchain_roots(env: &brigadier_providers::cli::CliEnv) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
     for name in [
@@ -3615,6 +3615,12 @@ fn toolchain_roots(env: &brigadier_providers::cli::CliEnv) -> Vec<PathBuf> {
         }
     }
     roots.retain(|root| root.is_absolute() && root.is_dir());
+    // pnpm locks its store in a fixed folder of `/tmp` (not `$TMPDIR`), made on first use.
+    #[cfg(unix)]
+    if let Ok(tmp) = Path::new("/tmp").canonicalize() {
+        let uid = nix::unistd::getuid();
+        roots.push(tmp.join(format!("pnpm-store-operation-locks-{uid}")));
+    }
     roots.dedup();
     roots
 }
