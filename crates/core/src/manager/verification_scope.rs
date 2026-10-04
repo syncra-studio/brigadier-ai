@@ -337,7 +337,12 @@ pub(super) fn scoped_spec(spec: String, scope: &mut VerificationScope, sandboxed
             .map(|name| format!(" -p {name}"))
             .collect::<String>();
         for command in ["build", "test", "clippy --all-targets"] {
-            checks.push_str(&format!("\n- `cargo {command}{packages}`."));
+            let flags = if command.starts_with("clippy") {
+                " -- -D warnings"
+            } else {
+                ""
+            };
+            checks.push_str(&format!("\n- `cargo {command}{packages}{flags}`."));
         }
         checks.push_str("\n- `cargo fmt --check`.");
     }
@@ -452,7 +457,7 @@ mod tests {
         for command in [
             "cargo build -p a -p b -p brigadier-desktop",
             "cargo test -p a",
-            "cargo clippy --all-targets -p a",
+            "cargo clippy --all-targets -p a -p b -p brigadier-desktop -- -D warnings",
         ] {
             assert!(stage < spec.find(command).unwrap());
         }
