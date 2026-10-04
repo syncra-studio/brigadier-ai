@@ -35,9 +35,10 @@ import {
   useOvernightCards,
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
-import { plainLine } from "@/app/conversation/rowWords";
+import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
 import { useAction } from "@/app/conversation/useAction";
+import { WorkerLine } from "@/app/conversation/WorkerChip";
 import { GitActions } from "@/app/conversation/GitActions";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/conversation/WorkerSummary";
@@ -270,8 +271,8 @@ function waitingFrom(
       const task = tasks[item.source.taskId];
       if (!task) return null;
       return item.source.type === "task"
-        ? `From task-${task.number}`
-        : `Before task-${task.number} can land`;
+        ? `From ${workerName(tasks, task)}`
+        : `Before ${workerName(tasks, task)} can land`;
     }
     case "card":
       return "A card waits for your answer";
@@ -314,7 +315,7 @@ function WaitingRow({
             open ? "wrap-break-word" : "truncate",
           )}
         >
-          {plainLine(item.what)}
+          <WorkerLine text={item.what} />
         </button>
         {source.type === "card" && (
           <Button
@@ -385,10 +386,10 @@ function DecisionRow({ decision }: { decision: Decision }) {
         className="text-muted-foreground mt-0.5 size-icon-sm shrink-0"
       />
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className={open ? "wrap-break-word" : "truncate"}>{plainLine(decision.what)}</span>
+        <span className={open ? "wrap-break-word" : "truncate"}><WorkerLine text={decision.what} /></span>
         {open && decision.why && (
           <span className="text-muted-foreground text-xs wrap-break-word">
-            {plainLine(decision.why)}
+            <WorkerLine text={decision.why} />
           </span>
         )}
       </span>

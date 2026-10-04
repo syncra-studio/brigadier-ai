@@ -153,3 +153,35 @@ export function plainLine(text: string): string {
 export function taskDecisions(decisions: readonly Decision[], taskId: string): Decision[] {
   return decisions.filter((decision) => decision.source.type === "task" && decision.source.taskId === taskId);
 }
+
+/**
+ * What a worker is called wherever the user reads it: its title, or for a check of another
+ * worker "Review of", "Second review of" or "Check of" and that worker's name. Its `task-N`
+ * stays in records and prompts only; a title that names one gets the worker's name instead.
+ */
+export function workerName(tasks: Readonly<Record<string, Task>>, task: Task, depth = 0): string {
+  const subject = task.subject ? tasks[task.subject] : undefined;
+  if (subject && depth < 2) {
+    const of = workerName(tasks, subject, depth + 1);
+    if (task.kind === "review") return `${/^second review/i.test(task.title) ? "Second review" : "Review"} of ${of}`;
+    if (task.kind === "verify") return `Check of ${of}`;
+  }
+  return depth < 2 ? namedTasks(task.title, tasks, depth + 1) : task.title;
+}
+
+/** A worker's `task-N`, with the title a line may already quote after it. */
+const TASK_REF = /\btask-(\d+)(\s+[“"][^”"]*[”"])?/g;
+
+/**
+ * A line with each `task-N` it names given as that worker's name in quotes ("Landed task-41
+ * “Findings”" reads "Landed “Findings”"); a number the session has no worker for stays.
+ */
+export function namedTasks(text: string, tasks: Readonly<Record<string, Task>>, depth = 0): string {
+  if (!text.includes("task-")) return text;
+  const byNumber = new Map(Object.values(tasks).map((task) => [task.number, task]));
+  return text.replace(TASK_REF, (whole, number: string, quoted: string | undefined) => {
+    const task = byNumber.get(Number(number));
+    if (!task) return whole;
+    return quoted ? quoted.trimStart() : `“${workerName(tasks, task, depth)}”`;
+  });
+}

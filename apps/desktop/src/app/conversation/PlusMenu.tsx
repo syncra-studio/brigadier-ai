@@ -225,11 +225,7 @@ export const PlusMenu: FC = () => {
               key={worker.id}
               onSelect={() => mention({ type: "task", id: worker.id }, `task-${worker.number}`)}
             >
-              <Row
-                icon={<WorkerGlyph taskId={worker.id} />}
-                title={`task-${worker.number}`}
-                detail={worker.title}
-              />
+              <Row icon={<WorkerGlyph taskId={worker.id} />} title={worker.title} />
             </DropdownMenuItem>
           ))}
           {chats.length > 0 && <Section>Chats</Section>}

@@ -131,7 +131,7 @@ export const TaskCardView = memo(function TaskCardView({ taskId }: { taskId: str
       onOpenChange={setOpen}
     >
       <p className="text-muted-foreground text-xs">
-        task-{task.number} · {task.kind} · {taskStateLabel(task)}
+        {task.kind} · {taskStateLabel(task)}
       </p>
       <HandoffLine task={task} groups={groups} />
       <TaskDetails task={task} model={model} />

@@ -9,8 +9,7 @@ import {
 import type { FC, ReactNode } from "react";
 
 import type { BlockOrchestratorStep, DecidedStep } from "@/app/conversation/blocks";
-import { plainLine } from "@/app/conversation/rowWords";
-import { WorkerMention } from "@/app/conversation/WorkerChip";
+import { WorkerLine, WorkerMention } from "@/app/conversation/WorkerChip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { OrchestratorStepKind } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -62,7 +61,7 @@ const Words: FC<{ attached?: boolean; children: ReactNode }> = ({ attached, chil
 function label(kind: OrchestratorStepKind | DecidedStep): ReactNode {
   switch (kind.type) {
     case "decided":
-      return <span className="min-w-0 truncate">Decided for you: {plainLine(kind.what)}</span>;
+      return <span className="min-w-0 truncate">Decided for you: <WorkerLine text={kind.what} /></span>;
     case "messaged":
       return (
         <>
@@ -100,7 +99,7 @@ const DecidedRow: FC<{ what: string; why: string }> = ({ what, why }) => {
   const line = (
     <>
       <CheckCircle aria-hidden className="size-icon-md shrink-0" />
-      <span className="min-w-0 truncate">Decided for you: {plainLine(what)}</span>
+      <span className="min-w-0 truncate">Decided for you: <WorkerLine text={what} /></span>
     </>
   );
   if (!why) {
@@ -120,8 +119,8 @@ const DecidedRow: FC<{ what: string; why: string }> = ({ what, why }) => {
         />
       </CollapsibleTrigger>
       <CollapsibleContent className="text-muted-foreground flex flex-col gap-1 ps-6 pb-1 text-sm wrap-break-word">
-        <span className="text-foreground/80">{plainLine(what)}</span>
-        <span>{plainLine(why)}</span>
+        <span className="text-foreground/80"><WorkerLine text={what} /></span>
+        <span><WorkerLine text={why} /></span>
       </CollapsibleContent>
     </Collapsible>
   );

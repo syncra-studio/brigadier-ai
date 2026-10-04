@@ -10,14 +10,13 @@ import {
   checkRounds,
   checksCount,
   ownerKey,
-  plainLine,
   ROLE_LABELS,
   type RowState,
   taskDecisions,
   taskRowDetail,
   taskState,
 } from "@/app/conversation/rowWords";
-import { AgentsPanelContext, useWorkerName, WorkerChip, WorkerGlyph } from "@/app/conversation/WorkerChip";
+import { AgentsPanelContext, useWorkerName, WorkerChip, WorkerGlyph, WorkerLine } from "@/app/conversation/WorkerChip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { Gate, PhaseState, Task } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -102,8 +101,8 @@ const TaskDecisions: FC<{ taskId: string }> = ({ taskId }) => {
     <ul className="flex flex-col gap-1">
       {decisions.map((decision) => (
         <li key={decision.id} className="flex flex-col">
-          <span className="text-foreground/80 wrap-break-word">{plainLine(decision.what)}</span>
-          {decision.why && <span className="wrap-break-word">{plainLine(decision.why)}</span>}
+          <span className="text-foreground/80 wrap-break-word"><WorkerLine text={decision.what} /></span>
+          {decision.why && <span className="wrap-break-word"><WorkerLine text={decision.why} /></span>}
         </li>
       ))}
     </ul>

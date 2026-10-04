@@ -131,7 +131,7 @@ const AgentRow = memo(function AgentRow({ taskId }: { taskId: string }) {
       <button
         type="button"
         data-task={`task-${task.number}`}
-        title={`task-${task.number} · ${taskStateLabel(task)}`}
+        title={taskStateLabel(task)}
         onClick={() => setPanel(task.id)}
         className="hover:bg-foreground/5 rounded-control flex w-full items-start gap-3 px-2 py-2 text-start transition-colors"
       >
@@ -365,7 +365,7 @@ function WorkerDetail({ task }: { task: Task }) {
         <WorkerGlyph taskId={task.id} className="size-6" />
         <h2
           className="min-w-0 flex-1 truncate text-sm font-medium"
-          title={`${name ?? task.title} · task-${task.number}`}
+          title={name ?? task.title}
         >
           {name ?? task.title}
         </h2>

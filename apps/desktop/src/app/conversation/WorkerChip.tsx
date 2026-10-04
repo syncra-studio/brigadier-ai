@@ -1,5 +1,6 @@
 import { createContext, memo, useContext, useState } from "react";
 
+import { namedTasks, plainLine, workerName } from "@/app/conversation/rowWords";
 import { IdGlyph } from "@/components/glyphs/worker-glyphs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Task, TaskState } from "@/ipc/generated";
@@ -59,28 +60,28 @@ export function WorkerGlyph({
   return <IdGlyph id={taskId} dot={working} className={cn(className, tone)} />;
 }
 
-/** The task a review worker reviews, while the board still has it. */
-function reviewSubject(board: Board | null | undefined, task: Task | undefined): Task | undefined {
-  if (task?.kind !== "review" || !task.subject) return undefined;
+/** The task a checker (a review or a verifier) checks, while the board still has it. */
+function checkSubject(board: Board | null | undefined, task: Task | undefined): Task | undefined {
+  if ((task?.kind !== "review" && task?.kind !== "verify") || !task.subject) return undefined;
   return board?.tasks[task.subject];
 }
 
-/**
- * What a worker is called: its title, or for a review of another worker "Review of" and that
- * worker's title, rather than its `task-N`.
- */
+/** What a worker is called (see `workerName`), rather than its `task-N`. */
 export function useWorkerName(taskId: string): string | null {
   return useBoard((s) => {
     const task = s.board?.tasks[taskId];
-    if (!task) return null;
-    const subject = reviewSubject(s.board, task);
-    return subject ? `Review of ${subject.title}` : task.title;
+    return task && s.board ? workerName(s.board.tasks, task) : null;
   });
 }
 
+/** A decision's or a waiting item's line as the user reads it: plain, its workers by name. */
+export const WorkerLine = memo(function WorkerLine({ text }: { text: string }) {
+  return useBoard((s) => plainLine(namedTasks(text, s.board?.tasks ?? {})));
+});
+
 /**
  * A worker named in a line: its glyph and name in a pill that truncates a long name, shows it
- * whole with the worker's number and state on hover, and opens the worker in the panel. The
+ * whole with the worker's state on hover, and opens the worker in the panel. The
  * glyph keeps the worker's own colour wherever it shows, so one worker never looks like two;
  * a line that must mark it gives a `tone`. `label` names it shorter where the line says the rest.
  */
@@ -98,13 +99,12 @@ export const WorkerChip = memo(function WorkerChip({
   const { setPanel } = useContext(AgentsPanelContext);
   const name = useWorkerName(taskId);
   const number = useBoard((s) => s.board?.tasks[taskId]?.number);
-  const state = useBoard((s) => s.board?.tasks[taskId]?.state);
   const stateLabel = useBoard((s) => {
     const task = s.board?.tasks[taskId];
     return task ? taskStateLabel(task) : undefined;
   });
   const [open, setOpen] = useState(false);
-  if (name === null || number === undefined || state === undefined) {
+  if (name === null || number === undefined || stateLabel === undefined) {
     return <span className="shrink-0">a worker</span>;
   }
   return (
@@ -139,16 +139,14 @@ export const WorkerChip = memo(function WorkerChip({
       </TooltipTrigger>
       <TooltipContent side="top" className="flex-col gap-0.5">
         <span className="wrap-break-word">{name}</span>
-        <span className="text-muted-foreground text-xs">
-          task-{number} · {stateLabel}
-        </span>
+        <span className="text-muted-foreground text-xs">{stateLabel}</span>
       </TooltipContent>
     </Tooltip>
   );
 });
 
 /**
- * How a line names a worker: its chip, and for a review of another worker the review's chip,
+ * How a line names a worker: its chip, and for a check of another worker the check's chip,
  * then "of" and that worker's chip ("[Review] of [Add tests]"). Items of a flex line.
  */
 export const WorkerMention = memo(function WorkerMention({
@@ -158,11 +156,12 @@ export const WorkerMention = memo(function WorkerMention({
   taskId: string;
   tone?: string | null | undefined;
 }) {
-  const subject = useBoard((s) => reviewSubject(s.board, s.board?.tasks[taskId])?.id ?? null);
+  const subject = useBoard((s) => checkSubject(s.board, s.board?.tasks[taskId])?.id ?? null);
+  const kind = useBoard((s) => s.board?.tasks[taskId]?.kind);
   if (subject === null) return <WorkerChip taskId={taskId} tone={tone} />;
   return (
     <>
-      <WorkerChip taskId={taskId} tone={tone} label="Review" className="shrink-0" />
+      <WorkerChip taskId={taskId} tone={tone} label={kind === "verify" ? "Check" : "Review"} className="shrink-0" />
       <span className="shrink-0">of</span>
       <WorkerChip taskId={subject} />
     </>

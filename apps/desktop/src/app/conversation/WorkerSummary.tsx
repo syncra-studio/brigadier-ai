@@ -159,7 +159,6 @@ export const WorkerSummaryRow = memo(function WorkerSummaryRow({
       type="button"
       data-slot="worker-summary-row"
       data-state={task.state}
-      title={`task-${task.number}`}
       onClick={() => setPanel(task.id)}
       className={cn(
         "hover:bg-foreground/5 rounded-control flex h-control-sm items-center gap-2 text-start text-sm transition-colors",
@@ -221,9 +220,7 @@ export const WorkerStripRow = memo(function WorkerStripRow({
           </button>
         </TooltipTrigger>
         <TooltipContent side="top" className="flex-col gap-0.5">
-          <span>
-            task-{task.number} · {task.kind}
-          </span>
+          <span className="wrap-break-word">{name}</span>
           <span className="text-muted-foreground text-xs">
             Uses {modelName(groups, choice)}
             {choice.effort && ` · ${choice.effort}`}
