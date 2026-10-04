@@ -65,6 +65,7 @@ export function UsagePage() {
 
   return (
     <SettingsPage
+      wide
       title="Usage"
       description="How much of each agent's usage is left, and where it's heading."
       actions={

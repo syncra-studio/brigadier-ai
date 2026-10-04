@@ -81,6 +81,7 @@ export function ProvidersPage() {
 
   return (
     <SettingsPage
+      wide
       title="Providers"
       description="The coding agents Brigadier runs, such as Claude Code and Codex. Connect them and choose which of their models you use."
       actions={

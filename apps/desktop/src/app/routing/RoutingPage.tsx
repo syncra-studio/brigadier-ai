@@ -89,6 +89,7 @@ export function RoutingPage() {
 
   return (
     <SettingsPage
+      wide
       title="Routing"
       description="In a session, Brigadier splits the work into tasks and hands each to a worker model. Choose which models it may use, and which one does each kind of work."
     >

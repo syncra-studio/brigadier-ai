@@ -7,6 +7,7 @@ import { PerformanceTab } from "@/app/inspector/PerformanceTab";
 import { ProcessesTab } from "@/app/inspector/ProcessesTab";
 import { ProvidersTab } from "@/app/inspector/providers/ProvidersTab";
 import { RoutingTab } from "@/app/inspector/RoutingTab";
+import { SettingsPage } from "@/app/settings/parts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { setInspectorTab } from "@/state/actions";
 import { type InspectorTab, useApp } from "@/state/store";
@@ -39,16 +40,13 @@ export function InspectorPage() {
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [tab]);
   return (
-    <div data-slot="settings-page" className="flex h-full flex-col">
-      {/* The page's toolbar strip, for dragging the window. */}
-      <div data-tauri-drag-region className="h-page-toolbar shrink-0" />
+    <SettingsPage title="Inspector" wide scrollable={false}>
       <Tabs
         value={tab}
         onValueChange={(value) => isTab(value) && setInspectorTab(value)}
-        className="max-w-settings mx-auto flex min-h-0 w-full flex-1 flex-col gap-0 px-5 pt-4"
+        className="flex min-h-0 flex-1 flex-col gap-0"
       >
-        <header className="flex flex-col gap-4 py-3">
-          <h1 className="text-page-title font-medium">Inspector</h1>
+        <div className="flex shrink-0 flex-col pt-1 pb-3">
           <TabsList
             ref={tabs}
             className="hide-scrollbar max-w-full min-w-0 justify-start self-start overflow-x-auto"
@@ -61,7 +59,7 @@ export function InspectorPage() {
             <TabsTrigger value="providers">Providers</TabsTrigger>
             <TabsTrigger value="routing">Routing</TabsTrigger>
           </TabsList>
-        </header>
+        </div>
         <TabsContent value="events" className="flex min-h-0 flex-col">
           <EventsTab />
         </TabsContent>
@@ -84,6 +82,6 @@ export function InspectorPage() {
           <RoutingTab />
         </TabsContent>
       </Tabs>
-    </div>
+    </SettingsPage>
   );
 }

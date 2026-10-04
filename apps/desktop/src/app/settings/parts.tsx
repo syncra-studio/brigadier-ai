@@ -30,40 +30,51 @@ import { useApp } from "@/state/store";
  * controls rows use (switch, segmented choice, select, button).
  */
 
-/** A Settings page: its title, then its sections in a centred column that scrolls. */
+/** A Settings page: its title, then its sections in a centred column. */
 export function SettingsPage({
   title,
   description,
   actions,
   wide = false,
+  scrollable = true,
   children,
 }: {
   title: string;
   description?: ReactNode;
   actions?: ReactNode;
-  /** A wider column, for a page with panes side by side. */
+  /** A wider column, for a data page (tables, charts, panes). */
   wide?: boolean;
+  /** Disable page scrolling when the content owns its bounded scroll areas. */
+  scrollable?: boolean;
   children: ReactNode;
 }) {
   return (
     <div data-slot="settings-page" className="flex h-full flex-col">
       {/* The page's toolbar strip, for dragging the window. */}
       <div data-tauri-drag-region className="h-page-toolbar shrink-0" />
-      <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+      <div
+        className={cn(
+          "min-h-0 flex-1",
+          scrollable ? "overflow-y-auto [scrollbar-gutter:stable]" : "flex flex-col overflow-hidden",
+        )}
+      >
         <div
           className={cn(
-            "mx-auto flex w-full flex-col px-5 pt-4 pb-12",
+            "mx-auto flex w-full flex-col px-5 pt-4",
             wide ? "max-w-settings-wide" : "max-w-settings",
+            scrollable ? "pb-12" : "min-h-0 flex-1",
           )}
         >
-          <header className="flex items-start gap-4 py-3">
+          <header className="flex shrink-0 items-start gap-4 py-3">
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <h1 className="text-page-title font-medium">{title}</h1>
               {description && <p className="text-foreground/65 text-sm">{description}</p>}
             </div>
             {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
           </header>
-          <div className="flex flex-col gap-10 pt-5">{children}</div>
+          <div className={cn("flex flex-col", scrollable ? "gap-10 pt-5" : "min-h-0 flex-1")}>
+            {children}
+          </div>
         </div>
       </div>
     </div>

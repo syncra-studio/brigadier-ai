@@ -45,7 +45,7 @@ export function StoragePage() {
   }, []);
 
   return (
-    <SettingsPage title="Storage">
+    <SettingsPage title="Storage" wide>
       <SettingsSection>
         <SettingsCard>
           <SettingsRow
