@@ -838,6 +838,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace --lib --bins --tests
 pnpm typecheck
 pnpm lint
+pnpm test
 git diff --check
 ```
 

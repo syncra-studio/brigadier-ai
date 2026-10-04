@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The full checks of docs/PLAN.md §10.13, run from anywhere in the checkout.
 #
-#   tools/full-checks.sh            fmt, generated types, build, clippy, tests, typecheck, lint
+#   tools/full-checks.sh            fmt, generated types, build, clippy, tests, typecheck, lint, app tests
 #   tools/full-checks.sh --cross    also Linux and Windows clippy of the cross-buildable crates
 #
 # Safe inside a Brigadier worker: it installs dependencies only when the checkout has none
@@ -31,7 +31,8 @@ run() {
   ${nice_prefix[@]+"${nice_prefix[@]}"} "$@"
 }
 
-if [ ! -f node_modules/.modules.yaml ] || [ ! -f apps/desktop/node_modules/.modules.yaml ]; then
+# pnpm marks the workspace's install at its root; the app's own folder holds only links.
+if [ ! -f node_modules/.modules.yaml ] || [ ! -e apps/desktop/node_modules/vite ]; then
   run pnpm install --frozen-lockfile
 fi
 
@@ -51,6 +52,7 @@ run cargo clippy --locked --workspace --all-targets -- -D warnings
 run cargo test --locked --workspace --lib --bins --tests
 run pnpm typecheck
 run pnpm lint
+run pnpm test
 echo "+ git diff --check"
 git diff --check
 
