@@ -23,3 +23,13 @@ Enter or Space to activate them. The `/overnight` menu item only prepares a draf
 Normal approval/rejection still sends `decidePlan`; automatic normal proposals have
 no user Start or approval control. Stop settles after one successful fixture call;
 Continue creates another proposal and requires Start.
+
+# The night of 2026-10-03
+
+`http://localhost:1426/fixtures/night.html` renders the real thread and side panel of the first
+overnight run from its stored events (`src/fixtures/boards/overnight-2026-10-03.json`, made by
+`scripts/extract-board-fixture.mjs` from a copy of the database). Requests are answered in the
+page and never reach a daemon; a worker's transcript is not in the fixture. Open Phase 2's header:
+it shows seven rows (the plan, four workers, one judgement call, the lead's reply), where the app
+showed 53 before one row per task. Open a row's chevron for its checks round by round, and the
+run card's Phase 2 for its steps.
