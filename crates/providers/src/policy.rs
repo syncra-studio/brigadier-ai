@@ -370,6 +370,42 @@ pub fn is_outward(command: &str) -> bool {
         .any(|words| words_outward(words))
 }
 
+/// The outward commands a command line runs, each as the command gate will see it: its argv
+/// without environment assignments, wrappers and redirections, and the folder the last `cd`
+/// before it in the line moved to (`None` when none did).
+pub fn outward_commands(command: &str) -> Vec<(Option<String>, Vec<String>)> {
+    let mut dir = None;
+    let mut found = Vec::new();
+    for words in simple_commands(command) {
+        let words = strip_prefixes(&words);
+        if words.first().is_some_and(|program| program == "cd") {
+            dir = Some(words.get(1).cloned().unwrap_or_else(|| "~".to_owned()));
+        } else if words_outward(words) {
+            found.push((dir.clone(), without_redirections(words)));
+        }
+    }
+    found
+}
+
+/// `words` without redirections (`> log`, `2>`, `<input`); `2>&1` reaches here as `2>`, as
+/// `&` ends a simple command.
+fn without_redirections(words: &[String]) -> Vec<String> {
+    let mut argv = Vec::with_capacity(words.len());
+    let mut words = words.iter();
+    while let Some(word) = words.next() {
+        let operator = word.trim_start_matches(|c: char| c.is_ascii_digit());
+        if operator.starts_with(['<', '>']) {
+            // A bare operator's target is the next word.
+            if operator.trim_start_matches(['<', '>']).is_empty() {
+                words.next();
+            }
+        } else {
+            argv.push(word.clone());
+        }
+    }
+    argv
+}
+
 /// Whether one simple command is an [`ALWAYS_ASK`] command. git is judged by its subcommand,
 /// as the gate does (`git stash push` and `git log --grep push` stay local; an alias is left to
 /// the gate, which resolves it), and `gh api` only when it writes.
@@ -1163,6 +1199,32 @@ mod tests {
             ArgvVerdict::Local
         );
         assert_eq!(classify_argv(&argv("git stash push")), ArgvVerdict::Local);
+    }
+
+    #[test]
+    fn outward_commands_are_found_as_the_gate_sees_them() {
+        let argv = |words: &[&str]| words.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            outward_commands("cd ../repo && git push origin main 2>&1 | tail -3"),
+            [(
+                Some("../repo".to_owned()),
+                argv(&["git", "push", "origin", "main"])
+            )]
+        );
+        assert_eq!(
+            outward_commands(
+                "/bin/zsh -lc 'GIT_TRACE=1 git -C x push > out.log; gh pr create --fill'"
+            ),
+            [
+                (None, argv(&["git", "-C", "x", "push"])),
+                (None, argv(&["gh", "pr", "create", "--fill"])),
+            ]
+        );
+        assert_eq!(
+            outward_commands("cd && npm publish <input"),
+            [(Some("~".to_owned()), argv(&["npm", "publish"]))]
+        );
+        assert!(outward_commands("cd x && git stash push && cargo test").is_empty());
     }
 
     #[test]

@@ -204,8 +204,10 @@ impl SessionManager {
                     && let Some(command) = &request.command
                     && brigadier_providers::policy::is_outward(command)
                 {
-                    // The CLI asked (its own ask rule); the gate must not ask again. Claude
-                    // names no cwd: its commands run where the worker runs.
+                    // The CLI asked (its own ask rule); the gate must not ask again, for any
+                    // outward command in the line, as the gate sees it (`cd repo && git push
+                    // 2>&1 | tail` reaches it as `git push` in `repo`). Claude names no cwd: its
+                    // commands run where the worker runs.
                     let cwd = match &request.cwd {
                         Some(cwd) => Some(PathBuf::from(cwd)),
                         None => match self.existing_task_live(&task_id) {
@@ -213,12 +215,18 @@ impl SessionManager {
                             None => None,
                         },
                     };
-                    self.waiters.add_pass(Pass {
-                        task_id: Some(task_id.clone()),
-                        argv: split_command(command),
-                        cwd: cwd.map(|cwd| resolved(&cwd)).unwrap_or_default(),
-                        expires_ms: now_ms() + PASS_TTL_MS,
-                    });
+                    for (dir, argv) in brigadier_providers::policy::outward_commands(command) {
+                        let cwd = match dir {
+                            None => cwd.clone(),
+                            Some(dir) => moved_to(cwd.as_deref(), &dir),
+                        };
+                        self.waiters.add_pass(Pass {
+                            task_id: Some(task_id.clone()),
+                            argv,
+                            cwd: cwd.map(|cwd| resolved(&cwd)).unwrap_or_default(),
+                            expires_ms: now_ms() + PASS_TTL_MS,
+                        });
+                    }
                 }
                 self.answer_worker_approval(&task_id, request, decision.clone())
                     .await?;
@@ -654,53 +662,26 @@ fn resolved(path: &Path) -> String {
         .into_owned()
 }
 
+/// The folder `cd <dir>` moves to from `cwd`; `None` when it can't be told (`cd -`, or a
+/// relative folder from an unknown one).
+fn moved_to(cwd: Option<&Path>, dir: &str) -> Option<PathBuf> {
+    let home = || std::env::var_os("HOME").map(PathBuf::from);
+    if dir == "~" {
+        home()
+    } else if let Some(rest) = dir.strip_prefix("~/") {
+        home().map(|home| home.join(rest))
+    } else if dir == "-" {
+        None
+    } else if Path::new(dir).is_absolute() {
+        Some(PathBuf::from(dir))
+    } else {
+        cwd.map(|cwd| cwd.join(dir))
+    }
+}
+
 fn answer_is_yes(answer: &str) -> bool {
     let answer = answer.trim().to_lowercase();
     answer.starts_with("yes") || answer.starts_with("include") || answer.starts_with("show")
-}
-
-/// Splits a shell command line into words (quotes and backslashes, no expansion).
-pub(crate) fn split_command(command: &str) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut word = String::new();
-    let mut in_word = false;
-    let mut quote: Option<char> = None;
-    let mut chars = command.chars();
-    while let Some(c) = chars.next() {
-        match (quote, c) {
-            (Some(q), c) if c == q => quote = None,
-            (Some('"'), '\\') => {
-                if let Some(next) = chars.next() {
-                    word.push(next);
-                }
-            }
-            (Some(_), c) => word.push(c),
-            (None, '\'' | '"') => {
-                quote = Some(c);
-                in_word = true;
-            }
-            (None, '\\') => {
-                if let Some(next) = chars.next() {
-                    word.push(next);
-                    in_word = true;
-                }
-            }
-            (None, c) if c.is_whitespace() => {
-                if in_word {
-                    words.push(std::mem::take(&mut word));
-                    in_word = false;
-                }
-            }
-            (None, c) => {
-                word.push(c);
-                in_word = true;
-            }
-        }
-    }
-    if in_word {
-        words.push(word);
-    }
-    words
 }
 
 /// Whether two command lines are the same command (the program compared by file name).
@@ -710,4 +691,24 @@ fn same_command(a: &[String], b: &[String]) -> bool {
             .map(|p| p.rsplit('/').next().unwrap_or(p).to_owned())
     };
     a.len() == b.len() && program(a) == program(b) && a[1..] == b[1..]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cd_in_the_line_moves_the_pass_to_its_folder() {
+        let cwd = Path::new("/work/repo");
+        assert_eq!(
+            moved_to(Some(cwd), "../other"),
+            Some(PathBuf::from("/work/repo/../other"))
+        );
+        assert_eq!(moved_to(Some(cwd), "/abs"), Some(PathBuf::from("/abs")));
+        assert_eq!(moved_to(None, "sub"), None);
+        assert_eq!(moved_to(Some(cwd), "-"), None);
+        if let Some(home) = std::env::var_os("HOME") {
+            assert_eq!(moved_to(None, "~/x"), Some(PathBuf::from(home).join("x")));
+        }
+    }
 }
