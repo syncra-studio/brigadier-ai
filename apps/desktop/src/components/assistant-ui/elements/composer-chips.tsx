@@ -139,8 +139,8 @@ export function chipFormatter(mention: MentionMatcher): Unstable_DirectiveFormat
   };
 }
 
-/** The app's icon and name for a mention chip of `type` (a worker's glyph, a chat's title). */
-export type MentionLook = (chip: DirectiveChipProps) => { icon: ReactNode; name: string } | null;
+/** The app's icon and name for a mention chip of `type` (a worker's glyph and name, a chat's title). */
+export type MentionLook = (chip: DirectiveChipProps) => { icon: ReactNode; name: ReactNode } | null;
 
 const MentionLookContext = createContext<MentionLook | null>(null);
 

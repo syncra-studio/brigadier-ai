@@ -15,7 +15,7 @@ import {
 } from "lexical";
 import { useCallback, useContext, useEffect, useMemo } from "react";
 
-import { WorkerGlyph } from "@/app/conversation/WorkerChip";
+import { WorkerGlyph, useWorkerName } from "@/app/conversation/WorkerChip";
 import { usePromptHistory } from "@/app/conversation/composerDraft";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { mentionOf } from "@/app/conversation/Mentions";
@@ -88,10 +88,17 @@ export default function ComposerEditor({
   );
 }
 
+/** A worker on its mention chip by its name; its `task-N` stays in the text it sends. */
+function MentionedWorker({ taskId, label }: { taskId: string; label: string }) {
+  return useWorkerName(taskId) ?? label;
+}
+
 /** A worker's glyph or a conversation's icon on its mention chip; files keep their type's. */
 const mentionLook: MentionLook = ({ directiveType, directiveId, label }) => {
   const id = directiveId.slice(directiveId.indexOf(":") + 1);
-  if (directiveType === "task") return { icon: <WorkerGlyph taskId={id} />, name: label };
+  if (directiveType === "task") {
+    return { icon: <WorkerGlyph taskId={id} />, name: <MentionedWorker taskId={id} label={label} /> };
+  }
   if (directiveType === "chat") return { icon: <Chat />, name: label };
   return null;
 };

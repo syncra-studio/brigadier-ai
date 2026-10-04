@@ -49,6 +49,7 @@ import {
 } from "@/app/conversation/composerTarget";
 import { useResolvedDraft } from "@/app/conversation/draftSetup";
 import { reportTexts, shownTexts } from "@/app/conversation/phaseView";
+import { workerName } from "@/app/conversation/rowWords";
 import { type BlockMeta, RequestBlock } from "@/app/conversation/RequestBlock";
 import { StatusCardContext } from "@/app/conversation/StatusCard";
 import { ComposerCapsule } from "@/app/conversation/ComposerCapsule";
@@ -389,7 +390,8 @@ function useMentionTargets(conversationId: string | null): MentionTarget[] {
       if (!board || board.conversationId !== conversationId) return [];
       return Object.values(board.tasks)
         .toSorted((a, b) => a.number - b.number)
-        .flatMap((task) => [task.id, task.number, task.title, task.state]);
+        // Each by its name, as everywhere the user reads it.
+        .flatMap((task) => [task.id, task.number, workerName(board.tasks, task), task.state]);
     }),
   );
   return useMemo(() => {

@@ -14,7 +14,7 @@ import { listFiles } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
-/** A worker the composer can @-mention. */
+/** A worker the composer can @-mention, `title` its name as the user reads it. */
 export type MentionTarget = { id: string; number: number; title: string; state: string };
 
 /** Files matching a query that the menu lists; only a handful show at once. */
@@ -246,9 +246,10 @@ export const Mentions: FC<{
       for (const target of targets) {
         const name = `task-${target.number}`;
         if (!name.includes(lower) && !target.title.toLowerCase().includes(lower)) continue;
+        // By its title, as everywhere the user reads it; `task-N` is what it leaves in the text.
         add({ type: "task", id: target.id }, name, {
           icon: <WorkerGlyph taskId={target.id} />,
-          detail: target.title,
+          name: target.title,
           trailing: target.state,
         });
       }
