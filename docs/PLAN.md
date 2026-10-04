@@ -820,21 +820,20 @@ No new test suite is a default deliverable. Use the existing suite, real runtime
 
 Use the worktree's own `target/`, or a deliberately shared `CARGO_TARGET_DIR` with the memory's freshness safeguards. **Never move target directories between worktrees**: build-script outputs contain absolute paths. Respect Rust/pnpm versions pinned by the repo. Dependencies use the installed versions; a research scout checks current official docs before changing a provider API, notification API or dependency. No silent upgrades.
 
-Run heavy commands one at a time, niced. `stage-sidecar` builds and stages the real sidecar before whole-workspace clippy/tests; a dummy sidecar is not verification. A representative check sequence, from the worktree, is:
+Run heavy commands one at a time, niced. `stage-sidecar` builds and stages the real sidecar before whole-workspace clippy/tests; a dummy sidecar is not verification. **`tools/full-checks.sh`** runs the whole sequence from anywhere in the checkout (`--cross` adds the Linux/Windows clippy below). It works the same for a person and inside a Brigadier worker: it installs dependencies only when the checkout has none (a worker's are copied in), uses `nice` only when the process isn't low priority already (a run worker is, and a sandbox refuses `nice`), and writes nothing outside the checkout's ignored folders, never `/tmp`. The sequence is:
 
 ```sh
-nice -n 10 pnpm install --frozen-lockfile
-nice -n 10 cargo fmt --all --check
-nice -n 10 cargo run --locked -q -p brigadier-ipc --bin gen-ts
+pnpm install --frozen-lockfile   # only when node_modules is missing
+cargo fmt --all --check
+cargo run --locked -q -p brigadier-ipc --bin gen-ts
 git diff --exit-code -- apps/desktop/src/ipc/generated
 test -z "$(git ls-files --others --exclude-standard -- apps/desktop/src/ipc/generated)"
-nice -n 10 pnpm build
-nice -n 10 pnpm --filter @brigadier/desktop stage-sidecar --debug
-nice -n 10 cargo clippy --locked --workspace --all-targets -- -D warnings
-nice -n 10 cargo test --locked --workspace --lib --bins --tests
-nice -n 10 pnpm typecheck
-nice -n 10 pnpm lint
-nice -n 10 pnpm build
+pnpm build
+pnpm --filter @brigadier/desktop stage-sidecar --debug
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace --lib --bins --tests
+pnpm typecheck
+pnpm lint
 git diff --check
 ```
 
