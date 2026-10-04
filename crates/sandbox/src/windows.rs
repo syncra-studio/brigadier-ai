@@ -28,15 +28,17 @@ use windows_sys::Win32::Security::{
     TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL};
+use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows_sys::Win32::System::Threading::{
     CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS, GetCurrentProcess,
     GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenProcessToken,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, TerminateProcess,
 };
 
+use crate::machine::memory_tight_from_load;
 use crate::{
-    AppPaths, CredentialStore, DetachedChild, Platform, PrivateFs, Processes, Result, Sandbox,
-    SandboxPolicy, Shell, SpawnSpec, unsupported,
+    AppPaths, CredentialStore, DetachedChild, Machine, MachineLoad, Platform, PrivateFs, Processes,
+    Result, Sandbox, SandboxPolicy, Shell, SpawnSpec, unsupported,
 };
 
 const NAME: &str = "windows";
@@ -72,6 +74,28 @@ impl Platform for Windows {
     }
     fn sandbox(&self) -> &dyn Sandbox {
         &Unsupported
+    }
+    fn machine(&self) -> &dyn Machine {
+        &WindowsMachine
+    }
+}
+
+/// The memory load. Windows has no reliable unprivileged temperature or heat-state API, so
+/// heat reads as nominal; a CPU-throttling signal arrives with the Windows platform phase.
+struct WindowsMachine;
+
+impl Machine for WindowsMachine {
+    fn load(&self) -> MachineLoad {
+        let mut status = MEMORYSTATUSEX {
+            dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: `status` is a live MEMORYSTATUSEX with `dwLength` set, as the call requires.
+        let read = unsafe { GlobalMemoryStatusEx(&mut status) } != 0;
+        MachineLoad {
+            heat: crate::Heat::Nominal,
+            memory_tight: read && memory_tight_from_load(status.dwMemoryLoad),
+        }
     }
 }
 
@@ -332,9 +356,29 @@ impl Processes for WindowsProcesses {
         unsupported("listing a process's descendants", NAME)
     }
 
+    fn children(&self, _pid: u32) -> Result<Vec<u32>> {
+        // As `descendants`.
+        unsupported("listing a process's children", NAME)
+    }
+
     fn group_of(&self, _pid: u32) -> Option<u32> {
         // Windows has no process groups to signal (see `kill_group`).
         None
+    }
+
+    fn command_line(&self, _pid: u32) -> Option<Vec<String>> {
+        // Reading another process's command line needs its PEB, as `in_dir`.
+        None
+    }
+
+    fn suspend(&self, _pid: u32) -> Result<()> {
+        // Suspending a process (NtSuspendProcess or a job object) arrives with the Windows
+        // platform phase, together with the tree walk that finds what to suspend.
+        unsupported("suspending a process", NAME)
+    }
+
+    fn resume(&self, _pid: u32) -> Result<()> {
+        unsupported("resuming a process", NAME)
     }
 
     fn in_dir(&self, _dir: &std::path::Path) -> Result<Vec<u32>> {

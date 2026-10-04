@@ -8,10 +8,11 @@ use std::path::PathBuf;
 
 use nix::unistd::{SysconfVar, sysconf};
 
+use crate::machine::{heat_from_thermal_zones, memory_tight_from_psi};
 use crate::unix::{self, UnixPrivateFs};
 use crate::{
-    AppPaths, CredentialStore, DetachedChild, Platform, PrivateFs, Processes, Result, Sandbox,
-    SandboxPolicy, Shell, SpawnSpec, unsupported,
+    AppPaths, CredentialStore, DetachedChild, Machine, MachineLoad, Platform, PrivateFs, Processes,
+    Result, Sandbox, SandboxPolicy, Shell, SpawnSpec, unsupported,
 };
 
 const NAME: &str = "linux";
@@ -48,6 +49,22 @@ impl Platform for Linux {
     fn sandbox(&self) -> &dyn Sandbox {
         &Unsupported
     }
+    fn machine(&self) -> &dyn Machine {
+        &LinuxMachine
+    }
+}
+
+/// Thermal zones against their trip points, and memory pressure stall information.
+struct LinuxMachine;
+
+impl Machine for LinuxMachine {
+    fn load(&self) -> MachineLoad {
+        MachineLoad {
+            heat: heat_from_thermal_zones(std::path::Path::new("/sys/class/thermal")),
+            memory_tight: std::fs::read_to_string("/proc/pressure/memory")
+                .is_ok_and(|text| memory_tight_from_psi(&text)),
+        }
+    }
 }
 
 struct LinuxProcesses;
@@ -74,8 +91,26 @@ impl Processes for LinuxProcesses {
     fn descendants(&self, pid: u32) -> Result<Vec<u32>> {
         Ok(unix::descendants(pid, child_pids))
     }
+    fn children(&self, pid: u32) -> Result<Vec<u32>> {
+        Ok(child_pids(pid))
+    }
     fn group_of(&self, pid: u32) -> Option<u32> {
         unix::group_of(pid)
+    }
+    fn command_line(&self, pid: u32) -> Option<Vec<String>> {
+        let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+        let args: Vec<String> = raw
+            .split(|byte| *byte == 0)
+            .filter(|arg| !arg.is_empty())
+            .map(|arg| String::from_utf8_lossy(arg).into_owned())
+            .collect();
+        (!args.is_empty()).then_some(args)
+    }
+    fn suspend(&self, pid: u32) -> Result<()> {
+        unix::suspend(pid)
+    }
+    fn resume(&self, pid: u32) -> Result<()> {
+        unix::resume(pid)
     }
     fn in_dir(&self, dir: &std::path::Path) -> Result<Vec<u32>> {
         let dir = dir.canonicalize()?;

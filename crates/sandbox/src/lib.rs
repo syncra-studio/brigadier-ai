@@ -9,6 +9,7 @@
 
 pub mod clone;
 pub mod footprint;
+mod machine;
 mod paths;
 mod process;
 pub mod removal;
@@ -29,6 +30,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub use machine::{Heat, Machine, MachineLoad};
 pub use paths::{AppPaths, IpcEndpoint, OWNER_MARKER};
 pub use process::{DetachedChild, InstanceLock, SpawnSpec};
 
@@ -68,6 +70,8 @@ pub trait Platform: Send + Sync + 'static {
     fn shell(&self) -> &dyn Shell;
     /// The OS sandbox used to confine worker processes.
     fn sandbox(&self) -> &dyn Sandbox;
+    /// How hard the machine is working: its heat state and memory pressure.
+    fn machine(&self) -> &dyn Machine;
 }
 
 /// Creates directories and files that only the current user can access.
@@ -104,8 +108,18 @@ pub trait Processes: Send + Sync {
     /// signalling any of them. A snapshot: callers that keep it check start times before they
     /// act on a pid later.
     fn descendants(&self, pid: u32) -> Result<Vec<u32>>;
+    /// The direct children of `pid`, a snapshot.
+    fn children(&self, pid: u32) -> Result<Vec<u32>>;
     /// The process group `pid` belongs to, while it runs.
     fn group_of(&self, pid: u32) -> Option<u32>;
+    /// The program and arguments `pid` was started with; `None` once it has exited or when it
+    /// isn't the current user's.
+    fn command_line(&self, pid: u32) -> Option<Vec<String>>;
+    /// Stops a process where it stands (SIGSTOP on Unix), without ending it, until
+    /// [`Processes::resume`]. Only for processes Brigadier started, their start time checked.
+    fn suspend(&self, pid: u32) -> Result<()>;
+    /// Lets a process [`Processes::suspend`] stopped go on (SIGCONT on Unix).
+    fn resume(&self, pid: u32) -> Result<()>;
     /// Wall-clock start time of a process, in milliseconds since the Unix epoch.
     fn start_time_ms(&self, pid: u32) -> Result<f64>;
     /// The current user's processes whose working directory is `dir` or inside it. This finds

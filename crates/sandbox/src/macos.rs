@@ -11,10 +11,11 @@ use std::time::Duration;
 
 use security_framework::passwords;
 
+use crate::machine::{heat_from_thermal_state, memory_tight_from_pressure_level};
 use crate::unix::{self, UnixPrivateFs};
 use crate::{
-    APP_ID, AppPaths, CredentialStore, DetachedChild, Error, Platform, PrivateFs, Processes,
-    Result, Sandbox, SandboxPolicy, Shell, SpawnSpec,
+    APP_ID, AppPaths, CredentialStore, DetachedChild, Error, Machine, MachineLoad, Platform,
+    PrivateFs, Processes, Result, Sandbox, SandboxPolicy, Shell, SpawnSpec,
 };
 
 pub(crate) struct MacOs {
@@ -49,6 +50,9 @@ impl Platform for MacOs {
     fn sandbox(&self) -> &dyn Sandbox {
         &Seatbelt
     }
+    fn machine(&self) -> &dyn Machine {
+        &MacMachine
+    }
 }
 
 struct MacProcesses;
@@ -75,8 +79,20 @@ impl Processes for MacProcesses {
     fn descendants(&self, pid: u32) -> Result<Vec<u32>> {
         Ok(unix::descendants(pid, child_pids))
     }
+    fn children(&self, pid: u32) -> Result<Vec<u32>> {
+        Ok(child_pids(pid))
+    }
     fn group_of(&self, pid: u32) -> Option<u32> {
         unix::group_of(pid)
+    }
+    fn command_line(&self, pid: u32) -> Option<Vec<String>> {
+        command_line(pid)
+    }
+    fn suspend(&self, pid: u32) -> Result<()> {
+        unix::suspend(pid)
+    }
+    fn resume(&self, pid: u32) -> Result<()> {
+        unix::resume(pid)
     }
     fn in_dir(&self, dir: &Path) -> Result<Vec<u32>> {
         let dir = dir.canonicalize()?;
@@ -110,6 +126,65 @@ impl Processes for MacProcesses {
         }
         Ok(info.pbi_start_tvsec as f64 * 1000.0 + info.pbi_start_tvusec as f64 / 1000.0)
     }
+}
+
+/// A process's arguments, per `KERN_PROCARGS2`: the argument count, the executable's path,
+/// padding, then the arguments, each ended by a NUL.
+fn command_line(pid: u32) -> Option<Vec<String>> {
+    let pid = libc::c_int::try_from(pid).ok().filter(|pid| *pid > 0)?;
+    let mut max: libc::c_int = 0;
+    let mut size = std::mem::size_of::<libc::c_int>();
+    let mut mib = [libc::CTL_KERN, libc::KERN_ARGMAX];
+    // SAFETY: `max` is a writable `c_int` and `size` says so; the result is checked.
+    #[allow(unsafe_code)]
+    let read = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            2,
+            (&raw mut max).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if read != 0 || max <= 0 {
+        return None;
+    }
+    let mut buffer = vec![0u8; usize::try_from(max).ok()?];
+    let mut size = buffer.len();
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    // SAFETY: `buffer` is writable for `size` bytes and the call writes at most that many,
+    // updating `size`; the result is checked before `buffer` is read.
+    #[allow(unsafe_code)]
+    let read = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if read != 0 {
+        return None;
+    }
+    buffer.truncate(size);
+    parse_procargs(&buffer)
+}
+
+fn parse_procargs(buffer: &[u8]) -> Option<Vec<String>> {
+    let count = usize::try_from(i32::from_ne_bytes(buffer.get(..4)?.try_into().ok()?)).ok()?;
+    let rest = buffer.get(4..)?;
+    // The executable's path, then the NULs padding it.
+    let path_end = rest.iter().position(|byte| *byte == 0)?;
+    let start = path_end + rest[path_end..].iter().position(|byte| *byte != 0)?;
+    let args = rest[start..]
+        .split(|byte| *byte == 0)
+        .take(count)
+        .map(|arg| String::from_utf8_lossy(arg).into_owned())
+        .collect::<Vec<_>>();
+    (!args.is_empty()).then_some(args)
 }
 
 /// Every process id on the machine, per `proc_listallpids`.
@@ -254,6 +329,83 @@ pub(crate) fn peer_confined(socket: std::os::fd::BorrowedFd<'_>) -> bool {
         )
     };
     peer == 1 && own != 1
+}
+
+/// `ProcessInfo.thermalState` and the kernel's memory-pressure level.
+struct MacMachine;
+
+impl Machine for MacMachine {
+    fn load(&self) -> MachineLoad {
+        MachineLoad {
+            heat: thermal_state()
+                .map(heat_from_thermal_state)
+                .unwrap_or_default(),
+            memory_tight: memory_pressure_level().is_some_and(memory_tight_from_pressure_level),
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+#[link(name = "Foundation", kind = "framework")]
+unsafe extern "C" {}
+
+// The Objective-C runtime, to read `[[NSProcessInfo processInfo] thermalState]`.
+#[allow(unsafe_code)]
+#[link(name = "objc")]
+unsafe extern "C" {
+    fn objc_getClass(name: *const std::ffi::c_char) -> *mut std::ffi::c_void;
+    fn sel_registerName(name: *const std::ffi::c_char) -> *mut std::ffi::c_void;
+    fn objc_msgSend();
+}
+
+/// `ProcessInfo.processInfo.thermalState`'s raw value (0 nominal … 3 critical).
+fn thermal_state() -> Option<isize> {
+    type Object = *mut std::ffi::c_void;
+    // SAFETY: `objc_msgSend` is called through the exact signature of each method it sends
+    // to: `+[NSProcessInfo processInfo]` returns an object, `-thermalState` an NSInteger. The
+    // class and the shared instance are checked for null before use; the shared instance is
+    // never released.
+    #[allow(unsafe_code)]
+    unsafe {
+        let class = objc_getClass(c"NSProcessInfo".as_ptr());
+        if class.is_null() {
+            return None;
+        }
+        let send_object = std::mem::transmute::<
+            unsafe extern "C" fn(),
+            unsafe extern "C" fn(Object, Object) -> Object,
+        >(objc_msgSend);
+        let info = send_object(class, sel_registerName(c"processInfo".as_ptr()));
+        if info.is_null() {
+            return None;
+        }
+        let send_integer = std::mem::transmute::<
+            unsafe extern "C" fn(),
+            unsafe extern "C" fn(Object, Object) -> isize,
+        >(objc_msgSend);
+        Some(send_integer(
+            info,
+            sel_registerName(c"thermalState".as_ptr()),
+        ))
+    }
+}
+
+/// `kern.memorystatus_vm_pressure_level`: 1 normal, 2 warning, 4 critical.
+fn memory_pressure_level() -> Option<i32> {
+    let mut level: libc::c_int = 0;
+    let mut size = std::mem::size_of::<libc::c_int>();
+    // SAFETY: `level` is a writable `c_int` and `size` says so; the result is checked.
+    #[allow(unsafe_code)]
+    let read = unsafe {
+        libc::sysctlbyname(
+            c"kern.memorystatus_vm_pressure_level".as_ptr(),
+            (&raw mut level).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (read == 0).then_some(level)
 }
 
 struct Keychain;
@@ -421,5 +573,51 @@ impl Sandbox for Seatbelt {
             cwd: spec.cwd,
             low_priority: spec.low_priority,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn procargs_give_the_arguments_after_the_executable_path() {
+        let mut buffer = 2i32.to_ne_bytes().to_vec();
+        buffer.extend_from_slice(b"/usr/bin/cargo\0\0\0\0cargo\0test\0HOME=/Users/x\0");
+        assert_eq!(
+            parse_procargs(&buffer),
+            Some(vec!["cargo".to_owned(), "test".to_owned()])
+        );
+        assert_eq!(parse_procargs(&[1, 0]), None);
+    }
+
+    #[test]
+    fn reads_a_child_s_arguments_and_stops_and_continues_it() {
+        let mut child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        assert_eq!(
+            MacProcesses.command_line(pid),
+            Some(vec!["/bin/sleep".to_owned(), "30".to_owned()])
+        );
+        let state = || {
+            let out = Command::new("ps")
+                .args(["-o", "stat=", "-p", &pid.to_string()])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        };
+        MacProcesses.suspend(pid).unwrap();
+        assert!(state().starts_with('T'), "stopped: {}", state());
+        MacProcesses.resume(pid).unwrap();
+        assert!(!state().starts_with('T'), "running: {}", state());
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+
+    #[test]
+    fn reads_the_machine_s_load() {
+        assert!(thermal_state().is_some());
+        assert!(memory_pressure_level().is_some());
+        let _ = MacMachine.load();
     }
 }

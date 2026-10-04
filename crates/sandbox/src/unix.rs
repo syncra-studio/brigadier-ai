@@ -152,6 +152,20 @@ pub(crate) fn descendants(pid: u32, children: impl Fn(u32) -> Vec<u32>) -> Vec<u
     tree
 }
 
+pub(crate) fn suspend(pid: u32) -> Result<()> {
+    signal(pid, Signal::SIGSTOP)
+}
+
+pub(crate) fn resume(pid: u32) -> Result<()> {
+    signal(pid, Signal::SIGCONT)
+}
+
+fn signal(pid: u32, which: Signal) -> Result<()> {
+    let pid = to_pid(pid).ok_or_else(invalid_pid)?;
+    signal::kill(pid, which).map_err(io::Error::from)?;
+    Ok(())
+}
+
 pub(crate) fn group_of(pid: u32) -> Option<u32> {
     let group = nix::unistd::getpgid(Some(to_pid(pid)?)).ok()?;
     u32::try_from(group.as_raw()).ok()
