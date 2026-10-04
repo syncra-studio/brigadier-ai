@@ -1658,10 +1658,13 @@ fn to_new_event(stream: String, event: &DomainEvent) -> Result<NewEvent> {
 }
 
 pub(crate) fn decode(event: &brigadier_store::StoredEvent) -> Result<DomainEvent> {
-    serde_json::from_str(event.payload.get()).map_err(|source| Error::Corrupt {
-        seq: event.seq,
-        source,
-    })
+    let mut decoded =
+        serde_json::from_str(event.payload.get()).map_err(|source| Error::Corrupt {
+            seq: event.seq,
+            source,
+        })?;
+    crate::legacy::normalize(&mut decoded);
+    Ok(decoded)
 }
 
 /// Checks that `path` is the top-level directory of a git repository.

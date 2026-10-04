@@ -127,6 +127,30 @@ fn tool_call(name: &str, args: Value) -> ToolCall {
     }
 }
 
+/// Stored events from JSONL lines of `stream`, `kind` and `payload`.
+fn seed_events(jsonl: &str) -> Vec<brigadier_store::NewEvent> {
+    #[derive(serde::Deserialize)]
+    struct Line {
+        stream: String,
+        kind: String,
+        payload: Box<serde_json::value::RawValue>,
+    }
+    jsonl
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .enumerate()
+        .map(|(index, line)| {
+            let line: Line = serde_json::from_str(line).expect("a seed line");
+            brigadier_store::NewEvent {
+                stream: line.stream,
+                kind: line.kind,
+                at_ms: 1_759_000_000_000 + index as i64,
+                payload: line.payload,
+            }
+        })
+        .collect()
+}
+
 /// Runs git in `dir` and returns its output; panics when it fails.
 pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
@@ -424,6 +448,11 @@ pub(crate) struct Flow {
 pub(crate) struct Options {
     pub permission: PermissionLevel,
     pub plan_mode: bool,
+    /// Stored events the data folder starts with (JSONL of `stream`, `kind`, `payload`), as
+    /// an earlier version left them.
+    pub seed: Option<&'static str>,
+    /// A copy of a real store's database the data folder starts with.
+    pub store: Option<PathBuf>,
 }
 
 impl Default for Options {
@@ -431,6 +460,8 @@ impl Default for Options {
         Self {
             permission: PermissionLevel::FullAccess,
             plan_mode: false,
+            seed: None,
+            store: None,
         }
     }
 }
@@ -452,6 +483,10 @@ impl Flow {
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-q", "-m", "Start"]);
         let data = dir.join("data");
+        if let Some(store) = &options.store {
+            std::fs::create_dir_all(&data).unwrap();
+            std::fs::copy(store, data.join("brigadier.db")).unwrap();
+        }
         let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
             data_dir: Some(data.clone()),
         })
@@ -469,6 +504,9 @@ impl Flow {
             .unwrap()
             .unwrap()
         };
+        if let Some(seed) = options.seed {
+            store.append(seed_events(seed)).await.unwrap();
+        }
         let core = Core::load(store).await.unwrap();
         let spawner: Spawner = Arc::new(|task| {
             tokio::spawn(task);

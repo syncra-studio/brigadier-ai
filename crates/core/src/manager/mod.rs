@@ -27,7 +27,7 @@ mod fallback;
 #[cfg(debug_assertions)]
 pub mod fault;
 mod files;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod flow;
 mod fork;
 mod gates;
