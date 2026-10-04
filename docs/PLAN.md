@@ -862,9 +862,14 @@ nice -n 10 cargo clippy --locked --target x86_64-pc-windows-gnu \
   -p brigadier-brain -p brigadier-index -p brigadier-router -p brigadier-review \
   -p brigadier-git -p brigadier-registry -p brigadier-sandbox -p brigadier-mcp-server \
   --all-targets -- -D warnings
+# the desktop crate's Windows-only code, with an empty stand-in for its Windows sidecar
+touch apps/desktop/src-tauri/binaries/brigadierd-x86_64-pc-windows-gnu.exe
+nice -n 10 cargo clippy --locked --target x86_64-pc-windows-gnu -p brigadier-desktop \
+  --all-targets -- -D warnings
+rm apps/desktop/src-tauri/binaries/brigadierd-x86_64-pc-windows-gnu.exe
 ```
 
-Read the daemon and Tauri `cfg` gates manually, checking that imports/helpers have the same gate as their users; those native crates may not cross-build on this host. Prior verification succeeded on wider GNU targets with extra tooling, but that does not make MSVC/GUI checks automatic. Local cross-clippy is not three-OS CI. After authorized push, real CI must be green for macOS, Windows and Linux on the exact integrated SHA. For this Phase 1 **docs-only** commit, the Delegator approved `git diff --check`, source-reference/consistency review and no prohibited design-source names; implementation checks above belong to Phase 2.
+`tools/full-checks.sh --cross` runs all three, removing the stand-in again only when it made it. Read the daemon and Tauri `cfg` gates manually, checking that imports/helpers have the same gate as their users; those native crates may not cross-build on this host. Prior verification succeeded on wider GNU targets with extra tooling, but that does not make MSVC/GUI checks automatic. Local cross-clippy is not three-OS CI. After authorized push, real CI must be green for macOS, Windows and Linux on the exact integrated SHA. For this Phase 1 **docs-only** commit, the Delegator approved `git diff --check`, source-reference/consistency review and no prohibited design-source names; implementation checks above belong to Phase 2.
 
 **What workers and checkers are told** (every session, not only runs): which dependency folders were copied into their worktree (don't reinstall), their own test data folder `/tmp/brigadier-test-<task>` (owned, cleaned with the task, writable in a sandbox) for anything a test or smoke run writes outside the checkout, never an app's real data folder, and their access. A sandboxed brief never says "install missing dependencies" or "try another way": a GUI smoke run can't open windows there. A check the sandbox, the task or the Rules forbid is reported as `[excluded] <check>: <rule or reason>`; like a `[pre-existing]` gap it holds nothing (no retry verifier, no hold) and is listed in the report's What got in the way. A held change accepted again with the same tree keeps its reviews and gets one verifier.
 

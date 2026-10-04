@@ -2,7 +2,8 @@
 # The full checks of docs/PLAN.md §10.13, run from anywhere in the checkout.
 #
 #   tools/full-checks.sh            fmt, generated types, build, clippy, tests, typecheck, lint, app tests
-#   tools/full-checks.sh --cross    also Linux and Windows clippy of the cross-buildable crates
+#   tools/full-checks.sh --cross    also Linux and Windows clippy of the cross-buildable crates,
+#                                   and Windows clippy of the desktop crate
 #
 # Safe inside a Brigadier worker: it installs dependencies only when the checkout has none
 # (a worker's are already copied in), runs `nice` only when the process isn't low priority
@@ -65,6 +66,17 @@ if $cross; then
   run cargo-zigbuild clippy --locked --target x86_64-unknown-linux-gnu "${crates[@]}" \
     --all-targets -- -D warnings
   run cargo clippy --locked --target x86_64-pc-windows-gnu "${crates[@]}" \
+    --all-targets -- -D warnings
+  # The desktop crate's Windows-only code. Its build wants the daemon's Windows sidecar beside
+  # it; none is built here, so an empty stand-in takes its place (binaries/ is ignored) and goes
+  # again after.
+  sidecar=apps/desktop/src-tauri/binaries/brigadierd-x86_64-pc-windows-gnu.exe
+  if [ ! -e "$sidecar" ]; then
+    mkdir -p "$(dirname "$sidecar")"
+    touch "$sidecar"
+    trap 'rm -f "$sidecar"' EXIT
+  fi
+  run cargo clippy --locked --target x86_64-pc-windows-gnu -p brigadier-desktop \
     --all-targets -- -D warnings
 fi
 
