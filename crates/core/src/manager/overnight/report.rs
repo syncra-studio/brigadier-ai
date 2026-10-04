@@ -59,8 +59,9 @@ struct RunCommit {
 type Usage = Vec<(ProviderKind, Option<u64>)>;
 
 impl SessionManager {
-    /// Writes the run's report into its conversation, once, and queues its notification.
-    pub(crate) async fn write_run_report(&self, run: &OvernightRun) {
+    /// Writes the run's report into its conversation, once, and queues its notification (one
+    /// that doesn't `notify` is recorded as delivered: the user is here, archiving it).
+    pub(crate) async fn write_run_report(&self, run: &OvernightRun, notify: bool) {
         let _held = self.overnight.reporting.lock().await;
         let id = &run.conversation_id;
         let board = match self.core.board(id).await {
@@ -148,7 +149,7 @@ impl SessionManager {
             title: notification_title(run, now),
             body: notification_body(run, &board),
             created_at_ms: now_ms(),
-            delivered_at_ms: None,
+            delivered_at_ms: (!notify).then(now_ms),
             delivery_error: None,
         };
         let _change = self.overnight.changes.lock().await;
@@ -341,7 +342,8 @@ impl SessionManager {
                     continue;
                 }
                 if saved.report_message_id.is_none() {
-                    self.write_run_report(saved).await;
+                    let notify = conversation.lifecycle != crate::model::Lifecycle::Archived;
+                    self.write_run_report(saved, notify).await;
                 } else if saved.report_version < REPORT_VERSION {
                     self.rerender_run_report(saved).await;
                 }

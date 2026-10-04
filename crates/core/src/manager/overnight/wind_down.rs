@@ -195,7 +195,7 @@ impl SessionManager {
             }
         };
         if let Some(reporting) = settled {
-            self.write_run_report(&reporting).await;
+            self.write_run_report(&reporting, true).await;
             if let Some(finished) = self
                 .change_run_if(&reporting, |now| {
                     if now.state != OvernightState::Reporting || now.report_message_id.is_none() {
@@ -285,10 +285,11 @@ impl SessionManager {
                 })
                 .await;
             if report && let Some(reporting) = settled {
-                self.write_run_report(&reporting).await;
+                self.write_run_report(&reporting, false).await;
                 self.change_run_if(&reporting, |now| {
                     now.state = OvernightState::Finished;
                     now.finished_at_ms = Some(now_ms());
+                    // One an earlier ending queued, too.
                     if let Some(notification) = now.notification.as_mut() {
                         notification.delivered_at_ms.get_or_insert_with(now_ms);
                     }
