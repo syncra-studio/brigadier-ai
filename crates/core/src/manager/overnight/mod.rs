@@ -232,11 +232,31 @@ impl SessionManager {
             .last()
             .is_some_and(|command| command.id == applied);
         if run.state == OvernightState::Preparing && started {
+            self.title_session_after(&run).await;
             let manager = self.arc();
             let preparing = run.clone();
             self.spawn(async move { manager.prepare_run(preparing).await });
         }
         Ok(run)
+    }
+
+    /// Names the session after the run it starts, unless the user named it themselves: a
+    /// title Brigadier took from the user's words ("/overnight Make overnight runs…") gives
+    /// way to the plan's name.
+    async fn title_session_after(&self, run: &OvernightRun) {
+        let Ok(conversation) = self.core.conversation(&run.conversation_id) else {
+            return;
+        };
+        if conversation.title == run.name || !words_title(&conversation.title, &run.words) {
+            return;
+        }
+        if let Err(err) = self
+            .core
+            .rename_conversation(run.conversation_id.clone(), run.name.clone())
+            .await
+        {
+            tracing::warn!(run = %run.id, error = %err, "could not name the session after its run");
+        }
     }
 
     /// The user's Stop: a proposal is dropped; a started run winds down now, the same clean
@@ -788,5 +808,25 @@ fn name_of(plan: &ProposedPlan, words: &str) -> String {
         "Overnight run".into()
     } else {
         cut.to_owned()
+    }
+}
+
+/// Whether `title` is one Brigadier gave the session, from the user's `words` or before any.
+fn words_title(title: &str, words: &str) -> bool {
+    let start = title.trim_end_matches('…').trim();
+    let words = words.split_whitespace().collect::<Vec<_>>().join(" ");
+    matches!(title, "New session" | "New chat") || (!start.is_empty() && words.starts_with(start))
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::words_title;
+
+    #[test]
+    fn only_a_title_taken_from_the_users_words_gives_way_to_the_run_name() {
+        let words = "/overnight Make overnight runs faster.\n\nRules: never Fable.";
+        assert!(words_title("/overnight Make overnight runs…", words));
+        assert!(words_title("New session", words));
+        assert!(!words_title("Speed work", words));
     }
 }
