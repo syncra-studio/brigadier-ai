@@ -24,7 +24,7 @@ use brigadier_providers::{
     Access, Origin, ProviderEvent, ProviderKind, Role as MessageAuthor, SessionSpec, Started,
     ToolSet, TurnInput,
 };
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 
 use super::brains::{LEDGER_MAX, brain_error, cut, one_line};
 use super::usage::TokenOwner;
@@ -66,6 +66,8 @@ const USER_MESSAGE_BYTES: usize = 16_000;
 const RECENT_SCAN: usize = 200;
 /// How long the fork may take to write its note.
 const HANDOFF_TIME: Duration = Duration::from_secs(180);
+/// How long a swap waits for a note whose fork starts only once the old CLI closed.
+pub(super) const HANDOFF_AFTER_CLOSE: Duration = Duration::from_secs(190);
 /// A turn that cannot run on the old CLI any more waits this long for a note still being
 /// written, then starts without it.
 pub(super) const HANDOFF_WAIT: Duration = Duration::from_secs(30);
@@ -150,6 +152,11 @@ pub(crate) struct RebirthPrep {
     /// When the fork finished (0 until then).
     ready_at_ms: AtomicI64,
     note: watch::Receiver<Option<Option<String>>>,
+    /// Set while the fork waits for the old CLI to close: Codex refuses to fork a thread its
+    /// live app-server still holds ("already has an active writer"). Dropped unsent, the fork
+    /// never starts.
+    after_close: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    waits_for_close: bool,
 }
 
 impl RebirthPrep {
@@ -161,6 +168,23 @@ impl RebirthPrep {
     /// When the fork finished, once it has.
     pub fn ready_at_ms(&self) -> Option<i64> {
         Some(self.ready_at_ms.load(Ordering::Acquire)).filter(|at| *at > 0)
+    }
+
+    /// Whether the fork starts only once the old CLI closed ([`Self::closed`]).
+    pub fn waits_for_close(&self) -> bool {
+        self.waits_for_close
+    }
+
+    /// The old CLI closed: a fork waiting for that starts now.
+    pub fn closed(&self) {
+        let sender = self
+            .after_close
+            .lock()
+            .ok()
+            .and_then(|mut held| held.take());
+        if let Some(sender) = sender {
+            let _ = sender.send(());
+        }
     }
 
     /// The note, waiting at most `limit` for it.
@@ -228,6 +252,16 @@ impl SessionManager {
         purpose: HandoffPurpose,
     ) -> Arc<RebirthPrep> {
         let (done, note) = watch::channel(None);
+        // A Codex thread can't be forked while its own app-server holds it: the swap closes
+        // the old CLI first, then the fork writes the note.
+        let waits_for_close =
+            provider == ProviderKind::Codex && purpose == HandoffPurpose::Threshold;
+        let (after_close, closed) = if waits_for_close {
+            let (sender, receiver) = oneshot::channel();
+            (Some(sender), Some(receiver))
+        } else {
+            (None, None)
+        };
         let prep = Arc::new(RebirthPrep {
             id: uuid::Uuid::now_v7().to_string(),
             started_at_ms: now_ms(),
@@ -237,9 +271,17 @@ impl SessionManager {
             due: AtomicBool::new(false),
             ready_at_ms: AtomicI64::new(0),
             note,
+            after_close: std::sync::Mutex::new(after_close),
+            waits_for_close,
         });
-        let (manager, id, ready) = (self.arc(), id.clone(), prep.clone());
+        // Weak: a preparation dropped before its CLI closed drops the sender, which ends this.
+        let (manager, id, ready) = (self.arc(), id.clone(), Arc::downgrade(&prep));
         self.spawn(async move {
+            if let Some(closed) = closed
+                && closed.await.is_err()
+            {
+                return;
+            }
             let written = match native_id {
                 Some(native_id) => {
                     manager
@@ -258,7 +300,9 @@ impl SessionManager {
                 let generation = manager.rebirths(&id).await + 1;
                 manager.keep_handoff_decisions(&id, note, generation).await;
             }
-            ready.ready_at_ms.store(now_ms(), Ordering::Release);
+            if let Some(ready) = ready.upgrade() {
+                ready.ready_at_ms.store(now_ms(), Ordering::Release);
+            }
             let _ = done.send(Some(written));
         });
         prep

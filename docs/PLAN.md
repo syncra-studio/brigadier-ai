@@ -257,7 +257,7 @@ Each phase lists its **goal**, **deliverables**, **key design**, and **done when
 - **Idle-quota enrichment** (toggle, on by default). When a usage window is about to reset with quota left over, Brigadier spends it deepening the Brain.
 - **Orchestrator rebirth.**
   - Triggers at about 150–200k tokens, between turns only, or when a new message arrives after the session's cache has expired (§7 item 3).
-  - The outgoing orchestrator writes a handoff note.
+  - The outgoing orchestrator writes a handoff note, in a fork of its CLI session. Claude forks while the old session still works, so the note is ready at the swap. Codex refuses to fork a thread its live app-server still holds ("already has an active writer", Codex 0.159.2, seen live 2026-10-04), so a Codex orchestrator's fork starts once the swap has closed the old CLI, and its next turn waits for the note.
   - The new session gets a briefing of about 15–25k tokens built from the Brain, the handoff note, and the last N messages verbatim.
   - It can search the full transcript on demand.
   - The user sees nothing.

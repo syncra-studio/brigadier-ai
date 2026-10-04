@@ -2753,12 +2753,14 @@ impl SessionManager {
             let Some(prep) = state.rebirth.clone() else {
                 return;
             };
+            // A note written only after the old CLI closed can't be waited for before.
             let now = prep.ready()
                 || (prep.is_due()
-                    && rebirth::swap_now(
-                        state.cli.as_ref().map(|cli| cli.provider),
-                        state.context,
-                    ));
+                    && (prep.waits_for_close()
+                        || rebirth::swap_now(
+                            state.cli.as_ref().map(|cli| cli.provider),
+                            state.context,
+                        )));
             if state.busy || state.closing || !now {
                 return;
             }
@@ -2767,12 +2769,21 @@ impl SessionManager {
             (prep, state.cli.take())
         };
         let swap_started_at_ms = now_ms();
-        if !prep.ready() {
-            prep.note(rebirth::HANDOFF_WAIT).await;
-        }
-        if let Some(cli) = cli {
-            cli.session.close().await;
-            cli.ended.cancelled().await;
+        if prep.waits_for_close() {
+            if let Some(cli) = cli {
+                cli.session.close().await;
+                cli.ended.cancelled().await;
+            }
+            prep.closed();
+            prep.note(rebirth::HANDOFF_AFTER_CLOSE).await;
+        } else {
+            if !prep.ready() {
+                prep.note(rebirth::HANDOFF_WAIT).await;
+            }
+            if let Some(cli) = cli {
+                cli.session.close().await;
+                cli.ended.cancelled().await;
+            }
         }
         let mut state = conv.state.lock().await;
         state.closing = false;
