@@ -446,7 +446,8 @@ export const RequestBlock: FC = () => {
       data-turn-steers={String(meta.steers.length)}
       className="group/answer relative flex flex-col gap-2 px-2"
     >
-      <ModelChanged model={meta.texts[last]?.model ?? null} picked={meta.picked} />
+      {/* A run picks each phase lead's model itself: not a change the user made. */}
+      {!phase && <ModelChanged model={meta.texts[last]?.model ?? null} picked={meta.picked} />}
       {header && (
         <WorkHeader
           meta={meta}
@@ -469,7 +470,8 @@ export const RequestBlock: FC = () => {
                 fold.state === "closing" && "animate-fold-close motion-reduce:animate-fold-fade-out",
               )}
             >
-              <div className={cn("flex min-h-0 flex-col gap-3", fold.state !== "open" && "overflow-hidden")}>
+              {/* min-w-0: a long unbroken line (a branch in code) wraps instead of widening the fold. */}
+              <div className={cn("flex min-h-0 min-w-0 flex-col gap-3", fold.state !== "open" && "overflow-hidden")}>
                 {folded.map((entry) => (
                   <SequenceEntry key={entryKey(entry)} entry={entry} streaming={false} />
                 ))}

@@ -72,9 +72,9 @@ test("Phase 2 of the night shows one row per worker task: 7 rows instead of 53",
   ]);
 });
 
-test("Phase 1 of the night: its three attempts, the whole-phase checks and its one judgement call", () => {
+test("Phase 1 of the night: its three attempts and the whole-phase checks; its header says it was verified", () => {
   const shown = lines(blockOf("run-09cc7d53-phase-1-g1"));
-  assert.deepEqual(shown, ["task-1", "task-5", "task-13", "text", "checks phase-1", "decided"]);
+  assert.deepEqual(shown, ["task-1", "task-5", "task-13", "text", "checks phase-1"]);
 });
 
 test("no checker has a row of its own", () => {
@@ -141,4 +141,80 @@ test("a checker's result reads from its round, or from its report once the round
 test("the whole-phase checks of phase 1 open from one row, with the verifier, reviewer and judge", () => {
   const owner = "phase:01a0fefa-e29d-74c7-ac52-3d3409cc7d53:phase-1";
   assert.equal(checksCount(checkersOf(tasks, [owner])), "1 review + 1 verify + 1 judge");
+});
+
+/**
+ * Phase 2's records replayed as a normal session's request: the same tasks, checks and plans,
+ * with no run, one task held for the user, and a second, separate plan.
+ */
+function normalSession() {
+  const phase = "run-09cc7d53-phase-2-g1";
+  const request = "normal-1";
+  const move = (requestId: string | null) => (requestId === phase ? request : requestId);
+  const held = byNumber(26).id;
+  const normalTasks = Object.fromEntries(
+    Object.values(tasks).map((task) => [
+      task.id,
+      {
+        ...task,
+        requestId: move(task.requestId),
+        run: null,
+        ...(task.id === held ? { state: "readyToLand" as const, landed: null } : {}),
+      },
+    ]),
+  );
+  const approved = Object.values(board.plans).find((plan) => plan.requestId === phase && plan.state.type === "approved");
+  assert.ok(approved);
+  const normalPlans: Record<string, Plan> = Object.fromEntries(
+    Object.values(board.plans).map((plan) => [plan.id, { ...plan, requestId: move(plan.requestId) ?? "" }]),
+  );
+  normalPlans.separate = {
+    ...approved,
+    id: "separate",
+    requestId: request,
+    revises: null,
+    title: "A separate plan",
+    position: approved.position + 1,
+    steps: [],
+  };
+  const user = { ...messages[0]!, id: request, seq: 320, requestId: request, text: "Fix the three causes" };
+  const normal: BoardDigest = {
+    ...board,
+    tasks: normalTasks,
+    plans: normalPlans,
+    requests: { [request]: { ...board.requests[phase]!, id: request, state: { type: "done" } } },
+    orchestratorSteps: board.orchestratorSteps
+      .filter((step) => step.requestId === phase)
+      .map((step) => ({ ...step, requestId: request })),
+    decisions: board.decisions
+      .filter((decision) => decision.requestId === phase)
+      .map((decision) => ({ ...decision, requestId: request })),
+  };
+  const block = buildBlocks([user], {}, false, normal, []).find((candidate) => candidate.key === request);
+  assert.ok(block);
+  return { block, normalTasks, held };
+}
+
+test("a normal session's request reads the same way: one row per task, its checks and plans folded in", () => {
+  const { block, normalTasks, held } = normalSession();
+  const rows = block.rows.flatMap((row) => (row.type === "task" ? [row.taskId] : []));
+  // Each worker once; none of its checkers.
+  assert.deepEqual(
+    rows.map((id) => normalTasks[id]?.number),
+    [26, 32, 37, 41],
+  );
+  // The revised plan once, as its newest revision, and the separate plan beside it.
+  assert.deepEqual(
+    block.cards.filter((card) => card.type === "plan").map((card) => card.id),
+    ["01a0ff89-d905-7753-bb7f-b310c324a8f6", "separate"],
+  );
+  // A task held for the user says so on its row, and its checks still open from it.
+  const task = normalTasks[held]!;
+  assert.equal(taskState(task).word, "Ready to land");
+  assert.equal(taskRowDetail(task, checkersOf(normalTasks, [`task:${held}`])), "checked by 2 reviews + 3 verifies");
+  // Only the orchestrator's own call is a "Decided for you" line in the thread.
+  const decided = sequence(block).flatMap((entry) =>
+    entry.kind === "orchestrator" ? entry.steps.filter((step) => step.kind.type === "decided") : [],
+  );
+  assert.equal(decided.length, 1);
 });
