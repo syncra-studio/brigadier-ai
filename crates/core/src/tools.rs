@@ -345,6 +345,9 @@ pub struct PlanStepInput {
     pub detail: Option<String>,
 }
 
+/// First, non-risky interactive proposals up to this size need no independent review.
+pub const SMALL_PLAN_STEPS: usize = 3;
+
 /// `propose_plan`: show a plan card. Under "Ask for approval" the user approves it before any
 /// write task starts.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -354,9 +357,9 @@ pub struct ProposePlan {
     pub title: String,
     /// The steps, in order.
     pub steps: Vec<PlanStepInput>,
-    /// True for big, risky or architectural plans: they get two independent reviewers
-    /// (plans of two or more steps get one) before Brigadier approves them on the user's
-    /// behalf.
+    /// True for big, risky or architectural plans: they get two independent reviewers.
+    /// Non-risky plans of two or more steps normally get one; eligible first small
+    /// interactive plans skip review.
     #[serde(default)]
     pub risky: bool,
     /// The id of the plan this one revises after its review asked for changes.

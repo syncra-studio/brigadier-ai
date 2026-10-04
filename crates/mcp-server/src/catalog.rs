@@ -68,12 +68,19 @@ messages, your answers, reports and decisions), including what is no longer in y
 Returns the best-matching passages with their dates.";
 
 const PROPOSE_PLAN: &str = "Show the user a plan card for multi-step work: a title and the \
-steps. Returns at once; the decision arrives later as a message. Under \"Ask for approval\" no \
-write task may start until the user approved a plan. Set `risky` for big, risky or \
-architectural plans. Under \"Approve for me\" a plan of two or more steps is reviewed \
-independently first; when the review asks for changes, propose the revised plan with \
-`revises` (the plan's id) and one response per finding (\"F1 accepted: …\", \"F2 declined: \
-why\").";
+steps. A first non-risky plan for a request with at most {small_plan_steps} steps skips \
+independent review in an interactive session outside plan mode. Under \"Approve for me\" \
+or \"Full access\" Brigadier approves it without review; under \"Ask for approval\" the user \
+decides, and no write task may start before approval. Larger non-risky plans get one \
+reviewer; set `risky` for big, risky or architectural plans, which get two. The small-plan \
+exception never applies to overnight runs, plan mode or revisions. Other non-risky multi-step \
+plans also get one reviewer unless their steps were already approved; changed steps and \
+plans after exhausted review rounds are reviewed even with one step. Under automatic approval, \
+when a review asks for changes, propose the revised plan with `revises` (the plan's id) and \
+one response per finding (\"F1 accepted: …\", \"F2 declined: why\"). Every reviewer checks \
+the revision again, focusing on prior findings, changed steps and their interactions with \
+the rest of the plan; responses alone never resolve findings. The decision is returned \
+with the tool result or arrives later as a message.";
 
 const PHASE_DONE: &str = "Only while you lead a phase of an overnight run: say the phase's \
 work is done, or as done as it can get without the user. Call it once every task of the phase \
@@ -204,7 +211,14 @@ fn orchestrator_tools() -> Vec<Tool> {
             SEARCH_TRANSCRIPT,
             input_schema::<SearchTranscript>(),
         ),
-        tool("propose_plan", PROPOSE_PLAN, input_schema::<ProposePlan>()),
+        Tool::new(
+            "propose_plan",
+            PROPOSE_PLAN.replace(
+                "{small_plan_steps}",
+                &brigadier_core::tools::SMALL_PLAN_STEPS.to_string(),
+            ),
+            Arc::new(input_schema::<ProposePlan>()),
+        ),
         tool(
             "propose_overnight",
             "Fill the user's unstarted overnight proposal from their brief or source files. Keep source phase numbers, dependencies, done-when and Rules verbatim; no invented scope. Include every phase the user's words select, also those after a \"stop after\" or a skip: Brigadier enforces those itself and keeps the rest for Continue. A bare goal keeps empty phases for Phase 0. Does not start, review or implement anything: only the user's Start does that. Use the run_id and revision from the proposal briefing.",
@@ -384,6 +398,26 @@ mod tests {
             task_id: brigadier_core::model::TaskId("t1".into()),
             checks,
         }
+    }
+
+    #[test]
+    fn plan_description_explains_small_plans_and_revision_reviews() {
+        let tools = orchestrator_tools();
+        let plan = tools
+            .iter()
+            .find(|tool| tool.name == "propose_plan")
+            .unwrap();
+        let description = plan.description.as_deref().unwrap();
+        assert!(!description.contains("two or more steps"));
+        assert!(description.contains(&format!(
+            "at most {} steps",
+            brigadier_core::tools::SMALL_PLAN_STEPS
+        )));
+        assert!(description.contains("approves it without review"));
+        assert!(description.contains("Larger non-risky plans get one reviewer"));
+        assert!(description.contains("which get two"));
+        assert!(description.contains("prior findings, changed steps and their interactions"));
+        assert!(description.contains("responses alone never resolve findings"));
     }
 
     #[test]

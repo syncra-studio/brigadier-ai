@@ -1,6 +1,6 @@
 // Lets `node --test` load the app's pure modules as the bundler does: `@/x` is `src/x`, and an
-// import without an extension finds its `.ts` file. Node strips the types itself; modules with
-// JSX or browser-only imports stay out of the tests.
+// import without an extension finds its `.ts` file. Node strips the types itself.
+// Rendering tests use Vite to load modules containing JSX.
 import { statSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";

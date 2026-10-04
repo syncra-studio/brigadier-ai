@@ -828,8 +828,7 @@ pub enum PlanApprover {
     /// Approve for me, a plan the orchestrator did not mark risky: approved without review,
     /// and marked as such on the card.
     Brigadier,
-    /// Approve for me, a plan of two or more steps or a risky one: approved after a
-    /// cross-vendor plan review.
+    /// Approved on the user's behalf after a cross-vendor plan review.
     Review,
 }
 
@@ -873,6 +872,9 @@ pub struct Plan {
     /// Big, risky or architectural, as the orchestrator judged it.
     pub risky: bool,
     pub state: PlanState,
+    /// Why independent review was skipped, if eligible at proposal time.
+    #[serde(default)]
+    pub review_skip_reason: Option<String>,
     /// Its current review round (reviewers from other vendors than the orchestrator's).
     #[serde(default)]
     pub gate: Option<Gate>,

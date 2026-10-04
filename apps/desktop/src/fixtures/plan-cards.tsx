@@ -125,6 +125,7 @@ const plans: Plan[] = states.map((item, index) => ({
   revises: item.id === "revising" ? "older" : null,
   responses: [],
   reviewNotes: [],
+  reviewSkipReason: null,
   createdAtMs: now,
   decidedAtMs: null,
   steps: [

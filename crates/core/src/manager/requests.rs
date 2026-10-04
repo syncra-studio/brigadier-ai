@@ -526,6 +526,7 @@ mod tests {
             risky: false,
             state,
             gate: None,
+            review_skip_reason: None,
             revises: None,
             responses: Vec::new(),
             review_notes: Vec::new(),

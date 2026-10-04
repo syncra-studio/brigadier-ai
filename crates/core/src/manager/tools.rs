@@ -543,9 +543,7 @@ impl SessionManager {
         args: crate::tools::ProposePlan,
         reviewed: bool,
     ) -> Result<(String, Option<CardId>)> {
-        use super::plan_gates::{
-            PLAN_ROUNDS, parse_responses, repeats_rejected, review_round, reviewers_for,
-        };
+        use super::plan_gates::{PLAN_ROUNDS, parse_responses, repeats_rejected, review_round};
         if args.steps.is_empty() {
             return Err(Error::Invalid("a plan needs at least one step".into()));
         }
@@ -663,6 +661,7 @@ impl SessionManager {
                 risky: args.risky,
                 state: PlanState::Proposed,
                 gate: None,
+                review_skip_reason: None,
                 revises: previous.as_ref().map(|previous| previous.id.clone()),
                 responses,
                 review_notes: Vec::new(),
@@ -675,14 +674,16 @@ impl SessionManager {
                 && board.plans.values().any(|p| {
                     matches!(p.state, PlanState::Approved { .. }) && p.request_id == request_id
                 });
-            let reviewers = reviewers_for(&plan, &board.plans).max(usize::from(reviewed));
+            let reviewers = prepare_plan_review(
+                &mut plan,
+                &board.plans,
+                permission,
+                self.overnight.active.get(id).is_none()
+                    && matches!(self.core.conversation(id)?.setup, Some(Setup::Session { .. })),
+                self.plan_mode(id),
+                reviewed,
+            );
             let round = review_round(&plan, &board.plans);
-            if reviewers == 0 && !user_decides {
-                plan.state = PlanState::Approved {
-                    by: PlanApprover::Brigadier,
-                };
-                plan.decided_at_ms = Some(now_ms());
-            }
             self.store_plan(&plan).await?;
             Ok((plan, reviewers, round, after_approved))
         }
@@ -697,7 +698,9 @@ impl SessionManager {
                 self.decided_for_plan(
                     &plan,
                     format!("Approved the plan \u{201c}{}\u{201d}", plan.title),
-                    if after_approved {
+                    if plan.review_skip_reason.is_some() {
+                        "Approved without review: small plan".into()
+                    } else if after_approved {
                         "Its steps are those of the plan already approved.".into()
                     } else {
                         "A one-step plan that isn't marked risky needs no review.".into()
@@ -907,9 +910,162 @@ fn messaged(task: &mut Task, text: String, answered: bool) {
     }
 }
 
+/// Select the proposal's review before storing it, including any durable exemption.
+fn prepare_plan_review(
+    plan: &mut Plan,
+    plans: &std::collections::HashMap<CardId, Plan>,
+    permission: PermissionLevel,
+    interactive: bool,
+    plan_mode: bool,
+    forced: bool,
+) -> usize {
+    use super::plan_gates::{reviewers_for, small_plan};
+    let reviewers = if interactive && !plan_mode && !forced && small_plan(plan, plans) {
+        plan.review_skip_reason = Some("small plan".into());
+        0
+    } else {
+        reviewers_for(plan, plans).max(usize::from(forced))
+    };
+    if reviewers == 0 && !plan_mode && permission != PermissionLevel::AskForApproval {
+        plan.state = PlanState::Approved {
+            by: PlanApprover::Brigadier,
+        };
+        plan.decided_at_ms = Some(now_ms());
+    }
+    reviewers
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn proposal() -> Plan {
+        // Old events without the new field must still load.
+        serde_json::from_value(serde_json::json!({
+            "id": "p", "conversationId": "c", "requestId": "r", "position": 0,
+            "title": "Small plan", "steps": [
+                {"title": "A", "detail": null, "taskId": null},
+                {"title": "B", "detail": null, "taskId": null},
+                {"title": "C", "detail": null, "taskId": null}
+            ], "risky": false, "state": {"type": "proposed"},
+            "createdAtMs": 0, "decidedAtMs": null
+        }))
+        .expect("old plan event")
+    }
+
+    #[test]
+    fn small_proposals_skip_review_but_respect_the_permission() {
+        for permission in [
+            PermissionLevel::ApproveForMe,
+            PermissionLevel::FullAccess,
+            PermissionLevel::AskForApproval,
+        ] {
+            let mut plan = proposal();
+            assert!(plan.review_skip_reason.is_none());
+            assert_eq!(
+                prepare_plan_review(
+                    &mut plan,
+                    &Default::default(),
+                    permission,
+                    true,
+                    false,
+                    false
+                ),
+                0
+            );
+            assert!(plan.gate.is_none());
+            assert_eq!(plan.review_skip_reason.as_deref(), Some("small plan"));
+            assert_eq!(
+                plan.state,
+                if permission == PermissionLevel::AskForApproval {
+                    PlanState::Proposed
+                } else {
+                    PlanState::Approved {
+                        by: PlanApprover::Brigadier,
+                    }
+                }
+            );
+            let stored = serde_json::to_value(&plan).unwrap();
+            let restored: Plan = serde_json::from_value(stored).unwrap();
+            assert_eq!(plan, restored);
+            assert_eq!(
+                super::super::plan_gates::rerun_of(&restored, &Default::default(), true),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn small_shortcut_excludes_risk_size_overnight_plan_mode_and_forced_reviews() {
+        for (risky, steps, interactive, plan_mode, forced, expected) in [
+            (true, 3, true, false, false, 2),
+            (false, 4, true, false, false, 1),
+            (false, 3, false, false, false, 1), // Overnight phase.
+            (false, 1, false, false, true, 1),  // Phase 0 / propose_phases.
+            (false, 3, true, true, false, 1),
+            (false, 3, true, false, true, 1),
+        ] {
+            let mut plan = proposal();
+            plan.risky = risky;
+            plan.steps.resize(steps, plan.steps[0].clone());
+            assert_eq!(
+                prepare_plan_review(
+                    &mut plan,
+                    &Default::default(),
+                    PermissionLevel::FullAccess,
+                    interactive,
+                    plan_mode,
+                    forced
+                ),
+                expected
+            );
+            assert!(plan.review_skip_reason.is_none());
+            assert_eq!(plan.state, PlanState::Proposed);
+        }
+    }
+
+    #[test]
+    fn any_earlier_proposal_prevents_the_small_plan_shortcut() {
+        use crate::work::{Gate, GateOutcome};
+        for state in [
+            PlanState::Rejected { message: None },
+            PlanState::Revising,
+            PlanState::Superseded,
+        ] {
+            let mut previous = proposal();
+            previous.id = CardId("previous".into());
+            previous.state = state;
+            previous.gate = Some(Gate {
+                round: super::super::plan_gates::PLAN_ROUNDS,
+                commit: None,
+                verification_scope: Default::default(),
+                rebased: false,
+                members: Vec::new(),
+                outcome: Some(GateOutcome::Failed),
+                relanding: false,
+                retry: false,
+                overridden: false,
+                findings: Vec::new(),
+            });
+            let mut next = proposal();
+            if previous.state == PlanState::Revising {
+                next.revises = Some(previous.id.clone());
+            }
+            let plans = [(previous.id.clone(), previous)].into_iter().collect();
+            assert_eq!(
+                prepare_plan_review(
+                    &mut next,
+                    &plans,
+                    PermissionLevel::ApproveForMe,
+                    true,
+                    false,
+                    false
+                ),
+                1
+            );
+            assert!(next.review_skip_reason.is_none());
+        }
+    }
 
     #[test]
     fn answering_a_question_keeps_brigadiers_fix_loop_and_a_steer_ends_it() {

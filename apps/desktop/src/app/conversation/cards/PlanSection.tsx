@@ -313,6 +313,13 @@ export const PlanSection = memo(function PlanSection({
           </Badge>
         </span>
       </h3>
+      {plan.state.type === "approved" && (
+        <p className="text-muted-foreground text-xs" data-auto-approved={plan.state.by === "brigadier" || undefined}>
+          {plan.state.by === "user" ? "Approved by you" : plan.state.by === "brigadier"
+            ? plan.reviewSkipReason ? `Approved without review: ${plan.reviewSkipReason}` : "Auto-approved by Brigadier"
+            : "Approved after plan review"}
+        </p>
+      )}
       <ol className="flex flex-col">
         {plan.steps.map((step, index) => {
           const taskId = steps[index * 3] as string | null | undefined;

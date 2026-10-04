@@ -16,6 +16,10 @@ requestId: string | null, position: number, title: string, steps: Array<PlanStep
  */
 risky: boolean, state: PlanState, 
 /**
+ * Why independent review was skipped, if eligible at proposal time.
+ */
+reviewSkipReason: string | null, 
+/**
  * Its current review round (reviewers from other vendors than the orchestrator's).
  */
 gate: Gate | null, 

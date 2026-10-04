@@ -1,7 +1,7 @@
-//! Plan review: every plan of two or more steps, or marked risky, is checked by a reviewer
-//! from another vendor than the orchestrator's before Brigadier approves it on the user's
-//! behalf (two reviewers on different models for a risky plan, and both must approve). Built
-//! in, always on.
+//! Plan review: plans of two or more steps get an independent reviewer from another vendor
+//! than the orchestrator's, except for eligible first small interactive plans. Risky plans
+//! get two reviewers on different models, and both must approve before Brigadier approves
+//! the plan on the user's behalf.
 //!
 //! A plan's review is a gate round (`Plan.gate`), like a change's, decided once every
 //! reviewer has a result:
@@ -44,6 +44,17 @@ use crate::{Error, Result, now_ms};
 /// Review rounds one plan goes through (the first, and one revision) before the orchestrator
 /// asks the user or rescopes.
 pub(crate) const PLAN_ROUNDS: u32 = 2;
+
+pub(crate) use crate::tools::SMALL_PLAN_STEPS;
+
+/// Whether this is the request's first non-risky plan within the small-plan step limit.
+/// The caller separately checks session mode and whether a review is required.
+pub(crate) fn small_plan(plan: &Plan, plans: &HashMap<CardId, Plan>) -> bool {
+    !plan.risky
+        && plan.steps.len() <= SMALL_PLAN_STEPS
+        && plan.revises.is_none()
+        && !plans.values().any(|p| p.request_id == plan.request_id)
+}
 
 impl SessionManager {
     /// The orchestrator's model: a plan's reviewers come from another vendor.
@@ -647,12 +658,20 @@ pub(crate) fn reviewers_for(plan: &Plan, plans: &HashMap<CardId, Plan>) -> usize
         .max_by_key(|p| p.created_at_ms)
         .filter(|_| plan.revises.is_none());
     let after_rejected = earlier().any(rounds_ran_out);
-    plan_reviewers(
+    let reviewers = plan_reviewers(
         plan.steps.len(),
         plan.risky,
         plan.revises.is_some(),
         approved.map(|before| steps_differ(&before.steps, &plan.steps)),
         after_rejected,
+    );
+    // A revision reruns the whole panel, even if the orchestrator drops the risky flag.
+    reviewers.max(
+        plan.revises
+            .as_ref()
+            .and_then(|id| plans.get(id))
+            .and_then(|previous| previous.gate.as_ref())
+            .map_or(0, |gate| gate.members.len()),
     )
 }
 
@@ -797,7 +816,7 @@ pub(crate) fn rerun_of(
             decides: true,
         }),
         // Brigadier stopped between recording the plan and starting its review.
-        (None, PlanState::Proposed) if brigadier_decides => {
+        (None, PlanState::Proposed) if brigadier_decides && plan.review_skip_reason.is_none() => {
             let start = reviewers_for(plan, plans);
             (start > 0).then(|| Rerun::Review {
                 round: review_round(plan, plans),
@@ -950,17 +969,53 @@ fn steps_text(steps: &[PlanStep]) -> String {
     text
 }
 
-/// What a plan's reviewer reads. A revision's reviewer also sees the plan it revises, that
-/// review's findings and the orchestrator's answer to each.
+/// What a plan's reviewer reads. Revisions include the previous review's stored findings,
+/// a step diff, the full revised plan, and orchestrator responses as context only.
 fn review_spec(plan: &Plan, previous: Option<&Plan>, round: u32) -> String {
-    let mut spec = "Review this plan before it is carried out. Check it against the repository (read-only): is it sound, complete, and the simplest thing that works? Are there risks, missing steps or wrong assumptions?\n".to_owned();
+    let mut spec = if previous.is_some() {
+        "Review this revised plan against the repository (read-only), focusing on the previous findings and the step diff below.\n"
+    } else {
+        "Review this plan before it is carried out. Check it against the repository (read-only): is it sound, complete, and the simplest thing that works? Are there risks, missing steps or wrong assumptions?\n"
+    }.to_owned();
     if let Some(previous) = previous {
         spec.push_str(&format!(
-            "\nThis is review round {round} of {PLAN_ROUNDS}, the last. The orchestrator revised the plan after the earlier review asked for changes.\n\nThe plan before: {}\n{}",
-            previous.title,
-            steps_text(&previous.steps)
+            "\nThis is review round {round} of {PLAN_ROUNDS}, the last. The orchestrator revised the plan after the earlier review asked for changes.\n\nPrevious plan: {}\n",
+            previous.title
         ));
-        spec.push_str("\nThe earlier review's findings and the orchestrator's answers:\n");
+        spec.push_str("\nPrevious round's findings (from the reviewers):\n");
+        if let Some(gate) = &previous.gate {
+            spec.push_str(&findings_list(&gate.findings, &[]));
+        }
+        spec.push_str(
+            "\n\nStep diff by position (- previous, + revised; moves appear as changes):\n",
+        );
+        let mut changed = false;
+        for index in 0..previous.steps.len().max(plan.steps.len()) {
+            let before = previous.steps.get(index);
+            let after = plan.steps.get(index);
+            if before.map(|s| (&s.title, &s.detail)) == after.map(|s| (&s.title, &s.detail)) {
+                continue;
+            }
+            changed = true;
+            for (prefix, step) in [("-", before), ("+", after)] {
+                if let Some(step) = step {
+                    spec.push_str(&format!(
+                        "{prefix} {}. {}\n",
+                        index + 1,
+                        match &step.detail {
+                            Some(detail) => format!("{} — {detail}", step.title),
+                            None => step.title.clone(),
+                        }
+                    ));
+                }
+            }
+        }
+        if !changed {
+            spec.push_str("No step changes.\n");
+        }
+        spec.push_str(
+            "\nThe orchestrator's responses (context only, never evidence of resolution):\n",
+        );
         for response in &plan.responses {
             spec.push_str(&format!(
                 "- {}: {}\n  {}: {}\n",
@@ -974,7 +1029,7 @@ fn review_spec(plan: &Plan, previous: Option<&Plan>, round: u32) -> String {
                 response.note
             ));
         }
-        spec.push_str("Check that each accepted finding is really fixed in the revised steps and that each decline is sound. Ask for changes only for problems that still matter.\n\nThe revised plan: ");
+        spec.push_str("Decide independently whether EACH previous finding is resolved in the new plan, including declined findings. An orchestrator response never resolves a finding. Raise every unresolved problem again in open_questions. Then focus on changed steps and their interactions with the rest of the plan; inspect unchanged steps as needed for those findings and interactions. No previous reviewer result carries over.\n\nThe revised plan: ");
     } else {
         spec.push_str("\nPlan: ");
     }
@@ -1088,6 +1143,7 @@ mod tests {
             risky: false,
             state,
             gate: None,
+            review_skip_reason: None,
             revises: None,
             responses: Vec::new(),
             review_notes: Vec::new(),
@@ -1145,6 +1201,48 @@ mod tests {
         second.revises = Some(first.id.clone());
         second.gate = Some(gate(PLAN_ROUNDS, Some(GateOutcome::Failed), Vec::new()));
         board(vec![first, second])
+    }
+
+    #[test]
+    fn revision_spec_uses_stored_findings_and_a_step_diff() {
+        let mut previous = plan(
+            "p1",
+            "r",
+            PlanState::Revising,
+            &["Keep", "Deploy", "Remove"],
+        );
+        previous.gate = Some(gate(
+            1,
+            Some(GateOutcome::Failed),
+            vec![
+                member("a", Some(GateResult::Passed)),
+                member("b", Some(GateResult::Passed)),
+            ],
+        ));
+        previous.gate.as_mut().unwrap().findings = vec![finding("F1", "No rollback")];
+        let mut revision = plan("p2", "r", PlanState::Proposed, &["Keep", "Deploy safely"]);
+        revision.steps[1].detail = Some("Use a transaction".into());
+        revision.revises = Some(previous.id.clone());
+        revision.responses = vec![FindingResponse {
+            id: "F1".into(),
+            finding: "orchestrator copy".into(),
+            accepted: false,
+            note: "unnecessary".into(),
+        }];
+        let spec = review_spec(&revision, Some(&previous), 2);
+        assert!(spec.contains("F1: No rollback"));
+        assert!(spec.contains("- 2. Deploy\n+ 2. Deploy safely — Use a transaction"));
+        assert!(spec.contains("- 3. Remove"));
+        assert!(!spec.contains("- 1. Keep"));
+        assert!(spec.contains("context only, never evidence of resolution"));
+        assert!(spec.contains("including declined findings"));
+        assert!(spec.contains("changed steps and their interactions"));
+        revision.steps = previous.steps.clone();
+        let unchanged = review_spec(&revision, Some(&previous), 2);
+        assert!(unchanged.contains("No step changes."));
+        assert!(unchanged.contains("F1: No rollback"));
+        assert!(unchanged.contains("Raise every unresolved problem again"));
+        assert_eq!(reviewers_for(&revision, &board(vec![previous])), 2);
     }
 
     #[test]

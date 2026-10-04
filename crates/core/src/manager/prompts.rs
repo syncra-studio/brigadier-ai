@@ -124,7 +124,8 @@ pub(crate) fn setting_texts(
                 run.branch, run.base
             ),
             format!(
-                "Approve for me, for this run only: Brigadier approves plans and changes on the user's behalf, {sandbox} It still refuses what only the user may do: pushing, publishing, deploying, spending, credentials, contacting anyone, and changes outside the run's branch.{PLAN_REVIEW} Nobody can answer questions or approvals before the morning: decide what the plan and the Rules settle (and note it with note_for_user, kind decided), and list what only the user can do (a key, an account, a push, a product choice the Rules leave open) with note_for_user, kind waiting, then carry on with everything that doesn't depend on it. Never ask the user, and never use request_approval.",
+                "Approve for me, for this run only: Brigadier approves plans and changes on the user's behalf, {sandbox} It still refuses what only the user may do: pushing, publishing, deploying, spending, credentials, contacting anyone, and changes outside the run's branch.{plan_review}{PLAN_REVISION} Nobody can answer questions or approvals before the morning: decide what the plan and the Rules settle (and note it with note_for_user, kind decided), and list what only the user can do (a key, an account, a push, a product choice the Rules leave open) with note_for_user, kind waiting, then carry on with everything that doesn't depend on it. Never ask the user, and never use request_approval.",
+                plan_review = plan_review_instructions(),
                 sandbox = if unsandboxed {
                     "and workers run without the OS sandbox, as in the session."
                 } else {
@@ -148,21 +149,30 @@ fn environment_text(environment: &Environment) -> String {
 }
 
 fn permission_text(permission: PermissionLevel) -> String {
+    let plan_review = plan_review_instructions();
     match permission {
-        PermissionLevel::AskForApproval => {
-            "Ask for approval: the user approves every plan and every change. Propose a plan (propose_plan) and wait for its approval before delegating any implement or merge task; a plan of two or more steps is also reviewed independently, and the user sees its findings on the card. Each accept_task also waits for the user's approval.".to_owned()
-        }
+        PermissionLevel::AskForApproval => format!(
+            "Ask for approval: the user approves every plan and every change. Propose a plan (propose_plan) and wait for its approval before delegating any implement or merge task. Independent review informs the user's decision; its findings appear on the card. Each accept_task also waits for the user's approval.{plan_review}"
+        ),
         PermissionLevel::ApproveForMe => format!(
-            "Approve for me: Brigadier approves plans and changes on the user's behalf. Small tasks just go.{PLAN_REVIEW} Ask the user only what only they can answer (product choices, unclear requirements)."
+            "Approve for me: Brigadier approves plans and changes on the user's behalf. Small tasks just go.{plan_review}{PLAN_REVISION} Ask the user only what only they can answer (product choices, unclear requirements)."
         ),
         PermissionLevel::FullAccess => format!(
-            "Full access: like Approve for me, but workers run without the OS sandbox. Be careful.{PLAN_REVIEW}"
+            "Full access: like Approve for me, but workers run without the OS sandbox. Be careful.{plan_review}{PLAN_REVISION}"
         ),
     }
 }
 
-/// How plans are reviewed when Brigadier approves them on the user's behalf.
-const PLAN_REVIEW: &str = " For multi-step work, propose_plan first: a plan of two or more steps gets an independent review before Brigadier approves it, and one marked risky: true (big, risky or architectural work) gets two. When the review asks for changes, you get its findings by id (F1, F2, …): propose the revised plan with revises (the plan's id) and responses, one line per finding (\"F1 accepted: what you changed\" or \"F2 declined: why\"). The revision is reviewed once more; if it still fails, ask the user or rescope.";
+/// The review policy shared by interactive sessions and overnight runs.
+fn plan_review_instructions() -> String {
+    format!(
+        " For multi-step work, propose_plan first. Plans of two or more steps get one independent reviewer; plans marked risky: true (big, risky or architectural work) get two. A first non-risky plan for a request, with at most {small_plan_steps} steps, skips review only in an interactive session outside plan mode. Brigadier approves it only under Approve for me or Full access; under Ask for approval the user decides. This small-plan exception never applies to overnight runs; Phase 0 plans submitted with propose_phases are reviewed even with one step. A non-risky plan with unchanged steps from an already approved plan also needs no new review, unless review rounds were exhausted for the request. Revisions after review findings, changed steps after approval, and new plans after exhausted review rounds are reviewed even with one step. Other one-step non-risky plans need no review.",
+        small_plan_steps = super::plan_gates::SMALL_PLAN_STEPS,
+    )
+}
+
+/// Revision instructions for plans whose review decides on the user's behalf.
+const PLAN_REVISION: &str = " When the review asks for changes, you get its findings by id (F1, F2, …): propose the revised plan with revises (the plan's id) and responses, one line per finding (\"F1 accepted: what you changed\" or \"F2 declined: why\"). The revision is reviewed once more; if it still fails, ask the user or rescope.";
 
 /// How the orchestrator and workers write (PLAN.md §7): brief, plain and lossless.
 const VOICE: &str = "
@@ -1037,6 +1047,28 @@ mod environment_tests {
             branch: "overnight/2026-10-04-textkit-1234".into(),
             path: "/tmp/run".into(),
         };
+        for permission in ["askForApproval", "approveForMe", "fullAccess"] {
+            for workspace in [None, Some(&run)] {
+                let prompt = orchestrator(&conversation(permission), None, &[], workspace, true);
+                assert!(prompt.contains("Plans of two or more steps get one independent reviewer"));
+                assert!(prompt.contains(&format!(
+                    "at most {} steps",
+                    super::super::plan_gates::SMALL_PLAN_STEPS
+                )));
+                assert!(
+                    prompt.contains("This small-plan exception never applies to overnight runs")
+                );
+                assert!(prompt.contains("Other one-step non-risky plans need no review."));
+                if permission == "askForApproval" && workspace.is_none() {
+                    assert!(!prompt.contains("revises"));
+                    assert!(!prompt.contains("When the review asks for changes"));
+                } else {
+                    assert!(prompt.contains("propose the revised plan with revises"));
+                }
+                assert!(!prompt.contains("Larger plans"));
+                assert!(!prompt.contains("forced reviews"));
+            }
+        }
         let full = orchestrator(&conversation("fullAccess"), None, &[], Some(&run), true);
         assert!(full.contains("workers run without the OS sandbox"));
         assert!(!full.contains("stays in its sandbox"));
