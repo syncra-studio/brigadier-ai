@@ -403,7 +403,8 @@ export function OvernightPlanCard({
         <div className="flex flex-col gap-0.5" role="status">
           {details.outcome?.[0] && <p className="text-sm">{details.outcome[0]}</p>}
           <p className="text-muted-foreground truncate text-xs" title={run.workspace?.branch}>
-            {whereLine(run, details.verifiedSha)}
+            {/* The report's own second line, until the work is merged. */}
+            {run.merged || !details.outcome?.[1] ? whereLine(run, details.verifiedSha) : details.outcome[1]}
           </p>
           <p className="text-muted-foreground text-xs">
             {details.waiting === 0

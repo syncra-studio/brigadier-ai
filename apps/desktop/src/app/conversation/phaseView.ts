@@ -29,6 +29,29 @@ export function splitReport(text: string): { head: string; details: string } | n
   return details ? { head: text.slice(0, at).trimEnd(), details } : null;
 }
 
+/**
+ * Reports rendered again in the current shape, by message id: a finished run whose report was
+ * written in an older one carries it as `reportText` (its message stays as written).
+ */
+export function reportTexts(runs: Readonly<Record<string, OvernightRun>> | undefined): Readonly<Record<string, string>> {
+  const texts: Record<string, string> = {};
+  for (const run of Object.values(runs ?? {})) {
+    if (run.reportMessageId && run.reportText) texts[run.reportMessageId] = run.reportText;
+  }
+  return texts;
+}
+
+/**
+ * The text each message shows (and Copy copies): a report rendered again over its message's
+ * text, else the full text of a long message. The same object when nothing changes.
+ */
+export function shownTexts(
+  fullText: Readonly<Record<string, string>>,
+  reports: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> {
+  return Object.keys(reports).length === 0 ? fullText : { ...fullText, ...reports };
+}
+
 /** Whether the run is over: nothing more happens in any of its phases. */
 export function runOver(run: OvernightRun): boolean {
   return run.state === "finished" || run.state === "superseded";

@@ -48,6 +48,7 @@ import {
   PulledSlot,
 } from "@/app/conversation/composerTarget";
 import { useResolvedDraft } from "@/app/conversation/draftSetup";
+import { reportTexts, shownTexts } from "@/app/conversation/phaseView";
 import { type BlockMeta, RequestBlock } from "@/app/conversation/RequestBlock";
 import { StatusCardContext } from "@/app/conversation/StatusCard";
 import { ComposerCapsule } from "@/app/conversation/ComposerCapsule";
@@ -330,6 +331,8 @@ function textOf(message: AppendMessage): string {
 const NO_PENDING: PendingMessage[] = [];
 const NO_RATINGS: Partial<Record<string, Rating>> = {};
 
+const NO_REPORTS: Readonly<Record<string, string>> = {};
+
 const EMPTY_DIGEST: BoardDigest & { head: string | null } = {
   tasks: {},
   approvals: {},
@@ -470,17 +473,22 @@ export function ConversationView({
   }, [conversationId, thread.items, thread.fullText]);
 
   const session = conversation?.kind === "session" || resolved.kind === "session";
+  // A run's report rendered again shows (and copies) in place of the text it was written with.
+  const reports = useBoard(
+    useShallow((s) => (s.board?.conversationId === conversationId ? reportTexts(s.board.overnight) : NO_REPORTS)),
+  );
+  const texts = useMemo(() => shownTexts(thread.fullText, reports), [thread.fullText, reports]);
   const tree = useMemo(
     () =>
       buildThread(
         thread.items,
-        thread.fullText,
+        texts,
         thread.hasMore,
         digest ?? EMPTY_DIGEST,
         pending,
         session ? "edits" : "all",
       ),
-    [thread.items, thread.fullText, thread.hasMore, digest, pending, session],
+    [thread.items, texts, thread.hasMore, digest, pending, session],
   );
   const setup = conversation?.setup;
   const picked =

@@ -550,6 +550,10 @@ pub struct AppliedCommand {
     pub at_ms: i64,
 }
 
+/// The morning report's current shape. A finished run whose report is older is rendered again
+/// from its records once (`report_text`).
+pub const REPORT_VERSION: u32 = 1;
+
 /// One segment of an overnight run: Start to its report. Continue proposes the next segment
 /// on the same branch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -607,6 +611,17 @@ pub struct OvernightRun {
     /// The report's three opening paragraphs, for a restored card whose message is off-page.
     #[serde(default)]
     pub report_outcome: Option<[String; 3]>,
+    /// The report's shape it was written in ([`REPORT_VERSION`]); 0 before versions existed.
+    #[serde(default)]
+    pub report_version: u32,
+    /// The report rendered again from the run's records in the current shape, shown in place
+    /// of its message's text (which stays as it was written).
+    #[serde(default)]
+    pub report_text: Option<String>,
+    /// The run branch's tip when the report was written: the commits it lists end here, even
+    /// after Continue adds more to the branch or the branch is gone.
+    #[serde(default)]
+    pub end_commit: Option<String>,
     #[serde(default)]
     pub merged: Option<RunMerge>,
     /// The notification the report comes with, until the app shows it.
@@ -665,6 +680,9 @@ impl OvernightRun {
             obstacles: Vec::new(),
             report_message_id: None,
             report_outcome: None,
+            report_version: 0,
+            report_text: None,
+            end_commit: None,
             merged: None,
             notification: None,
             stop: None,

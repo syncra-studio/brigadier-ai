@@ -52,6 +52,9 @@ pub(crate) struct Runs {
     pub(crate) admission: admission::Admission,
     /// Runs whose clean ending is under way (it runs once).
     winding: std::sync::Mutex<std::collections::HashSet<OvernightRunId>>,
+    /// Finished runs whose older report was tried again in the current shape (once a daemon
+    /// life, so one that can't be rebuilt keeps its report without retrying every tick).
+    rerendered: std::sync::Mutex<std::collections::HashSet<OvernightRunId>>,
     /// The generic recovery is ending the old daemon's tasks: their missing results are not
     /// verdicts on a run's checks (the round starts again afterwards).
     pub(crate) recovering: std::sync::atomic::AtomicBool,
@@ -132,6 +135,9 @@ impl SessionManager {
             obstacles: Vec::new(),
             report_message_id: None,
             report_outcome: None,
+            report_version: 0,
+            report_text: None,
+            end_commit: None,
             merged: None,
             notification: None,
             stop: None,
@@ -558,6 +564,9 @@ impl SessionManager {
             obstacles: Vec::new(),
             report_message_id: None,
             report_outcome: None,
+            report_version: 0,
+            report_text: None,
+            end_commit: None,
             notification: None,
             stop: None,
             commands: vec![AppliedCommand {

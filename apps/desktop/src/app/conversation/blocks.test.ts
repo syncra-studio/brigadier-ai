@@ -3,8 +3,9 @@ import { test } from "node:test";
 
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
 import { type Block, type BoardDigest, blockSequence, buildBlocks, judgementCall } from "@/app/conversation/blocks";
+import { reportTexts, shownTexts } from "@/app/conversation/phaseView";
 import { checkersOf, checkResult, checksCount, taskRowDetail, taskState } from "@/app/conversation/rowWords";
-import type { Decision, Message, OrchestratorStep, Plan, Task, UserRequest } from "@/ipc/generated";
+import type { Decision, Message, OrchestratorStep, OvernightRun, Plan, Task, UserRequest } from "@/ipc/generated";
 
 // The board of the first real overnight run (2026-10-03), from its stored events
 // (scripts/extract-board-fixture.mjs). Before one row per task, its Phase 1 showed 41 rows and
@@ -228,4 +229,22 @@ test("a run's decision shows in the thread unless its kind says it is a phase's 
   const routine = board.decisions.find((decision) => decision.source.type === "task");
   assert.ok(routine);
   assert.equal(judgementCall(routine), false);
+});
+
+test("a report rendered again shows, and copies, in place of the text it was written with", () => {
+  const run = Object.values(night.overnight)[0] as unknown as OvernightRun;
+  const id = run.reportMessageId ?? "";
+  const stored = messages.find((message) => message.id === id)?.text ?? "";
+  assert.ok(stored.includes("### Phase 1 · Measure — ✓ verified"), "the stored report is the old one");
+  // Nothing rendered again: the message's own text.
+  const fullText = {};
+  assert.equal(shownTexts(fullText, reportTexts({ [run.id]: run })), fullText);
+  const again = "**Faster, leaner overnight runs**: stopped by you at 07:04. 1 of 3 phases verified.";
+  const texts = shownTexts({}, reportTexts({ [run.id]: { ...run, reportText: again } }));
+  const shown = buildBlocks(messages, texts, false, board, [])
+    .flatMap((block) => block.texts)
+    .find((text) => text.messageId === id);
+  assert.equal(shown?.text, again);
+  // The stored message is untouched.
+  assert.equal(messages.find((message) => message.id === id)?.text, stored);
 });

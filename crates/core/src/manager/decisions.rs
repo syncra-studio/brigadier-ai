@@ -104,6 +104,11 @@ impl SessionManager {
         what: String,
         why: String,
     ) {
+        // What the user reads names a worker as the app shows it, never as "task-N".
+        let (what, why) = match self.core.board(conversation_id).await {
+            Ok(board) => (named(&what, &board), named(&why, &board)),
+            Err(_) => (what, why),
+        };
         let decision = Decision {
             id: uuid::Uuid::now_v7().to_string(),
             request_id,
@@ -143,6 +148,7 @@ impl SessionManager {
         let added = {
             let _held = self.waiting.lock().await;
             let board = self.core.board(conversation_id).await?;
+            let what = named(&what, &board);
             let key = waiting_key(&source, &what);
             let open_same = board.waiting.values().find(|open| open.key == key);
             if open_same.is_none() && repeats_run_ask(&board, &source, request_id.as_deref(), &what)
@@ -580,6 +586,67 @@ fn reconciled_waits(
     (listed, gone)
 }
 
+/// The longest worker name in a line the user reads, in characters.
+const NAME_CHARS: usize = 40;
+
+/// A worker as the user knows it: its title, as on its row, in quotes and cut short at a word
+/// ("“Fix the A/B breakdown note after…”").
+pub(crate) fn worker_name(task: &Task) -> String {
+    let title = task.title.split_whitespace().collect::<Vec<_>>().join(" ");
+    if title.chars().count() <= NAME_CHARS {
+        return format!("\u{201c}{title}\u{201d}");
+    }
+    let cut: String = title.chars().take(NAME_CHARS).collect();
+    let cut = match cut.rfind(' ') {
+        Some(at) if at > NAME_CHARS / 2 => &cut[..at],
+        _ => cut.as_str(),
+    };
+    format!(
+        "\u{201c}{}\u{2026}\u{201d}",
+        cut.trim_end_matches([' ', ',', ':', ';', '-', '·'])
+    )
+}
+
+/// `text` with each "task-N" of the conversation's tasks as the worker's name. A title quoted
+/// right after it ("task-3 “Add the flag”") becomes that name; "task-N" inside a branch, path
+/// or longer word stays as it is.
+pub(crate) fn named(text: &str, board: &Board) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("task-") {
+        let before = rest[..at].chars().next_back();
+        let digits: String = rest[at + 5..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        let after = rest[at + 5 + digits.len()..].chars().next();
+        let word = before.is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '/' | '-' | '_')))
+            && !digits.is_empty()
+            && after.is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '-' | '_' | '/')));
+        let task = word
+            .then(|| digits.parse::<u32>().ok())
+            .flatten()
+            .and_then(|number| board.tasks.values().find(|task| task.number == number));
+        let Some(task) = task else {
+            let end = at + 5;
+            out.push_str(&rest[..end]);
+            rest = &rest[end..];
+            continue;
+        };
+        out.push_str(&rest[..at]);
+        out.push_str(&worker_name(task));
+        rest = &rest[at + 5 + digits.len()..];
+        // Its title quoted after it is the name already.
+        if let Some(quoted) = rest.strip_prefix(" \u{201c}")
+            && let Some(close) = quoted.find('\u{201d}')
+        {
+            rest = &quoted[close + '\u{201d}'.len_utf8()..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// The overnight run an item belongs to: its own, its task's, or its request's.
 pub(crate) fn waiting_run(
     source: &WaitingSource,
@@ -786,6 +853,37 @@ fn report_waits(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_worker_is_named_as_the_app_shows_it() {
+        let mut board = Board::default();
+        let mut short = task("t1", TaskState::Landed, None);
+        short.number = 3;
+        let mut long = task("t2", TaskState::Stopped, None);
+        long.number = 37;
+        long.title = "Gate members take run slots in a fixed priority order".into();
+        board.tasks.insert(short.id.clone(), short);
+        board.tasks.insert(long.id.clone(), long);
+        assert_eq!(
+            named(
+                "Landed task-3 \u{201c}Add the flag\u{201d} on `main`",
+                &board
+            ),
+            "Landed \u{201c}Add the flag\u{201d} on `main`"
+        );
+        assert_eq!(
+            named("Sent task-37 back (task-37's fix 1 of 2).", &board),
+            "Sent \u{201c}Gate members take run slots in a fixed\u{2026}\u{201d} back (\u{201c}Gate members take run slots in a fixed\u{2026}\u{201d}'s fix 1 of 2)."
+        );
+        // Branches, paths and unknown numbers stay as they are.
+        for kept in [
+            "on `brigadier/4158464b/task-3-add-the-flag`",
+            "see task-30 and subtask-3 and task-3x",
+            "task-",
+        ] {
+            assert_eq!(named(kept, &board), kept);
+        }
+    }
 
     fn task_source() -> WaitingSource {
         WaitingSource::Task {

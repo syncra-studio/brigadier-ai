@@ -4,6 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { openNotificationSettings, request } from "@/ipc/client";
 import type { DiffStat, OvernightRun, TaskId } from "@/ipc/generated";
 import { loadConversation, loadFullText, openConversation, switchBranch } from "@/state/actions";
+import { reportTexts, shownTexts } from "@/app/conversation/phaseView";
 import { type Board, updateBoard, useBoard } from "@/state/board";
 import { setUpLidClosed, useKeepAwake } from "@/state/keepAwake";
 import { loadNotificationPermission, useNotifications } from "@/state/notifications";
@@ -181,7 +182,9 @@ export function useOvernightCards(conversationId: string): readonly OvernightCar
   }, [hasRuns]);
   const reports = useApp(useShallow((s) => runs.map((run) => {
     const message = s.threads[conversationId]?.items.find((item) => item.id === run.reportMessageId);
-    return message ? s.threads[conversationId]?.fullText[message.id] ?? message.text : undefined;
+    if (!message) return undefined;
+    const texts = shownTexts(s.threads[conversationId]?.fullText ?? {}, reportTexts({ [run.id]: run }));
+    return texts[message.id] ?? message.text;
   })));
   useEffect(() => {
     for (const run of runs) {
