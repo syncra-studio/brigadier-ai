@@ -4,6 +4,7 @@ import type { Compaction } from "./Compaction";
 import type { ContextUsage } from "./ContextUsage";
 import type { Conversation } from "./Conversation";
 import type { Decision } from "./Decision";
+import type { MachineStep } from "./MachineStep";
 import type { MemoryChange } from "./MemoryChange";
 import type { MessagePage } from "./MessagePage";
 import type { MessageQueue } from "./MessageQueue";
@@ -45,6 +46,11 @@ workerSteps: Array<WorkerStep>,
  * Every orchestrator step, in the order they happened.
  */
 orchestratorSteps: Array<OrchestratorStep>, 
+/**
+ * Every row about the machine (waiting for it to cool down, builds paused and resumed),
+ * in the order they happened.
+ */
+machineSteps: Array<MachineStep>, 
 /**
  * Every compaction of a Chat's context, in the order they happened.
  */

@@ -33,6 +33,7 @@ mod git_actions;
 mod instructions;
 mod landing;
 mod lifecycle;
+mod machine;
 mod outcomes;
 mod outputs;
 pub mod overnight;
@@ -132,6 +133,8 @@ pub struct SessionManager {
     faults: fault::Faults,
     research: research::Research,
     overnight: overnight::Runs,
+    /// Holds new work while the machine struggles, and runs heavy commands one at a time.
+    machine: Arc<crate::machine::MachineWatch>,
 }
 
 impl SessionManager {
@@ -165,6 +168,10 @@ impl SessionManager {
             .await;
         }
         let brains = brains::Brains::new(&data_dir);
+        let machine = Arc::new(crate::machine::MachineWatch::new(
+            runtime.platform().clone(),
+            data_dir.join("stopped-processes.json"),
+        ));
         let manager = Arc::new_cyclic(|me| Self {
             me: me.clone(),
             core,
@@ -190,8 +197,10 @@ impl SessionManager {
             faults: fault::Faults::default(),
             research: research::Research::default(),
             overnight: overnight::Runs::default(),
+            machine,
         });
         manager.install_worktree_remover();
+        manager.start_machine_watch().await;
         manager.recover_active_runs().await;
         manager.recover().await;
         manager.resume_runs().await;
@@ -220,6 +229,8 @@ impl SessionManager {
         self.research.stop.cancel();
         self.research.jobs.close();
         self.research.jobs.wait().await;
+        // What Brigadier stopped goes on before the CLIs above it close.
+        self.quit_machine_watch().await;
         let tasks: Vec<Arc<TaskLive>> = self.tasks_lock().values().cloned().collect();
         let convs: Vec<Arc<ConvLive>> = self.convs_lock().values().cloned().collect();
         let mut closing = tokio::task::JoinSet::new();

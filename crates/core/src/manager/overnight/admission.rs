@@ -12,15 +12,15 @@
 //! other task of that run takes one, and while a reviewer waits, no worker does. A change's
 //! checks so never wait behind new work, and the verifier, which proves it, goes first.
 //!
-//! Checks build and test: a run's verifier also takes the daemon-wide build lease, so one
-//! such check builds at a time, and every run worker runs at low OS priority (the spawn's
-//! `low_priority`), so its builds yield to the user's own work.
+//! Builds and tests run one at a time daemon-wide through the build lease every worker shares
+//! ([`crate::machine`]), scoped to each heavy command rather than a worker's life, and every
+//! worker runs at low OS priority (the spawn's `low_priority`), so its builds yield to the
+//! user's own work.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Notify;
 
 use super::super::SessionManager;
 use crate::model::{OvernightRunId, TaskId};
@@ -36,11 +36,8 @@ pub(crate) struct Admission {
     held: std::sync::Mutex<HashMap<OvernightRunId, HashSet<TaskId>>>,
     /// The tasks of each run waiting for a slot, with their [`rank`].
     waiting: std::sync::Mutex<HashMap<OvernightRunId, HashMap<TaskId, u8>>>,
-    /// Signalled whenever a slot or the build lease is given back.
+    /// Signalled whenever a slot is given back.
     freed: Notify,
-    build: Arc<Semaphore>,
-    /// The task holding the build lease, with it.
-    building: std::sync::Mutex<Option<(TaskId, OwnedSemaphorePermit)>>,
 }
 
 impl Default for Admission {
@@ -49,8 +46,6 @@ impl Default for Admission {
             held: Default::default(),
             waiting: Default::default(),
             freed: Notify::new(),
-            build: Arc::new(Semaphore::new(1)),
-            building: Default::default(),
         }
     }
 }
@@ -154,8 +149,7 @@ impl SessionManager {
         }
     }
 
-    /// Waits until `task` may execute (a slot of its run, and the build lease for a run's
-    /// verifier), showing why it waits meanwhile. Fails when the task ends or its run is over
+    /// Waits until `task` may execute (a slot of its run), showing why it waits meanwhile. Fails when the task ends or its run is over
     /// while it waits.
     pub(crate) async fn admit_run_task(&self, task: &Task) -> Result<()> {
         self.admit_to_run(task, false).await
@@ -220,73 +214,29 @@ impl SessionManager {
             }
         }
         drop(queued);
-        if task.kind == TaskKind::Verify && !self.holds_build_lease(&task.id) {
-            let lease = self.overnight.admission.build.clone();
-            let permit = match lease.clone().try_acquire_owned() {
-                Ok(permit) => permit,
-                Err(_) => {
-                    waited = true;
-                    self.set_task_blocked(
-                        &task.id,
-                        Some("Waiting for another check's build and tests to finish.".into()),
-                    )
-                    .await;
-                    loop {
-                        if let Ok(Ok(permit)) =
-                            tokio::time::timeout(RECHECK, lease.clone().acquire_owned()).await
-                        {
-                            break permit;
-                        }
-                        if let Err(err) = self.still_wanted(task).await {
-                            self.release_run_task(&task.id);
-                            return Err(err);
-                        }
-                    }
-                }
-            };
-            *self
-                .overnight
-                .admission
-                .building
-                .lock()
-                .unwrap_or_else(|p| p.into_inner()) = Some((task.id.clone(), permit));
-        }
         if waited {
             self.set_task_blocked(&task.id, None).await;
         }
         Ok(())
     }
 
-    /// Gives back what `task_id` held: its run's slot and the build lease.
+    /// Gives back what `task_id` held: its run's slot.
     pub(crate) fn release_run_task(&self, task_id: &TaskId) {
         let admission = &self.overnight.admission;
         let mut released = false;
         for tasks in admission.held().values_mut() {
             released |= tasks.remove(task_id);
         }
-        {
-            let mut building = admission.building.lock().unwrap_or_else(|p| p.into_inner());
-            if building.as_ref().is_some_and(|(id, _)| id == task_id) {
-                *building = None;
-                released = true;
-            }
-        }
         if released {
             admission.freed.notify_waiters();
         }
     }
 
-    /// Gives back everything `run_id`'s tasks held: its slots, and the build lease if one of
-    /// them had it. Its waiting tasks find the run over at their next look.
+    /// Gives back everything `run_id`'s tasks held: its slots. Its waiting tasks find the run
+    /// over at their next look.
     pub(crate) fn release_run(&self, run_id: &OvernightRunId) {
         let admission = &self.overnight.admission;
-        let held = admission.held().remove(run_id).unwrap_or_default();
-        {
-            let mut building = admission.building.lock().unwrap_or_else(|p| p.into_inner());
-            if building.as_ref().is_some_and(|(id, _)| held.contains(id)) {
-                *building = None;
-            }
-        }
+        admission.held().remove(run_id);
         admission.freed.notify_waiters();
     }
 
@@ -313,16 +263,6 @@ impl SessionManager {
                 .get(&task.conversation_id)
                 .is_some_and(|active| active.id == context.run_id && active.winding_down)
         })
-    }
-
-    fn holds_build_lease(&self, task_id: &TaskId) -> bool {
-        self.overnight
-            .admission
-            .building
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .as_ref()
-            .is_some_and(|(id, _)| id == task_id)
     }
 
     /// Fails when the task waiting for a slot ended meanwhile (stopped), or its run is over.

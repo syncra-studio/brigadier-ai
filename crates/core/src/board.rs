@@ -49,6 +49,8 @@ pub(crate) struct Board {
     pub(crate) worker_steps: Vec<WorkerStep>,
     /// Every orchestrator step, in stream order.
     pub(crate) orchestrator_steps: Vec<OrchestratorStep>,
+    /// Every row about the machine, in stream order.
+    pub(crate) machine_steps: Vec<crate::model::MachineStep>,
     pub(crate) compactions: HashMap<String, Compaction>,
     pub(crate) ratings: HashMap<String, Rating>,
     pub(crate) queue: MessageQueue,
@@ -173,6 +175,11 @@ impl Board {
                 let mut step = step.clone();
                 step.position = stream_seq;
                 self.orchestrator_steps.push(step);
+            }
+            DomainEvent::MachineStepped { step, .. } => {
+                let mut step = step.clone();
+                step.position = stream_seq;
+                self.machine_steps.push(step);
             }
             DomainEvent::MemoryUpdated { memory, .. } => {
                 match self

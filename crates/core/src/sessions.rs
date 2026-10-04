@@ -988,6 +988,7 @@ impl Core {
             head: board.head.as_ref().map(|(head, _)| head.clone()),
             worker_steps: board.worker_steps.clone(),
             orchestrator_steps: board.orchestrator_steps.clone(),
+            machine_steps: board.machine_steps.clone(),
             compactions: board.sorted_compactions(),
             decisions: board.decisions.clone(),
             waiting: board.sorted_waiting(),

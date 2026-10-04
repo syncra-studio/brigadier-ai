@@ -15,7 +15,7 @@ pub struct SpawnSpec {
     pub clear_env: bool,
     pub cwd: Option<PathBuf>,
     /// Runs at low OS priority (nice 10 on Unix, below normal on Windows), and so does
-    /// everything it starts: work the user isn't waiting on (an overnight run's workers).
+    /// everything it starts: work the user isn't waiting on (every worker).
     pub low_priority: bool,
 }
 

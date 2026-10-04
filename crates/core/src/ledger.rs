@@ -308,6 +308,24 @@ impl CleanupLedger {
         }
     }
 
+    /// Every CLI process recorded, with its owner and start time: the processes Brigadier itself
+    /// started, which may still run.
+    pub fn processes(&self) -> Vec<(String, u32, Option<f64>)> {
+        let state = self.state();
+        state
+            .artifacts
+            .iter()
+            .flat_map(|(owner, artifacts)| {
+                artifacts.iter().filter_map(move |artifact| match artifact {
+                    Artifact::Process { pid, started_at_ms } => {
+                        Some((owner.clone(), *pid, *started_at_ms))
+                    }
+                    _ => None,
+                })
+            })
+            .collect()
+    }
+
     /// Every owner with what it still holds, and whether it is being disposed of.
     pub fn owners(&self) -> Vec<(String, Vec<Artifact>, bool)> {
         let state = self.state();

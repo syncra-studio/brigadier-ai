@@ -141,6 +141,8 @@ export type { LidClosed } from "./LidClosed";
 export type { Lifecycle } from "./Lifecycle";
 export type { LimitHit } from "./LimitHit";
 export type { LimitKind } from "./LimitKind";
+export type { MachineStep } from "./MachineStep";
+export type { MachineStepKind } from "./MachineStepKind";
 export type { MemoryChange } from "./MemoryChange";
 export type { Mention } from "./Mention";
 export type { MergedModel } from "./MergedModel";

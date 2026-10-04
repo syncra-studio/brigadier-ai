@@ -631,6 +631,40 @@ pub struct Notice {
     pub at_ms: i64,
 }
 
+/// A grey thread row about the machine (PLAN.md §10.7): a worker or a build waiting for the
+/// machine to cool down, or for another build; a build paused for the heat, or going on again.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineStep {
+    pub kind: MachineStepKind,
+    /// The request the worker (or the orchestrator's turn) serves.
+    #[serde(default)]
+    pub request_id: Option<String>,
+    /// The worker it is about; absent for the orchestrator's own commands.
+    #[serde(default)]
+    pub task_id: Option<crate::work::TaskId>,
+    /// The command (`cargo test -p brigadier-core`); absent for a worker waiting to start.
+    #[serde(default)]
+    pub command: Option<String>,
+    pub at_ms: i64,
+    /// Where it happened in the conversation's stream (set when the board reads it).
+    #[serde(default)]
+    pub position: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum MachineStepKind {
+    /// "Waiting for the Mac to cool down": the machine is hot or short on memory.
+    WaitingToCool,
+    /// "Waiting for another build to finish": one build or test run goes at a time.
+    WaitingForBuild,
+    /// "Paused {command} to let the Mac cool down".
+    Paused,
+    /// "Resumed {command}".
+    Resumed,
+}
+
 /// How full the conversation model's context is, as its CLI last said.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -672,6 +706,10 @@ pub struct ConversationView {
     pub worker_steps: Vec<WorkerStep>,
     /// Every orchestrator step, in the order they happened.
     pub orchestrator_steps: Vec<OrchestratorStep>,
+    /// Every row about the machine (waiting for it to cool down, builds paused and resumed),
+    /// in the order they happened.
+    #[serde(default)]
+    pub machine_steps: Vec<MachineStep>,
     /// Every compaction of a Chat's context, in the order they happened.
     pub compactions: Vec<Compaction>,
     /// What was decided on the user's behalf, in the order it was decided.
@@ -1225,6 +1263,11 @@ pub enum DomainEvent {
     OrchestratorStepped {
         step: OrchestratorStep,
     },
+    /// Work waits for the machine, or a build was paused or resumed for its heat.
+    MachineStepped {
+        conversation_id: ConversationId,
+        step: MachineStep,
+    },
     /// A Chat's model began compacting its context, or finished (full snapshot).
     CompactionUpdated {
         compaction: Compaction,
@@ -1344,6 +1387,7 @@ impl DomainEvent {
             Self::RequestUpdated { .. } => "request.updated",
             Self::WorkerStepped { .. } => "worker.step",
             Self::OrchestratorStepped { .. } => "orchestrator.step",
+            Self::MachineStepped { .. } => "machine.step",
             Self::CompactionUpdated { .. } => "compaction.updated",
             Self::MessageRated { .. } => "message.rated",
             Self::BranchSwitched { .. } => "conversation.branch",

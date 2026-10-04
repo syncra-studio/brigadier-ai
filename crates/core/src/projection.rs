@@ -104,6 +104,7 @@ impl Projection {
             | DomainEvent::RequestUpdated { .. }
             | DomainEvent::WorkerStepped { .. }
             | DomainEvent::OrchestratorStepped { .. }
+            | DomainEvent::MachineStepped { .. }
             | DomainEvent::CompactionUpdated { .. }
             | DomainEvent::MessageRated { .. }
             | DomainEvent::BranchSwitched { .. }

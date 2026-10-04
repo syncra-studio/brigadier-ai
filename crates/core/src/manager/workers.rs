@@ -1079,10 +1079,12 @@ impl SessionManager {
         origin: Origin,
         first: TurnInput,
     ) -> Result<()> {
-        // An overnight run's worker starts once its run has a worker free (PLAN.md §10.7).
-        // A new session doesn't start at all once its run winds down (§10.9); a resumed one
-        // may still hand off.
+        // A new worker waits while the machine is hot or short on memory (PLAN.md §10.7).
+        // An overnight run's worker starts once its run has a worker free (§10.7). A new
+        // session doesn't start at all once its run winds down (§10.9); a resumed one may
+        // still hand off.
         if matches!(origin, Origin::New) {
+            self.hold_while_strained(task).await?;
             self.admit_new_run_task(task).await?;
         } else {
             self.admit_run_task(task).await?;
@@ -1210,7 +1212,7 @@ impl SessionManager {
             test_dir: &test_dir,
             run_repo: task.run.as_ref().map(|_| workspace.repo.as_path()),
             branch: workspace.branch.as_deref(),
-            low_priority: task.run.is_some(),
+            low_priority: true,
         }));
         let native = match &workspace.worktree {
             Some(worktree) => instructions::for_worker(provider, worktree).await,
@@ -1252,7 +1254,7 @@ impl SessionManager {
                 workspace.scratch.to_string_lossy().into_owned(),
             )],
             unset_env: Vec::new(),
-            low_priority: task.run.is_some(),
+            low_priority: true,
             record_to: None,
             redactor: redactor.clone(),
             owned_cwd: true,

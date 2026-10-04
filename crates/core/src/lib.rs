@@ -7,6 +7,7 @@
 mod board;
 pub mod knowledge;
 pub mod ledger;
+mod machine;
 pub mod manager;
 pub mod model;
 pub mod overnight;

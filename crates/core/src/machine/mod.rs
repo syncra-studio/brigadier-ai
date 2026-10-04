@@ -1,0 +1,694 @@
+//! The machine guard: Brigadier holds back its own heavy work while the machine struggles,
+//! automatically and with no setting (PLAN.md §10.7).
+//!
+//! - While the OS reports serious heat or memory pressure, no new worker starts and no new
+//!   build or test run goes ahead; they wait, with a grey row in the thread, and start when it
+//!   eases. Work already running is left alone.
+//! - Heavy commands run one at a time daemon-wide (the build lease, see [`builds`]).
+//! - Critical heat held for a minute pauses Brigadier's own running builds, newest first,
+//!   until it drops back; nothing is ever killed. The user's own apps and terminals, and the
+//!   worker CLIs themselves, are never touched.
+//! - Whatever is stopped is written down before it is stopped, so a daemon that quits or
+//!   crashes lets it go on: at quit, or at the next start.
+
+pub(crate) mod builds;
+pub(crate) mod heavy;
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use brigadier_sandbox::{Heat, MachineLoad, Platform};
+use tokio::sync::watch;
+
+use self::builds::{Action, Builds, Note, Proc, Seen};
+
+/// How often the watch looks at the machine and at Brigadier's process trees.
+pub(crate) const TICK: Duration = Duration::from_secs(2);
+/// How long something waiting for the machine sleeps between looks at whether it is still
+/// wanted.
+pub(crate) const RECHECK: Duration = Duration::from_secs(20);
+
+/// What a thread row says about a command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Row {
+    /// The command's CLI's owner in the cleanup ledger.
+    pub owner: String,
+    pub command: String,
+    pub note: Note,
+}
+
+/// The guard, the build lease and what is stopped, together.
+pub(crate) struct MachineWatch {
+    platform: Arc<dyn Platform>,
+    pub(crate) guard: MachineGuard,
+    builds: Mutex<Builds>,
+    stopped: Stopped,
+    quit: AtomicBool,
+}
+
+impl MachineWatch {
+    /// `stopped_file` is where what is stopped is written down.
+    pub(crate) fn new(platform: Arc<dyn Platform>, stopped_file: PathBuf) -> Self {
+        Self {
+            guard: MachineGuard::new(platform.clone()),
+            platform,
+            builds: Mutex::new(Builds::default()),
+            stopped: Stopped::new(stopped_file),
+            quit: AtomicBool::new(false),
+        }
+    }
+
+    /// At start: lets go on whatever an earlier daemon left stopped. Blocking.
+    pub(crate) fn recover(&self) -> usize {
+        self.stopped.sweep(&*self.platform)
+    }
+
+    /// One look at `now`: reads the machine, finds the heavy commands under `clis` (each
+    /// Brigadier CLI process with its owner), stops and lets go on what the lease and the heat
+    /// say. Returns what the threads should say. Blocking (it walks process trees).
+    pub(crate) fn tick(&self, clis: &[(String, Proc)], now: Instant) -> Vec<Row> {
+        let load = self.guard.read();
+        let platform = &*self.platform;
+        let seen: Vec<Seen> = clis
+            .iter()
+            .filter(|(_, cli)| still(platform, *cli))
+            .flat_map(|(owner, cli)| heavy_under(platform, cli.pid, owner))
+            .collect();
+        // Held while acting too, so quitting waits for a round under way and none acts after.
+        let mut builds = self.builds.lock().unwrap_or_else(|p| p.into_inner());
+        if self.quit.load(Ordering::Acquire) {
+            return Vec::new();
+        }
+        let mut rows = Vec::new();
+        for action in builds.tick(seen, load, now) {
+            match action {
+                Action::Stop(proc) => self.stopped.stop(platform, proc),
+                Action::Continue(proc) => self.stopped.resume(platform, proc),
+                Action::Note {
+                    owner,
+                    command,
+                    note,
+                } => rows.push(Row {
+                    owner,
+                    command,
+                    note,
+                }),
+            }
+        }
+        rows
+    }
+
+    /// The daemon quits: everything stopped goes on, and nothing is stopped after. Blocking.
+    pub(crate) fn quit(&self) {
+        let mut builds = self.builds.lock().unwrap_or_else(|p| p.into_inner());
+        self.quit.store(true, Ordering::Release);
+        for action in builds.release_all() {
+            if let Action::Continue(proc) = action {
+                self.stopped.resume(&*self.platform, proc);
+            }
+        }
+        self.stopped.sweep(&*self.platform);
+    }
+
+    /// Waits until the machine isn't strained, at most `max`; whether it is eased.
+    pub(crate) async fn eased_within(&self, max: Duration) -> bool {
+        let mut changes = self.guard.subscribe();
+        let _ = tokio::time::timeout(max, changes.wait_for(|load| !load.strained())).await;
+        !self.guard.current().strained()
+    }
+}
+
+/// Where the guard reads the machine's load from.
+pub(crate) struct MachineGuard {
+    platform: Arc<dyn Platform>,
+    /// A load set in place of the OS's (tests).
+    fake: Mutex<Option<MachineLoad>>,
+    /// A development build's stand-in for the OS: a file naming the load (`calm`, `hot`,
+    /// `memory`, `critical`), from `BRIGADIER_FAKE_MACHINE`, so the guard can be tried live.
+    fake_file: Option<PathBuf>,
+    load: watch::Sender<MachineLoad>,
+}
+
+impl MachineGuard {
+    pub(crate) fn new(platform: Arc<dyn Platform>) -> Self {
+        let fake_file = cfg!(debug_assertions)
+            .then(|| std::env::var_os("BRIGADIER_FAKE_MACHINE"))
+            .flatten()
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from);
+        Self {
+            platform,
+            fake: Mutex::new(None),
+            fake_file,
+            load: watch::Sender::new(MachineLoad::default()),
+        }
+    }
+
+    /// Reads the load now and tells whoever waits on it when it changed.
+    pub(crate) fn read(&self) -> MachineLoad {
+        let fake = *self.fake.lock().unwrap_or_else(|p| p.into_inner());
+        let load = match (fake, &self.fake_file) {
+            (Some(load), _) => load,
+            (None, Some(file)) => std::fs::read_to_string(file)
+                .map(|text| parse_fake(&text))
+                .unwrap_or_default(),
+            (None, None) => self.platform.machine().load(),
+        };
+        self.load.send_if_modified(|known| {
+            let changed = *known != load;
+            *known = load;
+            changed
+        });
+        load
+    }
+
+    /// The load as last read.
+    pub(crate) fn current(&self) -> MachineLoad {
+        *self.load.borrow()
+    }
+
+    /// Changes of the load, as they are read.
+    pub(crate) fn subscribe(&self) -> watch::Receiver<MachineLoad> {
+        self.load.subscribe()
+    }
+
+    /// Stands in for the OS from now on (tests).
+    #[cfg(test)]
+    pub(crate) fn fake(&self, load: MachineLoad) {
+        *self.fake.lock().unwrap_or_else(|p| p.into_inner()) = Some(load);
+        self.read();
+    }
+}
+
+fn parse_fake(text: &str) -> MachineLoad {
+    match text.trim() {
+        "hot" => MachineLoad {
+            heat: Heat::Serious,
+            memory_tight: false,
+        },
+        "memory" => MachineLoad {
+            heat: Heat::Nominal,
+            memory_tight: true,
+        },
+        "critical" => MachineLoad {
+            heat: Heat::Critical,
+            memory_tight: false,
+        },
+        _ => MachineLoad::default(),
+    }
+}
+
+/// `pid` as a [`Proc`], if it runs.
+pub(crate) fn proc_of(platform: &dyn Platform, pid: u32) -> Option<Proc> {
+    let started = platform.processes().start_time_ms(pid).ok()?;
+    Some(Proc {
+        pid,
+        started_ms: started.round() as i64,
+    })
+}
+
+/// Whether `proc` still is the process it was (alive, the same start time).
+pub(crate) fn still(platform: &dyn Platform, proc: Proc) -> bool {
+    platform.processes().is_alive(proc.pid)
+        && proc_of(platform, proc.pid)
+            .is_some_and(|now| (now.started_ms - proc.started_ms).abs() < 1_000)
+}
+
+/// The heavy commands running under `cli` (a CLI process Brigadier started), the topmost
+/// heavy process of each branch. The CLI itself never counts.
+pub(crate) fn heavy_under(platform: &dyn Platform, cli: u32, owner: &str) -> Vec<Seen> {
+    let processes = platform.processes();
+    let mut found = Vec::new();
+    let mut queue = processes.children(cli).unwrap_or_default();
+    let mut visited = 0;
+    while let Some(pid) = queue.pop() {
+        // A runaway fork chain can't keep the walk going forever.
+        visited += 1;
+        if visited > 2_000 {
+            break;
+        }
+        let Some(argv) = processes.command_line(pid) else {
+            continue;
+        };
+        if heavy::is_heavy(&argv) {
+            if let Some(root) = proc_of(platform, pid) {
+                found.push(Seen {
+                    root,
+                    owner: owner.to_owned(),
+                    command: heavy::label(&argv),
+                });
+            }
+            continue;
+        }
+        queue.extend(processes.children(pid).unwrap_or_default());
+    }
+    found
+}
+
+/// Stops `root` and everything below it, parents before their children so nothing forks past
+/// the walk. Returns every process stopped.
+pub(crate) fn stop_tree(platform: &dyn Platform, root: Proc) -> Vec<Proc> {
+    let processes = platform.processes();
+    if !still(platform, root) {
+        return Vec::new();
+    }
+    let mut stopped = Vec::new();
+    let mut queue = vec![root.pid];
+    while let Some(pid) = queue.pop() {
+        if stopped.iter().any(|proc: &Proc| proc.pid == pid) || stopped.len() > 2_000 {
+            continue;
+        }
+        let Some(proc) = proc_of(platform, pid) else {
+            continue;
+        };
+        if processes.suspend(pid).is_ok() {
+            stopped.push(proc);
+        }
+        queue.extend(processes.children(pid).unwrap_or_default());
+    }
+    stopped
+}
+
+/// Lets go on what [`stop_tree`] stopped, and anything still below `root`, children before
+/// their parents.
+pub(crate) fn continue_tree(platform: &dyn Platform, root: Proc, members: &[Proc]) {
+    let processes = platform.processes();
+    let mut procs: Vec<Proc> = members.to_vec();
+    if still(platform, root) {
+        for pid in processes.descendants(root.pid).unwrap_or_default() {
+            if !procs.iter().any(|proc| proc.pid == pid)
+                && let Some(proc) = proc_of(platform, pid)
+            {
+                procs.push(proc);
+            }
+        }
+        if !procs.contains(&root) {
+            procs.insert(0, root);
+        }
+    }
+    for proc in procs.into_iter().rev() {
+        if still(platform, proc)
+            && let Err(err) = processes.resume(proc.pid)
+        {
+            tracing::warn!(pid = proc.pid, error = %err, "could not let a stopped process go on");
+        }
+    }
+}
+
+/// What Brigadier stopped and hasn't let go on yet, by command, written down before anything
+/// is stopped: a daemon that dies lets it go on at its next start ([`Stopped::sweep`]).
+pub(crate) struct Stopped {
+    path: PathBuf,
+    procs: Mutex<HashMap<Proc, Vec<Proc>>>,
+}
+
+impl Stopped {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            procs: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn procs(&self) -> std::sync::MutexGuard<'_, HashMap<Proc, Vec<Proc>>> {
+        self.procs.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Stops `root`'s tree, written down first (the root, then every member stopped).
+    pub(crate) fn stop(&self, platform: &dyn Platform, root: Proc) {
+        {
+            let mut procs = self.procs();
+            procs.entry(root).or_default();
+            self.save(&procs);
+        }
+        let members = stop_tree(platform, root);
+        let mut procs = self.procs();
+        procs.insert(root, members);
+        self.save(&procs);
+    }
+
+    /// Lets `root`'s tree go on and crosses it off.
+    pub(crate) fn resume(&self, platform: &dyn Platform, root: Proc) {
+        let members = self.procs().get(&root).cloned().unwrap_or_default();
+        continue_tree(platform, root, &members);
+        let mut procs = self.procs();
+        procs.remove(&root);
+        self.save(&procs);
+    }
+
+    /// Lets everything written down go on: what a daemon that died left stopped (at start), or
+    /// what this one stopped (at quit).
+    pub(crate) fn sweep(&self, platform: &dyn Platform) -> usize {
+        let mut procs = std::mem::take(&mut *self.procs());
+        if let Ok(text) = std::fs::read_to_string(&self.path) {
+            match serde_json::from_str::<Vec<(Proc, Vec<Proc>)>>(&text) {
+                Ok(saved) => {
+                    for (root, members) in saved {
+                        procs.entry(root).or_default().extend(members);
+                    }
+                }
+                Err(err) => tracing::warn!(error = %err, "unreadable list of stopped processes"),
+            }
+        }
+        let count = procs.len();
+        for (root, members) in procs {
+            continue_tree(platform, root, &members);
+        }
+        let _ = std::fs::remove_file(&self.path);
+        count
+    }
+
+    fn save(&self, procs: &HashMap<Proc, Vec<Proc>>) {
+        if procs.is_empty() {
+            let _ = std::fs::remove_file(&self.path);
+            return;
+        }
+        let list: Vec<(&Proc, &Vec<Proc>)> = procs.iter().collect();
+        let result = serde_json::to_vec(&list)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| write_atomically(&self.path, &bytes));
+        if let Err(err) = result {
+            tracing::warn!(error = %err, "could not write down the stopped processes");
+        }
+    }
+}
+
+fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let temp = path.with_extension("json.new");
+    std::fs::write(&temp, bytes)?;
+    std::fs::rename(&temp, path)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::process::{Child, Command};
+
+    use super::*;
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("brigadier-machine-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn platform(dir: &Path) -> Arc<dyn Platform> {
+        brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.to_path_buf()),
+        })
+        .unwrap()
+    }
+
+    fn state(pid: u32) -> String {
+        let out = Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
+    /// A stand-in worker CLI (`sh`) running a stand-in build: a program named `cargo` (a copy
+    /// of `sleep`) run as `cargo test`, which starts a child of its own.
+    fn worker_with_build(dir: &Path) -> (Child, PathBuf) {
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        let cargo = bin.join("cargo");
+        std::fs::write(&cargo, "#!/bin/sh\n/bin/sleep 300 &\nwait\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("{} test -p core; true", cargo.display()))
+            .spawn()
+            .unwrap();
+        (child, cargo)
+    }
+
+    fn wait_for<T>(mut found: impl FnMut() -> Option<T>) -> T {
+        for _ in 0..100 {
+            if let Some(value) = found() {
+                return value;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("timed out");
+    }
+
+    #[test]
+    fn a_build_under_a_worker_is_found_stopped_and_let_go_on() {
+        let dir = TempDir::new();
+        let platform = platform(dir.path());
+        let (mut worker, _) = worker_with_build(dir.path());
+        let seen = wait_for(|| {
+            let seen = heavy_under(&*platform, worker.id(), "task:t");
+            // The build and its own child are up.
+            (seen.len() == 1
+                && platform
+                    .processes()
+                    .children(seen[0].root.pid)
+                    .is_ok_and(|children| !children.is_empty()))
+            .then_some(seen)
+        });
+        assert_eq!(seen[0].owner, "task:t");
+        assert_eq!(seen[0].command, "cargo test -p core");
+        let root = seen[0].root;
+        let stopped = Stopped::new(dir.path().join("stopped.json"));
+        stopped.stop(&*platform, root);
+        let members = stopped.procs().get(&root).cloned().unwrap();
+        assert!(members.len() >= 2, "the build and its child: {members:?}");
+        for member in &members {
+            assert!(state(member.pid).starts_with('T'), "stopped, not killed");
+        }
+        assert!(dir.path().join("stopped.json").exists());
+        stopped.resume(&*platform, root);
+        for member in &members {
+            let now = state(member.pid);
+            assert!(
+                !now.is_empty() && !now.starts_with('T'),
+                "running again: {now}"
+            );
+        }
+        assert!(!dir.path().join("stopped.json").exists());
+        platform.processes().kill_tree(worker.id()).unwrap();
+        worker.wait().unwrap();
+    }
+
+    #[test]
+    fn a_restart_lets_go_on_what_a_dead_daemon_left_stopped() {
+        let dir = TempDir::new();
+        let platform = platform(dir.path());
+        let (mut worker, _) = worker_with_build(dir.path());
+        let root = wait_for(|| {
+            heavy_under(&*platform, worker.id(), "task:t")
+                .first()
+                .map(|seen| seen.root)
+        });
+        let file = dir.path().join("stopped.json");
+        // The daemon that stopped it dies without letting it go on.
+        {
+            let stopped = Stopped::new(file.clone());
+            stopped.stop(&*platform, root);
+            assert!(state(root.pid).starts_with('T'));
+        }
+        // The next one finds it written down.
+        let next = Stopped::new(file.clone());
+        assert_eq!(next.sweep(&*platform), 1);
+        assert!(!state(root.pid).starts_with('T'));
+        assert!(!file.exists());
+        platform.processes().kill_tree(worker.id()).unwrap();
+        worker.wait().unwrap();
+    }
+
+    const HOT: MachineLoad = MachineLoad {
+        heat: Heat::Serious,
+        memory_tight: false,
+    };
+    const CRITICAL: MachineLoad = MachineLoad {
+        heat: Heat::Critical,
+        memory_tight: false,
+    };
+
+    fn stopped(pid: u32) -> bool {
+        state(pid).starts_with('T')
+    }
+
+    fn end(platform: &dyn Platform, mut worker: Child) {
+        platform.processes().kill_tree(worker.id()).unwrap();
+        worker.wait().unwrap();
+    }
+
+    /// Done-when (0): with the guard faked to hot, a new worker and a new build wait (a row
+    /// says so) and start when it clears; running work is untouched.
+    #[tokio::test]
+    async fn while_hot_new_workers_and_builds_wait_and_running_work_is_untouched() {
+        let dir = TempDir::new();
+        let platform = platform(dir.path());
+        let watch = Arc::new(MachineWatch::new(
+            platform.clone(),
+            dir.path().join("stopped.json"),
+        ));
+        let t0 = Instant::now();
+        // A build runs while the machine is calm.
+        let (first, _) = worker_with_build(&dir.path().join("a"));
+        let first_cli = proc_of(&*platform, first.id()).unwrap();
+        let running = wait_for(|| {
+            heavy_under(&*platform, first.id(), "task:a")
+                .first()
+                .map(|seen| seen.root)
+        });
+        let mut clis = vec![("task:a".to_owned(), first_cli)];
+        assert!(watch.tick(&clis, t0).is_empty());
+        assert!(watch.eased_within(Duration::ZERO).await);
+
+        watch.guard.fake(HOT);
+        // A new worker waits…
+        assert!(!watch.eased_within(Duration::from_millis(100)).await);
+        let worker = tokio::spawn({
+            let watch = watch.clone();
+            async move { watch.eased_within(Duration::from_secs(30)).await }
+        });
+        // …and so does a new build, with a row; the running one is left alone.
+        let (second, _) = worker_with_build(&dir.path().join("b"));
+        let second_cli = proc_of(&*platform, second.id()).unwrap();
+        let waiting = wait_for(|| {
+            heavy_under(&*platform, second.id(), "task:b")
+                .first()
+                .map(|seen| seen.root)
+        });
+        clis.push(("task:b".to_owned(), second_cli));
+        let rows = watch.tick(&clis, t0 + TICK);
+        assert_eq!(
+            rows,
+            vec![Row {
+                owner: "task:b".into(),
+                command: "cargo test -p core".into(),
+                note: Note::WaitingToCool,
+            }]
+        );
+        assert!(stopped(waiting.pid));
+        assert!(!stopped(running.pid), "running work untouched");
+        // The running build ends; still hot, so the new one keeps waiting.
+        end(&*platform, first);
+        clis.remove(0);
+        assert!(watch.tick(&clis, t0 + TICK * 2).is_empty());
+        assert!(stopped(waiting.pid));
+        assert!(!worker.is_finished());
+
+        // It clears: the worker starts, and the build goes on.
+        watch.guard.fake(MachineLoad::default());
+        assert!(worker.await.unwrap());
+        watch.tick(&clis, t0 + TICK * 3);
+        assert!(!stopped(waiting.pid));
+        assert!(!dir.path().join("stopped.json").exists());
+        end(&*platform, second);
+    }
+
+    /// Done-when (0b): critical heat for a minute suspends a running build (not killed), it
+    /// goes on when the heat drops, and a restarted daemon lets go on what was left stopped.
+    #[tokio::test]
+    async fn critical_heat_for_a_minute_pauses_a_build_until_it_cools_and_a_restart_resumes_it() {
+        let dir = TempDir::new();
+        let platform = platform(dir.path());
+        let file = dir.path().join("stopped.json");
+        let watch = MachineWatch::new(platform.clone(), file.clone());
+        let t0 = Instant::now();
+        let (worker, _) = worker_with_build(dir.path());
+        let cli = proc_of(&*platform, worker.id()).unwrap();
+        let build = wait_for(|| {
+            heavy_under(&*platform, worker.id(), "task:a")
+                .first()
+                .map(|seen| seen.root)
+        });
+        let clis = vec![("task:a".to_owned(), cli)];
+        watch.tick(&clis, t0);
+
+        watch.guard.fake(CRITICAL);
+        assert!(watch.tick(&clis, t0 + Duration::from_secs(1)).is_empty());
+        assert!(watch.tick(&clis, t0 + Duration::from_secs(40)).is_empty());
+        assert!(!stopped(build.pid));
+        let rows = watch.tick(&clis, t0 + Duration::from_secs(62));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].note, Note::Paused);
+        assert!(stopped(build.pid), "suspended");
+        assert!(platform.processes().is_alive(build.pid), "not killed");
+        assert!(file.exists(), "written down before it was stopped");
+
+        // Back to serious: it goes on.
+        watch.guard.fake(HOT);
+        let rows = watch.tick(&clis, t0 + Duration::from_secs(64));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].note, Note::Resumed);
+        assert_eq!(rows[0].command, "cargo test -p core");
+        assert!(!stopped(build.pid));
+
+        // Critical again for a minute, and the daemon dies with the build paused.
+        watch.guard.fake(CRITICAL);
+        watch.tick(&clis, t0 + Duration::from_secs(70));
+        watch.tick(&clis, t0 + Duration::from_secs(131));
+        assert!(stopped(build.pid));
+        drop(watch);
+        assert!(stopped(build.pid));
+        // The next daemon lets it go on as it starts.
+        let next = MachineWatch::new(platform.clone(), file.clone());
+        assert_eq!(next.recover(), 1);
+        assert!(!stopped(build.pid));
+        assert!(!file.exists());
+        end(&*platform, worker);
+    }
+
+    #[tokio::test]
+    async fn quitting_lets_stopped_builds_go_on() {
+        let dir = TempDir::new();
+        let platform = platform(dir.path());
+        let watch = MachineWatch::new(platform.clone(), dir.path().join("stopped.json"));
+        watch.guard.fake(HOT);
+        let (worker, _) = worker_with_build(dir.path());
+        let cli = proc_of(&*platform, worker.id()).unwrap();
+        let build = wait_for(|| {
+            heavy_under(&*platform, worker.id(), "task:a")
+                .first()
+                .map(|seen| seen.root)
+        });
+        watch.tick(&[("task:a".to_owned(), cli)], Instant::now());
+        assert!(stopped(build.pid));
+        watch.quit();
+        assert!(!stopped(build.pid));
+        end(&*platform, worker);
+    }
+
+    #[test]
+    fn a_fake_load_stands_in_for_the_os() {
+        let dir = TempDir::new();
+        let guard = MachineGuard::new(platform(dir.path()));
+        let changes = guard.subscribe();
+        guard.fake(MachineLoad {
+            heat: Heat::Serious,
+            memory_tight: false,
+        });
+        assert!(guard.current().strained());
+        assert!(changes.has_changed().unwrap());
+        assert_eq!(parse_fake("critical\n").heat, Heat::Critical);
+        assert!(parse_fake("memory").memory_tight);
+        assert_eq!(parse_fake("calm"), MachineLoad::default());
+    }
+}

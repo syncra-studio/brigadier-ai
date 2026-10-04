@@ -9,6 +9,7 @@ import type { ConversationId } from "./ConversationId";
 import type { Decision } from "./Decision";
 import type { KeptBranch } from "./KeptBranch";
 import type { Lifecycle } from "./Lifecycle";
+import type { MachineStep } from "./MachineStep";
 import type { MemoryChange } from "./MemoryChange";
 import type { Message } from "./Message";
 import type { MessageQueue } from "./MessageQueue";
@@ -45,7 +46,7 @@ export type DomainEvent = { "type": "projectCreated", project: Project, } | { "t
 /**
  * The request the turn serves.
  */
-requestId: string | null, } | { "type": "requestUpdated", request: UserRequest, } | { "type": "workerStepped", step: WorkerStep, } | { "type": "orchestratorStepped", step: OrchestratorStep, } | { "type": "compactionUpdated", compaction: Compaction, } | { "type": "messageRated", 
+requestId: string | null, } | { "type": "requestUpdated", request: UserRequest, } | { "type": "workerStepped", step: WorkerStep, } | { "type": "orchestratorStepped", step: OrchestratorStep, } | { "type": "machineStepped", conversationId: ConversationId, step: MachineStep, } | { "type": "compactionUpdated", compaction: Compaction, } | { "type": "messageRated", 
 /**
  * The answer: a message id, or `task:<id>` for a worker's report.
  */
