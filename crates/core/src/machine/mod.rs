@@ -208,7 +208,7 @@ impl MachineGuard {
     }
 
     /// Stands in for the OS from now on (tests).
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn fake(&self, load: MachineLoad) {
         *self.fake.lock().unwrap_or_else(|p| p.into_inner()) = Some(load);
         self.read();
