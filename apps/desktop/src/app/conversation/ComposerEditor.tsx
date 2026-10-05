@@ -465,7 +465,7 @@ function mergeSameImages(
     const isPasted = (attachment: Attachment) => isOneOf(attachment, pastedImages);
     for (const { image } of images) unmatched.delete(image);
     // One that failed to store can't be sent, so it is matched with none.
-    const [own, others] = await Promise.all([
+    const [ownHashes, otherHashes] = await Promise.all([
       withHashes(
         composer
           .getState()
@@ -486,6 +486,14 @@ function mergeSameImages(
         reader,
       ),
     ]);
+    // Upload status may change while bytes are being hashed. Match only copies that can
+    // still be sent at the moment the chips are changed, including both sides of a match.
+    const current = composer.getState().attachments;
+    const sendable = new Set(current.filter((attachment) =>
+      attachment.status.type === "requires-action" || attachment.status.type === "complete",
+    ).map((attachment) => composerInlineNumber(attachment, reader)));
+    const own = ownHashes.filter(([n]) => sendable.has(n));
+    const others = otherHashes.filter(([n]) => sendable.has(n) || context.deleted.has(n));
     const same = sameImages(own, others);
     const merged = composer
       .getState()
