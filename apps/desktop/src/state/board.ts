@@ -1,6 +1,8 @@
 import { createContext, useContext } from "react";
 import { createStore, type StoreApi, useStore } from "zustand";
 
+import { showConversationNotice } from "@/state/notices";
+
 import type {
   Approval,
   Compaction,
@@ -320,7 +322,7 @@ export function boardFromView(
     context: view.context,
     streaming: view.streaming,
     thinking: view.thinking ?? [],
-    notices: view.notices.slice(-NOTICES),
+    notices: view.notices.filter(showConversationNotice).slice(-NOTICES),
     activity: keep?.activity ?? {},
     summaries: keep?.summaries ?? {},
     edits: keep?.edits ?? {},
@@ -456,6 +458,7 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
         streaming: event.state === "running" || event.state === "starting" ? board.streaming : null,
       };
     case "conversationNotice":
+      if (!showConversationNotice(event.notice)) return board;
       return { ...board, notices: [...board.notices, event.notice].slice(-NOTICES) };
     case "taskUpdated":
       return { ...board, tasks: placed(board.tasks, event.task, envelope, board) };
