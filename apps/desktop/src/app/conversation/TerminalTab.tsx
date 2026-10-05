@@ -176,6 +176,17 @@ export function TerminalPane({ place }: { place: string }) {
     wasOpen.current = open;
   }, [open]);
   const reveal = useReveal(open);
+  // A pane found open on arrival (coming back to its place) leaves the keyboard where it is; it
+  // takes it once it is opened or its tab changes here.
+  type Arrival = { open: boolean; active: string | null };
+  const [arrival, setArrival] = useState<Arrival | null>({ open, active: data.active });
+  const [arrivedAt, setArrivedAt] = useState(place);
+  if (arrivedAt !== place) {
+    setArrivedAt(place);
+    setArrival({ open, active: data.active });
+  } else if (arrival && (arrival.open !== open || arrival.active !== data.active)) {
+    setArrival(null);
+  }
   const names = tabNames(data.tabs);
   const hide = useCallback(() => setTerminalOpen(place, false), [place]);
   useEffect(() => {
@@ -325,7 +336,11 @@ export function TerminalPane({ place }: { place: string }) {
             key={tab.id}
             className={tab.id === data.active ? "flex min-h-0 flex-1 flex-col" : "hidden"}
           >
-            <TerminalTab place={place} tabId={tab.id} active={open && tab.id === data.active} />
+            <TerminalTab
+              place={place}
+              tabId={tab.id}
+              active={open && !arrival && tab.id === data.active}
+            />
           </div>
         ))}
       </div>
@@ -341,6 +356,7 @@ export function TerminalTab({
 }: {
   place: string;
   tabId: string;
+  /** Takes the keyboard. */
   active: boolean;
 }) {
   const density = useApp((s) => s.settings.density);
