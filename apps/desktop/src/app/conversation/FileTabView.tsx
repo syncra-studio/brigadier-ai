@@ -28,6 +28,7 @@ import { formatBytes } from "@/lib/format";
 import { HIGHLIGHT_CHARS, highlight, languageOf, type Token } from "@/lib/highlight";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
+import { useCheckoutChanges } from "@/state/board";
 import type { FileTab } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
@@ -93,13 +94,23 @@ export function FileTabView({
   active: boolean;
 }) {
   const root = useCheckoutRoot();
-  // Read again each time the tab comes to the front: an agent may have changed the file.
+  // Read again each time the tab comes to the front, and while in front as work lands or the
+  // window gains focus: an agent or another app may have changed or removed the file.
   const [again, setAgain] = useState(0);
   const [wasActive, setWasActive] = useState(active);
-  if (wasActive !== active) {
+  const changes = useCheckoutChanges(conversationId);
+  const [seenChanges, setSeenChanges] = useState(changes);
+  if (wasActive !== active || seenChanges !== changes) {
     setWasActive(active);
+    setSeenChanges(changes);
     if (active) setAgain(again + 1);
   }
+  useEffect(() => {
+    if (!active) return;
+    const readAgain = () => setAgain((count) => count + 1);
+    window.addEventListener("focus", readAgain);
+    return () => window.removeEventListener("focus", readAgain);
+  }, [active]);
   const read = useFile(conversationId, tab.path, again);
   const { isCopied, copyToClipboard } = useCopyToClipboard();
   const mac = useApp((s) => s.info?.platform === "macos");
