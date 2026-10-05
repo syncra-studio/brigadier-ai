@@ -5,10 +5,10 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import type { RequestOf } from "@/ipc/client";
 import type { AttachmentRef } from "@/ipc/generated";
-import { InlineImages } from "@/lib/inlineImages";
+import { draftRefs } from "@/lib/inlineImages";
 import { loadDraft, NEW_CHAT_SCOPE, saveDraft } from "@/state/drafts";
 
-const image: AttachmentRef = { id: "image", name: "shot.png", mime: "image/png", bytes: 4, pasted: false, inline: true };
+const image: AttachmentRef = { id: "image", name: "shot.png", mime: "image/png", bytes: 4, pasted: false, inline: 0 };
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 let pins: RequestOf<"pinDraftAttachments">[];
@@ -42,11 +42,10 @@ afterEach(() => {
 });
 
 test("sending removes the saved inline draft and releases its daemon pins even with retained refs", async () => {
-  const images = new InlineImages();
-  images.retain([image]);
+  const retained = [image];
   const runtime = new ExternalStoreRuntimeCore({ messages: [], onNew: async () => {} });
   const composer = runtime.threads.getMainThreadRuntimeCore().composer;
-  const keep = () => saveDraft(NEW_CHAT_SCOPE, composer.text, [...images.refs.values()], []);
+  const keep = () => saveDraft(NEW_CHAT_SCOPE, composer.text, draftRefs(composer.text, [], retained), []);
   const unsubscribe = composer.subscribe(keep);
   try {
     composer.setText("look [image:image]");
@@ -55,7 +54,7 @@ test("sending removes the saved inline draft and releases its daemon pins even w
     assert.equal(composer.text, "");
     assert.equal(loadDraft(NEW_CHAT_SCOPE), null);
     assert.deepEqual(pins.at(-1), { method: "pinDraftAttachments", scope: NEW_CHAT_SCOPE, attachments: [] });
-    assert.deepEqual([...images.refs.values()], [image]);
+    assert.deepEqual(retained, [image]);
     keep();
     assert.equal(loadDraft(NEW_CHAT_SCOPE), null);
   } finally {
@@ -64,22 +63,19 @@ test("sending removes the saved inline draft and releases its daemon pins even w
 });
 
 test("clearing history recall releases all retained pins and keeps the new scope empty on reload", () => {
-  const images = new InlineImages();
-  images.recall("[image:image]", [image]);
   const second = { ...image, id: "second" };
-  images.recall("[image:second]", [second]);
-  saveDraft(NEW_CHAT_SCOPE, "[image:second]", [...images.refs.values()], []);
+  const retained = [image, second];
+  saveDraft(NEW_CHAT_SCOPE, "[image:second]", retained, []);
   assert.equal(pins.at(-1)?.attachments.length, 2);
-  saveDraft(NEW_CHAT_SCOPE, " \n ", [...images.refs.values()], []);
+  saveDraft(NEW_CHAT_SCOPE, " \n ", retained, []);
   assert.equal(loadDraft(NEW_CHAT_SCOPE), null);
   assert.deepEqual(pins.at(-1)?.attachments, []);
-  const reloaded = new InlineImages();
-  saveDraft(NEW_CHAT_SCOPE, "", [...reloaded.refs.values()], []);
+  saveDraft(NEW_CHAT_SCOPE, "", [], []);
   assert.equal(loadDraft(NEW_CHAT_SCOPE), null);
 });
 
 test("empty drafts preserve row attachments sharing an inline id", () => {
-  const row = { ...image, inline: false };
+  const row = { ...image, inline: null };
   saveDraft("conversation", "[image:image]", [row, image], []);
   saveDraft("conversation", "", [row, image], []);
   assert.deepEqual(loadDraft("conversation")?.attachments, [row]);
@@ -91,7 +87,5 @@ test("nonempty drafts retain and pin deleted images for undo and reload", () => 
   const draft = loadDraft("conversation");
   assert.deepEqual(draft?.attachments, [image]);
   assert.deepEqual(pins.at(-1)?.attachments, [image]);
-  const images = new InlineImages();
-  images.recall(draft!.text, draft!.attachments);
-  assert.deepEqual([...images.refs.values()], [image]);
+  assert.deepEqual(draftRefs(draft!.text, [], draft!.attachments), [image]);
 });

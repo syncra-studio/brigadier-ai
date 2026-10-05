@@ -16,6 +16,7 @@ import { mergeRegister } from "@lexical/utils";
 import { Globe } from "@openai/apps-sdk-ui/components/Icon";
 import {
   $createTextNode,
+  $getNearestNodeFromDOMNode,
   $getSelection,
   $hasUpdateTag,
   $isElementNode,
@@ -27,6 +28,7 @@ import {
   KEY_ARROW_LEFT_COMMAND,
   KEY_ARROW_RIGHT_COMMAND,
   KEY_BACKSPACE_COMMAND,
+  KEY_DOWN_COMMAND,
   type LexicalEditor,
   PASTE_TAG,
   type PointType,
@@ -35,6 +37,7 @@ import {
 import {
   createContext,
   type FC,
+  type MouseEvent,
   type ReactNode,
   type RefObject,
   useContext,
@@ -44,15 +47,11 @@ import {
   useState,
 } from "react";
 
-import {
-  IMAGE_UPLOAD,
-  INLINE_IMAGE,
-  imageSegments,
-  imageToken,
-  uploadToken,
-  type InlineImages,
-} from "@/lib/inlineImages";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
+import {
+  ComposerInlineImage,
+  inlineImageLabel,
+} from "@/components/assistant-ui/elements/inline-image";
 import { cn } from "@/lib/utils";
 
 /** A mention the app knows at a place in the text: its label (after `@`), kind and id. */
@@ -61,9 +60,18 @@ export type ChipMention = { label: string; type: string; id: string };
 /** The known mention whose `@label` starts at `at` in `text` (`at` is past the `@`), if any. */
 export type MentionMatcher = (text: string, at: number) => ChipMention | null;
 
-/** Inline code and links are chips too, next to the app's mentions. */
+/** The `[Image #n]` starting at `at` in `text`, if one does: its number and length. */
+export type ImageMatcher = (text: string, at: number) => { n: number; length: number } | null;
+
+/** Inline code and links are chips too, next to the app's mentions, and pasted images. */
 const CODE = "code";
 const URL_CHIP = "url";
+const IMAGE_CHIP = "image";
+
+/** The chip for image `n` pasted into the text, which stands for `[Image #n]`. */
+export function imageChip(n: number): Unstable_TriggerItem {
+  return { id: `${IMAGE_CHIP}:${n}`, type: IMAGE_CHIP, label: inlineImageLabel(n) };
+}
 
 const CODE_TOKEN = /(?<!`)`([^`\n]+)`(?!`)/y;
 const URL_TOKEN = /https?:\/\/[^\s<>"'`]+/y;
@@ -75,10 +83,28 @@ const WORD = /[\p{L}\p{N}_\-./]/u;
 
 type Token = { start: number; end: number; segment: Unstable_DirectiveSegment };
 
+const noMentions: MentionMatcher = () => null;
+const noImages: ImageMatcher = () => null;
+
 /** The chip token starting at `at` in `text`, if one does. */
-function tokenAt(text: string, at: number, mention: MentionMatcher): Token | null {
+function tokenAt(
+  text: string,
+  at: number,
+  mention: MentionMatcher,
+  image: ImageMatcher = noImages,
+): Token | null {
   const char = text[at];
   const afterSpace = at === 0 || SPACE.test(text[at - 1] ?? "");
+  if (char === "[") {
+    const marker = image(text, at);
+    if (marker) {
+      return {
+        start: at,
+        end: at + marker.length,
+        segment: { kind: "mention", ...imageChip(marker.n) },
+      };
+    }
+  }
   if (char === "`") {
     CODE_TOKEN.lastIndex = at;
     const code = CODE_TOKEN.exec(text);
@@ -113,15 +139,20 @@ function tokenAt(text: string, at: number, mention: MentionMatcher): Token | nul
 }
 
 /**
- * Text to segments: plain text, and the chips in it (the app's `@` mentions, `` `code` `` and
- * links). The one parse behind a draft, a recalled prompt and a pulled queue message.
+ * Text to segments: plain text, and the chips in it (the app's `@` mentions, `` `code` ``,
+ * links and pasted images). The one parse behind a draft, a recalled prompt and a pulled queue
+ * message.
  */
-export function parseChips(text: string, mention: MentionMatcher): Unstable_DirectiveSegment[] {
+export function parseChips(
+  text: string,
+  mention: MentionMatcher,
+  image: ImageMatcher = noImages,
+): Unstable_DirectiveSegment[] {
   const segments: Unstable_DirectiveSegment[] = [];
   let plain = 0;
   let at = 0;
   while (at < text.length) {
-    const token = tokenAt(text, at, mention);
+    const token = tokenAt(text, at, mention, image);
     if (!token) {
       at += 1;
       continue;
@@ -137,19 +168,22 @@ export function parseChips(text: string, mention: MentionMatcher): Unstable_Dire
 
 /**
  * The composer's directive formatter: a chip's text is what it stands for (`@label`,
- * `` `code` ``, the link), so the message itself stays plain text.
+ * `` `code` ``, the link, `[Image #n]`), so the message itself stays plain text.
  */
 export function chipFormatter(
   mention: MentionMatcher,
-  images?: InlineImages,
+  image: ImageMatcher = noImages,
 ): Unstable_DirectiveFormatter {
   return {
-    serialize: (item) => {
-      if (item.type === INLINE_IMAGE) return imageToken(item.id);
-      if (item.type === IMAGE_UPLOAD) return uploadToken(item.id);
-      return item.type === CODE ? `\`${item.label}\`` : item.type === URL_CHIP ? item.label : `@${item.label}`;
-    },
-    parse: (text) => imageSegments(text, images, (plain) => parseChips(plain, mention)),
+    serialize: (item) =>
+      item.type === CODE
+        ? `\`${item.label}\``
+        : item.type === URL_CHIP
+          ? item.label
+          : item.type === IMAGE_CHIP
+            ? `[${item.label}]`
+            : `@${item.label}`,
+    parse: (text) => parseChips(text, mention, image),
   };
 }
 
@@ -164,18 +198,21 @@ function fileIcon(name: string): ReactNode {
   return <FileTypeIcon name={name} className={CHIP_ICON} />;
 }
 
-/** One chip, inline in the composer's text: a blue mention, mono code pill or link. */
+/**
+ * One chip, inline in the composer's text: a blue mention, mono code pill, link or a pasted
+ * image's thumbnail.
+ */
 const ComposerChip: FC<DirectiveChipProps> = (chip) => {
   const look = useContext(MentionLookContext);
+  if (chip.directiveType === IMAGE_CHIP) {
+    return <ComposerImageChip n={Number(chip.directiveId.slice(IMAGE_CHIP.length + 1))} />;
+  }
   if (chip.directiveType === CODE) {
     return (
       <span data-slot="composer-chip" data-chip={CODE} className="bg-muted text-code-inline rounded-md px-1.5 py-0.5 font-mono">
         {chip.label}
       </span>
     );
-  }
-  if (chip.directiveType === INLINE_IMAGE || chip.directiveType === IMAGE_UPLOAD) {
-    return <>{look?.(chip)?.name ?? chip.label}</>;
   }
   const url = chip.directiveType === URL_CHIP;
   const custom = url ? null : look?.(chip);
@@ -193,6 +230,20 @@ const ComposerChip: FC<DirectiveChipProps> = (chip) => {
     </span>
   );
 };
+
+/**
+ * A pasted image's chip, whose × takes it out of the text as Backspace would: its image goes
+ * with it, and undo brings both back.
+ */
+function ComposerImageChip({ n }: { n: number }) {
+  const [editor] = useLexicalComposerContext();
+  const remove = (event: MouseEvent<HTMLButtonElement>) => {
+    const chip = event.currentTarget;
+    editor.update(() => $getNearestNodeFromDOMNode(chip)?.remove());
+    editor.focus();
+  };
+  return <ComposerInlineImage n={n} onRemove={remove} />;
+}
 
 /** Code and link chips, which Backspace turns back into text. */
 const isTextChip = (node: DirectiveNode) => {
@@ -256,7 +307,6 @@ function $unwrapChipBeforeCaret(): boolean {
   return true;
 }
 
-const noMentions: MentionMatcher = () => null;
 
 /**
  * The code and link tokens in `text` that are complete: a closed `` `…` ``, a link with a space
@@ -290,7 +340,9 @@ function completedTokens(text: string, caret: number | null): Token[] {
  * Turns `` `code` `` and links into chips: as they're typed, when the character completing one
  * (the closing backtick, the space after a link) goes in at the caret, and everywhere in a
  * paste. So a chip turned back into text stays text while it's edited. Never mid-composition.
- * It also keeps the system's text substitutions out of the field, and lets ← and → past chips.
+ * It also keeps the system's text substitutions out of the field, lets ← and → past chips, and
+ * leaves Enter and Space on a chip's own button (an image's preview or ×, reached by Tab) to
+ * press it, where the editor would send the message.
  */
 function ChipsPlugin({
   formatter,
@@ -326,10 +378,6 @@ function ChipsPlugin({
               : -1;
           const pasted = $hasUpdateTag(PASTE_TAG);
           if (!pasted && caret < 0) return;
-          // Images take precedence even inside code or URLs, just as in the backend scanner.
-          if (formatter.parse(node.getTextContent()).some((segment) =>
-            segment.kind === "mention" && (segment.type === INLINE_IMAGE || segment.type === IMAGE_UPLOAD),
-          )) return;
           // One chip per pass: the rest of the text is transformed again.
           const token = completedTokens(node.getTextContent(), pasted ? null : caret)[0];
           if (!token || token.segment.kind !== "mention") return;
@@ -343,6 +391,13 @@ function ChipsPlugin({
           target.replace(chip);
           if (after) chip.selectNext(0, 0);
         }),
+        editor.registerCommand(
+          KEY_DOWN_COMMAND,
+          (event) =>
+            (event.key === "Enter" || event.key === " ") &&
+            event.target instanceof HTMLButtonElement,
+          COMMAND_PRIORITY_NORMAL,
+        ),
         editor.registerCommand(
           KEY_ARROW_LEFT_COMMAND,
           (event) => $stepOverChip(event, true),
@@ -385,8 +440,10 @@ export const ChipComposerInput: FC<
     mentionLook?: MentionLook;
     /** Hears each item picked from a menu (it's in the text as a chip by then). */
     onMention?: (item: Unstable_TriggerItem) => void;
+    /** One line (under an action card): it doesn't grow, it scrolls. */
+    line?: boolean;
   }
-> = ({ formatter, mentionLook, onMention, className, children, ...props }) => {
+> = ({ formatter, mentionLook, onMention, line = false, className, children, ...props }) => {
   const [scrolled, setScrolled] = useState(false);
   const editor = useRef<LexicalEditor | null>(null);
   const directivePluginProps = useMemo(
@@ -422,9 +479,11 @@ export const ChipComposerInput: FC<
         onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)}
         className={cn(
           "relative w-full cursor-text",
-          "[&_.aui-lexical-input]:caret-primary [&_.aui-lexical-input]:whitespace-pre-wrap [&_.aui-lexical-input]:wrap-anywhere [&_.aui-lexical-input]:outline-none",
+          "[&_.aui-lexical-input]:caret-primary [&_.aui-lexical-input]:whitespace-pre-wrap [&_.aui-lexical-input]:break-words [&_.aui-lexical-input]:outline-none",
           "[&_.aui-lexical-placeholder]:text-muted-foreground/60 [&_.aui-lexical-placeholder]:pointer-events-none [&_.aui-lexical-placeholder]:absolute [&_.aui-lexical-placeholder]:inset-0 [&_.aui-lexical-placeholder]:truncate [&_.aui-lexical-placeholder]:select-none",
-          "max-h-composer-max data-scrolled:mask-fade-top text-base [&_.aui-lexical-input]:min-h-composer [&_.aui-lexical-input]:px-2 [&_.aui-lexical-input]:py-2.5 [&_.aui-lexical-placeholder]:px-2 [&_.aui-lexical-placeholder]:py-2.5",
+          line
+            ? "max-h-control-md text-sm [&_.aui-lexical-input]:min-h-control-md [&_.aui-lexical-input]:px-1 [&_.aui-lexical-input]:py-1.5 [&_.aui-lexical-placeholder]:px-1 [&_.aui-lexical-placeholder]:py-1.5"
+            : "max-h-composer-max data-scrolled:mask-fade-top text-base [&_.aui-lexical-input]:min-h-composer [&_.aui-lexical-input]:px-2 [&_.aui-lexical-input]:py-2.5 [&_.aui-lexical-placeholder]:px-2 [&_.aui-lexical-placeholder]:py-2.5",
           className,
         )}
       >

@@ -19,7 +19,6 @@ import {
   useEffect,
   useMemo,
   useState,
-  useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -555,10 +554,6 @@ export function ConversationView({
   // A new scope must not inherit uploads or refs from the previous composer.
   // oxlint-disable-next-line react-hooks/exhaustive-deps, react/memo-dependencies
   const attachments = useMemo(() => new BlobAttachmentAdapter(), [conversationId]);
-  useSyncExternalStore(attachments.inline.subscribe, attachments.inline.snapshot);
-  // Leaving the scope cancels its uploads; an editor remount within it (the compact input
-  // for a pending action) keeps them.
-  useEffect(() => () => attachments.inline.close(), [attachments]);
   const reader = useMemo<AttachmentReader>(() => ({
     read: readAttachment,
     composerRef: (id) => attachments.refOf(id),
@@ -707,7 +702,7 @@ export function ConversationView({
     isLoading: thread.loading && thread.items.length === 0,
     isRunning: running || waitingForQuota,
     isDisabled: archived,
-    isSendDisabled: attachments.inline.blocked || (conversation === null && resolved.problem !== null),
+    isSendDisabled: conversation === null && resolved.problem !== null,
     queue,
     adapters: { attachments, feedback },
     onNew: async (message) => submit(message, "auto"),

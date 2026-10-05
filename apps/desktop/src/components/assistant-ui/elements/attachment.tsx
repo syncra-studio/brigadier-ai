@@ -20,12 +20,14 @@ import {
   TileRemove,
   useAttachmentText,
 } from "@/components/assistant-ui/elements/attachment-tile";
+import { composerInlineNumber } from "@/components/assistant-ui/elements/inline-image";
 import { Spinner } from "@/components/glyphs/spinner";
 
 /**
  * One composer attachment (the assistant-ui Attachment element): an
  * image is a thumbnail that opens a preview, a long paste a "Pasted text" card that can go
- * back into the text field, any other file a card with its kind. Each has a remove ×.
+ * back into the text field, any other file a card with its kind. Each has a remove ×. An
+ * image pasted into the text isn't one: it shows in the text, unless it couldn't be stored.
  */
 const ComposerAttachment: FC = () => {
   const reader = useContext(AttachmentReaderContext);
@@ -42,6 +44,8 @@ const ComposerAttachment: FC = () => {
     if (status.type === "incomplete" && status.reason === "error") return "error";
     return "ready";
   });
+  // An image pasted into the text shows there, as its chip; here only if it failed, to say why.
+  if (state !== "error" && composerInlineNumber({ id, file }, reader) !== null) return null;
   const source: AttachmentSource = { file, ref: file ? undefined : reader?.composerRef(id) };
   const pasted = file ? isPastedFile(file) : source.ref?.pasted === true;
   const remove = (

@@ -6,8 +6,8 @@ import type {
   PendingAttachment,
 } from "@assistant-ui/react";
 
-import { InlineImages, draftRefs, inlineRefs } from "@/lib/inlineImages";
-import { isPastedFile } from "@/components/assistant-ui/elements/attachment-tile";
+import { draftRefs, inlineRefs } from "@/lib/inlineImages";
+import { inlineNumberOf, isPastedFile } from "@/components/assistant-ui/elements/attachment-tile";
 import type { AttachmentRef } from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";
 import { addAttachment } from "@/state/actions";
@@ -27,23 +27,20 @@ function kindOf(mime: string): "image" | "document" | "file" {
  */
 export class BlobAttachmentAdapter implements AttachmentAdapter {
   accept = "*";
-  readonly inline = new InlineImages();
+  private readonly retained = new Map<number, AttachmentRef>();
 
-  async uploadInline(key: string, file: File): Promise<void> {
-    try {
-      if (file.size > MAX_BYTES) throw new Error(`File is too large to upload (maximum ${formatBytes(MAX_BYTES)})`);
-      this.inline.complete(key, await addAttachment(file));
-    } catch (error) {
-      this.inline.fail(key, error);
-    }
+  retain(refs: Iterable<AttachmentRef>): void {
+    for (const ref of refs) if (ref.inline !== null) this.retained.set(ref.inline, ref);
   }
 
   messageRefs(text: string, attachments: readonly { id: string }[]): AttachmentRef[] {
-    return [...this.refsOf(attachments).map((ref) => ({ ...ref, inline: false })), ...inlineRefs(text, this.inline.refs.values())];
+    const refs = this.refsOf(attachments);
+    return [...refs.filter((ref) => ref.inline === null), ...inlineRefs(text, refs)];
   }
 
   draftRefs(text: string, attachments: readonly { id: string }[]): AttachmentRef[] {
-    return draftRefs(text, this.refsOf(attachments), this.inline.refs.values());
+    const refs = this.refsOf(attachments);
+    return draftRefs(text, refs.filter((ref) => ref.inline === null), this.retained.values());
   }
   private readonly refs = new Map<string, AttachmentRef>();
 
@@ -68,7 +65,10 @@ export class BlobAttachmentAdapter implements AttachmentAdapter {
     }
     yield { ...base, status: { type: "running", reason: "uploading", progress: 0 } };
     try {
-      this.refs.set(base.id, await addAttachment(file, isPastedFile(file)));
+      const ref = await addAttachment(file, isPastedFile(file));
+      const stored = { ...ref, inline: inlineNumberOf(file) };
+      this.refs.set(base.id, stored);
+      this.retain([stored]);
       yield { ...base, status: { type: "requires-action", reason: "composer-send" } };
     } catch (error) {
       yield {
@@ -101,6 +101,7 @@ export class BlobAttachmentAdapter implements AttachmentAdapter {
   adopt(ref: AttachmentRef): CreateAttachment {
     const id = crypto.randomUUID();
     this.refs.set(id, ref);
+    this.retain([ref]);
     return { id, type: kindOf(ref.mime), name: ref.name, contentType: ref.mime, content: [] };
   }
 

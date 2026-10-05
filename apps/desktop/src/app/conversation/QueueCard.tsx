@@ -1,4 +1,5 @@
-import { imagePreview } from "@/lib/inlineImages";
+import { normalizedImages } from "@/lib/inlineImages";
+import { namedImages } from "@/app/conversation/inlineImages";
 import { useAui, useAuiState } from "@assistant-ui/react";
 import {
   ArrowCurvedRight,
@@ -61,9 +62,9 @@ export function usePullQueued(): ((index: number) => Promise<void>) | null {
       await deleteQueued(conversationId, item.id);
       target.queue.pulled.set(conversationId, at, item.mentions);
       target.mentions.recall(item.mentions);
-      target.queue.attachments.inline.recall(item.text, item.attachments);
-      composer.setText(item.text);
-      for (const ref of item.attachments.filter((attachment) => !attachment.inline)) {
+      const normalized = normalizedImages(item.text, item.attachments);
+      composer.setText(normalized.text);
+      for (const ref of normalized.attachments) {
         await composer.addAttachment(target.queue.attachments.adopt(ref));
       }
     },
@@ -127,7 +128,9 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
       )}
       <MessageQueue ref={listRef} aria-label="Queued messages">
         {shown.map((item, index) => {
-          const attached = attachmentLabel(item.attachments.filter((attachment) => !attachment.inline));
+          const words = normalizedImages(item.text, item.attachments);
+          const preview = namedImages(words.text, words.attachments.flatMap((ref) => ref.inline === null ? [] : [ref.inline]));
+          const attached = attachmentLabel(item.attachments.filter((attachment) => attachment.inline == null));
           return (
             <MessageQueueItem
               key={item.id}
@@ -147,7 +150,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                 )
               }
             >
-              <span className="min-w-0 flex-1 truncate" title={imagePreview(item.text, item.attachments) || undefined}>
+              <span className="min-w-0 flex-1 truncate" title={preview || undefined}>
                 {item.text ? (
                   <>
                     <InlineImageText text={item.text} attachments={item.attachments} />

@@ -59,6 +59,20 @@ export function isPastedFile(file: File): boolean {
   return pastedFiles.has(file);
 }
 
+/** Images pasted into the text, by their `[Image #n]` number, as opposed to attached ones. */
+const inlineFiles = new WeakMap<File, number>();
+
+/** An image pasted into the text as `[Image #n]`, to attach as that image. */
+export function inlineImageFile(file: File, n: number): File {
+  inlineFiles.set(file, n);
+  return file;
+}
+
+/** The `[Image #n]` number of an image pasted into the text, if `file` is one. */
+export function inlineNumberOf(file: File): number | null {
+  return inlineFiles.get(file) ?? null;
+}
+
 /** Whether pasted text is too long to go to the model whole. */
 export function pasteTooLong(bytes: number): boolean {
   return bytes > PASTE_INLINE_BYTES;
@@ -288,7 +302,7 @@ const ZOOM_MAX = 8;
  * The "Image preview": the image over the dimmed window, fitted to it, with a close
  * button at the top right and a "− 100% +" zoom pill at the bottom (+, − and 0 zoom too).
  */
-function ImagePreview({
+export function ImagePreview({
   url,
   name,
   children,
