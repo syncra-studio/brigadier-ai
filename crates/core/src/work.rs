@@ -437,8 +437,8 @@ pub struct Gate {
     /// A second verification after a verifier could not check the change.
     #[serde(default)]
     pub retry: bool,
-    /// The user had the change land despite the round's findings (`accept_task` with
-    /// `override`): it lands as it is, without another round.
+    /// The user had the change land despite the round's findings (an override, in versions
+    /// before phases landed with `land_phase`): it lands as it is, without another round.
     #[serde(default)]
     pub overridden: bool,
     /// A plan's round: its reviewers' issues as each result arrives, numbered F1, F2, … for

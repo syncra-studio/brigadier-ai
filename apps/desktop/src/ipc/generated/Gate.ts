@@ -35,8 +35,8 @@ relanding: boolean,
  */
 retry: boolean, 
 /**
- * The user had the change land despite the round's findings (`accept_task` with
- * `override`): it lands as it is, without another round.
+ * The user had the change land despite the round's findings (an override, in versions
+ * before phases landed with `land_phase`): it lands as it is, without another round.
  */
 overridden: boolean, 
 /**

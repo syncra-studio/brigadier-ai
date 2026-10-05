@@ -1051,3 +1051,94 @@ async fn a_worker_past_the_handoff_size_continues_in_a_fresh_session_that_keeps_
     }
     flow.stop().await;
 }
+
+/// A request of one phase whose lead outlines it keeps a plan of its own: one phase with its
+/// outline and stage (the app's "Phase 1 / 1" pill), verified and landed like any phase. Only
+/// a small request without an outline has no plan and no pill.
+#[tokio::test]
+async fn an_outlined_request_of_one_phase_keeps_its_phase_and_pill() {
+    let flow = Flow::start(
+        "one-phase",
+        Options::default(),
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if turn.input.contains("[outline review]") {
+                    let reply = turn
+                        .call("approve_outline", json!({"task": "task-1"}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("[phase verifier]") {
+                    return Reply::text("[quiet]");
+                }
+                if let Some(n) = reports_in(&turn.input).last() {
+                    let reply = turn
+                        .call("land_phase", json!({"task": format!("task-{n}")}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Done.");
+                }
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"title": "Add the file", "kind": "implement",
+                               "spec": "Create one.txt.", "provider": "claude"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            if is_reviewer(&turn) {
+                let reply = turn
+                    .call("submit_report", json!({"summary": "No findings."}))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Reviewed.");
+            }
+            if turn.prompt.contains("You verify this phase") {
+                let review = turn.call("request_review", json!({})).await;
+                assert!(!review.is_error, "{}", review.text);
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "It passes.",
+                               "done_when": "[met] one.txt exists: ls shows it"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Verified.");
+            }
+            if turn.earlier == 0 {
+                let reply = turn
+                    .call("submit_outline", json!({"outline": "1. Create one.txt"}))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Waiting for the go-ahead.");
+            }
+            turn.write("one.txt", "one\n");
+            turn.git(&["add", "one.txt"]);
+            turn.git(&["commit", "-q", "-m", "Add one.txt"]);
+            let reply = turn
+                .call(
+                    "submit_report",
+                    json!({"summary": "Added one.txt.", "changes": ["one.txt"]}),
+                )
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        }),
+    )
+    .await;
+    flow.say("Add one.txt.").await;
+    let board = flow.settled().await;
+    assert_eq!(Flow::task(&board, 1).state, TaskState::Landed);
+    assert_eq!(board.plans.len(), 1, "the outlined request has its plan");
+    let plan = board.plans.values().next().unwrap();
+    assert_eq!(plan.steps.len(), 1);
+    let phase = &plan.steps[0];
+    assert_eq!(phase.outline.as_deref(), Some("1. Create one.txt"));
+    assert_eq!(phase.stage, crate::work::PhaseStage::Done);
+    assert!(board.approvals.is_empty(), "no cards");
+    flow.stop().await;
+}
