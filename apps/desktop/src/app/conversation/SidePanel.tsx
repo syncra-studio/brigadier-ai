@@ -22,24 +22,18 @@ import {
 } from "react";
 
 import { WORKERS_LABEL, WorkersTab } from "@/app/conversation/Agents";
-import type { FileTarget } from "@/app/conversation/FilesTab";
 import type { AgentsPanelState } from "@/app/conversation/WorkerChip";
-import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { useSidebar } from "@/components/ui/sidebar";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { takePaneClose } from "@/state/closedPanes";
 import { newBrowserTab, reopenBrowserTab } from "@/state/browsers";
-import { undoTabClose } from "@/state/terminalPlaces";
+import { openReviewTab, reopenTab } from "@/state/sessionTabs";
+import { HOME_PLACE, undoTabClose } from "@/state/terminalPlaces";
 import { changedPaneSize, savedPaneSizes, withSavedTerminal } from "@/state/paneSizes";
 import { useApp } from "@/state/store";
 
-const ReviewTab = lazy(() =>
-  import("@/app/conversation/ReviewTab").then((module) => ({
-    default: module.ReviewTab,
-  })),
-);
 const SideChatTab = lazy(() =>
   import("@/app/conversation/SideChatTab").then((module) => ({
     default: module.SideChatTab,
@@ -48,6 +42,11 @@ const SideChatTab = lazy(() =>
 const BrowserTab = lazy(() =>
   import("@/app/conversation/BrowserTab").then((module) => ({
     default: module.BrowserTab,
+  })),
+);
+const SourcePanel = lazy(() =>
+  import("@/app/conversation/SourcePanel").then((module) => ({
+    default: module.SourcePanel,
   })),
 );
 const FilesTab = lazy(() =>
@@ -62,7 +61,6 @@ const FilesTab = lazy(() =>
 /** The kinds of tab the side panel opens. */
 export type SideTab =
   | "workers"
-  | "review"
   | "browser"
   | "files"
   | "source"
@@ -74,7 +72,6 @@ const TABS: Record<
   { title: string; icon: ReactNode; keys: string | null }
 > = {
   workers: { title: WORKERS_LABEL, icon: null, keys: null },
-  review: { title: "Review", icon: <DiffGlyph />, keys: "⌃⇧G" },
   browser: { title: "Browser", icon: <Globe />, keys: "⌘T" },
   files: { title: "Files", icon: <Folders />, keys: "⌘P" },
   source: { title: "Source", icon: <Branch />, keys: null },
@@ -82,23 +79,21 @@ const TABS: Record<
 };
 
 /** The tabs the titlebar has a button for, in order. Side chat and Terminal are on the bottom
- * bar. */
-const TOOLS: readonly SideTab[] = ["files", "source", "browser", "review"];
+ * bar; Review is one of a session's main tabs. */
+const TOOLS: readonly SideTab[] = ["files", "source", "browser"];
 
 /** The panel's own shortcuts: show or hide it, and full view. */
 
-/** Which tab a key press opens: ⌃⇧G, ⌘T, ⌘P and ⌥⌘S (Ctrl for ⌘ off macOS). */
+/** ⌃⇧G: a session's Review tab, on every change. */
+function isReviewKey(event: KeyboardEvent): boolean {
+  return (
+    event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey && event.code === "KeyG"
+  );
+}
+
+/** Which tab a key press opens: ⌘T, ⌘P and ⌥⌘S (Ctrl for ⌘ off macOS). */
 function tabForKey(event: KeyboardEvent, mac: boolean): SideTab | null {
   const command = mac ? event.metaKey : event.ctrlKey;
-  if (
-    event.ctrlKey &&
-    event.shiftKey &&
-    !event.altKey &&
-    !event.metaKey &&
-    event.code === "KeyG"
-  ) {
-    return "review";
-  }
   if (command && !event.shiftKey && !event.altKey && event.code === "KeyT")
     return "browser";
   if (command && !event.shiftKey && !event.altKey && event.code === "KeyP")
@@ -193,8 +188,6 @@ export type SidePanelApi = {
   composerLimits: { min: number; max: number };
   resizeComposer: (width: number | null) => void;
   workspace: (element: HTMLElement | null) => void;
-  file: FileTarget | null;
-  openFile: (file: FileTarget | null) => void;
   available: readonly SideTab[];
   hide: () => void;
   openTab: (tab: SideTab) => void;
@@ -217,8 +210,6 @@ export const SidePanelContext = createContext<SidePanelApi>({
   composerLimits: { min: 372, max: 917 },
   resizeComposer: () => {},
   workspace: () => {},
-  file: null,
-  openFile: () => {},
   available: [],
   hide: () => {},
   openTab: () => {},
@@ -229,6 +220,14 @@ export const SidePanelContext = createContext<SidePanelApi>({
   buttonsWidth: 0,
   setButtonsWidth: () => {},
 });
+
+/** Brings the main area back from under the panel's full view, for a tab opened from it. */
+export function useShowMain(): () => void {
+  const { state, setFullscreen } = useContext(SidePanelContext);
+  return () => {
+    if (state.fullscreen) setFullscreen(false);
+  };
+}
 
 /** The room around `element`, followed as it and the window resize. */
 function useRoom(): {
@@ -283,7 +282,6 @@ export function useSidePanel(
 } {
   const [state, setState] = useState<PanelState>(CLOSED);
   const [worker, setWorker] = useState<string | null>(null);
-  const [file, setFile] = useState<FileTarget | null>(null);
   const [sizes, setSizes] = useState(savedPaneSizes);
   const [buttonsWidth, setButtonsWidth] = useState(0);
   const mac = useApp((s) => s.info?.platform === "macos");
@@ -317,22 +315,20 @@ export function useSidePanel(
     composerLimits.max,
     Math.max(composerLimits.min, sizes.browserComposer ?? 572),
   );
+  // A session's tools need its checkout; a draft, like Home, has the Browser only.
   const available = useMemo<SideTab[]>(
     () =>
-      kind === "session"
-        ? [
-            "workers",
-            "review",
-            "browser",
-            "files",
-            "source",
-            "sideChat",
-          ]
+      kind === "session" && conversationId
+        ? ["workers", "browser", "files", "source", "sideChat"]
         : kind === "chat"
-          ? ["sideChat"]
-          : [],
-    [kind],
+          ? ["sideChat", "browser"]
+          : kind === "sideChat"
+            ? []
+            : ["browser"],
+    [kind, conversationId],
   );
+  // Home's and the drafts' pages are Home's, as their terminals are.
+  const browserId = conversationId ?? HOME_PLACE;
   const openTab = useCallback((tab: SideTab) => {
     setState((current) => ({
       ...current,
@@ -375,30 +371,33 @@ export function useSidePanel(
     setScope(conversationId);
     setState(CLOSED);
     setWorker(null);
-    setFile(null);
   }
   useEffect(() => {
     if (kind === "sideChat") return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       const command = mac ? event.metaKey : event.ctrlKey;
-      if (
-        command &&
-        event.shiftKey &&
-        !event.altKey &&
-        event.code === "KeyT" &&
-        conversationId
-      ) {
-        const closed = takePaneClose(conversationId);
-        if (closed === "terminal" && undoTabClose(`conv:${conversationId}`)) {
+      if (command && event.shiftKey && !event.altKey && event.code === "KeyT") {
+        const closed = takePaneClose(browserId);
+        const place = conversationId ? `conv:${conversationId}` : HOME_PLACE;
+        if (closed === "terminal" && undoTabClose(place)) {
           event.preventDefault();
           return;
         }
-        if (closed === "browser" && reopenBrowserTab(conversationId)) {
+        if (closed === "browser" && reopenBrowserTab(browserId)) {
           event.preventDefault();
           openTab("browser");
           return;
         }
+        if (closed === "tab" && conversationId && reopenTab(conversationId)) {
+          event.preventDefault();
+          return;
+        }
+      }
+      if (isReviewKey(event) && kind === "session" && conversationId) {
+        event.preventDefault();
+        openReviewTab(conversationId, { type: "all" });
+        return;
       }
       if (command && event.shiftKey && !event.altKey && event.code === "KeyF") {
         if (!state.open) return;
@@ -421,15 +420,14 @@ export function useSidePanel(
       )
         return;
       event.preventDefault();
-      if (tab === "files") setFile(null);
-      if (tab === "browser" && conversationId) {
-        newBrowserTab(conversationId);
+      if (tab === "browser") {
+        newBrowserTab(browserId);
         openTab(tab);
       } else toggleTab(tab);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [kind, mac, available, toggleTab, openTab, state.open, conversationId]);
+  }, [kind, mac, available, toggleTab, openTab, state.open, conversationId, browserId]);
   const panel = useMemo<SidePanelApi>(
     () => ({
       state,
@@ -450,11 +448,6 @@ export function useSidePanel(
           changedPaneSize(withSavedTerminal(current), "browserComposer", next),
         ),
       workspace,
-      file,
-      openFile: (next) => {
-        setFile(next);
-        openTab("files");
-      },
       available,
       hide,
       openTab,
@@ -475,7 +468,6 @@ export function useSidePanel(
       composerWidth,
       composerLimits,
       workspace,
-      file,
       available,
       hide,
       openTab,
@@ -655,20 +647,6 @@ export function PanelButtonsRoom({
   );
 }
 
-/** The Source tab, for now: where source control will be. */
-function SourceTab() {
-  return (
-    <div className="m-auto flex max-w-xs flex-col items-center gap-2 p-4 text-center">
-      <Branch className="text-muted-foreground size-icon-lg" />
-      <p className="text-sm font-medium">Source control</p>
-      <p className="text-muted-foreground text-sm">
-        Changes, commits and branches will show here. Until then, Review shows
-        what changed.
-      </p>
-    </div>
-  );
-}
-
 /** Whether the panel is mounted, whether it is out at its width, and whether it is moving. */
 type Reveal = { mounted: boolean; out: boolean; moving: boolean };
 
@@ -771,13 +749,9 @@ export function SidePanel({
           <div className="flex min-h-0 flex-1 flex-col">
             {state.active === "workers" && conversationId ? (
               <WorkersTab conversationId={conversationId} />
-            ) : state.active === "review" && conversationId ? (
+            ) : state.active === "browser" ? (
               <Suspense fallback={null}>
-                <ReviewTab conversationId={conversationId} />
-              </Suspense>
-            ) : state.active === "browser" && conversationId ? (
-              <Suspense fallback={null}>
-                <BrowserTab conversationId={conversationId} />
+                <BrowserTab conversationId={conversationId ?? HOME_PLACE} />
               </Suspense>
             ) : state.active === "sideChat" && conversationId ? (
               <Suspense fallback={null}>
@@ -787,8 +761,10 @@ export function SidePanel({
               <Suspense fallback={null}>
                 <FilesTab conversationId={conversationId} />
               </Suspense>
-            ) : state.active === "source" ? (
-              <SourceTab />
+            ) : state.active === "source" && conversationId ? (
+              <Suspense fallback={null}>
+                <SourcePanel conversationId={conversationId} />
+              </Suspense>
             ) : null}
           </div>
         </aside>

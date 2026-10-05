@@ -27,6 +27,7 @@ import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { ChatActions, RenameDialog } from "@/app/conversation/ChatActions";
 import { PinnedSummary, PinnedSummaryToggle, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
+import { SessionTabBar, SessionTabViews } from "@/app/conversation/SessionTabBar";
 import { WorkerDiffs } from "@/app/conversation/WorkerSummary";
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
 import {
@@ -104,6 +105,7 @@ import {
 import { toast } from "@/state/toasts";
 import { type Board, useBoard } from "@/state/board";
 import { useBarActions } from "@/state/barActions";
+import { CHAT_TAB, openFileTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { placeOf } from "@/state/terminalPlaces";
 import {
   emptyThread,
@@ -769,22 +771,25 @@ export function ConversationView({
   }, [embedded, fullscreen, setFullscreen]);
   // The pinned summary, in a session's own view.
   const summary = setup?.type === "session" && !embedded;
-  // A file link in an answer opens in the Files tab when it is one of the session's files.
+  // A session's own view has tabs; another tab in front covers the conversation (kept as it was).
+  const tabbed = !embedded && conversation?.kind === "session";
+  const { active: activeTab } = useSessionTabsOf(tabbed ? conversationId : null);
+  const covered = tabbed && activeTab !== CHAT_TAB;
+  // A file link in an answer opens in a tab of its own when it is one of the session's files.
   const checkout =
     setup?.type === "session"
       ? setup.environment.type === "newWorktree"
         ? (setup.environment.path ?? setup.repo)
         : setup.repo
       : null;
-  const { openFile } = sidePanel;
   const openFileAt = useCallback(
     (path: string, line: number | null) => {
       const prefix = checkout ? `${checkout.replace(/\/$/, "")}/` : null;
-      if (!prefix || !path.startsWith(prefix)) return false;
-      openFile({ path: path.slice(prefix.length), line });
+      if (!prefix || !path.startsWith(prefix) || !conversationId) return false;
+      openFileTab(conversationId, path.slice(prefix.length), { line });
       return true;
     },
-    [checkout, openFile],
+    [checkout, conversationId],
   );
   return (
     <ViewContext.Provider value={{ selection, conversation, embedded }}>
@@ -805,14 +810,29 @@ export function ConversationView({
                       <div className={cn("flex h-full min-w-0 flex-1 flex-col", fullscreen && "hidden")}>
                         {/* The summary's popover, where it floats: opened in the top bar, under it. */}
                         <SummaryFloat>
-                          {!embedded && (
-                            <TopBar onRename={conversation && !archived ? () => setRenaming(true) : undefined}>
-                              {conversation && (
-                                <ChatActions conversation={conversation} onRename={() => setRenaming(true)} />
+                          {tabbed && conversation ? (
+                            <SessionTabBar conversation={conversation} onRename={() => setRenaming(true)}>
+                              {summary && (
+                                // The summary shows beside the conversation: it comes to the front.
+                                <span
+                                  className="contents"
+                                  onClickCapture={() => conversationId && selectTab(conversationId, CHAT_TAB)}
+                                >
+                                  <PinnedSummaryToggle />
+                                </span>
                               )}
-                              {conversation && summary && <PinnedSummaryToggle />}
                               <PanelButtonsRoom besidePanel />
-                            </TopBar>
+                            </SessionTabBar>
+                          ) : (
+                            !embedded && (
+                              <TopBar onRename={conversation && !archived ? () => setRenaming(true) : undefined}>
+                                {conversation && (
+                                  <ChatActions conversation={conversation} onRename={() => setRenaming(true)} />
+                                )}
+                                {conversation && summary && <PinnedSummaryToggle />}
+                                <PanelButtonsRoom besidePanel />
+                              </TopBar>
+                            )
                           )}
                           {error && (
                             <p
@@ -830,19 +850,27 @@ export function ConversationView({
                               </Button>
                             </p>
                           )}
-                          <SummaryPane summary={summary}>
-                            {conversation && summary && <PinnedSummary conversation={conversation} />}
-                            {conversation?.kind === "session" && <WorkerDiffs conversationId={conversation.id} />}
-                            <Thread
-                              components={THREAD_COMPONENTS}
-                              // One placeholder, in every conversation.
-                              placeholder="Do anything"
-                              // A session's work comes before its answer, and is followed once it
-                              // reaches the composer; a Chat's answer fills the room made for it.
-                              scrollMode={conversation?.kind === "chat" ? "chat" : "session"}
-                              scrollKey={conversation?.id}
-                            />
-                          </SummaryPane>
+                          <div className="relative flex min-h-0 flex-1 flex-col">
+                            <div
+                              inert={covered}
+                              className={cn("flex min-h-0 flex-1 flex-col", covered && "invisible")}
+                            >
+                              <SummaryPane summary={summary}>
+                                {conversation && summary && <PinnedSummary conversation={conversation} />}
+                                {conversation?.kind === "session" && <WorkerDiffs conversationId={conversation.id} />}
+                                <Thread
+                                  components={THREAD_COMPONENTS}
+                                  // One placeholder, in every conversation.
+                                  placeholder="Do anything"
+                                  // A session's work comes before its answer, and is followed once it
+                                  // reaches the composer; a Chat's answer fills the room made for it.
+                                  scrollMode={conversation?.kind === "chat" ? "chat" : "session"}
+                                  scrollKey={conversation?.id}
+                                />
+                              </SummaryPane>
+                            </div>
+                            {tabbed && conversationId && <SessionTabViews conversationId={conversationId} />}
+                          </div>
                         </SummaryFloat>
                         {!embedded && <TerminalPane place={placeOf(selection)} />}
                       </div>

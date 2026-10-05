@@ -77,10 +77,13 @@ async function copy(text: string, done: string) {
  * Markdown); Fork ›; Open in › (a session's working directory). Share, side chats, scheduled
  * tasks and new windows need what Brigadier doesn't have, so they are not offered.
  */
-export const ChatActions: FC<{ conversation: Conversation; onRename: () => void }> = ({
-  conversation,
-  onRename,
-}) => {
+export const ChatActions: FC<{
+  conversation: Conversation;
+  onRename: () => void;
+  /** Its ⋯ as a small button inside a tab. */
+  compact?: boolean;
+  className?: string;
+}> = ({ conversation, onRename, compact = false, className }) => {
   const id = conversation.id;
   const pinned = conversation.pinnedAtMs !== null;
   const archived = conversation.lifecycle === "archived";
@@ -122,7 +125,11 @@ export const ChatActions: FC<{ conversation: Conversation; onRename: () => void 
     <>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
-          <TooltipIconButton tooltip="Chat actions" size="icon-md">
+          <TooltipIconButton
+            tooltip="Chat actions"
+            size={compact ? "icon-xs" : "icon-md"}
+            className={className}
+          >
             <DotsHorizontal />
           </TooltipIconButton>
         </DropdownMenuTrigger>

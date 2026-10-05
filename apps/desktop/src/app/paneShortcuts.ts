@@ -3,7 +3,7 @@ import { useEffect } from "react";
 
 import { takePaneClose } from "@/state/closedPanes";
 import { useApp } from "@/state/store";
-import { currentPlace, HOME_PLACE, toggleTerminal, undoTabClose } from "@/state/terminalPlaces";
+import { HOME_PLACE, toggleTerminal, undoTabClose } from "@/state/terminalPlaces";
 
 /** The Panes menu's items (macOS), as the key presses the views listen for. */
 const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?: boolean }> = {
@@ -20,8 +20,8 @@ const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?: boole
 
 /**
  * The panes' shortcuts, wherever the window is: ⌘J and ⌃` show or hide the bottom terminal,
- * and on Home and in Settings ⌘⇧T brings back its last closed tab (a conversation's view does
- * that for its own). On macOS the Panes menu owns the keys; its items arrive here and go on as
+ * and in Settings ⌘⇧T brings back Home's last closed terminal tab (a view does that for its
+ * own). On macOS the Panes menu owns the keys; its items arrive here and go on as
  * key presses, to the browser while it owns the keyboard.
  */
 export function usePaneShortcuts(): void {
@@ -78,7 +78,8 @@ export function usePaneShortcuts(): void {
         event.shiftKey &&
         !event.altKey &&
         event.code === "KeyT" &&
-        currentPlace() === HOME_PLACE &&
+        // Elsewhere the view's own side panel reopens Home's terminals and pages.
+        useApp.getState().selection.type === "settings" &&
         takePaneClose(HOME_PLACE) === "terminal"
       ) {
         event.preventDefault();

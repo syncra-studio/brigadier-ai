@@ -1,50 +1,28 @@
-import { useVirtualizer } from "@tanstack/react-virtual";
 import {
-  ArrowLeft,
-  Check,
   ChevronDown,
   ChevronRight,
-  Copy,
   Folder,
   FolderOpen,
   Search,
 } from "@openai/apps-sdk-ui/components/Icon";
-import {
-  type FC,
-  memo,
-  useContext,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 
 import { useCheckoutFiles } from "@/app/conversation/Mentions";
-import { SidePanelContext } from "@/app/conversation/SidePanel";
+import { useShowMain } from "@/app/conversation/SidePanel";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { fuzzyMatch } from "@/components/assistant-ui/elements/fuzzy-match";
-import { useCheckoutRoot } from "@/components/assistant-ui/markdown-text";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
-import { request, revealPath } from "@/ipc/client";
-import type { CheckoutFile } from "@/ipc/generated";
-import { formatBytes } from "@/lib/format";
-import { HIGHLIGHT_CHARS, highlight, languageOf, type Token } from "@/lib/highlight";
-import { tokenPx } from "@/lib/tokens";
-import { cn } from "@/lib/utils";
 import { listFiles } from "@/state/actions";
+import { openFileTab } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
-import { toast } from "@/state/toasts";
 
 /**
- * The Files tab (⌘P): the session checkout's files as a tree with a search field, and one
- * file shown with its line numbers and colours, opened from the tree, a search result or a
- * file link in an answer.
+ * The Files panel (⌘P): the session checkout's files as a tree with a search field. A click
+ * opens a file in the preview tab (in italic, the next click takes its place); a double click
+ * or Enter opens it for good.
  */
 
-/** A file the tab shows, and the line to bring into view. */
-export type FileTarget = { path: string; line: number | null };
+/** Opens `path`: in the preview tab, or with `keep` in a tab of its own. */
+type OnOpen = (path: string, keep: boolean) => void;
 
 /** Search results listed at once; typing more narrows them. */
 const RESULTS = 100;
@@ -106,16 +84,16 @@ function visibleRows(root: Folder, open: ReadonlySet<string>): Row[] {
   return rows;
 }
 
-/** The side panel's Files tab: the tree, or one file. */
+/** The side panel's Files tab: the tree. */
 export function FilesTab({ conversationId }: { conversationId: string }) {
-  const { file, openFile } = useContext(SidePanelContext);
-  if (file) {
-    return <FileView key={`${file.path}:${file.line}`} conversationId={conversationId} target={file} />;
-  }
+  const showMain = useShowMain();
   return (
     <FileBrowser
       conversationId={conversationId}
-      onOpen={(path) => openFile({ path, line: null })}
+      onOpen={(path, keep) => {
+        openFileTab(conversationId, path, { preview: !keep });
+        showMain();
+      }}
     />
   );
 }
@@ -125,7 +103,7 @@ function FileBrowser({
   onOpen,
 }: {
   conversationId: string;
-  onOpen: (path: string) => void;
+  onOpen: OnOpen;
 }) {
   const conversation = useApp((s) => s.conversations[conversationId]);
   const list = useCheckoutFiles(conversation ?? null);
@@ -185,7 +163,7 @@ function FileBrowser({
                 setActive((index) => Math.min(results.length - 1, Math.max(0, index + step)));
               } else if (event.key === "Enter") {
                 const path = results[active];
-                if (path) onOpen(path);
+                if (path) onOpen(path, true);
               }
             }}
             className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none"
@@ -206,7 +184,8 @@ function FileBrowser({
                     type="button"
                     title={path}
                     data-active={index === active || undefined}
-                    onClick={() => onOpen(path)}
+                    onClick={() => onOpen(path, false)}
+                    onDoubleClick={() => onOpen(path, true)}
                     onPointerMove={() => setActive(index)}
                     className="data-active:bg-muted rounded-control flex h-control-md w-full items-center gap-2 px-2 text-start text-sm"
                   >
@@ -274,7 +253,7 @@ const TreeRow = memo(function TreeRow({
 }: {
   row: Row;
   onToggle: (path: string) => void;
-  onOpen: (path: string) => void;
+  onOpen: OnOpen;
 }) {
   const folder = row.kind === "folder";
   return (
@@ -282,7 +261,8 @@ const TreeRow = memo(function TreeRow({
       <button
         type="button"
         title={row.path}
-        onClick={() => (folder ? onToggle(row.path) : onOpen(row.path))}
+        onClick={() => (folder ? onToggle(row.path) : onOpen(row.path, false))}
+        onDoubleClick={() => !folder && onOpen(row.path, true)}
         // Each level indents by one step of the spacing scale.
         style={{ paddingInlineStart: `calc(var(--spacing) * ${2 + row.depth * 4})` }}
         className="hover:bg-muted text-muted-foreground hover:text-foreground rounded-control flex h-control-sm w-full items-center gap-1.5 pe-2 text-start text-sm"
@@ -308,171 +288,3 @@ const TreeRow = memo(function TreeRow({
     </li>
   );
 });
-
-function useFile(conversationId: string, path: string) {
-  const [state, setState] = useState<{ file: CheckoutFile | null; error: string | null }>({
-    file: null,
-    error: null,
-  });
-  useEffect(() => {
-    let live = true;
-    request({ method: "readFile", conversationId, path })
-      .then(({ file }) => live && setState({ file, error: null }))
-      .catch(
-        (cause: unknown) =>
-          live &&
-          setState({
-            file: null,
-            error: cause instanceof Error ? cause.message : String(cause),
-          }),
-      );
-    return () => {
-      live = false;
-    };
-  }, [conversationId, path]);
-  return state;
-}
-
-/** One file: its path over its lines, numbered and coloured, the target line marked. */
-function FileView({ conversationId, target }: { conversationId: string; target: FileTarget }) {
-  const { openFile } = useContext(SidePanelContext);
-  const root = useCheckoutRoot();
-  const { file, error } = useFile(conversationId, target.path);
-  const { isCopied, copyToClipboard } = useCopyToClipboard();
-  const mac = useApp((s) => s.info?.platform === "macos");
-  const absolute = root ? `${root.replace(/\/$/, "")}/${target.path}` : target.path;
-  return (
-    <>
-      <header className="border-border flex h-12 shrink-0 items-center gap-2 border-b px-4">
-        <TooltipIconButton tooltip="Back to files" size="icon-sm" onClick={() => openFile(null)}>
-          <ArrowLeft />
-        </TooltipIconButton>
-        <FileTypeIcon name={target.path} className="size-icon-md shrink-0" />
-        <h2 className="min-w-0 flex-1 truncate text-sm" title={absolute}>
-          <span className="font-medium">{baseName(target.path)}</span>
-          {dirName(target.path) && (
-            <span className="text-muted-foreground"> {dirName(target.path)}</span>
-          )}
-        </h2>
-        {file && <span className="text-muted-foreground shrink-0 text-xs">{formatBytes(file.size)}</span>}
-        <TooltipIconButton
-          tooltip={isCopied ? "Copied" : "Copy path"}
-          size="icon-sm"
-          onClick={() => copyToClipboard(target.path)}
-        >
-          {isCopied ? <Check /> : <Copy />}
-        </TooltipIconButton>
-        <TooltipIconButton
-          tooltip={mac ? "Reveal in Finder" : "Open in File Manager"}
-          size="icon-sm"
-          onClick={() =>
-            revealPath(absolute).catch((cause: unknown) =>
-              toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" }),
-            )
-          }
-        >
-          <FolderOpen />
-        </TooltipIconButton>
-      </header>
-      {error ? (
-        <p role="alert" className="text-destructive p-4 text-sm">
-          {error}
-        </p>
-      ) : !file ? null : file.text === null ? (
-        <p className="text-muted-foreground p-4 text-sm">Binary file not shown</p>
-      ) : (
-        <>
-          {file.truncated && (
-            <p className="text-muted-foreground border-border shrink-0 border-b px-4 py-1.5 text-xs">
-              Showing the first {formatBytes(file.text.length)} of {formatBytes(file.size)}
-            </p>
-          )}
-          <CodeLines text={file.text} language={languageOf(target.path)} line={target.line} />
-        </>
-      )}
-    </>
-  );
-}
-
-const CodeLines: FC<{ text: string; language: string; line: number | null }> = ({
-  text,
-  language,
-  line,
-}) => {
-  const lines = useMemo(() => text.replace(/\n$/, "").split("\n"), [text]);
-  const [tokens, setTokens] = useState<Token[][] | null>(null);
-  const density = useApp((s) => s.settings.density);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (text.length > HIGHLIGHT_CHARS) return;
-    let live = true;
-    highlight(text.replace(/\n$/, ""), language)
-      .then((result) => live && setTokens(result))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [text, language]);
-
-  // The app does not use React Compiler, so the virtualizer's unmemoizable API is fine here.
-  // oxlint-disable-next-line react/incompatible-library
-  const virtualizer = useVirtualizer({
-    count: lines.length,
-    getScrollElement: () => scrollRef.current,
-    // A line is `leading-5`: five steps of the spacing scale.
-    estimateSize: () => tokenPx("--spacing") * 5,
-    overscan: 20,
-  });
-  useLayoutEffect(() => {
-    virtualizer.measure();
-  }, [density, virtualizer]);
-  useLayoutEffect(() => {
-    if (line !== null && line > 0) virtualizer.scrollToIndex(line - 1, { align: "center" });
-  }, [line, virtualizer]);
-
-  const gutter = `${String(lines.length).length}ch`;
-  return (
-    <div ref={scrollRef} data-selectable className="min-h-0 flex-1 overflow-auto py-2">
-      <div
-        className="relative min-w-full font-mono text-xs"
-        style={{ height: `${virtualizer.getTotalSize()}px` }}
-      >
-        {virtualizer.getVirtualItems().map((item) => {
-          const number = item.index + 1;
-          const lineTokens = tokens?.[item.index];
-          return (
-            <div
-              key={item.key}
-              data-line={number}
-              data-target={number === line || undefined}
-              className="data-target:bg-warning/15 absolute start-0 flex h-5 w-max min-w-full items-center leading-5 whitespace-pre"
-              style={{ transform: `translateY(${item.start}px)` }}
-            >
-              <span
-                className="text-muted-foreground shrink-0 ps-4 pe-4 text-end select-none"
-                style={{ width: `calc(${gutter} + var(--spacing) * 8)` }}
-              >
-                {number}
-              </span>
-              <span className="pe-4">
-                {lineTokens
-                  ? lineTokens.map((token, index) => (
-                      <span
-                        // Tokens of a line never reorder.
-                        // oxlint-disable-next-line react/no-array-index-key
-                        key={index}
-                        className={cn(token.italic && "italic")}
-                        style={token.color ? { color: token.color } : undefined}
-                      >
-                        {token.content}
-                      </span>
-                    ))
-                  : lines[item.index]}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-};

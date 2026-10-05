@@ -61,6 +61,7 @@
  *               narrowest-window              a window narrower than this hides the side panel
  *               panel-resize-step             an arrow key's move of the side panel's edge
  *               w-panel-tab, min-w-panel-tab-min  a side panel tab: its width, its least
+ *               min-w-session-tab-min         a session's tab: its least (its width is a panel tab's)
  *               max-h-user-message            a long user message, clipped (about 15 lines)
  *               max-w-thread, max-w-{2xs,xs,sm,md,lg} readable column / surface widths
  *               max-w-settings                the Settings page's column
@@ -270,6 +271,8 @@
      scrolls. */
   --spacing-panel-tab: 15rem;
   --spacing-panel-tab-min: 5.625rem;
+  /* A session's tab keeps room for a short name beside its icon and button. */
+  --spacing-session-tab-min: 8rem;
   --spacing-setup: min(60rem, calc(100dvh - 2rem));
   --spacing-setup-card: 13rem;
   --spacing-user-message: 22.5rem;

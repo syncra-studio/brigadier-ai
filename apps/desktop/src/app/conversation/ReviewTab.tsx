@@ -31,7 +31,6 @@ import {
 } from "react";
 
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
-import { SidePanelContext } from "@/app/conversation/SidePanel";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { useCheckoutRoot } from "@/components/assistant-ui/markdown-text";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
@@ -66,12 +65,14 @@ import {
   setReviewScope,
   useReview,
 } from "@/state/review";
+import { openFileTab, openReviewTab, type ReviewTarget } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 
 /**
- * The Review tab in the side panel: a scope ("Last Turn", "Uncommitted", …) and its total,
- * every changed file's diff stacked under a sticky header, and the file list beside them. It
- * only reads; a line's "+" quotes it into the composer to comment on.
+ * A session's Review tab: a scope ("Last Turn", "Uncommitted", …) and its total, every changed
+ * file's diff stacked under a sticky header, and the file list beside them; or, opened from
+ * the Source panel, one file's staged or unstaged diff. It only reads; a line's "+" quotes it
+ * into the composer to comment on.
  */
 
 function scopeLabel(scope: ReviewScope, review: ReviewDiff | null): string {
@@ -127,14 +128,15 @@ function useChangeKey(conversationId: string): string {
 }
 
 /**
- * The review of `scope`, refetched when the options, the board or `tick` change it. While a
- * refetch loads, the last review stays only if it shows the same scope and options: another
- * scope's patch must not sit under this one's label.
+ * The review of `scope`, refetched when the options, the board, the Source panel's reading of
+ * the checkout or `tick` change it. While a refetch loads, the last review stays only if it
+ * shows the same scope and options: another scope's patch must not sit under this one's label.
  */
 function useReviewDiff(conversationId: string, scope: ReviewScope, options: ReviewOptions, tick: number) {
   const changeKey = useChangeKey(conversationId);
+  const checkout = useReview((s) => s.checkouts[conversationId] ?? "");
   const view = JSON.stringify([conversationId, scope, options.wholeFiles, options.ignoreWhitespace]);
-  const key = JSON.stringify([view, tick, changeKey]);
+  const key = JSON.stringify([view, tick, changeKey, checkout]);
   const [state, setState] = useState<{
     key: string | null;
     view: string | null;
@@ -181,22 +183,56 @@ function useReviewDiff(conversationId: string, scope: ReviewScope, options: Revi
   };
 }
 
-export function ReviewTab({ conversationId }: { conversationId: string }) {
-  const scope = useReview((s) => s.scopes[conversationId] ?? LATEST_TURN);
+export function ReviewTab({
+  conversationId,
+  target = { type: "all" },
+  active = true,
+}: {
+  conversationId: string;
+  target?: ReviewTarget;
+  /** In front: it shows changes made meanwhile when it comes to the front again. */
+  active?: boolean;
+}) {
+  const picked = useReview((s) => s.scopes[conversationId] ?? LATEST_TURN);
+  const single = target.type === "file" ? target : null;
+  const scope = useMemo<ReviewScope>(
+    () => (single ? { type: single.staged ? "staged" : "unstaged" } : picked),
+    [single, picked],
+  );
   const options = useReview((s) => s.options);
   const [tick, setTick] = useState(0);
-  const { review, error, loading } = useReviewDiff(conversationId, scope, options, tick);
-  const files = useMemo(
+  const [wasActive, setWasActive] = useState(active);
+  if (wasActive !== active) {
+    setWasActive(active);
+    if (active) setTick(tick + 1);
+  }
+  const { review: fullReview, error, loading } = useReviewDiff(conversationId, scope, options, tick);
+  // One file's diff: only its part of the scope's.
+  const review = useMemo(
     () =>
-      review
-        ? parsePatch(
-            review.patch,
-            review.files.map((file) => file.path),
-            review.fullFiles,
-          )
-        : [],
-    [review],
+      fullReview && single
+        ? (() => {
+            const files = fullReview.files.filter((file) => file.path === single.path);
+            return {
+              ...fullReview,
+              files,
+              insertions: files.reduce((sum, file) => sum + (file.insertions ?? 0), 0),
+              deletions: files.reduce((sum, file) => sum + (file.deletions ?? 0), 0),
+            };
+          })()
+        : fullReview,
+    [fullReview, single],
   );
+  const patches = useMemo(() => {
+    if (!fullReview) return new Map<string, PatchFile>();
+    const parsed = parsePatch(
+      fullReview.patch,
+      fullReview.files.map((file) => file.path),
+      fullReview.fullFiles,
+    );
+    return new Map(fullReview.files.map((file, index) => [file.path, parsed[index]!]));
+  }, [fullReview]);
+  const files = useMemo(() => review?.files ?? [], [review]);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const sections = useRef(new Map<string, HTMLElement>());
   const jump = (path: string) => {
@@ -219,11 +255,25 @@ export function ReviewTab({ conversationId }: { conversationId: string }) {
   return (
     <div data-slot="review-tab" className="flex min-h-0 flex-1 flex-col">
       <div className="border-border flex h-control-lg shrink-0 items-center gap-1 border-b px-2">
-        <ScopeMenu
-          conversationId={conversationId}
-          scope={scope}
-          review={review}
-        />
+        {single ? (
+          <>
+            <span className="text-muted-foreground px-1.5 text-sm">
+              {single.staged ? "Staged changes" : "Changes"}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setReviewScope(conversationId, { type: "uncommitted" });
+                openReviewTab(conversationId, { type: "all" });
+              }}
+            >
+              Review all
+            </Button>
+          </>
+        ) : (
+          <ScopeMenu conversationId={conversationId} scope={scope} review={review} />
+        )}
         {review && review.files.length > 0 && (
           <Counts insertions={review.insertions} deletions={review.deletions} className="text-sm" />
         )}
@@ -271,13 +321,15 @@ export function ReviewTab({ conversationId }: { conversationId: string }) {
             {error ? (
               <p className="text-destructive p-4 text-sm">{error}</p>
             ) : review && review.files.length === 0 ? (
-              <p className="text-muted-foreground p-4 text-sm">No changes</p>
+              <p className="text-muted-foreground p-4 text-sm">
+                {single ? `No ${single.staged ? "staged " : ""}changes in ${single.path}` : "No changes"}
+              </p>
             ) : (
-              review?.files.map((file, index) => (
+              review?.files.map((file) => (
                 <FileSection
                   key={file.path}
                   file={file}
-                  patch={files[index]}
+                  patch={patches.get(file.path)}
                   options={options}
                   collapsed={collapsed.has(file.path)}
                   onToggle={() =>
@@ -718,9 +770,9 @@ function failed(cause: unknown) {
   toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" });
 }
 
-/** A changed file's "Open in" menu: the Files tab, its default app, or the file manager. */
+/** A changed file's "Open in" menu: a file tab, its default app, or the file manager. */
 const OpenInMenu: FC<{ file: ReviewFile }> = ({ file }) => {
-  const { openFile, available } = useContext(SidePanelContext);
+  const { conversationId } = useContext(ReviewContext);
   const root = useCheckoutRoot();
   const mac = useApp((s) => s.info?.platform === "macos");
   const gone = file.status === "deleted";
@@ -733,12 +785,9 @@ const OpenInMenu: FC<{ file: ReviewFile }> = ({ file }) => {
         </TooltipIconButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem
-          disabled={!available.includes("files")}
-          onSelect={() => openFile({ path: file.path, line: null })}
-        >
+        <DropdownMenuItem onSelect={() => openFileTab(conversationId, file.path)}>
           <Folders />
-          Files tab
+          File tab
         </DropdownMenuItem>
         <DropdownMenuItem
           disabled={!absolute}

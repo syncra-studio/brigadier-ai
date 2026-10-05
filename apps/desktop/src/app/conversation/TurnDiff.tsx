@@ -1,9 +1,8 @@
 import { ArrowRotateCcw, ArrowRotateCw, ArrowUpRight } from "@openai/apps-sdk-ui/components/Icon";
-import { type FC, useContext, useState } from "react";
+import { type FC, useState } from "react";
 
 import { isFinal } from "@/app/conversation/blocks";
 import { useRequestDiff } from "@/app/conversation/ComposerCapsule";
-import { SidePanelContext } from "@/app/conversation/SidePanel";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { paper } from "@/components/assistant-ui/elements/surfaces";
@@ -12,6 +11,7 @@ import { request } from "@/ipc/client";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { setReviewScope } from "@/state/review";
+import { openReviewTab } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 
 const Counts: FC<{ insertions: number; deletions: number; className?: string }> = ({
@@ -41,12 +41,11 @@ export const TurnDiff: FC<{ requestId: string }> = ({ requestId }) => {
     ),
   );
   const [busy, setBusy] = useState(false);
-  const { openTab } = useContext(SidePanelContext);
   if (!diff || !conversationId) return null;
 
   const review = () => {
     setReviewScope(conversationId, { type: "lastTurn", requestId });
-    openTab("review");
+    openReviewTab(conversationId, { type: "all" });
   };
 
   const files = diff.files.length;

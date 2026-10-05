@@ -156,10 +156,11 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
         if let Some(file) = item.as_submenu()
             && file.text()? == "File"
         {
-            // Cmd+W belongs to the focused browser page or terminal shell. Keep window
-            // closing explicit, so a native page cannot make it bypass the pane handler.
+            // Cmd+W belongs to the focused browser page or terminal shell, else a session's tab
+            // in front. Keep window closing explicit, so a native page cannot make it bypass
+            // the pane handler.
             file.remove_at(0)?;
-            let close = MenuItemBuilder::with_id("pane:close", "Close page or terminal")
+            let close = MenuItemBuilder::with_id("pane:close", "Close tab, page or terminal")
                 .accelerator("CmdOrCtrl+W")
                 .build(app)?;
             let close_window = MenuItemBuilder::with_id("close-main-window", "Close Window")
@@ -194,13 +195,17 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
         ("new", "New browser page or terminal", "CmdOrCtrl+T"),
         (
             "reopen",
-            "Reopen closed page or terminal",
+            "Reopen closed tab, page or terminal",
             "CmdOrCtrl+Shift+T",
         ),
         ("address", "Focus browser address", "CmdOrCtrl+L"),
         ("full", "Toggle full view", "CmdOrCtrl+Shift+F"),
-        ("previous", "Previous page or terminal", "CmdOrCtrl+Shift+["),
-        ("next", "Next page or terminal", "CmdOrCtrl+Shift+]"),
+        (
+            "previous",
+            "Previous tab, page or terminal",
+            "CmdOrCtrl+Shift+[",
+        ),
+        ("next", "Next tab, page or terminal", "CmdOrCtrl+Shift+]"),
     ] {
         panes.append(
             &MenuItemBuilder::with_id(format!("pane:{id}"), title)
