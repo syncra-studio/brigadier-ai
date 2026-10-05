@@ -38,6 +38,7 @@ import {
   ComposerTargetContext,
 } from "@/app/conversation/composerTarget";
 import {
+  ApprovalSlot,
   PendingActionCard,
   setAsideCards,
   useAsideCards,
@@ -91,12 +92,24 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
   const plan = usePlanMode(target);
   // Cards put aside with ×, for the conversation they belong to.
   const putAside = useAsideCards(target?.conversation?.id ?? null);
+  // The conversation whose approvals the user stepped past with "Reply…", until none waits.
+  const [replyingIn, setReplyingIn] = useState<string | null>(null);
+  const shell = useRef<HTMLDivElement>(null);
+  const anyApproval = pending.some((entry) => entry.type === "approval");
+  // Once none waits, the next approval takes the composer's place again.
+  if (replyingIn !== null && !anyApproval) setReplyingIn(null);
   if (!target) return null;
   const { conversation, resolved, targets } = target;
   const archived = conversation?.lifecycle === "archived";
   const dictationOwner = conversation?.id ?? NEW_CHAT_SCOPE;
   const waiting = pending.filter((entry) => !putAside.includes(entry.id));
-  const current = archived ? undefined : waiting[0];
+  // Approvals take the composer's place, one at a time, until the user picks "Reply…"; then
+  // they wait on the rail above it like any other decision. Questions and proposals always
+  // sit above the full composer.
+  const approvals = waiting.filter((entry) => entry.type === "approval").map((entry) => entry.id);
+  const replying = conversation !== null && replyingIn === conversation.id;
+  const slot = !archived && approvals.length > 0 && !replying;
+  const current = archived || slot ? undefined : waiting[0];
   const setAsideIds = (ids: readonly string[]) => {
     if (conversation) setAsideCards(conversation.id, ids);
   };
@@ -144,9 +157,23 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
             </ComposerRailItem>
           )}
         </ComposerRail>
-        <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col gap-1.5">
+        {slot && conversation && (
+          <ApprovalSlot
+            ids={approvals}
+            onReply={() => {
+              setReplyingIn(conversation.id);
+              // The field comes back where it was, with its draft; the card waits above it.
+              requestAnimationFrame(() =>
+                shell.current?.querySelector<HTMLElement>("[contenteditable=true], textarea")?.focus(),
+              );
+            }}
+          />
+        )}
+        {/* Kept while an approval has its place, so the draft and its caret stay. */}
+        <ComposerPrimitive.Root className={cn("aui-composer-root relative flex w-full flex-col gap-1.5", slot && "hidden")}>
           {/* The composer's card: lifted, an inner hairline for an edge, and no focus ring. */}
           <div
+            ref={shell}
             data-slot="aui_composer-shell"
             className="@container/composer bg-composer rounded-composer shadow-hairline relative flex w-full cursor-text flex-col gap-1 p-2 backdrop-blur-lg"
           >

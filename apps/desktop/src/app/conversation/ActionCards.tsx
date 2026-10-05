@@ -1,11 +1,15 @@
 import {
   Branch,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Commit,
   Globe,
   InfoCircle,
+  Key,
   PencilSquare,
   QuestionMarkCircle,
+  Reply,
   Sparkle,
   Terminal,
 } from "@openai/apps-sdk-ui/components/Icon";
@@ -31,8 +35,8 @@ import {
   ActionCard,
   ActionCardActions,
   ActionCardCode,
-  ActionCardHeader,
   ActionCardQuestion,
+  ActionCardTitle,
   ActionFileList,
   ActionFreeText,
   ActionKbd,
@@ -59,9 +63,10 @@ import type {
   Conversation,
   DiffStat,
 } from "@/ipc/generated";
-import { NEVER_PUSHES_NOTE } from "@/lib/setup";
+import { shownCommand } from "@/components/transcript/activity";
 import { answerCard, answerQuestion, decidePlan } from "@/state/actions";
 import { useBoard } from "@/state/board";
+import { useApp } from "@/state/store";
 
 /* Pending decisions sit on the rail above the full composer. Their shortcuts leave
  * text fields, focused controls and open overlays to handle their own keys. */
@@ -247,12 +252,11 @@ function quote(arg: string): string {
 
 type Shown = {
   icon: ReactNode;
-  kind: ReactNode;
+  kind: string;
   title: ReactNode;
-  detail?: ReactNode;
-  /** Under the question (a warning). */
-  note?: ReactNode;
   body?: ReactNode;
+  /** The primary button's words; "Allow once" by default. */
+  allow?: string;
 };
 
 /** A file's line counts, at the end of its row. */
@@ -274,66 +278,56 @@ function fileStats(stat: DiffStat) {
   }));
 }
 
-/** The kinds shown ("Terminal", "Edit files", "Internet access") for what is asked. */
-function describe(
-  approval: Approval,
-  actorId: string | null,
-  landingId: string | null,
-): Shown {
-  // The worker that asks, and the one to land, as their chips; Brigadier asks for itself.
-  const actor = actorId === null ? null : <WorkerChip taskId={actorId} />;
-  const who = actor ?? "Brigadier";
+/** Prose the card asks about (an outline, the details of an action), scrolling when long. */
+function CardProse({ children }: { children: ReactNode }) {
+  return (
+    <div className="px-3">
+      <div className="bg-background/25 text-foreground/70 max-h-40 overflow-y-auto rounded-md p-2 text-sm whitespace-pre-wrap">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What a card asks, compactly: its kind ("Terminal", "Edit files", "Internet access", "Ask
+ * permission", "Merge", "Plan"), the asker's one-line reason as the title, and the exact thing
+ * asked about. `cwd` shows only when the command runs outside the session's own folders.
+ */
+function describe(approval: Approval, landingId: string | null, inSession: (path: string) => boolean): Shown {
   const { subject } = approval;
   switch (subject.type) {
     case "cli": {
       const { request } = subject;
       const edits = request.kind === "fileChange" || request.paths.length > 0;
-      const web = /web|fetch|search|network/i.test(request.tool);
+      const web = request.tool === "SandboxNetworkAccess" || /web|fetch|search|network/i.test(request.tool);
       const [icon, kind] = request.command
         ? [<Terminal key="icon" />, "Terminal"]
         : edits
           ? [<PencilSquare key="icon" />, "Edit files"]
           : web
             ? [<Globe key="icon" />, "Internet access"]
-            : [<Sparkle key="icon" />, request.tool];
-      const question = request.command ? (
-        actor ? (
-          <>Do you want {actor} to run this command?</>
-        ) : (
-          "Allow Brigadier to run this command?"
-        )
-      ) : edits ? (
-        <>
-          Allow {who} to edit{" "}
-          {request.paths.length === 0
-            ? "files"
-            : request.paths.length === 1
-              ? "the following file"
-              : "the following files"}
-          ?
-        </>
-      ) : web ? (
-        <>Allow {who} to connect to the internet?</>
-      ) : (
-        <>
-          Allow {who} to use {request.tool}?
-        </>
-      );
+            : [<Key key="icon" />, "Ask permission"];
+      const fallback = request.command
+        ? "Allow this command?"
+        : edits
+          ? request.paths.length === 1
+            ? "Allow editing this file?"
+            : "Allow editing these files?"
+          : web
+            ? "Allow connecting to the internet?"
+            : `Allow ${request.tool}?`;
+      const cwd = request.cwd && !inSession(request.cwd) ? request.cwd : null;
       return {
         icon,
         kind,
         // The asker's own justification, when it has one; else the plain question.
-        title: request.reason || question,
-        // Who asks and where it runs, quietly under the question.
-        detail:
-          [
-            request.reason && actor ? `Asked by ${actor}` : null,
-            request.escalation ? "Runs outside the sandbox" : null,
-          ]
-            .filter(Boolean)
-            .join(" · ") || undefined,
+        title: request.reason || fallback,
         body: request.command ? (
-          <ActionCardCode>{request.command}</ActionCardCode>
+          <ActionCardCode>
+            {shownCommand(request.command)}
+            {cwd && <span className="text-foreground/35 block">in {cwd}</span>}
+          </ActionCardCode>
         ) : request.paths.length > 0 ? (
           <ActionFileList files={request.paths.map((path) => ({ path }))} />
         ) : (
@@ -345,69 +339,85 @@ function describe(
       return {
         icon: <Terminal />,
         kind: "Terminal",
-        title: actor ? (
-          <>Do you want {actor} to run a command that reaches outside?</>
-        ) : (
-          "Allow Brigadier to run a command that reaches outside?"
-        ),
-        detail: NEVER_PUSHES_NOTE,
-        body: (
-          <ActionCardCode>{subject.argv.map(quote).join(" ")}</ActionCardCode>
-        ),
+        title: "Allow this command? It reaches outside this computer.",
+        body: <ActionCardCode>{shownCommand(subject.argv.map(quote).join(" "))}</ActionCardCode>,
       };
-    case "landing": {
-      const task =
-        landingId === null ? "this task" : <WorkerChip taskId={landingId} />;
+    case "landing":
       return {
         icon: <Commit />,
         kind: "Land a change",
-        title: (
+        title: landingId ? (
           <>
-            Land {task} on {subject.branch}?
+            Land <WorkerChip taskId={landingId} /> on {subject.branch}?
           </>
+        ) : (
+          `Land this change on ${subject.branch}?`
         ),
-        detail: "One reviewed commit",
         body: <ActionFileList files={fileStats(subject.diffStat)} />,
+        allow: "Land",
       };
-    }
     case "finishSession":
       return {
         icon: <Branch />,
-        kind: "Finish session",
-        title: `Merge ${subject.branch} into ${subject.base}?`,
-        detail: `${subject.commits} commit${subject.commits === 1 ? "" : "s"}`,
+        kind: "Merge",
+        title: `Merge ${subject.branch} into ${subject.base}? ${subject.commits} commit${subject.commits === 1 ? "" : "s"}.`,
         body: <ActionFileList files={fileStats(subject.diffStat)} />,
+        allow: "Merge",
       };
     case "action":
       return {
-        icon: <Sparkle />,
-        kind: actor ?? "Action",
+        icon: <Key />,
+        kind: "Ask permission",
         title: subject.action,
-        body: subject.details && (
-          <p className="text-foreground/65 px-4 pb-2 text-sm whitespace-pre-wrap">
-            {subject.details}
-          </p>
-        ),
+        body: subject.details && <CardProse>{subject.details}</CardProse>,
       };
     case "outline":
       return {
         icon: <Sparkle />,
-        kind: actor ?? "Plan",
-        title: "Start this plan?",
-        body: (
-          <p className="text-foreground/65 px-4 pb-2 text-sm whitespace-pre-wrap">
-            {subject.outline}
-          </p>
-        ),
+        kind: "Plan",
+        title: `Start this plan? ${subject.title}`,
+        body: <CardProse>{subject.outline}</CardProse>,
+        allow: "Yes, start it",
       };
   }
 }
 
+/** Whether a folder is the session's own: its repository, or a worker's worktree or scratch folder. */
+function useInSession(conversationId: string | undefined): (path: string) => boolean {
+  const repo = useApp((s) => {
+    const setup = conversationId ? s.conversations[conversationId]?.setup : undefined;
+    return setup?.type === "session" ? setup.repo : null;
+  });
+  const roots = useBoard(
+    useShallow((s) =>
+      Object.values(s.board?.tasks ?? {}).flatMap((task) =>
+        [task.workspace?.worktree, task.workspace?.scratch].filter((root): root is string => !!root),
+      ),
+    ),
+  );
+  return (path) => [repo, ...roots].some((root) => !!root && (path === root || path.startsWith(`${root}/`)));
+}
+
+/** Where a card stands among the approvals waiting: "1 of 3", with ‹ › to step between them. */
+export type ApprovalStep = { index: number; total: number; onStep: (index: number) => void };
+
 /**
- * [Deny `Esc`] [Allow once `⏎`], Allow focused so Enter allows; both keys work from
- * anywhere in the view.
+ * An approval, compact: kind and asker, the reason as the title, the exact command, then
+ * [Deny `Esc`] [Allow once `⏎` ⌄]. Allow takes focus so Enter allows; both keys work from
+ * anywhere in the view. Several waiting step "1 of 3" as each is answered. In the composer's
+ * place, "Reply…" brings the message field back.
  */
-function ApprovalAction({ id, footer }: { id: string; footer: ReactNode }) {
+export function ApprovalAction({
+  id,
+  footer,
+  step,
+  onReply,
+}: {
+  id: string;
+  footer?: ReactNode;
+  step?: ApprovalStep;
+  onReply?: () => void;
+}) {
   const approval = useBoard((s) => s.board?.approvals[id]);
   const actorId = useBoard((s) =>
     approval?.taskId && s.board?.tasks[approval.taskId]
@@ -420,6 +430,7 @@ function ApprovalAction({ id, footer }: { id: string; footer: ReactNode }) {
       ? approval.subject.taskId
       : null,
   );
+  const inSession = useInSession(approval?.conversationId);
   const action = useAction();
   const allow = useRef<HTMLButtonElement>(null);
   // Unless the user is typing somewhere, Allow takes focus.
@@ -441,34 +452,50 @@ function ApprovalAction({ id, footer }: { id: string; footer: ReactNode }) {
   });
   if (!approval) return null;
 
-  const shown = describe(approval, actorId, landingId);
+  const shown = describe(approval, landingId, inSession);
   const request =
     approval.subject.type === "cli" ? approval.subject.request : null;
   const grant = request?.grant ?? null;
   const allowLabel = (
     <>
-      <span className="truncate">Allow once</span>
+      <span className="truncate">{shown.allow ?? "Allow once"}</span>
       <ActionKbd variant="primary">⏎</ActionKbd>
     </>
   );
   return (
     <ActionCard aria-label="Approval" data-action="approval">
-      <ActionCardHeader
-        icon={shown.icon}
-        kind={shown.kind}
-        title={shown.title}
-        detail={shown.detail}
-      >
-        {shown.note}
-      </ActionCardHeader>
+      <div className="flex min-w-0 flex-col gap-2 px-4 pt-3.5 pb-2.5">
+        <div className="text-foreground/65 text-code flex min-w-0 items-center gap-2 leading-5 [&_svg]:size-4.5 [&_svg]:shrink-0">
+          {shown.icon}
+          <span className="shrink-0">{shown.kind}</span>
+          {actorId !== null && <WorkerChip taskId={actorId} className="min-w-0" />}
+          {step && step.total > 1 && <StepCounter step={step} />}
+        </div>
+        <div role="alert" aria-atomic="true">
+          <ActionCardTitle>{shown.title}</ActionCardTitle>
+        </div>
+      </div>
       {shown.body}
       <ActionCardActions
         leading={
-          action.error && (
-            <span role="alert" className="text-destructive me-auto text-xs">
-              {action.error}
-            </span>
-          )
+          <>
+            {onReply && (
+              <button
+                type="button"
+                data-slot="approval-reply"
+                className="text-foreground/55 hover:text-foreground hover:bg-foreground/8 focus-visible:ring-ring text-code rounded-capsule h-control-sm inline-flex shrink-0 items-center gap-1.5 px-2 outline-none transition-colors focus-visible:ring-2"
+                onClick={onReply}
+              >
+                <Reply className="size-icon-sm" />
+                Reply…
+              </button>
+            )}
+            {action.error && (
+              <span role="alert" className="text-destructive me-auto text-xs">
+                {action.error}
+              </span>
+            )}
+          </>
         }
       >
         <button
@@ -522,6 +549,50 @@ function ApprovalAction({ id, footer }: { id: string; footer: ReactNode }) {
       </ActionCardActions>
       {footer}
     </ActionCard>
+  );
+}
+
+/** "‹ 1 of 3 ›" at the end of an approval's header. */
+function StepCounter({ step }: { step: ApprovalStep }) {
+  const { index, total, onStep } = step;
+  const arrow =
+    "text-foreground/50 hover:text-foreground hover:bg-foreground/8 focus-visible:ring-ring rounded-capsule size-control-xs flex items-center justify-center outline-none transition-colors focus-visible:ring-2 disabled:opacity-30 [&_svg]:size-icon-xs";
+  return (
+    <span data-slot="approval-step" className="ms-auto flex shrink-0 items-center gap-0.5 tabular-nums">
+      <button type="button" aria-label="Previous request" className={arrow} disabled={index === 0} onClick={() => onStep(index - 1)}>
+        <ChevronLeft />
+      </button>
+      <span>
+        {index + 1} of {total}
+      </span>
+      <button type="button" aria-label="Next request" className={arrow} disabled={index >= total - 1} onClick={() => onStep(index + 1)}>
+        <ChevronRight />
+      </button>
+    </span>
+  );
+}
+
+/**
+ * The approvals waiting, one at a time in the composer's place, as the composer card: answering
+ * one shows the next. "Reply…" brings the composer back with the card above it.
+ */
+export function ApprovalSlot({ ids, onReply }: { ids: readonly string[]; onReply: () => void }) {
+  const [index, setIndex] = useState(0);
+  const at = Math.min(index, ids.length - 1);
+  const id = ids[at];
+  if (id === undefined) return null;
+  return (
+    <div
+      data-slot="approval-slot"
+      className="bg-composer rounded-composer shadow-hairline animate-rail-open relative w-full backdrop-blur-lg motion-reduce:animate-none"
+    >
+      <ApprovalAction
+        key={id}
+        id={id}
+        step={{ index: at, total: ids.length, onStep: setIndex }}
+        onReply={onReply}
+      />
+    </div>
   );
 }
 
