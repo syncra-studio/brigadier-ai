@@ -175,6 +175,8 @@ const ON_TASK_ROW: ReadonlySet<OrchestratorStepKind["type"]> = new Set(["accepte
 
 /** Whether a decision is a judgement call the thread shows, rather than a task's, plan's or phase's routine outcome. */
 export function judgementCall(decision: Decision): boolean {
+  // An answer to a worker shows as its "Answered …" line.
+  if (decision.kind === "answer") return false;
   if (decision.source.type === "orchestrator") return true;
   // A phase's outcome ("Verified phase 1 “Measure”") is said by the phase's header already.
   return decision.source.type === "run" && decision.kind !== "phaseOutcome";
@@ -185,25 +187,12 @@ export function isRunRequest(requestId: string | null): boolean {
   return requestId?.startsWith("run-") ?? false;
 }
 
-function keepApproval(approval: Approval): boolean {
-  switch (approval.state.type) {
-    case "pending":
-      return true;
-    case "allowed":
-    case "denied":
-      return approval.state.by === "user";
-    case "expired":
-      return false;
-  }
-}
-
 function keepPlan(plan: Plan): boolean {
   switch (plan.state.type) {
     case "proposed":
     case "rejected":
       return true;
     case "approved":
-      return plan.state.by === "user";
     case "superseded":
       return false;
   }
@@ -357,14 +346,7 @@ export function buildBlocks(
       atMs: compaction.startedAtMs,
     });
   }
-  for (const approval of Object.values(board.approvals)) {
-    placed.push({
-      kind: "card",
-      position: approval.position,
-      requestId: approval.requestId,
-      card: { type: "approval", id: approval.id, position: approval.position, keep: keepApproval(approval) },
-    });
-  }
+  // Approvals wait in the composer's place and leave nothing in the thread once answered.
   for (const question of Object.values(board.questions)) {
     placed.push({
       kind: "card",
@@ -374,8 +356,10 @@ export function buildBlocks(
     });
   }
   for (const plan of Object.values(board.plans)) {
-    // A superseded plan no longer shows in the thread.
-    if (plan.state.type === "superseded") continue;
+    // A session's plan at work lives in the side panel and the composer's phase pill; only one
+    // that waits on a decision shows in the thread. A superseded plan no longer shows; an
+    // overnight phase keeps its plan's row.
+    if (plan.state.type === "superseded" || (!isRunRequest(plan.requestId) && !keepPlan(plan))) continue;
     placed.push({
       kind: "card",
       position: plan.position,

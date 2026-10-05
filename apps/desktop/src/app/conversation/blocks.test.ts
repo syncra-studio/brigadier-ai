@@ -200,7 +200,7 @@ function normalSession() {
   return { block, normalTasks, held };
 }
 
-test("a normal session's request reads the same way: one row per task, its checks and plans folded in", () => {
+test("a normal session's request reads the same way: one row per task, its checks folded in, its plans out of the thread", () => {
   const { block, normalTasks, held } = normalSession();
   const rows = block.rows.flatMap((row) => (row.type === "task" ? [row.taskId] : []));
   // Each worker once; none of its checkers.
@@ -208,10 +208,10 @@ test("a normal session's request reads the same way: one row per task, its check
     rows.map((id) => normalTasks[id]?.number),
     [26, 32, 37, 41],
   );
-  // The revised plan once, as its newest revision, and the separate plan beside it.
+  // Approved plans at work show in the side panel and the phase pill, not in the thread.
   assert.deepEqual(
     block.cards.filter((card) => card.type === "plan").map((card) => card.id),
-    ["01a0ff89-d905-7753-bb7f-b310c324a8f6", "separate"],
+    [],
   );
   // A task held for the user says so on its row, and its checks still open from it.
   const task = normalTasks[held]!;

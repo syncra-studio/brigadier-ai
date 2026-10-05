@@ -1,5 +1,5 @@
 import { taskWaitWords } from "@/app/conversation/taskActivity";
-import type { Decision, DecisionWords, Gate, GateOwner, GateRole, MachineStepKind, Task } from "@/ipc/generated";
+import type { Decision, DecisionWords, Gate, GateOwner, GateRole, MachineStepKind, Task, WorkerRole } from "@/ipc/generated";
 
 /**
  * The words of a worker's row in the thread ("Router: quota penalty · Landed · checked by
@@ -160,12 +160,34 @@ export function taskDecisions(decisions: readonly Decision[], taskId: string): D
   return decisions.filter((decision) => decision.source.type === "task" && decision.source.taskId === taskId);
 }
 
+/** A worker's part in a request's flow, as its name says it. */
+const WORKER_ROLES: Record<WorkerRole, string> = {
+  lead: "Lead",
+  parallel: "Worker",
+  verifier: "Verifier",
+  fix: "Fix",
+  merge: "Merge",
+};
+
+/**
+ * A worker of a request's flow named by its part and phase: "Lead · Phase 1", "Verifier ·
+ * Phase 2", "Lead" for a request without phases. A parallel worker keeps its title, as
+ * several share a phase.
+ */
+function roleName(task: Task): string | null {
+  if (!task.role) return null;
+  const part = task.role === "parallel" ? task.title : WORKER_ROLES[task.role];
+  return task.phase === null ? part : `${part} · Phase ${task.phase}`;
+}
+
 /**
  * What a worker is called wherever the user reads it: its title, or for a check of another
  * worker "Review of", "Second review of" or "Check of" and that worker's name. Its `task-N`
  * stays in records and prompts only; a title that names one gets the worker's name instead.
  */
 export function workerName(tasks: Readonly<Record<string, Task>>, task: Task, depth = 0): string {
+  const role = roleName(task);
+  if (role) return role;
   const subject = task.subject ? tasks[task.subject] : undefined;
   if (subject && depth < 2) {
     const of = workerName(tasks, subject, depth + 1);

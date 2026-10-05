@@ -124,12 +124,12 @@ test("worker activity renders in the thread and expanded background strip", { ti
         assert.doesNotMatch(rows[id]!.text, /Working/);
       }
     }
-    assert.equal(rendering.thread.blocked?.state, "Waiting for a free worker");
-    assert.equal(rendering.thread.quota?.state, "Waiting for Codex quota");
-    assert.equal(rendering.thread.queued?.state, "Queued");
+    assert.equal(rendering.thread.blocked?.state, "is waiting");
+    assert.equal(rendering.thread.quota?.state, "is waiting for quota");
+    assert.equal(rendering.thread.queued?.state, "is queued");
   });
   await t.test("completed rows render no activity subrow", () => {
-    assert.match(rendering.thread.completed!.text, /Done/);
+    assert.match(rendering.thread.completed!.text, /finished/);
     assert.deepEqual(rendering.thread.completed?.lines, []);
     assert.equal(rendering.thread.completed?.subrows, 0);
     assert.equal(rendering.strip.completed, undefined);

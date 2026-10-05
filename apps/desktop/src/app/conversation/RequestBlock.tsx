@@ -2,6 +2,7 @@ import {
   ActionBarPrimitive,
   MessagePrimitive,
   type TextMessagePartProps,
+  useAui,
   useAuiState,
 } from "@assistant-ui/react";
 import {
@@ -20,7 +21,7 @@ import { useShallow } from "zustand/react/shallow";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { InlineImageText } from "@/app/conversation/InlineImage";
 import { MentionText } from "@/app/conversation/Mentions";
-import { OrchestratorSteps, STEP_ROW } from "@/app/conversation/OrchestratorSteps";
+import { OrchestratorSteps, STEP_ROW, WorkGroup } from "@/app/conversation/OrchestratorSteps";
 import {
   type BlockCard,
   type BlockCompaction,
@@ -31,20 +32,18 @@ import {
   isFinal,
   isLive,
   isRunRequest,
-  isWorking,
   type SequenceEntry as Entry,
 } from "@/app/conversation/blocks";
 import { type PhaseView, phaseViewOf, splitReport } from "@/app/conversation/phaseView";
-import { activelyWorking } from "@/app/conversation/taskActivity";
 import { PhaseChecksRow, TaskRow } from "@/app/conversation/TaskRow";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
 import { useViewConversation } from "@/app/conversation/viewContext";
-import { WorkerMention } from "@/app/conversation/WorkerChip";
+import { WorkerLine } from "@/app/conversation/WorkerChip";
+import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import {
   BranchPicker,
   MarkdownBlock,
-  MessageError,
   MessageText,
   StreamingMessageText,
 } from "@/components/assistant-ui/thread";
@@ -346,58 +345,120 @@ const SteerBubble: FC<{ text: string; atMs: number; attachments: readonly Attach
 };
 
 /**
- * The last line of a working block: what happens right now ("Thinking", "Delegating…"), or
- * the worker it waits for ("Waiting for [Add tests]").
+ * The last line of a working block while the orchestrator itself works: what happens right now
+ * ("Thinking", "Delegating…"). Workers show on their own rows.
  */
 const ActivityRow: FC<{ requestIds: string[] }> = ({ requestIds }) => {
-  const { label, worker, activeWork } = useBoard(
-    useShallow((s): { label: string | null; worker: string | null; activeWork: boolean } => {
-      const board = s.board;
-      if (!board) return { label: null, worker: null, activeWork: false };
-      const turn =
-        board.runRequest !== null &&
-        requestIds.includes(board.runRequest) &&
-        (board.run === "running" || board.run === "starting");
-      if (turn) {
-        // Streaming text shows itself.
-        const doing = board.doing || (board.streaming?.text ? null : "Thinking");
-        return { label: doing, worker: null, activeWork: true };
-      }
-      const working = Object.values(board.tasks)
-        .filter((task) =>
-          task.requestId !== null && requestIds.includes(task.requestId) &&
-          (isWorking(task) || task.state === "paused"),
-        )
-        .toSorted((a, b) => a.number - b.number);
-      const [first] = working;
-      if (working.length === 1 && first) {
-        return {
-          label: "Waiting for",
-          worker: first.id,
-          activeWork: activelyWorking({ task: first, activity: board.activity[first.id] }),
-        };
-      }
-      return {
-        label: working.length > 1 ? `Waiting for ${working.length} workers` : null,
-        worker: null,
-        activeWork: working.some((task) => activelyWorking({ task, activity: board.activity[task.id] })),
-      };
-    }),
-  );
+  const label = useBoard((s) => {
+    const board = s.board;
+    if (!board) return null;
+    const turn =
+      board.runRequest !== null &&
+      requestIds.includes(board.runRequest) &&
+      (board.run === "running" || board.run === "starting");
+    // Streaming text shows itself.
+    return turn ? board.doing || (board.streaming?.text ? null : "Thinking") : null;
+  });
   if (!label) return null;
-  if (worker) {
-    return (
-      <div data-slot="request-activity" className="flex min-w-0 items-center gap-1.5 text-sm">
-        <span className={cn("shrink-0", activeWork && "shimmer")}>{label}</span>
-        <WorkerMention taskId={worker} />
-      </div>
-    );
-  }
   return (
     // As wide as its words, so the sweep crosses them rather than the whole row.
-    <div data-slot="request-activity" className={cn("w-fit max-w-full truncate text-sm", activeWork && "shimmer")}>
+    <div data-slot="request-activity" className="shimmer w-fit max-w-full truncate text-sm">
       {label}
     </div>
+  );
+};
+
+/**
+ * What only the user can do for this request, as a short list at the end of its answer. Each is
+ * marked done from the side panel's "Waiting on you".
+ */
+const WaitingOnYou: FC<{ requestIds: string[] }> = ({ requestIds }) => {
+  const items = useBoard(
+    useShallow((s) =>
+      Object.values(s.board?.waiting ?? {})
+        .filter((item) => item.requestId !== null && requestIds.includes(item.requestId))
+        .toSorted((a, b) => a.createdAtMs - b.createdAtMs)
+        .map((item) => item.what),
+    ),
+  );
+  if (items.length === 0) return null;
+  return (
+    <div data-slot="answer-waiting" className="flex flex-col gap-1 text-sm">
+      <p className="text-foreground font-medium">Waiting on you</p>
+      <ul className="text-foreground/80 flex list-disc flex-col gap-0.5 ps-5">
+        {items.map((what) => (
+          <li key={what} className="wrap-break-word">
+            <WorkerLine text={what} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+};
+
+/** One line or a run of lines of folded work. */
+type FoldItem = { kind: "entry"; entry: Entry } | { kind: "group"; key: string; entries: Entry[] };
+
+/** Lines of work (steps, workers) that fold into one summing-up line when they run together. */
+function isWorkLine(entry: Entry): boolean {
+  return entry.kind === "orchestrator" || entry.kind === "row";
+}
+
+/**
+ * A finished turn's work, its runs of grey lines each folded into one that sums them up ("Created
+ * a worker, answered a worker"): the second level of "Worked for …", whose lines open in turn.
+ */
+function foldWork(entries: readonly Entry[]): FoldItem[] {
+  const items: FoldItem[] = [];
+  for (const entry of entries) {
+    const last = items.at(-1);
+    if (isWorkLine(entry) && last?.kind === "group") last.entries.push(entry);
+    else if (isWorkLine(entry)) items.push({ kind: "group", key: entryKey(entry), entries: [entry] });
+    else items.push({ kind: "entry", entry });
+  }
+  return items;
+}
+
+/** What a run of work lines did, kind by kind; a worker its run created counts once. */
+function workKinds(entries: readonly Entry[]): Parameters<typeof WorkGroup>[0]["kinds"] {
+  const created = new Set(
+    entries.flatMap((entry) =>
+      entry.kind === "orchestrator"
+        ? entry.steps.flatMap((step) => (step.kind.type === "created" ? [step.kind.taskId] : []))
+        : [],
+    ),
+  );
+  return entries.flatMap((entry) => {
+    if (entry.kind === "orchestrator") return entry.steps.map((step) => step.kind.type);
+    if (entry.kind === "row" && entry.row.type === "task" && created.has(entry.row.taskId)) return [];
+    return ["worker" as const];
+  });
+}
+
+const FoldedWork: FC<{ item: FoldItem }> = ({ item }) => {
+  if (item.kind === "entry") return <SequenceEntry entry={item.entry} streaming={false} />;
+  const [only] = item.entries;
+  const lines = item.entries.map((entry) => <SequenceEntry key={entryKey(entry)} entry={entry} streaming={false} />);
+  if (item.entries.length === 1 && only && (only.kind !== "orchestrator" || only.steps.length === 1)) return lines;
+  return <WorkGroup kinds={workKinds(item.entries)}>{lines}</WorkGroup>;
+};
+
+/** The block's error: what went wrong in full, and Try again where a Chat can answer again. */
+const BlockError: FC<{ retry: boolean }> = ({ retry }) => {
+  const error = useAuiState((s) => {
+    const status = s.message.status;
+    return status?.type === "incomplete" && status.reason === "error"
+      ? String(status.error ?? "The reply failed.")
+      : null;
+  });
+  const aui = useAui();
+  if (error === null) return null;
+  return (
+    <ErrorState
+      title="Something went wrong"
+      detail={error}
+      onRetry={retry ? () => aui.message().reload() : undefined}
+    />
   );
 };
 
@@ -514,8 +575,8 @@ export const RequestBlock: FC = () => {
             >
               {/* min-w-0: a long unbroken line (a branch in code) wraps instead of widening the fold. */}
               <div className={cn("flex min-h-0 min-w-0 flex-col gap-3", fold.state !== "open" && "overflow-hidden")}>
-                {folded.map((entry) => (
-                  <SequenceEntry key={entryKey(entry)} entry={entry} streaming={false} />
+                {foldWork(folded).map((item) => (
+                  <FoldedWork key={item.kind === "group" ? `group:${item.key}` : entryKey(item.entry)} item={item} />
                 ))}
               </div>
             </div>
@@ -546,6 +607,7 @@ export const RequestBlock: FC = () => {
               <ReplyText index={answer} streaming={answering} report={report && !answering} />
             </div>
           )}
+          {!answering && <WaitingOnYou requestIds={meta.requestIds} />}
         </>
       ) : (
         <div data-slot="request-work" data-follow-content className="flex flex-col gap-3">
@@ -565,7 +627,7 @@ export const RequestBlock: FC = () => {
       {/* A run's work is merged from its card, never undone behind the run's back. */}
       {!live && meta.session && !isRunRequest(meta.requestId) && <TurnDiff requestId={meta.requestId} />}
       {!meta.session && <TurnMemories requestIds={meta.requestIds} />}
-      <MessageError />
+      <BlockError retry={!meta.session && meta.rework} />
       {!live && last >= 0 && !phase && (
         <AnswerActions
           session={meta.session}

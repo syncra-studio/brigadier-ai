@@ -2,35 +2,25 @@ import { ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, memo, useContext } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { isWorking } from "@/app/conversation/blocks";
+import { isFinal, isWorking } from "@/app/conversation/blocks";
 import { STEP_ROW } from "@/app/conversation/OrchestratorSteps";
 import {
   checkersOf,
   checkResult,
   checkRounds,
   checksCount,
-  decisionWords,
   ownerKey,
   ROLE_LABELS,
   type RowState,
-  taskDecisions,
-  taskRowDetail,
-  taskState,
 } from "@/app/conversation/rowWords";
-import { taskActivityLines } from "@/app/conversation/taskActivity";
 import { TaskActivity } from "@/app/conversation/WorkerActivity";
-import { AgentsPanelContext, useWorkerName, WorkerChip, WorkerGlyph, WorkerLine } from "@/app/conversation/WorkerChip";
+import { AgentsPanelContext, useWorkerName, WorkerChip, WorkerGlyph } from "@/app/conversation/WorkerChip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { Gate, PhaseState, Task } from "@/ipc/generated";
+import { useNow } from "@/hooks/use-now";
+import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { type Board, useBoard } from "@/state/board";
-
-/**
- * A worker's one row in the thread, updated in place as it works and lands:
- * "[◆ Add tests] · Landed" (an older task adds "· checked by 1 review + 1 verify"). Its name opens the worker;
- * the chevron opens its checks round by round (each checker opens too) and what was decided
- * about it.
- */
 
 const TONES: Record<RowState["tone"], string> = {
   live: "shimmer",
@@ -47,7 +37,7 @@ function useCheckerIds(owners: readonly string[]): string[] {
   );
 }
 
-/** The chevron that opens a row's checks. */
+/** The chevron that opens a phase's checks. */
 const Opener: FC<{ label: string }> = ({ label }) => (
   <CollapsibleTrigger
     aria-label={label}
@@ -96,87 +86,77 @@ export function ChecksList({
   );
 }
 
-/** What was decided about a task, each with why, oldest first. */
-const TaskDecisions: FC<{ taskId: string }> = ({ taskId }) => {
-  const decisions = useBoard(useShallow((s) => taskDecisions(s.board?.decisions ?? [], taskId)));
-  if (decisions.length === 0) return null;
-  return (
-    <ul className="flex flex-col gap-1">
-      {decisions.map((decision) => {
-        const { what, why } = decisionWords(decision);
-        return (
-          <li key={decision.id} className="flex flex-col">
-            <span className="text-foreground/80 wrap-break-word"><WorkerLine text={what} /></span>
-            {why && <span className="wrap-break-word"><WorkerLine text={why} /></span>}
-          </li>
-        );
-      })}
-    </ul>
-  );
-};
-
-/** What a task's row says, as primitives, so the row re-renders only when its words change. */
-function rowFacts(board: Board | null | undefined, taskId: string): { word: string | null; tone: RowState["tone"]; detail: string } {
-  const task = board?.tasks[taskId];
-  if (!board || !task) return { word: null, tone: "quiet", detail: "" };
-  const state = taskState(task);
-  const source = (id: string) => ({ task: board.tasks[id], activity: board.activity[id] });
-  const activity = taskActivityLines(source(taskId), 0);
-  const tone = state.tone === "live" && !activity.firstWorking && !activity.secondWorking ? "quiet" : state.tone;
-  const word = (task.state === "running" || task.state === "starting") && /^Waiting\b/i.test(board.activity[taskId] ?? "")
-    ? board.activity[taskId]!
-    : state.word;
-  return { word, tone, detail: taskRowDetail(checkersOf(board.tasks, [`task:${taskId}`])) };
+/** How a worker's row says where it is: "started working", "finished", "failed". */
+export function lifecycleWords(task: Task): RowState {
+  switch (task.state) {
+    case "queued":
+    case "blocked":
+    case "paused":
+      if (task.quotaWait) return { word: "is waiting for quota", tone: "quiet" };
+      return { word: task.state === "queued" ? "is queued" : task.state === "paused" ? "is paused" : "is waiting", tone: "quiet" };
+    case "starting":
+      return { word: "is starting", tone: "live" };
+    case "running":
+      return { word: "started working", tone: "live" };
+    case "reported":
+    case "landing":
+    case "readyToLand":
+    case "landed":
+    case "done":
+      return { word: "finished", tone: "done" };
+    case "rejected":
+      return { word: "was turned down", tone: "quiet" };
+    case "stopped":
+      return { word: "was stopped", tone: "warning" };
+    case "failed":
+      return { word: "failed", tone: "failed" };
+  }
 }
 
+/** What a task's row says, as primitives, so the row re-renders only when its words change. */
+function rowFacts(board: Board | null | undefined, taskId: string): { word: string | null; tone: RowState["tone"]; final: boolean; from: number; to: number } {
+  const task = board?.tasks[taskId];
+  if (!board || !task) return { word: null, tone: "quiet", final: false, from: 0, to: 0 };
+  const { word, tone } = lifecycleWords(task);
+  return { word, tone, final: isFinal(task), from: task.createdAtMs, to: task.updatedAtMs };
+}
+
+/**
+ * A worker's one row in the thread, updated in place as it works: "Lead · Phase 1 started
+ * working" with what it does right now under it, then "Lead · Phase 1 finished · 4m 12s". The
+ * row opens the worker's own thread.
+ */
 export const TaskRow = memo(function TaskRow({ taskId }: { taskId: string }) {
   const { setPanel } = useContext(AgentsPanelContext);
   const name = useWorkerName(taskId);
-  const { word, tone, detail } = useBoard(useShallow((s) => rowFacts(s.board, taskId)));
-  const working = tone === "live";
-  const checkerIds = useCheckerIds([`task:${taskId}`]);
-  const decided = useBoard((s) => (s.board ? taskDecisions(s.board.decisions, taskId).length : 0));
+  const { word, tone, final, from, to } = useBoard(useShallow((s) => rowFacts(s.board, taskId)));
+  const live = tone === "live";
+  const now = useNow(final ? null : 1000);
   if (name === null || word === null) return null;
-  const opens = checkerIds.length > 0 || decided > 0;
-  const line = (
-    <div className="min-w-0">
-      <div data-slot="task-row" className={STEP_ROW}>
-        <button
-          type="button"
-          onClick={() => setPanel(taskId)}
-          title={name}
-          className="hover:text-foreground focus-visible:ring-ring/50 rounded-control flex min-w-0 items-center gap-1.5 outline-none focus-visible:ring-1"
-        >
-          <WorkerGlyph taskId={taskId} working={working} className="size-icon-sm shrink-0" />
-          <span className="text-foreground/90 min-w-0 truncate">{name}</span>
-        </button>
-        {/* Capped so a narrow thread truncates the detail, never the task's title. */}
-        <span className="flex max-w-3/5 min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap">
-          <span aria-hidden>·</span>
-          <span aria-live="polite" className={cn("min-w-0 truncate", TONES[tone])}>{word}</span>
-          {detail && (
-            <>
-              <span aria-hidden>·</span>
-              <span className="min-w-0 truncate" title={detail}>
-                {detail}
-              </span>
-            </>
-          )}
-        </span>
-        {opens && <Opener label={`Show the checks of ${name}`} />}
-      </div>
-      <TaskActivity taskId={taskId} className="ps-6 pb-1" />
-    </div>
-  );
-  if (!opens) return line;
+  const elapsed = formatDuration(Math.max(0, (final ? to : now) - from));
   return (
-    <Collapsible data-slot="task-row-group">
-      {line}
-      <CollapsibleContent className="text-muted-foreground flex flex-col gap-2 ps-6 pt-1 pb-1 text-sm">
-        <ChecksList checkerIds={checkerIds} gates={{}} />
-        <TaskDecisions taskId={taskId} />
-      </CollapsibleContent>
-    </Collapsible>
+    <div className="min-w-0">
+      <button
+        type="button"
+        data-slot="task-row"
+        onClick={() => setPanel(taskId)}
+        aria-label={`Open ${name}`}
+        title={name}
+        className={cn(STEP_ROW, "group hover:text-foreground focus-visible:ring-ring/50 rounded-control w-full text-start outline-none focus-visible:ring-1")}
+      >
+        <WorkerGlyph taskId={taskId} working={live} className="size-icon-sm shrink-0" />
+        <span className="min-w-0 truncate">
+          <span className="text-foreground/90">{name}</span>{" "}
+          <span aria-live="polite" className={TONES[tone]}>{word}</span>
+        </span>
+        <span className="shrink-0 tabular-nums">· {elapsed}</span>
+        <ChevronRight
+          aria-hidden
+          className="size-icon-xs shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+        />
+      </button>
+      {!final && <TaskActivity taskId={taskId} className="ps-6 pb-1" />}
+    </div>
   );
 });
 
