@@ -299,7 +299,14 @@ impl SessionManager {
                 && task.kind.writes()
                 && !relanding_pending(task)
         }) {
-            if !self.changed_nothing(task).await {
+            // A task that changed nothing ends meanwhile, and its worktree goes after it is
+            // recorded as ended: one whose diff is gone is undecided only if still reported.
+            if !self.changed_nothing(task).await
+                && self
+                    .task_by_id(&task.conversation_id, &task.id)
+                    .await
+                    .is_ok_and(|now| now.state == TaskState::Reported)
+            {
                 undecided.push(task.clone());
             }
         }

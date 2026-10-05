@@ -277,7 +277,14 @@ async fn an_outline_gets_one_review_from_the_other_vendor_and_a_go_ahead() {
     )
     .await;
     flow.say("Rework the parser.").await;
-    let board = flow.settled().await;
+    flow.settled().await;
+    // The lead, which changed nothing, ends once its turn is over: that may come after the
+    // orchestrator's final answer.
+    let board = flow
+        .until("every task to end", |board| {
+            board.tasks.values().all(|task| task.state.is_final())
+        })
+        .await;
     let lead = Flow::task(&board, 1);
     let reviewer = Flow::task(&board, 2);
     assert_eq!(board.tasks.len(), 2, "one lead and one reviewer");
