@@ -23,7 +23,6 @@ export type OvernightDetails = {
     Record<
       string,
       {
-        fixRound?: 1 | 2;
         quota?: { provider: string; resetsAtMs: number };
         workerTaskIds?: readonly TaskId[];
         criteria?: Readonly<Record<string, "verified" | "partial" | "blocked">>;
@@ -92,7 +91,6 @@ export function projectOvernight(run: OvernightRun, board: Board, report?: strin
     const quotaTask = tasks.filter((task) => task.quotaWait?.resetsAtMs != null)
       .toSorted((a, b) => a.quotaWait!.resetsAtMs! - b.quotaWait!.resetsAtMs!)[0];
     return [phase.id, {
-      ...(phase.fixRounds > 0 && phase.state === "running" ? { fixRound: Math.min(2, phase.fixRounds) as 1 | 2 } : {}),
       ...(quotaTask ? { quota: {
         provider: quotaTask.route.choice.provider === "claude" ? "Claude" : "Codex",
         resetsAtMs: quotaTask.quotaWait!.resetsAtMs!,

@@ -1,5 +1,5 @@
 import { taskWaitWords } from "@/app/conversation/taskActivity";
-import type { Decision, DecisionWords, Gate, GateOwner, GateRole, MachineStepKind, Task, WorkerRole } from "@/ipc/generated";
+import type { Decision, DecisionWords, GateOwner, GateRole, MachineStepKind, Task, WorkerRole } from "@/ipc/generated";
 
 /**
  * The words of a worker's row in the thread ("Router: quota penalty · Landed · checked by
@@ -96,24 +96,8 @@ export function taskRowDetail(checkers: readonly Task[]): string {
   return counted && `checked by ${counted}`;
 }
 
-/** What a checker came to: from its round on the owner while the owner keeps it, else from its report. */
-export function checkResult(checker: Task, gate: Gate | null): string {
-  const member =
-    gate && checker.gateLink && gate.round === checker.gateLink.round
-      ? gate.members.find((candidate) => candidate.taskId === checker.id)
-      : undefined;
-  switch (member?.result?.type) {
-    case "passed":
-      return "passed";
-    case "failed":
-      return "found problems";
-    case "unverified":
-      return "couldn’t verify";
-    case "noResult":
-      return "no result";
-    default:
-      break;
-  }
+/** What an older task's checker came to, from its report. */
+export function checkResult(checker: Task): string {
   if (checker.state === "stopped") return "stopped";
   if (checker.state === "failed") return "failed";
   const report = checker.report;

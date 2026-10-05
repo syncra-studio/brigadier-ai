@@ -35,7 +35,7 @@ import {
   type SequenceEntry as Entry,
 } from "@/app/conversation/blocks";
 import { type PhaseView, phaseViewOf, splitReport } from "@/app/conversation/phaseView";
-import { PhaseChecksRow, TaskRow } from "@/app/conversation/TaskRow";
+import { TaskRow } from "@/app/conversation/TaskRow";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
 import { useViewConversation } from "@/app/conversation/viewContext";
@@ -206,7 +206,7 @@ function entryKey(entry: Entry): string {
     case "compaction":
       return `compaction:${entry.compaction.id}`;
     case "row":
-      return entry.row.type === "task" ? `task:${entry.row.taskId}` : `checks:${entry.row.phaseId}`;
+      return `task:${entry.row.taskId}`;
   }
 }
 
@@ -268,11 +268,7 @@ const SequenceEntry: FC<{ entry: Entry; streaming: boolean }> = ({ entry, stream
     case "compaction":
       return <CompactionRow compaction={entry.compaction} />;
     case "row":
-      return entry.row.type === "task" ? (
-        <TaskRow taskId={entry.row.taskId} />
-      ) : (
-        <PhaseChecksRow runId={entry.row.runId} phaseId={entry.row.phaseId} />
-      );
+      return <TaskRow taskId={entry.row.taskId} />;
   }
 };
 
@@ -430,7 +426,7 @@ function workKinds(entries: readonly Entry[]): Parameters<typeof WorkGroup>[0]["
   );
   return entries.flatMap((entry) => {
     if (entry.kind === "orchestrator") return entry.steps.map((step) => step.kind.type);
-    if (entry.kind === "row" && entry.row.type === "task" && created.has(entry.row.taskId)) return [];
+    if (entry.kind === "row" && created.has(entry.row.taskId)) return [];
     return ["worker" as const];
   });
 }

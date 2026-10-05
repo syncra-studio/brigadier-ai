@@ -237,12 +237,9 @@ const proposed: OvernightRun = {
     requestId: null,
     startCommit: null,
     verifiedCommit: null,
-    gate: null,
-    fixRounds: 0,
     criteria: [],
     gaps: [],
     summary: null,
-    responses: [],
     lead: null,
     nudges: 0,
     startedAtMs: null,
@@ -370,24 +367,6 @@ const overnight: { label: string; model: OvernightCardModel }[] = [
   {
     label: "Running · lead working",
     model: variant("running", "running", { "phase-5": { workerTaskIds: ["worker-phase-5"] } }),
-  },
-  {
-    label: "Running · checking",
-    model: {
-      ...variant("checking", "phaseGate"),
-      run: {
-        ...variant("checking", "phaseGate").run,
-        phases: proposed.phases.slice(0, 2).map((phase) => ({ ...phase, state: "checking" })),
-      },
-    },
-  },
-  {
-    label: "Running · fixing 1/2",
-    model: variant("fixing-1", "running", { "phase-5": { fixRound: 1 } }),
-  },
-  {
-    label: "Running · fixing 2/2",
-    model: variant("fixing-2", "running", { "phase-5": { fixRound: 2 } }),
   },
   {
     label: "Waiting for limits",

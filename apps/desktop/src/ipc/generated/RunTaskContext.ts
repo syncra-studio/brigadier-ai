@@ -18,8 +18,4 @@ generation: number, role: RunRole,
 /**
  * The run's Rules as the task was briefed (a hash of the text).
  */
-rulesHash: string, 
-/**
- * The phase candidate a whole-phase check works on (its checkout is at this commit).
- */
-candidate: string | null, };
+rulesHash: string, };

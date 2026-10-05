@@ -47,13 +47,11 @@ export type BlockText = {
 };
 
 /**
- * A row of a block's work that updates in place: a worker's task, with its checks, fixes and
- * landing folded into it, or the whole-phase checks of an overnight phase. Checkers never get a
- * row of their own; they open from the row of what they check.
+ * A row of a block's work that updates in place: a worker's task, with its landing folded into
+ * it. An older task's checks open from its row; an older overnight phase's checks are workers
+ * like any other.
  */
-export type BlockRow =
-  | { type: "task"; taskId: string; position: number }
-  | { type: "phaseChecks"; runId: string; phaseId: string; position: number };
+export type BlockRow = { type: "task"; taskId: string; position: number };
 
 /**
  * A judgement call made on the user's behalf, shown as a quiet row among the orchestrator's.
@@ -252,8 +250,6 @@ export function buildBlocks(
     message,
     text: fullText[message.id] ?? message.text,
   }));
-  // A whole phase's checks share one row, where the first of them started.
-  const phaseChecks = new Map<string, Task>();
   for (const task of Object.values(board.tasks)) {
     placed.push({ kind: "task", position: task.position, requestId: task.requestId, id: task.id });
     // Each worker is one row; one that failed or waits for the user shows its card too.
@@ -265,8 +261,8 @@ export function buildBlocks(
         card: { type: "task", id: task.id, position: task.position, keep: true },
       });
     }
-    const owner = task.gateLink?.owner;
-    if (!owner) {
+    const owner = task.gateLink?.owner.type;
+    if (!owner || owner === "phase") {
       placed.push({
         kind: "row",
         position: task.position,
@@ -274,22 +270,7 @@ export function buildBlocks(
         row: { type: "task", taskId: task.id, position: task.position },
         atMs: task.createdAtMs,
       });
-    } else if (owner.type === "phase") {
-      const key = `${owner.runId}:${owner.phaseId}`;
-      const first = phaseChecks.get(key);
-      if (!first || task.position < first.position) phaseChecks.set(key, task);
     }
-  }
-  for (const task of phaseChecks.values()) {
-    if (task.gateLink?.owner.type !== "phase") continue;
-    const { runId, phaseId } = task.gateLink.owner;
-    placed.push({
-      kind: "row",
-      position: task.position,
-      requestId: task.requestId,
-      row: { type: "phaseChecks", runId, phaseId, position: task.position },
-      atMs: task.createdAtMs,
-    });
   }
   for (const step of board.orchestratorSteps) {
     // A phase's lead reads and messages its workers all night: the rows say what came of it.

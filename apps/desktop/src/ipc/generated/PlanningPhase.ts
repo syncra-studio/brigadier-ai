@@ -3,30 +3,21 @@ import type { CardId } from "./CardId";
 import type { ModelChoice } from "./ModelChoice";
 import type { PhaseState } from "./PhaseState";
 import type { ProposedPhase } from "./ProposedPhase";
-import type { TaskId } from "./TaskId";
 
 /**
- * Phase 0 of a bare goal: the lead writes the plan's phases, another vendor reviews them,
- * and a fresh judge checks they follow the goal without invented scope.
+ * Phase 0 of a bare goal: the lead reads the code and writes the plan's phases, which the run
+ * then follows.
  */
 export type PlanningPhase = { requestId: string, state: PhaseState, 
 /**
- * The plan card the phases were proposed on (reviewed like any plan).
+ * The plan the phases were proposed on.
  */
 planId: CardId | null, 
 /**
- * The phases as proposed, kept until the judge accepts them.
+ * The phases as proposed.
  */
 proposed: Array<ProposedPhase>, 
 /**
- * The judge of the latest proposal.
- */
-judge: TaskId | null, 
-/**
- * Judge rounds so far (at most two).
- */
-rounds: number, 
-/**
- * What the judge found missing or invented.
+ * Why Phase 0 couldn't write a plan the run may follow.
  */
 gaps: Array<string>, lead: ModelChoice | null, nudges: number, startedAtMs: number, settledAtMs: number | null, };

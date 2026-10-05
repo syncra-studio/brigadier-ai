@@ -1,22 +1,13 @@
 import { ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
-import { type FC, memo, useContext } from "react";
+import { memo, useContext } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { isFinal, isWorking } from "@/app/conversation/blocks";
+import { isFinal } from "@/app/conversation/blocks";
 import { STEP_ROW } from "@/app/conversation/OrchestratorSteps";
-import {
-  checkersOf,
-  checkResult,
-  checkRounds,
-  checksCount,
-  ownerKey,
-  ROLE_LABELS,
-  type RowState,
-} from "@/app/conversation/rowWords";
+import { type RowState } from "@/app/conversation/rowWords";
 import { TaskActivity } from "@/app/conversation/WorkerActivity";
-import { AgentsPanelContext, useWorkerName, WorkerChip, WorkerGlyph } from "@/app/conversation/WorkerChip";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import type { Gate, PhaseState, Task } from "@/ipc/generated";
+import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversation/WorkerChip";
+import type { Task } from "@/ipc/generated";
 import { useNow } from "@/hooks/use-now";
 import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -29,62 +20,6 @@ const TONES: Record<RowState["tone"], string> = {
   failed: "text-destructive",
   quiet: "",
 };
-
-/** The ids of an owner's checkers, so a row re-renders only when they change. */
-function useCheckerIds(owners: readonly string[]): string[] {
-  return useBoard(
-    useShallow((s) => (s.board ? checkersOf(s.board.tasks, owners).map((task) => task.id) : [])),
-  );
-}
-
-/** The chevron that opens a phase's checks. */
-const Opener: FC<{ label: string }> = ({ label }) => (
-  <CollapsibleTrigger
-    aria-label={label}
-    className="group/opener hover:text-foreground rounded-control focus-visible:ring-ring/50 -my-1 flex size-control-xs shrink-0 items-center justify-center outline-none focus-visible:ring-1"
-  >
-    <ChevronRight
-      aria-hidden
-      className="size-icon-xs transition-[rotate] group-data-[state=open]/opener:rotate-90 motion-reduce:transition-none"
-    />
-  </CollapsibleTrigger>
-);
-
-/**
- * Checks round by round: "Round 2 · [Review] passed · [Verify] found problems". `gates` are
- * the owners' current rounds by owner key, which hold the newest results.
- */
-export function ChecksList({
-  checkerIds,
-  gates,
-}: {
-  checkerIds: readonly string[];
-  gates: Readonly<Record<string, Gate | null>>;
-}) {
-  const checkers = useBoard(useShallow((s) => checkerIds.flatMap((id) => s.board?.tasks[id] ?? [])));
-  return (
-    <ol className="flex flex-col gap-1">
-      {checkRounds(checkers).map((round, index) => (
-        <li key={round[0]?.id ?? index} className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
-          <span className="shrink-0">Round {index + 1}</span>
-          {round.map((checker) => (
-            <span key={checker.id} className="flex min-w-0 items-center gap-1">
-              <span aria-hidden>·</span>
-              <WorkerChip
-                taskId={checker.id}
-                label={ROLE_LABELS[checker.gateLink?.role ?? "review"]}
-                className="shrink-0"
-              />
-              <span className="shrink-0">
-                {checkResult(checker, checker.gateLink ? (gates[ownerKey(checker.gateLink.owner)] ?? null) : null)}
-              </span>
-            </span>
-          ))}
-        </li>
-      ))}
-    </ol>
-  );
-}
 
 /** How a worker's row says where it is: "started working", "finished", "failed". */
 export function lifecycleWords(task: Task): RowState {
@@ -159,72 +94,3 @@ export const TaskRow = memo(function TaskRow({ taskId }: { taskId: string }) {
     </div>
   );
 });
-
-/** A phase's whole-phase checks as one row ("Whole-phase checks · passed · 1 review + 1 verify + 1 judge"). */
-export const PhaseChecksRow = memo(function PhaseChecksRow({ runId, phaseId }: { runId: string; phaseId: string }) {
-  const owner = `phase:${runId}:${phaseId}`;
-  const checkerIds = useCheckerIds([owner]);
-  const gate = useBoard((s) => s.board?.overnight[runId]?.phases.find((phase) => phase.id === phaseId)?.gate ?? null);
-  // Phase 0 keeps no round of its own: its judge's verdict settles the planning phase.
-  const planning = useBoard((s) => (phaseId === PLANNING_PHASE ? (s.board?.overnight[runId]?.planning?.state ?? null) : null));
-  const counted = useBoard((s) => (s.board ? checksCount(checkersOf(s.board.tasks, [owner])) : ""));
-  const working = useBoard((s) => checkerIds.some((id) => {
-    const task: Task | undefined = s.board?.tasks[id];
-    return task ? isWorking(task) : false;
-  }));
-  if (checkerIds.length === 0) return null;
-  const outcome = working ? "checking" : gate || !planning ? gateWord(gate) : planningWord(planning);
-  return (
-    <Collapsible data-slot="phase-checks-row">
-      <div className={STEP_ROW}>
-        <span className="text-foreground/90 shrink-0">Whole-phase checks</span>
-        <span className="flex min-w-0 items-center gap-1.5 truncate">
-          <span aria-hidden>·</span>
-          <span className={cn(working && "shimmer")}>{outcome}</span>
-          <span aria-hidden>·</span>
-          <span className="truncate">{counted}</span>
-        </span>
-        <Opener label="Show the whole-phase checks" />
-      </div>
-      <CollapsibleContent className="text-muted-foreground ps-6 pt-1 pb-1 text-sm">
-        <ChecksList checkerIds={checkerIds} gates={{ [owner]: gate }} />
-      </CollapsibleContent>
-    </Collapsible>
-  );
-});
-
-/** The phase id of Phase 0, where the plan is written and judged. */
-const PLANNING_PHASE = "phase-0";
-
-/** Phase 0's checks in a word, from what the planning phase came to. */
-function planningWord(state: PhaseState): string {
-  switch (state) {
-    case "verified":
-      return "passed";
-    case "partial":
-    case "blocked":
-      return "found gaps";
-    case "skipped":
-      return "skipped";
-    default:
-      return "checking";
-  }
-}
-
-/** A finished round of checks in a word. */
-export function gateWord(gate: Gate | null): string {
-  switch (gate?.outcome?.type) {
-    case "passed":
-      return "passed";
-    case "failed":
-      return "found gaps";
-    case "unverified":
-      return "couldn’t verify";
-    case "noResult":
-      return "no result";
-    case "superseded":
-      return "cut short";
-    default:
-      return gate ? "checking" : "done";
-  }
-}

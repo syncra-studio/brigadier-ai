@@ -3,8 +3,7 @@ import { useContext, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { phaseWord, runOver } from "@/app/conversation/phaseView";
-import { checkersOf, plainLine, taskState } from "@/app/conversation/rowWords";
-import { ChecksList, gateWord } from "@/app/conversation/TaskRow";
+import { plainLine, taskState } from "@/app/conversation/rowWords";
 import { useAction } from "@/app/conversation/useAction";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import {
@@ -52,8 +51,7 @@ const NUL = "\u0000";
 
 /**
  * A phase's work inside the run card: one line per step of its plan (or per worker, without a
- * plan), each opening its worker, then its whole-phase checks and the plan's step details behind
- * disclosures.
+ * plan), each opening its worker, then the plan's step details behind a disclosure.
  */
 function PhaseWork({
   runId,
@@ -79,16 +77,12 @@ function PhaseWork({
         });
       }
       return Object.values(tasks)
-        .filter((task) => task.gateLink === null && task.run?.runId === runId && task.run.phaseId === phaseId)
+        // An older run's whole-phase checks list here too; its other checks open from what they checked.
+        .filter((task) => (task.gateLink === null || task.gateLink.owner.type === "phase") && task.run?.runId === runId && task.run.phaseId === phaseId)
         .toSorted((a, b) => a.number - b.number)
         .map((task) => [task.id, taskState(task).word, task.title].join(NUL));
     }),
   );
-  const owner = `phase:${runId}:${phaseId}`;
-  const checkerIds = useBoard(
-    useShallow((s) => (s.board ? checkersOf(s.board.tasks, [owner]).map((task) => task.id) : [])),
-  );
-  const gate = useBoard((s) => s.board?.overnight[runId]?.phases.find((phase) => phase.id === phaseId)?.gate ?? null);
   const details = plan?.steps.filter((step) => step.detail) ?? [];
   return (
     <div className="flex flex-col gap-1.5 whitespace-normal">
@@ -122,16 +116,6 @@ function PhaseWork({
             );
           })}
         </ul>
-      )}
-      {checkerIds.length > 0 && (
-        <details>
-          <summary className={disclosureRow}>
-            Whole-phase checks · {gateWord(gate)}
-          </summary>
-          <div className="pt-1">
-            <ChecksList checkerIds={checkerIds} gates={{ [owner]: gate }} />
-          </div>
-        </details>
       )}
       {details.length > 0 && (
         <details>
@@ -213,9 +197,7 @@ export function OvernightPlanCard({
     const workerTaskIds = progress?.workerTaskIds;
     const status = quota
       ? `Waiting for ${quota.provider} limits · resets ${new Date(quota.resetsAtMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}`
-      : progress?.fixRound
-        ? `Fixing ${progress.fixRound}/2`
-        : phaseWord(phase.state, over);
+      : phaseWord(phase.state, over);
     return {
       key: phase.id,
       title: `Phase ${phase.number} · ${phase.name}`,
@@ -479,9 +461,7 @@ export function OvernightPlanCard({
                 ? "Preparing the worktree"
                 : run.state === "planning"
                   ? "Writing the plan"
-                  : run.state === "phaseGate"
-                    ? "Checking the whole phase"
-                    : "Working through the plan"}
+                  : "Working through the plan"}
         </p>
       )}
     </AgentPlan>

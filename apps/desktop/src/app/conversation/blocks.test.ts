@@ -54,7 +54,7 @@ function lines(block: Block): string[] {
   return sequence(block).map((entry) => {
     switch (entry.kind) {
       case "row":
-        return entry.row.type === "task" ? `task-${tasks[entry.row.taskId]?.number}` : `checks ${entry.row.phaseId}`;
+        return `task-${tasks[entry.row.taskId]?.number}`;
       case "orchestrator":
         return entry.steps.map((step) => step.kind.type).join("+");
       case "card":
@@ -78,18 +78,19 @@ test("Phase 2 of the night shows one row per worker task: 7 rows instead of 53",
   ]);
 });
 
-test("Phase 1 of the night: its three attempts and the whole-phase checks; its header says it was verified", () => {
+test("Phase 1 of the night: its three attempts, then its old whole-phase checks as workers", () => {
   const shown = lines(blockOf("run-09cc7d53-phase-1-g1"));
-  assert.deepEqual(shown, ["task-1", "task-5", "task-13", "text", "checks phase-1"]);
+  assert.deepEqual(shown, ["task-1", "task-5", "task-13", "text", "task-21", "task-22", "task-23"]);
 });
 
-test("no checker has a row of its own", () => {
+test("an older task's or plan's checker has no row of its own", () => {
   const rows = buildBlocks(messages, {}, false, board, []).flatMap((block) => block.rows);
-  const shown = new Set(rows.flatMap((row) => (row.type === "task" ? [row.taskId] : [])));
+  const shown = new Set(rows.map((row) => row.taskId));
   for (const task of Object.values(tasks)) {
-    assert.equal(shown.has(task.id), task.gateLink === null, `task-${task.number}`);
+    const ownRow = task.gateLink === null || task.gateLink.owner.type === "phase";
+    assert.equal(shown.has(task.id), ownRow, `task-${task.number}`);
   }
-  assert.equal(shown.size, 7);
+  assert.equal(shown.size, 10);
 });
 
 test("a decision never folds into a summary of reads", () => {
@@ -133,7 +134,7 @@ test("an older task's row counts every check it had", () => {
 test("an older task's checker result reads from its report", () => {
   const router = byNumber(26);
   const results = checkersOf(tasks, [`task:${router.id}`]).map(
-    (checker) => `task-${checker.number} ${checkResult(checker, null)}`,
+    (checker) => `task-${checker.number} ${checkResult(checker)}`,
   );
   assert.deepEqual(results, [
     "task-27 passed",

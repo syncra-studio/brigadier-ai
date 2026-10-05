@@ -69,8 +69,9 @@ export function phaseWord(state: PhaseState, over: boolean): string {
       return over ? "not reached" : "not started";
     case "running":
       return over ? "unfinished" : "working";
+    // Only older runs checked a whole phase: it was still at work.
     case "checking":
-      return over ? "unfinished" : "checking";
+      return over ? "unfinished" : "working";
     case "verified":
       return "verified";
     case "partial":
@@ -116,14 +117,17 @@ export function toYou(text: string): string {
 }
 
 /** How the gap of a phase the run's end cut off begins (the daemon's `CUT_OFF`, in `wind_down.rs`). */
-const CUT_OFF = "Its whole-phase checks never passed: ";
+const CUT_OFF = "It wasn't finished: ";
+/** The same, as older runs recorded it. */
+const OLD_CUT_OFF = "Its whole-phase checks never passed: ";
 
 /**
  * Why a settled phase isn't verified: wind-down's gap when the run's end cut it off (it comes
- * last, after gaps kept from an earlier segment), else the first its checks gave.
+ * last, after gaps kept from an earlier segment), else the first left of it.
  */
 function phaseGap(gaps: readonly string[]): string | undefined {
   const last = gaps.at(-1);
+  if (last?.startsWith(OLD_CUT_OFF)) return CUT_OFF + last.slice(OLD_CUT_OFF.length);
   return last?.startsWith(CUT_OFF) ? last : gaps[0];
 }
 
@@ -135,13 +139,23 @@ function outcomeOf(run: OvernightRun, phase: OvernightPhase, over: boolean): str
   const met = phase.criteria.filter((criterion) => criterion.status === "met").length;
   const total = phase.doneWhen.length || phase.criteria.length;
   switch (phase.state) {
+    // An older run counted the criteria its checks met; a phase now is verified as a whole.
     case "verified":
-      return `${met} of ${plural(total, "done-when criterion", "done-when criteria")} met${
-        phase.verifiedCommit ? ` · verified at ${phase.verifiedCommit.slice(0, 7)}` : ""
-      }.`;
+      return phase.criteria.length > 0
+        ? `${met} of ${plural(total, "done-when criterion", "done-when criteria")} met${
+            phase.verifiedCommit ? ` · verified at ${phase.verifiedCommit.slice(0, 7)}` : ""
+          }.`
+        : phase.verifiedCommit
+          ? `Verified at ${phase.verifiedCommit.slice(0, 7)}.`
+          : "Verified.";
     case "partial":
     case "blocked":
-      return toYou(phaseGap(phase.gaps) ?? `${met} of ${plural(total, "done-when criterion", "done-when criteria")} met.`);
+      return toYou(
+        phaseGap(phase.gaps) ??
+          (phase.criteria.length > 0
+            ? `${met} of ${plural(total, "done-when criterion", "done-when criteria")} met.`
+            : "Part of it is left."),
+      );
     case "skipped":
       return "Skipped, as the run's restrictions said.";
     case "pending":
