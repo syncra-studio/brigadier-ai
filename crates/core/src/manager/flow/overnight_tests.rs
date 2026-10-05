@@ -507,3 +507,63 @@ async fn a_restart_mid_phase_resumes_the_run() {
     assert!(files.contains("p1.txt"), "{files}");
     flow.stop().await;
 }
+
+/// A lead that finds its phase already done changes nothing; the phase still gets its fresh
+/// verifier, whose work lands, before it counts as verified.
+#[tokio::test]
+async fn a_phase_whose_lead_changed_nothing_is_still_verified() {
+    let flow = Flow::start(
+        "overnight-unchanged",
+        Options::default(),
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                return lead_the_phase(&turn).await;
+            }
+            if is_reviewer(&turn) {
+                return review(&turn).await;
+            }
+            if is_verifier(&turn) {
+                // The lead was wrong: the verifier finds the file missing and adds it.
+                turn.write("p1.txt", "1\n");
+                turn.git(&["add", "p1.txt"]);
+                turn.git(&["commit", "-q", "-m", "Add p1.txt"]);
+                let review = turn.call("request_review", json!({})).await;
+                assert!(!review.is_error, "{}", review.text);
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "p1.txt was missing; added it.", "changes": ["p1.txt"],
+                               "done_when": "[met] p1.txt exists: ls shows it"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Verified.");
+            }
+            let reply = turn
+                .call(
+                    "submit_report",
+                    json!({"summary": "p1.txt is already there; nothing to change."}),
+                )
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        }),
+    )
+    .await;
+    let run = start_run(&flow, "/overnight Make one file.", 1).await;
+    let board = finished(&flow, &run.id).await;
+    let run = run_of(&board, &run.id);
+    assert_eq!(run.stop, Some(StopReason::Done), "{run:#?}");
+    assert_eq!(run.phases[0].state, PhaseState::Verified);
+    let verifiers: Vec<_> = board
+        .tasks
+        .values()
+        .filter(|task| task.role == Some(WorkerRole::Verifier))
+        .collect();
+    assert_eq!(verifiers.len(), 1, "a fresh verifier checked the phase");
+    let branch = run.workspace.as_ref().expect("a branch").branch.clone();
+    let files = super::git(&flow.repo, &["ls-tree", "-r", "--name-only", &branch]);
+    assert!(files.contains("p1.txt"), "{files}");
+    assert_eq!(verifiers[0].state, TaskState::Landed);
+    flow.stop().await;
+}

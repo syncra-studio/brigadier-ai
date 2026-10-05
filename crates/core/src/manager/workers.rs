@@ -2478,8 +2478,16 @@ impl SessionManager {
                 )));
             }
         }
-        // A phase with an outline ends with a fresh verifier, which the orchestrator lands.
-        let verify = !relanding && !reviewing && !unchanged && self.needs_verifier(&task).await;
+        // A phase with an outline ends with a fresh verifier, which the orchestrator lands. An
+        // overnight phase is verified even when its lead changed nothing: its "done when"
+        // still gets checked by someone fresh.
+        let run_phase = task.run.as_ref().is_some_and(|run| {
+            run.phase_id.is_some() && run.role == crate::overnight::RunRole::Worker
+        });
+        let verify = !relanding
+            && !reviewing
+            && (!unchanged || run_phase)
+            && self.needs_verifier(&task).await;
         let report = Report {
             summary: self.redact_for(&live, &input.summary).await,
             changes: input.changes.clone(),
@@ -2532,7 +2540,7 @@ impl SessionManager {
             let mut shown = task.clone();
             reported(&mut shown);
             let mut text = prompts::report_envelope(&shown, &report, &route_label(&shown));
-            if unchanged {
+            if unchanged && verifier.is_none() {
                 text.push_str(&format!(
                     "\n[nothing to land task-{}] It changed no files, so it is done; there is nothing to land.",
                     task.number
