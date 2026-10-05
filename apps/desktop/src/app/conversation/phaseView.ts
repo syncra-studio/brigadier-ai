@@ -135,7 +135,8 @@ function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-function outcomeOf(run: OvernightRun, phase: OvernightPhase, over: boolean): string | null {
+/** What came of a phase in a line, as its block and the run card say it; null while it works. */
+export function phaseOutcome(run: OvernightRun, phase: OvernightPhase, over: boolean): string | null {
   const met = phase.criteria.filter((criterion) => criterion.status === "met").length;
   const total = phase.doneWhen.length || phase.criteria.length;
   switch (phase.state) {
@@ -180,7 +181,7 @@ export function phaseViewOf(runs: Readonly<Record<string, OvernightRun>>, reques
         settled,
         startedAtMs: phase.startedAtMs,
         endedAtMs: phase.settledAtMs ?? (settled ? run.finishedAtMs : null),
-        outcome: settled ? outcomeOf(run, phase, over) : null,
+        outcome: settled ? phaseOutcome(run, phase, over) : null,
       };
     }
     const planning = run.planning;

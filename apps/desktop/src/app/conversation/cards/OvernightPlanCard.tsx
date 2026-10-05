@@ -2,7 +2,7 @@ import { Moon } from "@openai/apps-sdk-ui/components/Icon";
 import { useContext, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { phaseWord, runOver } from "@/app/conversation/phaseView";
+import { phaseOutcome, phaseWord, runOver } from "@/app/conversation/phaseView";
 import { plainLine, taskState } from "@/app/conversation/rowWords";
 import { useAction } from "@/app/conversation/useAction";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
@@ -19,10 +19,13 @@ import {
   type AgentPlanStep,
   type AgentPlanStepStatus,
 } from "@/components/assistant-ui/elements/agent-plan";
+import { JobProgress, type JobOutcomeStatus } from "@/components/assistant-ui/elements/job-progress";
 import { disclosureRow } from "@/components/assistant-ui/elements/surfaces";
+import { Timeline, type TimelineEvent } from "@/components/assistant-ui/elements/timeline";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { OvernightRun, PhaseState, Plan } from "@/ipc/generated";
+import type { OvernightPhase, OvernightRun, PhaseState, Plan } from "@/ipc/generated";
+import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 
 const MARK: Record<PhaseState, AgentPlanStepStatus> = {
@@ -191,13 +194,16 @@ export function OvernightPlanCard({
       }
     });
   };
-  const steps: AgentPlanStep[] = run.phases.map((phase) => {
+  // A started run reads as its progress over a timeline of its phases; a proposal lists them.
+  const started = !proposed && run.phases.length > 0;
+  const quotaWord = (phase: OvernightPhase) => {
+    const quota = details.phaseProgress[phase.id]?.quota;
+    return quota && `Waiting for ${quota.provider} limits · resets ${clockTime(quota.resetsAtMs)}`;
+  };
+  const steps: AgentPlanStep[] = (started ? [] : run.phases).map((phase) => {
     const progress = details.phaseProgress[phase.id];
-    const quota = progress?.quota;
     const workerTaskIds = progress?.workerTaskIds;
-    const status = quota
-      ? `Waiting for ${quota.provider} limits · resets ${new Date(quota.resetsAtMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}`
-      : phaseWord(phase.state, over);
+    const status = quotaWord(phase) || phaseWord(phase.state, over);
     return {
       key: phase.id,
       title: `Phase ${phase.number} · ${phase.name}`,
@@ -234,7 +240,7 @@ export function OvernightPlanCard({
       ),
     };
   });
-  if (steps.length === 0)
+  if (!started && steps.length === 0)
     steps.push({
       key: "phase-0",
       title: "Phase 0 · Write the plan",
@@ -273,8 +279,7 @@ export function OvernightPlanCard({
         </>
       }
       steps={steps}
-      showProgress={!proposed && run.phases.length > 0}
-      progressLabel="verified"
+      showProgress={false}
       footer={
         <div className="flex flex-col gap-2">
           {!proposed && !finished && (
@@ -365,6 +370,17 @@ export function OvernightPlanCard({
         </div>
       }
     >
+      {started && (
+        <>
+          <RunProgress model={model} over={over} ending={ending} />
+          <Timeline
+            aria-label="Phases"
+            events={run.phases.map((phase) =>
+              phaseEvent(run, phase, over, quotaWord(phase), details.phaseProgress[phase.id]?.criteria),
+            )}
+          />
+        </>
+      )}
       {finished && (
         // What came of it, where the work is and what Merge takes, and (live) what waits on the user.
         <div className="flex flex-col gap-0.5" role="status">
@@ -451,7 +467,7 @@ export function OvernightPlanCard({
           )}
         </p>
       )}
-      {running && (
+      {running && !started && (
         <p className="text-muted-foreground text-xs" role="status">
           {ending
             ? "Ending the run"
@@ -465,6 +481,126 @@ export function OvernightPlanCard({
         </p>
       )}
     </AgentPlan>
+  );
+}
+
+/** `atMs` as a local "07:30". */
+function clockTime(atMs: number): string {
+  return new Date(atMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function sentenceCase(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** "6h 12m", "45m": how long a run went. */
+function spanWords(ms: number): string {
+  const minutes = Math.max(0, Math.round(ms / 60_000));
+  const hours = Math.floor(minutes / 60);
+  return hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
+}
+
+/**
+ * A started run's progress: the phase at work and how many are verified, settling into how the
+ * run came out.
+ */
+function RunProgress({ model, over, ending }: { model: OvernightCardModel; over: boolean; ending: boolean }) {
+  const { run } = model;
+  const selected = run.phases.filter((phase) => phase.state !== "skipped");
+  const verified = selected.filter((phase) => phase.state === "verified").length;
+  const counted = `${verified} of ${selected.length} verified`;
+  if (over) {
+    const status: JobOutcomeStatus =
+      verified === selected.length ? "success" : verified > 0 ? "partial" : run.stop?.type === "stopped" ? "cancelled" : "failed";
+    const took =
+      run.startedAtMs !== null && run.finishedAtMs !== null ? spanWords(run.finishedAtMs - run.startedAtMs) : undefined;
+    return (
+      <JobProgress
+        title={`${counted}`}
+        done={verified}
+        total={selected.length}
+        meta={took}
+        outcome={{ status }}
+      />
+    );
+  }
+  const index = selected.findIndex((phase) => phase.state === "running" || phase.state === "checking");
+  const current = index >= 0 ? selected[index] : undefined;
+  const title = ending
+    ? "Ending the run"
+    : run.state === "preparing"
+      ? "Preparing the worktree"
+      : current
+        ? `Phase ${index + 1} of ${selected.length} · ${current.name}`
+        : "Starting the next phase";
+  return (
+    <JobProgress
+      title={title}
+      done={verified}
+      total={selected.length}
+      meta={counted}
+      description={run.state === "waitingQuota" ? "Waiting for limits" : undefined}
+    />
+  );
+}
+
+/** A phase on the run's timeline: when it ran, how it came out, and its work behind a disclosure. */
+function phaseEvent(
+  run: OvernightRun,
+  phase: OvernightPhase,
+  over: boolean,
+  quota: string | undefined,
+  results: Readonly<Record<string, string>> | undefined,
+): TimelineEvent {
+  const now = !over && (phase.state === "running" || phase.state === "checking");
+  const future = phase.state === "pending" || (phase.state === "skipped" && !over);
+  const at = now ? phase.startedAtMs : (phase.settledAtMs ?? phase.startedAtMs);
+  return {
+    id: phase.id,
+    when: now ? "now" : future ? "future" : "past",
+    time: at !== null && !future ? clockTime(at) : "",
+    title: `Phase ${phase.number} · ${phase.name}`,
+    detail: quota || phaseOutcome(run, phase, over) || sentenceCase(phaseWord(phase.state, over)),
+    more: <PhaseMore run={run} phase={phase} open={now} results={results} />,
+  };
+}
+
+/** A phase's workers and what it covers; open while the phase is at work. */
+function PhaseMore({
+  run,
+  phase,
+  open,
+  results,
+}: {
+  run: OvernightRun;
+  phase: OvernightPhase;
+  open: boolean;
+  /** An older run's checks of each criterion. */
+  results: Readonly<Record<string, string>> | undefined;
+}) {
+  const covers = (phase.scope || phase.doneWhen.length > 0) && (
+    <details>
+      <summary className={cn(disclosureRow, "text-xs")}>What it covers</summary>
+      <div className="text-muted-foreground flex flex-col gap-1.5 pt-1 text-xs">
+        {phase.scope && <p>{phase.scope}</p>}
+        <DoneWhen criteria={phase.doneWhen} results={results} />
+      </div>
+    </details>
+  );
+  if (phase.requestId === null) return covers || null;
+  const work = <PhaseWork runId={run.id} phaseId={phase.id} requestId={phase.requestId} />;
+  return (
+    <div className="text-muted-foreground flex flex-col gap-1 pt-1 text-xs">
+      {open ? (
+        work
+      ) : (
+        <details>
+          <summary className={disclosureRow}>Workers</summary>
+          <div className="pt-1">{work}</div>
+        </details>
+      )}
+      {covers}
+    </div>
   );
 }
 

@@ -8,9 +8,9 @@ recoverable command error.
 
 The gallery renders normal approval/review/revision/rejection and all three approval
 origins, overnight proposals (including bare goals, invalid restrictions and power
-risks), preparation, planning, work, checks, both fix rounds, limits, wind-down,
-reporting, partial completion and full completion. The active fifth phase remains
-visible past the initial four rows. Expand criteria, use Show N more, open a worker,
+risks), preparation, planning, work, limits, wind-down, reporting, partial completion
+and full completion. A started run reads as its progress over a timeline of its phases;
+the active phase is marked on it. Expand criteria, use Show N more, open a worker,
 and exercise Start/Stop/Merge/Continue/Read report against the fixture actions.
 
 Normal plans render as the summary context card's Plan section, each in a card of its own here.
