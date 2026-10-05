@@ -33,8 +33,8 @@ test("a line's task-N reads as the worker's name, once where the line already qu
     namedTasks("The checks of task-5's change waited for it", tasks),
     `The checks of “${byNumber(5).title}”'s change waited for it`,
   );
-  // Unavailable worker references still never expose an internal id.
-  assert.equal(namedTasks("task-999 is gone", tasks), "a worker is gone");
+  // A number the session has no worker for stays as it is.
+  assert.equal(namedTasks("task-999 is gone", tasks), "task-999 is gone");
   // So does one inside a branch, path, file name or longer word; a sentence's full stop still ends it.
   for (const kept of ["on `brigadier/x/task-13-fix`", "docs/task-13.md", "read task-13.diff", "task-13x", "subtask-13"]) {
     assert.equal(namedTasks(kept, tasks), kept);

@@ -72,6 +72,8 @@ useBoard.setState(({ board }) => {
       "theme settings and first paint",
     ),
     step(11.6, "brigadier/project_map", "completed", "apps/desktop/src"),
+    step(11.65, "functions.read_file", "completed", "apps/desktop/src/state/settings.ts"),
+    step(11.7, "functions.exec_command", "completed", "pnpm typecheck"),
     // Each successful call gives way to its authored result; no duplicate generic row.
     step(
       11.8,
@@ -86,6 +88,7 @@ useBoard.setState(({ board }) => {
       "completed",
       "Keep the theme in the settings store",
     ),
+    { requestId: "r2", atMs: now - 90000, position: 15.6, kind: { type: "searchedWeb", query: "prefers-color-scheme theme initialization" } } satisfies OrchestratorStep,
     ...(done
       ? []
       : [

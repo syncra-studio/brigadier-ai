@@ -22,7 +22,7 @@ import { ThinkingRow } from "@/app/conversation/ThinkingRow";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { InlineImageText } from "@/app/conversation/InlineImage";
 import { MentionText } from "@/app/conversation/Mentions";
-import { OrchestratorSteps, STEP_ROW, WorkGroup, stepSummaryKind, stepSummaryAction } from "@/app/conversation/OrchestratorSteps";
+import { OrchestratorSteps, STEP_ROW, WorkGroup, stepSummaryKind, stepSummaryAction, isNonWorkerStep } from "@/app/conversation/OrchestratorSteps";
 import {
   type BlockCard,
   type BlockCompaction,
@@ -255,7 +255,7 @@ const ReportText: FC<TextMessagePartProps> = (props) => {
 const SequenceEntry: FC<{ entry: Entry; streaming: boolean; grouped?: boolean }> = ({ entry, streaming, grouped = true }) => {
   switch (entry.kind) {
     case "thinking":
-      return <ThinkingRow text={entry.segment.text} startedAtMs={entry.segment.startedAtMs} endedAtMs={entry.segment.updatedAtMs} live={entry.live} />;
+      return <ThinkingRow compact text={entry.segment.text} startedAtMs={entry.segment.startedAtMs} endedAtMs={entry.segment.updatedAtMs} live={entry.live} />;
     case "text":
       return (
         <div
@@ -444,7 +444,8 @@ function workKinds(entries: readonly Entry[]): Parameters<typeof WorkGroup>[0]["
 const FoldedWork: FC<{ item: FoldItem }> = ({ item }) => {
   if (item.kind === "entry") return <SequenceEntry entry={item.entry} streaming={false} />;
   const [only] = item.entries;
-  if (item.entries.length === 1 && only) return <SequenceEntry entry={only} streaming={false} />;
+  const workerGroup = item.entries.some((entry) => entry.kind === "row" || (entry.kind === "orchestrator" && entry.steps.some((step) => !isNonWorkerStep(step))));
+  if (item.entries.length === 1 && only && (!workerGroup || only.kind !== "orchestrator" || only.steps.length === 1)) return <SequenceEntry entry={only} streaming={false} grouped={!workerGroup} />;
   const lines = item.entries.map((entry) => <SequenceEntry key={entryKey(entry)} entry={entry} streaming={false} grouped={false} />);
   // Lifecycle rows whose creation is already counted do not add another summary segment.
   const created = new Set(item.entries.flatMap((entry) => entry.kind === "orchestrator"

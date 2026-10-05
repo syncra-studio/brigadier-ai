@@ -93,6 +93,11 @@ test("every registered action keeps its verb across provider namespaces and outc
   );
 });
 
+test("commands name the command while retaining its outcome", () => {
+  assert.equal(toolWords(call("functions.exec_command", "inProgress", "pnpm typecheck")), "Running pnpm typecheck");
+  assert.equal(toolWords(call("Bash", "failed", "pnpm test settings")), "Ran pnpm test settings — failed");
+});
+
 test("worker references become their names, including unavailable references", () => {
   const tasks = {
     worker: {

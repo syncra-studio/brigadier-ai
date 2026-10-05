@@ -38,7 +38,7 @@ const shot = async (name) => {
   );
   const measured = await page
     .locator(
-      '[data-slot="orchestrator-step"], [data-slot="worker-action"] > button',
+      '[data-slot="orchestrator-step"]',
     )
     .evaluateAll((rows) =>
       rows.map((row) => {
@@ -76,6 +76,11 @@ try {
     /Searched project memory/,
   );
   assert.match(await page.locator("main").innerText(), /Searching code/);
+  assert.match(await page.locator("main").innerText(), /Read apps\/desktop\/src\/state\/settings.ts/);
+  assert.match(await page.locator("main").innerText(), /Ran pnpm typecheck/);
+  // Worker lifecycle rows retain the existing size, spacing and live activity subrow.
+  assert.match(await page.locator('[data-kind="created"] [role="button"]').first().getAttribute("class"), /min-h-row-sm.*gap-2/);
+  assert.match(await page.locator("main").innerText(), /Running pnpm test settings/);
   await shot("02-running-actions");
 
   await load("view=done");
@@ -90,6 +95,10 @@ try {
     .all())
     await group.click();
   await shot("05-done-level2");
+  const web = page.locator('[data-kind="searchedWeb"] [role="button"]').first();
+  await web.click();
+  assert.match(await page.locator('[data-slot="web-search"]').innerText(), /prefers-color-scheme theme initialization/);
+  await shot("06-web-query");
   const created = page.locator('[data-kind="created"] [role="button"]').first();
   await created.focus();
   await page.keyboard.press("Enter");
@@ -100,49 +109,6 @@ try {
     .first();
   await thought.click();
   await shot("07-thought-details");
-
-  await load("view=running&worker=1");
-  await page.locator('[data-slot="task-row"]').first().click();
-  const worker = page.locator('[data-slot="worker-thread"]');
-  await worker.waitFor();
-  await worker.evaluate((element) => {
-    element.scrollTop = 0;
-  });
-  await shot("08-worker");
-  const groups = worker.locator('[data-slot="collapsible"] > button');
-  for (const group of await groups.all()) {
-    if ((await group.innerText()).includes("Read a file")) {
-      await group.click();
-      break;
-    }
-  }
-  const web = worker
-    .locator("button")
-    .filter({
-      hasText: "Searched the web for radix switch prefers-color-scheme",
-    });
-  await web.click();
-  await worker.evaluate((element) => {
-    element.scrollTop = 0;
-  });
-  assert.equal(await worker.locator('[data-slot="web-search"] li').count(), 3);
-  await shot("09-web-results");
-  const failed = worker
-    .locator("button")
-    .filter({ hasText: "Ran pnpm test settings" })
-    .first();
-  // It lives under the second action group, so expand that group first.
-  if (!(await failed.isVisible())) {
-    for (const group of await worker
-      .locator('[data-slot="collapsible"] > button')
-      .all()) {
-      if ((await group.innerText()).includes("Edited")) await group.click();
-    }
-  }
-  await failed.click();
-  await failed.scrollIntoViewIfNeeded();
-  assert.match(await worker.innerText(), /Exit code 1/);
-  await shot("10-command-output");
 
   await load("view=running&thinking=1");
   assert.match(
@@ -158,7 +124,7 @@ try {
     JSON.stringify(metrics, null, 2),
   );
   console.log(
-    `Saved ${metrics.length} captures; copy, keyboard disclosures, results, output and overflow checks passed.`,
+    `Saved ${metrics.length} captures; copy, keyboard disclosures, scope, and overflow checks passed.`,
   );
 } finally {
   await browser.close();

@@ -1,4 +1,3 @@
-import { toolActivity, toolName, type ToolKind } from "@/app/conversation/toolWords";
 import type { TranscriptItem } from "@/components/transcript/transcript";
 
 /**
@@ -7,7 +6,7 @@ import type { TranscriptItem } from "@/components/transcript/transcript";
  * files, ran commands").
  */
 
-export type ActivityKind = ToolKind;
+export type ActivityKind = "read" | "list" | "search" | "edit" | "run" | "report" | "tool";
 
 export type Activity = {
   kind: ActivityKind;
@@ -88,7 +87,7 @@ function target(words: readonly string[]): string | null {
 }
 
 function classifyCommand(raw: string): Activity {
-  const command = shownCommand(raw);
+  const command = unwrapCommand(raw);
   // A compound command is told as what it runs.
   const simple = !/[;&|<>`$(]/.test(command.replace(/\s\|\|\s.*$/, ""));
   const words = wordsOf(command);
@@ -139,16 +138,9 @@ function classifyTool(name: string, input: string | null): Activity {
   const text = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : null);
   const path = text("file_path") ?? text("path") ?? text("notebook_path");
   const file = path ? basename(path) : null;
-  const short = toolName(name);
-  if (toolActivity(name).kind === "run") {
-    const command = text("command") ?? text("cmd");
-    if (command) return classifyCommand(command);
-  }
-  switch (short) {
+  const short = name.replace(/^mcp__/, "").replace(/__/g, "/");
+  switch (name) {
     case "Read":
-    case "read":
-    case "read_file":
-    case "read_artifact":
       return { kind: "read", done: `Read ${file ?? "a file"}`, doing: `Reading ${file ?? "a file"}` };
     case "Glob":
     case "LS":
@@ -158,14 +150,12 @@ function classifyTool(name: string, input: string | null): Activity {
       const what = pattern ? ` for ${pattern}` : "";
       return { kind: "search", done: `Searched${what}`, doing: `Searching${what}` };
     }
-    case "WebSearch":
-    case "web_search": {
+    case "WebSearch": {
       const query = text("query");
       const what = query ? ` for ${query}` : "";
       return { kind: "search", web: true, done: `Searched the web${what}`, doing: `Searching the web${what}` };
     }
-    case "WebFetch":
-    case "web_fetch": {
+    case "WebFetch": {
       const url = text("url");
       let host = "a page";
       try {
@@ -184,9 +174,7 @@ function classifyTool(name: string, input: string | null): Activity {
   if (short.endsWith("submit_report")) {
     return { kind: "report", done: "Sent its report", doing: "Sending its report" };
   }
-  const activity = toolActivity(name);
-  const detail = text("query") ?? text("pattern") ?? text("title");
-  return { ...activity, done: activity.done + (detail ? `: ${detail}` : ""), doing: activity.doing + (detail ? `: ${detail}` : "") };
+  return { kind: "tool", done: `Used ${short}`, doing: `Using ${short}` };
 }
 
 export function activityOf(item: ActionItem): Activity {
@@ -207,7 +195,7 @@ export function activityOf(item: ActionItem): Activity {
 
 /** Tool calls the worker's CLI makes for itself, with nothing to tell. */
 function hidden(item: TranscriptItem): boolean {
-  return item.kind === "tool" && toolName(item.name) === "ToolSearch";
+  return item.kind === "tool" && item.name === "ToolSearch";
 }
 
 function isAction(item: TranscriptItem): item is ActionItem {
@@ -220,11 +208,11 @@ function isAction(item: TranscriptItem): item is ActionItem {
 export function threadEntries(items: readonly TranscriptItem[]): ThreadEntry[] {
   const entries: ThreadEntry[] = [];
   for (const item of items) {
-    if (hidden(item) || item.kind === "turnStarted" || (item.kind === "approval" && item.resolution)) continue;
+    if (hidden(item) || item.kind === "turnStarted") continue;
     if (item.kind === "turnCompleted" && item.status === "completed") continue;
     if (isAction(item)) {
       const last = entries.at(-1);
-      if (last?.kind === "actions" && item.status !== "inProgress" && last.items.every((action) => action.status !== "inProgress")) last.items.push(item);
+      if (last?.kind === "actions") last.items.push(item);
       else entries.push({ kind: "actions", key: item.key, items: [item] });
       continue;
     }
@@ -240,24 +228,13 @@ const PLURALS: Record<ActivityKind, [one: string, many: string]> = {
   edit: ["edited a file", "edited files"],
   run: ["ran a command", "ran commands"],
   report: ["sent its report", "sent its report"],
-  tool: ["completed an action", "completed actions"],
-  worker: ["created a worker", "created workers"],
-  message: ["sent a message", "sent messages"],
-  memory: ["saved project memory", "saved project memory"],
-  plan: ["planned the work", "planned the work"],
-  approval: ["requested approval", "requested approvals"],
-  land: ["landed changes", "landed changes"],
-  web: ["searched the web", "searched the web"],
-  image: ["created an image", "created images"],
+  tool: ["used a tool", "used tools"],
 };
 
 /** "Read files, ran a command": the kinds of a run, in the order they first happened. */
 export function summarize(activities: readonly Activity[]): string {
   const counts = new Map<ActivityKind, number>();
-  for (const activity of activities) {
-    const kind = activity.web && activity.kind === "search" ? "web" : activity.kind;
-    counts.set(kind, (counts.get(kind) ?? 0) + 1);
-  }
+  for (const activity of activities) counts.set(activity.kind, (counts.get(activity.kind) ?? 0) + 1);
   const parts = [...counts].map(([kind, count]) => PLURALS[kind][count === 1 ? 0 : 1]);
   const text = parts.join(", ");
   return text.charAt(0).toUpperCase() + text.slice(1);

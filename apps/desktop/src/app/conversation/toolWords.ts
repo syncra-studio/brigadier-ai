@@ -199,6 +199,9 @@ export function toolWords(
   ) {
     action = `${kind.status === "inProgress" ? "Reading" : "Read"} ${detail}`;
     target = "";
+  } else if (detail && activity.kind === "run") {
+    action = `${kind.status === "inProgress" ? "Running" : "Ran"} ${detail}`;
+    target = "";
   } else if (
     detail &&
     detail !== "a worker" &&

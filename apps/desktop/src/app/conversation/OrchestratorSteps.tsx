@@ -14,7 +14,7 @@ import {
 import { type FC, type ReactNode, useContext } from "react";
 
 import type { BlockOrchestratorStep, DecidedStep, MachineWords } from "@/app/conversation/blocks";
-import { toolActivity, toolWords, type ToolKind } from "@/app/conversation/toolWords";
+import { toolActivity, toolName, toolWords, type ToolKind } from "@/app/conversation/toolWords";
 import { machineWords } from "@/app/conversation/rowWords";
 import { AgentsPanelContext, useWorkerName, WorkerGlyph, WorkerLine } from "@/app/conversation/WorkerChip";
 import { ACTIVITY_ROW, ACTIVITY_DETAIL, ACTIVITY_ICONS } from "@/components/assistant-ui/elements/activity-row";
@@ -98,8 +98,7 @@ function dominant(kinds: readonly SummaryKind[]): SummaryKind {
 const RUN_ICONS: Record<SummaryKind, FC<{ className?: string }>> = { ...ACTIVITY_ICONS, ...ICONS, worker: Sparkle };
 
 /** A grey line of the thread's work. */
-export const STEP_ROW = ACTIVITY_ROW;
-const row = STEP_ROW;
+export const STEP_ROW = "text-muted-foreground flex min-h-row-sm min-w-0 items-center gap-2 text-sm";
 
 /** The chevron at the end of a line that opens: shown on hover, turned while open. */
 export const OPENER =
@@ -267,7 +266,7 @@ const MachineRow: FC<{ kind: MachineWords }> = ({ kind }) => {
   const mac = useApp((s) => s.info?.platform === "macos");
   const Icon = MACHINE_ICONS[kind.machine];
   return (
-    <div data-slot="orchestrator-step" data-kind="machine" className={row}>
+    <div data-slot="orchestrator-step" data-kind="machine" className={STEP_ROW}>
       <Icon aria-hidden className="size-icon-md shrink-0" />
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         {kind.taskId && <WorkerName taskId={kind.taskId} />}
@@ -296,6 +295,8 @@ const WorkStepRow: FC<{ kind: OrchestratorStepKind | DecidedStep }> = ({ kind })
     ) : (
       label(kind, spec, toolLabel)
     );
+  const workerRow = isWorkerKind(kind);
+  const row = workerRow ? STEP_ROW : ACTIVITY_ROW;
   const more = details(kind, spec);
   if (!more) {
     return (
@@ -325,7 +326,7 @@ const WorkStepRow: FC<{ kind: OrchestratorStepKind | DecidedStep }> = ({ kind })
           <ChevronRight aria-hidden className={OPENER} />
         </div>
       </CollapsibleTrigger>
-      <CollapsibleContent className={cn(ACTIVITY_DETAIL, "wrap-break-word")}>
+      <CollapsibleContent className={workerRow ? "text-muted-foreground flex max-h-action-list flex-col gap-1 overflow-y-auto ps-6 pt-1 pb-2 text-sm wrap-break-word" : cn(ACTIVITY_DETAIL, "wrap-break-word")}>
         {more}
       </CollapsibleContent>
     </Collapsible>
@@ -334,14 +335,28 @@ const WorkStepRow: FC<{ kind: OrchestratorStepKind | DecidedStep }> = ({ kind })
 
 /** What the orchestrator did between two replies, one grey line per step. */
 export const OrchestratorSteps: FC<{ steps: readonly BlockOrchestratorStep[]; grouped?: boolean }> = ({ steps, grouped = true }) => {
-  const settled = steps.filter((step) => step.kind.type !== "tool" || step.kind.status !== "inProgress");
-  const active = steps.filter((step) => step.kind.type === "tool" && step.kind.status === "inProgress");
-  const lines = settled.map((step) => <StepRow key={step.position} step={step} />);
-  return <div className="flex min-w-0 flex-col gap-1">
-    {grouped && settled.length > 1 ? <WorkGroup kinds={settled.map(stepSummaryKind)} actions={settled.map(stepSummaryAction)}>{lines}</WorkGroup> : lines}
-    {active.map((step) => <StepRow key={step.position} step={step} />)}
-  </div>;
+  const runs: BlockOrchestratorStep[][] = [];
+  for (const step of steps) {
+    const last = runs.at(-1);
+    const foldable = isNonWorkerStep(step) && (step.kind.type !== "tool" || step.kind.status !== "inProgress");
+    if (foldable && last?.every((item) => isNonWorkerStep(item) && (item.kind.type !== "tool" || item.kind.status !== "inProgress"))) last.push(step);
+    else runs.push([step]);
+  }
+  return <>
+    {runs.map((run) => grouped && run.length > 1
+      ? <WorkGroup key={run[0]!.position} kinds={run.map(stepSummaryKind)} actions={run.map(stepSummaryAction)}>{run.map((step) => <StepRow key={step.position} step={step} />)}</WorkGroup>
+      : run.map((step) => <StepRow key={step.position} step={step} />))}
+  </>;
 };
+
+function isWorkerKind(kind: BlockOrchestratorStep["kind"]): boolean {
+  if (kind.type === "tool") return ["worker", "message", "report"].includes(toolActivity(kind.name).kind) || toolName(kind.name) === "read_report";
+  return ["created", "messaged", "readReport", "accepted", "answered", "machine"].includes(kind.type);
+}
+
+export function isNonWorkerStep(step: BlockOrchestratorStep): boolean {
+  return !isWorkerKind(step.kind);
+}
 
 export function stepSummaryAction(step: BlockOrchestratorStep): string | null {
   if (step.kind.type !== "tool") return null;
@@ -360,14 +375,16 @@ export function stepSummaryKind(step: BlockOrchestratorStep): SummaryKind {
  */
 export const WorkGroup: FC<{ kinds: readonly SummaryKind[]; actions?: readonly (string | null)[]; children: ReactNode }> = ({ kinds, actions, children }) => {
   const Icon = RUN_ICONS[dominant(kinds)];
+  const workerGroup = kinds.some((kind) => ["worker", "created", "messaged", "readReport", "accepted", "answered", "message", "report", "machine"].includes(kind));
+  const row = workerGroup ? STEP_ROW : ACTIVITY_ROW;
   return (
     <Collapsible data-slot="work-group">
       <CollapsibleTrigger className={cn(row, "group hover:text-foreground focus-visible:ring-ring/50 rounded-control w-full text-start outline-none focus-visible:ring-1")}>
         <Icon aria-hidden className="size-icon-md shrink-0" />
-        <span className="min-w-0 truncate">{summarizeKinds(kinds, actions)}</span>
+        <span className={cn("min-w-0 truncate", workerGroup && "text-foreground/90")}>{summarizeKinds(kinds, actions)}</span>
         <ChevronRight aria-hidden className={OPENER} />
       </CollapsibleTrigger>
-      <CollapsibleContent className="flex min-w-0 flex-col gap-1 pt-1">{children}</CollapsibleContent>
+      <CollapsibleContent className={workerGroup ? "flex flex-col" : "flex min-w-0 flex-col gap-1 pt-1"}>{children}</CollapsibleContent>
     </Collapsible>
   );
 };

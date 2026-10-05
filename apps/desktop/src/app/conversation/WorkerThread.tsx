@@ -1,12 +1,20 @@
 import { ThinkingRow } from "@/app/conversation/ThinkingRow";
 import {
+  Book,
   Check,
   ChevronRight,
   Copy,
+  EditPencil,
+  Folder,
   Globe,
+  Reply,
+  Search,
   ShieldCheck,
+  Terminal,
+  Tools,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
+  type FC,
   type ReactNode,
   useEffect,
   useLayoutEffect,
@@ -15,8 +23,6 @@ import {
   useState,
 } from "react";
 
-import { ACTIVITY_ROW, ACTIVITY_ICONS, ACTIVITY_DETAIL, ActivityChevron } from "@/components/assistant-ui/elements/activity-row";
-import { toolActivity, toolName } from "@/app/conversation/toolWords";
 import { isFinal, isWorking } from "@/app/conversation/blocks";
 import { QuotaWaitLine } from "@/app/conversation/cards/RouteDetails";
 import { TaskDetails } from "@/app/conversation/cards/TaskCardView";
@@ -26,11 +32,13 @@ import { RateItem, RateMenu } from "@/components/assistant-ui/rate-menu";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import {
+  type ActivityKind,
   activityOf,
   shownCommand,
   summarize,
   type ThreadEntry,
   threadEntries,
+  unwrapCommand,
 } from "@/components/transcript/activity";
 import { type TranscriptItem, TranscriptFolder } from "@/components/transcript/transcript";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
@@ -79,6 +87,16 @@ class IncrementalFold {
   }
 }
 
+const ICONS: Record<ActivityKind, FC<{ className?: string }>> = {
+  read: Book,
+  list: Folder,
+  search: Search,
+  edit: EditPencil,
+  run: Terminal,
+  report: Reply,
+  tool: Tools,
+};
+
 type ActionItem = Extract<ThreadEntry, { kind: "actions" }>["items"][number];
 
 /** A worker's error in a few words, by kind; its own words follow in full. */
@@ -99,7 +117,7 @@ const ERROR_TITLES: Record<ErrorKind, string> = {
   stalled: "It stopped responding",
 };
 
-const row = ACTIVITY_ROW;
+const row = "text-muted-foreground flex min-h-row-sm min-w-0 items-center gap-2 text-sm";
 
 /** A command's box: "Shell", the command and what it printed, then how it ended. */
 function shellCard(item: Extract<ActionItem, { kind: "command" }>): ReactNode {
@@ -118,7 +136,7 @@ function shellCard(item: Extract<ActionItem, { kind: "command" }>): ReactNode {
     <div data-slot="shell-card" className="border-border bg-code-surface rounded-control mt-1 flex flex-col border text-sm">
       <span className="text-muted-foreground px-3 pt-2 text-xs">Shell</span>
       <pre className="text-code max-h-60 overflow-auto px-3 py-1 font-mono whitespace-pre-wrap">
-        {`$ ${shownCommand(item.command)}`}
+        {`$ ${unwrapCommand(item.command)}`}
         {output ? `\n${output}` : <span className="text-muted-foreground">{"\nNo output"}</span>}
       </pre>
       <span
@@ -159,11 +177,11 @@ function actionDetail(item: ActionItem): ReactNode {
     case "command":
       return shellCard(item);
     case "tool": {
-      const query = ["WebSearch", "web_search"].includes(toolName(item.name)) ? searchQuery(item.input) : null;
+      const query = item.name === "WebSearch" ? searchQuery(item.input) : null;
       if (query !== null && item.status === "failed") {
         // A failed search found nothing: its query, then what went wrong in full.
         return (
-          <div className="flex flex-col gap-2 pt-1 pb-2">
+          <div className="flex flex-col gap-2 ps-6 pt-1 pb-2">
             <WebSearch query={query} results={[]} />
             <ErrorState title="The search failed" detail={item.output || null} />
           </div>
@@ -172,7 +190,7 @@ function actionDetail(item: ActionItem): ReactNode {
       if (query !== null) {
         return (
           <WebSearch
-            className="pt-1 pb-2"
+            className="ps-6 pt-1 pb-2"
             query={query}
             results={searchResults(item.output)}
             searching={item.status === "inProgress"}
@@ -180,7 +198,7 @@ function actionDetail(item: ActionItem): ReactNode {
         );
       }
       if (!item.input && !item.output) return null;
-      return card(toolActivity(item.name).done, [item.input, item.output].filter(Boolean).join("\n\n"));
+      return card(item.name, [item.input, item.output].filter(Boolean).join("\n\n"));
     }
     case "files":
       return card(
@@ -195,28 +213,30 @@ function actionDetail(item: ActionItem): ReactNode {
 /** One action as a grey line; a command or tool call opens to what it ran. */
 function ActionRow({ item }: { item: ActionItem }) {
   const activity = activityOf(item);
-  const Icon = activity.web ? Globe : ACTIVITY_ICONS[activity.kind];
+  const Icon = activity.web ? Globe : ICONS[activity.kind];
   const running = item.status === "inProgress";
-  const now = useNow(running && item.kind === "command" ? 1000 : null);
-  const elapsed = item.kind === "command" ? (running && item.startedAtMs !== undefined ? now - item.startedAtMs : item.durationMs) : null;
-  const time = elapsed !== null && elapsed >= 1000 ? formatDuration(elapsed) : null;
   const label = (
     <>
       <Icon aria-hidden className="size-icon-md shrink-0" />
-      <span className={cn("min-w-0 truncate", running && "shimmer motion-reduce:animate-none")}>{item.status === "declined" && item.kind === "command" ? `Stopped ${shownCommand(item.command).split("\n")[0]}` : running ? activity.doing : activity.done}</span>
+      <span className="min-w-0 truncate">{running ? activity.doing : activity.done}</span>
       {item.status === "failed" && <span className="text-destructive shrink-0">failed</span>}
-      {time && <span className="shrink-0 tabular-nums">{running ? "for" : item.status === "declined" ? "after" : "in"} {time}</span>}
+      {item.kind === "command" && !running && item.durationMs !== null && item.durationMs >= 1000 && (
+        <span className="shrink-0 tabular-nums">in {formatDuration(item.durationMs)}</span>
+      )}
     </>
   );
   const detail = actionDetail(item);
   if (!detail) return <div className={row}>{label}</div>;
   return (
-    <Collapsible defaultOpen={running} data-slot="worker-action">
+    <Collapsible>
       <CollapsibleTrigger className={cn(row, "group hover:text-foreground w-full text-start")}>
         {label}
-        <ActivityChevron />
+        <ChevronRight
+          aria-hidden
+          className="size-icon-xs shrink-0 opacity-0 transition-[rotate,opacity] group-hover:opacity-100 group-data-[state=open]:rotate-90 group-data-[state=open]:opacity-100"
+        />
       </CollapsibleTrigger>
-      <CollapsibleContent className={ACTIVITY_DETAIL}>{detail}</CollapsibleContent>
+      <CollapsibleContent>{detail}</CollapsibleContent>
     </Collapsible>
   );
 }
@@ -226,21 +246,24 @@ function ActionRun({ items }: { items: readonly ActionItem[] }) {
   const [first] = items;
   if (items.length === 1 && first) return <ActionRow item={first} />;
   const activities = items.map(activityOf);
-  const counts = new Map<typeof activities[number]["kind"], number>();
+  const counts = new Map<ActivityKind, number>();
   for (const activity of activities) counts.set(activity.kind, (counts.get(activity.kind) ?? 0) + 1);
   // Edits win the icon; otherwise the most frequent kind does.
   const [dominant] = counts.has("edit")
     ? ["edit" as const]
     : ([...counts].toSorted((a, b) => b[1] - a[1])[0] ?? ["run" as const]);
-  const Icon = activities.every((activity) => activity.web) ? Globe : ACTIVITY_ICONS[dominant];
+  const Icon = ICONS[dominant];
   return (
     <Collapsible>
       <CollapsibleTrigger className={cn(row, "group hover:text-foreground w-full text-start")}>
         <Icon aria-hidden className="size-icon-md shrink-0" />
         <span className="min-w-0 truncate">{summarize(activities)}</span>
-        <ActivityChevron />
+        <ChevronRight
+          aria-hidden
+          className="size-icon-xs shrink-0 opacity-0 transition-[rotate,opacity] group-hover:opacity-100 group-data-[state=open]:rotate-90 group-data-[state=open]:opacity-100"
+        />
       </CollapsibleTrigger>
-      <CollapsibleContent className="flex max-h-action-list min-w-0 flex-col gap-1 overflow-y-auto pt-1">
+      <CollapsibleContent className="max-h-action-list overflow-y-auto ps-6">
         {items.map((item) => (
           <ActionRow key={item.key} item={item} />
         ))}
@@ -417,19 +440,19 @@ export function WorkerThread({ task, model }: { task: Task; model: string }) {
             type="button"
             aria-expanded={open}
             onClick={() => setOpen(!open)}
-            className="group border-border flex items-center gap-1 self-stretch border-b pb-2 text-start"
+            className="group border-border flex h-control-sm items-center gap-1 self-stretch border-b text-start"
           >
             <span className="text-muted-foreground text-sm">{label}</span>
             <ChevronRight
               aria-hidden
               className={cn(
                 "text-muted-foreground size-icon-xs transition-[rotate,opacity] duration-200 motion-reduce:transition-none",
-                open ? "rotate-90" : "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100",
+                open ? "rotate-90" : "opacity-0 group-hover:opacity-100",
               )}
             />
           </button>
         ) : (
-          <div className="border-border flex items-center border-b pb-2">
+          <div className="border-border flex h-control-sm items-center border-b">
             <span
               className={cn(
                 "text-sm",

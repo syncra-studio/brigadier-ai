@@ -191,14 +191,14 @@ const TASK_REF = /(?<![\p{L}\p{N}_/-])task-(\d+)(?![\p{L}\p{N}_/-]|\.\w)(\s+[“
 
 /**
  * A line with each `task-N` it names given as that worker's name in quotes ("Landed task-41
- * “Findings”" reads "Landed “Findings”"); an unavailable worker reads as “a worker”.
+ * “Findings”" reads "Landed “Findings”"); a number the session has no worker for stays.
  */
 export function namedTasks(text: string, tasks: Readonly<Record<string, Task>>, depth = 0): string {
   if (!text.includes("task-")) return text;
   const byNumber = new Map(Object.values(tasks).map((task) => [task.number, task]));
-  return text.replace(TASK_REF, (_whole, number: string, quoted: string | undefined) => {
+  return text.replace(TASK_REF, (whole, number: string, quoted: string | undefined) => {
     const task = byNumber.get(Number(number));
-    if (!task) return quoted ? quoted.trimStart() : "a worker";
+    if (!task) return whole;
     return quoted ? quoted.trimStart() : `“${workerName(tasks, task, depth)}”`;
   });
 }
