@@ -5,6 +5,7 @@
 use std::time::{Duration, Instant};
 
 use super::SessionManager;
+use super::watchdog::WorkerWatch;
 use crate::machine::builds::{Note, Proc};
 use crate::machine::{RECHECK, Row, TICK, proc_of};
 use crate::model::{ConversationId, DomainEvent, MachineStep, MachineStepKind};
@@ -171,14 +172,34 @@ impl SessionManager {
             },
         )
         .await;
-        while !self.machine.eased_within(RECHECK).await {
+        loop {
+            let eased = self.machine.eased_within(RECHECK).await;
+            // Stopped meanwhile, or the daemon quits: it doesn't start, eased or not.
             let now = self.task_by_id(&task.conversation_id, &task.id).await?;
             if now.state.is_final() {
                 return Err(Error::Invalid(format!("task-{} has ended", task.number)));
             }
             self.admit()?;
+            if eased {
+                break;
+            }
         }
         self.set_task_blocked(&task.id, None).await;
         Ok(())
+    }
+
+    /// Whether the machine is hot or short on memory now.
+    pub(crate) fn machine_strained(&self) -> bool {
+        self.machine.guard.current().strained()
+    }
+
+    /// `watch` with the time its worker's commands were held for the machine counted as
+    /// activity: a build Brigadier stopped is no stall of its worker.
+    pub(crate) fn unheld(&self, task_id: &TaskId, watch: &WorkerWatch) -> WorkerWatch {
+        let mut watch = watch.clone();
+        if let Some(held) = self.machine.held_at_ms(&format!("task:{task_id}")) {
+            watch.last_event_ms = watch.last_event_ms.max(held);
+        }
+        watch
     }
 }

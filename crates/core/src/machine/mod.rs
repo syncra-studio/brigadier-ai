@@ -52,6 +52,8 @@ pub(crate) struct MachineWatch {
     quit: AtomicBool,
     /// The CPU time each process of a heavy command had used at the last look, in ms.
     cpu: Mutex<HashMap<u32, u64>>,
+    /// When a command of each owner was last held, in ms since the epoch.
+    held: Mutex<HashMap<String, i64>>,
 }
 
 impl MachineWatch {
@@ -64,6 +66,7 @@ impl MachineWatch {
             stopped: Stopped::new(stopped_file),
             quit: AtomicBool::new(false),
             cpu: Mutex::new(HashMap::new()),
+            held: Mutex::new(HashMap::new()),
         }
     }
 
@@ -90,22 +93,51 @@ impl MachineWatch {
             return Vec::new();
         }
         let mut rows = Vec::new();
+        let mut unstopped = Vec::new();
         for action in builds.tick(seen, load, now) {
             match action {
-                Action::Stop(proc) => self.stopped.stop(platform, proc),
+                Action::Stop(proc) => {
+                    if !self.stopped.stop(platform, proc) {
+                        unstopped.push(proc);
+                    }
+                }
                 Action::Continue(proc) => self.stopped.resume(platform, proc),
                 Action::Note {
+                    proc,
                     owner,
                     command,
                     note,
-                } => rows.push(Row {
-                    owner,
-                    command,
-                    note,
-                }),
+                } => {
+                    if !unstopped.contains(&proc) {
+                        rows.push(Row {
+                            owner,
+                            command,
+                            note,
+                        });
+                    }
+                }
             }
         }
+        for proc in unstopped {
+            builds.left_running(proc);
+        }
+        let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        let stamp = crate::now_ms();
+        held.retain(|_, at| stamp - *at < 24 * 60 * 60 * 1000);
+        for owner in builds.held_owners() {
+            held.insert(owner, stamp);
+        }
         rows
+    }
+
+    /// When a command of `owner` was last held (waiting or paused), in ms since the epoch:
+    /// time its worker spent silent for the machine, which the stall watchdog doesn't count.
+    pub(crate) fn held_at_ms(&self, owner: &str) -> Option<i64> {
+        self.held
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(owner)
+            .copied()
     }
 
     /// Marks each command whose processes used CPU since the last look, or started since.
@@ -351,16 +383,25 @@ impl Stopped {
     }
 
     /// Stops `root`'s tree, written down first (the root, then every member stopped).
-    pub(crate) fn stop(&self, platform: &dyn Platform, root: Proc) {
+    /// Nothing is stopped when it can't be written down (a full disk): whether it was.
+    pub(crate) fn stop(&self, platform: &dyn Platform, root: Proc) -> bool {
         {
             let mut procs = self.procs();
             procs.entry(root).or_default();
-            self.save(&procs);
+            if let Err(err) = self.save(&procs) {
+                tracing::warn!(error = %err, "left a build running: the stopped processes can't be written down");
+                procs.remove(&root);
+                return false;
+            }
         }
         let members = stop_tree(platform, root);
         let mut procs = self.procs();
         procs.insert(root, members);
-        self.save(&procs);
+        // The root is written down already: a next daemon finds the rest below it.
+        if let Err(err) = self.save(&procs) {
+            tracing::warn!(error = %err, "could not write down a stopped build's processes");
+        }
+        true
     }
 
     /// Lets `root`'s tree go on and crosses it off.
@@ -369,7 +410,9 @@ impl Stopped {
         continue_tree(platform, root, &members);
         let mut procs = self.procs();
         procs.remove(&root);
-        self.save(&procs);
+        if let Err(err) = self.save(&procs) {
+            tracing::warn!(error = %err, "could not write down the stopped processes");
+        }
     }
 
     /// Lets everything written down go on: what a daemon that died left stopped (at start), or
@@ -394,18 +437,17 @@ impl Stopped {
         count
     }
 
-    fn save(&self, procs: &HashMap<Proc, Vec<Proc>>) {
+    fn save(&self, procs: &HashMap<Proc, Vec<Proc>>) -> std::io::Result<()> {
         if procs.is_empty() {
-            let _ = std::fs::remove_file(&self.path);
-            return;
+            return match std::fs::remove_file(&self.path) {
+                Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err),
+                _ => Ok(()),
+            };
         }
         let list: Vec<(&Proc, &Vec<Proc>)> = procs.iter().collect();
-        let result = serde_json::to_vec(&list)
+        serde_json::to_vec(&list)
             .map_err(std::io::Error::other)
-            .and_then(|bytes| write_atomically(&self.path, &bytes));
-        if let Err(err) = result {
-            tracing::warn!(error = %err, "could not write down the stopped processes");
-        }
+            .and_then(|bytes| write_atomically(&self.path, &bytes))
     }
 }
 

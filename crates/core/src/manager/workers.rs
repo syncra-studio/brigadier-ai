@@ -1086,6 +1086,12 @@ impl SessionManager {
         if matches!(origin, Origin::New) {
             self.hold_while_strained(task).await?;
             self.admit_new_run_task(task).await?;
+            // The machine may have heated up while it waited for a run's slot.
+            while task.run.is_some() && self.machine_strained() {
+                self.release_run_task(&task.id);
+                self.hold_while_strained(task).await?;
+                self.admit_new_run_task(task).await?;
+            }
         } else {
             self.admit_run_task(task).await?;
         }

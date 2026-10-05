@@ -426,7 +426,7 @@ impl SessionManager {
         if task.state.is_final() {
             return;
         }
-        let watch = live.watch(now).await;
+        let watch = self.unheld(&task.id, &live.watch(now).await);
         let Some(verdict) = stall_verdict(
             task.state,
             task.quota_wait.is_some(),
@@ -473,6 +473,7 @@ impl SessionManager {
                     return;
                 };
                 let due = |current: &WorkerWatch| {
+                    let current = &self.unheld(&task.id, current);
                     let verdict_now =
                         stall_verdict(state, quota_wait, card, current, timing, now_ms());
                     still_due(verdict, seen, current, verdict_now)
@@ -595,6 +596,7 @@ impl SessionManager {
         let settled = live.settle.lock().await;
         let (state, quota_wait, card) = self.task_now(live).await?;
         let due = |current: &WorkerWatch| {
+            let current = &self.unheld(&live.id, current);
             let verdict_now = stall_verdict(state, quota_wait, card, current, timing, now_ms());
             still_due(verdict, seen, current, verdict_now)
         };

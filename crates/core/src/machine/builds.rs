@@ -76,6 +76,7 @@ pub(crate) enum Action {
     Continue(Proc),
     /// Tell the command's owner's thread.
     Note {
+        proc: Proc,
         owner: String,
         command: String,
         note: Note,
@@ -173,6 +174,7 @@ impl Builds {
             } else {
                 actions.push(Action::Stop(seen.root));
                 actions.push(Action::Note {
+                    proc: seen.root,
                     owner: seen.owner.clone(),
                     command: seen.command.clone(),
                     note: if load.strained() {
@@ -225,6 +227,7 @@ impl Builds {
                 self.last_pause = Some(now);
                 actions.push(Action::Stop(proc));
                 actions.push(Action::Note {
+                    proc,
                     owner: build.owner.clone(),
                     command: build.command.clone(),
                     note: Note::Paused,
@@ -270,6 +273,25 @@ impl Builds {
         stopped
             .into_iter()
             .map(|(_, proc)| Action::Continue(proc))
+            .collect()
+    }
+
+    /// A command that couldn't be stopped runs on, without the lease, left alone.
+    pub(crate) fn left_running(&mut self, proc: Proc) {
+        if let Some(build) = self.builds.get_mut(&proc) {
+            build.state = State::LongRunning;
+        }
+        if self.lease == Some(proc) {
+            self.lease = None;
+        }
+    }
+
+    /// The owners of the commands stopped now.
+    pub(crate) fn held_owners(&self) -> Vec<String> {
+        self.builds
+            .values()
+            .filter(|build| matches!(build.state, State::Waiting | State::Paused { .. }))
+            .map(|build| build.owner.clone())
             .collect()
     }
 
@@ -319,6 +341,7 @@ impl Builds {
             };
             actions.push(Action::Continue(proc));
             actions.push(Action::Note {
+                proc,
                 owner: build.owner.clone(),
                 command: build.command.clone(),
                 note: Note::Resumed,
