@@ -1,5 +1,5 @@
-//! Newer versions of Brigadier and the agent CLIs, for the rail's update button: a minute after
-//! launch and then every six hours, and again after an update.
+//! Newer versions of Brigadier and the agent CLIs, for the bottom bar's update pills: a minute
+//! after launch and then every six hours, and again after an update.
 //!
 //! - Brigadier: the repository's latest GitHub release against this build's version. Its
 //!   Update opens the release's page.

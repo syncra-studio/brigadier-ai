@@ -1038,6 +1038,10 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             daemon.terminals.resize(&terminal_id, cols, rows)?;
             Response::ResizeTerminal
         }
+        Request::ClearTerminal { terminal_id } => {
+            daemon.terminals.clear(&terminal_id)?;
+            Response::ClearTerminal
+        }
         Request::CloseTerminal { terminal_id } => {
             daemon.terminals.close(&terminal_id);
             Response::CloseTerminal

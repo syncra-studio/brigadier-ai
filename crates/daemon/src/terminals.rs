@@ -223,6 +223,15 @@ impl Terminals {
             .map_err(|err| Error::Invalid(format!("couldn't resize the terminal: {err}")))
     }
 
+    /// Forgets the saved output but the line in progress (the prompt), as the view's clear does.
+    pub fn clear(&self, id: &str) -> Result<()> {
+        let terminal = self.get(id)?;
+        let mut scrollback = lock(&terminal.scrollback);
+        let keep = scrollback.rfind('\n').map_or(0, |at| at + 1);
+        scrollback.drain(..keep);
+        Ok(())
+    }
+
     /// How many terminals run.
     pub fn count(&self) -> usize {
         lock(&self.live).len()

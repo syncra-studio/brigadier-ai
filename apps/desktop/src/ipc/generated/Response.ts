@@ -68,7 +68,7 @@ files: Array<string>,
 /**
  * Set when the checkout has more files than were listed.
  */
-truncated: boolean, } | { "method": "readFile", file: CheckoutFile, } | { "method": "openTerminal", terminal: TerminalInfo, } | { "method": "openSetupTerminal", terminal: TerminalInfo, } | { "method": "openSideChat", conversation: Conversation, } | { "method": "writeTerminal" } | { "method": "resizeTerminal" } | { "method": "closeTerminal" } | { "method": "getDictation", dictation: DictationStatus, } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation", dictationId: string, } | { "method": "appendDictation" } | { "method": "finishDictation" } | { "method": "cancelDictation" } | { "method": "rateMessage" } | { "method": "getSessionDiff", 
+truncated: boolean, } | { "method": "readFile", file: CheckoutFile, } | { "method": "openTerminal", terminal: TerminalInfo, } | { "method": "openSetupTerminal", terminal: TerminalInfo, } | { "method": "openSideChat", conversation: Conversation, } | { "method": "writeTerminal" } | { "method": "resizeTerminal" } | { "method": "clearTerminal" } | { "method": "closeTerminal" } | { "method": "getDictation", dictation: DictationStatus, } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation", dictationId: string, } | { "method": "appendDictation" } | { "method": "finishDictation" } | { "method": "cancelDictation" } | { "method": "rateMessage" } | { "method": "getSessionDiff", 
 /**
  * Absent for Chats and local-checkout sessions.
  */

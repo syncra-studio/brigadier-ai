@@ -94,7 +94,16 @@ function UpdatePill({ items, children }: { items: UpdateItem[]; children: ReactN
         </TooltipTrigger>
         <TooltipContent side="top">{label}</TooltipContent>
       </Tooltip>
-      <PopoverContent side="top" align="end" className="flex w-sm flex-col gap-1 p-1.5">
+      <PopoverContent
+        side="top"
+        align="end"
+        // Focus the list itself, not its first button (whose tip would open with it).
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
+        }}
+        className="flex w-sm flex-col gap-1 p-1.5"
+      >
         {rows.map((item) => (
           <UpdateRow key={item.target} item={item} />
         ))}

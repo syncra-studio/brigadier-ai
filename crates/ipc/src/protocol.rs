@@ -238,6 +238,10 @@ pub enum Request {
         cols: u16,
         rows: u16,
     },
+    /// Forgets a terminal's saved output (⌘K), so reopening its tab doesn't replay it.
+    ClearTerminal {
+        terminal_id: String,
+    },
     /// Ends a terminal's shell.
     CloseTerminal {
         terminal_id: String,
@@ -886,6 +890,7 @@ pub enum Response {
     },
     WriteTerminal,
     ResizeTerminal,
+    ClearTerminal,
     CloseTerminal,
     GetDictation {
         dictation: DictationStatus,

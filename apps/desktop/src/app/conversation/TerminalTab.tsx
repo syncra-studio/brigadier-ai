@@ -512,6 +512,11 @@ export function TerminalView({
         event.preventDefault();
         event.stopPropagation();
         terminal.clear();
+        // The daemon forgets it too, so reopening the tab doesn't bring it back.
+        if (id)
+          void request({ method: "clearTerminal", terminalId: id }).catch(
+            () => {},
+          );
         return false;
       }
       // Off macOS, Ctrl+J, K, T and W are the shell's while it has the keyboard.
