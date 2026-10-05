@@ -51,3 +51,12 @@ the rendering test in `src/app/conversation/WorkerActivity.test.ts`, run by `pnp
 It renders task rows and the expanded background-workers strip with a fixed clock,
 including live activity, waits, checks and a completed worker. This standalone entry
 is absent from the production build.
+
+# Phase flow
+
+`http://localhost:1426/fixtures/flow.html` renders a session run the phase way from synthetic data
+(`src/fixtures/flow.tsx`): a finished request, and a second one whose lead works while three approvals
+wait in the composer's place (a command, a keychain action, "Start this plan?"). Answering an approval
+removes it, as the daemon would. Query: `view=done` (the second request finished, with what waits on the
+user), `approvals=0`, `sidebar=0`, `summary=0`, `density=compact`. `window.flow` holds the stores and
+the recorded requests (`calls`).
