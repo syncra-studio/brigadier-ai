@@ -149,6 +149,19 @@ pub struct MessageWorker {
     pub text: String,
 }
 
+/// `answer_worker`: answer the question a worker waits on (`ask_orchestrator`).
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AnswerWorker {
+    /// The task, e.g. "task-3".
+    pub task: String,
+    /// The answer: what the worker should do.
+    pub answer: String,
+    /// Why, in a few words (the brief says so, the worker's recommendation fits, a decision
+    /// settled it).
+    pub why: String,
+}
+
 /// `route_follow_up`: sorts a message the user sent while the orchestrator works on their
 /// request.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -510,6 +523,7 @@ pub struct OvernightSourceInput {
 pub enum OrchestratorCall {
     DelegateTask(DelegateTask),
     MessageWorker(MessageWorker),
+    AnswerWorker(AnswerWorker),
     RouteFollowUp(RouteFollowUp),
     StopWorker(TaskRef),
     AskUser(AskUser),
@@ -536,6 +550,7 @@ impl OrchestratorCall {
         match self {
             Self::DelegateTask(_) => "delegate_task",
             Self::MessageWorker(_) => "message_worker",
+            Self::AnswerWorker(_) => "answer_worker",
             Self::RouteFollowUp(_) => "route_follow_up",
             Self::StopWorker(_) => "stop_worker",
             Self::AskUser(_) => "ask_user",
@@ -707,6 +722,7 @@ pub enum WorkerCall {
     SubmitOutline(SubmitOutline),
     RequestReview(RequestReview),
     SubmitReport(SubmitReport),
+    QueryBrain(QueryBrain),
     CodeSearch(CodeSearch),
     CodeRefs(CodeRefs),
     ProjectMap,
@@ -720,6 +736,7 @@ impl WorkerCall {
             Self::SubmitOutline(_) => "submit_outline",
             Self::RequestReview(_) => "request_review",
             Self::SubmitReport(_) => "submit_report",
+            Self::QueryBrain(_) => "query_brain",
             Self::CodeSearch(_) => "code_search",
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",

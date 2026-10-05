@@ -4,11 +4,11 @@
 use std::sync::{Arc, OnceLock};
 
 use brigadier_core::tools::{
-    ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch, DelegateTask,
-    FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser, OrchestratorCall, PhaseDone,
-    PlanPhases, ProposeOvernight, ProposePhases, QueryBrain, ReadArtifact, RecordNodes, Remember,
-    ReportRef, RequestApproval, RequestReview, Role, RouteFollowUp, SaveMemory, SearchTranscript,
-    SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
+    AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch,
+    DelegateTask, FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser, OrchestratorCall,
+    PhaseDone, PlanPhases, ProposeOvernight, ProposePhases, QueryBrain, ReadArtifact, RecordNodes,
+    Remember, ReportRef, RequestApproval, RequestReview, Role, RouteFollowUp, SaveMemory,
+    SearchTranscript, SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
@@ -25,9 +25,15 @@ so make the spec self-contained. `implement` and `merge` tasks change code in th
 worktree, commit their own steps and land only through land_phase; the other kinds only read \
 and report.";
 
-const MESSAGE_WORKER: &str = "Send text to a running worker: the answer to the question it \
-asked you (it is waiting for it), or an instruction that steers its current work. Returns once \
-delivered.";
+const MESSAGE_WORKER: &str = "Send text to a worker: an instruction that steers its current \
+work, or sends a reported worker back to work. Answer a worker's question with answer_worker. \
+Returns once delivered.";
+
+const ANSWER_WORKER: &str = "Answer the question a worker asked you (it waits for the answer). \
+Answer at once and yourself: take the worker's recommendation if it fits, else what the brief, \
+the outline, the user's words or the Brain imply; never reopen a decision already settled. Ask \
+the user only what truly only they can decide. `why` is a few words the user reads next to the \
+answer.";
 
 const ROUTE_FOLLOW_UP: &str = "Sort a [follow-up …] the user sent while you work on their \
 request. joins=true: it belongs to this work; it reaches you at once as the user's message, and \
@@ -150,9 +156,16 @@ they state it or clearly imply it holds beyond this chat; never secrets or passi
 user sees it saved and can remove it.";
 
 const ASK_ORCHESTRATOR: &str = "Ask the orchestrator (who gave you this task) a question you \
-cannot settle yourself, such as an unclear requirement or a choice outside your task. The call \
-blocks until the answer comes back, which can take minutes. Ask only when you cannot sensibly \
-go on without the answer.";
+cannot settle yourself, such as an unclear requirement or a choice outside your task. One \
+question per call, with the options you see and the one you recommend. The call blocks until \
+the answer comes back. Ask only when you cannot sensibly go on without the answer; look things \
+up with query_brain and the code tools first.";
+
+const WORKER_QUERY_BRAIN: &str = "Ask the Project Brain (read-only): what Brigadier knows \
+about this project (its modules, earlier findings, decisions, conventions, contracts) and the \
+user's preferences, each with where it came from. Fast and cheap: ask it before reading widely. \
+It answers with what holds now; set `history` to also see earlier versions. When it says there \
+are more results, ask again with `page`.";
 
 const SUBMIT_OUTLINE: &str = "Leads only, when the work is multi-step or risky: after \
 reading the code, send your outline (the steps in order with the files each touches, how you \
@@ -206,6 +219,11 @@ fn orchestrator_tools() -> Vec<Tool> {
             "message_worker",
             MESSAGE_WORKER,
             input_schema::<MessageWorker>(),
+        ),
+        tool(
+            "answer_worker",
+            ANSWER_WORKER,
+            input_schema::<AnswerWorker>(),
         ),
         tool(
             "route_follow_up",
@@ -286,6 +304,11 @@ fn worker_tools() -> Vec<Tool> {
             SUBMIT_REPORT,
             input_schema::<SubmitReport>(),
         ),
+        tool(
+            "query_brain",
+            WORKER_QUERY_BRAIN,
+            input_schema::<QueryBrain>(),
+        ),
         tool("code_search", CODE_SEARCH, input_schema::<CodeSearch>()),
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
@@ -349,6 +372,7 @@ pub fn parse_call(
             let call = match name {
                 "delegate_task" => OrchestratorCall::DelegateTask(args(name, arguments)?),
                 "message_worker" => OrchestratorCall::MessageWorker(args(name, arguments)?),
+                "answer_worker" => OrchestratorCall::AnswerWorker(args(name, arguments)?),
                 "route_follow_up" => OrchestratorCall::RouteFollowUp(args(name, arguments)?),
                 "stop_worker" => OrchestratorCall::StopWorker(args(name, arguments)?),
                 "ask_user" => OrchestratorCall::AskUser(args(name, arguments)?),
@@ -385,6 +409,7 @@ pub fn parse_call(
                     WorkerCall::RequestReview(args::<RequestReview>(name, arguments)?)
                 }
                 "submit_report" => WorkerCall::SubmitReport(args::<SubmitReport>(name, arguments)?),
+                "query_brain" => WorkerCall::QueryBrain(args::<QueryBrain>(name, arguments)?),
                 "code_search" => WorkerCall::CodeSearch(args::<CodeSearch>(name, arguments)?),
                 "code_refs" => WorkerCall::CodeRefs(args::<CodeRefs>(name, arguments)?),
                 "project_map" => WorkerCall::ProjectMap,

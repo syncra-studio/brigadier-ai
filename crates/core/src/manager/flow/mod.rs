@@ -83,7 +83,7 @@ impl Turn {
 
     /// Calls a Brigadier tool as the session's model would.
     pub async fn call(&self, name: &str, args: Value) -> ToolReply {
-        let call = tool_call(name, args);
+        let call = tool_call(name, args, self.is_orchestrator());
         ToolHost::call(&*self.host, &self.grant, call).await
     }
 
@@ -100,8 +100,9 @@ impl Turn {
     }
 }
 
-/// The tool call `name` with `args`, as the MCP server would build it.
-fn tool_call(name: &str, args: Value) -> ToolCall {
+/// The tool call `name` with `args`, as the MCP server would build it for the orchestrator or
+/// a worker.
+fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
     fn arg<T: serde::de::DeserializeOwned>(name: &str, args: Value) -> T {
         serde_json::from_value(args).unwrap_or_else(|err| panic!("{name} arguments: {err}"))
     }
@@ -110,10 +111,12 @@ fn tool_call(name: &str, args: Value) -> ToolCall {
     match name {
         "delegate_task" => ToolCall::Orchestrator(O::DelegateTask(arg(name, args))),
         "message_worker" => ToolCall::Orchestrator(O::MessageWorker(arg(name, args))),
+        "answer_worker" => ToolCall::Orchestrator(O::AnswerWorker(arg(name, args))),
         "stop_worker" => ToolCall::Orchestrator(O::StopWorker(arg(name, args))),
         "ask_user" => ToolCall::Orchestrator(O::AskUser(arg(name, args))),
         "read_report" => ToolCall::Orchestrator(O::ReadReport(arg(name, args))),
-        "query_brain" => ToolCall::Orchestrator(O::QueryBrain(arg(name, args))),
+        "query_brain" if orchestrator => ToolCall::Orchestrator(O::QueryBrain(arg(name, args))),
+        "query_brain" => ToolCall::Worker(W::QueryBrain(arg(name, args))),
         "plan_phases" => ToolCall::Orchestrator(O::PlanPhases(arg(name, args))),
         "approve_outline" => ToolCall::Orchestrator(O::ApproveOutline(arg(name, args))),
         "request_approval" => ToolCall::Orchestrator(O::RequestApproval(arg(name, args))),

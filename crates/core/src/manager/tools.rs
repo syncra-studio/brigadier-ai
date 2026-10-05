@@ -211,6 +211,15 @@ impl SessionManager {
                     .await;
                 Ok(reply)
             }
+            OrchestratorCall::AnswerWorker(args) => {
+                let task = self.find_task(id, &args.task).await?;
+                let reply = self
+                    .answer_worker(&task, args.answer.clone(), args.why)
+                    .await?;
+                self.update_task(id, &task.id, |task| messaged(task, args.answer, true))
+                    .await?;
+                Ok(reply)
+            }
             OrchestratorCall::RouteFollowUp(args) => {
                 self.route_follow_up(id, &args.follow_up, args.joins).await
             }
@@ -292,8 +301,14 @@ impl SessionManager {
                 ))
             }
             OrchestratorCall::QueryBrain(args) => {
-                self.query_brain_tool(id, args.query, args.history.unwrap_or(false), args.page)
-                    .await
+                self.query_brain_tool(
+                    id,
+                    args.query,
+                    args.history.unwrap_or(false),
+                    args.page,
+                    false,
+                )
+                .await
             }
             OrchestratorCall::Remember(args) => self.remember_tool(id, args).await,
             OrchestratorCall::SearchTranscript(args) => self.search_transcript_tool(id, args).await,
@@ -466,6 +481,16 @@ impl SessionManager {
             WorkerCall::RequestReview(args) => {
                 self.request_review(&conversation_id, &task_id, args.focus)
                     .await
+            }
+            WorkerCall::QueryBrain(args) => {
+                self.query_brain_tool(
+                    &conversation_id,
+                    args.query,
+                    args.history.unwrap_or(false),
+                    args.page,
+                    true,
+                )
+                .await
             }
             WorkerCall::SubmitReport(args) => {
                 self.worker_report(&conversation_id, &task_id, args).await

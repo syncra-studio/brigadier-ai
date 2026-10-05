@@ -764,3 +764,124 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
     assert_eq!(said.matches("[outline review]").count(), 1);
     flow.stop().await;
 }
+
+/// A worker's questions are answered by the orchestrator, never left for the user: one with
+/// answer_worker and a reason, one by a steering message_worker. Each shows as an "Answered"
+/// row and enters the ledger. Workers may ask the Project Brain too (read-only).
+#[tokio::test]
+async fn the_orchestrator_answers_a_workers_questions_and_logs_each_answer() {
+    let flow = Flow::start(
+        "answers",
+        Options::default(),
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if turn.input.contains("Which greeting?") {
+                    let reply = turn
+                        .call(
+                            "answer_worker",
+                            json!({"task": "task-1", "answer": "Hello.",
+                                   "why": "your recommendation fits the brief"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("Which language?") {
+                    let reply = turn
+                        .call(
+                            "message_worker",
+                            json!({"task": "task-1", "text": "English."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                if !reports_in(&turn.input).is_empty() {
+                    // Nothing waits on an answer any more.
+                    let reply = turn
+                        .call(
+                            "answer_worker",
+                            json!({"task": "task-1", "answer": "x", "why": "y"}),
+                        )
+                        .await;
+                    assert!(reply.is_error, "{}", reply.text);
+                    return Reply::text("It says Hello, in English.");
+                }
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"title": "Pick a greeting", "kind": "scout",
+                               "spec": "Pick the greeting."}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            let brain = turn
+                .call("query_brain", json!({"query": "greeting conventions"}))
+                .await;
+            assert!(!brain.is_error, "{}", brain.text);
+            assert!(!brain.text.contains("Delegate a scout"), "{}", brain.text);
+            let first = turn
+                .call(
+                    "ask_orchestrator",
+                    json!({"question": "Which greeting? I recommend Hello."}),
+                )
+                .await;
+            assert_eq!(first.text, "Hello.");
+            let second = turn
+                .call("ask_orchestrator", json!({"question": "Which language?"}))
+                .await;
+            assert_eq!(second.text, "English.");
+            let reply = turn
+                .call("submit_report", json!({"summary": "Hello, in English."}))
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        }),
+    )
+    .await;
+    flow.say("Which greeting should we use?").await;
+    let board = flow.settled().await;
+    assert_eq!(Flow::task(&board, 1).state, TaskState::Done);
+    assert!(board.approvals.is_empty() && board.questions.is_empty());
+    let answered: Vec<(String, String, String)> = flow
+        .events()
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            crate::model::DomainEvent::OrchestratorStepped { step } => match step.kind {
+                crate::work::OrchestratorStepKind::Answered {
+                    question,
+                    answer,
+                    why,
+                    ..
+                } => Some((question, answer, why)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        answered,
+        vec![
+            (
+                "Which greeting? I recommend Hello.".to_owned(),
+                "Hello.".to_owned(),
+                "your recommendation fits the brief".to_owned()
+            ),
+            (
+                "Which language?".to_owned(),
+                "English.".to_owned(),
+                "steer".to_owned()
+            ),
+        ]
+    );
+    let logged = board
+        .decisions
+        .iter()
+        .filter(|decision| decision.kind == crate::work::DecisionKind::Answer)
+        .count();
+    assert_eq!(logged, 2, "{:?}", board.decisions);
+    flow.stop().await;
+}

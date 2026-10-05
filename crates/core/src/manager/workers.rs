@@ -101,8 +101,8 @@ pub(crate) struct Workspace {
 #[derive(Default)]
 struct TaskLiveState {
     cli: Option<Arc<Cli>>,
-    /// The worker waits on `ask_orchestrator`.
-    question: Option<oneshot::Sender<String>>,
+    /// The worker waits on `ask_orchestrator`: what it asked, and where the answer goes.
+    question: Option<(String, oneshot::Sender<String>)>,
     /// A turn is running.
     busy: bool,
     /// Asked once to submit its report after a turn ended without one.
@@ -2291,7 +2291,7 @@ impl SessionManager {
         }
         let question = self.redact_for(&live, &question).await;
         let (tx, rx) = oneshot::channel();
-        live.state.lock().await.question = Some(tx);
+        live.state.lock().await.question = Some((question.clone(), tx));
         self.set_task_blocked(task_id, Some(format!("Asked the orchestrator: {question}")))
             .await;
         self.deliver(
@@ -2301,7 +2301,7 @@ impl SessionManager {
                 label: format!("question from task-{}", task.number),
                 task_id: Some(task_id.clone()),
                 text: format!(
-                    "[question from task-{} \"{}\"]\n{question}\n[/question] Answer it with message_worker (task-{}); the worker waits.",
+                    "[question from task-{} \"{}\"]\n{question}\n[/question] Answer it now with answer_worker (task-{}): the worker's recommendation if it fits, else what the brief implies; never reopen a settled decision. The worker waits.",
                     task.number, task.title, task.number
                 ),
             },
@@ -2321,6 +2321,60 @@ impl SessionManager {
                 ))
             }
         }
+    }
+
+    /// `answer_worker`: answers the question a worker waits on, and why.
+    pub(crate) async fn answer_worker(
+        &self,
+        task: &Task,
+        answer: String,
+        why: String,
+    ) -> Result<String> {
+        let live = self
+            .existing_task_live(&task.id)
+            .ok_or_else(|| Error::Invalid(format!("task-{} has ended", task.number)))?;
+        let Some((question, waiter)) = live.state.lock().await.question.take() else {
+            return Err(Error::Invalid(format!(
+                "task-{} isn't waiting on a question. To steer it, use message_worker.",
+                task.number
+            )));
+        };
+        let _ = waiter.send(answer.clone());
+        self.record_answer(task, question, answer, why).await;
+        Ok(format!("Answered task-{}; it continues.", task.number))
+    }
+
+    /// Logs an answer to a worker's question: the thread's "Answered" row, and the ledger's
+    /// decision (the morning report lists it).
+    async fn record_answer(&self, task: &Task, question: String, answer: String, why: String) {
+        let why = match why.trim() {
+            "" => "steer".to_owned(),
+            why => why.to_owned(),
+        };
+        self.orchestrator_step(
+            &task.conversation_id,
+            crate::work::OrchestratorStepKind::Answered {
+                task_id: task.id.clone(),
+                question,
+                answer: answer.clone(),
+                why: why.clone(),
+            },
+        )
+        .await;
+        let request = self
+            .request_for(&task.conversation_id, Some(&task.id))
+            .await;
+        self.record_decision(
+            &task.conversation_id,
+            request,
+            crate::work::DecisionSource::Task {
+                task_id: task.id.clone(),
+            },
+            crate::work::DecisionKind::Answer,
+            format!("Answered task-{}: {answer}", task.number),
+            why,
+        )
+        .await;
     }
 
     /// `submit_report`: stores the worker's final report and hands it on.
@@ -2812,8 +2866,12 @@ impl SessionManager {
             None
         };
         let mut state = live.state.lock().await;
-        if let Some(waiter) = state.question.take() {
-            let _ = waiter.send(text);
+        if let Some((question, waiter)) = state.question.take() {
+            drop(state);
+            let _ = waiter.send(text.clone());
+            // An answer, however it was sent: the thread shows it as one.
+            self.record_answer(task, question, text, "steer".into())
+                .await;
             return Ok((
                 format!("Answered task-{}; it continues.", task.number),
                 true,

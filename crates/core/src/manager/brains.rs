@@ -671,6 +671,7 @@ impl SessionManager {
         text: String,
         history: bool,
         page: Option<u32>,
+        worker: bool,
     ) -> Result<String> {
         let started = Instant::now();
         let project = match self.project_of(id) {
@@ -771,6 +772,9 @@ impl SessionManager {
                 reply.push_str(&answer.text);
             }
             _ if !code.is_empty() => reply.push_str("[Project Brain]\nNothing more on this."),
+            _ if worker => reply.push_str(
+                "The Project Brain has nothing on this yet: look in the code (code_search, code_refs, project_map).",
+            ),
             _ => reply.push_str(
                 "The Project Brain has nothing on this yet. Delegate a scout (or research) task; its report is kept in the Brain for next time.",
             ),
