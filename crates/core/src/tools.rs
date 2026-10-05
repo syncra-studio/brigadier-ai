@@ -710,17 +710,32 @@ fn paths<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::E
         .collect())
 }
 
-/// Whether a report line only says the list is empty ("None.", "N/A", "-"): some models fill
-/// every section, and a placeholder under needs_user must not read as something for the user.
+/// Whether a report line only says the list is empty ("None.", "N/A", "-", "None for
+/// implementation."): some models fill every section, and a placeholder under needs_user must
+/// not read as something for the user.
 fn empty_item(item: &str) -> bool {
     const PLACEHOLDERS: [&str; 6] = ["none", "n/a", "na", "nothing", "no", "none needed"];
+    // A placeholder qualified by what it is about ("None for this task", "Nothing needed for
+    // the build"), as long as no second sentence or clause follows that could hold a real ask.
+    const QUALIFIED: [&str; 7] = [
+        "none for ",
+        "none needed ",
+        "nothing needed",
+        "none required",
+        "nothing required",
+        "no action needed",
+        "no action required",
+    ];
     let item = item
         .trim()
         .trim_matches(|c: char| {
             c.is_whitespace() || c.is_ascii_punctuation() || matches!(c, '—' | '–')
         })
         .to_lowercase();
-    item.is_empty() || PLACEHOLDERS.contains(&item.as_str())
+    let one_clause = !item.contains([';', ':', '—', '–']) && !item.contains(". ");
+    item.is_empty()
+        || PLACEHOLDERS.contains(&item.as_str())
+        || (one_clause && QUALIFIED.iter().any(|start| item.starts_with(start)))
 }
 
 /// A tool call from a worker.
@@ -894,7 +909,7 @@ mod tests {
             "done_when": ["[met] tests pass: 41 passed", "none needed"],
             "open_questions": ["None."],
             "risks": "-\nNothing.\n(none)",
-            "needs_user": ["  no  ", "n/a"],
+            "needs_user": ["  no  ", "n/a", "None for implementation.", "Nothing needed for the build"],
         }));
         assert_eq!(report.changes, ["src/a.ts"]);
         assert!(report.decisions.is_empty());
@@ -911,6 +926,12 @@ mod tests {
             kept.needs_user,
             ["None of the keys are set: add STRIPE_KEY to .env"]
         );
+        // So does a qualified placeholder that goes on to ask for something.
+        let asks = self::report(serde_json::json!({
+            "summary": "Done.",
+            "needs_user": "None for the code; paste one real screenshot in the app",
+        }));
+        assert_eq!(asks.needs_user.len(), 1);
     }
 
     #[test]
