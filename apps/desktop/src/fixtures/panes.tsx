@@ -98,6 +98,7 @@ useApp.setState({
 const shells = new Map<string, string>();
 const nativePages = new Map<string, HTMLDivElement>();
 const calls: unknown[] = [];
+const eventListeners = new Map<number, string>();
 function place(pageId: string, bounds: BrowserBounds | null) {
   const page = nativePages.get(pageId);
   if (!page) return;
@@ -114,6 +115,34 @@ mockIPC(
   (command, args) => {
     calls.push({ command, args });
     const values = args as Record<string, unknown>;
+    // The bundled mock removes args.id, while this API version sends eventId.
+    // Match the actual event bridge here so subscriptions really release on pane changes.
+    if (command === "plugin:event|listen") {
+      eventListeners.set(values.handler as number, values.event as string);
+      return values.handler;
+    }
+    if (command === "plugin:event|unlisten") {
+      eventListeners.delete(values.eventId as number);
+      return null;
+    }
+    if (command === "plugin:event|emit") {
+      const bridge = (
+        window as unknown as {
+          __TAURI_INTERNALS__: {
+            runCallback: (id: number, event: unknown) => void;
+          };
+        }
+      )["__TAURI_INTERNALS__"];
+      for (const [handler, event] of eventListeners) {
+        if (event === values.event)
+          bridge.runCallback(handler, {
+            id: handler,
+            event,
+            payload: values.payload,
+          });
+      }
+      return null;
+    }
     if (command === "browser_open" || command === "browser_navigate") {
       const pageId = values.id as string;
       let page = nativePages.get(pageId);
@@ -189,7 +218,7 @@ mockIPC(
       return { method: req.method, page: { entries: [], hasMore: false } };
     return { method: req.method };
   },
-  { shouldMockEvents: true },
+  { shouldMockEvents: false },
 );
 
 function Fixture() {
