@@ -112,10 +112,8 @@ impl Parser {
             return Vec::new();
         }
         let Ok(message) = serde_json::from_str::<Value>(line) else {
-            return vec![notice(
-                NoticeLevel::Warning,
-                format!("unparsed Codex output: {}", clip(line, 300)),
-            )];
+            tracing::warn!("Codex sent output that is not valid JSON");
+            return vec![unreadable_message()];
         };
         let method = message.get("method").and_then(Value::as_str);
         let id = message.get("id").cloned();
@@ -913,13 +911,19 @@ fn decode<T: DeserializeOwned>(method: &str, params: Value, out: &mut Vec<Output
     match serde_json::from_value(params) {
         Ok(value) => Some(value),
         Err(err) => {
-            out.push(notice(
-                NoticeLevel::Warning,
-                format!("Codex sent a {method} these bindings cannot read: {err}"),
-            ));
+            tracing::warn!(method, error = %err, "Could not decode a Codex message");
+            out.push(unreadable_message());
             None
         }
     }
+}
+
+fn unreadable_message() -> Output {
+    notice(
+        NoticeLevel::Warning,
+        "Brigadier could not read a message from Codex. Some session updates may be missing."
+            .into(),
+    )
 }
 
 fn notice(level: NoticeLevel, message: String) -> Output {
@@ -941,6 +945,53 @@ mod tests {
                 Output::Control(_) => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn unreadable_messages_still_warn_the_user() {
+        let mut parser = Parser::live();
+        for line in [
+            "not JSON".to_owned(),
+            json!({ "method": "item/agentMessage/delta", "params": {
+                "threadId": "t1", "turnId": "u1", "itemId": "a1", "delta": 42,
+            }})
+            .to_string(),
+        ] {
+            assert!(matches!(
+                parser.feed(&line).as_slice(),
+                [Output::Event(ProviderEvent::Notice { level: NoticeLevel::Warning, message })]
+                    if message == "Brigadier could not read a message from Codex. Some session updates may be missing."
+            ));
+        }
+    }
+
+    #[test]
+    fn unknown_fields_do_not_warn_the_user() {
+        let mut parser = Parser::live();
+        let line = json!({ "method": "item/agentMessage/delta", "params": {
+            "threadId": "t1", "turnId": "u1", "itemId": "a1", "delta": "hello",
+            "futureField": { "anything": true },
+        }});
+        assert!(matches!(
+            events(&mut parser, &line).as_slice(),
+            [ProviderEvent::MessageDelta { text, .. }] if text == "hello"
+        ));
+    }
+
+    #[test]
+    fn too_many_denials_is_reported_as_a_codex_error() {
+        let mut parser = Parser::live();
+        let line = json!({ "method": "error", "params": {
+            "threadId": "t1", "turnId": "u1", "willRetry": false,
+            "error": { "message": "Too many approval requests were denied.",
+                "codexErrorInfo": "tooManyDenials", "additionalDetails": null },
+        }});
+        assert!(matches!(
+            events(&mut parser, &line).as_slice(),
+            [ProviderEvent::Error { error }]
+                if error.code.as_deref() == Some("tooManyDenials")
+                    && error.message == "Too many approval requests were denied."
+        ));
     }
 
     #[test]

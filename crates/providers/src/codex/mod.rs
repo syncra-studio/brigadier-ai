@@ -120,7 +120,7 @@ pub const ORCHESTRATOR_RESIDUE: &str = "Codex orchestrators keep these built-ins
 /// the reason to show before falling back to a Claude orchestrator.
 ///
 /// Verified for Codex 0.156.1 and rechecked live on 0.158.0 (the version these bindings come
-/// from; a different version gets a warning notice when its session starts): a read-only thread
+/// from at the time; version drift is logged for diagnostics): a read-only thread
 /// with `untrusted` approvals and the restricted feature set exposes no command tool at all, so
 /// no exec-policy rule or sandbox gap can let a command run; `apply_patch` asks and is
 /// declined, leaving no file; the Brigadier MCP tools run without an elicitation. What remains
@@ -526,17 +526,11 @@ impl Provider for Codex {
                     .await;
             }
             if thread.cli_version != p::SCHEMA_VERSION {
-                session
-                    .emit(ProviderEvent::Notice {
-                        level: NoticeLevel::Warning,
-                        message: format!(
-                            "Codex {} is running; Brigadier's bindings were generated from {}. \
-                             Unknown fields are ignored; regenerate them with gen-codex.",
-                            thread.cli_version,
-                            p::SCHEMA_VERSION
-                        ),
-                    })
-                    .await;
+                tracing::warn!(
+                    cli_version = %thread.cli_version,
+                    schema_version = p::SCHEMA_VERSION,
+                    "Codex version differs from the generated bindings; unknown fields are ignored"
+                );
             }
             Ok(Started { session, events })
         })
@@ -1379,8 +1373,10 @@ impl Rpc {
                 return Err(Error::Timeout("Codex to answer"));
             }
         };
-        serde_json::from_value(result)
-            .map_err(|err| Error::Protocol(format!("unexpected {method} response: {err}")))
+        serde_json::from_value(result).map_err(|err| {
+            tracing::warn!(method, error = %err, "Could not decode a Codex response");
+            Error::Protocol("Brigadier could not read Codex's reply.".into())
+        })
     }
 
     async fn notify(&self, method: &str) -> Result<()> {

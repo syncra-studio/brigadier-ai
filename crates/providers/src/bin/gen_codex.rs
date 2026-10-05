@@ -5,7 +5,7 @@
 //!
 //! Only the messages the adapter uses, and the types they reference, are generated. Unknown
 //! fields are tolerated (newer Codex versions add fields all the time); the adapter compares the
-//! running version with the one recorded here and warns when they differ.
+//! running version with the one recorded here and logs diagnostic details when they differ.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
