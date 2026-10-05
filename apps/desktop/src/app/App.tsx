@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 
-import { AppRail, AppSidebar, TitlebarToggle } from "@/app/AppSidebar";
+import { AppSidebar, TitlebarToggle } from "@/app/AppSidebar";
+import { BottomBar } from "@/app/BottomBar";
 import { DeleteDialog } from "@/app/dialogs/DeleteDialog";
 import { useLifecycleShortcuts } from "@/app/lifecycleShortcuts";
 import { AddProjectDialog } from "@/app/dialogs/AddProjectDialog";
@@ -45,7 +46,7 @@ function PageCorners() {
   return (
     <div
       aria-hidden
-      className="top-titlebar start-rail end-surface-inset bottom-surface-inset pointer-events-none absolute z-20"
+      className="top-titlebar start-surface-inset end-surface-inset bottom-bottom-bar pointer-events-none absolute z-20"
     >
       <span className="page-corner page-corner-top-start" />
       <span className="page-corner page-corner-top-end" />
@@ -130,17 +131,16 @@ export function App() {
 
   return (
     <div className="bg-chrome flex h-full flex-col">
-      <SidebarProvider className="relative min-h-0 flex-1">
+      <SidebarProvider className="relative min-h-0 flex-1 flex-col">
         {/* The page surface the sidebar panel and the content sit on; their headers stay
-            above it, in the titlebar strip. */}
+            above it, in the titlebar strip, and the bottom bar below it. */}
         <div
           aria-hidden
           data-slot="page-surface"
-          className="bg-background rounded-page shadow-page top-titlebar start-rail end-surface-inset bottom-surface-inset pointer-events-none absolute"
+          className="bg-background rounded-page shadow-page top-titlebar start-surface-inset end-surface-inset bottom-bottom-bar pointer-events-none absolute"
         />
         <PageCorners />
-        <AppRail />
-        <div className="relative flex min-w-0 flex-1 pb-surface-inset pe-surface-inset">
+        <div className="relative flex min-h-0 min-w-0 flex-1 ps-surface-inset pe-surface-inset">
           <SidebarPanel>{selection.type === "settings" ? <SettingsNav /> : <AppSidebar />}</SidebarPanel>
           <main className="body-divider relative flex h-full min-w-0 flex-1">
             <div className="relative flex h-full min-w-0 flex-1 flex-col">
@@ -159,6 +159,7 @@ export function App() {
             </div>
           </main>
         </div>
+        <BottomBar />
         <TitlebarToggle />
         <GlobalSearch />
         <OnboardingDialog />

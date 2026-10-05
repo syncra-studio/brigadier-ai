@@ -4,7 +4,7 @@ import { useEffect, useId, useState } from "react";
 import { errorText } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { Segmented } from "@/app/settings/parts";
-import { RailButton } from "@/app/sidebar/nav";
+import { BarButton } from "@/app/sidebar/nav";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import {
   DropdownMenu,
@@ -51,8 +51,8 @@ function refreshUsage(): void {
 }
 
 /*
- * The rail's status buttons, above Brigadier's menu: each agent's usage windows, and keeping
- * the computer awake.
+ * The bottom bar's status buttons, after Settings: each agent's usage windows, and keeping the
+ * computer awake. Their menus open upwards.
  */
 
 // ----- usage ---------------------------------------------------------------------------
@@ -150,8 +150,8 @@ function heatTone(overview: ProviderOverview, tightest: number): { text: string;
   return tone(tightest);
 }
 
-/** How the tightest agent stands, for the rail button: what is left, and whether to warn. */
-function railStatus(shown: (ProviderOverview & { quota: QuotaSnapshot })[]): {
+/** How the tightest agent stands, for the bar button: what is left, and whether to warn. */
+function barStatus(shown: (ProviderOverview & { quota: QuotaSnapshot })[]): {
   label: string;
   alert: "text-destructive" | "text-warning" | null;
 } {
@@ -172,7 +172,7 @@ function railStatus(shown: (ProviderOverview & { quota: QuotaSnapshot })[]): {
 }
 
 /**
- * Usage on the rail: its icon (tinted, with a dot, while an agent runs hot), and on click
+ * Usage on the bar: its icon (tinted, with a dot, while an agent runs hot), and on click
  * each agent's windows, with the way to the Usage page.
  */
 export function UsageMenu() {
@@ -183,11 +183,11 @@ export function UsageMenu() {
   );
   const now = useNow();
   const shown = (providers ?? []).filter(withQuota);
-  const { label, alert } = railStatus(shown);
+  const { label, alert } = barStatus(shown);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <RailButton label={label} selected={onPage}>
+        <BarButton label={label} selected={onPage}>
           <Usage className={alert ?? undefined} />
           {alert && (
             <span
@@ -198,9 +198,9 @@ export function UsageMenu() {
               )}
             />
           )}
-        </RailButton>
+        </BarButton>
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="right" align="end" className="w-xs">
+      <DropdownMenuContent side="top" align="start" className="w-xs">
         <DropdownMenuLabel>Usage</DropdownMenuLabel>
         {shown.length === 0 ? (
           <p className="text-muted-foreground px-2 pb-1.5 text-sm">No agent has reported usage yet.</p>
@@ -293,7 +293,7 @@ function useKeepAwakeStatus(): void {
 }
 
 /**
- * Keeping awake on the rail: a light bulb, lit (with a dot) while the computer is kept awake.
+ * Keeping awake on the bar: a light bulb, lit (with a dot) while the computer is kept awake.
  * On click, a small panel: how it stands now, when to stay awake (off, while agents work,
  * always), and whether that holds with the lid closed.
  */
@@ -322,7 +322,7 @@ export function KeepAwakeMenu() {
       }}
     >
       <PopoverTrigger asChild>
-        <RailButton label={`Keep awake: ${option?.label ?? ""} · ${state.text}`}>
+        <BarButton label={`Keep awake: ${option?.label ?? ""} · ${state.text}`}>
           <Lightbulb
             className={cn(state.awake && "text-foreground", shownError && "text-warning")}
           />
@@ -335,9 +335,9 @@ export function KeepAwakeMenu() {
               )}
             />
           )}
-        </RailButton>
+        </BarButton>
       </PopoverTrigger>
-      <PopoverContent side="right" align="end" className="flex w-xs flex-col gap-3 p-3">
+      <PopoverContent side="top" align="start" className="flex w-xs flex-col gap-3 p-3">
         <div className="flex items-start gap-2.5">
           <Lightbulb
             aria-hidden

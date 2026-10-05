@@ -132,7 +132,7 @@
   width: clamp(
     var(--spacing-sidebar-min),
     var(--sidebar-width, var(--spacing-sidebar)),
-    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-rail) - 20rem))
+    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - 20rem))
   );
 }
 

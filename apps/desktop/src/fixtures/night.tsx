@@ -10,7 +10,8 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
-import { AppRail, AppSidebar, TitlebarToggle } from "@/app/AppSidebar";
+import { AppSidebar, TitlebarToggle } from "@/app/AppSidebar";
+import { BottomBar } from "@/app/BottomBar";
 import { ConversationView } from "@/app/ConversationView";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
 import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
@@ -142,14 +143,13 @@ function NightPage() {
   return (
     <TooltipProvider>
       <div className="bg-chrome flex h-screen flex-col">
-        <SidebarProvider className="relative min-h-0 flex-1" defaultOpen={query.get("sidebar") !== "0"}>
+        <SidebarProvider className="relative min-h-0 flex-1 flex-col" defaultOpen={query.get("sidebar") !== "0"}>
           <div
             aria-hidden
             data-slot="page-surface"
-            className="bg-background rounded-page shadow-page top-titlebar start-rail end-surface-inset bottom-surface-inset pointer-events-none absolute"
+            className="bg-background rounded-page shadow-page top-titlebar start-surface-inset end-surface-inset bottom-bottom-bar pointer-events-none absolute"
           />
-          <AppRail />
-          <div className="relative flex min-w-0 flex-1 pb-surface-inset pe-surface-inset">
+          <div className="relative flex min-h-0 min-w-0 flex-1 ps-surface-inset pe-surface-inset">
             <SidebarPanel>
               <AppSidebar />
             </SidebarPanel>
@@ -159,6 +159,7 @@ function NightPage() {
               </div>
             </main>
           </div>
+          <BottomBar />
           <TitlebarToggle />
         </SidebarProvider>
       </div>

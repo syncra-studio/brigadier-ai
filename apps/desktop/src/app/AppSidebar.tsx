@@ -9,7 +9,6 @@ import {
   Pencil,
   Pin,
   Plus,
-  Settings,
   SettingsCog,
   Trash,
   Unpin,
@@ -22,7 +21,6 @@ import { ProjectDialog } from "@/app/dialogs/ProjectDialog";
 import { RemoveProjectDialog } from "@/app/dialogs/RemoveProjectDialog";
 import { NameDialog } from "@/app/NameDialog";
 import { useShortcuts } from "@/app/shortcuts";
-import { KeepAwakeMenu, UsageMenu } from "@/app/RailStatus";
 import { openSearch } from "@/app/SearchDialog";
 import {
   navRow,
@@ -31,10 +29,8 @@ import {
   NavHeader,
   NavList,
   NavSection,
-  RailButton,
   rowAction,
 } from "@/app/sidebar/nav";
-import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
 import { Spinner } from "@/components/glyphs/spinner";
 import { TITLEBAR_BUTTON, TitlebarTips } from "@/components/titlebar-button";
 import { Button } from "@/components/ui/button";
@@ -61,9 +57,7 @@ import { cn } from "@/lib/utils";
 import {
   archive,
   archiveAll,
-  closeSettings,
   openConversation,
-  openSettings,
   renameConversation,
   select,
   setPinned,
@@ -75,7 +69,7 @@ import { exportProjectConventions } from "@/state/brain";
 import { askDelete, clearPicked, pickClick, pickedIn, prunePicked, usePicked } from "@/state/picking";
 import { useApp } from "@/state/store";
 
-// ----- titlebar and rail -----------------------------------------------------------------
+// ----- titlebar --------------------------------------------------------------------------
 
 /**
  * The sidebar toggle, at a fixed spot in the titlebar on the traffic lights' line: just after
@@ -99,52 +93,6 @@ export function TitlebarToggle() {
         </Tooltip>
       </TitlebarTips>
     </div>
-  );
-}
-
-/**
- * The navigation rail along the window's start, on the window chrome: Home (chats and
- * projects, under Brigadier's mark) at the top; at the bottom keeping the computer awake, the
- * agents' usage, and Settings (where the Inspector and setup are too).
- */
-export function AppRail() {
-  const { open, holdPeek, releasePeek } = useSidebar();
-  const inSettings = useApp((s) => s.selection.type === "settings");
-  const onUsagePage = useApp(
-    (s) => s.selection.type === "settings" && s.selection.page === "usage",
-  );
-  const shortcuts = useShortcuts();
-  return (
-    <nav
-      aria-label="App navigation"
-      className="w-rail pt-titlebar flex h-full shrink-0 flex-col items-center gap-2 px-2 pb-1"
-    >
-      <div data-tauri-drag-region className="flex w-full flex-col items-center gap-2 pt-2">
-        <RailButton
-          label="Home"
-          selected={!inSettings}
-          onClick={() => closeSettings()}
-          // With the panel closed, resting on it peeks the panel.
-          onPointerEnter={open ? undefined : holdPeek}
-          onPointerLeave={open ? undefined : releasePeek}
-        >
-          {/* The mark stands a size above the rail's icons, and bright whether or not Home is
-              the page. */}
-          <BrigadierGlyph aria-hidden className="text-foreground size-rail-mark!" />
-        </RailButton>
-      </div>
-      <div data-tauri-drag-region className="min-h-0 w-full flex-1" />
-      <KeepAwakeMenu />
-      <UsageMenu />
-      <RailButton
-        label="Settings"
-        shortcut={shortcuts.settings}
-        selected={inSettings && !onUsagePage}
-        onClick={() => openSettings()}
-      >
-        <Settings />
-      </RailButton>
-    </nav>
   );
 }
 

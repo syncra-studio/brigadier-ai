@@ -1,4 +1,8 @@
-import { MagnifyingGlassSearch, XCircleFilled } from "@openai/apps-sdk-ui/components/Icon";
+import {
+  ArrowLeft,
+  MagnifyingGlassSearch,
+  XCircleFilled,
+} from "@openai/apps-sdk-ui/components/Icon";
 import { useState } from "react";
 
 import {
@@ -9,7 +13,7 @@ import {
 } from "@/app/settings/pages";
 import { navRow, NavHeader, NavList, NavSection } from "@/app/sidebar/nav";
 import { cn } from "@/lib/utils";
-import { openSettings } from "@/state/actions";
+import { closeSettings, openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";
 
 /** How many frames a result waits for its page (which may load lazily) to show the setting. */
@@ -43,8 +47,8 @@ function openResult({ page, row }: SettingsSearchResult) {
 }
 
 /**
- * The sidebar panel while Settings is open: its title, a search field, then its pages in
- * their groups. Typing replaces the pages with the settings found, each with its page's name.
+ * The sidebar panel while Settings is open: the way back to the app, its title, a search
+ * field, then its pages in their groups. Typing replaces the pages with the settings found, each with its page's name.
  */
 export function SettingsNav() {
   const current = useApp((s) => (s.selection.type === "settings" ? s.selection.page : null));
@@ -60,6 +64,12 @@ export function SettingsNav() {
 
   return (
     <>
+      <div className="px-2 pt-2">
+        <button type="button" className={navRow} onClick={closeSettings}>
+          <ArrowLeft aria-hidden className="text-foreground/65" />
+          Back to app
+        </button>
+      </div>
       <NavHeader title="Settings" />
       <div className="px-2 pb-2">
         <label className="h-nav-search rounded-capsule bg-foreground/8 focus-within:ring-ring/50 flex items-center gap-2 px-3 focus-within:ring-2">

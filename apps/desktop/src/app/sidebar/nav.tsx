@@ -115,14 +115,15 @@ export function NavEmpty({ children, className }: { children: ReactNode; classNa
 }
 
 /**
- * A button on the rail: an icon, its name (and shortcut) in a tooltip, a pill behind it while
- * selected.
+ * A button on the bottom bar: a muted icon that brightens on hover, its name (and shortcut) in
+ * a tooltip above it, a pill behind it while selected or while its menu is open.
  */
-export function RailButton({
+export function BarButton({
   label,
   shortcut,
   selected = false,
   children,
+  className,
   ...props
 }: ComponentProps<"button"> & { label: string; shortcut?: string; selected?: boolean }) {
   return (
@@ -131,18 +132,19 @@ export function RailButton({
         <button
           type="button"
           aria-label={label}
-          aria-current={selected ? "page" : undefined}
+          aria-pressed={selected || undefined}
           className={cn(
-            "size-rail-button rounded-nav focus-visible:ring-ring/50 relative flex shrink-0 items-center justify-center outline-none transition-colors duration-150 focus-visible:ring-2 [&_svg]:relative [&_svg]:size-icon-lg",
-            "before:rounded-nav before:bg-foreground/8 before:absolute before:inset-0 before:opacity-0 before:transition-opacity before:duration-150 hover:before:opacity-100 data-[state=open]:before:opacity-100",
-            selected ? "text-foreground before:opacity-100" : "text-muted-foreground hover:text-foreground",
+            "size-bar-button rounded-toolbar-button focus-visible:ring-ring/50 relative flex shrink-0 items-center justify-center outline-none transition-colors duration-150 focus-visible:ring-2 [&_svg]:relative [&_svg]:size-icon-md",
+            "before:rounded-toolbar-button before:bg-foreground/8 before:absolute before:inset-0 before:opacity-0 before:transition-opacity before:duration-150 hover:before:opacity-100 data-[state=open]:before:opacity-100",
+            selected ? "text-foreground before:opacity-100" : "text-muted-foreground hover:text-foreground data-[state=open]:text-foreground",
+            className,
           )}
           {...props}
         >
           {children}
         </button>
       </TooltipTrigger>
-      <TooltipContent side="right">
+      <TooltipContent side="top">
         {label}
         {shortcut && <Kbd>{shortcut}</Kbd>}
       </TooltipContent>
