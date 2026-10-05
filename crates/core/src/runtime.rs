@@ -354,6 +354,11 @@ impl Runtime {
         self.record_overview(overview).await;
     }
 
+    /// Whether an Inspector session's CLI is open.
+    pub fn raw_sessions_open(&self) -> bool {
+        !self.state().live.is_empty()
+    }
+
     /// The cleanup ledger shared by every CLI session and conversation.
     pub fn ledger(&self) -> &Arc<CleanupLedger> {
         &self.ledger

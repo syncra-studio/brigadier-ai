@@ -44,6 +44,7 @@ mod phases;
 mod project_removal;
 mod prompts;
 mod pull_request;
+mod quiet;
 mod rebirth;
 mod requests;
 mod research;
@@ -138,6 +139,8 @@ pub struct SessionManager {
     machine: Arc<crate::machine::MachineWatch>,
     /// Conversations being archived or deleted: their fences and cleanups.
     closing: closing::Closing,
+    /// Background model turns, for maintenance's idle check.
+    activity: Arc<quiet::Activity>,
 }
 
 impl SessionManager {
@@ -202,6 +205,7 @@ impl SessionManager {
             overnight: overnight::Runs::default(),
             machine,
             closing: closing::Closing::default(),
+            activity: Arc::default(),
         });
         manager.install_worktree_remover();
         manager.start_machine_watch().await;

@@ -237,6 +237,11 @@ impl SessionManager {
         }
     }
 
+    /// Whether an archive's or a delete's cleanup is under way.
+    pub(super) fn cleanups_running(&self) -> bool {
+        !self.closing.jobs.is_empty()
+    }
+
     /// A quit: waits for the cleanups under way, at most [`QUIT_WAIT`]. One cut off is
     /// finished at the next launch.
     pub(super) async fn finish_cleanups_for_quit(&self) {

@@ -341,6 +341,10 @@ async fn run(
     supervisor.spawn(awake.clone().run(stopping.clone()));
     supervisor.spawn(idle::exit_when_idle(daemon.clone(), stopping.clone()));
     supervisor.spawn(storage::housekeeping(daemon.clone(), stopping.clone()));
+    supervisor.spawn(storage::compact_when_quiet(
+        daemon.clone(),
+        stopping.clone(),
+    ));
     supervisor.spawn(registry::keep_current(daemon.clone(), stopping.clone()));
     supervisor.spawn(updates::keep_current(daemon.clone(), stopping.clone()));
     supervisor.spawn(overnight_supervisor::keep_in_step(
@@ -361,6 +365,7 @@ async fn run(
         state = store.writer_stopped() => {
             tracing::error!(state = ?state, "store writer stopped; exiting");
             stopping.cancel();
+            store.stop_maintenance();
             awake.shutdown().await;
             daemon.terminals.close_all();
             daemon.sessions.shutdown().await;
@@ -370,6 +375,7 @@ async fn run(
         Some(reason) = fatal.recv() => {
             tracing::error!(reason = %reason, "critical task failed; exiting");
             stopping.cancel();
+            store.stop_maintenance();
             awake.shutdown().await;
             daemon.terminals.close_all();
             daemon.sessions.shutdown().await;
@@ -379,8 +385,10 @@ async fn run(
     };
     tracing::info!(reason, "shutting down");
 
-    // 1. Stop accepting connections; critical tasks may now end without being fatal.
+    // 1. Stop accepting connections; critical tasks may now end without being fatal. A
+    //    compaction running stops (rolled back whole) and none starts.
     stopping.cancel();
+    store.stop_maintenance();
     // Sleep works normally again, even when the lid is closed.
     awake.shutdown().await;
     // 2. Stop admitting provider work, end every CLI session (bounded, whole process groups)

@@ -111,7 +111,9 @@ impl SessionManager {
             .lock()
             .unwrap_or_else(|p| p.into_inner()) = Some((model_provider, model.clone()));
         let manager = self.arc();
+        let turn = self.background_turn();
         self.spawn(self.research.jobs.track_future(async move {
+            let _turn = turn;
             tracing::info!(model = %model, runs_on = %provider, "researching a new model on spare quota");
             let researched = manager.research_model(provider, model_provider, &model).await;
             let key = (model_provider, model.clone());
@@ -368,7 +370,9 @@ impl SessionManager {
             start = Some(tx);
             let manager = self.arc();
             let job = id.clone();
+            let turn = self.background_turn();
             self.spawn(self.research.jobs.track_future(async move {
+                let _turn = turn;
                 tokio::select! {
                     biased;
                     () = cancel.cancelled() => return,

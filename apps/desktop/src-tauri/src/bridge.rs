@@ -120,10 +120,9 @@ impl Bridge {
         }
         let timeout = match &request {
             Request::CloneProject { .. } => CLONE_TIMEOUT,
-            Request::Archive { .. }
-            | Request::Restore { .. }
-            | Request::Delete { .. }
-            | Request::DeletesFinished { .. } => LIFECYCLE_TIMEOUT,
+            Request::Archive { .. } | Request::Restore { .. } | Request::Delete { .. } => {
+                LIFECYCLE_TIMEOUT
+            }
             _ => REQUEST_TIMEOUT,
         };
         let (reply, response) = oneshot::channel();

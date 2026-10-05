@@ -663,20 +663,14 @@ impl SessionManager {
             return;
         };
         match self.delete_closed(conversation, true, false).await {
-            Ok(()) => self.open_fence(id),
+            Ok(()) => {
+                self.open_fence(id);
+                self.note_space_freed();
+            }
             Err(err) => {
                 tracing::warn!(conversation = %id, error = %err, "could not finish deleting a conversation; the next launch tries again")
             }
         }
-    }
-
-    /// Waits until the deletes of `ids` under way have finished. The space compacting the
-    /// database would give back then, when that is worth offering.
-    pub async fn deletes_finished(&self, ids: &[ConversationId]) -> Option<u64> {
-        for id in ids {
-            self.cleanup_finished(id).await;
-        }
-        self.compactable_bytes().await
     }
 
     /// Deletes a conversation now, after its cleanup under way (a project removal, a side

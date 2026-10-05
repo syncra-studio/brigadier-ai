@@ -27,7 +27,7 @@ mod writer;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
@@ -197,6 +197,85 @@ pub enum WriterState {
     Died(String),
 }
 
+/// Coordinates a compaction with the writes around it. Every ordering is `SeqCst`: a write
+/// admitted while an automatic compaction arms either finds it armed (and makes it give way)
+/// or is counted before the compaction looks (and it doesn't start).
+#[derive(Debug, Default)]
+pub(crate) struct Maintenance {
+    /// Shutdown has begun: no compaction starts, and one running stops.
+    stopped: AtomicBool,
+    /// An automatic compaction is about to start or is running.
+    armed: AtomicBool,
+    /// A write arrived while it was armed: it gives way. Kept until the next one arms, so a
+    /// write just before `VACUUM` starts still stops it.
+    yielded: AtomicBool,
+    /// Writes admitted and not answered yet (queued, or in the writer's batch).
+    in_flight: AtomicUsize,
+    /// Writes ever admitted: activity, for the daemon's quiet period.
+    admitted: AtomicU64,
+}
+
+impl Maintenance {
+    /// Whether the compaction running now should stop (`automatic`: also when a write came).
+    pub(crate) fn should_stop(&self, automatic: bool) -> bool {
+        self.stopped.load(Ordering::SeqCst) || (automatic && self.yielded.load(Ordering::SeqCst))
+    }
+
+    fn admit(&self) -> InFlight<'_> {
+        self.admitted.fetch_add(1, Ordering::SeqCst);
+        self.in_flight.fetch_add(1, Ordering::SeqCst);
+        if self.armed.load(Ordering::SeqCst) {
+            self.yielded.store(true, Ordering::SeqCst);
+        }
+        InFlight(self)
+    }
+}
+
+/// A write admitted and not answered yet.
+struct InFlight<'a>(&'a Maintenance);
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// An automatic compaction, armed: from now on any write makes it give way. Disarmed when
+/// dropped. See [`Store::arm_compaction`].
+pub struct ArmedCompaction(Store);
+
+impl ArmedCompaction {
+    /// Runs it, unless a write is under way or came since it was armed. A write that comes
+    /// while it runs waits only until it has stopped, except at the end of the `VACUUM`, its
+    /// copy back into the file, which can't be stopped: about 2.5 ms per MB of data that
+    /// stays (measured), which callers bound.
+    pub async fn run(self) -> Result<Compacted> {
+        if self.0.maintenance.in_flight.load(Ordering::SeqCst) > 0 {
+            return Ok(Compacted::GaveWay);
+        }
+        self.0
+            .command(|reply| WriteOp::Compact {
+                automatic: true,
+                reply,
+            })
+            .await?
+    }
+}
+
+impl Drop for ArmedCompaction {
+    fn drop(&mut self) {
+        self.0.maintenance.armed.store(false, Ordering::SeqCst);
+    }
+}
+
+/// How an [`ArmedCompaction`] ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Compacted {
+    Done,
+    /// A write came, or one was under way: it did not start, or stopped with nothing changed.
+    GaveWay,
+}
+
 #[derive(Debug, Default)]
 struct Counters {
     last_seq: AtomicI64,
@@ -215,6 +294,7 @@ pub struct Store {
     reads: ReadPool,
     feed: broadcast::Sender<Arc<StoredEvent>>,
     admitting: Arc<AtomicBool>,
+    maintenance: Arc<Maintenance>,
     counters: Arc<Counters>,
     writer_state: watch::Receiver<WriterState>,
     blobs: BlobStore,
@@ -231,6 +311,7 @@ impl Store {
         }
         let blobs = BlobStore::open(config.blobs_dir.clone())?;
         let counters = Arc::new(Counters::default());
+        let maintenance = Arc::new(Maintenance::default());
         let (feed, _) = broadcast::channel(FEED_CAPACITY);
         let (writes, writer_rx) = mpsc::channel(WRITE_QUEUE);
         let (state_tx, writer_state) = watch::channel(WriterState::Running);
@@ -243,6 +324,7 @@ impl Store {
             writer_rx,
             feed.clone(),
             counters.clone(),
+            maintenance.clone(),
             state_tx,
             ready_tx,
         )?;
@@ -254,6 +336,7 @@ impl Store {
             reads,
             feed,
             admitting: Arc::new(AtomicBool::new(true)),
+            maintenance,
             counters,
             writer_state,
             blobs,
@@ -275,7 +358,7 @@ impl Store {
         if !self.admitting.load(Ordering::Acquire) {
             return Err(Error::ShuttingDown);
         }
-        self.command(|reply| WriteOp::Append {
+        self.write(|reply| WriteOp::Append {
             events,
             retention,
             reply,
@@ -341,7 +424,7 @@ impl Store {
         if streams.is_empty() && prefixes.is_empty() {
             return Ok(0);
         }
-        self.command(|reply| WriteOp::Delete {
+        self.write(|reply| WriteOp::Delete {
             streams,
             prefixes,
             reply,
@@ -403,7 +486,7 @@ impl Store {
         for chunk in candidates.chunks(GC_CHUNK) {
             let hashes = chunk.to_vec();
             let collected = self
-                .command(|reply| WriteOp::CollectBlobs { hashes, reply })
+                .write(|reply| WriteOp::CollectBlobs { hashes, reply })
                 .await??;
             stats.referenced += collected.referenced;
             stats.recent += collected.recent;
@@ -470,11 +553,46 @@ impl Store {
 
     /// Rebuilds the database without its free pages and truncates the WAL, through the writer
     /// (so between batches). Only when nothing is working: it holds up every write meanwhile.
+    /// A shutdown stops it, with nothing changed.
     pub async fn compact(&self) -> Result<()> {
-        if !self.admitting.load(Ordering::Acquire) {
+        if !self.admitting.load(Ordering::Acquire) || self.maintenance.should_stop(false) {
             return Err(Error::ShuttingDown);
         }
-        self.command(|reply| WriteOp::Compact { reply }).await?
+        match self
+            .command(|reply| WriteOp::Compact {
+                automatic: false,
+                reply,
+            })
+            .await??
+        {
+            Compacted::Done => Ok(()),
+            Compacted::GaveWay => Err(Error::ShuttingDown),
+        }
+    }
+
+    /// Arms an automatic [`Store::compact`]: a write that comes from now until it has finished
+    /// stops it, with nothing changed, and goes through. The caller checks once more that
+    /// nothing works after arming, then runs it: work that starts in between writes, and so
+    /// stops it.
+    pub fn arm_compaction(&self) -> Result<ArmedCompaction> {
+        let maintenance = &*self.maintenance;
+        if !self.admitting.load(Ordering::Acquire) || maintenance.should_stop(false) {
+            return Err(Error::ShuttingDown);
+        }
+        maintenance.yielded.store(false, Ordering::SeqCst);
+        maintenance.armed.store(true, Ordering::SeqCst);
+        Ok(ArmedCompaction(self.clone()))
+    }
+
+    /// Writes ever admitted: whether anything was written since the last look.
+    pub fn writes_admitted(&self) -> u64 {
+        self.maintenance.admitted.load(Ordering::SeqCst)
+    }
+
+    /// Shutdown has begun: no compaction starts any more, and one running stops (its writes
+    /// still go through until [`Store::shutdown`]).
+    pub fn stop_maintenance(&self) {
+        self.maintenance.stopped.store(true, Ordering::SeqCst);
     }
 
     /// Asks the writer for a PASSIVE WAL checkpoint without waiting behind a full queue.
@@ -489,6 +607,7 @@ impl Store {
     /// the writer thread.
     pub async fn shutdown(&self) -> Result<()> {
         self.admitting.store(false, Ordering::Release);
+        self.stop_maintenance();
         self.command(|reply| WriteOp::Shutdown { reply }).await?
     }
 
@@ -560,6 +679,13 @@ impl Store {
             Ok(state) => state.clone(),
             Err(_) => WriterState::Died("writer state channel closed".into()),
         }
+    }
+
+    /// [`Store::command`] for a write: counted while it is under way, and it makes an
+    /// automatic compaction give way.
+    async fn write<T>(&self, op: impl FnOnce(oneshot::Sender<T>) -> WriteOp) -> Result<T> {
+        let _in_flight = self.maintenance.admit();
+        self.command(op).await
     }
 
     async fn command<T>(&self, op: impl FnOnce(oneshot::Sender<T>) -> WriteOp) -> Result<T> {

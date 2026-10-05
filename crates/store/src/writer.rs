@@ -9,9 +9,12 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::blob::{BlobStore, Removal};
 use crate::{
-    BlobHash, Counters, Error, MAX_BATCH, NewEvent, Result, Retention, StoredEvent, WriterState,
-    schema,
+    BlobHash, Compacted, Counters, Error, MAX_BATCH, Maintenance, NewEvent, Result, Retention,
+    StoredEvent, WriterState, schema,
 };
+
+/// SQLite virtual machine steps between two looks at whether a compaction should stop.
+const STOP_CHECK_STEPS: i32 = 1000;
 
 pub(crate) struct WriteCommand {
     pub(crate) op: WriteOp,
@@ -37,8 +40,10 @@ pub(crate) enum WriteOp {
         reply: oneshot::Sender<Result<()>>,
     },
     /// Rebuilds the database file without its free pages (`VACUUM`), then truncates the WAL.
+    /// `automatic`: it gives way to any write that comes meanwhile.
     Compact {
-        reply: oneshot::Sender<Result<()>>,
+        automatic: bool,
+        reply: oneshot::Sender<Result<Compacted>>,
     },
     Shutdown {
         reply: oneshot::Sender<Result<()>>,
@@ -84,7 +89,7 @@ struct Sorted {
     mutations: Vec<Mutation>,
     collections: Vec<Collection>,
     checkpoints: Vec<oneshot::Sender<Result<()>>>,
-    compactions: Vec<oneshot::Sender<Result<()>>>,
+    compactions: Vec<(bool, oneshot::Sender<Result<Compacted>>)>,
     shutdown: Option<oneshot::Sender<Result<()>>>,
 }
 
@@ -113,7 +118,7 @@ impl Sorted {
                 self.collections.push(Collection { hashes, reply })
             }
             WriteOp::Checkpoint { reply } => self.checkpoints.push(reply),
-            WriteOp::Compact { reply } => self.compactions.push(reply),
+            WriteOp::Compact { automatic, reply } => self.compactions.push((automatic, reply)),
             WriteOp::Shutdown { reply } => match self.shutdown {
                 // A second shutdown racing the first just succeeds.
                 Some(_) => {
@@ -125,12 +130,14 @@ impl Sorted {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn(
     db_path: PathBuf,
     blobs: BlobStore,
     rx: mpsc::Receiver<WriteCommand>,
     feed: Feed,
     counters: Arc<Counters>,
+    maintenance: Arc<Maintenance>,
     state: watch::Sender<WriterState>,
     ready: std::sync::mpsc::Sender<Result<()>>,
 ) -> Result<()> {
@@ -141,7 +148,7 @@ pub(crate) fn spawn(
                 state,
                 outcome: None,
             };
-            let mut writer = match Writer::open(&db_path, blobs, feed, counters) {
+            let mut writer = match Writer::open(&db_path, blobs, feed, counters, maintenance) {
                 Ok(writer) => {
                     let _ = ready.send(Ok(()));
                     writer
@@ -188,6 +195,7 @@ struct Writer {
     wal_path: PathBuf,
     feed: Feed,
     counters: Arc<Counters>,
+    maintenance: Arc<Maintenance>,
     /// Last `stream_seq` per stream. Only this thread writes, so the cache is authoritative.
     heads: HashMap<String, i64>,
 }
@@ -196,7 +204,13 @@ struct Writer {
 const MAX_CACHED_HEADS: usize = 16_384;
 
 impl Writer {
-    fn open(db_path: &Path, blobs: BlobStore, feed: Feed, counters: Arc<Counters>) -> Result<Self> {
+    fn open(
+        db_path: &Path,
+        blobs: BlobStore,
+        feed: Feed,
+        counters: Arc<Counters>,
+        maintenance: Arc<Maintenance>,
+    ) -> Result<Self> {
         let mut conn = Connection::open(db_path)?;
         schema::configure_writer(&conn)?;
         schema::migrate(&mut conn)?;
@@ -217,6 +231,7 @@ impl Writer {
             wal_path: wal_path.into(),
             feed,
             counters,
+            maintenance,
             heads: HashMap::new(),
         };
         writer.record_wal_size();
@@ -269,8 +284,9 @@ impl Writer {
             for reply in checkpoints {
                 let _ = reply.send(self.checkpoint("PASSIVE"));
             }
-            for reply in compactions {
-                let _ = reply.send(self.compact());
+            for (automatic, reply) in compactions {
+                // A shutdown in this batch has stopped maintenance already.
+                let _ = reply.send(self.compact(automatic));
             }
             if let Some(reply) = shutdown {
                 let result = self.checkpoint("TRUNCATE");
@@ -412,10 +428,32 @@ impl Writer {
     }
 
     /// `VACUUM` (outside any transaction: the batch's has committed), then a TRUNCATE
-    /// checkpoint so the WAL gives its space back too.
-    fn compact(&self) -> Result<()> {
-        self.conn.execute_batch("VACUUM")?;
-        self.checkpoint("TRUNCATE")
+    /// checkpoint so the WAL gives its space back too. It stops, rolled back whole, once
+    /// maintenance should, up to its copy back into the file (SQLite can't stop that part): the
+    /// progress handler looks only while this `VACUUM` runs, so no other statement is ever
+    /// stopped.
+    fn compact(&self, automatic: bool) -> Result<Compacted> {
+        if self.maintenance.should_stop(automatic) {
+            return Ok(Compacted::GaveWay);
+        }
+        let maintenance = self.maintenance.clone();
+        self.conn.progress_handler(
+            STOP_CHECK_STEPS,
+            Some(move || maintenance.should_stop(automatic)),
+        )?;
+        let vacuumed = self.conn.execute_batch("VACUUM");
+        self.conn.progress_handler(0, None::<fn() -> bool>)?;
+        match vacuumed {
+            Ok(()) => {}
+            Err(rusqlite::Error::SqliteFailure(err, _))
+                if err.code == rusqlite::ErrorCode::OperationInterrupted =>
+            {
+                return Ok(Compacted::GaveWay);
+            }
+            Err(err) => return Err(err.into()),
+        }
+        self.checkpoint("TRUNCATE")?;
+        Ok(Compacted::Done)
     }
 
     fn record_wal_size(&self) {

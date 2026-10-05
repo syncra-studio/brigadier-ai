@@ -426,7 +426,6 @@ impl Session {
             // Long: answered beside the connection's other requests.
             request @ (Request::ScanStorage
             | Request::PreviewDelete { .. }
-            | Request::DeletesFinished { .. }
             | Request::CleanStorage { .. }
             | Request::PreviewRemoveProject { .. }
             | Request::RemoveProject { .. }
@@ -1405,9 +1404,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         }
         Request::PreviewDelete { ids } => Response::PreviewDelete {
             branches: sessions.preview_delete(&ids).await,
-        },
-        Request::DeletesFinished { ids } => Response::DeletesFinished {
-            compactable_bytes: sessions.deletes_finished(&ids).await,
         },
         Request::RenameConversation { id, title } => Response::RenameConversation {
             conversation: Box::new(core.rename_conversation(id, title).await?),

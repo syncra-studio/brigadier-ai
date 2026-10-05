@@ -28,10 +28,8 @@ import type {
   SetupRequest,
   UnlandedBranch,
 } from "@/ipc/generated";
-import { formatBytes } from "@/lib/format";
 import { savePinnedSummary } from "@/lib/pinnedSummary";
 import { setSetting } from "@/state/settings";
-import { compactDatabase } from "@/state/storage";
 import {
   boardFromView,
   boardOf,
@@ -1037,8 +1035,7 @@ function dropConversations(ids: string[]): void {
 
 /**
  * Deletes conversations for good. The rows leave at once; the daemon cleans up in the
- * background. Those whose delete fails come back, with one toast that says why. Once the rest
- * are gone, a toast offers to compact the database when that gives back enough space.
+ * background. Those whose delete fails come back, with one toast that says why.
  */
 export async function deleteAll(ids: string[]): Promise<void> {
   const { conversations } = useApp.getState();
@@ -1074,16 +1071,6 @@ export async function deleteAll(ids: string[]): Promise<void> {
   const deleted = before.filter((c) => !failed.some((entry) => entry.conversation.id === c.id));
   // Their unsent drafts go only once they are surely going.
   for (const { id } of deleted) forgetDraft(id);
-  if (deleted.length === 0) return;
-  const compactableBytes = await request({ method: "deletesFinished", ids: deleted.map((c) => c.id) })
-    .then((finished) => finished.compactableBytes)
-    // The offer is a nicety; the delete itself was answered already.
-    .catch(() => null);
-  if (compactableBytes !== null) {
-    toast(`Deleted. Compact the database to give back ${formatBytes(compactableBytes)}.`, {
-      actions: [{ label: "Compact", run: () => void compactDatabase() }],
-    });
-  }
 }
 
 /** The branches deleting `ids` takes whose work never landed (or may not have). */

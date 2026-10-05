@@ -2,8 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 
 import { request } from "@/ipc/client";
-import { formatBytes } from "@/lib/format";
-import { toast } from "@/state/toasts";
 import type {
   BranchChoice,
   CleanReport,
@@ -43,28 +41,6 @@ export async function scanStorage(): Promise<StorageReport> {
 /** Removes the picked items of a scan. */
 export async function cleanStorage(scanId: string, items: string[]): Promise<CleanReport> {
   return (await request({ method: "cleanStorage", scanId, items })).report;
-}
-
-/** Runs Storage's "Compact the database" on its own, and says how it went. */
-export async function compactDatabase(): Promise<void> {
-  try {
-    const report = await scanStorage();
-    const item = report.items.find((entry) => entry.category === "database" && entry.selectable);
-    if (!item) {
-      toast("The database is already compact.");
-      return;
-    }
-    const cleaned = await cleanStorage(report.scanId, [item.id]);
-    const failed = cleaned.failures.map((failure) => failure.error).join("; ");
-    if (failed) {
-      toast(`Couldn't compact the database: ${failed}`, { tone: "error" });
-    } else {
-      toast(`Compacted the database: ${formatBytes(cleaned.reclaimedBytes)} given back.`);
-    }
-  } catch (cause) {
-    const why = cause instanceof Error ? cause.message : String(cause);
-    toast(`Couldn't compact the database: ${why}`, { tone: "error" });
-  }
 }
 
 /** What uninstalling this app removes. */

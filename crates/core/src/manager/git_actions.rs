@@ -232,6 +232,7 @@ impl SessionManager {
         provider: ProviderKind,
         patch: &str,
     ) -> Result<String> {
+        let _turn = self.background_turn();
         let (model, effort) = self.cheapest(provider)?;
         let run = uuid::Uuid::now_v7().to_string();
         let owner = format!("gen:{run}");

@@ -319,6 +319,7 @@ impl SessionManager {
         native_id: String,
         purpose: HandoffPurpose,
     ) -> Option<String> {
+        let _turn = self.background_turn();
         let conversation = self.core.conversation(id).ok()?;
         let project = conversation
             .project_id

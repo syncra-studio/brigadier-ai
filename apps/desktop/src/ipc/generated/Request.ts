@@ -76,7 +76,7 @@ path: string, } | { "method": "openArtifact", id: string, fileName: string, } | 
 /**
  * Brigadier branches to delete, at the tips the preview showed.
  */
-deleteBranches: Array<BranchChoice>, keepBrain: boolean, } | { "method": "delete", ids: Array<ConversationId>, } | { "method": "previewDelete", ids: Array<ConversationId>, } | { "method": "deletesFinished", ids: Array<ConversationId>, } | { "method": "renameConversation", id: ConversationId, title: string, } | { "method": "setPinned", id: ConversationId, pinned: boolean, } | { "method": "appendMessage", conversationId: ConversationId, text: string, } | { "method": "listMessages", conversationId: ConversationId, 
+deleteBranches: Array<BranchChoice>, keepBrain: boolean, } | { "method": "delete", ids: Array<ConversationId>, } | { "method": "previewDelete", ids: Array<ConversationId>, } | { "method": "renameConversation", id: ConversationId, title: string, } | { "method": "setPinned", id: ConversationId, pinned: boolean, } | { "method": "appendMessage", conversationId: ConversationId, text: string, } | { "method": "listMessages", conversationId: ConversationId, 
 /**
  * Only messages with a smaller `seq` (for paging backwards).
  */

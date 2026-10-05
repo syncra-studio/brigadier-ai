@@ -29,6 +29,12 @@ const QUIT_TIMEOUT: Duration = Duration::from_secs(30);
 const HOUSEKEEPING_DELAY: Duration = Duration::from_secs(2 * 60);
 /// And then once a day.
 const HOUSEKEEPING_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+/// The database compacts on its own once nothing has run or been written for this long.
+const COMPACT_QUIET: Duration = Duration::from_secs(2 * 60);
+/// Its first look after the daemon starts, once launch-time work has settled.
+const COMPACT_DELAY: Duration = Duration::from_secs(2 * 60);
+/// How often it looks (and right after a delete has finished).
+const COMPACT_LOOK_EVERY: Duration = Duration::from_secs(30);
 /// A connection folder younger than this may belong to a daemon about to listen.
 #[cfg(unix)]
 const SOCKET_MIN_AGE: Duration = Duration::from_secs(10 * 60);
@@ -229,6 +235,69 @@ pub async fn housekeeping(daemon: Arc<Daemon>, stop: CancellationToken) -> anyho
         }
         daemon.storage.housekeep(&daemon).await;
     }
+}
+
+/// Compacts the database on its own (PLAN.md §2, Delete): once Brigadier has been quiet for
+/// [`COMPACT_QUIET`] (nothing works, nothing was written) and that gives back enough space.
+/// Never in the daemon's first minutes, and never once it is stopping.
+pub async fn compact_when_quiet(
+    daemon: Arc<Daemon>,
+    stop: CancellationToken,
+) -> anyhow::Result<()> {
+    let (delay, quiet) = compact_timing();
+    tokio::select! {
+        () = stop.cancelled() => return Ok(()),
+        () = tokio::time::sleep(delay) => {}
+    }
+    let mut tick = tokio::time::interval(COMPACT_LOOK_EVERY.min(quiet));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // The generation the quiet period started at, and when.
+    let mut quiet_since: Option<(u64, Instant)> = None;
+    loop {
+        tokio::select! {
+            () = stop.cancelled() => return Ok(()),
+            _ = tick.tick() => {}
+            () = daemon.sessions.space_freed() => {}
+        }
+        if daemon.uninstall.started() {
+            return Ok(());
+        }
+        if daemon.sessions.busy_for_maintenance().await.is_some() {
+            quiet_since = None;
+            continue;
+        }
+        let generation = daemon.sessions.maintenance_generation();
+        let since = match quiet_since {
+            Some((at, since)) if at == generation => since,
+            _ => {
+                quiet_since = Some((generation, Instant::now()));
+                continue;
+            }
+        };
+        if since.elapsed() < quiet {
+            continue;
+        }
+        let _one = daemon.storage.cleaning.lock().await;
+        if stop.is_cancelled() {
+            return Ok(());
+        }
+        daemon.sessions.compact_when_quiet(generation).await;
+        quiet_since = None;
+    }
+}
+
+/// [`COMPACT_DELAY`] and [`COMPACT_QUIET`], or in a debug build both `BRIGADIER_COMPACT_QUIET_SECS`
+/// (to see it without waiting minutes).
+fn compact_timing() -> (Duration, Duration) {
+    #[cfg(debug_assertions)]
+    if let Some(secs) = std::env::var("BRIGADIER_COMPACT_QUIET_SECS")
+        .ok()
+        .and_then(|secs| secs.parse::<u64>().ok())
+    {
+        let secs = Duration::from_secs(secs.max(1));
+        return (secs, secs);
+    }
+    (COMPACT_DELAY, COMPACT_QUIET)
 }
 
 impl Storage {

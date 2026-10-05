@@ -31,7 +31,7 @@ use ts_rs::TS;
 use crate::metrics::{DaemonMetrics, Diagnostics};
 
 /// Bumped on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// What a development build's injected limit applies to.
 #[cfg(debug_assertions)]
@@ -642,10 +642,6 @@ pub enum Request {
     PreviewDelete {
         ids: Vec<ConversationId>,
     },
-    /// Waits until the deletes of `ids` under way have finished.
-    DeletesFinished {
-        ids: Vec<ConversationId>,
-    },
     RenameConversation {
         id: ConversationId,
         title: String,
@@ -1078,10 +1074,6 @@ pub enum Response {
     },
     PreviewDelete {
         branches: Vec<UnlandedBranch>,
-    },
-    DeletesFinished {
-        /// The space compacting the database now gives back, when Storage would offer it.
-        compactable_bytes: Option<u64>,
     },
     RenameConversation {
         conversation: Box<Conversation>,

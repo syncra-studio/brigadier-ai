@@ -19,6 +19,7 @@ use std::time::{Duration, SystemTime};
 
 use brigadier_providers::Artifact;
 use brigadier_sandbox::removal::{self, Bound};
+use brigadier_store::{Compacted, DbSpace};
 
 use super::{SessionManager, blocking, git_error};
 use crate::model::{
@@ -41,6 +42,15 @@ const LOG_MAX_AGE: Duration = Duration::from_secs(8 * 24 * 60 * 60);
 const RECORDING_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// Compacting the database is offered from this much free space on.
 const COMPACT_MIN_BYTES: u64 = 1024 * 1024;
+/// The database compacts on its own from this much free space on, or from
+/// [`AUTO_COMPACT_SHARE`] of the file when that is at least [`AUTO_COMPACT_MIN_BYTES`].
+const AUTO_COMPACT_BYTES: u64 = 32 * 1024 * 1024;
+const AUTO_COMPACT_SHARE: f64 = 0.25;
+const AUTO_COMPACT_MIN_BYTES: u64 = 4 * 1024 * 1024;
+/// A larger database (the data that stays) is only compacted from Settings › Storage: the end
+/// of a `VACUUM`, its copy back, can't be stopped, and holds up a write for about 2.5 ms per
+/// MB (measured), so about 0.3 s here at most.
+const AUTO_COMPACT_MAX_LIVE_BYTES: u64 = 128 * 1024 * 1024;
 
 /// A removal the daemon runs for a picked item.
 #[derive(Debug, Clone)]
@@ -355,12 +365,15 @@ impl SessionManager {
         states
     }
 
-    /// The space "Compact the database" gives back now, when Storage offers it (a delete
-    /// asks, to offer it right away).
-    pub async fn compactable_bytes(&self) -> Option<u64> {
+    /// The database's space, when enough of it is free to compact it on its own: a rebuild
+    /// costs about the data that stays, so only a large share or a lot of space is worth it.
+    pub async fn worth_compacting(&self) -> Option<DbSpace> {
         let space = self.core.store().free_space().await.ok()?;
-        let bytes = space.free_bytes + space.wal_bytes;
-        (bytes >= COMPACT_MIN_BYTES).then_some(bytes)
+        let free = space.free_bytes;
+        let share = free as f64 / space.file_bytes.max(1) as f64;
+        (free >= AUTO_COMPACT_BYTES
+            || (free >= AUTO_COMPACT_MIN_BYTES && share >= AUTO_COMPACT_SHARE))
+            .then_some(space)
     }
 
     /// The Brain's embedding model is loaded, or a Brain job embeds.
@@ -579,28 +592,92 @@ impl SessionManager {
     }
 
     async fn compact_database(&self) -> Result<Cleaned> {
-        if self.agents_working().await || !self.brain_work().is_empty() {
+        if self.busy_for_maintenance().await.is_some() {
             return Err(Error::Invalid(
                 "Brigadier is working; compact the database once nothing runs".into(),
             ));
         }
-        let db = self.data_dir.join("brigadier.db");
-        let size = move || {
-            ["", "-wal", "-shm"]
-                .iter()
-                .map(|suffix| {
-                    let mut path = db.clone().into_os_string();
-                    path.push(suffix);
-                    std::fs::metadata(path).map_or(0, |meta| meta.len())
-                })
-                .sum::<u64>()
-        };
-        let before = size();
+        let before = self.database_bytes();
         self.core.store().compact().await?;
         Ok(Cleaned {
-            reclaimed: before.saturating_sub(size()),
+            reclaimed: before.saturating_sub(self.database_bytes()),
             ..Cleaned::default()
         })
+    }
+
+    /// Compacts the database on its own when that gives back enough
+    /// ([`SessionManager::worth_compacting`]) and Brigadier has been quiet since
+    /// `quiet_generation` ([`SessionManager::maintenance_generation`]). It gives way to any
+    /// write meanwhile. Logs what it gave back; shows nothing.
+    pub async fn compact_when_quiet(&self, quiet_generation: u64) {
+        let Some(space) = self.worth_compacting().await else {
+            return;
+        };
+        let live = space.file_bytes.saturating_sub(space.free_bytes);
+        if live > AUTO_COMPACT_MAX_LIVE_BYTES {
+            if self.first_too_large() {
+                tracing::info!(
+                    live,
+                    free = space.free_bytes,
+                    "the database is too large to compact on its own without holding up work; \
+                     Settings › Storage compacts it"
+                );
+            }
+            return;
+        }
+        let store = self.core.store();
+        let Ok(armed) = store.arm_compaction() else {
+            return;
+        };
+        // Armed first: work that starts from now on writes, and so stops it.
+        if let Some(busy) = self.busy_for_maintenance().await {
+            tracing::debug!(busy, "compacting the database waits: something works");
+            return;
+        }
+        if self.maintenance_generation() != quiet_generation {
+            tracing::debug!("compacting the database waits: something ran since the last look");
+            return;
+        }
+        let before = self.database_bytes();
+        let started = std::time::Instant::now();
+        let outcome = armed.run().await;
+        let ms = started.elapsed().as_millis() as u64;
+        match outcome {
+            Ok(Compacted::Done) => {
+                let after = self.database_bytes();
+                tracing::info!(
+                    before,
+                    after,
+                    given_back = before.saturating_sub(after),
+                    free_pages_bytes = space.free_bytes,
+                    ms,
+                    "compacted the database on its own"
+                );
+            }
+            Ok(Compacted::GaveWay) => {
+                tracing::info!(
+                    ms,
+                    "compacting the database gave way to new work; it tries again once quiet"
+                );
+            }
+            Err(brigadier_store::Error::ShuttingDown) => {
+                tracing::info!(ms, "compacting the database stopped for the quit");
+            }
+            Err(err) => tracing::warn!(error = %err, "could not compact the database"),
+        }
+    }
+
+    /// The database's files, with its WAL.
+    fn database_bytes(&self) -> u64 {
+        let db = self.data_dir.join("brigadier.db");
+        ["", "-wal", "-shm"]
+            .iter()
+            .map(|suffix| {
+                let mut path = db.clone().into_os_string();
+                path.push(suffix);
+                std::fs::metadata(path).map_or(0, |meta| meta.len())
+            })
+            .sum()
     }
 
     /// Whether a live owner of the cleanup ledger holds the worktree at `path`.
