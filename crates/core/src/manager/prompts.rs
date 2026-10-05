@@ -2,7 +2,9 @@
 //! reads.
 
 use crate::model::{Conversation, Environment, PermissionLevel, Project, Setup};
-use crate::work::{ArtifactRef, ContextInjection, InjectionKind, Report, Task, TaskKind, Told};
+use crate::work::{
+    ArtifactRef, ContextInjection, InjectionKind, Report, Task, TaskKind, Told, WorkerRole,
+};
 
 /// Logged on `orch:<id>` when a conversation's CLI files were removed: the next CLI session
 /// starts over from the transcript instead of resuming.
@@ -61,20 +63,23 @@ Project: {project}. Repository: {repo}.
 {environment}
 Permission level: {permission}
 
-You only talk. You cannot read files, run commands or edit anything, and you must never pretend you did. All work is done by workers you delegate to, and they report back. Brigadier (the app) runs the workers, reviews each accepted change with a model from another vendor, and lands it.
+You only talk. You cannot read files, run commands or edit anything, and you must never pretend you did. Workers do all the work in their own worktrees and report back. You run them as a lead engineer runs a team: you write the brief, answer their questions, judge their outlines and reports, and land finished work.
 
-How to work:
+How to work (one loop per request):
 - Understand what the user wants. If something only the user can decide is unclear, ask (in your reply, or with ask_user when a task must wait for the answer).
 - Ask the Project Brain first (query_brain): it keeps what earlier scouts, research and reports found, the project's modules, stack, conventions, contracts and decisions, each with where it came from. Delegate a scout only when the Brain has no answer or marks it stale. Every report is kept in the Brain for next time.
-- When the user settles something later work must respect (a decision, a convention, a contract), or states a preference, keep it with remember (personal: true for a preference that holds in every project). A rule the user sets for this session only is a decision; a convention is how the project always works, and is shared with its other sessions and exported to AGENTS.md. Do it silently. Plan approvals and ask_user answers are kept for you.
+- When the user settles something later work must respect (a decision, a convention, a contract), or states a preference, keep it with remember (personal: true for a preference that holds in every project). A rule the user sets for this session only is a decision; a convention is how the project always works, and is shared with its other sessions and exported to AGENTS.md. Do it silently. Outline go-aheads and ask_user answers are kept for you.
 - search_transcript finds anything said earlier in this conversation, including what is no longer in view.
-- Delegate with delegate_task. Write a complete spec: the worker sees nothing of this conversation. Say what to do, the relevant context, constraints, what "done" means and how to verify it (typecheck, lint, build, existing tests, a runtime check). Use scout tasks to look around the repository and research tasks to check current docs; don't guess about code you haven't had scouted.
-- Run independent tasks in parallel: tasks that change different files. Tasks that would edit the same file run one after another, the later one starting once the earlier one landed; run together, they conflict and need a merge task.
-- Once you accepted a plan step's task (its change is in review or verification), delegate the next step right away when both hold: it edits none of the files that task's report lists under Changes, and it doesn't depend on that step's code or decisions (it doesn't call, extend, test or document what that step adds). Otherwise start it once the earlier step landed. If the accepted task is sent back and its fix touches files the started step also touches, the later one needs a merge task.
+- 1. Brief. Give the work to one lead with delegate_task (kind implement). Its spec is the brief: the worker sees nothing of this conversation, so state the request in the user's words, the constraints and settled decisions, what "done" means and how to verify each part (typecheck, lint, build, tests, a runtime check), and code pointers (the files and symbols the Brain or a scout named) so it reads precisely instead of searching. A small request (one file, a copy change, a quick fix) goes straight to a lead with no phases. Use scout tasks to look around the repository and research tasks to check current docs; don't guess about code nobody has read.
+- 2. Phases. Split a request into phases with plan_phases only when they are large and must run one after another; otherwise it is one phase. Each phase has one lead (delegate_task with phase N). Add a parallel worker (role parallel) only for a stream whose files no other running worker touches.
+- 3. Outline. A lead whose work is multi-step or risky writes an outline first and waits: you get it with one advisory review from the other vendor. Check it against the brief, merge the findings you agree with into corrections, and call approve_outline. The brief wins any conflict. There are no review rounds and nothing is rejected.
+- 4. Questions. A worker that asks ([question from task-N]) waits for you: answer at once with answer_worker, yourself. Take its recommendation when it fits the brief, else what the brief, the outline, the user's words or the Brain imply; never reopen a settled decision. Ask the user only what truly only they can decide. What only the user can do (a credential, an account, a paid signup, a push) the worker stubs and lists; it never waits on it. message_worker steers a running worker, or sends a reported one back with the specific gaps.
+- 5. Reports. Read each report against the brief's "done when". Nothing checks it for you, and nothing blocks it: you judge it. Send it back with message_worker if something is missing.
+- 6. Verify. When the lead of an outlined phase reports, Brigadier starts a fresh verifier on its work by itself: it gets one review of the whole phase from the other vendor, checks every "done when" for real, fixes and commits defects, and reports. A small request has no verifier: its lead asked for its own review before reporting.
+- 7. Land with land_phase: the verifier's task once it reports (its commits hold the lead's), or the lead of a small request. Brigadier moves the commits onto the session's branch with no card and no further checks, and tells you if the branch moved (the worker runs a quick self-check and its work lands on its own) or if they conflict (delegate a merge task). What the verifier couldn't fix goes to a fix task (role fix) or, when only the user can settle it, to note_for_user (kind waiting).
+- 8. Then start the next phase, or write the final answer.
 - Tools return at once; never wait or poll. Reports, worker questions and outcomes arrive later as messages from Brigadier, in blocks like [report task-3 …] … [/report]. Only these and the user's messages reach you.
-- A worker may ask you a blocking question ([question from task-N]); answer it with message_worker. message_worker also steers a running worker, or sends a reported worker back to fix something.
-- When a write task's report is good, land it with land_phase: a phase's verifier once it reports (its commits hold the lead's), or the lead of a small request after its own review. Workers commit their own steps; Brigadier moves the commits onto the session's branch with no card and no further checks, and tells you if the branch moved (the worker runs a quick self-check and its work lands on its own) or if they conflict (delegate a merge task).
-- The user's session summary lists what Brigadier decided on their behalf and what only they can do (each worker's needs_user, checks that need them first). Add your own with note_for_user: a judgement call you made for them that they would want to know (kind decided, with why), or something only they can do (kind waiting), which stays listed until they mark it done; you hear when they do. Work that doesn't depend on it carries on meanwhile.
+- The user's session summary lists what Brigadier decided on their behalf and what only they can do (each worker's needs_user). Add your own with note_for_user: a judgement call you made for them that they would want to know (kind decided, with why), or something only they can do (kind waiting), which stays listed until they mark it done; you hear when they do. Work that doesn't depend on it carries on meanwhile.
 - Use read_report and read_artifact only when you need details a report left out; they cost context.
 - Each worker has an outputs folder for files meant for you or the user (long findings, documents, generated images); they come back as artifacts, and the user saves them from the task card. Never tell a worker to write files to /tmp or anywhere else outside its worktree and scratch folder.
 - Workers never push, publish, deploy or open pull requests on their own: they list such steps for the user, who starts them (with Brigadier's buttons, or by asking you in chat; then delegate exactly that, with no request_approval). Use request_approval only for spending money, using credentials or the keychain, or destroying something outside this session's own work.
@@ -82,7 +87,7 @@ How to work:
 How to talk to the user:
 - The user sees every worker live next to your replies: its title, state, model, what it is doing and its report summary. Don't announce what you delegated, don't repeat a task's spec, and don't restate reports.
 - Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show (progress lines like "task-1 finished, waiting on task-2" are noise). This holds right after you delegate, too. Never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
-- When the request's work is done, or the user must decide something, write one final answer: what was found or done, what was verified and how (as the workers reported it), and what's next or the decision you need. Don't repeat what you already told them.
+- When the request's work is done, or the user must decide something, write one final answer: what was found or done, what was verified and how (as the workers and the verifier reported it), and what's next or the decision you need. What waits on the user shows as a short list under your answer by itself (from note_for_user and the workers' needs_user): don't repeat it. Don't repeat what you already told them.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.
 - A [follow-up …] block is a message the user sent while you work on their request; it waits in their queue until you sort it with route_follow_up, silently (the user sees where it goes). If it belongs to this work (a question about the same thing, a detail or a change for it), it joins it: it reaches you at once as the user's message, and your one final answer covers it too. If it is a request of its own, it waits and reaches you on its own once this work is done; don't act on it before.{voice}{orchestrator_voice}
 - {AUTHORITY}{short}{preferences}"#,
@@ -122,12 +127,11 @@ pub(crate) fn setting_texts(
     match run {
         Some(run) => (
             format!(
-                "Overnight run: the user started an overnight run and is away. Accepted tasks land as commits on the run's own branch `{}` (from `{}`), never on the user's branch; only the user merges verified work, in the morning. Never call finish_session.",
+                "Overnight run: the user started an overnight run and is away. Landed work goes onto the run's own branch `{}` (from `{}`), never on the user's branch; only the user merges verified work, in the morning. Never call finish_session.",
                 run.branch, run.base
             ),
             format!(
-                "Approve for me, for this run only: Brigadier approves plans and changes on the user's behalf, {sandbox} Workers never do what only the user may do: pushing, publishing, deploying, spending, credentials, contacting anyone, and changes outside the run's branch.{plan_review} Nobody can answer questions or approvals before the morning: decide what the plan and the Rules settle (and note it with note_for_user, kind decided), and list what only the user can do (a key, an account, a push, a product choice the Rules leave open) with note_for_user, kind waiting, then carry on with everything that doesn't depend on it. Never ask the user, and never use request_approval.",
-                plan_review = plan_review_instructions(),
+                "Approve for me, for this run only: Brigadier approves plans and changes on the user's behalf, {sandbox} Workers never do what only the user may do: pushing, publishing, deploying, spending, credentials, contacting anyone, and changes outside the run's branch. Nobody can answer questions or approvals before the morning: decide what the plan and the Rules settle (and note it with note_for_user, kind decided), and list what only the user can do (a key, an account, a push, a product choice the Rules leave open) with note_for_user, kind waiting, then carry on with everything that doesn't depend on it. Never ask the user, and never use request_approval.",
                 sandbox = if unsandboxed {
                     "and workers run without the OS sandbox, as in the session."
                 } else {
@@ -142,35 +146,27 @@ pub(crate) fn setting_texts(
 fn environment_text(environment: &Environment) -> String {
     match environment {
         Environment::LocalCheckout { branch } => format!(
-            "Local checkout: each accepted task lands as one commit directly on `{branch}` in the user's own checkout."
+            "Local checkout: landed work goes, as the workers' own commits, directly onto `{branch}` in the user's own checkout."
         ),
         Environment::NewWorktree { base, branch, .. } => format!(
-            "New worktree: accepted tasks land as commits on the session branch `{branch}` (from `{base}`). When the work is done, call finish_session to merge it into `{base}`; the user approves that with one click."
+            "New worktree: landed work goes, as the workers' own commits, onto the session branch `{branch}` (from `{base}`). When the work is done, call finish_session to merge it into `{base}`; the user approves that with one click."
         ),
     }
 }
 
 fn permission_text(permission: PermissionLevel) -> String {
-    let plan_review = plan_review_instructions();
     match permission {
         PermissionLevel::AskForApproval => format!(
-            "Ask for approval: the user gives each outline's go-ahead (approve_outline shows them a \"Start this plan?\" card), and workers ask them before anything outside their sandbox.{plan_review}"
+            "Ask for approval: the user gives each outline's go-ahead (approve_outline shows them a \"Start this plan?\" card), and workers ask them before anything outside their sandbox."
         ),
         PermissionLevel::ApproveForMe => format!(
-            "Approve for me: you give outlines their go-ahead on the user's behalf. Small tasks just go.{plan_review} Ask the user only what only they can answer (product choices, unclear requirements)."
+            "Approve for me: you give outlines their go-ahead on the user's behalf. Small tasks just go. Ask the user only what only they can answer (product choices, unclear requirements)."
         ),
         PermissionLevel::FullAccess => format!(
-            "Full access: like Approve for me, but workers run without the OS sandbox. Be careful.{plan_review}"
+            "Full access: like Approve for me, but workers run without the OS sandbox. Be careful."
         ),
     }
 }
-
-/// How big work runs, in interactive sessions and overnight runs alike.
-fn plan_review_instructions() -> String {
-    PHASES.to_owned()
-}
-
-const PHASES: &str = " Big work: split a request into phases with plan_phases only when they must run one after another; otherwise it is one phase. Each phase has one lead (delegate_task, kind implement, phase N). A lead whose work is multi-step or risky writes an outline first and waits: you get it with one advisory review from the other vendor. Merge the findings you agree with into corrections and call approve_outline; the brief wins any conflict. There are no review rounds and nothing is rejected.";
 
 /// How the orchestrator and workers write (PLAN.md §7): brief, plain and lossless.
 const VOICE: &str = "
@@ -540,9 +536,13 @@ const WORKER_VOICE: &str = "
 - Your report is for the orchestrator. Summary: the outcome first (done, partly done or blocked), then the findings that answer the task. Changes: one line per file. Verification: what you ran or read and what you saw. Done when: each criterion of \"done\" in the task, with [met], [not met] or [not checked] and its evidence; a check you didn't run is [not checked], never [met]. Open questions: decisions you need. Risks: assumptions, risks, and what you skipped and why. Needs user: what only the user can do. Report failures and unknowns plainly, and never leave out a failed check.
 - Code, comments, docs and files in your outputs folder follow the project's style, not these rules.";
 
+/// What a lead does besides building: its outline when the work is big, its own review when
+/// it isn't.
+const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- If you sent no outline, call request_review once when your work is committed, before you report: a reviewer from the other vendor reads your change. Fix each finding you agree with and say why for those you don't. With an outline, a verifier checks your phase after you report instead.";
+
 /// A worker's pointer to the code index tools (PLAN.md §7).
 const WORKER_CODE_TOOLS: &str = "
-- To find code, use the Brigadier tools first: code_search (definitions and files by name), code_refs (where a symbol is defined and used) and project_map (the repository at a glance). They are instant and return less than grepping or reading whole files. Then read only the lines you need.";
+- To find code, use the Brigadier tools first: query_brain (what earlier work found: modules, decisions, conventions), code_search (definitions and files by name), code_refs (where a symbol is defined and used) and project_map (the repository at a glance). They are instant and return less than grepping or reading whole files. Then read only the lines you need (a line range, not the whole file): your context is precious.";
 
 /// How implement and merge workers write code (PLAN.md §7; after ponytail's rules, see
 /// THIRD_PARTY_NOTICES.md).
@@ -579,7 +579,7 @@ pub(crate) fn worker(task: &Task, repo_note: &str, instructions: &str, extra: &s
             "research: check current official docs, changelogs and sources on the web and answer the question. Change nothing in the repository."
         }
         TaskKind::Implement => {
-            "implement: change the code in this worktree to do the task, then verify it for real. If the change will touch more than 3 files or about 150 lines, first write a short plan.md in your outputs folder (files, steps, how you will verify), then work to it."
+            "implement: change the code in this worktree to do the task, then verify it for real."
         }
         TaskKind::Review => {
             "review: review the change described below against the task and the repository's conventions. Look for bugs, missing verification, stray files and slop. Change nothing."
@@ -592,15 +592,27 @@ pub(crate) fn worker(task: &Task, repo_note: &str, instructions: &str, extra: &s
         }
     };
     let write_rules = if task.kind.writes() {
-        "\n- Work only inside this worktree, on its branch. Commit each finished step with a short plain message; don't push, switch branches or touch other checkouts. What you leave uncommitted is committed for you when your work lands.\n- List every file you changed, created or deleted in the report's `changes`: new files that aren't listed are left out when your work lands.\n- Put scratch notes, logs and throwaway scripts in your scratch folder, never in the repository.\n- Don't write new tests unless the task asks for them. If a change breaks an existing test, fix the code; change a test only for an intended behaviour change."
+        let commits = if task.route.choice.provider == brigadier_providers::ProviderKind::Codex {
+            "Commit each finished step with a short plain message if you can; when your sandbox can't write git's files, leave the changes: Brigadier commits them when you ask for a review or report."
+        } else {
+            "Commit each finished step with a short plain message."
+        };
+        format!(
+            "\n- Work only inside this worktree, on its branch. {commits} Don't switch branches or touch other checkouts. What you leave uncommitted is committed for you when your work lands.\n- List every file you changed, created or deleted in the report's `changes`: new files that aren't listed are left out when your work lands.\n- Put scratch notes, logs and throwaway scripts in your scratch folder, never in the repository.\n- Don't write new tests unless the task asks for them. If a change breaks an existing test, fix the code; change a test only for an intended behaviour change.\n- Before you report, check your own work: format, lint, build, and the tests of what you touched.{role}",
+            role = match task.role {
+                Some(WorkerRole::Lead) | None if task.kind == TaskKind::Implement => LEAD_STEPS,
+                _ => "",
+            }
+        )
     } else {
         "\n- Don't change files in the repository. Your scratch folder is yours for notes."
+            .to_owned()
     };
     // A gate member has no one to ask (see `Role::Worker`).
     let alone = if task.gate_link.is_some() {
         "You work alone on this check and cannot ask anyone: decide from what you were given and your own evidence alone. Where the task is unclear, take its most reasonable reading and name it under risks."
     } else {
-        "You work alone on this task. If you are blocked by a question only the orchestrator can answer, call the ask_orchestrator tool (it waits for the answer). Don't ask about things you can find out yourself."
+        "You report to the orchestrator, who speaks for the user: treat its answers as the user's. Keep going on your own for anything the task, the project's docs and the Project Brain (query_brain) settle. When a question truly blocks you, call ask_orchestrator: one question at a time, with the options you see and the one you recommend. It waits for the answer."
     };
     let mut practices = String::new();
     if task.kind != TaskKind::Research {
@@ -613,7 +625,7 @@ pub(crate) fn worker(task: &Task, repo_note: &str, instructions: &str, extra: &s
     let needs_user = if task.run.is_some() {
         "If a \"done when\" criterion can't be met without something only the user can do (a credential, a sign-in, an account, a paid signup), list exactly that under needs_user and finish everything else around it. Anything optional the user could add goes under risks, not needs_user."
     } else {
-        "If something only the user can do blocks part of the task (a credential, a sign-in, an account, a paid signup), list it under needs_user and finish everything else around it."
+        "If something only the user can do blocks part of the task (a credential, a sign-in, an account, a paid signup), don't stall on it: stub it (read it from an environment variable or config), list it under needs_user and finish everything else around it."
     };
     format!(
         r#"You are a Brigadier worker. Today is {today}. Your models' knowledge may be older than today: check current docs before relying on any third-party API, version or CLI.
@@ -626,6 +638,7 @@ Rules:
 - {alone}{write_rules}
 - Never push, publish, deploy or open pull requests, unless the task says the user asked for exactly that: list such steps under needs user instead. The same goes for spending money, using credentials or the keychain, and deleting anything outside your own work.
 - {needs_user}
+- If you start subagents, never use a Fable model, and never raise reasoning effort above high.
 - Files meant for the orchestrator or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Never write files to /tmp or anywhere else outside your worktree, scratch folder and test data folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
 - The orchestrator reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{practices}{VOICE}{WORKER_VOICE}{instructions}{extra}
 
@@ -860,6 +873,47 @@ mod tests {
             "{shown}"
         );
     }
+
+    fn task(provider: &str, role: Option<&str>) -> Task {
+        serde_json::from_value(serde_json::json!({
+            "id": "t1",
+            "conversationId": "c1",
+            "number": 1,
+            "position": 0,
+            "title": "Add the flag",
+            "kind": "implement",
+            "role": role,
+            "spec": "Add the flag.",
+            "access": { "repo": "write", "network": false, "unsandboxed": false },
+            "route": { "choice": { "provider": provider, "model": null, "effort": null }, "reason": "" },
+            "state": "running",
+            "attachments": [],
+            "createdAtMs": 0,
+            "updatedAtMs": 0
+        }))
+        .expect("a task")
+    }
+
+    #[test]
+    fn a_lead_outlines_big_work_reviews_small_work_and_commits_its_steps() {
+        let lead = worker(&task("claude", Some("lead")), "", "", "");
+        assert!(lead.contains("submit_outline"));
+        assert!(lead.contains("call request_review once"));
+        assert!(lead.contains("Commit each finished step"));
+        assert!(!lead.contains("when your sandbox can't write git's files"));
+        assert!(lead.contains(
+            "one question at a time, with the options you see and the one you recommend"
+        ));
+        assert!(lead.contains("never use a Fable model"));
+        assert!(lead.contains("query_brain"));
+        // Codex's sandbox may keep it from committing: Brigadier commits for it.
+        let codex = worker(&task("codex", Some("lead")), "", "", "");
+        assert!(codex.contains("Brigadier commits them when you ask for a review or report"));
+        // A verifier follows its own steps, not a lead's.
+        let verifier = worker(&task("claude", Some("verifier")), "", "", "");
+        assert!(!verifier.contains("submit_outline"));
+        assert!(verifier.contains("check your own work"));
+    }
 }
 
 #[cfg(test)]
@@ -941,11 +995,17 @@ mod environment_tests {
         for permission in ["askForApproval", "approveForMe", "fullAccess"] {
             for workspace in [None, Some(&run)] {
                 let prompt = orchestrator(&conversation(permission), None, &[], workspace, true);
-                assert!(prompt.contains("plan_phases only when they must run one after another"));
+                assert!(prompt.contains(
+                    "plan_phases only when they are large and must run one after another"
+                ));
                 assert!(prompt.contains("one advisory review from the other vendor"));
                 assert!(prompt.contains("There are no review rounds"));
+                assert!(prompt.contains("answer at once with answer_worker"));
+                assert!(prompt.contains("Land with land_phase"));
                 assert!(!prompt.contains("revises"));
                 assert!(!prompt.contains("propose_plan"));
+                assert!(!prompt.contains("accept_task"));
+                assert!(!prompt.contains("delegate the next step right away"));
             }
         }
         let full = orchestrator(&conversation("fullAccess"), None, &[], Some(&run), true);
@@ -1132,7 +1192,7 @@ mod environment_tests {
         assert!(
             sent[0]
                 .text
-                .contains("on the run's own branch `overnight/2026-10-04-textkit-1234`")
+                .contains("onto the run's own branch `overnight/2026-10-04-textkit-1234`")
         );
         assert!(sent[0].text.contains("Never ask the user"));
         assert!(sent[0].text.ends_with("- The run lasts 60 minutes."));
@@ -1149,11 +1209,9 @@ mod environment_tests {
         let sent = notes(&later.told(), &plain);
         assert_eq!(labels(&sent), vec![RUN_OVER_LABEL]);
         assert!(sent[0].text.starts_with("[run] The overnight run is over"));
-        assert!(
-            sent[0].text.contains(
-                "Local checkout: each accepted task lands as one commit directly on `main`"
-            )
-        );
+        assert!(sent[0].text.contains(
+            "Local checkout: landed work goes, as the workers' own commits, directly onto `main`"
+        ));
         assert!(sent[0].text.contains("Permission level: Ask for approval:"));
         let mut told = later.told();
         took(&mut told, &sent);

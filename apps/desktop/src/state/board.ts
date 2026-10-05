@@ -537,6 +537,7 @@ function applyToBoard(board: Board, envelope: EventEnvelope): Board {
 const TOOL_DOING: Readonly<Record<string, string>> = {
   delegate_task: "Delegating to a worker",
   message_worker: "Messaging a worker",
+  answer_worker: "Answering a worker",
   stop_worker: "Stopping a worker",
   ask_user: "Asking you",
   read_report: "Reading a report",
@@ -545,9 +546,10 @@ const TOOL_DOING: Readonly<Record<string, string>> = {
   search_transcript: "Looking back through the conversation",
   // Remembering is silent by design.
   remember: "Thinking",
-  propose_plan: "Writing a plan",
+  plan_phases: "Planning the phases",
+  approve_outline: "Reading a worker's outline",
   request_approval: "Asking for your approval",
-  accept_task: "Accepting a worker's change",
+  land_phase: "Landing a worker's commits",
   finish_session: "Finishing the session",
   list_tasks: "Checking on the workers",
   route_follow_up: "Sorting your follow-up",
