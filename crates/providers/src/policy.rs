@@ -440,6 +440,10 @@ impl Similar {
         let Some(command) = &request.command else {
             return false;
         };
+        // A grant is for running a program, not for writing files with the shell's help.
+        if redirects_to_file(command) {
+            return false;
+        }
         let commands: Vec<Vec<String>> = simple_commands(command)
             .into_iter()
             .map(|words| strip_prefixes(&words).to_vec())
@@ -447,7 +451,7 @@ impl Similar {
             .collect();
         let mut judged = 0;
         for words in &commands {
-            if NEUTRAL.contains(&program_name(&words[0])) {
+            if neutral(words) {
                 continue;
             }
             // A shell wrapper is judged by the commands of its script.
@@ -469,6 +473,85 @@ impl Similar {
         }
         judged > 0
     }
+}
+
+/// Whether a simple command only moves between folders or filters what it is given ([`NEUTRAL`]),
+/// writing no file of its own: `sort -o out` and `uniq in out` write one.
+fn neutral(words: &[String]) -> bool {
+    let program = program_name(&words[0]);
+    if !NEUTRAL.contains(&program) {
+        return false;
+    }
+    let args = &words[1..];
+    match program {
+        "sort" => !args.iter().any(|arg| {
+            arg.starts_with("--output")
+                || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains('o'))
+        }),
+        "uniq" => args.iter().filter(|arg| !arg.starts_with('-')).count() < 2,
+        _ => true,
+    }
+}
+
+/// Whether `command` sends output into a file with the shell's `>` or `>>` (outside quotes),
+/// other than `/dev/null` and the like or another file descriptor (`2>&1`).
+fn redirects_to_file(command: &str) -> bool {
+    let mut chars = command.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '\'' => {
+                for c in chars.by_ref() {
+                    if c == '\'' {
+                        break;
+                    }
+                }
+            }
+            '"' => {
+                while let Some(c) = chars.next() {
+                    match c {
+                        '"' => break,
+                        '\\' => {
+                            chars.next();
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            '>' => {
+                while chars.peek().is_some_and(|c| matches!(c, '>' | '|')) {
+                    chars.next();
+                }
+                if chars.peek() == Some(&'&') {
+                    // `>&2` duplicates a descriptor; `>&file` is zsh's and bash's `>file 2>&1`.
+                    chars.next();
+                    let target: String = chars
+                        .by_ref()
+                        .take_while(|c| !c.is_whitespace() && !matches!(c, ';' | '|' | '&'))
+                        .collect();
+                    if !target.chars().all(|c| c.is_ascii_digit() || c == '-') {
+                        return true;
+                    }
+                    continue;
+                }
+                while chars.peek().is_some_and(|c| c.is_whitespace()) {
+                    chars.next();
+                }
+                let target: String = chars
+                    .by_ref()
+                    .take_while(|c| !c.is_whitespace() && !matches!(c, ';' | '|' | '&' | ')'))
+                    .collect();
+                let target = target.trim_matches(|c| c == '"' || c == '\'');
+                if !matches!(target, "/dev/null" | "/dev/stdout" | "/dev/stderr") {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// The host of a request for network access from inside the sandbox.
@@ -677,6 +760,31 @@ mod tests {
             route(&request, &online, ApprovalMode::Delegated),
             Route::Allow
         );
+    }
+
+    #[test]
+    fn allow_similar_never_covers_writing_files_with_the_shell() {
+        let mut similar = Similar::default();
+        similar.allow(&command("curl https://example.com", None, true));
+        for line in [
+            "curl https://example.com 2>&1 | head -5",
+            "curl -s https://example.com >/dev/null 2>&1",
+            "curl https://example.com | sort | uniq -c",
+            "echo '>' && curl https://example.com",
+        ] {
+            assert!(similar.covers(&command(line, None, true)), "{line}");
+        }
+        for line in [
+            "curl https://example.com && sort -o /outside/file /tmp/input",
+            "curl https://example.com && sort -uo /outside/file /tmp/input",
+            "curl https://example.com && uniq /tmp/input /outside/file",
+            "curl https://example.com && echo hi > ~/.zshrc",
+            "curl https://example.com >> /outside/log",
+            "curl https://example.com &> /outside/log",
+            "curl https://example.com >&/outside/log",
+        ] {
+            assert!(!similar.covers(&command(line, None, true)), "{line}");
+        }
     }
 
     #[test]
