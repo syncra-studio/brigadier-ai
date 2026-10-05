@@ -122,24 +122,7 @@ impl Claude {
     /// settings, no MCP servers and writes no session.
     async fn control(&self, requests: Vec<Map<String, Value>>) -> Result<Vec<Value>> {
         let mut spec = self.env.spec(self.binary()?);
-        spec.args = [
-            "-p",
-            "--input-format",
-            "stream-json",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--no-session-persistence",
-            "--strict-mcp-config",
-            "--mcp-config",
-            r#"{"mcpServers":{}}"#,
-            "--setting-sources",
-            "",
-            "--settings",
-            r#"{"autoMemoryEnabled":false}"#,
-        ]
-        .map(Into::into)
-        .to_vec();
+        spec.args = Self::control_args().into_iter().map(Into::into).collect();
         spec.cwd = Some(self.platform.paths().data_dir.clone());
         let process::Spawned {
             process,
@@ -178,28 +161,56 @@ impl Claude {
         result
     }
 
-    fn session_args(spec: &SessionSpec, cwd: &Path, native_id: &str) -> Result<Vec<String>> {
-        let mut args: Vec<String> = [
+    /// Every print-mode process requests summaries, regardless of role or settings.
+    fn stream_args() -> Vec<String> {
+        [
             "-p",
             "--input-format",
             "stream-json",
             "--output-format",
             "stream-json",
-            "--include-partial-messages",
-            "--verbose",
-            "--replay-user-messages",
-            "--permission-prompt-tool",
-            "stdio",
-            "--strict-mcp-config",
-            "--setting-sources",
-            "project",
-            // Thinking otherwise streams empty; its summaries are the reasoning Brigadier
-            // shows. (The `showThinkingSummaries` setting is not read in print mode.)
+            // The boolean showThinkingSummaries setting is not read in print mode.
             "--thinking-display",
             "summarized",
         ]
         .map(str::to_owned)
-        .to_vec();
+        .to_vec()
+    }
+
+    fn control_args() -> Vec<String> {
+        let mut args = Self::stream_args();
+        args.extend(
+            [
+                "--verbose",
+                "--no-session-persistence",
+                "--strict-mcp-config",
+                "--mcp-config",
+                r#"{"mcpServers":{}}"#,
+                "--setting-sources",
+                "",
+                "--settings",
+                r#"{"autoMemoryEnabled":false}"#,
+            ]
+            .map(str::to_owned),
+        );
+        args
+    }
+
+    fn session_args(spec: &SessionSpec, cwd: &Path, native_id: &str) -> Result<Vec<String>> {
+        let mut args = Self::stream_args();
+        args.extend(
+            [
+                "--include-partial-messages",
+                "--verbose",
+                "--replay-user-messages",
+                "--permission-prompt-tool",
+                "stdio",
+                "--strict-mcp-config",
+                "--setting-sources",
+                "project",
+            ]
+            .map(str::to_owned),
+        );
         args.push("--mcp-config".into());
         args.push(mcp_config(&spec.mcp_servers).to_string());
         // Decided once, for both the tools and the settings.
@@ -1543,26 +1554,43 @@ mod tests {
         }
     }
 
+    fn assert_thinking_args(args: &[String]) {
+        assert_eq!(
+            args.windows(2)
+                .filter(|pair| *pair == ["--thinking-display", "summarized"])
+                .count(),
+            1
+        );
+    }
+
     #[test]
     fn every_session_requests_readable_thinking_in_print_mode() {
         let dir = Temp::new();
         let mut spec = spec(dir.path(), &["claude-sonnet-5-5"]);
+        let native_id = "00000000-0000-4000-8000-000000000000";
         for origin in [
             Origin::New,
             Origin::Resume {
-                native_id: "00000000-0000-4000-8000-000000000000".into(),
+                native_id: native_id.into(),
+            },
+            Origin::Fork {
+                native_id: native_id.into(),
             },
         ] {
             spec.origin = origin;
-            let args =
-                Claude::session_args(&spec, dir.path(), "00000000-0000-4000-8000-000000000000")
-                    .unwrap();
-            assert!(
-                args.windows(2)
-                    .any(|pair| pair == ["--thinking-display", "summarized"])
-            );
-            assert!(args.iter().any(|arg| arg == "--include-partial-messages"));
+            // Orchestrators, workers, reviewers and jobs share this builder.
+            for tools in [ToolSet::None, ToolSet::Lean, ToolSet::Default, ToolSet::Web] {
+                spec.tools = tools;
+                let args = Claude::session_args(&spec, dir.path(), native_id).unwrap();
+                assert_thinking_args(&args);
+                assert!(args.iter().any(|arg| arg == "--include-partial-messages"));
+            }
         }
+    }
+
+    #[test]
+    fn control_processes_also_request_readable_thinking() {
+        assert_thinking_args(&Claude::control_args());
     }
 
     #[test]
