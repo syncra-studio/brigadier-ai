@@ -8,6 +8,8 @@ export function useShortcuts() {
     sidebar: mac ? "⌘B" : "Ctrl+B",
     search: mac ? "⌘K" : "Ctrl+K",
     settings: mac ? "⌘," : "Ctrl+,",
+    sideChat: mac ? "⌥⌘S" : "Ctrl+Alt+S",
+    terminal: mac ? "⌘J" : "Ctrl+J",
     inspector: mac ? "⌥⌘I" : "Ctrl+Alt+I",
   };
 }

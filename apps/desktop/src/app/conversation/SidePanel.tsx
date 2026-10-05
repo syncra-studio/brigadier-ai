@@ -85,15 +85,9 @@ const TABS: Record<
   sideChat: { title: "Side chat", icon: <PlusCircle />, keys: "⌥⌘S" },
 };
 
-/** The tabs the titlebar has a button for, in order. */
-const TOOLS: readonly SideTab[] = [
-  "files",
-  "source",
-  "sideChat",
-  "terminal",
-  "browser",
-  "review",
-];
+/** The tabs the titlebar has a button for, in order. Side chat and Terminal are on the bottom
+ * bar. */
+const TOOLS: readonly SideTab[] = ["files", "source", "browser", "review"];
 
 /** The panel's own shortcuts: show or hide it, and full view. */
 
@@ -725,11 +719,7 @@ export const PanelButtons: FC = () => {
             key={tab}
             tooltip={TABS[tab].title}
             shortcut={keys(TABS[tab].keys)}
-            aria-pressed={
-              tab === "terminal"
-                ? state.terminalOpen
-                : visible && state.active === tab
-            }
+            aria-pressed={visible && state.active === tab}
             onClick={() => toggleTab(tab)}
           >
             {TABS[tab].icon}

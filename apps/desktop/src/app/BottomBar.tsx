@@ -1,4 +1,4 @@
-import { Settings } from "@openai/apps-sdk-ui/components/Icon";
+import { PlusCircle, Settings, Terminal } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { KeepAwakeMenu, UsageMenu } from "@/app/BarStatus";
@@ -6,6 +6,7 @@ import { useShortcuts } from "@/app/shortcuts";
 import { BarButton } from "@/app/sidebar/nav";
 import { cn } from "@/lib/utils";
 import { toggleSettings } from "@/state/actions";
+import { useBarActions } from "@/state/barActions";
 import { useApp } from "@/state/store";
 
 /**
@@ -16,6 +17,8 @@ import { useApp } from "@/state/store";
 export function BottomBar() {
   const inSettings = useApp((s) => s.selection.type === "settings");
   const shortcuts = useShortcuts();
+  const sideChat = useBarActions((s) => s.sideChat);
+  const terminal = useBarActions((s) => s.terminal);
   return (
     <footer
       aria-label="App bar"
@@ -33,6 +36,26 @@ export function BottomBar() {
       <UsageMenu />
       <KeepAwakeMenu />
       <div data-tauri-drag-region className="min-w-0 flex-1 self-stretch" />
+      <BarItem show={sideChat !== null}>
+        <BarButton
+          label="Side chat"
+          shortcut={shortcuts.sideChat}
+          selected={sideChat?.on ?? false}
+          onClick={() => useBarActions.getState().sideChat?.toggle()}
+        >
+          <PlusCircle />
+        </BarButton>
+      </BarItem>
+      <BarItem show={terminal !== null}>
+        <BarButton
+          label="Terminal"
+          shortcut={shortcuts.terminal}
+          selected={terminal?.on ?? false}
+          onClick={() => useBarActions.getState().terminal?.toggle()}
+        >
+          <Terminal />
+        </BarButton>
+      </BarItem>
     </footer>
   );
 }

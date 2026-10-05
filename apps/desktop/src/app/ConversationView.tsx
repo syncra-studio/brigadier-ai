@@ -103,6 +103,7 @@ import {
 } from "@/state/actions";
 import { toast } from "@/state/toasts";
 import { type Board, useBoard } from "@/state/board";
+import { useBarActions } from "@/state/barActions";
 import {
   emptyThread,
   type PendingMessage,
@@ -552,6 +553,25 @@ export function ConversationView({
           : null,
   );
   const [renaming, setRenaming] = useState(false);
+  // The bottom bar's Side chat and Terminal act on this view while it is the window's own.
+  const sideChatOn = sidePanel.visible && sidePanel.state.active === "sideChat";
+  const terminalOn = sidePanel.state.terminalOpen;
+  const { available, toggleTab } = sidePanel;
+  useEffect(() => {
+    if (embedded) return;
+    useBarActions.setState({
+      sideChat: available.includes("sideChat")
+        ? { on: sideChatOn, toggle: () => toggleTab("sideChat") }
+        : null,
+      terminal: available.includes("terminal")
+        ? { on: terminalOn, toggle: () => toggleTab("terminal") }
+        : null,
+    });
+  }, [embedded, available, sideChatOn, terminalOn, toggleTab]);
+  useEffect(() => {
+    if (embedded) return;
+    return () => useBarActions.setState({ sideChat: null, terminal: null });
+  }, [embedded]);
 
   // A new scope must not inherit uploads or refs from the previous composer.
   // oxlint-disable-next-line react-hooks/exhaustive-deps, react/memo-dependencies
