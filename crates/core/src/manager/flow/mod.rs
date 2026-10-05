@@ -47,7 +47,11 @@ pub(crate) struct Turn {
     host: Arc<SessionManager>,
     events: mpsc::Sender<ProviderEvent>,
     answers: Answers,
+    steers: Steers,
 }
+
+/// What was steered into a session's running turn, for the turn to read.
+type Steers = Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<String>>>;
 
 /// The approvals a scripted CLI asked for and waits on, by request id.
 type Answers =
@@ -118,6 +122,15 @@ impl Turn {
         tokio::time::timeout(PATIENCE, rx).await.ok()?.ok()
     }
 
+    /// Waits for the next message steered into this running turn (`None`: none came in time).
+    pub async fn steered(&self) -> Option<String> {
+        let mut steers = self.steers.lock().await;
+        tokio::time::timeout(PATIENCE, steers.recv())
+            .await
+            .ok()
+            .flatten()
+    }
+
     /// Reports the session's context size mid-turn, as a CLI does after each model call.
     pub async fn report_context(&self, tokens: i64) {
         let _ = self
@@ -166,6 +179,8 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "finish_session" => ToolCall::Orchestrator(O::FinishSession(arg(name, args))),
         "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
         "list_tasks" => ToolCall::Orchestrator(O::ListTasks),
+        "phase_done" => ToolCall::Orchestrator(O::PhaseDone(arg(name, args))),
+        "propose_phases" => ToolCall::Orchestrator(O::ProposePhases(arg(name, args))),
         "ask_orchestrator" => ToolCall::Worker(W::AskOrchestrator(arg(name, args))),
         "submit_outline" => ToolCall::Worker(W::SubmitOutline(arg(name, args))),
         "submit_report" => ToolCall::Worker(W::SubmitReport(arg(name, args))),
@@ -321,6 +336,7 @@ impl Provider for FakeCli {
                     cli_version: Some("1.0.0".into()),
                 })
                 .await;
+            let (steer_tx, steers) = mpsc::unbounded_channel();
             let session = Arc::new(FakeSession {
                 kind: self.kind,
                 native_id,
@@ -333,6 +349,8 @@ impl Provider for FakeCli {
                 turns: std::sync::atomic::AtomicU32::new(0),
                 answers: Answers::default(),
                 running: Arc::default(),
+                steer_tx,
+                steers: Arc::new(tokio::sync::Mutex::new(steers)),
             });
             Ok(Started { session, events })
         })
@@ -373,6 +391,9 @@ struct FakeSession {
     answers: Answers,
     /// A turn is running: a steer joins it rather than starting another.
     running: Arc<std::sync::atomic::AtomicBool>,
+    /// Steers into a running turn, which the turn may read ([`Turn::steered`]).
+    steer_tx: mpsc::UnboundedSender<String>,
+    steers: Steers,
 }
 
 impl FakeSession {
@@ -403,11 +424,17 @@ impl ProviderSession for FakeSession {
             let Some(tx) = self.sender() else {
                 return Err(brigadier_providers::Error::Invalid("the CLI exited".into()));
             };
-            let host = self
-                .host
-                .get()
-                .and_then(Weak::upgrade)
-                .expect("the manager is running");
+            // A manager that starts again may resume a session before it is reachable here.
+            let host = tokio::time::timeout(PATIENCE, async {
+                loop {
+                    if let Some(host) = self.host.get().and_then(Weak::upgrade) {
+                        break host;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("the manager is running");
             let earlier = self.turns.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let turn = Turn {
                 provider: self.kind,
@@ -419,6 +446,7 @@ impl ProviderSession for FakeSession {
                 host,
                 events: tx.clone(),
                 answers: self.answers.clone(),
+                steers: self.steers.clone(),
             };
             let script = self.script.clone();
             let running = self.running.clone();
@@ -458,8 +486,10 @@ impl ProviderSession for FakeSession {
     }
 
     fn steer(&self, input: TurnInput) -> BoxFuture<'_, brigadier_providers::Result<()>> {
-        // A script's turn has already decided its reply: a steer into it changes nothing.
+        // A running turn reads it if its script asks for it ([`Turn::steered`]); otherwise its
+        // reply is already decided and the steer changes nothing.
         if self.running.load(std::sync::atomic::Ordering::SeqCst) {
+            let _ = self.steer_tx.send(input_text(&input));
             return Box::pin(async { Ok(()) });
         }
         self.send(input)
@@ -499,6 +529,79 @@ impl ProviderSession for FakeSession {
     }
 }
 
+/// The store in `data`.
+async fn open_store(data: &Path) -> brigadier_store::Store {
+    let data = data.to_owned();
+    tokio::task::spawn_blocking(move || {
+        brigadier_store::Store::open(brigadier_store::StoreConfig {
+            db_path: data.join("brigadier.db"),
+            blobs_dir: data.join("blobs"),
+            readers: 2,
+        })
+    })
+    .await
+    .unwrap()
+    .unwrap()
+}
+
+/// The manager on `store`, its CLIs running `script`, once it has seen both CLIs' models.
+async fn boot(
+    data: &Path,
+    store: brigadier_store::Store,
+    script: &Script,
+) -> (Arc<SessionManager>, Arc<Core>) {
+    let data = data.to_owned();
+    let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+        data_dir: Some(data.clone()),
+    })
+    .unwrap();
+    let core = Core::load(store).await.unwrap();
+    let spawner: Spawner = Arc::new(|task| {
+        tokio::spawn(task);
+    });
+    let host: Arc<OnceLock<Weak<SessionManager>>> = Arc::default();
+    let fake = |kind| -> Arc<dyn Provider> {
+        Arc::new(FakeCli {
+            kind,
+            script: script.clone(),
+            host: host.clone(),
+        })
+    };
+    let runtime = Runtime::start_faked(
+        core.clone(),
+        platform,
+        spawner.clone(),
+        [fake(ProviderKind::Claude), fake(ProviderKind::Codex)],
+    )
+    .await
+    .unwrap();
+    let manager = SessionManager::start(
+        core.clone(),
+        runtime.clone(),
+        spawner,
+        ManagerConfig {
+            daemon_exe: PathBuf::from("/fake/brigadierd"),
+        },
+    )
+    .await
+    .unwrap();
+    host.set(Arc::downgrade(&manager)).ok();
+    // The router picks only among models it has seen.
+    let mut checked = runtime.provider_checks();
+    tokio::time::timeout(PATIENCE, async {
+        while ProviderKind::ALL.iter().any(|kind| {
+            runtime
+                .overview(*kind)
+                .is_none_or(|overview| overview.models.is_none())
+        }) {
+            checked.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the scripted CLIs are checked");
+    (manager, core)
+}
+
 // ----- a scripted session -----------------------------------------------------------------
 
 /// A session in a fresh data folder on a fresh repository, its CLIs scripted.
@@ -508,6 +611,7 @@ pub(crate) struct Flow {
     pub repo: PathBuf,
     pub conversation: ConversationId,
     dir: PathBuf,
+    script: Script,
 }
 
 /// What a scripted session is set up with.
@@ -553,70 +657,11 @@ impl Flow {
             std::fs::create_dir_all(&data).unwrap();
             std::fs::copy(store, data.join("brigadier.db")).unwrap();
         }
-        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
-            data_dir: Some(data.clone()),
-        })
-        .unwrap();
-        let store = {
-            let data = data.clone();
-            tokio::task::spawn_blocking(move || {
-                brigadier_store::Store::open(brigadier_store::StoreConfig {
-                    db_path: data.join("brigadier.db"),
-                    blobs_dir: data.join("blobs"),
-                    readers: 2,
-                })
-            })
-            .await
-            .unwrap()
-            .unwrap()
-        };
+        let store = open_store(&data).await;
         if let Some(seed) = options.seed {
             store.append(seed_events(seed)).await.unwrap();
         }
-        let core = Core::load(store).await.unwrap();
-        let spawner: Spawner = Arc::new(|task| {
-            tokio::spawn(task);
-        });
-        let host: Arc<OnceLock<Weak<SessionManager>>> = Arc::default();
-        let fake = |kind| -> Arc<dyn Provider> {
-            Arc::new(FakeCli {
-                kind,
-                script: script.clone(),
-                host: host.clone(),
-            })
-        };
-        let runtime = Runtime::start_faked(
-            core.clone(),
-            platform,
-            spawner.clone(),
-            [fake(ProviderKind::Claude), fake(ProviderKind::Codex)],
-        )
-        .await
-        .unwrap();
-        let manager = SessionManager::start(
-            core.clone(),
-            runtime.clone(),
-            spawner,
-            ManagerConfig {
-                daemon_exe: PathBuf::from("/fake/brigadierd"),
-            },
-        )
-        .await
-        .unwrap();
-        host.set(Arc::downgrade(&manager)).ok();
-        // The router picks only among models it has seen.
-        let mut checked = runtime.provider_checks();
-        tokio::time::timeout(PATIENCE, async {
-            while ProviderKind::ALL.iter().any(|kind| {
-                runtime
-                    .overview(*kind)
-                    .is_none_or(|overview| overview.models.is_none())
-            }) {
-                checked.changed().await.unwrap();
-            }
-        })
-        .await
-        .expect("the scripted CLIs are checked");
+        let (manager, core) = boot(&data, store, &script).await;
         let project = core
             .create_project("Flow".into(), Some(repo.display().to_string()))
             .await
@@ -650,7 +695,19 @@ impl Flow {
             repo,
             conversation: conversation.id,
             dir,
+            script,
         }
+    }
+
+    /// Quits the manager as a daemon that stops does, and starts a new one on the same data
+    /// folder: what was recorded carries on.
+    pub async fn restart(&mut self) {
+        self.manager.shutdown().await;
+        let data = self.dir.join("data");
+        let store = open_store(&data).await;
+        let (manager, core) = boot(&data, store, &self.script).await;
+        self.manager = manager;
+        self.core = core;
     }
 
     /// Sends the user's message.
@@ -752,5 +809,7 @@ impl Flow {
     }
 }
 
+#[cfg(test)]
+mod overnight_tests;
 #[cfg(test)]
 mod tests;
