@@ -255,10 +255,20 @@ impl SessionManager {
                     // 2. Litter over the whole range: a committed new file needs a report
                     // that names it, as an untracked one does.
                     // A file added and removed again within the series counts too: its
-                    // content would stay in the history that lands.
-                    let range: Vec<_> = worktree
-                        .changes(&base)
+                    // content would stay in the history that lands. So does a tracked file
+                    // changed and put back (a log): only the always-excluded patterns drop it.
+                    let net = worktree.changes(&base).map_err(git_error)?;
+                    let passing = worktree.passing_files(&base).map_err(git_error)?;
+                    let restored: Vec<String> = worktree
+                        .series_paths(&base)
                         .map_err(git_error)?
+                        .into_iter()
+                        .filter(|path| {
+                            !net.iter().any(|change| &change.path == path)
+                                && !passing.contains(path)
+                        })
+                        .collect();
+                    let range: Vec<_> = net
                         .into_iter()
                         .map(|mut change| {
                             if change.kind == ChangeKind::Added {
@@ -266,17 +276,16 @@ impl SessionManager {
                             }
                             change
                         })
-                        .chain(
-                            worktree
-                                .passing_files(&base)
-                                .map_err(git_error)?
-                                .into_iter()
-                                .map(|path| brigadier_git::Change {
-                                    path,
-                                    kind: ChangeKind::Added,
-                                    untracked: true,
-                                }),
-                        )
+                        .chain(passing.into_iter().map(|path| brigadier_git::Change {
+                            path,
+                            kind: ChangeKind::Added,
+                            untracked: true,
+                        }))
+                        .chain(restored.into_iter().map(|path| brigadier_git::Change {
+                            path,
+                            kind: ChangeKind::Modified,
+                            untracked: false,
+                        }))
                         .collect();
                     let mut drop = Vec::new();
                     for (change, verdict) in litter::classify(&range, &reported) {

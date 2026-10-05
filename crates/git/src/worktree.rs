@@ -67,6 +67,31 @@ impl Worktree {
         self.repo.tree_changes(base, &tree, &untracked)
     }
 
+    /// Every path a commit of `base..HEAD` (first-parent) changes, including those a later
+    /// commit puts back as they were, which [`Self::changes`] doesn't show.
+    pub fn series_paths(&self, base: &Oid) -> Result<BTreeSet<String>> {
+        valid_oid(base)?;
+        let head = self.head()?;
+        let range = format!("{}..{}", base.0, head.0);
+        let list = self
+            .repo
+            .cmd(&["rev-list", "--first-parent", "--parents", &range], true)?;
+        let mut paths = BTreeSet::new();
+        for line in parse::text(&list)?.lines() {
+            let mut ids = line.split_whitespace().map(|id| Oid(id.to_owned()));
+            let (Some(commit), Some(parent)) = (ids.next(), ids.next()) else {
+                continue;
+            };
+            for change in self.repo.tree_changes(&parent, &commit, &BTreeSet::new())? {
+                if let ChangeKind::Renamed { from } = &change.kind {
+                    paths.insert(from.clone());
+                }
+                paths.insert(change.path);
+            }
+        }
+        Ok(paths)
+    }
+
     /// Files a commit of `base..HEAD` (first-parent) adds and a later one removes again:
     /// absent from both `base` and HEAD, so [`Self::changes`] never shows them, yet their
     /// content stays in the series' history.
@@ -760,6 +785,41 @@ mod tests {
         let commits = text(repo, &["rev-list", &format!("{}..{}", f.base.0, tip.0)]);
         for commit in commits.lines() {
             assert!(!paths(repo, &Oid(commit.to_owned())).contains(&"debug.log".to_owned()));
+        }
+    }
+
+    #[test]
+    fn a_tracked_file_changed_and_put_back_within_the_series_is_still_seen() {
+        let f = fixture("restored");
+        let repo = &f.wt.repo;
+        commit(repo, "Track a log", &[("build.log", "clean\n")]);
+        let base = f.wt.head().expect("HEAD");
+        commit(repo, "Log a secret", &[("build.log", "secret\n")]);
+        commit(
+            repo,
+            "Put the log back",
+            &[("build.log", "clean\n"), ("a.rs", "a\n")],
+        );
+        let changed: Vec<String> =
+            f.wt.changes(&base)
+                .expect("changes")
+                .into_iter()
+                .map(|change| change.path)
+                .collect();
+        assert_eq!(changed, ["a.rs"], "no net change to the log");
+        let touched = f.wt.series_paths(&base).expect("series paths");
+        assert!(touched.contains("build.log"), "{touched:?}");
+        let (tip, _, _) = replayed(
+            f.wt.replay_series(&base, &base, &["build.log".into()])
+                .expect("replay"),
+        );
+        let commits = text(repo, &["rev-list", &format!("{}..{}", base.0, tip.0)]);
+        for commit in commits.lines() {
+            assert_eq!(
+                text(repo, &["show", &format!("{commit}:build.log")]),
+                "clean\n",
+                "no commit carries the secret"
+            );
         }
     }
 
