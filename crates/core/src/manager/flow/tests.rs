@@ -160,10 +160,13 @@ async fn a_real_store_loads_and_recovers() {
         script(|_| async { Reply::text("[quiet]") }),
     )
     .await;
-    let mut tasks = 0;
+    let (mut sessions, mut tasks, mut plans, mut runs) = (0, 0, 0, 0);
     for conversation in flow.core.catalog().conversations {
         let board = flow.core.board(&conversation.id).await.unwrap();
+        sessions += 1;
         tasks += board.tasks.len();
+        plans += board.plans.len();
+        runs += board.runs.len();
         for approval in board.approvals.values() {
             assert!(
                 !matches!(approval.subject, ApprovalSubject::Landing { .. })
@@ -181,6 +184,9 @@ async fn a_real_store_loads_and_recovers() {
         }
     }
     assert!(tasks > 0, "the store holds tasks");
+    eprintln!(
+        "loaded {sessions} conversations, {tasks} tasks, {plans} plans, {runs} overnight runs"
+    );
     flow.stop().await;
 }
 
