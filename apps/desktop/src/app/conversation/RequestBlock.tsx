@@ -181,7 +181,7 @@ const WorkHeader: FC<{
       data-slot="request-work-header"
       aria-expanded={open}
       onClick={(event) => onToggle(event.currentTarget)}
-      className="group border-border flex items-center gap-1 border-b pb-2 text-start"
+      className="group border-border focus-visible:ring-ring/50 flex items-center gap-1 border-b pb-2 text-start outline-none focus-visible:ring-1"
     >
       {text}
       <ChevronRight

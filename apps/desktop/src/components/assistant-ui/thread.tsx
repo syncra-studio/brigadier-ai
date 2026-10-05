@@ -506,8 +506,16 @@ const MarkdownText = lazy(() =>
   })),
 );
 
+/** Keep Markdown source out of the first reply while its renderer loads. */
+const ReplyLoading: FC = () => (
+  <div data-slot="reply-loading" role="status" aria-label="Loading reply" className="flex flex-col gap-2 py-1">
+    <Skeleton className="h-4 w-4/5 motion-reduce:animate-none" />
+    <Skeleton className="h-4 w-3/5 motion-reduce:animate-none" />
+  </div>
+);
+
 export const MessageText: FC<TextMessagePartProps> = (props) => (
-  <Suspense fallback={<p className="whitespace-pre-wrap">{props.text}</p>}>
+  <Suspense fallback={<ReplyLoading />}>
     <MarkdownText {...props} />
   </Suspense>
 );
@@ -526,7 +534,7 @@ export const MarkdownBlock: FC<{ text: string; streaming?: boolean }> = ({
 
 /** Text that is still streaming: its newest words fade in. */
 export const StreamingMessageText: FC<TextMessagePartProps> = (props) => (
-  <Suspense fallback={<p className="whitespace-pre-wrap">{props.text}</p>}>
+  <Suspense fallback={<ReplyLoading />}>
     <MarkdownText {...props} streaming />
   </Suspense>
 );

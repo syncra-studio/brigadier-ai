@@ -66,6 +66,7 @@ const shot = async (name) => {
 const load = async (query) => {
   await page.goto(url(query));
   await page.locator('[data-slot="request-work-header"]').waitFor();
+  await page.locator(".aui-md").first().waitFor();
 };
 try {
   await load("view=running");
@@ -84,10 +85,33 @@ try {
   await shot("02-running-actions");
 
   await load("view=done");
+  const reply = page.locator('[data-slot="aui_assistant-message-content"]').last();
+  await reply.locator("strong").filter({ hasText: "Theme" }).waitFor();
+  assert.equal(await reply.locator("ul > li").count(), 3);
+  assert.equal(await reply.locator("code").count(), 4);
+  assert.doesNotMatch(await reply.innerText(), /\*\*Theme\*\*|^- Phase/m);
   await shot("03-done-collapsed");
   const divider = page.locator('[data-slot="request-work-header"]');
-  await divider.focus();
+  await divider.click();
+  assert.equal(await divider.evaluate((element) => element.matches(":focus-visible")), false);
+  assert.equal(await divider.evaluate((element) => getComputedStyle(element).outlineStyle), "none");
+  assert.equal(await divider.evaluate((element) => getComputedStyle(element).boxShadow), "none");
+  // Keyboard users keep a visible focus indicator and can toggle with Enter.
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(await divider.evaluate((element) => element.matches(":focus-visible")), true);
+  assert.notEqual(await divider.evaluate((element) => getComputedStyle(element).boxShadow), "none");
   await page.keyboard.press("Enter");
+  assert.equal(await divider.getAttribute("aria-expanded"), "false");
+  await page.keyboard.press("Enter");
+  assert.equal(await divider.getAttribute("aria-expanded"), "true");
+  // Reset keyboard focus before exercising pointer interaction for review captures.
+  await page.locator(".aui-md p").last().click();
+  await divider.click();
+  await divider.click();
+  assert.equal(await divider.evaluate((element) => element.matches(":focus-visible")), false);
+  assert.equal(await divider.evaluate((element) => getComputedStyle(element).outlineStyle), "none");
+  assert.equal(await divider.evaluate((element) => getComputedStyle(element).boxShadow), "none");
   await page.locator('[data-slot="request-fold"]').waitFor();
   await shot("04-done-level1");
   for (const group of await page
