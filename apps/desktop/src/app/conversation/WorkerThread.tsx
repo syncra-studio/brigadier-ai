@@ -33,18 +33,20 @@ import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button
 import {
   type ActivityKind,
   activityOf,
+  shownCommand,
   summarize,
   type ThreadEntry,
   threadEntries,
   unwrapCommand,
 } from "@/components/transcript/activity";
 import { type TranscriptItem, TranscriptFolder } from "@/components/transcript/transcript";
-import { DECIDERS, ErrorCard } from "@/components/transcript/TranscriptRow";
+import { ErrorState } from "@/components/assistant-ui/elements/error-state";
+import { searchResults, WebSearch } from "@/components/assistant-ui/elements/web-search";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";
-import type { Rating, RawEntry, Task } from "@/ipc/generated";
+import type { ErrorKind, Rating, RawEntry, Task } from "@/ipc/generated";
 import { formatDuration, formatSentAt } from "@/lib/format";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
@@ -96,7 +98,57 @@ const ICONS: Record<ActivityKind, FC<{ className?: string }>> = {
 
 type ActionItem = Extract<ThreadEntry, { kind: "actions" }>["items"][number];
 
+/** A worker's error in a few words, by kind; its own words follow in full. */
+const ERROR_TITLES: Record<ErrorKind, string> = {
+  usageLimit: "Out of usage for now",
+  rateLimit: "Rate limited",
+  overloaded: "The model is overloaded",
+  auth: "Not signed in",
+  billing: "A billing problem",
+  contextWindow: "Out of context",
+  invalidRequest: "The request was refused",
+  policy: "Blocked by a usage policy",
+  network: "A network problem",
+  sandbox: "Blocked by the sandbox",
+  server: "The provider had an error",
+  process: "The CLI stopped",
+  other: "Something went wrong",
+  stalled: "It stopped responding",
+};
+
 const row = "text-muted-foreground flex min-h-row-sm min-w-0 items-center gap-2 text-sm";
+
+/** A command's box: "Shell", the command and what it printed, then how it ended. */
+function shellCard(item: Extract<ActionItem, { kind: "command" }>): ReactNode {
+  const output = item.output.trimEnd();
+  const ending =
+    item.status === "inProgress"
+      ? "Running"
+      : item.status === "declined"
+        ? "Stopped"
+        : item.exitCode !== null && item.exitCode !== 0
+          ? `Exit code ${item.exitCode}`
+          : item.status === "failed"
+            ? "Failed"
+            : "Success";
+  return (
+    <div data-slot="shell-card" className="border-border bg-code-surface rounded-control mt-1 flex flex-col border text-sm">
+      <span className="text-muted-foreground px-3 pt-2 text-xs">Shell</span>
+      <pre className="text-code max-h-60 overflow-auto px-3 py-1 font-mono whitespace-pre-wrap">
+        {`$ ${unwrapCommand(item.command)}`}
+        {output ? `\n${output}` : <span className="text-muted-foreground">{"\nNo output"}</span>}
+      </pre>
+      <span
+        className={cn(
+          "border-border border-t px-3 py-1.5 text-end text-xs",
+          ending === "Success" ? "text-muted-foreground" : ending === "Running" ? "shimmer" : "text-destructive",
+        )}
+      >
+        {ending}
+      </span>
+    </div>
+  );
+}
 
 function card(title: string, body: string): ReactNode {
   return (
@@ -107,16 +159,37 @@ function card(title: string, body: string): ReactNode {
   );
 }
 
-/** What an action row opens to: a Shell card for a command, the call for a tool. */
+/** A web search's query, from its call. */
+function searchQuery(input: string | null): string | null {
+  try {
+    const value: unknown = JSON.parse(input ?? "");
+    const query = value && typeof value === "object" ? (value as { query?: unknown }).query : null;
+    return typeof query === "string" ? query : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What an action row opens to: a Shell box for a command, the pages a search found, the call for a tool. */
 function actionDetail(item: ActionItem): ReactNode {
   switch (item.kind) {
-    case "command": {
-      const exit = item.exitCode !== null && item.exitCode !== 0 ? `\n(exit ${item.exitCode})` : "";
-      return card("Shell", `$ ${unwrapCommand(item.command)}\n${item.output.trimEnd()}${exit}`);
-    }
-    case "tool":
+    case "command":
+      return shellCard(item);
+    case "tool": {
+      const query = item.name === "WebSearch" ? searchQuery(item.input) : null;
+      if (query !== null) {
+        return (
+          <WebSearch
+            className="ps-6 pt-1 pb-2"
+            query={query}
+            results={searchResults(item.output)}
+            searching={item.status === "inProgress"}
+          />
+        );
+      }
       if (!item.input && !item.output) return null;
       return card(item.name, [item.input, item.output].filter(Boolean).join("\n\n"));
+    }
     case "files":
       return card(
         "Files",
@@ -136,7 +209,9 @@ function ActionRow({ item }: { item: ActionItem }) {
     <>
       <Icon aria-hidden className="size-icon-md shrink-0" />
       <span className="min-w-0 truncate">{running ? activity.doing : activity.done}</span>
-      {item.status === "failed" && <span className="text-destructive shrink-0">failed</span>}
+      {item.kind === "command" && !running && item.durationMs !== null && item.durationMs >= 1000 && (
+        <span className="shrink-0 tabular-nums">in {formatDuration(item.durationMs)}</span>
+      )}
     </>
   );
   const detail = actionDetail(item);
@@ -201,21 +276,23 @@ function EntryView({ entry }: { entry: ThreadEntry }) {
         </div>
       );
     case "approval": {
-      const what = item.request.command ?? (item.request.paths.join(", ") || item.request.tool);
-      const allowed = item.resolution?.decision.type === "allow";
+      // Answered, it leaves no trace: the command's own row tells what came of it.
+      if (item.resolution) return null;
+      const what = item.request.command ? shownCommand(item.request.command) : item.request.paths.join(", ") || item.request.tool;
       return (
-        <div className={cn(row, !item.resolution && "text-warning")}>
+        <div className={cn(row, "text-warning")}>
           <ShieldCheck aria-hidden className="size-icon-md shrink-0" />
-          <span className="min-w-0 truncate">
-            {item.resolution
-              ? `${allowed ? "Allowed" : "Denied"} by ${DECIDERS[item.resolution.decidedBy]}: ${what}`
-              : `Waiting for approval: ${what}`}
-          </span>
+          <span className="min-w-0 truncate">Waiting for your approval: {what}</span>
         </div>
       );
     }
     case "error":
-      return <ErrorCard error={item.error} />;
+      return (
+        <ErrorState
+          title={ERROR_TITLES[item.error.kind]}
+          detail={item.error.willRetry ? `${item.error.message}\n\nIt tries again on its own.` : item.error.message}
+        />
+      );
     case "notice":
       return (
         <p className={cn("text-sm", item.level === "warning" ? "text-warning" : "text-muted-foreground")}>
@@ -229,13 +306,11 @@ function EntryView({ entry }: { entry: ThreadEntry }) {
   }
 }
 
-/** What the worker does right now, as the thread's last line. */
+/** What the worker does right now, as the thread's last line, when no row of its says it. */
 function liveLabel(entries: readonly ThreadEntry[]): string | null {
   const last = entries.at(-1);
-  if (last?.kind === "actions") {
-    const current = last.items.at(-1);
-    if (current?.status === "inProgress") return activityOf(current).doing;
-  }
+  // A running action says so on its own row.
+  if (last?.kind === "actions" && last.items.at(-1)?.status === "inProgress") return null;
   if (last?.kind === "item" && last.item.kind === "message" && last.item.streaming) return null;
   return "Thinking";
 }

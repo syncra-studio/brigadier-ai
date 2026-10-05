@@ -37,6 +37,20 @@ export function unwrapCommand(command: string): string {
   return (wrapped?.[2] ?? command).trim();
 }
 
+/** Brigadier's own folder of tool shims, before a tool's name: `/…/gate/bin/git` → `git`. */
+const GATE_PATH = /(^|[\s'"(;&|])(?:\/[\w.@+-]+(?: [\w.@+-]+)*)*?\/gate\/bin\//g;
+
+/** git's `-c name=value` settings, which say nothing about what the command does. */
+const GIT_SETTINGS = /(\bgit)((?:\s+-c\s+[\w.-]+=\S*)+)/g;
+
+/**
+ * A command as the card shows it: what the shell wrapper runs, with Brigadier's gate folder
+ * and git's `-c` settings left out (`/bin/zsh -lc '/…/gate/bin/git -c a=b push'` → `git push`).
+ */
+export function shownCommand(command: string): string {
+  return unwrapCommand(command).replace(GATE_PATH, "$1").replace(GIT_SETTINGS, "$1").trim();
+}
+
 function basename(path: string): string {
   return path.replace(/\/+$/, "").split("/").pop() || path;
 }
@@ -121,9 +135,21 @@ function classifyTool(name: string, input: string | null): Activity {
       const what = pattern ? ` for ${pattern}` : "";
       return { kind: "search", done: `Searched${what}`, doing: `Searching${what}` };
     }
-    case "WebSearch":
-    case "WebFetch":
-      return { kind: "search", web: true, done: "Searched the web", doing: "Searching the web" };
+    case "WebSearch": {
+      const query = text("query");
+      const what = query ? ` for ${query}` : "";
+      return { kind: "search", web: true, done: `Searched the web${what}`, doing: `Searching the web${what}` };
+    }
+    case "WebFetch": {
+      const url = text("url");
+      let host = "a page";
+      try {
+        if (url) host = new URL(url).host || url;
+      } catch {
+        host = url ?? host;
+      }
+      return { kind: "read", web: true, done: `Read ${host}`, doing: `Reading ${host}` };
+    }
     case "Edit":
     case "MultiEdit":
     case "Write":
