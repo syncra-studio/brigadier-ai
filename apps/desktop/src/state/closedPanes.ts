@@ -1,4 +1,5 @@
-/** The last closed session/page, for the shared reopen shortcut. */
+/** The last closed terminal/page, for the shared reopen shortcut, by conversation id (or
+ * "home" for Home's terminals). */
 const closed: { conversationId: string; kind: "terminal" | "browser" }[] = [];
 export function notePaneClose(
   conversationId: string,

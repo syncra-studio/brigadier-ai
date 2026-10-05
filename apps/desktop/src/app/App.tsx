@@ -13,6 +13,8 @@ import { OnboardingDialog } from "@/app/onboarding/OnboardingDialog";
 import { GlobalSearch } from "@/app/SearchDialog";
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
+import { TerminalPane } from "@/app/conversation/TerminalTab";
+import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { runSmoke } from "@/app/smoke";
 import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/toast";
@@ -24,6 +26,7 @@ import { markStartup } from "@/lib/startup";
 import { setMetricsStreaming, toggleInspector, toggleSettings } from "@/state/actions";
 import { openFolderPicker } from "@/state/addProject";
 import { useApp, type Selection } from "@/state/store";
+import { HOME_PLACE } from "@/state/terminalPlaces";
 
 let readyReported = false;
 
@@ -67,6 +70,7 @@ export function App() {
 
   useEffect(markMounted, []);
   useLifecycleShortcuts();
+  usePaneShortcuts();
 
   // Cold start ends when the app is usable: the loaded catalog painted, the agent CLIs ready
   // (or no longer waited for) and the startup screen gone.
@@ -151,6 +155,8 @@ export function App() {
                   <div className="min-h-0 flex-1">
                     <SettingsView page={selection.page} />
                   </div>
+                  {/* Home's terminal, under the page. */}
+                  <TerminalPane place={HOME_PLACE} />
                 </>
               ) : (
                 <ConversationView key={viewKey(selection)} selection={selection} />

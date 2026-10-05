@@ -8,32 +8,33 @@ import {
   Terminal as TerminalIcon,
   X,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
-import { SidePanelContext, useReveal } from "@/app/conversation/SidePanel";
+import { useReveal } from "@/app/conversation/SidePanel";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
-import {
-  addTerminalSession,
-  describeTerminalSession,
-  removeTerminalSession,
-  selectTerminalSession,
-  terminalSessions,
-  terminalSessionName,
-  undoTerminalClose,
-  useTerminalSessions,
-} from "@/state/terminalSessions";
-import { toast } from "@/state/toasts";
-
 import { openUrl, request } from "@/ipc/client";
 import type { TerminalInfo, TerminalOutput } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { tokenPx } from "@/lib/tokens";
+import { changedPaneSize, savedPaneSizes } from "@/state/paneSizes";
 import { useApp } from "@/state/store";
-import { noteTerminal, onTerminalOutput } from "@/state/terminals";
+import {
+  addTab,
+  closeTab,
+  hasTab,
+  noteShell,
+  noteShellCwd,
+  onTerminalOutput,
+  placeConversation,
+  selectTab,
+  setTerminalOpen,
+  tabNames,
+  terminalPlace,
+  useTerminalPlace,
+} from "@/state/terminalPlaces";
 
 /**
- * The Terminal tab (⌃`): the session's shell in its checkout. The shell runs in the
- * daemon and keeps running while the tab is hidden; closing the tab ends it.
+ * The bottom terminal (⌘J, ⌃`): shells the daemon runs, in the thread's checkout or folder,
+ * or Home's. They keep running while the pane is hidden; closing a tab ends its shell.
  */
 
 /** A token colour in hex, which the terminal's renderer understands (tokens are oklch). */
@@ -53,10 +54,10 @@ function tokenColor(name: `--${string}`): string {
 
 function theme(): ITheme {
   return {
-    background: tokenColor("--terminal-background"),
-    foreground: tokenColor("--terminal-foreground"),
-    cursor: tokenColor("--terminal-foreground"),
-    cursorAccent: tokenColor("--terminal-background"),
+    background: tokenColor("--background"),
+    foreground: tokenColor("--foreground"),
+    cursor: tokenColor("--foreground"),
+    cursorAccent: tokenColor("--background"),
     selectionBackground: tokenColor("--muted"),
   };
 }
@@ -64,166 +65,95 @@ function theme(): ITheme {
 const DIM = "\u001b[2m";
 const RESET = "\u001b[0m";
 
-/** A bottom-only terminal with independent shells. Hiding never ends a shell. */
-export function TerminalPane({ conversationId }: { conversationId: string }) {
-  const { state, terminalHeight, terminalMaxHeight, resizeTerminal, closeTab } =
-    useContext(SidePanelContext);
-  const data = useTerminalSessions((s) => s.conversations[conversationId]);
-  const projectPath = useApp((s) => {
-    const projectId = s.conversations[conversationId]?.projectId;
-    return projectId ? s.projects[projectId]?.repos[0]?.path : undefined;
-  });
-  const strip = useRef<HTMLDivElement>(null);
-  const [compactTabs, setCompactTabs] = useState(false);
+const MIN_HEIGHT = 160;
+const DEFAULT_HEIGHT = 280;
+
+/** The pane's height, shared by every place and kept across launches. */
+function useTerminalHeight(pane: RefObject<HTMLElement | null>) {
+  const [saved, setSaved] = useState(() => savedPaneSizes().terminal ?? null);
+  const [room, setRoom] = useState(() => window.innerHeight);
+  useEffect(() => {
+    const column = pane.current?.parentElement;
+    if (!column) return;
+    const observer = new ResizeObserver(() => setRoom(column.getBoundingClientRect().height));
+    observer.observe(column);
+    return () => observer.disconnect();
+  }, [pane]);
+  const max = Math.max(MIN_HEIGHT, room * 0.5);
+  const height = Math.max(MIN_HEIGHT, Math.min(saved ?? DEFAULT_HEIGHT, max));
+  const resize = useCallback((next: number | null) => {
+    changedPaneSize(savedPaneSizes(), "terminal", next);
+    setSaved(next);
+  }, []);
+  return { height, max, resize };
+}
+
+/**
+ * The bottom terminal of a place (a conversation's, or Home's): its tabs, each an independent
+ * shell. Hiding the pane never ends a shell.
+ */
+export function TerminalPane({ place }: { place: string }) {
+  const data = useTerminalPlace(place);
+  const open = data.open;
   const start = useRef<{ y: number; height: number } | null>(null);
   const pane = useRef<HTMLElement>(null);
+  const { height, max, resize } = useTerminalHeight(pane);
   const previousFocus = useRef<HTMLElement | null>(null);
   const wasOpen = useRef(false);
   useEffect(() => {
-    if (state.terminalOpen && !wasOpen.current) {
+    if (open && !wasOpen.current) {
       previousFocus.current =
-        document.activeElement instanceof HTMLElement
-          ? document.activeElement
-          : null;
-    } else if (!state.terminalOpen && wasOpen.current) {
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    } else if (!open && wasOpen.current && pane.current?.contains(document.activeElement)) {
       const editor = document.querySelector<HTMLElement>(
         '[data-slot="composer"] [contenteditable="true"], [data-slot="composer"] textarea',
       );
       (editor ?? previousFocus.current)?.focus();
     }
-    wasOpen.current = state.terminalOpen;
-  }, [state.terminalOpen]);
-  const reveal = useReveal(state.terminalOpen);
+    wasOpen.current = open;
+  }, [open]);
+  const reveal = useReveal(open);
+  const names = tabNames(data.tabs);
+  const hide = useCallback(() => setTerminalOpen(place, false), [place]);
   useEffect(() => {
-    if (state.terminalOpen && !terminalSessions(conversationId).sessions.length)
-      addTerminalSession(conversationId);
-  }, [conversationId, state.terminalOpen]);
-  const newSession = useCallback(
-    () => addTerminalSession(conversationId),
-    [conversationId],
-  );
-  const active = data?.active;
-  const sessionName = (index: number) =>
-    terminalSessionName(
-      projectPath,
-      data?.sessions[index]?.cwd,
-      index,
-      data?.sessions.length ?? 0,
-    );
-  useEffect(() => {
-    const element = strip.current;
-    if (!state.terminalOpen || !active || !element) return;
-    const fitTabs = () => {
-      const selected = element.querySelector<HTMLElement>(
-        '[aria-selected="true"]',
-      );
-      setCompactTabs(
-        (selected?.parentElement?.getBoundingClientRect().width ?? 0) <
-          tokenPx("--spacing-terminal-tab-label-min"),
-      );
-      selected?.parentElement?.scrollIntoView({
-        block: "nearest",
-        inline: "nearest",
-      });
-    };
-    fitTabs();
-    const observer = new ResizeObserver(fitTabs);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [active, state.terminalOpen]);
-  const focusShell = () =>
-    requestAnimationFrame(() => {
-      if (pane.current?.inert) return;
-      [
-        ...(pane.current?.querySelectorAll<HTMLTextAreaElement>(
-          ".xterm-helper-textarea",
-        ) ?? []),
-      ]
-        .find((element) => element.getClientRects().length > 0)
-        ?.focus();
-    });
-  const close = useCallback(
-    (id: string) => {
-      removeTerminalSession(conversationId, id);
-      if (!terminalSessions(conversationId).sessions.length)
-        closeTab("terminal");
-      toast("Terminal closed", {
-        actions: [
-          {
-            label: "Undo",
-            run: () => {
-              undoTerminalClose(conversationId);
-              // A closed process is replaced by a fresh shell; commands are never replayed.
-              document.dispatchEvent(
-                new CustomEvent("brigadier:restore-terminal", {
-                  detail: conversationId,
-                }),
-              );
-            },
-          },
-        ],
-      });
-    },
-    [conversationId, closeTab],
-  );
-  useEffect(() => {
-    if (!state.terminalOpen) return;
+    if (!open) return;
     const key = (event: KeyboardEvent) => {
-      const focused = document.activeElement;
-      if (!focused || !pane.current?.contains(focused)) return;
-      const command = event.metaKey || event.ctrlKey;
-      if (!command || event.altKey) return;
-      if (
-        event.shiftKey &&
-        ["BracketLeft", "BracketRight"].includes(event.code) &&
-        data?.sessions.length
-      ) {
+      if (!pane.current?.contains(document.activeElement)) return;
+      if (!event.metaKey || event.ctrlKey || event.altKey) return;
+      const { tabs, active } = terminalPlace(place);
+      if (event.shiftKey && ["BracketLeft", "BracketRight"].includes(event.code) && tabs.length) {
         event.preventDefault();
-        const index = data.sessions.findIndex(
-          (session) => session.id === data.active,
-        );
-        const next =
-          (index +
-            (event.code === "BracketLeft" ? -1 : 1) +
-            data.sessions.length) %
-          data.sessions.length;
-        selectTerminalSession(conversationId, data.sessions[next]!.id);
+        const index = tabs.findIndex((tab) => tab.id === active);
+        const next = (index + (event.code === "BracketLeft" ? -1 : 1) + tabs.length) % tabs.length;
+        selectTab(place, tabs[next]!.id);
         return;
       }
-      if (event.code === "KeyT" && !event.shiftKey) {
+      if (event.shiftKey) return;
+      if (event.code === "KeyT") {
         event.preventDefault();
-        newSession();
+        addTab(place);
       }
-      if (event.code === "KeyW" && !event.shiftKey) {
+      if (event.code === "KeyW" && active) {
         event.preventDefault();
-        if (active) close(active);
+        closeTab(place, active);
       }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [
-    state.terminalOpen,
-    conversationId,
-    close,
-    newSession,
-    data,
-    active,
-    pane,
-  ]);
-  if (!reveal.mounted && !data?.sessions.length) return null;
+  }, [open, place]);
+  if (!reveal.mounted && !data.tabs.length) return null;
   return (
     <section
       ref={pane}
       data-slot="terminal-pane"
       aria-label="Terminal"
-      inert={!state.terminalOpen}
+      inert={!open}
       className={cn(
-        "border-border bg-terminal-background relative flex min-h-0 shrink-0 flex-col",
-        reveal.moving &&
-          "ease-panel transition-[height] duration-500 motion-reduce:transition-none",
+        "bg-background relative flex min-h-0 shrink-0 flex-col",
+        reveal.moving && "ease-panel transition-[height] duration-500 motion-reduce:transition-none",
       )}
       style={{
-        height: reveal.out ? terminalHeight : 0,
+        height: reveal.out ? height : 0,
         visibility: reveal.mounted ? "visible" : "hidden",
       }}
     >
@@ -232,182 +162,107 @@ export function TerminalPane({ conversationId }: { conversationId: string }) {
         aria-label="Resize terminal"
         aria-orientation="horizontal"
         tabIndex={0}
-        aria-valuenow={terminalHeight}
-        aria-valuemin={160}
-        aria-valuemax={terminalMaxHeight}
+        aria-valuenow={height}
+        aria-valuemin={MIN_HEIGHT}
+        aria-valuemax={max}
         className="group/resize absolute inset-x-0 -top-2 z-10 h-4 cursor-row-resize outline-none"
         onPointerDown={(event) => {
           if (event.button !== 0) return;
           event.preventDefault();
           event.currentTarget.setPointerCapture(event.pointerId);
-          start.current = { y: event.clientY, height: terminalHeight };
+          start.current = { y: event.clientY, height };
         }}
         onPointerMove={(event) => {
           if (!start.current) return;
-          const height = start.current.height + start.current.y - event.clientY;
-          if (height < 90) {
-            resizeTerminal(160);
+          const wanted = start.current.height + start.current.y - event.clientY;
+          if (wanted < MIN_HEIGHT) {
+            // Dragged shut: it opens again at the height it had before the drag.
+            resize(start.current.height);
             start.current = null;
-            closeTab("terminal");
-          } else
-            resizeTerminal(Math.max(160, Math.min(height, terminalMaxHeight)));
+            hide();
+          } else resize(Math.min(wanted, max));
         }}
         onPointerUp={(event) => {
           start.current = null;
-          event.currentTarget.releasePointerCapture(event.pointerId);
+          if (event.currentTarget.hasPointerCapture(event.pointerId))
+            event.currentTarget.releasePointerCapture(event.pointerId);
         }}
         onPointerCancel={() => {
           start.current = null;
         }}
-        onDoubleClick={() => resizeTerminal(null)}
+        onDoubleClick={() => resize(null)}
         onKeyDown={(event) => {
           const value =
             event.key === "ArrowUp"
-              ? terminalHeight + 16
+              ? height + 16
               : event.key === "ArrowDown"
-                ? terminalHeight - 16
+                ? height - 16
                 : event.key === "Home"
-                  ? 160
+                  ? MIN_HEIGHT
                   : event.key === "End"
-                    ? terminalMaxHeight
+                    ? max
                     : null;
           if (value === null) return;
           event.preventDefault();
-          resizeTerminal(Math.max(160, Math.min(value, terminalMaxHeight)));
+          resize(Math.max(MIN_HEIGHT, Math.min(value, max)));
         }}
       >
         <span className="bg-input absolute inset-x-0 top-1 h-px opacity-0 group-hover/resize:opacity-100 group-focus-visible/resize:opacity-100" />
       </div>
-      <div className="border-terminal-divider flex h-full min-h-0 flex-col overflow-hidden border-t">
-        <header
-          data-slot="terminal-header"
-          className="border-terminal-divider flex h-terminal-header shrink-0 items-center gap-1 border-b px-2"
-        >
-          <div
-            ref={strip}
-            role="tablist"
-            aria-label="Terminal sessions"
-            tabIndex={-1}
-            className="hide-scrollbar flex min-w-0 gap-0.5 overflow-x-auto scroll-px-1"
-            style={{
-              width: `calc(var(--spacing-terminal-tab) * ${data?.sessions.length ?? 1} + var(--spacing) * 0.5 * ${Math.max(0, (data?.sessions.length ?? 1) - 1)})`,
-            }}
-            onKeyDown={(event) => {
-              if (
-                !["ArrowLeft", "ArrowRight", "Home", "End"].includes(
-                  event.key,
-                ) ||
-                !data?.sessions.length
-              )
-                return;
-              event.preventDefault();
-              const index = data.sessions.findIndex(
-                (session) => session.id === active,
-              );
-              const next =
-                event.key === "Home"
-                  ? 0
-                  : event.key === "End"
-                    ? data.sessions.length - 1
-                    : (index +
-                        (event.key === "ArrowLeft" ? -1 : 1) +
-                        data.sessions.length) %
-                      data.sessions.length;
-              const id = data.sessions[next]!.id;
-              selectTerminalSession(conversationId, id);
-              requestAnimationFrame(() =>
-                strip.current
-                  ?.querySelector<HTMLButtonElement>(`[data-session="${id}"]`)
-                  ?.focus(),
-              );
-            }}
-          >
-            {data?.sessions.map((session, index) => (
-              <div
-                key={session.id}
-                className={cn(
-                  "group/terminal-tab flex h-terminal-tab-height min-w-terminal-tab-min max-w-terminal-tab flex-1 items-center gap-1 rounded-lg py-1 ps-terminal-tab-start pe-terminal-tab-end text-[length:var(--text-terminal-tab)] leading-[var(--text-terminal-tab--line-height)] font-terminal-tab",
-                  session.id === active
-                    ? "bg-terminal-tab text-terminal-tab-active shadow-terminal-tab"
-                    : "text-terminal-tab-inactive hover:bg-toolbar-hover",
-                  compactTabs && "px-1",
-                )}
-              >
-                <button
-                  type="button"
-                  role="tab"
-                  data-session={session.id}
-                  id={`terminal-tab-${session.id}`}
-                  aria-controls={`terminal-panel-${session.id}`}
-                  aria-selected={session.id === active}
-                  tabIndex={session.id === active ? 0 : -1}
-                  aria-label={sessionName(index)}
-                  onClick={() => {
-                    selectTerminalSession(conversationId, session.id);
-                    focusShell();
-                  }}
-                  className="flex min-w-0 flex-1 items-center gap-1 rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  <TerminalIcon aria-hidden className="size-icon-md shrink-0" />
-                  <TerminalSessionLabel
-                    key={sessionName(index)}
-                    name={sessionName(index)}
-                    hidden={compactTabs}
-                  />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Close ${sessionName(index)} tab`}
-                  onClick={() => {
-                    close(session.id);
-                    focusShell();
-                  }}
-                  className={cn(
-                    "text-terminal-tab-inactive hover:bg-toolbar-hover hover:text-terminal-tab-active flex size-5 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-1 focus-visible:ring-ring",
-                    session.id !== active &&
-                      "hidden group-hover/terminal-tab:flex group-focus-within/terminal-tab:flex",
-                  )}
-                >
-                  <X aria-hidden className="size-icon-xs" />
-                </button>
-              </div>
-            ))}
-          </div>
-          <TitlebarTips>
-            <TitlebarButton
-              tooltip="New terminal"
-              shortcut="⌘T"
-              onClick={newSession}
-              className="shrink-0"
-            >
+      <div className="border-border flex h-full min-h-0 flex-col overflow-hidden border-t">
+        <TitlebarTips>
+          <header className="border-border flex h-10 shrink-0 items-center gap-1 border-b px-2">
+            <div role="tablist" aria-label="Terminals" className="flex min-w-0 items-center gap-1">
+              {data.tabs.map((tab, index) => {
+                const selected = tab.id === data.active;
+                return (
+                  <div
+                    key={tab.id}
+                    className={cn(
+                      "group/tab flex h-8 w-60 min-w-16 shrink items-center gap-2 rounded-lg ps-2 pe-1 text-sm",
+                      selected
+                        ? "bg-panel-tab shadow-panel-tab text-foreground"
+                        : "text-muted-foreground hover:bg-toolbar-hover hover:text-foreground",
+                    )}
+                  >
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={selected}
+                      className="flex min-w-0 flex-1 items-center gap-2 self-stretch outline-none focus-visible:underline"
+                      onClick={() => selectTab(place, tab.id)}
+                    >
+                      <TerminalIcon aria-hidden className="size-icon-md shrink-0" />
+                      <span className="truncate">{names[index]}</span>
+                    </button>
+                    <TitlebarButton
+                      tooltip="Close terminal"
+                      shortcut="⌘W"
+                      size="icon-xs"
+                      className={cn(!selected && "opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100")}
+                      onClick={() => closeTab(place, tab.id)}
+                    >
+                      <X />
+                    </TitlebarButton>
+                  </div>
+                );
+              })}
+            </div>
+            <TitlebarButton tooltip="New terminal" shortcut="⌘T" onClick={() => addTab(place)}>
               <Plus />
             </TitlebarButton>
             <div className="flex-1" />
-            <TitlebarButton
-              tooltip="Hide terminal"
-              shortcut="⌃`"
-              onClick={() => closeTab("terminal")}
-              className="shrink-0"
-            >
+            <TitlebarButton tooltip="Hide terminal" shortcut="⌘J" onClick={hide}>
               <ChevronDown />
             </TitlebarButton>
-          </TitlebarTips>
-        </header>
-        {data?.sessions.map((session) => (
+          </header>
+        </TitlebarTips>
+        {data.tabs.map((tab) => (
           <div
-            key={session.id}
-            id={`terminal-panel-${session.id}`}
-            role="tabpanel"
-            aria-labelledby={`terminal-tab-${session.id}`}
-            className={
-              session.id === active ? "flex min-h-0 flex-1 flex-col" : "hidden"
-            }
+            key={tab.id}
+            className={tab.id === data.active ? "flex min-h-0 flex-1 flex-col" : "hidden"}
           >
-            <TerminalTab
-              conversationId={conversationId}
-              sessionId={session.id}
-              active={state.terminalOpen && session.id === active}
-            />
+            <TerminalTab place={place} tabId={tab.id} active={open && tab.id === data.active} />
           </div>
         ))}
       </div>
@@ -415,109 +270,57 @@ export function TerminalPane({ conversationId }: { conversationId: string }) {
   );
 }
 
-/** A clipped shell name fades at the edge rather than replacing the suffix with dots. */
-function TerminalSessionLabel({
-  name,
-  hidden,
-}: {
-  name: string;
-  hidden: boolean;
-}) {
-  const label = useRef<HTMLSpanElement>(null);
-  const [overflowing, setOverflowing] = useState(false);
-  useEffect(() => {
-    const element = label.current;
-    if (!element) return;
-    const measure = () =>
-      setOverflowing(element.scrollWidth > element.clientWidth);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  return (
-    <span
-      ref={label}
-      className={cn(
-        "min-w-0 flex-1 overflow-hidden whitespace-nowrap text-start",
-        hidden && "hidden",
-      )}
-      style={{
-        maskImage: overflowing
-          ? "linear-gradient(to right, black calc(100% - var(--spacing-terminal-label-fade)), transparent)"
-          : undefined,
-      }}
-    >
-      {name}
-    </span>
-  );
-}
-
+/** One tab's shell: started (or found again) in the daemon when the tab first shows. */
 export function TerminalTab({
-  conversationId,
-  sessionId,
+  place,
+  tabId,
   active,
 }: {
-  conversationId: string;
-  sessionId: string;
+  place: string;
+  tabId: string;
   active: boolean;
 }) {
   const density = useApp((s) => s.settings.density);
-  const [generation, setGeneration] = useState(0);
-  const restart = useCallback(
-    () => setGeneration((current) => current + 1),
-    [],
-  );
   const open = useCallback(
     async (cols: number, rows: number) => {
+      const conversationId = placeConversation(place);
+      const selection = useApp.getState().selection;
+      const projectId =
+        conversationId === null && selection.type === "draft" && selection.kind === "session"
+          ? selection.projectId
+          : null;
       const { terminal } = await request({
         method: "openTerminal",
-        conversationId,
-        sessionId,
+        ...(conversationId ? { conversationId } : {}),
+        ...(projectId ? { projectId } : {}),
+        sessionId: tabId,
         cols,
         rows,
       });
-      if (
-        !terminalSessions(conversationId).sessions.some(
-          (session) => session.id === sessionId,
-        )
-      ) {
-        void request({
-          method: "closeTerminal",
-          terminalId: terminal.id,
-        }).catch(() => {});
+      if (!hasTab(place, tabId)) {
+        void request({ method: "closeTerminal", terminalId: terminal.id }).catch(() => {});
         throw new Error("Terminal closed");
       }
-      noteTerminal(sessionId, terminal.id);
-      describeTerminalSession(conversationId, sessionId, terminal.cwd);
+      noteShell(place, tabId, terminal.id);
+      noteShellCwd(place, tabId, terminal.cwd);
       return terminal;
     },
-    [conversationId, sessionId],
+    [place, tabId],
   );
-  return (
-    <TerminalView
-      key={`${density}:${generation}`}
-      open={open}
-      onRestart={restart}
-      focus={active}
-    />
-  );
+  return <TerminalView key={density} open={open} focus={active} />;
 }
 
 /**
  * A shell the daemon runs, shown live: `open` starts it (or re-attaches to it) at the view's
- * size. When it ends, `onExit` hears its exit code; without one, the next key pressed calls
- * `onRestart` for a new shell.
+ * size. When it ends, `onExit` hears its exit code (a pane's tab just closes).
  */
 export function TerminalView({
   open,
-  onRestart,
   onExit,
   focus = true,
   className,
 }: {
   open: (cols: number, rows: number) => Promise<TerminalInfo>;
-  onRestart?: () => void;
   onExit?: (code: number | null) => void;
   /** Takes the keyboard once it is open. */
   focus?: boolean;
@@ -542,9 +345,6 @@ export function TerminalView({
       fontFamily: style.fontFamily,
       fontSize: Number.parseFloat(style.fontSize),
       theme: theme(),
-      lineHeight: 1.375,
-      cursorStyle: "block",
-      cursorInactiveStyle: "outline",
       cursorBlink: true,
       scrollback: 5000,
       linkHandler: {
@@ -569,15 +369,10 @@ export function TerminalView({
         return;
       }
       ended = true;
+      if (!onExit) return;
       const code = output.code === null ? "" : ` with code ${output.code}`;
-      if (onExit) {
-        terminal.write(`\r\n${DIM}[Process exited${code}.]${RESET}\r\n`);
-        onExit(output.code);
-        return;
-      }
-      terminal.write(
-        `\r\n${DIM}[Process exited${code}. Press any key to start a new shell.]${RESET}\r\n`,
-      );
+      terminal.write(`\r\n${DIM}[Process exited${code}.]${RESET}\r\n`);
+      onExit(output.code);
     };
     const stop = onTerminalOutput((output) => {
       if (id === null) early.push(output);
@@ -668,11 +463,7 @@ export function TerminalView({
       );
     });
     const input = terminal.onData((data) => {
-      if (ended) {
-        onRestart?.();
-        return;
-      }
-      if (id) {
+      if (id && !ended) {
         request({ method: "writeTerminal", terminalId: id, data }).catch(
           () => {},
         );
@@ -696,14 +487,11 @@ export function TerminalView({
       liveTerminal.current = null;
       terminal.dispose();
     };
-  }, [open, connected, onRestart, onExit, mac]);
+  }, [open, connected, onExit, mac]);
 
   return (
     <div
-      className={cn(
-        "bg-terminal-background flex min-h-0 flex-1 flex-col",
-        className,
-      )}
+      className={cn("bg-background flex min-h-0 flex-1 flex-col", className)}
     >
       {error && (
         <p role="alert" className="text-destructive shrink-0 px-4 py-2 text-sm">
@@ -713,7 +501,7 @@ export function TerminalView({
       <div
         ref={host}
         data-slot="terminal"
-        className="min-h-0 flex-1 ps-4 pt-2 pb-3 font-terminal text-terminal"
+        className="min-h-0 flex-1 ps-4 pe-2 pt-2 pb-3 font-mono text-xs"
       />
     </div>
   );

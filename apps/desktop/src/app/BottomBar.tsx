@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { toggleSettings } from "@/state/actions";
 import { useBarActions } from "@/state/barActions";
 import { useApp } from "@/state/store";
+import { placeOf, toggleTerminal, useTerminalPlaces } from "@/state/terminalPlaces";
 
 /**
  * The bar along the window's bottom, on the window chrome under the sidebar panel and the
@@ -18,7 +19,8 @@ export function BottomBar() {
   const inSettings = useApp((s) => s.selection.type === "settings");
   const shortcuts = useShortcuts();
   const sideChat = useBarActions((s) => s.sideChat);
-  const terminal = useBarActions((s) => s.terminal);
+  const place = useApp((s) => placeOf(s.selection));
+  const terminalOn = useTerminalPlaces((s) => s.places[place]?.open ?? false);
   return (
     <footer
       aria-label="App bar"
@@ -46,16 +48,14 @@ export function BottomBar() {
           <PlusCircle />
         </BarButton>
       </BarItem>
-      <BarItem show={terminal !== null}>
-        <BarButton
-          label="Terminal"
-          shortcut={shortcuts.terminal}
-          selected={terminal?.on ?? false}
-          onClick={() => useBarActions.getState().terminal?.toggle()}
-        >
-          <Terminal />
-        </BarButton>
-      </BarItem>
+      <BarButton
+        label="Terminal"
+        shortcut={shortcuts.terminal}
+        selected={terminalOn}
+        onClick={() => toggleTerminal()}
+      >
+        <Terminal />
+      </BarButton>
     </footer>
   );
 }

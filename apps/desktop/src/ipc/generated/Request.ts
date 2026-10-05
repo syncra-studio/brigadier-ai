@@ -41,7 +41,7 @@ query: string | null, } | { "method": "readFile", conversationId: ConversationId
 /**
  * Relative to the checkout's root.
  */
-path: string, } | { "method": "openTerminal", conversationId: ConversationId, 
+path: string, } | { "method": "openTerminal", conversationId?: ConversationId, projectId?: ProjectId, 
 /**
  * Independent shell session; omitted for the original default shell.
  */

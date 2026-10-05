@@ -9,7 +9,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use brigadier_core::manager::SessionManager;
 use brigadier_core::runtime::{Runtime, StartRaw};
-use brigadier_core::{Conversation, ConversationId, Core, MAX_ATTACHMENT_BYTES};
+use brigadier_core::{
+    Conversation, ConversationId, Core, Lifecycle, MAX_ATTACHMENT_BYTES, ProjectId, Setup,
+};
 use brigadier_ipc::metrics::{DaemonMetrics, Diagnostics, budgets};
 use brigadier_ipc::protocol::{
     ArtifactText, ClientFrame, ClientInfo, DaemonActivity, DaemonInfo, DictationUpdate, ErrorCode,
@@ -35,6 +37,8 @@ use crate::uninstall::Uninstall;
 use crate::updates::Updates;
 use crate::upgrade;
 
+/// The owner of Home's terminals (they belong to no conversation).
+const HOME_TERMINALS: &str = "home";
 /// Frames buffered between a connection's reader task and its handler.
 const INBOUND_FRAMES: usize = 32;
 /// Slow requests' answers waiting to be written.
@@ -338,10 +342,17 @@ impl Session {
             }
             Request::OpenTerminal {
                 conversation_id,
+                project_id,
                 session_id,
                 cols,
                 rows,
-            } => self.open_terminal(&conversation_id, session_id.as_deref(), cols, rows),
+            } => self.open_terminal(
+                conversation_id.as_ref(),
+                project_id.as_ref(),
+                session_id.as_deref(),
+                cols,
+                rows,
+            ),
             Request::OpenSetupTerminal {
                 provider,
                 install,
@@ -496,26 +507,65 @@ impl Session {
         Ok(())
     }
 
-    /// Opens (or re-attaches to) a session's terminal; its output then comes to this
-    /// connection.
+    /// Opens (or re-attaches to) a conversation's terminal, or Home's; its output then comes
+    /// to this connection.
     fn open_terminal(
         &mut self,
-        conversation_id: &ConversationId,
+        conversation_id: Option<&ConversationId>,
+        project_id: Option<&ProjectId>,
         session_id: Option<&str>,
         cols: u16,
         rows: u16,
     ) -> Result<Response, IpcError> {
-        let cwd = self.daemon.sessions.checkout_dir(conversation_id)?;
+        let (owner, cwd) = match conversation_id {
+            Some(id) => (id.0.clone(), self.conversation_terminal_dir(id)?),
+            None => (
+                HOME_TERMINALS.to_owned(),
+                self.project_terminal_dir(project_id)?,
+            ),
+        };
         // Subscribed first, so no output between the scrollback and the feed is lost.
         if self.terminal_feed.is_none() {
             self.terminal_feed = Some(self.daemon.terminals.subscribe());
         }
-        let terminal =
-            self.daemon
-                .terminals
-                .open_session(&conversation_id.0, session_id, cwd, cols, rows)?;
+        let terminal = self
+            .daemon
+            .terminals
+            .open_session(&owner, session_id, cwd, cols, rows)?;
         self.terminals.insert(terminal.id.clone());
         Ok(Response::OpenTerminal { terminal })
+    }
+
+    /// Where a conversation's terminal starts: a session's checkout, else its project's first
+    /// repository, else the home folder. An archived or deleted one has none.
+    fn conversation_terminal_dir(&self, id: &ConversationId) -> Result<String, IpcError> {
+        let conversation = self.daemon.core.conversation(id)?;
+        if conversation.lifecycle == Lifecycle::Archived {
+            return Err(brigadier_core::Error::Invalid(
+                "an archived thread has no terminal".into(),
+            )
+            .into());
+        }
+        if matches!(conversation.setup, Some(Setup::Session { .. })) {
+            return Ok(self.daemon.sessions.checkout_dir(id)?);
+        }
+        self.project_terminal_dir(conversation.project_id.as_ref())
+    }
+
+    /// The project's first repository, else the home folder.
+    fn project_terminal_dir(&self, project: Option<&ProjectId>) -> Result<String, IpcError> {
+        let repo = project
+            .and_then(|id| self.daemon.core.project(id).ok())
+            .and_then(|project| project.repos.into_iter().next());
+        if let Some(repo) = repo {
+            return Ok(repo.path);
+        }
+        let env = self.daemon.runtime.cli_env();
+        Ok(env
+            .home()
+            .ok_or_else(|| IpcError::from(brigadier_core::Error::Invalid("no home folder".into())))?
+            .display()
+            .to_string())
     }
 
     /// Opens (or re-attaches to) the terminal that sets up a CLI: its install or sign-in

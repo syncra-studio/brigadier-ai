@@ -22,6 +22,7 @@ import {
   FloatingComposerSlot,
 } from "@/app/conversation/PaneComposer";
 import { TerminalPane } from "@/app/conversation/TerminalTab";
+import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -30,8 +31,7 @@ import type { BrowserBounds, Request, Task } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 import { useBrowsers } from "@/state/browsers";
-import { useTerminalSessions } from "@/state/terminalSessions";
-import { emitTerminalOutput } from "@/state/terminals";
+import { emitTerminalOutput, toggleTerminal, useTerminalPlaces } from "@/state/terminalPlaces";
 
 const id = "pane-fixture";
 const base = Object.values(night.tasks)[0] as unknown as Task;
@@ -223,6 +223,7 @@ mockIPC(
 
 function Fixture() {
   const { panel, agents } = useSidePanel(id, "session");
+  usePaneShortcuts();
   const runtime = useExternalStoreRuntime<ThreadMessage>({
     messages: [],
     onNew: async () => {},
@@ -235,7 +236,8 @@ function Fixture() {
         calls,
         shells,
         useBrowsers,
-        useTerminalSessions,
+        useTerminalPlaces,
+        toggleTerminal,
         emitPaneShortcut: (shortcut: string) => emit("pane-shortcut", shortcut),
       },
     });
@@ -305,12 +307,12 @@ function Fixture() {
                       </div>
                     </ComposerPlacement>
                   </div>
+                  <TerminalPane place={`conv:${id}`} />
                 </div>
                 <SidePanel conversationId={id} />
                 <PanelButtons />
                 <FloatingComposerSlot capsule={false} />
               </div>
-              <TerminalPane conversationId={id} />
             </main>
           </div>
         </AgentsPanelContext.Provider>

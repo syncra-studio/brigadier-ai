@@ -196,11 +196,17 @@ pub enum Request {
         /// Relative to the checkout's root.
         path: String,
     },
-    /// A bottom-pane shell in the session's checkout,
-    /// started if none runs, sized `cols` × `rows`. Its output then streams to this
-    /// connection as [`ServerFrame::Terminal`].
+    /// A bottom-pane shell, started if none runs, sized `cols` × `rows`. A conversation's runs
+    /// in its checkout, else its project's first repository, else the home folder; without a
+    /// conversation it is Home's, in `project_id`'s first repository, else the home folder. Its
+    /// output then streams to this connection as [`ServerFrame::Terminal`].
     OpenTerminal {
-        conversation_id: ConversationId,
+        #[serde(default)]
+        #[ts(optional)]
+        conversation_id: Option<ConversationId>,
+        #[serde(default)]
+        #[ts(optional)]
+        project_id: Option<ProjectId>,
         /// Independent shell session; omitted for the original default shell.
         #[serde(default)]
         #[ts(optional)]

@@ -3,7 +3,6 @@ import {
   Folders,
   Globe,
   PlusCircle,
-  Terminal,
   X,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
@@ -22,8 +21,6 @@ import {
   useState,
 } from "react";
 
-import { listen } from "@tauri-apps/api/event";
-
 import { WORKERS_LABEL, WorkersTab } from "@/app/conversation/Agents";
 import type { FileTarget } from "@/app/conversation/FilesTab";
 import type { AgentsPanelState } from "@/app/conversation/WorkerChip";
@@ -34,8 +31,8 @@ import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { takePaneClose } from "@/state/closedPanes";
 import { newBrowserTab, reopenBrowserTab } from "@/state/browsers";
-import { undoTerminalClose } from "@/state/terminalSessions";
-import { changedPaneSize, savedPaneSizes } from "@/state/paneSizes";
+import { undoTabClose } from "@/state/terminalPlaces";
+import { changedPaneSize, savedPaneSizes, withSavedTerminal } from "@/state/paneSizes";
 import { useApp } from "@/state/store";
 
 const ReviewTab = lazy(() =>
@@ -59,13 +56,13 @@ const FilesTab = lazy(() =>
   })),
 );
 
-/** Independent tools share one right-side slot; the terminal is a separate bottom pane. */
+/** Independent tools share one right-side slot; the terminal is a separate bottom pane
+ * (`TerminalPane`). */
 
 /** The kinds of tab the side panel opens. */
 export type SideTab =
   | "workers"
   | "review"
-  | "terminal"
   | "browser"
   | "files"
   | "source"
@@ -78,7 +75,6 @@ const TABS: Record<
 > = {
   workers: { title: WORKERS_LABEL, icon: null, keys: null },
   review: { title: "Review", icon: <DiffGlyph />, keys: "⌃⇧G" },
-  terminal: { title: "Terminal", icon: <Terminal />, keys: "⌃`" },
   browser: { title: "Browser", icon: <Globe />, keys: "⌘T" },
   files: { title: "Files", icon: <Folders />, keys: "⌘P" },
   source: { title: "Source", icon: <Branch />, keys: null },
@@ -91,7 +87,7 @@ const TOOLS: readonly SideTab[] = ["files", "source", "browser", "review"];
 
 /** The panel's own shortcuts: show or hide it, and full view. */
 
-/** Which tab a key press opens: ⌃⇧G, ⌃`, ⌘T, ⌘P and ⌥⌘S (Ctrl for ⌘ off macOS). */
+/** Which tab a key press opens: ⌃⇧G, ⌘T, ⌘P and ⌥⌘S (Ctrl for ⌘ off macOS). */
 function tabForKey(event: KeyboardEvent, mac: boolean): SideTab | null {
   const command = mac ? event.metaKey : event.ctrlKey;
   if (
@@ -102,9 +98,6 @@ function tabForKey(event: KeyboardEvent, mac: boolean): SideTab | null {
     event.code === "KeyG"
   ) {
     return "review";
-  }
-  if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey) {
-    if (event.code === "Backquote") return "terminal";
   }
   if (command && !event.shiftKey && !event.altKey && event.code === "KeyT")
     return "browser";
@@ -128,16 +121,14 @@ export function shortcutLabel(keys: string, mac: boolean): string {
 
 type PanelState = {
   open: boolean;
-  active: Exclude<SideTab, "terminal"> | null;
+  active: SideTab | null;
   fullscreen: boolean;
-  terminalOpen: boolean;
 };
 
 const CLOSED: PanelState = {
   open: false,
   active: null,
   fullscreen: false,
-  terminalOpen: false,
 };
 const MOTION_MS = 500;
 /** The room the panel has: the workspace beside the rail and sidebar, and the window. */
@@ -201,9 +192,6 @@ export type SidePanelApi = {
   composerWidth: number;
   composerLimits: { min: number; max: number };
   resizeComposer: (width: number | null) => void;
-  terminalHeight: number;
-  terminalMaxHeight: number;
-  resizeTerminal: (height: number | null) => void;
   workspace: (element: HTMLElement | null) => void;
   file: FileTarget | null;
   openFile: (file: FileTarget | null) => void;
@@ -228,9 +216,6 @@ export const SidePanelContext = createContext<SidePanelApi>({
   composerWidth: 572,
   composerLimits: { min: 372, max: 917 },
   resizeComposer: () => {},
-  terminalHeight: 280,
-  terminalMaxHeight: 400,
-  resizeTerminal: () => {},
   workspace: () => {},
   file: null,
   openFile: () => {},
@@ -332,17 +317,12 @@ export function useSidePanel(
     composerLimits.max,
     Math.max(composerLimits.min, sizes.browserComposer ?? 572),
   );
-  const terminalHeight = Math.max(
-    160,
-    Math.min(sizes.terminal ?? 280, room.height * 0.5),
-  );
   const available = useMemo<SideTab[]>(
     () =>
       kind === "session"
         ? [
             "workers",
             "review",
-            "terminal",
             "browser",
             "files",
             "source",
@@ -354,11 +334,12 @@ export function useSidePanel(
     [kind],
   );
   const openTab = useCallback((tab: SideTab) => {
-    setState((current) =>
-      tab === "terminal"
-        ? { ...current, terminalOpen: true }
-        : { ...current, open: true, active: tab, fullscreen: !fitsNow.current },
-    );
+    setState((current) => ({
+      ...current,
+      open: true,
+      active: tab,
+      fullscreen: !fitsNow.current,
+    }));
   }, []);
   const hide = useCallback(
     () =>
@@ -368,79 +349,26 @@ export function useSidePanel(
   const closeTab = useCallback(
     (tab: SideTab) =>
       setState((current) =>
-        tab === "terminal"
-          ? { ...current, terminalOpen: false }
-          : current.active === tab
-            ? { ...current, open: false, fullscreen: false }
-            : current,
+        current.active === tab
+          ? { ...current, open: false, fullscreen: false }
+          : current,
       ),
     [],
   );
   const toggleTab = useCallback(
     (tab: SideTab) =>
       setState((current) =>
-        tab === "terminal"
-          ? { ...current, terminalOpen: !current.terminalOpen }
-          : current.open && current.active === tab
-            ? { ...current, open: false, fullscreen: false }
-            : {
-                ...current,
-                open: true,
-                active: tab,
-                fullscreen: !fitsNow.current,
-              },
+        current.open && current.active === tab
+          ? { ...current, open: false, fullscreen: false }
+          : {
+              ...current,
+              open: true,
+              active: tab,
+              fullscreen: !fitsNow.current,
+            },
       ),
     [],
   );
-  // Native menu accelerators keep working while the isolated browser owns keyboard focus.
-  useEffect(() => {
-    if (!mac || kind === "sideChat") return;
-    let disposed = false;
-    let unsubscribe: (() => void) | undefined;
-    const keys: Record<
-      string,
-      { code: string; shift?: boolean; control?: boolean }
-    > = {
-      terminal: { code: "KeyJ" },
-      "terminal-alternate": { code: "Backquote", control: true },
-      new: { code: "KeyT" },
-      reopen: { code: "KeyT", shift: true },
-      address: { code: "KeyL" },
-      full: { code: "KeyF", shift: true },
-      close: { code: "KeyW" },
-      previous: { code: "BracketLeft", shift: true },
-      next: { code: "BracketRight", shift: true },
-    };
-    void listen<string>("pane-shortcut", ({ payload }) => {
-      const key = keys[payload];
-      if (!key) return;
-      const browser =
-        state.open && state.active === "browser"
-          ? document.querySelector('[data-pane="browser"]')
-          : null;
-      const target =
-        (!document.hasFocus() && browser) || document.activeElement || window;
-      target.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          bubbles: true,
-          cancelable: true,
-          code: key.code,
-          metaKey: !key.control,
-          ctrlKey: key.control ?? false,
-          shiftKey: key.shift ?? false,
-        }),
-      );
-    })
-      .then((off) => {
-        if (disposed) off();
-        else unsubscribe = off;
-      })
-      .catch(() => {});
-    return () => {
-      disposed = true;
-      unsubscribe?.();
-    };
-  }, [mac, kind, state.open, state.active]);
   // A mounted view can change conversation without carrying its selected worker/file over.
   const [scope, setScope] = useState(conversationId);
   if (scope !== conversationId) {
@@ -462,9 +390,8 @@ export function useSidePanel(
         conversationId
       ) {
         const closed = takePaneClose(conversationId);
-        if (closed === "terminal" && undoTerminalClose(conversationId)) {
+        if (closed === "terminal" && undoTabClose(`conv:${conversationId}`)) {
           event.preventDefault();
-          openTab("terminal");
           return;
         }
         if (closed === "browser" && reopenBrowserTab(conversationId)) {
@@ -472,17 +399,6 @@ export function useSidePanel(
           openTab("browser");
           return;
         }
-      }
-      if (
-        command &&
-        !event.altKey &&
-        !event.shiftKey &&
-        event.code === "KeyJ" &&
-        available.includes("terminal")
-      ) {
-        event.preventDefault();
-        toggleTab("terminal");
-        return;
       }
       if (command && event.shiftKey && !event.altKey && event.code === "KeyF") {
         if (!state.open) return;
@@ -523,18 +439,16 @@ export function useSidePanel(
       limits,
       resize: (next) => {
         if (state.active)
-          setSizes((current) => changedPaneSize(current, state.active!, next));
+          setSizes((current) =>
+            changedPaneSize(withSavedTerminal(current), state.active!, next),
+          );
       },
       composerWidth,
       composerLimits,
       resizeComposer: (next) =>
         setSizes((current) =>
-          changedPaneSize(current, "browserComposer", next),
+          changedPaneSize(withSavedTerminal(current), "browserComposer", next),
         ),
-      terminalHeight,
-      terminalMaxHeight: Math.max(160, room.height * 0.5),
-      resizeTerminal: (next) =>
-        setSizes((current) => changedPaneSize(current, "terminal", next)),
       workspace,
       file,
       openFile: (next) => {
@@ -558,10 +472,8 @@ export function useSidePanel(
       fits,
       width,
       limits,
-      terminalHeight,
       composerWidth,
       composerLimits,
-      room.height,
       workspace,
       file,
       available,
@@ -573,15 +485,6 @@ export function useSidePanel(
       buttonsWidth,
     ],
   );
-  useEffect(() => {
-    const restore = (event: Event) => {
-      if ((event as CustomEvent<string>).detail === conversationId)
-        openTab("terminal");
-    };
-    document.addEventListener("brigadier:restore-terminal", restore);
-    return () =>
-      document.removeEventListener("brigadier:restore-terminal", restore);
-  }, [conversationId, openTab]);
   const workersOpen = state.open && state.active === "workers";
   const agents = useMemo(
     () => ({

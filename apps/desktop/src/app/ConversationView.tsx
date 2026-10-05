@@ -104,6 +104,7 @@ import {
 import { toast } from "@/state/toasts";
 import { type Board, useBoard } from "@/state/board";
 import { useBarActions } from "@/state/barActions";
+import { placeOf } from "@/state/terminalPlaces";
 import {
   emptyThread,
   type PendingMessage,
@@ -553,9 +554,8 @@ export function ConversationView({
           : null,
   );
   const [renaming, setRenaming] = useState(false);
-  // The bottom bar's Side chat and Terminal act on this view while it is the window's own.
+  // The bottom bar's Side chat acts on this view while it is the window's own.
   const sideChatOn = sidePanel.visible && sidePanel.state.active === "sideChat";
-  const terminalOn = sidePanel.state.terminalOpen;
   const { available, toggleTab } = sidePanel;
   useEffect(() => {
     if (embedded) return;
@@ -563,14 +563,11 @@ export function ConversationView({
       sideChat: available.includes("sideChat")
         ? { on: sideChatOn, toggle: () => toggleTab("sideChat") }
         : null,
-      terminal: available.includes("terminal")
-        ? { on: terminalOn, toggle: () => toggleTab("terminal") }
-        : null,
     });
-  }, [embedded, available, sideChatOn, terminalOn, toggleTab]);
+  }, [embedded, available, sideChatOn, toggleTab]);
   useEffect(() => {
     if (embedded) return;
-    return () => useBarActions.setState({ sideChat: null, terminal: null });
+    return () => useBarActions.setState({ sideChat: null });
   }, [embedded]);
 
   // A new scope must not inherit uploads or refs from the previous composer.
@@ -840,12 +837,12 @@ export function ConversationView({
                             />
                           </SummaryPane>
                         </SummaryFloat>
+                        {!embedded && <TerminalPane place={placeOf(selection)} />}
                       </div>
                       {!embedded && <SidePanel conversationId={conversationId} />}
                       {!embedded && <PanelButtons />}
                       {!embedded && <FloatingComposerSlot />}
                       </div>
-                      {!embedded && conversationId && <TerminalPane conversationId={conversationId} />}
                     </div>
                   </OpenFileContext.Provider>
                   {conversation && (

@@ -56,3 +56,13 @@ export function changedPaneSize(
   }
   return sizes;
 }
+
+/**
+ * `current` with the terminal's saved height: the bottom pane saves that one itself, so a
+ * view holding an older copy must not write it back.
+ */
+export function withSavedTerminal(current: PaneSizes): PaneSizes {
+  const { terminal: _held, ...rest } = current;
+  const { terminal } = savedPaneSizes();
+  return terminal === undefined ? rest : { ...rest, terminal };
+}

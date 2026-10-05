@@ -1,7 +1,7 @@
-//! Bottom-pane shells, independently keyed within each session's checkout, on a
+//! Bottom-pane shells, independently keyed within each conversation (or Home), on a
 //! pseudo terminal. Its output streams live to the connections that opened it, and a tail is
 //! kept so a tab opened again shows what came before; none of it is stored. A shell ends when
-//! its tab closes, its session is archived or deleted, or the daemon quits.
+//! its tab closes, its conversation is archived or deleted, or the daemon quits.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -236,15 +236,30 @@ impl Terminals {
         }
     }
 
-    /// Ends the conversation's terminal, if one runs.
+    /// Ends the conversation's terminals. They are let go of at once, so a shell opened for it
+    /// afterwards (it was restored) is a new one; ending them happens on its own thread, so
+    /// archiving and deleting don't wait for it.
     pub fn close_conversation(&self, conversation: &str) {
-        let ids: Vec<String> = lock(&self.live)
-            .values()
-            .filter(|terminal| terminal.conversation == conversation)
-            .map(|terminal| terminal.id.clone())
-            .collect();
-        for id in ids {
-            self.close(&id);
+        let ended: Vec<Arc<Terminal>> = {
+            let mut live = lock(&self.live);
+            let ids: Vec<String> = live
+                .values()
+                .filter(|terminal| terminal.conversation == conversation)
+                .map(|terminal| terminal.id.clone())
+                .collect();
+            ids.iter().filter_map(|id| live.remove(id)).collect()
+        };
+        if ended.is_empty() {
+            return;
+        }
+        let killed = std::thread::Builder::new()
+            .name("terminal close".into())
+            .spawn({
+                let ended = ended.clone();
+                move || ended.iter().for_each(|terminal| terminal.kill())
+            });
+        if killed.is_err() {
+            ended.iter().for_each(|terminal| terminal.kill());
         }
     }
 
