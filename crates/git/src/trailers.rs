@@ -34,7 +34,59 @@ pub fn strip_ai_coauthors(message: &str) -> String {
     cleaned
 }
 
-/// Whether `line` is a Co-authored-by trailer whose name or email names an AI.
+/// The names of AI products and their companies.
+fn ai_product(word: &str) -> bool {
+    matches!(
+        word,
+        "claude"
+            | "anthropic"
+            | "codex"
+            | "openai"
+            | "copilot"
+            | "gemini"
+            | "cursoragent"
+            | "devin"
+            | "aider"
+    ) || word.starts_with("gpt")
+        || word.ends_with("gpt")
+}
+
+/// The other words an AI's co-author name is made of: its model, its edition, its maker.
+fn ai_name_word(word: &str) -> bool {
+    ai_product(word)
+        || word.bytes().all(|b| b.is_ascii_digit())
+        || matches!(
+            word,
+            "opus"
+                | "sonnet"
+                | "haiku"
+                | "fable"
+                | "code"
+                | "cli"
+                | "agent"
+                | "ai"
+                | "assistant"
+                | "bot"
+                | "swe"
+                | "integration"
+                | "cursor"
+                | "github"
+                | "google"
+                | "mini"
+                | "pro"
+                | "flash"
+        )
+}
+
+fn words(text: &str) -> Vec<&str> {
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+/// Whether `line` is a Co-authored-by trailer that names an AI: its address is an AI's (a
+/// product's no-reply or bot address), or its name is wholly an AI's ("Claude Opus 5",
+/// "GitHub Copilot"). A person who shares a word with one ("Claude Martin") is kept.
 fn ai_coauthor(line: &str) -> bool {
     let Some((key, value)) = line.split_once(':') else {
         return false;
@@ -43,26 +95,33 @@ fn ai_coauthor(line: &str) -> bool {
         return false;
     }
     let value = value.to_ascii_lowercase();
-    let words: Vec<&str> = value
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|word| !word.is_empty())
-        .collect();
-    words.iter().enumerate().any(|(index, word)| {
-        matches!(
-            *word,
-            "claude"
-                | "anthropic"
-                | "codex"
-                | "openai"
-                | "copilot"
-                | "gemini"
-                | "cursoragent"
-                | "devin"
-                | "aider"
-        ) || word.starts_with("gpt")
-            || word.ends_with("gpt")
-            || (*word == "cursor" && words.get(index + 1) == Some(&"agent"))
-    })
+    let (name, email) = match value.split_once('<') {
+        Some((name, rest)) => (name, rest.split_once('>').map_or(rest, |(email, _)| email)),
+        None => (value.as_str(), ""),
+    };
+    let name = words(name);
+    // One word alone ("Claude", "Devin") is a person's name too: then the address decides.
+    let whole_name = name.len() > 1 || email.trim().is_empty();
+    if whole_name
+        && name.iter().all(|word| ai_name_word(word))
+        && name.iter().any(|word| ai_product(word))
+    {
+        return true;
+    }
+    let (local, domain) = email.trim().rsplit_once('@').unwrap_or(("", ""));
+    let robot = local.contains("noreply") || local.contains("no-reply") || local.contains("[bot]");
+    match domain {
+        "anthropic.com" | "openai.com" | "google.com" | "github.com" | "aider.chat" => {
+            robot || words(local).iter().any(|word| ai_product(word))
+        }
+        "cursor.com" => local == "cursoragent",
+        // A GitHub account: an AI's app ("…[bot]"), or Copilot's own.
+        "users.noreply.github.com" => {
+            let login = local.rsplit_once('+').map_or(local, |(_, login)| login);
+            login == "copilot" || (robot && words(login).iter().any(|word| ai_product(word)))
+        }
+        _ => robot && words(local).iter().any(|word| ai_product(word)),
+    }
 }
 
 impl Repo {
