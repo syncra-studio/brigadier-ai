@@ -506,7 +506,7 @@ export function useSidePanel(
         tab === "browser" &&
         event.target instanceof Element &&
         event.target.closest(
-          '[data-slot="terminal-pane"], [data-pane="browser"]',
+          '[data-slot="terminal-pane"], [data-terminal-menu], [data-pane="browser"]',
         )
       )
         return;

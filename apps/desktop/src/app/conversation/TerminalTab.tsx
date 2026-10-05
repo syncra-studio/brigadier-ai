@@ -138,7 +138,14 @@ export function TerminalPane({ conversationId }: { conversationId: string }) {
     if (!state.terminalOpen) return;
     const key = (event: KeyboardEvent) => {
       const focused = document.activeElement;
-      if (!focused || !pane.current?.contains(focused)) return;
+      if (
+        !focused ||
+        (!pane.current?.contains(focused) &&
+          focused
+            .closest("[data-terminal-menu]")
+            ?.getAttribute("data-terminal-menu") !== conversationId)
+      )
+        return;
       const command = event.metaKey || event.ctrlKey;
       if (!command || event.altKey) return;
       if (
@@ -244,7 +251,7 @@ export function TerminalPane({ conversationId }: { conversationId: string }) {
             aria-hidden
             className="size-icon-md text-toolbar-foreground shrink-0"
           />
-          <DropdownMenu>
+          <DropdownMenu key={state.terminalOpen ? "open" : "hidden"}>
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
@@ -259,10 +266,12 @@ export function TerminalPane({ conversationId }: { conversationId: string }) {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
+              data-terminal-menu={conversationId}
               align="start"
               onCloseAutoFocus={(event) => {
                 event.preventDefault();
                 requestAnimationFrame(() => {
+                  if (!pane.current || pane.current.inert) return;
                   const input = [
                     ...(pane.current?.querySelectorAll<HTMLTextAreaElement>(
                       ".xterm-helper-textarea",
