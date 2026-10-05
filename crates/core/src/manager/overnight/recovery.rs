@@ -1,9 +1,9 @@
 //! Resuming runs after a restart (PLAN.md §10.10). Run ownership is replayed before the
-//! generic recovery (which ends interrupted tasks); results it reports for a run's checks
-//! while it does are not taken as the checks' verdicts. Afterwards each active run picks up
-//! where it was: an interrupted round of whole-phase checks starts again on the same candidate,
-//! a phase lead is reminded of its phase, a run past its deadline winds down at once, and an
-//! ending that was cut off finishes. The time Brigadier wasn't running is recorded on the run,
+//! generic recovery (which ends interrupted tasks). Afterwards each active run picks up where
+//! it was: a phase lead hears of the tasks the restart ended and is reminded of its phase (a
+//! run from before phases were verified like any request's, caught checking a phase, resumes
+//! that phase as running), a run past its deadline winds down at once, and an ending that was
+//! cut off finishes. The time Brigadier wasn't running is recorded on the run,
 //! with the Mac's own sleep record when it has one, for the report.
 
 use std::path::PathBuf;
@@ -13,7 +13,6 @@ use std::time::Duration;
 use super::super::SessionManager;
 use crate::now_ms;
 use crate::overnight::{OvernightRun, OvernightState, PhaseState, RunGap};
-use crate::work::GateOutcome;
 
 /// A heartbeat older than this many clock ticks means Brigadier wasn't running in between.
 const MISSED_BEATS: i64 = 3;
@@ -92,52 +91,30 @@ impl SessionManager {
                 let manager = self.arc();
                 self.spawn(async move { manager.end_run(run).await });
             }
+            // An older run caught checking a phase (or Phase 0's plan): its checks are gone with
+            // the old daemon, so the phase runs again and its lead settles it.
             OvernightState::PhaseGate => {
-                for phase in run
-                    .phases
-                    .iter()
-                    .filter(|p| p.state == PhaseState::Checking)
-                {
-                    let candidate = match &phase.gate {
-                        Some(gate) if gate.outcome.is_none() => gate.commit.clone(),
-                        Some(_) => None,
-                        // Cut off between phase_done and its checks.
-                        None => self.run_tip(&run).await.ok(),
-                    };
-                    let Some(candidate) = candidate else {
-                        continue;
-                    };
-                    let phase_id = phase.id.clone();
-                    // The round's members were ended with the old daemon: a new round checks
-                    // the same candidate again.
-                    let Some(now) = self
-                        .change_run_if(&run, |now| {
-                            let phase = now.phases.iter_mut().find(|p| p.id == phase_id)?;
-                            if let Some(gate) = phase.gate.as_mut() {
-                                gate.outcome = Some(GateOutcome::NoResult);
+                let resumed = self
+                    .change_run_if(&run, |now| {
+                        for phase in &mut now.phases {
+                            if phase.state == PhaseState::Checking {
+                                phase.state = PhaseState::Running;
+                                phase.nudges = 0;
                             }
-                            Some(())
-                        })
-                        .await
-                    else {
-                        continue;
-                    };
-                    let manager = self.arc();
-                    self.spawn(async move {
-                        manager.open_phase_gate(&now, &phase_id, candidate).await;
-                    });
+                        }
+                        now.state = OvernightState::Running;
+                        Some(())
+                    })
+                    .await;
+                if resumed.is_some() {
+                    self.lead_turn_ended(&run.conversation_id);
                 }
             }
             OvernightState::Planning => {
                 if let Some(planning) = &run.planning
                     && planning.state == PhaseState::Checking
-                    && let Some(judge) = &planning.judge
-                    && self
-                        .task_by_id(&run.conversation_id, judge)
-                        .await
-                        .is_ok_and(|task| task.state.is_final() && task.report.is_none())
                 {
-                    self.judge_planning(&run).await;
+                    self.resume_judged_plan(&run).await;
                 } else {
                     self.lead_turn_ended(&run.conversation_id);
                 }

@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::model::{CardId, ConversationId, OvernightRunId, TaskId};
-use crate::work::Gate;
 
 /// The run's own branch and worktree, made at Start from the base's committed tip. Its work
 /// lands there; only the user's Merge brings verified work into the base.
@@ -31,26 +30,16 @@ pub struct RunWorkspace {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum RunRole {
-    /// Work the phase lead delegated (and the checks of a plan it proposed).
+    /// Work the phase lead delegated.
     Worker,
-    /// A reviewer or verifier of a run task's change.
+    /// A reviewer or verifier of a run task's work (a phase's verifier too).
     Check,
-    /// Verifies every "done when" criterion of a whole phase, fresh.
+    /// A whole-phase verifier of a run from before phases were verified like any request's.
     PhaseVerifier,
-    /// Reviews a whole phase's diff, from another vendor than its authors.
+    /// A whole-phase reviewer of such a run.
     PhaseReviewer,
-    /// Judges a whole phase (or Phase 0's plan) from the evidence, in a fresh context.
+    /// A judge of such a run's phase or plan.
     Judge,
-}
-
-impl RunRole {
-    /// Checks a whole phase: its candidate stays as it is while they work.
-    pub fn checks_phase(self) -> bool {
-        matches!(
-            self,
-            Self::PhaseVerifier | Self::PhaseReviewer | Self::Judge
-        )
-    }
 }
 
 /// Which run a task works for, fixed when the task is made: a late event of the task keeps
@@ -68,9 +57,6 @@ pub struct RunTaskContext {
     pub role: RunRole,
     /// The run's Rules as the task was briefed (a hash of the text).
     pub rules_hash: String,
-    /// The phase candidate a whole-phase check works on (its checkout is at this commit).
-    #[serde(default)]
-    pub candidate: Option<String>,
 }
 
 /// Where a run is. `Proposed` waits for the user's Start; everything after it is the run's own.
@@ -86,7 +72,8 @@ pub enum OvernightState {
     /// Phase 0: writing and reviewing the plan for a bare goal.
     Planning,
     Running,
-    /// A phase's work settled and its whole result is being checked.
+    /// A phase's whole result was being checked, in a run from before phases were verified
+    /// like any request's; it resumes as `Running`.
     PhaseGate,
     /// No eligible model until a usage window resets.
     WaitingQuota,
@@ -114,7 +101,8 @@ impl OvernightState {
 pub enum PhaseState {
     Pending,
     Running,
-    /// Its whole result is being verified, reviewed and judged.
+    /// Its whole result was being checked, in a run from before phases were verified like any
+    /// request's; it resumes as `Running`.
     Checking,
     Verified,
     /// Unfinished: some criteria may be met, the rest wait on the user, or the run ended first.
@@ -151,30 +139,22 @@ pub struct OvernightPhase {
     /// The request its lead's turns, tasks and reports belong to; set when it starts.
     #[serde(default)]
     pub request_id: Option<String>,
-    /// The run branch's tip when the phase started: the whole phase is checked against it.
+    /// The run branch's tip when the phase started: its work is everything after it.
     #[serde(default)]
     pub start_commit: Option<String>,
-    /// The commit its checks verified, once the phase is verified.
+    /// The run branch's tip when the phase was settled as done, its verifier's work landed.
     #[serde(default)]
     pub verified_commit: Option<String>,
-    /// The latest round of whole-phase checks: its commit is the candidate they check.
-    #[serde(default)]
-    pub gate: Option<Gate>,
-    /// Fix rounds after its checks found gaps (at most two).
-    #[serde(default)]
-    pub fix_rounds: u32,
-    /// What each criterion came to, from the judge and the fresh verifier's evidence.
+    /// What each criterion came to. Only runs from before phases were verified like any
+    /// request's have these, and phases the run's end cut off.
     #[serde(default)]
     pub criteria: Vec<CriterionResult>,
-    /// What the phase still lacks after its last checks, each in one line.
+    /// What the phase still lacks, each in one line.
     #[serde(default)]
     pub gaps: Vec<String>,
-    /// The lead's own summary when it said the phase's work was done.
+    /// The lead's own summary when it settled the phase.
     #[serde(default)]
     pub summary: Option<String>,
-    /// The lead's answers to the findings of the checks before its last fix round.
-    #[serde(default)]
-    pub responses: Vec<String>,
     /// The lead's model, the vendor whose work its reviewers must not be.
     #[serde(default)]
     pub lead: Option<crate::model::ModelChoice>,
@@ -222,12 +202,9 @@ impl OvernightPhase {
             request_id: None,
             start_commit: None,
             verified_commit: None,
-            gate: None,
-            fix_rounds: 0,
             criteria: Vec::new(),
             gaps: Vec::new(),
             summary: None,
-            responses: Vec::new(),
             lead: None,
             nudges: 0,
             started_at_ms: None,
@@ -361,22 +338,18 @@ impl OvernightRun {
     }
 }
 
-/// Phase 0 of a bare goal: the lead writes the plan's phases, another vendor reviews them,
-/// and a fresh judge checks they follow the goal without invented scope.
+/// Phase 0 of a bare goal: the lead reads the code and writes the plan's phases, which the run
+/// then follows.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanningPhase {
     pub request_id: String,
     pub state: PhaseState,
-    /// The plan card the phases were proposed on (reviewed like any plan).
+    /// The plan the phases were proposed on.
     pub plan_id: Option<CardId>,
-    /// The phases as proposed, kept until the judge accepts them.
+    /// The phases as proposed.
     pub proposed: Vec<ProposedPhase>,
-    /// The judge of the latest proposal.
-    pub judge: Option<TaskId>,
-    /// Judge rounds so far (at most two).
-    pub rounds: u32,
-    /// What the judge found missing or invented.
+    /// Why Phase 0 couldn't write a plan the run may follow.
     pub gaps: Vec<String>,
     pub lead: Option<crate::model::ModelChoice>,
     pub nudges: u32,

@@ -2,9 +2,9 @@
 //!
 //! The fence comes first and is durable (the run is `WindingDown`): no new phase, task, fix or
 //! retry starts. Live workers are asked to finish their current step and hand off cleanly in
-//! their report; checks already running may finish. Whatever still runs at the cutoff is
-//! stopped, its work kept with the task. Phases that were not checked settle as what they are
-//! (never verified for missing evidence), the report is written, and the run's leases go.
+//! their report, with the sections a fresh worker carries on from; reviews already running may
+//! finish. Whatever still runs at the cutoff is stopped, its work kept with the task. Phases
+//! that weren't settled end as partial, the report is written, and the run's leases go.
 //!
 //! The deadline is a time the report is ready by: a run with one gets a third of its length
 //! (at most 20 minutes) for this, and the last part of that (at most 2 minutes) stays for the
@@ -16,10 +16,7 @@ use std::time::Duration;
 
 use super::super::SessionManager;
 use crate::model::{ConversationId, DomainEvent, OvernightRunId};
-use crate::overnight::{
-    CriterionResult, CriterionStatus, Deadline, OvernightRun, OvernightState, PhaseState,
-    StopReason,
-};
+use crate::overnight::{Deadline, OvernightRun, OvernightState, PhaseState, StopReason};
 use crate::work::TaskState;
 use crate::{Result, now_ms};
 
@@ -33,7 +30,7 @@ const POLL: Duration = Duration::from_secs(5);
 pub(crate) const CLOCK: Duration = Duration::from_secs(30);
 
 /// What a live worker is told when its run ends.
-const HAND_OFF: &str = "[Brigadier] The overnight run is ending now ({reason}). Finish only the step you are in the middle of, leave the worktree coherent, and call submit_report at once with a clean handoff: what you changed, what is left unfinished, decisions you made, traps you found, and the exact commands that verify your work. Start nothing new.";
+const HAND_OFF: &str = "[Brigadier] The overnight run is ending now ({reason}). Start nothing new. Finish only the step you are in the middle of, leave the worktree coherent and commit the finished steps (not broken work). Then call submit_report at once with a handoff a fresh worker with no memory of this session can carry on from, under these headings in the summary: Goal and where it stands; Done (with commit hashes); In progress (exact files and state, and anything uncommitted); Next steps (ordered and concrete); Decisions and approvals already given; Gotchas learned; How to verify (the exact commands and what passing looks like).";
 
 impl SessionManager {
     /// Starts the deadline clock: every half minute, a run past its wind-down instant (by the
@@ -331,26 +328,12 @@ fn fence(run: &mut OvernightRun) -> bool {
     }
 }
 
-/// Phases (and Phase 0) that were running or checked when the run ended settle as what they
-/// are, `reason` saying why; the run goes on to its report.
+/// Phases (and Phase 0) that were running when the run ended settle as partial, `reason`
+/// saying why; the run goes on to its report.
 fn settle_cut_off(run: &mut OvernightRun, reason: &str) {
     for phase in &mut run.phases {
         if !matches!(phase.state, PhaseState::Running | PhaseState::Checking) {
             continue;
-        }
-        let candidate = phase.gate.as_ref().and_then(|gate| gate.commit.clone());
-        if phase.criteria.is_empty() {
-            phase.criteria = phase
-                .done_when
-                .iter()
-                .map(|criterion| CriterionResult {
-                    id: criterion.id.clone(),
-                    status: CriterionStatus::NotRun,
-                    evidence: format!("Not checked: {reason}."),
-                    candidate: candidate.clone(),
-                    by: None,
-                })
-                .collect();
         }
         // Cut off by the run's end, it is unfinished, not blocked: it needs nothing.
         phase.state = PhaseState::Partial;
@@ -411,7 +394,9 @@ pub(super) fn to_you(text: &str) -> String {
 }
 
 /// How the gap of a phase the run's end cut off begins; why the run ended follows.
-pub(super) const CUT_OFF: &str = "Its whole-phase checks never passed: ";
+pub(super) const CUT_OFF: &str = "It wasn't finished: ";
+/// How such a gap began in runs from before phases were verified like any request's.
+pub(super) const OLD_CUT_OFF: &str = "Its whole-phase checks never passed: ";
 
 /// Why the run ended, as a phase's gap says it.
 fn stop_words(stop: Option<&StopReason>) -> String {
@@ -463,12 +448,6 @@ mod tests {
         settle_cut_off(&mut run, "the session was deleted");
         assert_eq!(run.state, OvernightState::Reporting);
         assert_eq!(run.phases[0].state, PhaseState::Partial);
-        assert!(
-            run.phases[0]
-                .criteria
-                .iter()
-                .all(|c| c.status == CriterionStatus::NotRun)
-        );
         assert!(
             run.phases[0]
                 .gaps

@@ -86,17 +86,16 @@ brief implies, in `corrections`; the brief wins any conflict. Under \"Ask for ap
 shows the user a \"Start this plan?\" card and the go-ahead goes once they start it. Returns at \
 once.";
 
-const PHASE_DONE: &str = "Only while you lead a phase of an overnight run: say the phase's \
-work is done, or as done as it can get without the user. Call it once every task of the phase \
-has landed or ended (nothing of it may still run, wait for checks or wait to be accepted). \
-Brigadier then checks the whole phase with a fresh verifier, a reviewer from another vendor and \
-a fresh judge; the outcome arrives later as a message. After its checks sent you findings, \
-call it again once they are fixed, with one response per finding.";
+const PHASE_DONE: &str = "Only while you lead a phase of an overnight run: settle the phase \
+once every task of it has landed or ended (nothing of it may still run or wait to be landed). \
+Judge its verifier's report: done when every \"done when\" is met and its work landed; \
+partial when some is left for a later run; blocked when what is left needs the user. Brigadier \
+then starts the next phase or ends the run.";
 
 const PROPOSE_PHASES: &str = "Only in Phase 0 of an overnight run (the user gave a goal \
 without a plan): propose the plan's phases, each with its exact scope, \"done when\" criteria \
-anyone can check, and the phases it builds on. A judge checks them against the user's goal \
-before any phase starts; nothing beyond the goal belongs in it.";
+anyone can check, and the phases it builds on. The run follows them from phase 1 on; nothing \
+beyond the goal belongs in it.";
 
 const REQUEST_APPROVAL: &str = "Ask the user to approve what only they may decide: spending \
 money, using credentials or the keychain, or destroying something outside this session's own \

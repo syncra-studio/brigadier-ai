@@ -1,10 +1,11 @@
 //! The morning report (PLAN.md §10.11): one message at the end of the run, rendered from the
-//! run's records, never from a model's memory of it. What shows is short. First come three
-//! lines, in the run card's words: the outcome, what Merge takes and what waits on the user.
-//! Then one line per phase, what waits on the user and what got in the way. Everything after
-//! the `### Details` heading the app shows folded: the branch, the commits, what was decided
-//! for the user (one short line each), each phase's criteria with their evidence, its checks
-//! and the lead's answers, who did the work, and the usage.
+//! run's records, never from a model's memory of it, in the sections a delegated run reports
+//! with. First come three lines, in the run card's words: the outcome, what Merge takes and
+//! what waits on the user. Then each phase, done or not, with what its verifier checked and
+//! how, and what the review from the other vendor found and what was done about it; the
+//! commits; what was decided for the user; what waits on them; problems and risks. Everything
+//! after the `### Details` heading the app shows folded: the branch, who did the work on which
+//! model (the worker lineage), and the usage.
 //!
 //! It is written once: its message has a stable id per run segment, looked for before it is
 //! appended, and the run records it after. A crash in between finds the message on recovery
@@ -19,8 +20,7 @@
 use super::super::decisions::{named, short_words, waiting_run};
 use super::super::{SessionManager, blocking, git_error};
 use super::directives::{Clock, parse};
-use super::phase_gates::{criterion_evidence, without_marker};
-use super::wind_down::{CUT_OFF, to_you};
+use super::wind_down::{CUT_OFF, OLD_CUT_OFF, to_you};
 use crate::board::Board;
 use crate::model::{DomainEvent, OvernightRunId, Setup};
 use crate::now_ms;
@@ -30,8 +30,8 @@ use crate::overnight::{
 };
 use crate::sessions::one_line;
 use crate::work::{
-    Decision, DecisionKind, DecisionSource, GateOutcome, RequestState, Task, TaskKind, TaskState,
-    UserRequest,
+    Decision, DecisionKind, DecisionSource, RequestState, Task, TaskKind, TaskState, UserRequest,
+    WorkerRole,
 };
 use brigadier_providers::ProviderKind;
 
@@ -43,6 +43,12 @@ const EVIDENCE: usize = 160;
 const DECIDED: usize = 140;
 /// A missing criterion or a gap on a phase's line, at most.
 const MISSING: usize = 90;
+/// A verifier's "done when" lines listed per phase, at most (its report has them all).
+const DONE_WHEN: usize = 8;
+/// Lines of how a phase was verified, and review findings, listed per phase, at most.
+const HOW: usize = 4;
+/// Risks a phase's verifier named, listed per phase under problems and risks, at most.
+const RISKS: usize = 3;
 /// Check names listed per kind of check that couldn't run.
 const CHECK_NAMES: usize = 3;
 /// The heading after which the app folds the report.
@@ -618,7 +624,7 @@ fn render(
 ) -> String {
     let waits = waiting(run, board);
     let mut text = String::new();
-    // The three lines the run card shows too.
+    // The outcome in three lines, which the run card shows too.
     text.push_str(&outcome_line(run, now));
     text.push_str("\n\n");
     text.push_str(&merge_line(run, commits));
@@ -628,31 +634,58 @@ fn render(
         1 => "1 thing waits on you.".to_owned(),
         n => format!("{n} things wait on you."),
     });
-    text.push_str("\n\n");
-    for line in phase_lines(run, board) {
+    text.push_str("\n\n### Phases\n");
+    let segments = chain(run, board);
+    for (line, phase) in phase_lines(run, board) {
         text.push_str(&format!("- {line}\n"));
+        if let Some(phase) = phase {
+            for line in phase_evidence(phase, board, &segments) {
+                text.push_str(&format!("  - {line}\n"));
+            }
+        }
+    }
+    if !commits.is_empty() {
+        text.push_str("\n### Commits\n");
+        let mut verified = false;
+        for commit in commits {
+            if Some(&commit.commit) == run.verified_commit.as_ref() {
+                verified = true;
+            }
+            text.push_str(&format!(
+                "- `{}` {}{}\n",
+                short(&commit.commit),
+                commit.subject,
+                if verified { "" } else { " (unverified)" }
+            ));
+        }
+        if commits.len() == COMMITS {
+            text.push_str("Only the latest 60 are listed; the branch has them all.\n");
+        }
+    }
+    let decided = decision_lines(run, board);
+    if !decided.is_empty() {
+        text.push_str("\n### Decided for you\n");
+        for line in decided {
+            text.push_str(&format!("- {line}\n"));
+        }
     }
     if !waits.is_empty() {
-        text.push_str("\nWaiting on you:\n");
+        text.push_str("\n### Waiting on you\n");
         for item in &waits {
             text.push_str(&format!("- {}\n", item.trim()));
         }
         text.push_str("Then say \u{201c}continue\u{201d} to pick the run up on the same branch.\n");
     }
-    let in_the_way = in_the_way(run, board, now);
-    match in_the_way.as_slice() {
-        [] => {}
-        [one] => text.push_str(&format!("\nGot in the way: {one}\n")),
-        lines => {
-            text.push_str("\nGot in the way:\n");
-            for line in lines {
-                text.push_str(&format!("- {line}\n"));
-            }
+    let problems = problems(run, board, now);
+    if !problems.is_empty() {
+        text.push_str("\n### Problems and risks\n");
+        for line in problems {
+            text.push_str(&format!("- {line}\n"));
         }
     }
     // The details, folded by the app: everything after this heading.
     text.push_str(&format!("\n{DETAILS}\n"));
-    text.push_str(&details(run, board, commits, usage));
+    text.push_str(&details(run, board, usage));
     // Workers by the names the app shows, also in text written before they were; the run's
     // words about the user said to the user.
     named(&to_you(&text), board)
@@ -746,16 +779,22 @@ fn phase_word(state: PhaseState) -> &'static str {
 }
 
 /// One line per phase: its state in the run card's word, why when it isn't verified, and
-/// what landed.
-fn phase_lines(run: &OvernightRun, board: &Board) -> Vec<String> {
+/// what landed; with the phase it is about (none for Phase 0).
+fn phase_lines<'a>(
+    run: &'a OvernightRun,
+    board: &Board,
+) -> Vec<(String, Option<&'a OvernightPhase>)> {
     let mut lines = Vec::new();
     if let Some(planning) = &run.planning {
         let head = phase_head(planning.state, "Phase 0 · Write the plan");
         let word = phase_word(planning.state);
-        lines.push(match (planning.state, planning.gaps.first()) {
-            (PhaseState::Verified, _) | (_, None) => format!("{head}: {word}."),
-            (_, Some(gap)) => format!("{head}: {word}, {}", sentence(&one_line(gap, MISSING))),
-        });
+        lines.push((
+            match (planning.state, planning.gaps.first()) {
+                (PhaseState::Verified, _) | (_, None) => format!("{head}: {word}."),
+                (_, Some(gap)) => format!("{head}: {word}, {}", sentence(&one_line(gap, MISSING))),
+            },
+            None,
+        ));
     }
     let segments = chain(run, board);
     for phase in &run.phases {
@@ -774,7 +813,7 @@ fn phase_lines(run: &OvernightRun, board: &Board) -> Vec<String> {
             (0, _) => String::new(),
             (n, _) => format!(" {} landed.", plural(n, "task", "tasks")),
         };
-        lines.push(match phase.state {
+        let line = match phase.state {
             PhaseState::Verified => format!("{head}: {word}.{}", tasks(true)),
             PhaseState::Partial => format!(
                 "{head}: {word}, {}.{}",
@@ -795,7 +834,170 @@ fn phase_lines(run: &OvernightRun, board: &Board) -> Vec<String> {
             PhaseState::Running | PhaseState::Checking => {
                 format!("{head}: {word}.{}", tasks(false))
             }
+        };
+        lines.push((line, Some(phase)));
+    }
+    lines
+}
+
+/// The tasks of `phase` in the run and the segments it continues, in the order they were made.
+fn phase_tasks<'a>(
+    phase: &OvernightPhase,
+    board: &'a Board,
+    segments: &[&OvernightRunId],
+) -> Vec<&'a Task> {
+    let mut tasks: Vec<&Task> = board
+        .tasks
+        .values()
+        .filter(|task| {
+            task.run.as_ref().is_some_and(|context| {
+                context.phase_id.as_deref() == Some(phase.id.as_str())
+                    && segments.contains(&&context.run_id)
+            })
+        })
+        .collect();
+    tasks.sort_by_key(|task| task.number);
+    tasks
+}
+
+/// Under a phase's line: what was verified and how (its verifier's report, else its lead's,
+/// else the criteria an older run's checks recorded), what each review found and what was done
+/// about it, and the lead's own summary. One short line each.
+fn phase_evidence(
+    phase: &OvernightPhase,
+    board: &Board,
+    segments: &[&OvernightRunId],
+) -> Vec<String> {
+    if matches!(phase.state, PhaseState::Pending | PhaseState::Skipped) {
+        return Vec::new();
+    }
+    let tasks = phase_tasks(phase, board, segments);
+    let reported = |task: &&&Task| task.report.is_some();
+    let verifier = tasks
+        .iter()
+        .rev()
+        .filter(reported)
+        .find(|task| task.role == Some(WorkerRole::Verifier));
+    let lead = tasks.iter().rev().filter(reported).find(|task| {
+        task.kind == TaskKind::Implement
+            && matches!(
+                task.role,
+                None | Some(WorkerRole::Lead | WorkerRole::Parallel | WorkerRole::Fix)
+            )
+    });
+    let mut lines = Vec::new();
+    match (verifier, lead) {
+        (Some(task), _) | (None, Some(task)) => {
+            let report = task.report.as_ref().expect("reported");
+            let who = if verifier.is_some() {
+                format!("Verified by task-{}", task.number)
+            } else {
+                format!("No verifier; task-{} checked its own work", task.number)
+            };
+            lines.push(sentence(&format!(
+                "{who}: {}",
+                one_line(report.summary.trim(), EVIDENCE).trim_end_matches('.')
+            )));
+            for line in report.done_when.iter().take(DONE_WHEN) {
+                lines.push(sentence(&one_line(without_marker(line), EVIDENCE)));
+            }
+            if report.done_when.len() > DONE_WHEN {
+                lines.push(format!(
+                    "{} more \u{201c}done when\u{201d} lines in its report.",
+                    report.done_when.len() - DONE_WHEN
+                ));
+            }
+            for line in report.verification.iter().take(HOW) {
+                lines.push(sentence(&format!("How: {}", one_line(line, EVIDENCE))));
+            }
+        }
+        (None, None) if !phase.criteria.is_empty() => {
+            for criterion in &phase.done_when {
+                let line = match phase.criteria.iter().find(|c| c.id == criterion.id) {
+                    Some(result) => {
+                        let evidence = evidence_text(&result.evidence);
+                        let evidence = evidence.strip_prefix("Not checked: ").unwrap_or(evidence);
+                        format!(
+                            "{} {}: {}",
+                            criterion.id,
+                            status_word(result.status),
+                            one_line(evidence, EVIDENCE)
+                        )
+                    }
+                    None => format!("{} not checked", criterion.id),
+                };
+                lines.push(sentence(&line));
+            }
+        }
+        (None, None) => lines.push("Nothing verified it.".into()),
+    }
+    for reviewer in tasks
+        .iter()
+        .filter(|task| task.role == Some(WorkerRole::Reviewer))
+    {
+        let what = if reviewer.title.starts_with("Review the outline") {
+            "Outline review"
+        } else {
+            "Code review"
+        };
+        lines.push(match &reviewer.report {
+            Some(report) if report.open_questions.is_empty() => {
+                format!("{what}: no findings.")
+            }
+            Some(report) => {
+                let mut line = format!(
+                    "{what}: {}: {}",
+                    plural(report.open_questions.len(), "finding", "findings"),
+                    report
+                        .open_questions
+                        .iter()
+                        .take(HOW)
+                        .map(|finding| one_line(finding, DECIDED).trim_end_matches('.').to_owned())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                );
+                if report.open_questions.len() > HOW {
+                    line.push_str(&format!("; {} more", report.open_questions.len() - HOW));
+                }
+                sentence(&line)
+            }
+            None => format!("{what} gave no result."),
         });
+    }
+    // What was done about the review: whoever asked for it fixed what it agreed with and said
+    // so in its report.
+    if let Some(task) = verifier.or(lead)
+        && let Some(report) = &task.report
+        && tasks.iter().any(|t| {
+            t.role == Some(WorkerRole::Reviewer)
+                && t.subject.as_ref() == Some(&task.id)
+                && t.report
+                    .as_ref()
+                    .is_some_and(|r| !r.open_questions.is_empty())
+        })
+    {
+        let answers: Vec<String> = report
+            .decisions
+            .iter()
+            .take(HOW)
+            .map(|line| one_line(line, DECIDED).trim_end_matches('.').to_owned())
+            .collect();
+        lines.push(sentence(&format!(
+            "Done about it: {}",
+            if answers.is_empty() {
+                one_line(report.summary.trim(), DECIDED)
+                    .trim_end_matches('.')
+                    .to_owned()
+            } else {
+                answers.join("; ")
+            }
+        )));
+    }
+    if let Some(summary) = phase.summary.as_deref().filter(|s| !s.trim().is_empty()) {
+        lines.push(sentence(&format!(
+            "Summary: {}",
+            one_line(summary.trim(), EVIDENCE).trim_end_matches('.')
+        )));
     }
     lines
 }
@@ -858,7 +1060,7 @@ fn unverified_why(run: &OvernightRun, phase: &OvernightPhase) -> String {
         && !phase
             .gaps
             .last()
-            .is_some_and(|last| last.starts_with(CUT_OFF))
+            .is_some_and(|last| last.starts_with(CUT_OFF) || last.starts_with(OLD_CUT_OFF))
     {
         return one_line(gap, MISSING).trim_end_matches('.').to_owned();
     }
@@ -868,17 +1070,17 @@ fn unverified_why(run: &OvernightRun, phase: &OvernightPhase) -> String {
         Some(StopReason::StopDirective) => "the run stopped where you asked".into(),
         Some(StopReason::Blocked { .. }) => "the run stopped early".into(),
         _ => phase.gaps.first().map_or_else(
-            || "its checks never passed".into(),
+            || "it wasn't finished".into(),
             |gap| one_line(gap, MISSING).trim_end_matches('.').to_owned(),
         ),
     }
 }
 
-/// What got in the way of the run, from its records, grouped: what the overnight rules
-/// declined, resumes that failed, changes held unverified, checks that couldn't run, work
-/// stopped before it finished, interruptions and lateness. A phase not reached says so on its
-/// own line.
-fn in_the_way(run: &OvernightRun, board: &Board, now: i64) -> Vec<String> {
+/// Problems and risks, from the run's records, grouped: what got in the way (declined
+/// permissions, resumes that failed, changes held unverified, checks that couldn't run, work
+/// stopped before it finished, interruptions and lateness), then the risks each phase's
+/// verifier named.
+fn problems(run: &OvernightRun, board: &Board, now: i64) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for obstacle in &run.obstacles {
         lines.push(format!(
@@ -923,6 +1125,23 @@ fn in_the_way(run: &OvernightRun, board: &Board, now: i64) -> Vec<String> {
                 "The report is {} minutes late (due at {})",
                 (finished - time.at_ms) / 60_000,
                 time.local_time
+            ));
+        }
+    }
+    let segments = chain(run, board);
+    for phase in &run.phases {
+        let risks: Vec<&String> = phase_tasks(phase, board, &segments)
+            .into_iter()
+            .rev()
+            .find(|task| task.role == Some(WorkerRole::Verifier) && task.report.is_some())
+            .and_then(|task| task.report.as_ref())
+            .map(|report| report.risks.iter().take(RISKS).collect())
+            .unwrap_or_default();
+        for risk in risks {
+            lines.push(format!(
+                "Phase {}: {}",
+                phase.number,
+                one_line(without_marker(risk), DECIDED).trim_end_matches('.')
             ));
         }
     }
@@ -1038,49 +1257,15 @@ fn times_in(count: u32, tasks: &[u32]) -> String {
     }
 }
 
-/// The folded part: where the work is, the commits, what was decided, each phase's evidence,
-/// who did the work, the usage and what Brigadier ignored in the user's words.
-fn details(run: &OvernightRun, board: &Board, commits: &[RunCommit], usage: &Usage) -> String {
+/// The folded part: where the work is, who did it on which model, the usage and what Brigadier
+/// ignored in the user's words.
+fn details(run: &OvernightRun, board: &Board, usage: &Usage) -> String {
     let mut text = String::new();
     if let Some(workspace) = &run.workspace {
         text.push_str(&format!(
             "Branch `{}` from `{}`. Worktree and handoffs: `{}`.\n",
             workspace.branch, workspace.base, workspace.path
         ));
-    }
-    if !commits.is_empty() {
-        text.push_str("\nCommits:\n");
-        let mut verified = false;
-        for commit in commits {
-            if Some(&commit.commit) == run.verified_commit.as_ref() {
-                verified = true;
-            }
-            text.push_str(&format!(
-                "- `{}` {}{}\n",
-                short(&commit.commit),
-                commit.subject,
-                if verified { "" } else { " (unverified)" }
-            ));
-        }
-        if commits.len() == COMMITS {
-            text.push_str("Only the latest 60 are listed; the branch has them all.\n");
-        }
-    }
-    let decided = decision_lines(run, board);
-    if !decided.is_empty() {
-        text.push_str("\nDecided for you:\n");
-        for line in decided {
-            text.push_str(&format!("- {line}\n"));
-        }
-    }
-    for phase in &run.phases {
-        if matches!(phase.state, PhaseState::Pending | PhaseState::Skipped) {
-            continue;
-        }
-        text.push_str(&format!("\nPhase {} · {}:\n", phase.number, phase.name));
-        for line in evidence_lines(phase, board) {
-            text.push_str(&format!("- {line}\n"));
-        }
     }
     let workers = worker_lines(run, board);
     if !workers.is_empty() {
@@ -1098,84 +1283,6 @@ fn details(run: &OvernightRun, board: &Board, commits: &[RunCommit], usage: &Usa
         ));
     }
     text
-}
-
-/// Each criterion with its status, who checked it and its evidence; the whole-phase checks;
-/// their findings and the lead's answers. One short line each.
-fn evidence_lines(phase: &OvernightPhase, board: &Board) -> Vec<String> {
-    let mut lines = Vec::new();
-    for criterion in &phase.done_when {
-        let result = phase.criteria.iter().find(|c| c.id == criterion.id);
-        let line = match result {
-            Some(result) => {
-                let by = result
-                    .by
-                    .as_ref()
-                    .and_then(|id| board.tasks.get(id))
-                    .map(|task| format!(", checked by task-{}", task.number))
-                    .unwrap_or_default();
-                let evidence = evidence_text(&result.evidence);
-                let evidence = evidence.strip_prefix("Not checked: ").unwrap_or(evidence);
-                format!(
-                    "{} {}{by}: {}",
-                    criterion.id,
-                    status_word(result.status),
-                    one_line(evidence, EVIDENCE)
-                )
-            }
-            None => format!("{} not checked", criterion.id),
-        };
-        lines.push(sentence(&line));
-    }
-    match &phase.gate {
-        Some(gate) => {
-            let on = gate
-                .commit
-                .as_deref()
-                .map(|commit| format!(" on `{}`", short(commit)))
-                .unwrap_or_default();
-            let fixes = match phase.fix_rounds {
-                0 => String::new(),
-                n => format!(", after {}", plural(n as usize, "fix round", "fix rounds")),
-            };
-            lines.push(match gate.outcome {
-                Some(GateOutcome::Passed) => {
-                    format!(
-                        "Whole-phase checks passed in round {}{on}{fixes}.",
-                        gate.round
-                    )
-                }
-                Some(_) => format!(
-                    "Whole-phase checks found gaps in round {}{on}{fixes}.",
-                    gate.round
-                ),
-                None => format!(
-                    "Whole-phase checks didn't finish round {}{on}{fixes}.",
-                    gate.round
-                ),
-            });
-            if gate.outcome != Some(GateOutcome::Passed) {
-                for finding in &gate.findings {
-                    lines.push(sentence(&format!(
-                        "Finding {}: {}",
-                        finding.id,
-                        one_line(&finding.text, DECIDED)
-                    )));
-                }
-            }
-        }
-        None if phase.state == PhaseState::Partial => {
-            lines.push("Whole-phase checks never ran.".into());
-        }
-        None => {}
-    }
-    for response in &phase.responses {
-        lines.push(sentence(&format!(
-            "Lead's answer: {}",
-            one_line(response, DECIDED)
-        )));
-    }
-    lines
 }
 
 fn status_word(status: CriterionStatus) -> &'static str {
@@ -1286,47 +1393,94 @@ fn without_titles(line: &str) -> String {
     out
 }
 
-/// Whether a task of a role and kind is in a group of who worked.
-type Belongs = fn(RunRole, TaskKind) -> bool;
-
-/// Who did the work: per kind of work, how many and on which models.
+/// Who did the work (the worker lineage), one line per phase: its leads and verifiers by name
+/// and model, in the order they started, then its reviews, scouts and judges counted by model.
 fn worker_lines(run: &OvernightRun, board: &Board) -> Vec<String> {
-    let groups: [(&str, Belongs); 8] = [
-        ("Workers", |role, kind| {
-            role == RunRole::Worker && kind.writes()
-        }),
-        ("Scouts and research", |role, kind| {
-            role == RunRole::Worker && matches!(kind, TaskKind::Scout | TaskKind::Research)
-        }),
-        ("Plan reviews", |role, kind| {
-            role == RunRole::Worker && kind == TaskKind::Review
-        }),
-        ("Task reviews", |role, kind| {
-            role == RunRole::Check && kind == TaskKind::Review
-        }),
-        ("Task verifications", |role, kind| {
-            (role == RunRole::Check || role == RunRole::Worker) && kind == TaskKind::Verify
-        }),
-        ("Phase verifiers", |role, _| role == RunRole::PhaseVerifier),
-        ("Phase reviewers", |role, _| role == RunRole::PhaseReviewer),
-        ("Judges", |role, _| role == RunRole::Judge),
-    ];
-    let mut tasks: Vec<(&Task, RunRole)> = run_tasks(run, board)
-        .filter_map(|task| task.run.as_ref().map(|context| (task, context.role)))
-        .collect();
-    tasks.sort_by_key(|(task, _)| task.number);
-    groups
-        .iter()
-        .filter_map(|(label, belongs)| {
-            let members: Vec<&Task> = tasks
+    let tasks: Vec<&Task> = run_tasks(run, board).collect();
+    let mut phases: Vec<(String, Option<&str>)> = Vec::new();
+    if run.planning.is_some() {
+        phases.push(("Phase 0".into(), Some(super::policy::PLANNING_PHASE)));
+    }
+    for phase in &run.phases {
+        phases.push((format!("Phase {}", phase.number), Some(phase.id.as_str())));
+    }
+    phases.push(("Outside a phase".into(), None));
+    let mut lines = Vec::new();
+    for (label, id) in phases {
+        let of: Vec<&Task> = tasks
+            .iter()
+            .copied()
+            .filter(|task| task.run.as_ref().and_then(|c| c.phase_id.as_deref()) == id)
+            .collect();
+        if of.is_empty() {
+            continue;
+        }
+        let role = |task: &Task| match (task.role, task.run.as_ref().map(|c| c.role)) {
+            (Some(WorkerRole::Verifier), _) | (_, Some(RunRole::PhaseVerifier)) => "verifier",
+            (Some(WorkerRole::Reviewer), _) | (_, Some(RunRole::PhaseReviewer)) => "review",
+            (_, Some(RunRole::Judge)) => "judge",
+            _ => match task.kind {
+                TaskKind::Implement | TaskKind::Merge => "lead",
+                TaskKind::Scout | TaskKind::Research => "scout",
+                TaskKind::Review => "review",
+                TaskKind::Verify => "verifier",
+            },
+        };
+        let named = |task: &Task| {
+            format!(
+                "task-{} ({} {})",
+                task.number,
+                provider_name(task.route.choice.provider),
+                task.route.choice.model.as_deref().unwrap_or("default")
+            )
+        };
+        let mut parts = Vec::new();
+        for (kind, many) in [("lead", "leads"), ("verifier", "verified by")] {
+            let members: Vec<String> = of
                 .iter()
-                .filter(|(task, role)| belongs(*role, task.kind))
-                .map(|(task, _)| *task)
+                .filter(|task| role(task) == kind)
+                .map(|task| named(task))
                 .collect();
-            (!members.is_empty())
-                .then(|| format!("{label}: {}, {}.", members.len(), models(&members)))
-        })
-        .collect()
+            // An old run checked every task on its own: those many verifiers are counted.
+            if kind == "verifier" && members.len() > 3 {
+                let many: Vec<&Task> = of
+                    .iter()
+                    .copied()
+                    .filter(|task| role(task) == kind)
+                    .collect();
+                parts.push(format!("{} verifiers ({})", many.len(), models(&many)));
+                continue;
+            }
+            if !members.is_empty() {
+                let word = if kind == "lead" && members.len() == 1 {
+                    "lead"
+                } else {
+                    many
+                };
+                parts.push(format!("{word} {}", members.join(", ")));
+            }
+        }
+        for (kind, one, many) in [
+            ("review", "review", "reviews"),
+            ("scout", "scout", "scouts"),
+            ("judge", "judge", "judges"),
+        ] {
+            let members: Vec<&Task> = of
+                .iter()
+                .copied()
+                .filter(|task| role(task) == kind)
+                .collect();
+            if !members.is_empty() {
+                parts.push(format!(
+                    "{} ({})",
+                    plural(members.len(), one, many),
+                    models(&members)
+                ));
+            }
+        }
+        lines.push(sentence(&format!("{label}: {}", parts.join("; "))));
+    }
+    lines
 }
 
 /// "Claude opus", or "Codex gpt-6-astra 10, gpt-6.1-sol 6": the models, most used first.
@@ -1348,7 +1502,9 @@ fn models(tasks: &[&Task]) -> String {
             None => counted.push((provider, model, 1)),
         }
     }
-    let first = counted_first(tasks);
+    let first = tasks
+        .first()
+        .map_or(ProviderKind::Claude, |task| task.route.choice.provider);
     counted.sort_by_key(|(provider, _, count)| (*provider != first, std::cmp::Reverse(*count)));
     if let [(provider, model, _)] = counted.as_slice() {
         return format!("{} {model}", provider_name(*provider));
@@ -1364,13 +1520,6 @@ fn models(tasks: &[&Task]) -> String {
         last = Some(provider);
     }
     parts.join(", ")
-}
-
-/// The provider of the first of `tasks`, whose models are listed first.
-fn counted_first(tasks: &[&Task]) -> ProviderKind {
-    tasks
-        .first()
-        .map_or(ProviderKind::Claude, |task| task.route.choice.provider)
 }
 
 /// A provider in one word.
@@ -1441,6 +1590,27 @@ fn human_count(count: u64) -> String {
         1_000_000..1_000_000_000 => scaled(1e6, "M"),
         _ => scaled(1e9, "B"),
     }
+}
+
+/// A line without its list marker: "- ", "* ", "• ", "2. " or "2) ".
+fn without_marker(line: &str) -> &str {
+    let line = line.trim_start_matches(['-', '*', '•', ' ', '\t']);
+    let number = line.trim_start_matches(|c: char| c.is_ascii_digit());
+    match number.strip_prefix(['.', ')']) {
+        Some(rest) if number.len() < line.len() => rest.trim_start(),
+        _ => line,
+    }
+}
+
+/// The evidence a "[met] criterion: evidence" line gives after its criterion, if any.
+fn criterion_evidence(line: &str) -> Option<&str> {
+    let line = without_marker(line);
+    let text = line.find(']').map_or(line, |end| line[end + 1..].trim());
+    let at = [": ", " — ", " – ", " - ", " -> ", " => "]
+        .iter()
+        .filter_map(|separator| text.find(separator).map(|at| at + separator.len()))
+        .min()?;
+    Some(text[at..].trim()).filter(|evidence| evidence.chars().any(char::is_alphanumeric))
 }
 
 /// A checker's "[met] p1-c1: evidence" line without its status and id, which the report
@@ -1571,15 +1741,35 @@ Merge takes phase 1 (`1dcda64`). 2 later commits stay unverified on the branch.
 
 1 thing waits on you.
 
+### Phases
 - ✓ Phase 1 · Measure: verified. 1 task landed.
+  - p1-c1 met: docs/evidence/2026-10-03-overnight-ab-breakdown.md has the per-role table (lines 17-32) and the token split. It has \"Top causes, by minutes lost\" w…
+  - Summary: Commit 1dcda643eb adds docs/evidence/2026-10-03-overnight-ab-breakdown.md and links it from docs/evidence/2026-10-02-overnight-phase3.md. The note breaks down …
 - ◐ Phase 2 · Fix: partial, you stopped the run. 2 tasks landed, 1 didn't.
+  - p2-c1 not checked: you stopped the run.
 - Phase 3 · Re-measure: not reached.
 
-Waiting on you:
+### Commits
+- `d1453e7` Read 'path: description' report entries as the path when landing (unverified)
+- `bdd536d` Start the quota forecast penalty at 100% for check work (unverified)
+- `1dcda64` docs: break down the overnight A/B run by role
+
+### Decided for you
+- Didn't land “Break down the overnight A/B time and…”: problems left after 1 fix round.
+- Sent “Fix the A/B breakdown note after review” back after review (fix 1 of 2).
+- Didn't land “Fix the A/B breakdown note after review”: problems left after 2 fix rounds.
+- Sent the plan “Phase 2 · Fix the three ranked causes from the A/B breakdown” back after review.
+- Approved the plan “Phase 2 · Fix the three ranked causes from the A/B breakdown”.
+- Sent “Landing: read 'path: description'…” back after review (fix 1 of 2).
+- Sent “Gate members take run slots in a fixed…” back after review (fix 1 of 2).
+- Rejected cause 3 (gate members take run slots in priority order) instead of retrying it tonight; “Gate members take run slots in a fixed…” did not land.
+- Landed “Findings note: record what phase 2…” on `brigadier/4158464b/session`.
+
+### Waiting on you
 - Bring the phase 2 note commit daf8ac1f4b from brigadier/4158464b/session onto overnight/2026-10-03-faster-leaner-overnight-runs-09cc7d53. It adds the whole note, so on the run branch keep its version of docs/evidence/2026-10-03-overnight-ab-breakdown.md; that version only appends a section.
 Then say “continue” to pick the run up on the same branch.
 
-Got in the way:
+### Problems and risks
 - Held because their change couldn't be verified: “Make cause 1's fix in the A/B note obey…”, “Router: quota forecast penalty starts…”.
 - Not run: Full app smoke and Desktop --smoke (2 tasks).
 - Already failing before the run: Provider doctests and Dependency installation (2 tasks).
@@ -1594,21 +1784,9 @@ Got in the way:
             "Merge takes phase 1 (`1dcda64`). 2 later commits stay unverified on the branch."
         );
         for line in [
-            "- `d1453e7` Read 'path: description' report entries as the path when landing (unverified)\n",
-            "- `bdd536d` Start the quota forecast penalty at 100% for check work (unverified)\n",
-            "- `1dcda64` docs: break down the overnight A/B run by role\n",
-            "- Didn't land “Break down the overnight A/B time and…”: problems left after 1 fix round.\n",
-            "- Sent “Fix the A/B breakdown note after review” back after review (fix 1 of 2).\n",
-            "- Sent the plan “Phase 2 · Fix the three ranked causes from the A/B breakdown” back after review.\n",
-            "- Landed “Findings note: record what phase 2…” on `brigadier/4158464b/session`.\n",
-            "- Rejected cause 3 (gate members take run slots in priority order) instead of retrying it tonight; “Gate members take run slots in a fixed…” did not land.\n",
-            "- p1-c1 met, checked by “Judge phase 1”: docs/evidence/2026-10-03-overnight-ab-breakdown.md has the per-role table",
-            "- Whole-phase checks passed in round 1 on `1dcda64`.\n",
-            "- p2-c1 not checked: you stopped the run.\n",
-            "- Workers: 6, Claude opus.\n",
-            "- Task reviews: 16, Codex gpt-6-astra 10, gpt-6.1-sol 6.\n",
-            "- Task verifications: 13, Codex gpt-6.1-sol 10, gpt-6-sol 3.\n",
-            "- Judges: 1, Claude opus.\n",
+            "Branch `overnight/2026-10-03-faster-leaner-overnight-runs-09cc7d53` from `main`.",
+            "- Phase 1: leads “Break down the overnight A/B time and…” (Claude opus), ",
+            "; 8 verifiers (Codex gpt-6.1-sol 5, gpt-6-sol 2, Claude sonnet 1); 11 reviews (Codex gpt-6-astra 6, gpt-6.1-sol 5); 1 judge (Claude opus).\n",
             "Usage: Claude 26.6M · Codex 55.7M tokens.\n",
         ] {
             assert!(details.contains(line), "{line}\n{details}");
@@ -1625,7 +1803,12 @@ Got in the way:
         }
         // Workers by the names the app shows them by, never "task-N" (branches keep theirs).
         assert_no_task_numbers(&text);
-        assert!(shown.lines().count() <= 20, "{shown}");
+        // The outcome, the phases and what waits on you come before the long lists.
+        let waiting = shown.find("### Waiting on you").expect("waiting");
+        assert!(
+            shown[..waiting].find("### Phases") < Some(waiting),
+            "{shown}"
+        );
     }
 
     /// No "task-N" outside a branch or path name.
@@ -1760,6 +1943,7 @@ Got in the way:
         let cut_off = |run: &OvernightRun| {
             phase_lines(run, &board)
                 .into_iter()
+                .map(|(line, _)| line)
                 .find(|line| line.contains("Phase 2"))
                 .expect("phase 2's line")
         };
@@ -1799,7 +1983,7 @@ Got in the way:
     }
 
     #[test]
-    fn the_report_says_what_got_in_the_way_and_folds_the_details() {
+    fn the_report_lists_problems_and_folds_the_details() {
         let mut phases = vec![
             OvernightPhase::new(1, "Measure", "", &["It is measured.".into()], &[]),
             OvernightPhase::new(2, "Re-measure", "", &["Again.".into()], &[]),
@@ -1823,11 +2007,13 @@ Got in the way:
             "{text}"
         );
         assert!(
-            shown.contains("\nGot in the way: `git push` was declined by the overnight rules: it acts outside this machine (3 times, task-3, task-5).\n"),
+            shown.contains("\n### Problems and risks\n- `git push` was declined by the overnight rules: it acts outside this machine (3 times, task-3, task-5).\n"),
             "{text}"
         );
         assert!(!shown.contains("Not reached"), "{text}");
-        assert!(details.contains("- p1-c1 not checked.\n"), "{text}");
+        // Verified with nothing on record behind it: the report says so rather than a criterion.
+        assert!(shown.contains("  - Nothing verified it.\n"), "{text}");
+        assert!(details.contains("Usage: "), "{text}");
         assert!(
             shown.starts_with("**Speed**: stopped at the deadline at "),
             "{text}"

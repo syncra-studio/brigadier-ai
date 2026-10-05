@@ -437,19 +437,32 @@ pub struct NoteForUser {
     pub why: Option<String>,
 }
 
-/// `phase_done`: the lead of an overnight phase says its work is done (or as done as it can
-/// get without the user), so Brigadier checks the whole phase.
+/// `phase_done`: the lead of an overnight phase settles it once its work has landed (or as
+/// much of it as can without the user), judging its verifier's report.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PhaseDone {
-    /// What the phase changed and how it was verified, in a few sentences, and anything left
-    /// for the user.
+    pub outcome: PhaseOutcome,
+    /// What the phase changed, how its verifier checked it and what the review found and what
+    /// was done about it, in a few sentences.
     pub summary: String,
-    /// After the phase's checks found gaps: one line per finding, "F1 fixed: how" or "F2
-    /// declined: why".
+    /// For a partial or blocked phase: what is left, one line each (for blocked, exactly what
+    /// only the user can do).
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "String", extend("default" = ""))]
-    pub responses: Vec<String>,
+    pub left: Vec<String>,
+}
+
+/// How an overnight phase ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum PhaseOutcome {
+    /// Every "done when" is met and its work has landed.
+    Done,
+    /// Some of it is done; the rest is left for a later run.
+    Partial,
+    /// What is left needs the user.
+    Blocked,
 }
 
 /// One phase of a plan Phase 0 writes.
@@ -477,13 +490,6 @@ pub struct ProposePhases {
     /// The plan's name, a few words ("Windows support").
     pub name: String,
     pub phases: Vec<PhaseInput>,
-    /// The id of the plan this one revises after its review asked for changes.
-    #[serde(default)]
-    pub revises: Option<String>,
-    /// With `revises`: one line per finding of that review, "F1 accepted: what changed" or
-    /// "F2 declined: why".
-    #[serde(default)]
-    pub responses: Vec<String>,
 }
 
 /// `propose_overnight`: interpret a user's unstarted proposal; it cannot Start a run.

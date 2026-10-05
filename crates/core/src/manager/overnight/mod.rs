@@ -10,7 +10,6 @@ pub(crate) mod admission;
 mod conductor;
 pub mod directives;
 mod messages;
-mod phase_gates;
 pub(crate) mod policy;
 mod recovery;
 mod report;

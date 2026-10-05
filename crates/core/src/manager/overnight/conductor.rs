@@ -1,10 +1,11 @@
-//! The conductor (PLAN.md §10.6): it takes a started run through its phases. Each phase gets
-//! a fresh lead, the session's orchestrator started over from the phase's own briefing (its
-//! scope, criteria, the user's Rules and words, what earlier phases verified) without the
-//! conversation's recent messages. The lead plans and delegates as usual and says when the
-//! phase's work is done (`phase_done`); that is a proposal, not the end: the whole phase is
-//! then checked ([`super::phase_gates`]) and only its judge's verdict, backed by evidence,
-//! settles it.
+//! The conductor (PLAN.md §10.6): it takes a started run through its phases, each the way a
+//! request's phase goes. Each phase gets a fresh lead, the session's orchestrator started over
+//! from the phase's own briefing (its scope, criteria, the user's Rules and words, what earlier
+//! phases settled) without the conversation's recent messages. It briefs one worker lead, which
+//! may outline first (one advisory review); the lead builds and reports, a fresh verifier
+//! checks every "done when" with one review from the other vendor and fixes what fails, and
+//! `land_phase` lands the work on the run branch. The orchestrator then settles the phase
+//! (`phase_done`): done, partial or blocked, judged from the verifier's report.
 //!
 //! The conductor decides in code what comes next: the next selected phase whose dependencies
 //! are verified, a clean ending when the plan is done, a stop directive was reached or a later
@@ -23,15 +24,19 @@ use crate::overnight::{
     Deadline, OvernightPhase, OvernightRun, OvernightState, PhaseState, PlanningPhase, StopAfter,
     StopReason,
 };
-use crate::tools::{PhaseDone, ProposePhases};
-use crate::work::{InjectionKind, PlanState, RequestState, TaskState, UserRequest};
+use crate::tools::{PhaseDone, PhaseOutcome, ProposePhases};
+use crate::work::{InjectionKind, RequestState, TaskState, UserRequest};
 use crate::{Error, Result, now_ms};
 
 /// How long a phase waits for the orchestrator's turn (the user's own question, say) to end
 /// before it takes over the orchestrator, per try.
 const LEAD_WAIT: Duration = Duration::from_secs(10 * 60);
 /// How long a lead's turn may end with the phase still open before it is reminded.
-const NUDGE_GRACE: Duration = Duration::from_secs(60);
+const NUDGE_GRACE: Duration = if cfg!(test) {
+    Duration::from_secs(2)
+} else {
+    Duration::from_secs(60)
+};
 /// Reminders a lead gets to finish or hand over its phase; after them its phase is checked
 /// as it is.
 const NUDGES: u32 = 2;
@@ -108,8 +113,6 @@ impl SessionManager {
                         state: PhaseState::Running,
                         plan_id: None,
                         proposed: Vec::new(),
-                        judge: None,
-                        rounds: 0,
                         gaps: Vec::new(),
                         lead: None,
                         nudges: 0,
@@ -268,7 +271,7 @@ impl SessionManager {
         };
         let briefing = self.phase_brief(&run, &phase).await;
         let kickoff = format!(
-            "[overnight · phase {n}] Lead phase {n} (\u{201c}{name}\u{201d}) now, as your briefing describes. Give it one lead (delegate_task, kind implement) with a complete brief that names the criteria ids it serves; a lead of big work sends an outline for your go-ahead (approve_outline), and land good reports with land_phase. When every task of the phase has landed or ended, call phase_done. Don't write to the user: reply with exactly {quiet} unless the phase is done.",
+            "[overnight · phase {n}] Lead phase {n} (\u{201c}{name}\u{201d}) now, as your briefing describes. Give it one lead (delegate_task, kind implement) with a complete brief: the scope, every \"done when\" with its id, and code pointers. A lead of big work sends an outline for your go-ahead (approve_outline). When the lead reports, Brigadier starts the phase's verifier; land the phase with land_phase on the verifier once it reports. Then settle the phase with phase_done (done, partial or blocked), judging the verifier's report. Don't write to the user: reply with exactly {quiet}.",
             n = phase.number,
             name = phase.name,
             quiet = super::super::prompts::QUIET,
@@ -483,9 +486,7 @@ impl SessionManager {
             "This phase's scope, exactly as the plan says:\n{}\n\n",
             phase.scope
         ));
-        text.push_str(
-            "Done when (each criterion is checked independently, by its id, on the whole phase):\n",
-        );
+        text.push_str("Done when (the phase's verifier checks each, by its id, for real):\n");
         for criterion in &phase.done_when {
             text.push_str(&format!("- {}: {}\n", criterion.id, criterion.text));
         }
@@ -622,21 +623,9 @@ impl SessionManager {
         lines.join("\n")
     }
 
-    /// `phase_done`: the lead says its phase's work is done. Refused while any of it still
-    /// runs or waits; otherwise the run branch's tip is frozen as the phase's candidate and
-    /// the whole phase is checked.
+    /// `phase_done`: the lead settles its phase, judging the verifier's report. Refused while
+    /// any of the phase's work still runs or waits to land.
     pub(crate) async fn phase_done(&self, id: &ConversationId, args: PhaseDone) -> Result<String> {
-        self.phase_done_as(id, args, false).await
-    }
-
-    /// [`Self::phase_done`]; `force`: the lead stopped answering, so the phase is checked as it
-    /// is even with work of it still open (what lands later opens a new round).
-    async fn phase_done_as(
-        &self,
-        id: &ConversationId,
-        args: PhaseDone,
-        force: bool,
-    ) -> Result<String> {
         let active = self.overnight.active.get(id).ok_or_else(|| {
             Error::Invalid(
                 "No overnight run is going in this session: phase_done is only for leading one of its phases.".into(),
@@ -661,55 +650,171 @@ impl SessionManager {
             .cloned()
             .ok_or_else(|| {
                 Error::Invalid(
-                    "No phase is being led now: its checks already run, or the run is ending. Reply with exactly [quiet].".into(),
+                    "No phase is being led now: the run is ending. Reply with exactly [quiet]."
+                        .into(),
                 )
             })?;
         let open = unsettled(&board, &run, &phase);
-        if !open.is_empty() && !force {
+        if !open.is_empty() {
             return Err(Error::Invalid(format!(
-                "Phase {} still has work going: {}. Wait for it, land what reported well (land_phase) or stop what is no longer needed, then call phase_done again.",
+                "Phase {} still has work going: {}. Wait for it, land the verifier's work (land_phase) or stop what is no longer needed, then call phase_done again.",
                 phase.number,
                 open.join(", ")
             )));
         }
-        if let Some(gate) = &phase.gate
-            && !gate.findings.is_empty()
-            && phase.fix_rounds > 0
-            && !force
-        {
-            super::phase_gates::parse_responses(&args.responses, &gate.findings)
-                .map_err(Error::Invalid)?;
-        }
-        let candidate = self.run_tip(&run).await?;
         let summary = args.summary.trim().to_owned();
-        let responses = args.responses.clone();
-        let Some(run) = self
-            .change_run_if(&run, |now| {
-                let phase = now.phases.iter_mut().find(|p| p.id == phase.id)?;
-                if phase.state != PhaseState::Running {
-                    return None;
-                }
-                phase.state = PhaseState::Checking;
-                phase.summary = Some(summary.clone());
-                phase.responses = responses.clone();
-                now.state = OvernightState::PhaseGate;
-                Some(())
-            })
+        if summary.is_empty() {
+            return Err(Error::Invalid(
+                "Say in `summary` what the phase changed, how its verifier checked it and what the review found.".into(),
+            ));
+        }
+        let left: Vec<String> = args
+            .left
+            .iter()
+            .map(|line| line.trim().to_owned())
+            .filter(|line| !line.is_empty())
+            .collect();
+        let state = match args.outcome {
+            PhaseOutcome::Done => PhaseState::Verified,
+            PhaseOutcome::Partial => PhaseState::Partial,
+            PhaseOutcome::Blocked => PhaseState::Blocked,
+        };
+        if state != PhaseState::Verified && left.is_empty() {
+            return Err(Error::Invalid(
+                "Say in `left` what is left of the phase, one line each.".into(),
+            ));
+        }
+        let tip = self.run_tip(&run).await?;
+        if self
+            .settle_phase(&run, &phase.id, state, Some(summary), left, Some(tip))
             .await
-        else {
+            .is_none()
+        {
             return Err(Error::Invalid(
                 "The run moved on meanwhile; nothing changed. Reply with exactly [quiet].".into(),
             ));
-        };
-        let (manager, phase_id) = (self.arc(), phase.id.clone());
-        self.spawn(async move {
-            manager.open_phase_gate(&run, &phase_id, candidate).await;
-        });
+        }
         Ok(format!(
-            "Brigadier now checks phase {} as a whole: a fresh verifier runs every criterion, a reviewer from another vendor reads the whole diff, and a fresh judge decides from their evidence. The outcome arrives as a message. Reply with exactly {} now.",
+            "Settled phase {} as {}. Brigadier starts the next phase or ends the run itself. Reply with exactly {} now.",
             phase.number,
+            match state {
+                PhaseState::Verified => "done",
+                PhaseState::Blocked => "blocked",
+                _ => "partial",
+            },
             super::super::prompts::QUIET
         ))
+    }
+
+    /// Settles a running phase as `state` (the run branch at `tip` for one done), records the
+    /// outcome under "Decided for you" and what a blocked phase needs under "Waiting on you",
+    /// and moves the run on. `None` when the run or the phase moved on meanwhile.
+    async fn settle_phase(
+        &self,
+        run: &OvernightRun,
+        phase_id: &str,
+        state: PhaseState,
+        summary: Option<String>,
+        gaps: Vec<String>,
+        tip: Option<String>,
+    ) -> Option<OvernightRun> {
+        let now = self
+            .change_run_if(run, |now| {
+                // The merge point moves only while everything before it is verified.
+                let all_verified = now
+                    .phases
+                    .iter()
+                    .filter(|p| p.id != phase_id && p.start_commit.is_some())
+                    .all(|p| p.state == PhaseState::Verified);
+                let phase = now.phases.iter_mut().find(|p| p.id == phase_id)?;
+                if phase.state != PhaseState::Running {
+                    return None;
+                }
+                phase.state = state;
+                phase.summary.clone_from(&summary);
+                phase.gaps.clone_from(&gaps);
+                phase.settled_at_ms = Some(now_ms());
+                if state == PhaseState::Verified {
+                    phase.verified_commit.clone_from(&tip);
+                    if all_verified {
+                        now.verified_commit.clone_from(&tip);
+                    }
+                }
+                Some(())
+            })
+            .await?;
+        let phase = now.phase(phase_id)?.clone();
+        if state == PhaseState::Blocked {
+            for gap in &gaps {
+                self.run_waits(
+                    &now,
+                    phase.request_id.clone(),
+                    None,
+                    &format!("Phase {}: {gap}", phase.number),
+                )
+                .await;
+            }
+        }
+        let (what, why) = match state {
+            PhaseState::Verified => (
+                format!(
+                    "Verified phase {} \u{201c}{}\u{201d}",
+                    phase.number, phase.name
+                ),
+                "Its verifier checked every \"done when\" and its work landed.".to_owned(),
+            ),
+            _ => (
+                format!(
+                    "Settled phase {} \u{201c}{}\u{201d} as {}",
+                    phase.number,
+                    phase.name,
+                    if state == PhaseState::Blocked {
+                        "blocked"
+                    } else {
+                        "partial"
+                    }
+                ),
+                gaps.first().map_or_else(
+                    || "Part of it is left.".to_owned(),
+                    |gap| format!("Left: {gap}"),
+                ),
+            ),
+        };
+        self.phase_outcome_decided(&now, phase_id, phase.request_id.clone(), what, why)
+            .await;
+        if state == PhaseState::Verified {
+            self.phase_verified_waiting(&now.conversation_id, &now.id, phase.number)
+                .await;
+        }
+        self.advance_soon(&now.conversation_id, &now.id);
+        Some(now)
+    }
+
+    /// The lead stopped answering with its phase open: the phase settles as partial, and what
+    /// of it still runs stops (its work is kept with its task).
+    async fn settle_unanswered(&self, run: &OvernightRun, phase: &OvernightPhase, board: &Board) {
+        let open: Vec<_> = board
+            .tasks
+            .values()
+            .filter(|task| of_phase(task, run, phase) && !task.state.is_final())
+            .map(|task| task.id.clone())
+            .collect();
+        for task in open {
+            if let Err(err) = Box::pin(self.stop_task(task.clone())).await {
+                tracing::warn!(task = %task, error = %err, "could not stop a task of an unsettled phase");
+            }
+            self.release_run_task(&task);
+        }
+        let tip = self.run_tip(run).await.ok();
+        self.settle_phase(
+            run,
+            &phase.id,
+            PhaseState::Partial,
+            None,
+            vec!["Its lead stopped before it settled the phase.".into()],
+            tip,
+        )
+        .await;
     }
 
     /// `propose_phases`: Phase 0's plan, judged against the goal.
@@ -776,65 +881,110 @@ impl SessionManager {
             })
             .collect();
         let board = self.core.board(id).await?;
-        if let Some(run) = board.runs.get(&active.id) {
-            let name = args.name.trim().to_owned();
-            self.change_run_if(run, |now| {
-                let planning = now.planning.as_mut()?;
-                planning.plan_id = plan_id.clone();
-                planning.proposed = proposed.clone();
-                planning.state = PhaseState::Checking;
-                if !name.is_empty() {
-                    now.name = name.clone();
+        let run = board
+            .runs
+            .get(&active.id)
+            .cloned()
+            .ok_or_else(|| Error::NotFound(format!("overnight run {}", active.id)))?;
+        if self
+            .adopt_plan(&run, args.name.trim(), proposed, plan_id)
+            .await
+            .is_none()
+        {
+            return Err(Error::Invalid(
+                "The run moved on meanwhile; nothing changed. Reply with exactly [quiet].".into(),
+            ));
+        }
+        Ok(format!(
+            "Recorded the plan. Phase 1 starts now, with a fresh briefing. Reply with exactly {}.",
+            super::super::prompts::QUIET
+        ))
+    }
+
+    /// Phase 0's phases become the run's plan, and the run goes on with its first phase.
+    async fn adopt_plan(
+        &self,
+        run: &OvernightRun,
+        name: &str,
+        proposed: Vec<crate::overnight::ProposedPhase>,
+        plan_id: Option<crate::model::CardId>,
+    ) -> Option<OvernightRun> {
+        let phases: Vec<OvernightPhase> = proposed
+            .iter()
+            .enumerate()
+            .map(|(index, phase)| {
+                OvernightPhase::new(
+                    phase.number.unwrap_or(index as u32 + 1),
+                    &phase.name,
+                    &phase.scope,
+                    &phase.done_when,
+                    &phase.depends_on,
+                )
+            })
+            .collect();
+        let now = self
+            .change_run_if(run, |now| {
+                if now.state != OvernightState::Planning {
+                    return None;
                 }
+                let planning = now.planning.as_mut()?;
+                if plan_id.is_some() {
+                    planning.plan_id.clone_from(&plan_id);
+                }
+                planning.proposed.clone_from(&proposed);
+                planning.state = PhaseState::Verified;
+                planning.settled_at_ms = Some(now_ms());
+                if !name.is_empty() {
+                    now.name = name.to_owned();
+                }
+                now.phases = phases.clone();
+                let chosen = now.directives.clone();
+                for phase in &mut now.phases {
+                    if !super::selects(&chosen, phase.number) {
+                        phase.state = PhaseState::Skipped;
+                    }
+                }
+                now.state = OvernightState::Running;
                 Some(())
             })
-            .await;
-        }
-        // A judge checks the phases against the goal before any starts.
-        self.planning_plan_decided(&plan).await;
-        Ok("Recorded the phases. A judge checks them against the goal before any phase starts; the outcome arrives as a message.".into())
+            .await?;
+        self.run_decided(
+            &now,
+            Some(PLANNING_PHASE),
+            Some(planning_request(&now)),
+            format!(
+                "Planned \u{201c}{}\u{201d} in {}",
+                now.name,
+                plural_phases(now.phases.len())
+            ),
+            "Phase 0 read the goal and the code; the phases follow the goal.".into(),
+        )
+        .await;
+        self.advance_soon(&now.conversation_id, &now.id);
+        Some(now)
     }
 
-    /// Phase 0's plan was recorded: a judge checks its phases against the goal.
-    /// Boxed with a named type: it starts a judge, a task whose result comes back through
-    /// the gates.
-    pub(crate) fn planning_plan_decided<'a>(
-        &'a self,
-        plan: &'a crate::work::Plan,
-    ) -> brigadier_providers::BoxFuture<'a, ()> {
-        Box::pin(self.planning_plan_reviewed(plan))
-    }
-
-    async fn planning_plan_reviewed(&self, plan: &crate::work::Plan) {
-        let Some(active) = self.overnight.active.get(&plan.conversation_id) else {
+    /// An older run caught while Phase 0's plan was being judged: the plan it proposed is the
+    /// run's plan now (or, with none, Phase 0 goes on).
+    pub(crate) async fn resume_judged_plan(&self, run: &OvernightRun) {
+        let Some(planning) = run.planning.clone() else {
             return;
         };
-        let Ok(board) = self.core.board(&plan.conversation_id).await else {
-            return;
-        };
-        let Some(run) = board.runs.get(&active.id).cloned() else {
-            return;
-        };
-        let Some(planning) = &run.planning else {
-            return;
-        };
-        if planning.plan_id.as_ref() != Some(&plan.id) || run.state != OvernightState::Planning {
-            return;
-        }
-        match &plan.state {
-            PlanState::Approved { .. } => self.judge_planning(&run).await,
-            PlanState::Rejected { message } => {
-                let why = message
-                    .clone()
-                    .unwrap_or_else(|| "its review did not approve it".into());
-                self.planning_blocked(&run, vec![format!(
-                    "Phase 0 could not get its plan approved: {why}. Say how to narrow the goal, or give a plan, then Continue."
-                )])
+        if planning.proposed.is_empty() {
+            let resumed = self
+                .change_run_if(run, |now| {
+                    let planning = now.planning.as_mut()?;
+                    planning.state = PhaseState::Running;
+                    planning.nudges = 0;
+                    Some(())
+                })
                 .await;
+            if resumed.is_some() {
+                self.lead_turn_ended(&run.conversation_id);
             }
-            // Revising: the lead proposes the revision (it was told so).
-            _ => {}
+            return;
         }
+        self.adopt_plan(run, "", planning.proposed, None).await;
     }
 
     /// Phase 0 couldn't produce a plan the run may follow: the run ends, saying why.
@@ -1030,18 +1180,8 @@ impl SessionManager {
                     "Phase 0 ended without proposing a plan. Give the run a plan (or a narrower goal), then Continue.".into(),
                 ])
                 .await;
-            } else {
-                // Checked as it is: the judge decides what it is worth.
-                let _ = self
-                    .phase_done_as(
-                        id,
-                        PhaseDone {
-                            summary: "(The lead ended its turns without calling phase_done; Brigadier checks the phase as it is.)".into(),
-                            responses: Vec::new(),
-                        },
-                        true,
-                    )
-                    .await;
+            } else if let Some(phase) = run.phases.iter().find(|p| p.state == PhaseState::Running) {
+                self.settle_unanswered(&run, phase, &board).await;
             }
             return;
         }
@@ -1066,11 +1206,11 @@ impl SessionManager {
             "[overnight · phase 0] The plan isn't proposed yet. Propose the phases with propose_phases now (nobody can answer questions before the morning: decide what the goal and Rules settle, note what only the user can decide with note_for_user, and plan around it).".to_owned()
         } else if open.is_empty() {
             format!(
-                "[overnight · {label}] Nothing of this phase runs now. Delegate what remains of it, or, when its work is done (or what is left needs the user), call phase_done. Nobody can answer questions before the morning: note what only the user can do with note_for_user (kind waiting) and finish the rest."
+                "[overnight · {label}] Nothing of this phase runs now. Delegate what remains of it, or settle it with phase_done (done, partial or blocked) from its verifier's report. Nobody can answer questions before the morning: note what only the user can do with note_for_user (kind waiting) and finish the rest."
             )
         } else {
             format!(
-                "[overnight · {label}] This phase waits on you: {}. Land what reported well (land_phase), send back or stop the rest, then go on; call phase_done once all of it has landed or ended.",
+                "[overnight · {label}] This phase waits on you: {}. Land the verifier's work (land_phase), send back or stop the rest, then go on; settle the phase with phase_done once all of it has landed or ended.",
                 open.join(", ")
             )
         };
@@ -1101,18 +1241,19 @@ impl SessionManager {
     }
 }
 
+/// Whether `task` works on `phase` of `run`.
+fn of_phase(task: &crate::work::Task, run: &OvernightRun, phase: &OvernightPhase) -> bool {
+    task.run.as_ref().is_some_and(|context| {
+        context.run_id == run.id && context.phase_id.as_deref() == Some(phase.id.as_str())
+    })
+}
+
 /// What of `phase` still runs or waits to be decided: its tasks that haven't landed or ended.
 fn unsettled(board: &Board, run: &OvernightRun, phase: &OvernightPhase) -> Vec<String> {
     let mut open: Vec<_> = board
         .tasks
         .values()
-        .filter(|task| {
-            task.run.as_ref().is_some_and(|context| {
-                context.run_id == run.id
-                    && context.phase_id.as_deref() == Some(phase.id.as_str())
-                    && !context.role.checks_phase()
-            }) && !task.state.is_final()
-        })
+        .filter(|task| of_phase(task, run, phase) && !task.state.is_final())
         .collect();
     open.sort_by_key(|task| task.number);
     open.iter()
@@ -1182,7 +1323,7 @@ fn pick_next(run: &OvernightRun, verified_before: &[u32]) -> Pick {
 /// Everything Phase 0's lead starts from: the goal, the Rules and the restrictions.
 fn planning_brief(run: &OvernightRun) -> String {
     format!(
-        "[Overnight run \u{201c}{name}\u{201d} · Phase 0: write the plan]\nThe user gave a goal without a plan. Your job in this phase is the plan only: its phases, each with its exact scope, \"done when\" criteria anyone can check by running something or reading the code, and the phases it builds on. Scouts and research may look around the repository first; nothing is changed in Phase 0. Propose the phases with propose_phases. Another vendor reviews them and a fresh judge checks them against the goal before any phase starts, so put in only what the goal asks for: no invented scope, nothing the Rules exclude.\n\nThe goal, in the user's words:\n{goal}\n\nRules and settled decisions, verbatim:\n{rules}\n\n{directives}",
+        "[Overnight run \u{201c}{name}\u{201d} · Phase 0: write the plan]\nThe user gave a goal without a plan. Your job in this phase is the plan only: its phases, each with its exact scope, \"done when\" criteria anyone can check by running something or reading the code, and the phases it builds on. Split into phases only what must happen one after another; one phase is fine. Scouts and research may look around the repository first; nothing is changed in Phase 0. Propose the phases with propose_phases; the run follows them, so put in only what the goal asks for: no invented scope, nothing the Rules exclude.\n\nThe goal, in the user's words:\n{goal}\n\nRules and settled decisions, verbatim:\n{rules}\n\n{directives}",
         name = run.name,
         goal = run.words,
         rules = if run.rules.trim().is_empty() {
@@ -1243,4 +1384,17 @@ fn phase_detail(phase: &crate::tools::PhaseInput) -> String {
         ));
     }
     detail
+}
+
+/// Phase 0's request.
+fn planning_request(run: &OvernightRun) -> String {
+    run.planning.as_ref().map_or_else(
+        || format!("run-{}-phase-0", run.id.short()),
+        |planning| planning.request_id.clone(),
+    )
+}
+
+/// "1 phase", "3 phases".
+fn plural_phases(count: usize) -> String {
+    format!("{count} phase{}", if count == 1 { "" } else { "s" })
 }

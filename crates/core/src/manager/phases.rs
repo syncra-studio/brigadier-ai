@@ -694,13 +694,24 @@ impl SessionManager {
         })
     }
 
-    /// Whether `task`'s report ends a phase that had an outline: a fresh verifier then checks
-    /// the phase before it lands.
+    /// Whether `task`'s report ends a phase that had an outline, or a phase of an overnight
+    /// run: a fresh verifier then checks the phase before it lands.
     pub(crate) async fn needs_verifier(&self, task: &Task) -> bool {
         if task.kind != TaskKind::Implement
             || !matches!(task.role, Some(WorkerRole::Lead | WorkerRole::Parallel))
         {
             return false;
+        }
+        if task.run.as_ref().is_some_and(|run| {
+            run.phase_id.is_some() && run.role == crate::overnight::RunRole::Worker
+        }) {
+            // A run that is ending verifies nothing more: its report says what is unverified.
+            let ending = self
+                .overnight
+                .active
+                .get(&task.conversation_id)
+                .is_none_or(|active| active.winding_down);
+            return !ending && self.verifier_of(task).await.is_none();
         }
         let Some((plan, index)) = self.phase_of(task).await else {
             return false;
@@ -762,6 +773,37 @@ impl SessionManager {
             .await?;
         self.set_phase_stage(lead, PhaseStage::Verifying).await;
         Ok(verifier)
+    }
+
+    /// Who a checking task must not be, for a hand-off to another model: a review or a
+    /// verification of a phase's work, the phase's author.
+    pub(crate) async fn checker_avoid(
+        &self,
+        member: &Task,
+    ) -> (
+        Option<brigadier_router::Author>,
+        Vec<brigadier_router::Author>,
+    ) {
+        if !matches!(member.kind, TaskKind::Review | TaskKind::Verify)
+            && member.role != Some(WorkerRole::Verifier)
+        {
+            return (None, Vec::new());
+        }
+        let Some(subject) = &member.subject else {
+            return (None, Vec::new());
+        };
+        let Ok(subject) = self.task_by_id(&member.conversation_id, subject).await else {
+            return (None, Vec::new());
+        };
+        let author = self.phase_author(&subject).await;
+        let choice = &author.route.choice;
+        (
+            Some(brigadier_router::Author {
+                provider: choice.provider,
+                model: choice.model.clone(),
+            }),
+            Vec::new(),
+        )
     }
 
     /// Whether `task` is a lead whose outline waits for its go-ahead: its turn ending is

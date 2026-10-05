@@ -797,13 +797,13 @@ impl SessionManager {
                 "The overnight run is ending: no new work starts now. Finish the current step; what is left goes into the morning report.".into(),
             ));
         }
-        // Phase 0 only writes the plan: nothing changes the code before its phases are judged.
+        // Phase 0 only writes the plan: nothing changes the code before its phases are set.
         if kind.writes()
             && extra.run.is_none()
             && active_run.as_ref().is_some_and(|active| active.planning)
         {
             return Err(Error::Invalid(
-                "Phase 0 of this overnight run only writes the plan: propose its phases with propose_phases. Scouts and research may look around; nothing is changed before the phases are reviewed and judged.".into(),
+                "Phase 0 of this overnight run only writes the plan: propose its phases with propose_phases. Scouts and research may look around; nothing is changed before the phases are set.".into(),
             ));
         }
         let run = match extra.run {
@@ -1486,11 +1486,6 @@ impl SessionManager {
                     || (task.kind == TaskKind::Implement && continues_work(subject)) =>
             {
                 self.work_head(subject).await?
-            }
-            // A whole-phase check looks at the phase's candidate exactly.
-            _ if let Some(candidate) = task.run.as_ref().and_then(|run| run.candidate.clone()) => {
-                let commit = Oid(candidate);
-                (commit.clone(), commit, false)
             }
             // A run's workers start from its branch's tip, never the user's uncommitted files.
             _ if run_branch.is_some() => {
@@ -2584,9 +2579,7 @@ impl SessionManager {
         if !task.kind.writes() {
             self.learn_report(&task, &report, Some(live.learning.clone()));
         }
-        if reviewing {
-            self.gate_member_reported(&task).await;
-        } else if relanding {
+        if relanding && !reviewing {
             // Its commits land once its turn is over (fast-forward, or rebased and checked
             // once more if the branch moved again).
             let manager = self.arc();
@@ -3020,8 +3013,6 @@ impl SessionManager {
         // Until it is recorded stopped, a landing that fails as its worktree goes hands
         // nothing back to the orchestrator.
         let _stopping = Stopping::mark(self, &task_id);
-        // A gate member that gave its result already has its outcome under way.
-        let reviewing = task.gate_link.is_some() && task.report.is_none();
         if let Some(live) = &live {
             live.close_cli().await;
         }
@@ -3030,13 +3021,6 @@ impl SessionManager {
         // Whoever waits for its review hears it gave none.
         self.reviews
             .settle(&task.id, Err("the reviewer was stopped".into()));
-        // A landing's or plan's reviewer stopped before its verdict releases what it was
-        // reviewing, as one that failed does: otherwise it would wait for a verdict that never
-        // comes.
-        if reviewing {
-            self.gate_member_failed(&task, "It was stopped before it gave a result.")
-                .await;
-        }
         Ok(())
     }
 
@@ -3275,8 +3259,8 @@ impl SessionManager {
         Err(Error::NotFound(format!("task {task_id}")))
     }
 
-    /// A worker failed: the task ends and the orchestrator hears why. A landing's or plan's
-    /// reviewer failing releases what it was reviewing.
+    /// A worker failed: the task ends and the orchestrator hears why (or whoever waits for its
+    /// review).
     pub(crate) async fn worker_failed(&self, task: &Task, reason: &str) {
         let reviewing = task.gate_link.is_some();
         let mut kept = None;
@@ -3303,8 +3287,8 @@ impl SessionManager {
                 })
                 .await;
         }
+        // A check from an earlier version's gate had nobody to tell.
         if reviewing {
-            self.gate_member_failed(task, reason).await;
             return;
         }
         // Whoever waits for its review hears why there is none.

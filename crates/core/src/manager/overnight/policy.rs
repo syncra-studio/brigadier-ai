@@ -85,7 +85,7 @@ impl ActiveRuns {
     }
 }
 
-/// The phase a run works on now: Phase 0 while it plans, else the one running or checked.
+/// The phase a run works on now: Phase 0 while it plans, else the one running.
 fn current_phase(run: &OvernightRun) -> Option<String> {
     if run.state == crate::overnight::OvernightState::Planning {
         return Some(PLANNING_PHASE.into());
@@ -112,7 +112,6 @@ impl ActiveRun {
         match subject {
             Some(subject) => subject.run.clone().map(|run| RunTaskContext {
                 role: RunRole::Check,
-                candidate: None,
                 ..run
             }),
             None => active.map(|active| active.context(RunRole::Worker)),
@@ -128,7 +127,6 @@ impl ActiveRun {
             generation: self.generation,
             role,
             rules_hash: self.rules_hash.clone(),
-            candidate: None,
         }
     }
 }
