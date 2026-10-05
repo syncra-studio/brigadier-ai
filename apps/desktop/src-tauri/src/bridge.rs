@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use brigadier_core::{DomainEvent, WaitingItem, WaitingSource};
+use brigadier_core::{ApprovalSubject, CardState, DomainEvent, WaitingItem, WaitingSource};
 use brigadier_ipc::app::BridgeEvent;
 use brigadier_ipc::protocol::{
     ClientFrame, ClientInfo, DaemonInfo, ErrorCode, EventEnvelope, IpcError, Outcome, Request,
@@ -76,7 +76,7 @@ struct Inner {
     last_seq: AtomicI64,
     stopping: AtomicBool,
     notify: Notify,
-    /// "Waiting on you" items already notified, so an item's update doesn't notify again.
+    /// "Waiting on you" items and approvals already notified, so an update doesn't notify again.
     notified: Mutex<HashSet<String>>,
 }
 
@@ -363,6 +363,7 @@ impl Bridge {
             ServerFrame::Event { event } => {
                 self.inner.last_seq.fetch_max(event.seq, Ordering::AcqRel);
                 self.notify_waiting(&event);
+                self.notify_approval(&event);
                 self.emit(BridgeEvent::Event { event });
             }
             ServerFrame::Lagged { resume_after } => {
@@ -397,6 +398,54 @@ impl Bridge {
             (self.inner.notify)("Waiting on you", &item.what);
         }
     }
+
+    /// Tells the user, once per approval, that a worker or the orchestrator waits for their
+    /// go-ahead (the thread shows the same request in the composer's place).
+    fn notify_approval(&self, event: &EventEnvelope) {
+        let Some((id, what)) = pending_approval(event) else {
+            return;
+        };
+        if self
+            .inner
+            .notified
+            .lock()
+            .expect("notified lock")
+            .insert(format!("approval:{id}"))
+        {
+            (self.inner.notify)("Awaiting approval", &what);
+        }
+    }
+}
+
+/// An approval an event opens, as its id and what it asks in a line, if it opens one.
+fn pending_approval(event: &EventEnvelope) -> Option<(String, String)> {
+    let raw = event.event.0.get();
+    // Most events aren't about approvals: skip decoding them.
+    if !raw.contains("\"approvalUpdated\"") || !raw.contains("\"pending\"") {
+        return None;
+    }
+    let DomainEvent::ApprovalUpdated { approval } = serde_json::from_str(raw).ok()? else {
+        return None;
+    };
+    if approval.state != CardState::Pending {
+        return None;
+    }
+    let what = match approval.subject {
+        ApprovalSubject::Cli { request } => request
+            .reason
+            .filter(|reason| !reason.trim().is_empty())
+            .or(request.command)
+            .unwrap_or_else(|| format!("A worker asks to use {}.", request.tool)),
+        // Only in recorded conversations: nothing asks this way any more.
+        ApprovalSubject::OutwardCommand { .. } => return None,
+        ApprovalSubject::Landing { branch, .. } => format!("Land a commit on {branch}?"),
+        ApprovalSubject::FinishSession { branch, base, .. } => {
+            format!("Merge {branch} into {base}?")
+        }
+        ApprovalSubject::Action { action, .. } => action,
+        ApprovalSubject::Outline { title, .. } => format!("Start this plan? {title}"),
+    };
+    Some((approval.id.0, what))
 }
 
 /// The "Waiting on you" item an event lists for an unanswered card, if it lists one.
@@ -479,5 +528,50 @@ mod tests {
         });
         assert!(stuck_card(&envelope(&task)).is_none());
         assert!(stuck_card(&envelope(&waiting(WaitingSource::Orchestrator))).is_none());
+    }
+
+    fn approval(subject: ApprovalSubject, state: CardState) -> DomainEvent {
+        DomainEvent::ApprovalUpdated {
+            approval: brigadier_core::Approval {
+                id: CardId("a1".into()),
+                conversation_id: brigadier_core::ConversationId("c1".into()),
+                task_id: None,
+                request_id: None,
+                position: 0,
+                subject,
+                state,
+                created_at_ms: 0,
+                resolved_at_ms: None,
+            },
+        }
+    }
+
+    #[test]
+    fn pending_approvals_notify_with_what_they_ask() {
+        let outline = ApprovalSubject::Outline {
+            task_id: TaskId("task-1".into()),
+            title: "Dark mode".into(),
+            outline: "1. Add the switch".into(),
+        };
+        assert_eq!(
+            pending_approval(&envelope(&approval(outline.clone(), CardState::Pending))),
+            Some(("a1".to_owned(), "Start this plan? Dark mode".to_owned()))
+        );
+        let merge = ApprovalSubject::FinishSession {
+            branch: "brigadier/s1".into(),
+            base: "main".into(),
+            commits: 2,
+            diff_stat: Default::default(),
+        };
+        assert_eq!(
+            pending_approval(&envelope(&approval(merge, CardState::Pending))).map(|(_, what)| what),
+            Some("Merge brigadier/s1 into main?".to_owned())
+        );
+        // A settled approval doesn't notify.
+        let answered = CardState::Expired {
+            reason: "The worker stopped.".into(),
+        };
+        assert!(pending_approval(&envelope(&approval(outline, answered))).is_none());
+        assert!(pending_approval(&envelope(&waiting(WaitingSource::Orchestrator))).is_none());
     }
 }
