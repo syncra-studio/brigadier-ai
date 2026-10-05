@@ -310,9 +310,8 @@ fn edited_attachments(text: &str, attachments: &[AttachmentRef]) -> Vec<Attachme
         .iter()
         .filter(|attachment| {
             attachment.inline.is_none()
-                || crate::sessions::inline_image_tokens(text, std::slice::from_ref(attachment))
-                    .len()
-                    > 0
+                || !crate::sessions::inline_image_tokens(text, std::slice::from_ref(attachment))
+                    .is_empty()
         })
         .cloned()
         .collect()

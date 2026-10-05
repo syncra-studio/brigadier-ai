@@ -1775,15 +1775,6 @@ impl SessionManager {
                     append_input_text(&mut inline, &self.inline_attachment(attachment).await);
                     continue;
                 }
-                if is_image(&attachment.mime)
-                    && let Some(Some(file)) = copied.get(&attachment.id)
-                {
-                    files.push(InputFile {
-                        path: file.path.clone(),
-                        name: attachment.name.clone(),
-                        mime: attachment.mime.clone(),
-                    });
-                }
                 if conv.kind == ConversationKind::Session {
                     append_input_text(
                         &mut inline,
@@ -4205,18 +4196,27 @@ fn name_inline_images(
 ) -> String {
     let mut text = user_text.to_owned();
     let mut image_numbers = HashMap::new();
-    for attachment in attachments.iter().filter(|a| a.inline.is_some()) {
-        let n = attachment.inline.filter(|n| *n > 0).unwrap_or_else(|| {
-            let next = image_numbers.len() as u32 + 1;
-            *image_numbers.entry(attachment.id.clone()).or_insert(next)
-        });
+    for attachment in attachments {
         let sent = copied
             .get(&attachment.id)
             .and_then(Option::as_ref)
             .map(|file| {
-                files.push(file.clone());
+                files.push(InputFile {
+                    path: file.path.clone(),
+                    name: attachment.name.clone(),
+                    mime: attachment.mime.clone(),
+                });
                 files.len()
             });
+        let Some(number) = attachment.inline else {
+            continue;
+        };
+        let n = if number > 0 {
+            number
+        } else {
+            let next = image_numbers.len() as u32 + 1;
+            *image_numbers.entry(attachment.id.clone()).or_insert(next)
+        };
         let marker = if attachment.inline == Some(0) {
             format!("[image:{}]", attachment.id)
         } else {
@@ -4435,6 +4435,33 @@ mod tests {
                 "before [Image #1, pasted here: image 1 of the images sent with this message] again [Image #1 again: the same image as above, not another one]"
             );
         }
+    }
+
+    #[test]
+    fn inline_notes_count_row_images_in_attachment_order() {
+        let row = image_ref("row", false, "image/png");
+        let mut inline = image_ref("pasted", true, "image/png");
+        inline.inline = Some(1);
+        let attachments = vec![row, inline];
+        let mut files = Vec::new();
+        let text = name_inline_images(
+            "[Image #1]",
+            &attachments,
+            &image_files(&attachments),
+            ConversationKind::Chat,
+            &mut files,
+        );
+        assert_eq!(
+            files
+                .iter()
+                .map(|file| file.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["row.png", "pasted.png"]
+        );
+        assert_eq!(
+            text,
+            "[Image #1, pasted here: image 2 of the images sent with this message]"
+        );
     }
 
     #[test]
