@@ -25,7 +25,7 @@ export function BottomBar() {
     <footer
       aria-label="App bar"
       data-tauri-drag-region
-      className="h-bottom-bar bg-chrome flex shrink-0 items-center gap-0.5 px-2"
+      className="h-bottom-bar bg-chrome px-surface-inset flex shrink-0 items-center gap-0.5"
     >
       <BarButton
         label={inSettings ? "Close settings" : "Settings"}

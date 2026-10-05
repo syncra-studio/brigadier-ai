@@ -182,9 +182,10 @@
   --spacing-sidebar-min: 11.75rem;
   --spacing-sidebar-max: 29.25rem;
   --spacing-nav-row: 1.875rem;
-  /* The bottom bar's buttons; the sidebar panel's header (its title and actions); the
-     Settings search field. */
-  --spacing-bar-button: 1.625rem;
+  /* The bottom bar's buttons (and its update pills), leaving the bar's height a surface-inset
+     gap above and below them; the sidebar panel's header (its title and actions); the Settings
+     search field. */
+  --spacing-bar-button: 1.5rem;
   --spacing-nav-header: 3.25rem;
   --spacing-nav-search: 2.25rem;
   /* The sidebar's list fades out this far under its header, and this far above its end, while
@@ -599,7 +600,7 @@
   --spacing-sidebar-min: 10.5rem;
   --spacing-sidebar-max: 26rem;
   --spacing-nav-row: 1.625rem;
-  --spacing-bar-button: 1.5rem;
+  --spacing-bar-button: 1.25rem;
   --spacing-nav-header: 2.75rem;
   --spacing-nav-search: 1.875rem;
   --spacing-switch-width: 1.75rem;

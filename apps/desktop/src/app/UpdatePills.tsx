@@ -81,7 +81,7 @@ function UpdatePill({ items, children }: { items: UpdateItem[]; children: ReactN
             <button
               type="button"
               aria-label={label}
-              className="border-border text-muted-foreground hover:text-foreground hover:bg-foreground/8 data-[state=open]:text-foreground data-[state=open]:bg-foreground/8 focus-visible:ring-ring/50 mx-0.5 flex h-6 shrink-0 items-center gap-1 rounded-full border ps-1.5 pe-2 text-xs outline-none transition-colors duration-150 focus-visible:ring-2"
+              className="border-border text-muted-foreground hover:text-foreground hover:bg-foreground/8 data-[state=open]:text-foreground data-[state=open]:bg-foreground/8 focus-visible:ring-ring/50 mx-0.5 flex h-bar-button shrink-0 items-center gap-1 rounded-full border ps-1.5 pe-2 text-xs outline-none transition-colors duration-150 focus-visible:ring-2"
             >
               {busy ? (
                 <Spinner aria-hidden className="size-icon-sm animate-spin" />
