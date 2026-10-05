@@ -1,23 +1,18 @@
-//! Landing accepted work: each accepted write task becomes one clean, reviewed commit on the
-//! right branch (PLAN §6 Phase 3; corrections B4, B5, B6, B11).
+//! Landing a phase's work (the delegator flow, §2.4 of the flow spec): the worker that ends a
+//! phase (its verifier, or a lead that reviewed its own small change) committed its work in
+//! small steps in its own worktree, branched from the session's tip. `land_phase` moves those
+//! commits onto the target branch, with no card and no checks of its own:
 //!
-//! 1. **Build the candidate on the current target tip** (`prepare_candidate`): the worker's
-//!    whole work since its base, replayed in its worktree. Conflicts go back to the
-//!    orchestrator, which delegates a `merge` task: Brigadier merges the target into the work
-//!    with conflict markers in place, and the merge worker only edits files.
-//! 2. **Litter guard**: only the worker's reported files and tracked changes are staged; logs,
-//!    scratch notes, debug scripts and stray files are left out and listed. Unreported tracked
-//!    changes are kept and flagged to the reviewer.
-//! 3. **Commit** with a normal `git commit` (the repository's hooks run, the user's identity).
-//! 4. **Review** by a model from the other vendor (a `review` task over that exact commit and
-//!    the worker's verification). Enforced here, whatever the orchestrator asks. If only one
-//!    vendor is available, another model of the same vendor reviews, and the card says so.
-//! 5. **Approval**: under "Ask for approval" the user approves the landing on a card.
-//! 6. **Land** fast-forward only, never over uncommitted, untracked or ignored files, and only
-//!    if the target is still where it was (the git engine checks it right before mutating).
-//!    If the target moved, the candidate is replayed on the new tip; unless that replay was
-//!    clean and touched none of the same paths, it is reviewed again. Anything unsafe leaves
-//!    the task "ready to land" with nothing changed.
+//! 1. **Leftovers**: anything the worker left uncommitted is committed, litter left out.
+//! 2. **Litter guard over the whole range** (phase start..HEAD): logs, scratch files and new
+//!    files no report of the phase names are dropped from every commit and listed.
+//! 3. **Rebase** onto the target's tip when it moved (each commit replayed, authors and
+//!    messages kept). After a real rebase the worker runs a quick self-check (build and the
+//!    tests it touched) before anything lands; its next report then lands on its own,
+//!    fast-forward only, never reviewed again. Conflicts go to a merge worker.
+//! 4. **Fast-forward** the target, never over uncommitted, untracked or ignored files, and
+//!    only if the target is still where it was (the git engine checks it right before
+//!    mutating). Anything unsafe leaves the task "ready to land" with nothing changed.
 //!
 //! Finishing a new-worktree session merges the session branch into its base the same way,
 //! after the user's one click.
@@ -26,270 +21,164 @@ use std::path::{Path, PathBuf};
 
 use brigadier_git::{
     ChangeKind, CommitOutcome, LandBlock, LandOutcome, LandRequest, MergeOutcome, Oid,
-    PrepareOutcome, RebaseOutcome, litter,
+    PrepareOutcome, SeriesOutcome, litter,
 };
+
 use brigadier_providers::ApprovalDecision;
 
 use super::cards::CardAnswer;
 use super::conversation::Envelope;
-use super::outputs::outputs_dir;
 use super::workers::Workspace;
 use super::{SessionManager, blocking, git_error};
-use crate::model::{ConversationId, Environment, PermissionLevel, Setup};
+use crate::model::{ConversationId, Environment, Setup};
 use crate::work::{
-    ApprovalSubject, Candidate, DiffStat, ExcludedFile, FileStat, InjectionKind, Task, TaskState,
+    ApprovalSubject, DecisionKind, DecisionSource, DiffStat, ExcludedFile, FileStat, InjectionKind,
+    OrchestratorStepKind, PhaseStage, Task, TaskState,
 };
 use crate::{Error, Result};
 
-/// Diffs up to this size are given to the reviewer inline.
-const INLINE_DIFF_BYTES: usize = 24_000;
-/// A worker's plan up to this size is given to the reviewer inline.
-const PLAN_INLINE_BYTES: usize = 8_000;
+/// Times a landing starts over when the target moves between the rebase and the
+/// fast-forward.
+const LAND_TRIES: usize = 3;
+
+/// What moving a task's commits onto its target came to.
+enum Moved {
+    /// The target's new tip holds them.
+    Landed {
+        tip: Oid,
+        commits: u32,
+        excluded: Vec<ExcludedFile>,
+    },
+    /// Nothing was left to land once litter was left out.
+    Nothing {
+        excluded: Vec<ExcludedFile>,
+    },
+    /// The target moved: the commits were rebased onto `onto` and wait for the worker's
+    /// self-check.
+    Rebased {
+        onto: Oid,
+        commits: u32,
+        excluded: Vec<ExcludedFile>,
+    },
+    Conflicts {
+        onto: Oid,
+        paths: Vec<String>,
+    },
+    HookFailed {
+        output: String,
+    },
+    Blocked(LandBlock),
+}
 
 impl SessionManager {
-    /// `accept_task`: starts the landing pipeline and returns at once. The commit message is
-    /// kept: when the gate finds problems, Brigadier sends the worker back and lands its fix
-    /// with it, without the orchestrator. `overriding`: the user explicitly said to land it
-    /// despite its checks' findings (see [`Self::land_despite_checks`]).
-    pub(crate) async fn accept_task(
-        &self,
-        conversation_id: &ConversationId,
-        task: Task,
-        message: String,
-        overriding: bool,
-    ) -> Result<String> {
-        if overriding
-            && let Some(reply) = self
-                .land_despite_checks(conversation_id, &task, &message)
-                .await?
-        {
-            return Ok(reply);
-        }
-        let number = task.number;
-        self.begin_landing(conversation_id, task, message, true)
-            .await?
-            .ok_or_else(|| {
-                Error::Invalid(format!(
-                    "task-{number} changed meanwhile; look at it again before accepting it"
-                ))
-            })
-    }
-
-    /// Lands, on the user's word, the change whose last checks found problems, as it is and
-    /// without checking it again: the candidate those checks ran on (or one with the same
-    /// files, a fix that changed nothing), with the commit message it was built with. Under
-    /// "Ask for approval" the user still approves it on its card. `None` when the task has no
-    /// such change: it is checked as usual.
-    async fn land_despite_checks(
-        &self,
-        conversation_id: &ConversationId,
-        task: &Task,
-        message: &str,
-    ) -> Result<Option<String>> {
-        let message = message.trim().to_owned();
-        if message.is_empty() {
-            return Err(Error::Invalid("the commit message is empty".into()));
-        }
-        if task.state != TaskState::Reported
-            || super::gates::checks_stand(task) != Some(crate::work::GateOutcome::Failed)
-        {
-            return Ok(None);
-        }
-        let (Some(checked), Some(candidate)) = (
-            task.gate.as_ref().and_then(|gate| gate.commit.clone()),
-            task.candidate.clone(),
-        ) else {
-            return Ok(None);
-        };
-        if checked != candidate.commit && !self.same_tree(task, &checked, &candidate.commit).await {
-            return Ok(None);
-        }
-        // An overnight run never lands past failed checks: that stays the user's call, in the
-        // morning (PLAN.md §10.8).
-        if let Some(run) = &task.run {
-            let line = format!(
-                "{}: its checks failed, so the run won't land it. Read the findings and decide.",
-                super::decisions::worker_name(task)
-            );
-            if let Err(err) = self
-                .wait_on_user(
-                    conversation_id,
-                    task.request_id.clone(),
-                    crate::work::WaitingSource::Run {
-                        run_id: run.run_id.clone(),
-                        task_id: Some(task.id.clone()),
-                    },
-                    &line,
-                )
-                .await
-            {
-                tracing::warn!(task = %task.id, error = %err, "could not list a refused override");
-            }
-            return Err(Error::Invalid(format!(
-                "task-{n} works for the overnight run, which never lands a change despite failed checks. It is listed for the user. Send it back with the findings (message_worker), or leave it for them.",
-                n = task.number
-            )));
-        }
-        // The user's word, not the orchestrator's: they wrote after these findings reached it.
-        let user_at_ms = self.user_spoke_at(conversation_id).await;
-        if !super::gates::user_spoke_since_checks(task, user_at_ms) {
-            return Err(Error::Invalid(format!(
-                "task-{n} lands despite its checks' findings only on the user's word, and the user has not written since those findings reached you. Ask the user first, with the findings; only if they tell you to land it anyway, call accept_task for task-{n} with override: true again.",
-                n = task.number
-            )));
-        }
-        let later = self.later_request_for(conversation_id, task).await;
-        let task = self
-            .update_task(conversation_id, &task.id, |t| {
-                t.state = TaskState::Reviewing;
-                t.blocked_reason = None;
-                t.landing = Some(message);
-                if let Some(gate) = t.gate.as_mut() {
-                    gate.overridden = true;
-                    // The same files the round found problems in.
-                    gate.commit = Some(candidate.commit.clone());
-                }
-                if later.is_some() {
-                    t.request_id = later;
-                }
-            })
-            .await?;
-        // What the worker wrote after its report goes with the outcome, not before it.
-        self.hold_late_findings(&task).await;
-        let number = task.number;
-        let manager = self.arc();
-        self.spawn(async move {
-            if let Err(err) = manager.approve_and_land(&task).await {
-                manager
-                    .landing_problem(&task, &err.to_string(), TaskState::Reported)
-                    .await;
-            }
-        });
-        Ok(Some(format!(
-            "Landing task-{number} as it is, on the user's word, despite its checks' findings (its commit keeps the message it was checked with); the outcome arrives as a message."
-        )))
-    }
-
-    /// When the user last spoke in the conversation: their newest message, or answer on a
-    /// question card.
-    async fn user_spoke_at(&self, conversation_id: &ConversationId) -> Option<i64> {
-        let wrote = self
-            .core
-            .list_messages(conversation_id.clone(), None, 20)
-            .await
-            .ok()
-            .and_then(|page| {
-                page.messages
-                    .iter()
-                    .filter(|message| message.role == crate::model::MessageRole::User)
-                    .map(|message| message.created_at_ms)
-                    .max()
-            });
-        let answered = self
-            .core
-            .board(conversation_id)
-            .await
-            .ok()
-            .and_then(|board| {
-                board
-                    .questions
-                    .values()
-                    .filter_map(|question| question.answered_at_ms)
-                    .max()
-            });
-        wrote.max(answered)
-    }
-
-    /// Starts landing `task`; `fresh` when the orchestrator accepted it (its fix rounds start
-    /// over), not when Brigadier lands a fix on its own. `None`, with nothing changed, when
-    /// the task moved on from the state it was read in meanwhile (stopped, sent back,
-    /// reported again, or no longer Brigadier's to land).
-    pub(crate) async fn begin_landing(
-        &self,
-        conversation_id: &ConversationId,
-        task: Task,
-        message: String,
-        fresh: bool,
-    ) -> Result<Option<String>> {
+    /// `land_phase`: lands a reported write task's commits (and so its phase's: a verifier
+    /// works on top of its lead's commits) on the session's branch. Returns the outcome.
+    pub(crate) async fn land_phase(&self, id: &ConversationId, task: Task) -> Result<String> {
         if !task.kind.writes() {
             return Err(Error::Invalid(format!(
                 "task-{} is a {:?} task: only implement and merge tasks land",
                 task.number, task.kind
             )));
         }
-        let message = message.trim().to_owned();
-        if message.is_empty() {
-            return Err(Error::Invalid("the commit message is empty".into()));
+        if !matches!(task.state, TaskState::Reported | TaskState::ReadyToLand) {
+            return Err(Error::Invalid(format!(
+                "task-{} is {:?}; only a reported task lands",
+                task.number, task.state
+            )));
         }
-        match task.state {
-            TaskState::Reported => {}
-            TaskState::ReadyToLand if task.candidate.is_some() => {}
-            state => {
-                return Err(Error::Invalid(format!(
-                    "task-{} is {state:?}; only a reported task can be accepted",
-                    task.number
-                )));
-            }
+        if let Some(verifier) = self.verifier_of(&task).await {
+            return Err(Error::Invalid(format!(
+                "task-{}'s phase is verified by task-{}, which works on top of its commits: land task-{} once it reports.",
+                task.number, verifier.number, verifier.number
+            )));
         }
-        // Only a candidate whose checks all passed lands as it is; one that couldn't be
-        // verified is built and checked again.
-        let retry = task.state == TaskState::ReadyToLand && super::gates::candidate_passed(&task);
-        let later = self.later_request_for(conversation_id, &task).await;
+        let later = self.later_request_for(id, &task).await;
         // Checked and changed in one step: a stop, a steer or a newer report that came after
         // `task` was read wins.
-        let still = |now: &Task| {
-            now.state == task.state
-                && super::workers::same_report(now, &task)
-                && now.candidate == task.candidate
-                && (fresh || now.landing.is_some())
-        };
+        let still = |now: &Task| now.state == task.state && super::workers::same_report(now, &task);
         let Some(task) = self
-            .update_task_if(conversation_id, &task.id, still, |t| {
-                t.state = TaskState::Reviewing;
+            .update_task_if(id, &task.id, still, |t| {
+                t.state = TaskState::Landing;
                 t.blocked_reason = None;
-                t.landing = Some(message.clone());
-                if fresh {
-                    t.fix_rounds = 0;
-                }
-                if !retry {
-                    t.candidate = None;
-                }
+                t.landing = Some(t.title.clone());
                 if later.is_some() {
                     t.request_id = later;
                 }
             })
             .await?
         else {
-            return Ok(None);
+            return Err(Error::Invalid(format!(
+                "task-{} changed meanwhile; look at it again before landing it",
+                task.number
+            )));
         };
-        // What the worker wrote after its report goes to its checks, and to the orchestrator
-        // with their outcome, not before it.
-        self.hold_late_findings(&task).await;
-        let number = task.number;
-        let manager = self.arc();
-        self.spawn(async move {
-            let result = if retry {
-                manager.land_task(&task).await
-            } else {
-                manager.build_and_review(&task, message).await
-            };
-            if let Err(err) = result {
-                manager
-                    .landing_problem(&task, &err.to_string(), TaskState::Reported)
-                    .await;
+        match self.move_commits(&task).await {
+            Ok(moved) => Ok(self.settle_landing(&task, moved, false).await.1),
+            Err(err) => {
+                self.hand_back(&task, TaskState::Reported, None).await;
+                Err(err)
             }
-        });
-        Ok(Some(if retry {
-            format!("Landing task-{number} again; the outcome arrives as a message.")
-        } else {
-            format!(
-                "Accepted task-{number}. Brigadier builds its commit, has it reviewed by another vendor's model and verified, sends the worker back with any findings, and lands it; the outcome arrives as a message."
-            )
-        }))
+        }
     }
 
-    /// Steps 1–4: candidate, litter guard, commit, review task.
-    async fn build_and_review(&self, task: &Task, message: String) -> Result<()> {
+    /// A worker rebased during its landing reported after its self-check: its commits land
+    /// now, on their own (fast-forward, or another rebase and self-check if the target moved
+    /// again). The orchestrator hears the outcome.
+    pub(crate) async fn land_after_self_check(&self, task: &Task) {
+        let Ok(task) = self
+            .update_task(&task.conversation_id, &task.id, |t| {
+                t.state = TaskState::Landing;
+                t.blocked_reason = None;
+            })
+            .await
+        else {
+            return;
+        };
+        let (landed, text) = match self.move_commits(&task).await {
+            Ok(moved) => self.settle_landing(&task, moved, true).await,
+            Err(err) => {
+                self.landing_problem(&task, &err.to_string(), TaskState::Reported)
+                    .await;
+                return;
+            }
+        };
+        // Problems were handed to the orchestrator by `settle_landing`; a landing is news too.
+        let text = if landed {
+            format!("[landed task-{}] {text}", task.number)
+        } else {
+            text
+        };
+        if landed || text.starts_with("[nothing to land") {
+            self.deliver(
+                &task.conversation_id,
+                Envelope {
+                    kind: InjectionKind::Decision,
+                    label: format!("landed task-{}", task.number),
+                    task_id: Some(task.id.clone()),
+                    text,
+                },
+            )
+            .await;
+        }
+    }
+
+    /// The verifier that works on top of `task`'s commits and lands them, while it lives.
+    pub(crate) async fn verifier_of(&self, task: &Task) -> Option<Task> {
+        let board = self.core.board(&task.conversation_id).await.ok()?;
+        board
+            .tasks
+            .values()
+            .filter(|other| {
+                other.subject.as_ref() == Some(&task.id)
+                    && other.role == Some(crate::work::WorkerRole::Verifier)
+                    && !other.state.is_final()
+            })
+            .max_by_key(|other| other.number)
+            .cloned()
+    }
+
+    /// Steps 1–4 in the task's worktree and repository.
+    async fn move_commits(&self, task: &Task) -> Result<Moved> {
         let workspace = task
             .workspace
             .clone()
@@ -309,197 +198,402 @@ impl SessionManager {
             .clone()
             .ok_or_else(|| Error::Invalid("the task has no target branch".into()))?;
         let repo = self.task_repo(task)?;
-        let reported = task
-            .report
-            .as_ref()
-            .map(|r| r.changes.clone())
-            .unwrap_or_default();
-
+        let reported = self.phase_reported(task).await;
+        let squash = task.kind == crate::work::TaskKind::Merge;
+        let on_snapshot = workspace.on_snapshot;
+        let leftovers = format!(
+            "{}\n\nWhat task-{} left uncommitted, committed as it landed.",
+            task.title, task.number
+        );
         let git = self.git.clone();
-        let (repo_path, path, branch) = (repo.clone(), worktree.clone(), target.clone());
-        let commit_message = message.clone();
-        let built = blocking(move || {
-            let repo = git.open(&repo_path).map_err(git_error)?;
-            let onto = repo
-                .branch_tip(&branch)
-                .map_err(git_error)?
-                .ok_or_else(|| Error::Invalid(format!("branch {branch} does not exist")))?;
-            let worktree = git.open_worktree(&path).map_err(git_error)?;
-            let changes = match worktree
-                .prepare_candidate(&base, &onto)
-                .map_err(git_error)?
-            {
-                PrepareOutcome::Prepared { changes } => changes,
-                PrepareOutcome::Conflicts { paths } => return Ok(Built::Conflicts { onto, paths }),
-            };
-            let reported: Vec<String> = reported.iter().map(|p| normalize(p)).collect();
-            let mut include = Vec::new();
-            let mut excluded = Vec::new();
-            let mut unreported = Vec::new();
-            for (change, verdict) in litter::classify(&changes, &reported) {
-                match verdict {
-                    litter::Verdict::Keep => {
-                        if !change.untracked && !is_reported(&change.path, &reported) {
-                            unreported.push(change.path.clone());
+        let moved = blocking(move || {
+            let repo = git.open(&repo).map_err(git_error)?;
+            let worktree = git.open_worktree(&worktree).map_err(git_error)?;
+            let mut tries = 0;
+            loop {
+                tries += 1;
+                let mut excluded = Vec::new();
+                let onto = repo
+                    .branch_tip(&target)
+                    .map_err(git_error)?
+                    .ok_or_else(|| Error::Invalid(format!("branch {target} does not exist")))?;
+                let (tip, commits, rebased) = if squash {
+                    // A merge task's work is one merge of the target into the conflicting
+                    // work: it lands as one commit, built from the files.
+                    let changes = match worktree
+                        .prepare_candidate(&base, &onto)
+                        .map_err(git_error)?
+                    {
+                        PrepareOutcome::Prepared { changes } => changes,
+                        PrepareOutcome::Conflicts { paths } => {
+                            return Ok(Moved::Conflicts { onto, paths });
                         }
-                        include.push(change.path);
+                    };
+                    let include = keep_paths(&changes, &reported, &mut excluded);
+                    match worktree
+                        .commit_candidate(&include, &leftovers)
+                        .map_err(git_error)?
+                    {
+                        CommitOutcome::Committed { commit, .. } => (commit, 1, false),
+                        CommitOutcome::HookFailed { output } => {
+                            return Ok(Moved::HookFailed { output });
+                        }
+                        CommitOutcome::Empty => return Ok(Moved::Nothing { excluded }),
                     }
-                    litter::Verdict::Exclude { reason } => excluded.push(ExcludedFile {
-                        path: change.path,
-                        reason,
-                    }),
+                } else {
+                    // 1. What it left uncommitted.
+                    let head = worktree.head().map_err(git_error)?;
+                    let left = worktree.changes(&head).map_err(git_error)?;
+                    let include = keep_paths(&left, &reported, &mut excluded);
+                    if !include.is_empty()
+                        && let CommitOutcome::HookFailed { output } = worktree
+                            .commit_candidate(&include, &leftovers)
+                            .map_err(git_error)?
+                    {
+                        return Ok(Moved::HookFailed { output });
+                    }
+                    // 2. Litter over the whole range: a committed new file needs a report
+                    // that names it, as an untracked one does.
+                    let range: Vec<_> = worktree
+                        .changes(&base)
+                        .map_err(git_error)?
+                        .into_iter()
+                        .map(|mut change| {
+                            if change.kind == ChangeKind::Added {
+                                change.untracked = true;
+                            }
+                            change
+                        })
+                        .collect();
+                    let mut drop = Vec::new();
+                    for (change, verdict) in litter::classify(&range, &reported) {
+                        if let litter::Verdict::Exclude { reason } = verdict {
+                            if !excluded
+                                .iter()
+                                .any(|e: &ExcludedFile| e.path == change.path)
+                            {
+                                excluded.push(ExcludedFile {
+                                    path: change.path.clone(),
+                                    reason,
+                                });
+                            }
+                            if let ChangeKind::Renamed { from } = change.kind {
+                                drop.push(from);
+                            }
+                            drop.push(change.path);
+                        }
+                    }
+                    // 3. Onto the target's tip.
+                    match worktree
+                        .replay_series(&base, &onto, &drop)
+                        .map_err(git_error)?
+                    {
+                        SeriesOutcome::Conflicts { paths } => {
+                            return Ok(Moved::Conflicts { onto, paths });
+                        }
+                        SeriesOutcome::Replayed { tip, commits, .. } => {
+                            // Work started on a snapshot of the user's uncommitted files sits
+                            // on the commit the snapshot was taken on.
+                            let started = if on_snapshot {
+                                repo.resolve(&format!("{}^", base.0)).map_err(git_error)?
+                            } else {
+                                base.clone()
+                            };
+                            (tip, commits, started != onto)
+                        }
+                    }
+                };
+                if commits == 0 {
+                    return Ok(Moved::Nothing { excluded });
                 }
-            }
-            match worktree
-                .commit_candidate(&include, &commit_message)
-                .map_err(git_error)?
-            {
-                CommitOutcome::Committed { commit, diff_stat } => {
-                    let diff = repo.diff(&onto, &commit).map_err(git_error)?;
-                    Ok(Built::Committed {
+                if rebased {
+                    return Ok(Moved::Rebased {
                         onto,
-                        commit,
-                        diff_stat,
+                        commits,
                         excluded,
-                        unreported,
-                        diff,
-                    })
+                    });
                 }
-                CommitOutcome::HookFailed { output } => Ok(Built::HookFailed { output }),
-                CommitOutcome::Empty => Ok(Built::Empty { excluded }),
+                // 4. Fast-forward.
+                let request = LandRequest {
+                    branch: target.clone(),
+                    expected_tip: onto,
+                    commit: tip,
+                };
+                match repo.land(&request).map_err(git_error)? {
+                    LandOutcome::Landed { new_tip } => {
+                        return Ok(Moved::Landed {
+                            tip: new_tip,
+                            commits,
+                            excluded,
+                        });
+                    }
+                    LandOutcome::Blocked(LandBlock::TipMoved { .. }) if tries < LAND_TRIES => {}
+                    LandOutcome::Blocked(block) => return Ok(Moved::Blocked(block)),
+                }
             }
         })
         .await?;
+        Ok(moved)
+    }
 
-        match built {
-            Built::Conflicts { onto, paths } => {
-                self.landing_problem(
-                    task,
-                    &format!(
-                        "Its changes conflict with the current `{target}` ({}) in: {}. {}",
+    /// Acts on what moving the commits came to; returns the outcome for the orchestrator.
+    /// `on_its_own`: Brigadier lands it after a self-check, so a problem reaches the
+    /// orchestrator as a message (the caller announces a landing). Whether it landed comes
+    /// with it.
+    async fn settle_landing(&self, task: &Task, moved: Moved, on_its_own: bool) -> (bool, String) {
+        let target = task
+            .workspace
+            .as_ref()
+            .and_then(|w| w.target.clone())
+            .unwrap_or_default();
+        let problem = |reason: String, state: TaskState| async move {
+            if on_its_own {
+                self.landing_problem(task, &reason, state).await;
+            } else {
+                self.hand_back(task, state, Some(&reason)).await;
+            }
+            format!("[not landed task-{}] {reason}", task.number)
+        };
+        let text = match moved {
+            Moved::Landed {
+                tip,
+                commits,
+                excluded,
+            } => {
+                self.landed(task, &target, &tip, commits).await;
+                return (
+                    true,
+                    format!(
+                        "Landed {} on `{target}` (now at {}).{}",
+                        commits_word(commits),
+                        short(&tip),
+                        litter_note(&excluded)
+                    ),
+                );
+            }
+            Moved::Nothing { excluded } => {
+                self.dispose_task(task, TaskState::Done).await;
+                self.set_phase_stage(task, PhaseStage::Done).await;
+                format!(
+                    "[nothing to land task-{}] It has no commits to land.{}",
+                    task.number,
+                    litter_note(&excluded)
+                )
+            }
+            Moved::Rebased {
+                onto,
+                commits,
+                excluded,
+            } => {
+                let updated = self
+                    .update_task(&task.conversation_id, &task.id, |t| {
+                        if let Some(w) = t.workspace.as_mut() {
+                            w.base = Some(onto.0.clone());
+                            w.on_snapshot = false;
+                        }
+                    })
+                    .await;
+                let text = format!(
+                    "`{target}` moved since you started, so Brigadier rebased your {} onto its tip ({}).{} Run a quick self-check now: build, and run the tests of the crates or packages you touched. Fix and commit anything that broke, then call submit_report again. Your work lands on its own once your report is in; it is not reviewed again.",
+                    commits_word(commits),
+                    short(&onto),
+                    litter_note(&excluded)
+                );
+                let sent = match updated {
+                    Ok(task) => self
+                        .message_worker(&task.conversation_id, &task, text, "Brigadier")
+                        .await
+                        .map(|_| ()),
+                    Err(err) => Err(err),
+                };
+                match sent {
+                    Ok(()) => format!(
+                        "`{target}` moved, so task-{}'s {} were rebased onto it. It runs a quick self-check, and its work lands on its own after its report; you hear when it has landed.",
+                        task.number,
+                        commits_word(commits)
+                    ),
+                    Err(err) => {
+                        problem(
+                            format!("Its commits were rebased onto `{target}`, which moved, but its worker could not be asked to check them: {err}"),
+                            TaskState::Reported,
+                        )
+                        .await
+                    }
+                }
+            }
+            Moved::Conflicts { onto, paths } => {
+                problem(
+                    format!(
+                        "Its commits conflict with the current `{target}` ({}) in: {}. {}",
                         short(&onto),
                         paths.join(", "),
                         conflict_step(task, &target)
                     ),
                     TaskState::Reported,
                 )
-                .await;
+                .await
             }
-            Built::HookFailed { output } => {
-                self.landing_problem(
-                    task,
-                    &format!(
-                        "The repository's commit hooks refused the commit:\n{}\nSend task-{} back with message_worker to fix this.",
+            Moved::HookFailed { output } => {
+                problem(
+                    format!(
+                        "The repository's commit hooks refused to commit what it left uncommitted:\n{}\nSend task-{} back with message_worker to fix this.",
                         clip(&output, 3_000),
                         task.number
                     ),
                     TaskState::Reported,
                 )
-                .await;
+                .await
             }
-            Built::Empty { excluded } => {
-                let note = if excluded.is_empty() {
-                    String::new()
-                } else {
+            Moved::Blocked(block) => {
+                problem(
                     format!(
-                        " Left out as litter: {}.",
-                        excluded
-                            .iter()
-                            .map(|e| e.path.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                };
-                self.announcing(task).await;
-                self.dispose_task(task, TaskState::Done).await;
-                self.deliver(
-                    &task.conversation_id,
-                    Envelope {
-                        kind: InjectionKind::Decision,
-                        label: format!("task-{} empty", task.number),
-                        task_id: Some(task.id.clone()),
-                        text: format!("[nothing to land task-{}] The task changed nothing that could be committed.{note}", task.number),
-                    },
+                        "It is ready to land, but landing now is not safe: {block} Nothing was changed. Call land_phase for task-{} again once that is resolved.",
+                        task.number
+                    ),
+                    TaskState::ReadyToLand,
                 )
-                .await;
+                .await
             }
-            Built::Committed {
-                onto,
-                commit,
-                diff_stat,
-                excluded,
-                unreported,
-                diff,
-            } => {
-                let live = self.existing_task_live(&task.id);
-                let redactor = match live {
-                    Some(live) => live.redactor().await,
-                    None => None,
-                };
-                let diff = match redactor {
-                    Some(redactor) => redactor.redact(&diff).into_owned(),
-                    None => diff,
-                };
-                let diff_bytes = diff.len() as u64;
-                let hash = self.core.store().blobs().put(diff.into_bytes()).await?;
-                let candidate = Candidate {
-                    commit: commit.0.clone(),
-                    onto: onto.0.clone(),
-                    message: message.clone(),
-                    diff_stat: diff_stat_of(&diff_stat),
-                    excluded,
-                    diff: Some(crate::work::ArtifactRef {
-                        id: hash.to_string(),
-                        title: format!("Candidate commit of task-{}", task.number),
-                        kind: crate::work::ArtifactKind::Diff,
-                        mime: "text/x-diff".into(),
-                        bytes: diff_bytes,
-                        file_name: Some(format!("task-{}-candidate.diff", task.number)),
-                    }),
-                };
-                let task = self
-                    .update_task(&task.conversation_id, &task.id, |t| {
-                        t.candidate = Some(candidate);
-                        // Later work of this worker is relative to the candidate's parent.
-                        if let Some(workspace) = t.workspace.as_mut() {
-                            workspace.base = Some(onto.0.clone());
-                            workspace.on_snapshot = false;
-                        }
-                    })
-                    .await?;
-                // A held change accepted again unchanged keeps its reviews.
-                let reverify = self.reverify_held(&task, &commit.0).await;
-                let recheck = if reverify.is_some() {
-                    super::gates::Recheck::Verify
-                } else {
-                    super::gates::Recheck::Full
-                };
-                match self.open_gate(&task, unreported, recheck, reverify).await {
-                    Ok(()) => {}
-                    Err(super::gates::NotOpened::Error(err)) => return Err(err),
-                    Err(super::gates::NotOpened::Unchanged) => {
-                        self.escalate_unchanged(&task).await;
+        };
+        (false, text)
+    }
+
+    /// Every file a report of `task`'s phase names: the provenance a new file needs to land.
+    async fn phase_reported(&self, task: &Task) -> Vec<String> {
+        let mut reported: Vec<String> = Vec::new();
+        let mut add = |t: &Task| {
+            if let Some(report) = &t.report {
+                reported.extend(report.changes.iter().map(|p| normalize(p)));
+            }
+        };
+        add(task);
+        if let Ok(board) = self.core.board(&task.conversation_id).await {
+            let mut subject = task.subject.clone();
+            while let Some(id) = subject {
+                let Some(t) = board.tasks.get(&id) else { break };
+                add(t);
+                subject = t.subject.clone();
+            }
+            if let Some(phase) = task.phase {
+                for t in board.tasks.values() {
+                    if t.request_id == task.request_id && t.phase == Some(phase) && t.kind.writes()
+                    {
+                        add(t);
                     }
                 }
             }
         }
-        Ok(())
+        reported.sort();
+        reported.dedup();
+        reported
     }
 
-    /// What a reviewer reads about the change: the task, what the worker was told since, the
-    /// worker's report, the diff. `scratch` is the reader's own scratch folder.
-    pub(crate) async fn review_brief(&self, subject: &Task, scratch: &Path) -> String {
-        // What the worker wrote after its report may come in after its checks were opened.
-        let addendum = match &subject.addendum {
-            Some(addendum) => Some(addendum.clone()),
-            None => self
-                .task_by_id(&subject.conversation_id, &subject.id)
-                .await
-                .ok()
-                .filter(|now| now.candidate == subject.candidate)
-                .and_then(|now| now.addendum),
+    /// The tasks whose work landed with `task`'s: it, and the work it builds on (a verifier's
+    /// lead, a merge task's conflicting task).
+    async fn landed_with(&self, task: &Task) -> Vec<Task> {
+        let mut tasks = vec![task.clone()];
+        let Ok(board) = self.core.board(&task.conversation_id).await else {
+            return tasks;
         };
-        let mut text = brief_history(subject);
+        let mut subject = task.subject.clone();
+        while let Some(id) = subject {
+            let Some(t) = board.tasks.get(&id) else { break };
+            if t.kind.writes() && !t.state.is_final() && !tasks.iter().any(|known| known.id == t.id)
+            {
+                tasks.push(t.clone());
+            }
+            subject = t.subject.clone();
+        }
+        tasks
+    }
+
+    async fn landed(&self, task: &Task, target: &str, new_tip: &Oid, commits: u32) {
+        let tasks = self.landed_with(task).await;
+        for landed in &tasks {
+            let updated = self
+                .update_task(&landed.conversation_id, &landed.id, |t| {
+                    t.landed = Some(new_tip.0.clone());
+                    t.landing = None;
+                })
+                .await;
+            // Its report enters the Brain now, at the commit that landed.
+            if let Ok(updated) = &updated
+                && let Some(report) = &updated.report
+            {
+                self.learn_report(updated, report, None);
+            }
+        }
+        self.orchestrator_step(
+            &task.conversation_id,
+            OrchestratorStepKind::Landed {
+                task_ids: tasks.iter().map(|t| t.id.clone()).collect(),
+                commits,
+                branch: target.to_owned(),
+                head: new_tip.0.clone(),
+            },
+        )
+        .await;
+        let request = self
+            .request_for(&task.conversation_id, Some(&task.id))
+            .await;
+        self.record_decision(
+            &task.conversation_id,
+            request,
+            DecisionSource::Task {
+                task_id: task.id.clone(),
+            },
+            DecisionKind::Routine,
+            landed_line(task, target),
+            format!("{} landed fast-forward.", commits_word(commits)),
+        )
+        .await;
+        for landed in &tasks {
+            self.set_phase_stage(landed, PhaseStage::Done).await;
+        }
+        // The task branches are fully on the target now; they were Brigadier's, so they go
+        // too.
+        for landed in &tasks {
+            let branch = landed.workspace.as_ref().and_then(|w| w.branch.clone());
+            self.dispose_task(landed, TaskState::Landed).await;
+            if let (Some(branch), Ok(repo)) = (branch, self.task_repo(landed)) {
+                let git = self.git.clone();
+                let into = target.to_owned();
+                let deleted = blocking(move || {
+                    let repo = git.open(&repo).map_err(git_error)?;
+                    // `git branch -d` would compare with the main checkout's HEAD, which is
+                    // not the target in a new-worktree session; the merge check here is the
+                    // real one. Deleted only at the tip found merged: a commit added since
+                    // then stays.
+                    if let Some(tip) = repo.branch_tip(&branch).map_err(git_error)?
+                        && repo.is_merged(&branch, &into).map_err(git_error)?
+                    {
+                        repo.delete_branch_at(&branch, &tip).map_err(git_error)?;
+                    }
+                    Ok(())
+                })
+                .await;
+                if let Err(err) = deleted {
+                    tracing::warn!(task = %landed.id, error = %err, "could not delete the landed task branch");
+                }
+            }
+        }
+    }
+
+    /// What a reviewer reads about the work it reviews: the task, what the worker was told
+    /// since, the worker's report, and where its commits are.
+    pub(crate) async fn review_brief(&self, subject: &Task, _scratch: &Path) -> String {
+        let mut text = format!(
+            "\n\nThe task it implements (task-{}):\n{}",
+            subject.number, subject.spec
+        );
+        if !subject.messages.is_empty() {
+            text.push_str(
+                "\n\nWhat the orchestrator told the worker after that, oldest first (it changes the task where it differs):",
+            );
+            for message in &subject.messages {
+                text.push_str(&format!("\n---\n{message}"));
+            }
+        }
         if let Some(report) = &subject.report {
             text.push_str(&format!(
                 "\n\nThe worker's report:\n{}\n{}",
@@ -522,78 +616,14 @@ impl SessionManager {
                     }
                 }
             }
-            if let Some(addendum) = addendum {
-                let addendum = self.late_findings_for_checker(&addendum, scratch).await;
-                text.push_str(&format!(
-                    "\n\nWhat the worker wrote after its report:\n{addendum}"
-                ));
-            }
         }
-        // A worker on a big change writes its plan first; the change is checked against it.
-        if let Some(workspace) = &subject.workspace {
-            let plan = outputs_dir(Path::new(&workspace.scratch)).join("plan.md");
-            if let Ok(plan_text) = tokio::fs::read_to_string(&plan).await
-                && !plan_text.trim().is_empty()
-            {
-                let plan_text = if plan_text.len() > PLAN_INLINE_BYTES {
-                    let mut end = PLAN_INLINE_BYTES;
-                    while !plan_text.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    format!(
-                        "{}\n[… cut; the full plan is {}]",
-                        &plan_text[..end],
-                        plan.display()
-                    )
-                } else {
-                    plan_text
-                };
-                text.push_str(&format!(
-                    "\n\nThe worker's plan (plan.md), which the change should follow:\n{plan_text}"
-                ));
-            }
-        }
-        if let Some(candidate) = &subject.candidate {
-            if !candidate.excluded.is_empty() {
-                text.push_str("\n\nLeft out of the commit as litter:");
-                for file in &candidate.excluded {
-                    text.push_str(&format!("\n- {} ({})", file.path, file.reason));
-                }
-            }
+        if let Some(base) = subject.workspace.as_ref().and_then(|w| w.base.clone()) {
             text.push_str(&format!(
-                "\n\nYour checkout is at the candidate commit; its parent is {}. See the change with `git show --stat HEAD` and `git diff HEAD~1`.",
-                short(&Oid(candidate.onto.clone()))
+                "\n\nThe work starts at {}: see it with `git log --oneline {base}..HEAD` and `git diff {base}..HEAD` (uncommitted changes, if any, with `git status` and `git diff`).",
+                short(&Oid(base.clone()))
             ));
-            if let Some(diff) = &candidate.diff
-                && diff.bytes as usize <= INLINE_DIFF_BYTES
-                && let Ok(text_diff) = self.core.read_blob_text(diff.id.clone()).await
-            {
-                text.push_str(&format!("\n\nThe diff:\n```diff\n{text_diff}\n```"));
-            }
         }
         text
-    }
-
-    /// What the worker wrote after its report, as a checker reads it: the whole of each part
-    /// cut to a report's size is written into the checker's scratch folder, and the cut
-    /// points at that file (a checker has no read_artifact).
-    async fn late_findings_for_checker(&self, held: &str, scratch: &Path) -> String {
-        let mut shown = held.to_owned();
-        for (n, (note, id)) in super::prompts::late_findings_cuts(held)
-            .into_iter()
-            .enumerate()
-        {
-            let Ok(whole) = self.core.read_blob_text(id.to_owned()).await else {
-                continue;
-            };
-            let path = scratch.join(format!("after-report-{}.md", n + 1));
-            if let Err(err) = tokio::fs::write(&path, whole).await {
-                tracing::warn!(path = %path.display(), error = %err, "could not give a checker what the worker wrote after its report");
-                continue;
-            }
-            shown = shown.replacen(note, &super::prompts::late_findings_file_note(&path), 1);
-        }
-        shown
     }
 
     /// What a merge worker reads: the task whose work it finishes merging and the conflicts
@@ -716,318 +746,6 @@ impl SessionManager {
         Ok((start.onto, start.commit))
     }
 
-    /// Step 5 (the user's approval under "Ask for approval"), then step 6.
-    pub(super) async fn approve_and_land(&self, task: &Task) -> Result<()> {
-        let permission = self.permission(&task.conversation_id);
-        if permission == PermissionLevel::AskForApproval && task.run.is_none() {
-            let candidate = task
-                .candidate
-                .clone()
-                .ok_or_else(|| Error::Invalid("no candidate".into()))?;
-            self.set_task_state(&task.conversation_id, &task.id, TaskState::AwaitingApproval)
-                .await?;
-            let (_, rx) = self
-                .open_approval(
-                    &task.conversation_id,
-                    Some(task.id.clone()),
-                    ApprovalSubject::Landing {
-                        task_id: task.id.clone(),
-                        branch: task
-                            .workspace
-                            .as_ref()
-                            .and_then(|w| w.target.clone())
-                            .unwrap_or_default(),
-                        diff_stat: candidate.diff_stat.clone(),
-                    },
-                )
-                .await?;
-            let answer = rx.await;
-            // The answer is about this round's commit: once the task moved on (a newer round,
-            // sent back, stopped), it decides nothing.
-            let now = self.task_by_id(&task.conversation_id, &task.id).await?;
-            if !super::gates::round_current(task, &now) {
-                return Ok(());
-            }
-            match answer {
-                Ok(CardAnswer::Decision(ApprovalDecision::Allow)) => {}
-                Ok(CardAnswer::Decision(ApprovalDecision::Deny { message })) => {
-                    self.announcing(task).await;
-                    let addendum = self.hand_back(task, TaskState::Reported, None).await;
-                    self.deliver(
-                        &task.conversation_id,
-                        Envelope {
-                            kind: InjectionKind::Decision,
-                            label: format!("landing task-{} declined", task.number),
-                            task_id: Some(task.id.clone()),
-                            text: format!(
-                                "[decision] The user declined landing task-{}{}. Nothing landed.{addendum}",
-                                task.number,
-                                if message.trim().is_empty() {
-                                    String::new()
-                                } else {
-                                    format!(": {message}")
-                                }
-                            ),
-                        },
-                    )
-                    .await;
-                    return Ok(());
-                }
-                _ => return Err(Error::Invalid("the landing approval was withdrawn".into())),
-            }
-        }
-        self.land_task(task).await
-    }
-
-    /// Step 6: lands the candidate. When the target moved, the candidate is replayed onto it
-    /// and the new commit goes through the gate again before it lands. `decided` is the task
-    /// as its round was decided (or its landing approved): only that round's commit lands,
-    /// and only once it passed.
-    pub(super) async fn land_task(&self, decided: &Task) -> Result<()> {
-        let task = self
-            .task_by_id(&decided.conversation_id, &decided.id)
-            .await?;
-        if !super::gates::round_current(decided, &task) {
-            tracing::info!(task = %task.id, "dropped the landing of a round the task moved on from");
-            return Ok(());
-        }
-        if !super::gates::candidate_passed(&task) {
-            return Err(Error::Invalid(format!(
-                "Its current change has not passed its checks, so it did not land. Call accept_task for task-{} again to check and land it.",
-                task.number
-            )));
-        }
-        let candidate = task
-            .candidate
-            .clone()
-            .ok_or_else(|| Error::Invalid("no candidate".into()))?;
-        let target = task
-            .workspace
-            .as_ref()
-            .and_then(|w| w.target.clone())
-            .ok_or_else(|| Error::Invalid("no target branch".into()))?;
-        let (git, repo) = (self.git.clone(), self.task_repo(&task)?);
-        let request = LandRequest {
-            branch: target.clone(),
-            expected_tip: Oid(candidate.onto.clone()),
-            commit: Oid(candidate.commit.clone()),
-        };
-        let outcome = blocking(move || {
-            git.open(&repo)
-                .map_err(git_error)?
-                .land(&request)
-                .map_err(git_error)
-        })
-        .await?;
-        match outcome {
-            LandOutcome::Landed { new_tip } => {
-                self.landed(&task, &target, &new_tip).await;
-                Ok(())
-            }
-            LandOutcome::Blocked(LandBlock::TipMoved { actual }) => {
-                let worktree = task
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| w.worktree.clone())
-                    .map(PathBuf::from)
-                    .ok_or_else(|| Error::Invalid("no worktree".into()))?;
-                let (git, old, new) = (
-                    self.git.clone(),
-                    Oid(candidate.onto.clone()),
-                    actual.clone(),
-                );
-                let commit = Oid(candidate.commit.clone());
-                let rebased = blocking(move || {
-                    git.open_worktree(&worktree)
-                        .map_err(git_error)?
-                        .rebase_candidate(&commit, &old, &new)
-                        .map_err(git_error)
-                })
-                .await?;
-                match rebased {
-                    RebaseOutcome::Rebased { commit, clean_fast } => {
-                        let task = self
-                            .update_task(&task.conversation_id, &task.id, |t| {
-                                if let Some(c) = t.candidate.as_mut() {
-                                    c.commit = commit.0.clone();
-                                    c.onto = actual.0.clone();
-                                }
-                                if let Some(w) = t.workspace.as_mut() {
-                                    w.base = Some(actual.0.clone());
-                                    w.on_snapshot = false;
-                                }
-                            })
-                            .await?;
-                        // A change the user had land despite its findings lands as it is
-                        // after a clean replay too.
-                        if clean_fast && task.gate.as_ref().is_some_and(|gate| gate.overridden) {
-                            let task = self
-                                .update_task(&task.conversation_id, &task.id, |t| {
-                                    if let Some(gate) = t.gate.as_mut() {
-                                        gate.commit = Some(commit.0.clone());
-                                    }
-                                })
-                                .await?;
-                            return Box::pin(self.land_task(&task)).await;
-                        }
-                        // A new commit is verified again before it lands, and reviewed
-                        // again too when the replay touched paths the target also changed
-                        // (B11).
-                        let recheck = if clean_fast {
-                            super::gates::Recheck::Rebased { review: false }
-                        } else {
-                            super::gates::Recheck::Rebased { review: true }
-                        };
-                        match self.open_gate(&task, Vec::new(), recheck, None).await {
-                            Err(super::gates::NotOpened::Error(err)) => Err(err),
-                            _ => Ok(()),
-                        }
-                    }
-                    RebaseOutcome::Conflicts { paths } => {
-                        self.landing_problem(
-                            &task,
-                            &format!(
-                                "`{target}` moved and now conflicts with it in: {}. {}",
-                                paths.join(", "),
-                                conflict_step(&task, &target)
-                            ),
-                            TaskState::Reported,
-                        )
-                        .await;
-                        Ok(())
-                    }
-                }
-            }
-            LandOutcome::Blocked(block) => {
-                self.landing_problem(
-                    &task,
-                    &format!(
-                        "It is ready to land, but landing now is not safe: {block} Nothing was changed. Call accept_task for task-{} again once that is resolved.",
-                        task.number
-                    ),
-                    TaskState::ReadyToLand,
-                )
-                .await;
-                Ok(())
-            }
-        }
-    }
-
-    async fn landed(&self, task: &Task, target: &str, new_tip: &Oid) {
-        let updated = self
-            .update_task(&task.conversation_id, &task.id, |t| {
-                t.landed = Some(new_tip.0.clone());
-            })
-            .await;
-        // Its report enters the Brain now, at the commit that landed.
-        if let Ok(updated) = &updated
-            && let Some(report) = &updated.report
-        {
-            self.learn_report(updated, report, None);
-        }
-        // The task branch is fully on the target now; it was Brigadier's, so it goes too.
-        let branch = task.workspace.as_ref().and_then(|w| w.branch.clone());
-        // The landed envelope follows the cleanup below.
-        self.announcing(task).await;
-        self.dispose_task(task, TaskState::Landed).await;
-        if let (Some(branch), Ok(repo)) = (branch, self.task_repo(task)) {
-            let git = self.git.clone();
-            let into = target.to_owned();
-            let deleted = blocking(move || {
-                let repo = git.open(&repo).map_err(git_error)?;
-                // `git branch -d` would compare with the main checkout's HEAD, which is not
-                // the target in a new-worktree session; the merge check here is the real one.
-                // Deleted only at the tip found merged: a commit added since then stays.
-                if let Some(tip) = repo.branch_tip(&branch).map_err(git_error)?
-                    && repo.is_merged(&branch, &into).map_err(git_error)?
-                {
-                    repo.delete_branch_at(&branch, &tip).map_err(git_error)?;
-                }
-                Ok(())
-            })
-            .await;
-            if let Err(err) = deleted {
-                tracing::warn!(task = %task.id, error = %err, "could not delete the landed task branch");
-            }
-        }
-        // Landed on the user's word, despite what its checks found.
-        if task.gate.as_ref().is_some_and(|gate| gate.overridden) {
-            let findings = super::gates::one_line_findings(&self.gate_findings(task).await);
-            self.decided_for_task(
-                task,
-                format!("{} on the user's word", landed_line(task, target)),
-                "Landed despite its checks' findings.".to_owned(),
-            )
-            .await;
-            self.deliver(
-                &task.conversation_id,
-                Envelope {
-                    kind: InjectionKind::Decision,
-                    label: format!("landed task-{}", task.number),
-                    task_id: Some(task.id.clone()),
-                    text: format!(
-                        "[landed task-{}] Commit {} is on `{target}`. It landed on the user's word despite its checks' findings: {findings}",
-                        task.number,
-                        short(new_tip),
-                    ),
-                },
-            )
-            .await;
-            return;
-        }
-        let review = task
-            .review
-            .as_ref()
-            .map(|r| {
-                if r.cross_vendor {
-                    "reviewed by another vendor"
-                } else {
-                    "reviewed by another model of the same vendor (only one vendor was available)"
-                }
-            })
-            .unwrap_or("reviewed");
-        let fixes = fixes_made(task);
-        self.decided_for_task(
-            task,
-            landed_line(task, target),
-            format!(
-                "{} and verified{}.",
-                match task.review.as_ref().map(|r| r.cross_vendor) {
-                    Some(true) => "Reviewed by another vendor",
-                    Some(false) => "Reviewed by the same vendor (the only one available)",
-                    None => "Reviewed",
-                },
-                match fixes {
-                    0 => String::new(),
-                    1 => ", after 1 fix round".into(),
-                    rounds => format!(", after {rounds} fix rounds"),
-                }
-            ),
-        )
-        .await;
-        self.deliver(
-            &task.conversation_id,
-            Envelope {
-                kind: InjectionKind::Decision,
-                label: format!("landed task-{}", task.number),
-                task_id: Some(task.id.clone()),
-                text: format!(
-                    "[landed task-{}] Commit {} is on `{target}` ({review}, and verified{}).",
-                    task.number,
-                    short(new_tip),
-                    match fixes {
-                        0 => String::new(),
-                        1 => "; Brigadier had the worker fix the checks' findings once".into(),
-                        rounds => format!(
-                            "; Brigadier had the worker fix the checks' findings {rounds} times"
-                        ),
-                    }
-                ),
-            },
-        )
-        .await;
-    }
-
     /// Something stopped a landing: the task goes to `state` and the orchestrator hears why,
     /// and decides what happens next.
     pub(super) async fn landing_problem(&self, task: &Task, reason: &str, state: TaskState) {
@@ -1041,7 +759,7 @@ impl SessionManager {
             return;
         }
         self.announcing(task).await;
-        let addendum = self.hand_back(task, state, Some(reason)).await;
+        self.hand_back(task, state, Some(reason)).await;
         self.deliver(
             &task.conversation_id,
             Envelope {
@@ -1049,7 +767,7 @@ impl SessionManager {
                 label: format!("landing task-{}", task.number),
                 task_id: Some(task.id.clone()),
                 text: format!(
-                    "[not landed task-{} \"{}\"] {reason}{addendum}",
+                    "[not landed task-{} \"{}\"] {reason}",
                     task.number, task.title
                 ),
             },
@@ -1058,13 +776,11 @@ impl SessionManager {
     }
 
     /// A landing ends without landing and the orchestrator decides next: the task goes to
-    /// `state` (`blocked` is why, for a task ready to land), Brigadier no longer lands it on
-    /// its own, and what its worker wrote after its report, held meanwhile, is returned as a
-    /// block for the orchestrator (empty when none was held).
-    async fn hand_back(&self, task: &Task, state: TaskState, blocked: Option<&str>) -> String {
-        let mut addendum = None;
+    /// `state` (`blocked` is why, for a task ready to land) and Brigadier no longer lands it
+    /// on its own.
+    async fn hand_back(&self, task: &Task, state: TaskState, blocked: Option<&str>) {
         // A task stopped meanwhile, or being stopped, stays stopped.
-        let updated = self
+        let _ = self
             .update_task_if(
                 &task.conversation_id,
                 &task.id,
@@ -1075,17 +791,9 @@ impl SessionManager {
                         .filter(|_| state == TaskState::ReadyToLand)
                         .map(str::to_owned);
                     t.landing = None;
-                    addendum = t.addendum.take();
                 },
             )
             .await;
-        match (updated, addendum) {
-            (Ok(Some(updated)), Some(addendum)) => format!(
-                "\n{}",
-                super::prompts::late_findings_envelope(&updated, &addendum)
-            ),
-            _ => String::new(),
-        }
     }
 
     /// The app's explicit Merge of this run's verified SHA, independent of session setup.
@@ -1389,54 +1097,6 @@ impl SessionManager {
     }
 }
 
-enum Built {
-    Conflicts {
-        onto: Oid,
-        paths: Vec<String>,
-    },
-    HookFailed {
-        output: String,
-    },
-    Empty {
-        excluded: Vec<ExcludedFile>,
-    },
-    Committed {
-        onto: Oid,
-        commit: Oid,
-        diff_stat: brigadier_git::DiffStat,
-        excluded: Vec<ExcludedFile>,
-        unreported: Vec<String>,
-        diff: String,
-    },
-}
-
-/// The task a change implements and what its worker was told since: the orchestrator's
-/// messages, and the findings Brigadier sent it back with.
-fn brief_history(subject: &Task) -> String {
-    let mut text = format!(
-        "\n\nThe task it implements (task-{}):\n{}",
-        subject.number, subject.spec
-    );
-    if !subject.messages.is_empty() {
-        text.push_str(
-            "\n\nWhat the orchestrator told the worker after that, oldest first (it changes the task where it differs):",
-        );
-        for message in &subject.messages {
-            text.push_str(&format!("\n---\n{message}"));
-        }
-    }
-    if !subject.fixes.is_empty() {
-        text.push_str(&format!(
-            "\n\nWhat earlier checks of its change found, which Brigadier sent the worker back to fix, oldest first. Each time it told the worker: \"{}\"",
-            super::gates::SEND_BACK
-        ));
-        for (index, findings) in subject.fixes.iter().enumerate() {
-            text.push_str(&format!("\n--- fix {}\n{findings}", index + 1));
-        }
-    }
-    text
-}
-
 pub(super) fn diff_stat_of(stat: &brigadier_git::DiffStat) -> DiffStat {
     DiffStat {
         files: stat
@@ -1458,12 +1118,6 @@ pub(super) fn diff_stat_of(stat: &brigadier_git::DiffStat) -> DiffStat {
 fn normalize(path: &str) -> String {
     let path = path.trim().trim_start_matches("./").trim_end_matches('/');
     Path::new(path).to_string_lossy().into_owned()
-}
-
-fn is_reported(path: &str, reported: &[String]) -> bool {
-    reported.iter().any(|r| {
-        path == r || path.starts_with(&format!("{r}/")) || r.ends_with(&format!("/{path}"))
-    })
 }
 
 /// "Landed task-3 “Add the flag” on `main`", for "Decided for you". An overnight run's tasks
@@ -1511,59 +1165,52 @@ fn clip(text: &str, max: usize) -> String {
     format!("{}…", &text[..end])
 }
 
-/// The fixes Brigadier had the worker make to its change, also those before the orchestrator
-/// accepted it again (after a hold or a hand-back): a fresh accept starts `fix_rounds` over,
-/// `fixes` keeps every one.
-fn fixes_made(task: &Task) -> usize {
-    task.fixes.len().max(task.fix_rounds as usize)
+/// "1 commit", "3 commits".
+fn commits_word(commits: u32) -> String {
+    if commits == 1 {
+        "1 commit".to_owned()
+    } else {
+        format!("{commits} commits")
+    }
+}
+
+/// What the litter guard left out, as a sentence (empty when nothing).
+fn litter_note(excluded: &[ExcludedFile]) -> String {
+    if excluded.is_empty() {
+        return String::new();
+    }
+    format!(
+        " Left out as litter (still in its worktree): {}.",
+        excluded
+            .iter()
+            .map(|e| format!("{} ({})", e.path, e.reason))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+/// The changes to commit from `changes`; what the litter guard leaves out goes to `excluded`.
+fn keep_paths(
+    changes: &[brigadier_git::Change],
+    reported: &[String],
+    excluded: &mut Vec<ExcludedFile>,
+) -> Vec<String> {
+    let mut include = Vec::new();
+    for (change, verdict) in litter::classify(changes, reported) {
+        match verdict {
+            litter::Verdict::Keep => include.push(change.path),
+            litter::Verdict::Exclude { reason } => excluded.push(ExcludedFile {
+                path: change.path,
+                reason,
+            }),
+        }
+    }
+    include
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn checks_of_a_fix_read_what_the_worker_was_sent_back_with() {
-        let mut task: Task = serde_json::from_value(serde_json::json!({
-            "id": "t1",
-            "conversationId": "c1",
-            "number": 1,
-            "position": 0,
-            "title": "Add avg2",
-            "kind": "implement",
-            "spec": "Add avg2 to src/math.js.",
-            "access": { "repo": "write", "network": false, "unsandboxed": false },
-            "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
-            "state": "reviewing",
-            "attachments": [],
-            "createdAtMs": 0,
-            "updatedAtMs": 0
-        }))
-        .expect("a task");
-        let first = brief_history(&task);
-        assert!(first.contains("Add avg2 to src/math.js."), "{first}");
-        assert!(!first.contains("orchestrator told"), "{first}");
-        assert!(!first.contains("Brigadier sent"), "{first}");
-        task.messages = vec!["src/index.js may change too.".into()];
-        task.fixes = vec![
-            "From the review (task-2):\n- Re-export avg2 from src/index.js".into(),
-            "From the verification (task-5):\n- [not met] npm test passes".into(),
-        ];
-        let text = brief_history(&task);
-        assert!(text.contains("src/index.js may change too."), "{text}");
-        assert!(text.contains(super::super::gates::SEND_BACK), "{text}");
-        assert!(
-            text.contains("--- fix 1\nFrom the review (task-2):\n- Re-export avg2"),
-            "{text}"
-        );
-        assert!(text.contains("--- fix 2\nFrom the verification"), "{text}");
-        // Accepted again after a hold: its fix rounds start over, the fixes made still count.
-        task.fix_rounds = 0;
-        assert_eq!(fixes_made(&task), 2);
-        task.fix_rounds = 1;
-        task.fixes.clear();
-        assert_eq!(fixes_made(&task), 1);
-    }
 
     #[test]
     fn a_runs_landing_line_leaves_out_the_branch_its_report_already_names() {

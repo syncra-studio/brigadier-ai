@@ -73,7 +73,7 @@ How to work:
 - Once you accepted a plan step's task (its change is in review or verification), delegate the next step right away when both hold: it edits none of the files that task's report lists under Changes, and it doesn't depend on that step's code or decisions (it doesn't call, extend, test or document what that step adds). Otherwise start it once the earlier step landed. If the accepted task is sent back and its fix touches files the started step also touches, the later one needs a merge task.
 - Tools return at once; never wait or poll. Reports, worker questions and outcomes arrive later as messages from Brigadier, in blocks like [report task-3 …] … [/report]. Only these and the user's messages reach you.
 - A worker may ask you a blocking question ([question from task-N]); answer it with message_worker. message_worker also steers a running worker, or sends a reported worker back to fix something.
-- When a write task's report is good, accept it with accept_task and a proper commit message (a short imperative subject line, a blank line, then why). Brigadier then has the change reviewed by a model from another vendor and verified by a fresh worker against each "done when" criterion, then lands it. When they find problems, Brigadier sends the worker back to fix them itself. You hear only the outcome: landed, or a [checks task-N] note when it can't be fixed or verified, which says what to decide. Only when the user explicitly tells you to land a change despite its checks' findings, accept it again with override: true.
+- When a write task's report is good, land it with land_phase: a phase's verifier once it reports (its commits hold the lead's), or the lead of a small request after its own review. Workers commit their own steps; Brigadier moves the commits onto the session's branch with no card and no further checks, and tells you if the branch moved (the worker runs a quick self-check and its work lands on its own) or if they conflict (delegate a merge task).
 - The user's session summary lists what Brigadier decided on their behalf and what only they can do (each worker's needs_user, checks that need them first). Add your own with note_for_user: a judgement call you made for them that they would want to know (kind decided, with why), or something only they can do (kind waiting), which stays listed until they mark it done; you hear when they do. Work that doesn't depend on it carries on meanwhile.
 - Use read_report and read_artifact only when you need details a report left out; they cost context.
 - Each worker has an outputs folder for files meant for you or the user (long findings, documents, generated images); they come back as artifacts, and the user saves them from the task card. Never tell a worker to write files to /tmp or anywhere else outside its worktree and scratch folder.
@@ -592,7 +592,7 @@ pub(crate) fn worker(task: &Task, repo_note: &str, instructions: &str, extra: &s
         }
     };
     let write_rules = if task.kind.writes() {
-        "\n- Work only inside this worktree. Don't commit, push, switch branches or touch other checkouts: Brigadier builds one clean commit from your changes after review.\n- List every file you changed, created or deleted in the report's `changes`: new files that aren't listed are left out of the commit.\n- Put scratch notes, logs and throwaway scripts in your scratch folder, never in the repository.\n- Don't write new tests unless the task asks for them. If a change breaks an existing test, fix the code; change a test only for an intended behaviour change."
+        "\n- Work only inside this worktree, on its branch. Commit each finished step with a short plain message; don't push, switch branches or touch other checkouts. What you leave uncommitted is committed for you when your work lands.\n- List every file you changed, created or deleted in the report's `changes`: new files that aren't listed are left out when your work lands.\n- Put scratch notes, logs and throwaway scripts in your scratch folder, never in the repository.\n- Don't write new tests unless the task asks for them. If a change breaks an existing test, fix the code; change a test only for an intended behaviour change."
     } else {
         "\n- Don't change files in the repository. Your scratch folder is yours for notes."
     };
@@ -768,25 +768,12 @@ pub(crate) fn report_envelope(task: &Task, report: &Report, route: &str) -> Stri
 /// The reported write tasks still waiting for the orchestrator's decision (see
 /// `SessionManager::undecided`).
 pub(crate) fn undecided_note(tasks: &[Task]) -> String {
-    use crate::work::GateOutcome;
     let list: Vec<String> = tasks
         .iter()
-        .map(|task| {
-            // Checks that already ended on this very change: accepting it as it is repeats them.
-            let checked = match super::gates::checks_stand(task) {
-                Some(GateOutcome::Failed) => {
-                    " (its checks found problems and it has not changed since: send it back with guidance or stop it; accepting it as it is will not land it, unless the user explicitly told you to land it despite the findings: then accept it with override: true)"
-                }
-                Some(_) => {
-                    " (its checks could not finish: accept it again only if what stopped them was temporary)"
-                }
-                None => "",
-            };
-            format!("task-{} \"{}\"{checked}", task.number, task.title)
-        })
+        .map(|task| format!("task-{} \"{}\"", task.number, task.title))
         .collect();
     format!(
-        "[waiting for your decision: {}. Accept each with accept_task, send it back with message_worker, or stop it with stop_worker if its work should not land; until then it stays open.]",
+        "[waiting for your decision: {}. Land each with land_phase, send it back with message_worker, or stop it with stop_worker if its work should not land; until then it stays open.]",
         list.join(", ")
     )
 }
@@ -816,31 +803,6 @@ pub(crate) fn late_findings_text(artifact: &ArtifactRef, text: &str) -> String {
 const CUT_HEAD: &str = "[…cut; read_artifact ";
 const CUT_TAIL: &str = " reads all ";
 
-/// The cuts [`late_findings_text`] left in `text`, in order: each one's note, and the id of
-/// the artifact that holds the whole text.
-pub(crate) fn late_findings_cuts(text: &str) -> Vec<(&str, &str)> {
-    let mut cuts = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find(CUT_HEAD) {
-        let after = &rest[start + CUT_HEAD.len()..];
-        let Some(end) = after.find(']') else {
-            break;
-        };
-        let note = &rest[start..start + CUT_HEAD.len() + end + 1];
-        if let Some((id, _)) = after[..end].split_once(CUT_TAIL) {
-            cuts.push((note, id));
-        }
-        rest = &rest[start + note.len()..];
-    }
-    cuts
-}
-
-/// What a checker reads in place of a cut's note: the file that holds the whole text (it
-/// has no read_artifact).
-pub(crate) fn late_findings_file_note(path: &std::path::Path) -> String {
-    format!("[…cut; the whole text is in {}]", path.display())
-}
-
 /// What a worker wrote after its report (see [`report_envelope`]), shown as
 /// [`late_findings_text`] gives it.
 pub(crate) fn late_findings_envelope(task: &Task, shown: &str) -> String {
@@ -849,14 +811,6 @@ pub(crate) fn late_findings_envelope(task: &Task, shown: &str) -> String {
          it is kept with the report:\n{shown}\n[/report]",
         task.number
     )
-}
-
-/// What a [`late_findings_envelope`] shows of the worker's text; `None` for other text.
-pub(crate) fn late_findings_shown(envelope: &str) -> Option<&str> {
-    let (head, rest) = envelope.split_once('\n')?;
-    (head.starts_with("[report task-") && head.contains(" · addendum] "))
-        .then(|| rest.strip_suffix("\n[/report]"))
-        .flatten()
 }
 
 /// Asks the orchestrator to sort a follow-up the user sent while `request` works.
@@ -905,68 +859,6 @@ mod tests {
             shown.ends_with("[…cut; read_artifact blob1 reads all 9000 bytes]"),
             "{shown}"
         );
-    }
-
-    #[test]
-    fn a_checker_finds_where_the_rest_of_a_cut_addendum_is() {
-        let artifact = |id: &str| ArtifactRef {
-            id: id.into(),
-            title: "What the worker wrote after its report".into(),
-            kind: crate::work::ArtifactKind::Note,
-            mime: "text/markdown".into(),
-            bytes: 9_000,
-            file_name: None,
-        };
-        assert!(late_findings_cuts("Short.").is_empty());
-        let long = "x".repeat(4_000);
-        let held = format!(
-            "{}\n\nShort.\n\n{}",
-            late_findings_text(&artifact("blob1"), &long),
-            late_findings_text(&artifact("blob2"), &long)
-        );
-        let cuts = late_findings_cuts(&held);
-        assert_eq!(
-            cuts,
-            vec![
-                ("[…cut; read_artifact blob1 reads all 9000 bytes]", "blob1"),
-                ("[…cut; read_artifact blob2 reads all 9000 bytes]", "blob2"),
-            ]
-        );
-        let path = std::path::Path::new("/scratch/held-1.md");
-        let shown = held.replacen(cuts[0].0, &late_findings_file_note(path), 1);
-        assert!(
-            shown.contains("[…cut; the whole text is in /scratch/held-1.md]"),
-            "{shown}"
-        );
-        assert_eq!(late_findings_cuts(&shown).len(), 1);
-    }
-
-    #[test]
-    fn a_held_back_addendum_is_read_back_from_its_envelope() {
-        let task: Task = serde_json::from_value(serde_json::json!({
-            "id": "t1",
-            "conversationId": "c1",
-            "number": 1,
-            "position": 0,
-            "title": "isPrime",
-            "kind": "implement",
-            "spec": "Add isPrime.",
-            "access": { "repo": "write", "network": false, "unsandboxed": false },
-            "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
-            "state": "reported",
-            "attachments": [],
-            "createdAtMs": 0,
-            "updatedAtMs": 0
-        }))
-        .expect("a task");
-        let shown = "Done.\n\n`test/primes.test.js:7` expects false.";
-        let envelope = late_findings_envelope(&task, shown);
-        assert_eq!(late_findings_shown(&envelope), Some(shown));
-        assert_eq!(
-            late_findings_shown("[report task-1] Done.\n[/report]"),
-            None
-        );
-        assert_eq!(late_findings_shown("Done."), None);
     }
 }
 

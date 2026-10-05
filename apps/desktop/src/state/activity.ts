@@ -27,10 +27,10 @@ const WORKING: ReadonlySet<TaskState> = new Set([
   "starting",
   "running",
   "blocked",
-  "reviewing",
+  "landing",
 ]);
 /** A task that waits for the user to approve its landing. */
-const LANDING: ReadonlySet<TaskState> = new Set(["awaitingApproval", "readyToLand"]);
+const LANDING: ReadonlySet<TaskState> = new Set(["readyToLand"]);
 
 export const useActivity = create<{ byConversation: Record<string, Activity> }>(() => ({
   byConversation: {},

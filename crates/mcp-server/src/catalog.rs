@@ -4,8 +4,8 @@
 use std::sync::{Arc, OnceLock};
 
 use brigadier_core::tools::{
-    AcceptTask, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch,
-    DelegateTask, FinishSession, JobCall, MessageWorker, NoteForUser, OrchestratorCall, PhaseDone,
+    ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch, DelegateTask,
+    FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser, OrchestratorCall, PhaseDone,
     PlanPhases, ProposeOvernight, ProposePhases, QueryBrain, ReadArtifact, RecordNodes, Remember,
     ReportRef, RequestApproval, Role, RouteFollowUp, SaveMemory, SearchTranscript, SubmitOutline,
     SubmitReport, TaskRef, ToolCall, WorkerCall,
@@ -22,7 +22,8 @@ message in this conversation. Never wait, sleep or poll for it: end your turn, a
 when the report or the user's next message arrives. You can delegate several independent tasks \
 at once. The worker sees nothing of this conversation but `spec` (and the listed attachments), \
 so make the spec self-contained. `implement` and `merge` tasks change code in their own git \
-worktree and land only through accept_task; the other kinds only read and report.";
+worktree, commit their own steps and land only through land_phase; the other kinds only read \
+and report.";
 
 const MESSAGE_WORKER: &str = "Send text to a running worker: the answer to the question it \
 asked you (it is waiting for it), or an instruction that steers its current work. Returns once \
@@ -96,14 +97,13 @@ money, using credentials or the keychain, or destroying something outside this s
 work. Not for pushes, pull requests or deploys the user asked for (just do those) nor for work \
 inside the session. Returns at once; the decision arrives later as a message.";
 
-const ACCEPT_TASK: &str = "Land a finished `implement` or `merge` task as one commit on the \
-session's branch, with your commit message. Call it after reading the task's report. Brigadier \
-first has the change reviewed by another vendor and checks that it can land safely; what happens \
-arrives as a message. Meanwhile the next plan step may start if it edits none of this task's \
-changed files and doesn't depend on its code or decisions. Set override only when the user \
-explicitly told you to land it despite the checks' findings, after those findings reached you: \
-the change they found problems in then lands as it is, without being checked again. Brigadier \
-refuses it unless the user wrote since.";
+const LAND_PHASE: &str = "Land a finished `implement` or `merge` task's commits on the \
+session's branch: a phase's verifier once its report is in (its commits hold the lead's), or the \
+lead of a small request after its own review. Call it after reading the report. Brigadier \
+commits what was left uncommitted, leaves litter out, and fast-forwards the branch; no card, \
+no further checks. If the branch moved meanwhile, the commits are rebased and the worker runs a \
+quick self-check first; then they land on their own and you hear when. Conflicts come back to \
+you: delegate a merge task.";
 
 const FINISH_SESSION: &str = "New-worktree sessions only: when all the work has landed, ask \
 the user to merge the session branch into its base branch (one click on a card). Returns at \
@@ -231,7 +231,7 @@ fn orchestrator_tools() -> Vec<Tool> {
             REQUEST_APPROVAL,
             input_schema::<RequestApproval>(),
         ),
-        tool("accept_task", ACCEPT_TASK, input_schema::<AcceptTask>()),
+        tool("land_phase", LAND_PHASE, input_schema::<LandPhase>()),
         tool(
             "finish_session",
             FINISH_SESSION,
@@ -345,7 +345,7 @@ pub fn parse_call(
                 "plan_phases" => OrchestratorCall::PlanPhases(args(name, arguments)?),
                 "approve_outline" => OrchestratorCall::ApproveOutline(args(name, arguments)?),
                 "request_approval" => OrchestratorCall::RequestApproval(args(name, arguments)?),
-                "accept_task" => OrchestratorCall::AcceptTask(args(name, arguments)?),
+                "land_phase" => OrchestratorCall::LandPhase(args(name, arguments)?),
                 "finish_session" => OrchestratorCall::FinishSession(args(name, arguments)?),
                 "note_for_user" => OrchestratorCall::NoteForUser(args(name, arguments)?),
                 "list_tasks" => OrchestratorCall::ListTasks,

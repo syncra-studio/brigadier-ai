@@ -17,9 +17,9 @@
 //! its tasks' landings. When those don't add up, the run keeps the report it has.
 
 use super::super::decisions::{named, short_words, waiting_run};
-use super::super::gates::{criterion_evidence, without_marker};
 use super::super::{SessionManager, blocking, git_error};
 use super::directives::{Clock, parse};
+use super::phase_gates::{criterion_evidence, without_marker};
 use super::wind_down::{CUT_OFF, to_you};
 use crate::board::Board;
 use crate::model::{DomainEvent, OvernightRunId, Setup};

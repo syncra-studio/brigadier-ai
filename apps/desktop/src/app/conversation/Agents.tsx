@@ -92,9 +92,8 @@ function statusLine(task: Task, summary: WorkerSummary | undefined, now: number)
         : "Paused";
     case "reported":
       return "Reported";
-    case "reviewing":
-      return "In review";
-    case "awaitingApproval":
+    case "landing":
+      return "Landing";
     case "readyToLand":
       return "Waiting for you";
     case "rejected":

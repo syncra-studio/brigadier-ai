@@ -29,7 +29,7 @@
 //! "Decided for you". A debug build scales every threshold with `BRIGADIER_STALL_SECS` (the
 //! silence before a nudge, in seconds), so the watchdog can be tried live.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -43,8 +43,8 @@ use crate::board::Board;
 use crate::model::{ConversationId, Lifecycle};
 use crate::now_ms;
 use crate::work::{
-    ApprovalSubject, AttemptEnd, CardId, CardState, Gate, GateOwner, PlanState, QuestionKind, Task,
-    TaskId, TaskState, WaitingSource,
+    ApprovalSubject, AttemptEnd, CardId, CardState, PlanState, QuestionKind, Task, TaskId,
+    TaskState, WaitingSource,
 };
 
 /// The silence before a nudge, in seconds; every other threshold follows from it.
@@ -216,45 +216,6 @@ fn card_open(board: &Board, task: &TaskId) -> bool {
     })
 }
 
-/// What is wrong with a gate round nobody decided.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum GateStuck {
-    /// Every member has a result.
-    Undecided,
-    /// These members ended (at least `grace` ago) without their result.
-    Lost(Vec<TaskId>),
-}
-
-/// Whether `gate`, still waited on, is stuck at `now`, its members found in `tasks`.
-pub(crate) fn gate_stuck(
-    gate: &Gate,
-    tasks: &HashMap<TaskId, Task>,
-    now: i64,
-    grace: i64,
-) -> Option<GateStuck> {
-    if gate.outcome.is_some() || gate.members.is_empty() {
-        return None;
-    }
-    let lost: Vec<TaskId> = gate
-        .members
-        .iter()
-        .filter(|member| member.result.is_none())
-        .map(|member| member.task_id.clone())
-        .collect();
-    if lost.is_empty() {
-        return Some(GateStuck::Undecided);
-    }
-    let lost: Vec<TaskId> = lost
-        .into_iter()
-        .filter(|id| {
-            tasks
-                .get(id)
-                .is_some_and(|task| task.state.is_final() && now - task.updated_at_ms >= grace)
-        })
-        .collect();
-    (!lost.is_empty()).then_some(GateStuck::Lost(lost))
-}
-
 /// A card the user left unanswered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StuckCard {
@@ -409,7 +370,6 @@ impl SessionManager {
                     self.watch_worker(live, task, &board, timing, now).await;
                 }
             }
-            self.watch_gates(&board, timing, now).await;
             self.watch_cards(&conversation_id, &board, timing, now)
                 .await;
         }
@@ -635,78 +595,6 @@ impl SessionManager {
         .await;
     }
 
-    /// Settles gate rounds whose members all ended without the round being decided.
-    async fn watch_gates(&self, board: &Board, timing: &Timing, now: i64) {
-        let rounds = board
-            .tasks
-            .values()
-            .filter(|task| task.state == TaskState::Reviewing)
-            .filter_map(|task| task.gate.as_ref().map(|gate| (Some(task), gate)));
-        for (owner, gate) in rounds {
-            match gate_stuck(gate, &board.tasks, now, timing.grace) {
-                Some(GateStuck::Undecided) => {
-                    // Plan rounds are decided with their last result, in one write.
-                    let Some(task) = owner else {
-                        continue;
-                    };
-                    if self.resettle_gate(task).await {
-                        tracing::info!(task = %task.id, round = gate.round, "settled a gate round left undecided");
-                        self.decided_for_task(
-                            task,
-                            format!(
-                                "Acted on the checks of task-{}: they had all finished",
-                                task.number
-                            ),
-                            "Every check had a result, but the round was never decided.".into(),
-                        )
-                        .await;
-                    }
-                }
-                Some(GateStuck::Lost(members)) => {
-                    for id in members {
-                        let Some(member) = board.tasks.get(&id) else {
-                            continue;
-                        };
-                        tracing::info!(member = %member.id, "recording the result of a gate member that ended without it");
-                        if member.report.is_some() && member.state == TaskState::Done {
-                            self.gate_member_reported(member).await;
-                        } else {
-                            self.gate_member_failed(member, "it ended without a result")
-                                .await;
-                        }
-                        let of = match &member.gate_link.as_ref().map(|link| &link.owner) {
-                            Some(GateOwner::Task { task_id }) => board
-                                .tasks
-                                .get(task_id)
-                                .map(|t| format!("task-{}", t.number)),
-                            Some(GateOwner::Plan { plan_id }) => board
-                                .plans
-                                .get(plan_id)
-                                .map(|p| format!("the plan \u{201c}{}\u{201d}", p.title)),
-                            Some(GateOwner::Phase { run_id, phase_id }) => board
-                                .runs
-                                .get(run_id)
-                                .and_then(|run| run.phase(phase_id))
-                                .map(|p| format!("phase {} of the overnight run", p.number)),
-                            None => None,
-                        }
-                        .unwrap_or_else(|| "a change".into());
-                        self.decided_for_task(
-                            member,
-                            format!(
-                                "Counted the result of task-{}, a check of {of}",
-                                member.number
-                            ),
-                            "It had ended, but its result never reached the round, which waited for it.".into(),
-                        )
-                        .await;
-                    }
-                }
-                None => {}
-            }
-        }
-    }
-
     /// Lists the cards the user left unanswered for long under "Waiting on you".
     async fn watch_cards(
         &self,
@@ -752,7 +640,6 @@ impl Drop for Busy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::work::{GateMember, GateResult, GateRole};
 
     const MIN: i64 = 60_000;
 
@@ -852,8 +739,7 @@ mod tests {
             TaskState::Blocked,
             TaskState::Paused,
             TaskState::Reported,
-            TaskState::Reviewing,
-            TaskState::AwaitingApproval,
+            TaskState::Landing,
             TaskState::ReadyToLand,
             TaskState::Landed,
             TaskState::Done,
@@ -975,7 +861,7 @@ mod tests {
         // Its task reported, waits for a card or for quota meanwhile.
         for state in [
             TaskState::Reported,
-            TaskState::Reviewing,
+            TaskState::Landing,
             TaskState::Paused,
             TaskState::Stopped,
         ] {
@@ -1012,102 +898,6 @@ mod tests {
             ..seen.clone()
         };
         assert!(!due(&fresh));
-    }
-
-    fn task(id: &str, number: u32, state: TaskState, updated: i64) -> Task {
-        let mut task: Task = serde_json::from_value(serde_json::json!({
-            "id": id,
-            "conversationId": "c1",
-            "number": number,
-            "position": 0,
-            "title": "Check the change",
-            "kind": "verify",
-            "spec": "Verify it.",
-            "access": { "repo": "read", "network": false, "unsandboxed": false },
-            "route": { "choice": { "provider": "codex", "model": null, "effort": null }, "reason": "" },
-            "state": "running",
-            "attachments": [],
-            "createdAtMs": 0,
-            "updatedAtMs": 0
-        }))
-        .expect("a task");
-        task.state = state;
-        task.updated_at_ms = updated;
-        task
-    }
-
-    fn member(id: &str, result: Option<GateResult>) -> GateMember {
-        GateMember {
-            task_id: TaskId(id.into()),
-            role: GateRole::Verify,
-            result,
-            avoid: Vec::new(),
-        }
-    }
-
-    fn gate(members: Vec<GateMember>) -> Gate {
-        Gate {
-            verification_scope: Default::default(),
-            rebased: false,
-            round: 1,
-            commit: Some("c1".into()),
-            members,
-            outcome: None,
-            relanding: false,
-            retry: false,
-            overridden: false,
-            findings: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn a_round_with_every_result_but_no_outcome_is_undecided() {
-        let tasks = HashMap::new();
-        let full = gate(vec![
-            member("m1", Some(GateResult::Passed)),
-            member("m2", Some(GateResult::Passed)),
-        ]);
-        assert_eq!(
-            gate_stuck(&full, &tasks, 0, MIN),
-            Some(GateStuck::Undecided)
-        );
-        let mut decided = full;
-        decided.outcome = Some(crate::work::GateOutcome::Passed);
-        assert_eq!(gate_stuck(&decided, &tasks, 0, MIN), None);
-        assert_eq!(gate_stuck(&gate(Vec::new()), &tasks, 0, MIN), None);
-    }
-
-    #[test]
-    fn a_member_that_ended_without_its_result_is_lost_after_the_grace() {
-        let mut tasks = HashMap::new();
-        for t in [
-            task("m1", 2, TaskState::Done, 0),
-            task("m2", 3, TaskState::Running, 0),
-            task("m3", 4, TaskState::Failed, 5 * MIN),
-        ] {
-            tasks.insert(t.id.clone(), t);
-        }
-        let round = gate(vec![
-            member("m1", None),
-            member("m2", None),
-            member("m3", None),
-            member("m4", Some(GateResult::Passed)),
-        ]);
-        // m2 still runs; m3 ended too recently.
-        assert_eq!(
-            gate_stuck(&round, &tasks, 6 * MIN, 2 * MIN),
-            Some(GateStuck::Lost(vec![TaskId("m1".into())]))
-        );
-        assert_eq!(
-            gate_stuck(&round, &tasks, 7 * MIN, 2 * MIN),
-            Some(GateStuck::Lost(vec![
-                TaskId("m1".into()),
-                TaskId("m3".into())
-            ]))
-        );
-        // Every member without a result still runs: nothing is stuck.
-        let running = gate(vec![member("m2", None)]);
-        assert_eq!(gate_stuck(&running, &tasks, 60 * MIN, 2 * MIN), None);
     }
 
     fn approval(id: &str, created: i64, state: CardState) -> crate::work::Approval {

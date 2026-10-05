@@ -117,7 +117,7 @@ fn tool_call(name: &str, args: Value) -> ToolCall {
         "plan_phases" => ToolCall::Orchestrator(O::PlanPhases(arg(name, args))),
         "approve_outline" => ToolCall::Orchestrator(O::ApproveOutline(arg(name, args))),
         "request_approval" => ToolCall::Orchestrator(O::RequestApproval(arg(name, args))),
-        "accept_task" => ToolCall::Orchestrator(O::AcceptTask(arg(name, args))),
+        "land_phase" => ToolCall::Orchestrator(O::LandPhase(arg(name, args))),
         "finish_session" => ToolCall::Orchestrator(O::FinishSession(arg(name, args))),
         "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
         "list_tasks" => ToolCall::Orchestrator(O::ListTasks),

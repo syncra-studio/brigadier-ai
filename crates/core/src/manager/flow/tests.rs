@@ -313,3 +313,138 @@ async fn an_outline_gets_one_review_from_the_other_vendor_and_a_go_ahead() {
     )));
     flow.stop().await;
 }
+
+/// Two workers on disjoint files commit their own steps (one also commits a stray log). The
+/// orchestrator lands each report with land_phase: the first fast-forwards; the second finds
+/// the branch moved, is rebased, runs a quick self-check and lands on its own. No cards, no
+/// reviews, and the log never lands.
+#[tokio::test]
+async fn reported_work_lands_with_its_own_commits_and_a_self_check_after_a_rebase() {
+    let heard: Heard = Arc::default();
+    let log = heard.clone();
+    let flow = Flow::start(
+        "land",
+        Options::default(),
+        script(move |turn| {
+            log.lock().unwrap().push(turn.input.clone());
+            let log = log.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    let mut landed = Vec::new();
+                    for n in [1, 2] {
+                        if turn.input.contains(&format!("[report task-{n} ")) {
+                            let reply = turn
+                                .call("land_phase", json!({"task": format!("task-{n}")}))
+                                .await;
+                            assert!(!reply.is_error, "{}", reply.text);
+                            log.lock().unwrap().push(reply.text.clone());
+                            landed.push(reply.text);
+                        }
+                    }
+                    if !landed.is_empty() {
+                        return Reply::text(format!("[quiet] {}", landed.join(" | ")));
+                    }
+                    if turn.input.contains("[landed task-") {
+                        return Reply::text("Both files are in.");
+                    }
+                    for (title, file) in [("Add a", "a.txt"), ("Add b", "b.txt")] {
+                        let reply = turn
+                            .call(
+                                "delegate_task",
+                                json!({"title": title, "kind": "implement",
+                                       "spec": format!("Create {file}.")}),
+                            )
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                    }
+                    return Reply::text("[quiet]");
+                }
+                let n = turn.task_number().unwrap();
+                let file = if n == 1 { "a.txt" } else { "b.txt" };
+                if turn.input.contains("Run a quick self-check") {
+                    assert!(turn.git(&["status", "--porcelain"]).trim().is_empty());
+                    assert!(turn.cwd.join("a.txt").exists() && turn.cwd.join("b.txt").exists());
+                    let reply = turn
+                        .call(
+                            "submit_report",
+                            json!({"summary": "Builds and passes after the rebase.",
+                                   "changes": [file]}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Checked.");
+                }
+                turn.write(file, &format!("{file}\n"));
+                turn.git(&["add", file]);
+                turn.git(&["commit", "-q", "-m", &format!("Add {file}")]);
+                if n == 1 {
+                    turn.write("debug.log", "scratch\n");
+                    turn.git(&["add", "-f", "debug.log"]);
+                    turn.git(&["commit", "-q", "-m", "Keep a log"]);
+                }
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": format!("Added {file}."), "changes": [file]}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("Reported.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add a.txt and b.txt.").await;
+    let board = flow
+        .until("both to land", |board| {
+            board.tasks.len() == 2
+                && board
+                    .tasks
+                    .values()
+                    .all(|task| task.state == TaskState::Landed)
+        })
+        .await;
+    let first = Flow::task(&board, 1);
+    let target = first
+        .workspace
+        .as_ref()
+        .and_then(|w| w.target.clone())
+        .unwrap();
+    let files = super::git(&flow.repo, &["ls-tree", "-r", "--name-only", &target]);
+    assert!(
+        files.contains("a.txt") && files.contains("b.txt"),
+        "{files}"
+    );
+    assert!(!files.contains("debug.log"), "the log stays out: {files}");
+    let subjects = super::git(&flow.repo, &["log", "--format=%s", &target]);
+    assert!(subjects.contains("Add a.txt") && subjects.contains("Add b.txt"));
+    assert!(board.approvals.is_empty(), "no cards");
+    assert!(
+        board
+            .tasks
+            .values()
+            .all(|task| task.kind == crate::work::TaskKind::Implement),
+        "no reviewers or verifiers"
+    );
+    let said = heard.lock().unwrap().join("\n");
+    assert!(said.contains("Run a quick self-check"), "one was rebased");
+    assert!(
+        said.contains("Left out as litter") && said.contains("debug.log"),
+        "the orchestrator hears what stayed out"
+    );
+    let landings = flow
+        .events()
+        .await
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                crate::model::DomainEvent::OrchestratorStepped { step }
+                    if matches!(step.kind, crate::work::OrchestratorStepKind::Landed { .. })
+            )
+        })
+        .count();
+    assert_eq!(landings, 2);
+    flow.settled().await;
+    flow.stop().await;
+}

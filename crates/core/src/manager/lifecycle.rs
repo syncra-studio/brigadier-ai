@@ -85,8 +85,8 @@ impl SessionManager {
             };
             for task in tasks.into_iter().filter(|task| !task.state.is_final()) {
                 match task.state {
-                    // A fix Brigadier was to check and land on its own, or was still being
-                    // made: the restart ended that, so the orchestrator decides.
+                    // A self-check after a rebase, or its report Brigadier was to land on its
+                    // own: the restart ended that, so the orchestrator decides.
                     _ if interrupted_fix(&task) => {
                         self.recover_fix(&task).await;
                         continue;
@@ -108,21 +108,14 @@ impl SessionManager {
                         self.dispose_task(&task, TaskState::Done).await;
                         continue;
                     }
-                    // The landing was interrupted: accept it again.
-                    TaskState::Reviewing | TaskState::AwaitingApproval if task.kind.writes() => {
-                        let mut addendum = None;
-                        let updated = self
+                    // The landing was interrupted (older stores: its checks, or its card):
+                    // nothing landed, and the orchestrator lands it again.
+                    TaskState::Landing if task.kind.writes() => {
+                        let _ = self
                             .update_task(&conversation.id, &task.id, |t| {
                                 t.state = TaskState::Reported;
                                 t.candidate = None;
-                                t.review = None;
                                 t.landing = None;
-                                addendum = t.addendum.take();
-                                if let Some(gate) = t.gate.as_mut()
-                                    && gate.outcome.is_none()
-                                {
-                                    gate.outcome = Some(crate::work::GateOutcome::Superseded);
-                                }
                             })
                             .await;
                         // The orchestrator was promised the landing's outcome as a message.
@@ -133,18 +126,8 @@ impl SessionManager {
                                 label: format!("landing task-{}", task.number),
                                 task_id: Some(task.id.clone()),
                                 text: format!(
-                                    "[not landed task-{} \"{}\"] Brigadier restarted before the landing finished; nothing landed. Call accept_task for task-{} again.{}",
-                                    task.number,
-                                    task.title,
-                                    task.number,
-                                    match (&updated, addendum) {
-                                        // Held while Brigadier had the change.
-                                        (Ok(updated), Some(addendum)) => format!(
-                                            "\n{}",
-                                            prompts::late_findings_envelope(updated, &addendum)
-                                        ),
-                                        _ => String::new(),
-                                    }
+                                    "[not landed task-{} \"{}\"] Brigadier restarted before the landing finished; nothing landed. Call land_phase for task-{} again.",
+                                    task.number, task.title, task.number,
                                 ),
                             },
                         )
@@ -168,18 +151,16 @@ impl SessionManager {
         }
     }
 
-    /// A write task Brigadier was landing a fix of when it quit: the fix was reported but not
-    /// yet checked, or the worker was still making it. Its worktree stays and it waits as
-    /// reported; the orchestrator gets its report, and decides.
+    /// A write task whose commits were rebased during its landing, cut off by the restart
+    /// while its worker ran the quick self-check (or before its report landed): its worktree
+    /// stays and it waits as reported; the orchestrator gets its report, and decides.
     async fn recover_fix(&self, task: &Task) {
-        let fixing = task.state != TaskState::Reported;
-        let mut addendum = None;
+        let checking = task.state != TaskState::Reported;
         let Ok(task) = self
             .update_task(&task.conversation_id, &task.id, |t| {
                 t.landing = None;
                 t.state = TaskState::Reported;
                 t.blocked_reason = None;
-                addendum = t.addendum.take();
             })
             .await
         else {
@@ -189,34 +170,16 @@ impl SessionManager {
             Some(report) => prompts::report_envelope(&task, report, &route_label(&task)),
             None => String::new(),
         };
-        // What the worker wrote after that report, held while Brigadier had the change.
-        if let Some(addendum) = addendum {
-            text.push_str(&format!(
-                "\n{}",
-                prompts::late_findings_envelope(&task, &addendum)
-            ));
-        }
-        let next = format!(
-            "Decide: accept_task for task-{n} to check and land it, message_worker to send it back, or stop_worker.",
-            n = task.number
-        );
-        if fixing {
-            let findings = self.gate_findings(&task).await;
-            text.push_str(&format!(
-                "\n[not landed task-{}] Brigadier restarted while the worker was fixing what the checks of its change found; its fix is unfinished in its worktree and nothing landed. The report above is from before the fix.{} {next}",
-                task.number,
-                if findings.is_empty() {
-                    String::new()
-                } else {
-                    format!("\nThe findings:\n{findings}")
-                }
-            ));
+        let n = task.number;
+        text.push_str(&if checking {
+            format!(
+                "\n[not landed task-{n}] Its commits were rebased onto the session's branch, which had moved, and Brigadier restarted while the worker ran its quick self-check; nothing landed. Send it back to finish the self-check (message_worker), then call land_phase for task-{n}."
+            )
         } else {
-            text.push_str(&format!(
-                "\n[not landed task-{}] This is the worker's fix of what the checks found; Brigadier restarted before checking it, so nothing landed. {next}",
-                task.number
-            ));
-        }
+            format!(
+                "\n[not landed task-{n}] This is the report after its self-check; Brigadier restarted before landing it, so nothing landed. Call land_phase for task-{n}."
+            )
+        });
         self.deliver(
             &task.conversation_id,
             Envelope {
@@ -304,8 +267,7 @@ impl SessionManager {
                         | TaskState::Starting
                         | TaskState::Running
                         | TaskState::Blocked
-                        | TaskState::Reviewing
-                        | TaskState::AwaitingApproval
+                        | TaskState::Landing
                 )
             })
         })
@@ -714,7 +676,7 @@ mod tests {
         assert!(interrupted_fix(&task(TaskState::Running, true)));
         // A report the orchestrator already has, and a landing under way (handled apart).
         assert!(!interrupted_fix(&task(TaskState::Reported, false)));
-        assert!(!interrupted_fix(&task(TaskState::Reviewing, true)));
+        assert!(!interrupted_fix(&task(TaskState::Landing, true)));
         assert!(!interrupted_fix(&task(TaskState::ReadyToLand, true)));
         let mut review = task(TaskState::Reported, true);
         review.kind = crate::work::TaskKind::Review;

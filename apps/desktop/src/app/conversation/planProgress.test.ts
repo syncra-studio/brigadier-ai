@@ -34,7 +34,7 @@ test("each plan lifecycle takes precedence over its steps", () => {
 test("task states have distinct pending, running, landed and failed marks", () => {
   assert.equal(planStepStatus(undefined), "pending");
   assert.equal(planStepStatus("queued"), "pending");
-  for (const state of ["starting", "running", "blocked", "paused", "reported", "reviewing", "awaitingApproval", "readyToLand"] as const) assert.equal(planStepStatus(state), "active");
+  for (const state of ["starting", "running", "blocked", "paused", "reported", "landing", "readyToLand"] as const) assert.equal(planStepStatus(state), "active");
   for (const state of ["landed", "done"] as const) assert.equal(planStepStatus(state), "done");
   for (const state of ["failed", "rejected", "stopped"] as const) assert.equal(planStepStatus(state), "failed");
 });

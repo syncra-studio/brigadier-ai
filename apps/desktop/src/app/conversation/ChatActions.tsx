@@ -84,7 +84,7 @@ function useRunning(conversationId: string): boolean {
   );
 }
 
-const ACTIVE = new Set(["queued", "starting", "running", "blocked", "reviewing"]);
+const ACTIVE = new Set(["queued", "starting", "running", "blocked", "landing"]);
 
 function fail(cause: unknown) {
   toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" });

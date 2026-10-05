@@ -378,18 +378,14 @@ pub struct RequestApproval {
     pub details: String,
 }
 
-/// `accept_task`: land a reported write task as one reviewed commit.
+/// `land_phase`: land a reported write task's commits (with the work they build on) on the
+/// session's branch.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct AcceptTask {
-    /// The task, e.g. "task-3".
+pub struct LandPhase {
+    /// The task whose commits land, e.g. "task-3": a phase's verifier, or the lead of a
+    /// small request.
     pub task: String,
-    /// The commit message: a short subject line, a blank line, then the body.
-    pub commit_message: String,
-    /// Only when the user explicitly told you to land it despite the checks' findings: it
-    /// lands as it is, without being checked again.
-    #[serde(default, rename = "override")]
-    pub override_checks: bool,
 }
 
 /// `finish_session`: merge the session branch into its base (new-worktree sessions), behind the
@@ -525,7 +521,7 @@ pub enum OrchestratorCall {
     PlanPhases(PlanPhases),
     ApproveOutline(ApproveOutline),
     RequestApproval(RequestApproval),
-    AcceptTask(AcceptTask),
+    LandPhase(LandPhase),
     FinishSession(FinishSession),
     NoteForUser(NoteForUser),
     ListTasks,
@@ -551,7 +547,7 @@ impl OrchestratorCall {
             Self::PlanPhases(_) => "plan_phases",
             Self::ApproveOutline(_) => "approve_outline",
             Self::RequestApproval(_) => "request_approval",
-            Self::AcceptTask(_) => "accept_task",
+            Self::LandPhase(_) => "land_phase",
             Self::FinishSession(_) => "finish_session",
             Self::NoteForUser(_) => "note_for_user",
             Self::ListTasks => "list_tasks",

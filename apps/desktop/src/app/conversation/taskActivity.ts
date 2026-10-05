@@ -3,7 +3,7 @@ import { formatDuration } from "@/lib/format";
 
 const TERMINAL = new Set<Task["state"]>(["landed", "done", "rejected", "stopped", "failed"]);
 
-const SETTLED_WORKER = new Set<Task["state"]>(["reported", "awaitingApproval", "readyToLand"]);
+const SETTLED_WORKER = new Set<Task["state"]>(["reported", "readyToLand"]);
 
 function hasTaskActivity(task: Task): boolean {
   return !TERMINAL.has(task.state);
@@ -34,7 +34,6 @@ export function taskWaitWords(task: Task): string | null {
     const reason = task.blockedReason?.trim();
     return reason ? (/^waiting\b/i.test(reason) ? reason : `Waiting: ${reason}`) : "Waiting";
   }
-  if (task.state === "awaitingApproval") return "Waiting for you";
   if (task.state === "readyToLand") return task.run ? "Held" : "Ready to land";
   return null;
 }
@@ -58,17 +57,14 @@ function semantic(source: ActivitySource): string {
   const wait = taskWaitWords(task);
   if (wait) return wait;
   const activity = source.activity || source.summary;
-  if (task.state === "running" && task.fixRounds > 0) {
-    return `Fixing review findings (round ${task.fixRounds})${activity ? `: ${activity}` : ""}`;
-  }
   if (activity && (task.state === "running" || task.state === "starting")) return activity;
   switch (task.state) {
     case "starting":
       return "Starting…";
     case "running":
       return "Thinking…";
-    case "reviewing":
-      return "Waiting for checks";
+    case "landing":
+      return "Landing";
     case "reported":
       return "Waiting for the report to be processed";
     default:
@@ -98,41 +94,10 @@ function timed(source: ActivitySource, text: string, now: number): string {
   return `${text} · ${elapsed}${changes}`;
 }
 
-/** At most two lines, including the current round's unfinished checkers. */
-export function taskActivityLines(
-  source: ActivitySource,
-  checkers: readonly ActivitySource[],
-  now: number,
-): ActivityLines {
+/** At most two lines of what a worker is at. */
+export function taskActivityLines(source: ActivitySource, now: number): ActivityLines {
   const empty = { first: "", second: "", firstWorking: false, secondWorking: false };
   const task = source.task;
   if (!task || !hasTaskActivity(task)) return empty;
-  if (task.state === "reviewing" && !taskWaitWords(task) && task.gate && !task.gate.outcome) {
-    const pending = task.gate.members.filter((member) => !member.result);
-    const lines = pending.slice(0, 2).map((member) => {
-      const checker = checkers.find((entry) => entry.task?.id === member.taskId) ?? { task: undefined };
-      const vendor = checker.task?.route.choice.provider === "claude" ? "Claude" : "Codex";
-      const label = member.role === "review"
-        ? `${checker.task ? `${vendor} ` : ""}reviewing the diff`
-        : member.role === "verify" ? "Verifier" : "Judge";
-      return {
-        text: timed(checker, `${label}${checker.task ? `: ${semantic(checker)}` : ": waiting to start"}`, now),
-        working: activelyWorking(checker),
-      };
-    });
-    const diff = source.diff ?? task.candidate?.diffStat;
-    if (lines.length) {
-      const changes = diff && diff.insertions + diff.deletions > 0 ? ` · +${diff.insertions} −${diff.deletions}` : "";
-      const more = pending.length > 2
-        ? ` · +${pending.length - 2} more ${pending.length === 3 ? "check" : "checks"}`
-        : "";
-      return {
-        first: lines[0]!.text + changes,
-        second: `${lines[1]?.text ?? ""}${more}`,
-        firstWorking: lines[0]!.working,
-        secondWorking: lines[1]?.working ?? false,
-      };
-    }
-  }
   return { ...empty, first: timed(source, semantic(source), now), firstWorking: activelyWorking(source) };
 }

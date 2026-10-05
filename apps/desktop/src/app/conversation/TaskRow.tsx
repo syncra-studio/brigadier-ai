@@ -26,8 +26,8 @@ import { cn } from "@/lib/utils";
 import { type Board, useBoard } from "@/state/board";
 
 /**
- * A worker's one row in the thread, updated in place as it works, is checked, fixed and lands:
- * "[◆ Add tests] · Landed · checked by 1 review + 1 verify · 1 fix". Its name opens the worker;
+ * A worker's one row in the thread, updated in place as it works and lands:
+ * "[◆ Add tests] · Landed" (an older task adds "· checked by 1 review + 1 verify"). Its name opens the worker;
  * the chevron opens its checks round by round (each checker opens too) and what was decided
  * about it.
  */
@@ -121,12 +121,12 @@ function rowFacts(board: Board | null | undefined, taskId: string): { word: stri
   if (!board || !task) return { word: null, tone: "quiet", detail: "" };
   const state = taskState(task);
   const source = (id: string) => ({ task: board.tasks[id], activity: board.activity[id] });
-  const activity = taskActivityLines(source(taskId), task.gate?.members.map((member) => source(member.taskId)) ?? [], 0);
+  const activity = taskActivityLines(source(taskId), 0);
   const tone = state.tone === "live" && !activity.firstWorking && !activity.secondWorking ? "quiet" : state.tone;
   const word = (task.state === "running" || task.state === "starting") && /^Waiting\b/i.test(board.activity[taskId] ?? "")
     ? board.activity[taskId]!
     : state.word;
-  return { word, tone, detail: taskRowDetail(task, checkersOf(board.tasks, [`task:${taskId}`])) };
+  return { word, tone, detail: taskRowDetail(checkersOf(board.tasks, [`task:${taskId}`])) };
 }
 
 export const TaskRow = memo(function TaskRow({ taskId }: { taskId: string }) {
@@ -134,7 +134,6 @@ export const TaskRow = memo(function TaskRow({ taskId }: { taskId: string }) {
   const name = useWorkerName(taskId);
   const { word, tone, detail } = useBoard(useShallow((s) => rowFacts(s.board, taskId)));
   const working = tone === "live";
-  const gate = useBoard((s) => s.board?.tasks[taskId]?.gate ?? null);
   const checkerIds = useCheckerIds([`task:${taskId}`]);
   const decided = useBoard((s) => (s.board ? taskDecisions(s.board.decisions, taskId).length : 0));
   if (name === null || word === null) return null;
@@ -174,7 +173,7 @@ export const TaskRow = memo(function TaskRow({ taskId }: { taskId: string }) {
     <Collapsible data-slot="task-row-group">
       {line}
       <CollapsibleContent className="text-muted-foreground flex flex-col gap-2 ps-6 pt-1 pb-1 text-sm">
-        <ChecksList checkerIds={checkerIds} gates={{ [`task:${taskId}`]: gate }} />
+        <ChecksList checkerIds={checkerIds} gates={{}} />
         <TaskDecisions taskId={taskId} />
       </CollapsibleContent>
     </Collapsible>

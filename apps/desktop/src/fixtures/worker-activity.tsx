@@ -7,7 +7,7 @@ import { BackgroundWorkers } from "@/app/conversation/BackgroundWorkers";
 import { TaskRow } from "@/app/conversation/TaskRow";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
-import type { Gate, Task } from "@/ipc/generated";
+import type { Task } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 
 const base = Object.values(night.tasks)[0] as unknown as Task;
@@ -25,23 +25,13 @@ const task = (id: string, state: Task["state"], patch: Partial<Task> = {}): Task
   attempts: [],
   run: null,
   requestId: null,
-  gate: null,
   gateLink: null,
   candidate: null,
   report: null,
   quotaWait: null,
   blockedReason: null,
-  fixRounds: 0,
   ...patch,
 });
-const gate: Gate = {
-  rebased: false,
-  verificationScope: { type: "full", reason: "Worker activity fixture" },
-  round: 1, commit: null, outcome: null, relanding: false, retry: false, overridden: false, findings: [],
-  members: ["review", "verify", "review"].map((role, index) => ({
-    taskId: `checker-${index}`, role: role as "review" | "verify", result: null, avoid: [],
-  })),
-};
 const tasks = {
   active: task("active", "running"),
   blocked: task("blocked", "blocked", { blockedReason: "Waiting for a free worker" }),
@@ -51,13 +41,7 @@ const tasks = {
     },
   }),
   queued: task("queued", "queued", { blockedReason: "waiting for step 1" }),
-  gate: task("gate", "reviewing", { gate }),
   completed: task("completed", "done"),
-  ...Object.fromEntries(gate.members.map((member) => [member.taskId, task(member.taskId, "running", {
-    kind: member.role === "review" ? "review" : "verify",
-    gateLink: { owner: { type: "task", taskId: "gate" }, round: 1, role: member.role },
-    route: { ...base.route, choice: { ...base.route.choice, provider: "codex" } },
-  })])),
 };
 useBoard.setState({
   board: {
@@ -65,7 +49,6 @@ useBoard.setState({
     activity: {
       active: "Editing apps/desktop/src/composer/Paste.tsx",
       blocked: "Writing…", quota: "Writing…", queued: "Writing…",
-      "checker-0": "Thinking…", "checker-1": "$ cargo test -p core", "checker-2": "Thinking…",
     },
     diffs: { active: { files: [], insertions: 209, deletions: 102 } },
   },
@@ -101,7 +84,7 @@ function WorkerActivityFixture() {
   return (
     <TooltipProvider>
       <main className="mx-auto flex max-w-2xl flex-col gap-4 p-6">
-        {["active", "blocked", "quota", "queued", "gate", "completed"].map((id) => (
+        {["active", "blocked", "quota", "queued", "completed"].map((id) => (
           <section key={id} data-task={id}><TaskRow taskId={id} /></section>
         ))}
         <BackgroundWorkers conversationId={conversationId} />

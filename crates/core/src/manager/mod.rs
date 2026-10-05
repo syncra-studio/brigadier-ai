@@ -30,7 +30,6 @@ mod files;
 #[cfg(all(test, unix))]
 mod flow;
 mod fork;
-mod gates;
 mod git_actions;
 mod instructions;
 mod landing;
@@ -56,7 +55,6 @@ mod undo;
 mod uninstall;
 mod usage;
 mod usage_view;
-mod verification_scope;
 pub mod warm;
 mod watchdog;
 mod worker_handoff;
@@ -110,12 +108,9 @@ pub struct SessionManager {
     /// Held while a new-worktree session's own worktree is created, so parallel first tasks
     /// create it once.
     session_worktrees: tokio::sync::Mutex<()>,
-    /// Held while a gate round opens or records a result, so results can't race the round
-    /// that is still being set up.
-    gates: tokio::sync::Mutex<()>,
     /// Held while a plan is proposed (checked against the plans as they are, then recorded
     /// and the open ones replaced) and while a review result decides a plan, so the two
-    /// can't interleave. Taken before `gates`.
+    /// can't interleave.
     plans: tokio::sync::Mutex<()>,
     /// Reviews someone waits for: a worker's `request_review`, an outline's review.
     reviews: phases::Reviews,
@@ -188,7 +183,6 @@ impl SessionManager {
             convs: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
             session_worktrees: tokio::sync::Mutex::new(()),
-            gates: tokio::sync::Mutex::new(()),
             plans: tokio::sync::Mutex::new(()),
             reviews: phases::Reviews::default(),
             task_writes: tokio::sync::Mutex::new(()),

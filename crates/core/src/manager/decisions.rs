@@ -393,7 +393,9 @@ impl SessionManager {
                 .map(|n| format!(" (task-{n} listed it as something only the user can do)"))
                 .unwrap_or_default(),
             WaitingSource::Landing { task_id } => number(task_id)
-                .map(|n| format!(" The checks of task-{n}'s change waited for it: call accept_task for task-{n} again to verify and land it."))
+                .map(|n| {
+                    format!(" It waited for this to land: call land_phase for task-{n} again.")
+                })
                 .unwrap_or_default(),
             WaitingSource::Run {
                 task_id: Some(task_id),
@@ -501,12 +503,12 @@ fn lists_still(source: &WaitingSource, synced: &Task, now: &Task) -> bool {
         return false;
     }
     let submitted = |task: &Task| task.report.as_ref().map(|report| report.submitted_at_ms);
-    let round = |task: &Task| task.gate.as_ref().map(|gate| gate.round);
     match source {
         WaitingSource::Task { .. } => {
             submitted(synced).is_some() && submitted(synced) == submitted(now)
         }
-        WaitingSource::Landing { .. } => round(synced).is_some() && round(synced) == round(now),
+        // Listed by the per-change checks, which are gone: nothing lists them again.
+        WaitingSource::Landing { .. } => false,
         WaitingSource::Card { .. } | WaitingSource::Orchestrator | WaitingSource::Run { .. } => {
             true
         }
@@ -1362,22 +1364,6 @@ mod tests {
         task
     }
 
-    fn round(mut task: Task, round: u32) -> Task {
-        task.gate = Some(crate::work::Gate {
-            verification_scope: Default::default(),
-            rebased: false,
-            round,
-            commit: Some("c1".into()),
-            members: Vec::new(),
-            outcome: None,
-            relanding: false,
-            retry: false,
-            overridden: false,
-            findings: Vec::new(),
-        });
-        task
-    }
-
     #[test]
     fn a_report_lists_its_waits_only_while_it_is_the_tasks_latest() {
         let source = task_source();
@@ -1395,24 +1381,6 @@ mod tests {
             &source,
             &task("t1", TaskState::Reported, None),
             &task("t1", TaskState::Reported, None)
-        ));
-    }
-
-    #[test]
-    fn a_round_lists_what_its_checks_need_only_while_it_is_the_latest() {
-        let source = WaitingSource::Landing {
-            task_id: TaskId("t1".into()),
-        };
-        let decided = round(task("t1", TaskState::Reviewing, Some((5, &[]))), 2);
-        assert!(lists_still(&source, &decided, &decided));
-        let newer = round(task("t1", TaskState::Reviewing, Some((5, &[]))), 3);
-        assert!(!lists_still(&source, &decided, &newer));
-        let landed = round(task("t1", TaskState::Landed, Some((5, &[]))), 2);
-        assert!(!lists_still(&source, &decided, &landed));
-        assert!(!lists_still(
-            &source,
-            &task("t1", TaskState::Reviewing, None),
-            &decided
         ));
     }
 

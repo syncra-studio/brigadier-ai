@@ -7,14 +7,12 @@ import type { Candidate } from "./Candidate";
 import type { Capability } from "./Capability";
 import type { CardId } from "./CardId";
 import type { ConversationId } from "./ConversationId";
-import type { Gate } from "./Gate";
 import type { GateLink } from "./GateLink";
 import type { KeptWork } from "./KeptWork";
 import type { Pin } from "./Pin";
 import type { QualityTier } from "./QualityTier";
 import type { QuotaWait } from "./QuotaWait";
 import type { Report } from "./Report";
-import type { ReviewRecord } from "./ReviewRecord";
 import type { Route } from "./Route";
 import type { RunTaskContext } from "./RunTaskContext";
 import type { TaskId } from "./TaskId";
@@ -72,30 +70,21 @@ subject: TaskId | null,
 /**
  * The plan this one reviews.
  */
-plan: CardId | null, attachments: Array<AttachmentRef>, workspace: TaskWorkspace | null, report: Report | null, candidate: Candidate | null, review: ReviewRecord | null, 
+plan: CardId | null, attachments: Array<AttachmentRef>, workspace: TaskWorkspace | null, report: Report | null, 
 /**
- * A write task: the current gate round on its candidate (reviewers and a verifier).
+ * Older tasks: the single commit the per-change checks were built on.
  */
-gate: Gate | null, 
+candidate: Candidate | null, 
 /**
- * A reviewer or verifier: the gate round it belongs to.
+ * A reviewer or verifier of an overnight phase's checks: the round it belongs to.
  */
 gateLink: GateLink | null, 
 /**
- * A write task: the commit message it was accepted with, while Brigadier lands it on
- * its own (it is re-gated after each fix round).
+ * Set while its work is being landed, or rebased and waiting for its quick self-check:
+ * its next report lands on its own (fast-forward only, never reviewed again). Older
+ * tasks: the commit message it was accepted with.
  */
 landing: string | null, 
-/**
- * A write task: times Brigadier sent it back with a gate's findings.
- */
-fixRounds: number, 
-/**
- * A write task: the findings Brigadier sent it back with, one entry per fix round,
- * oldest first. Later checks read them, and so does the orchestrator when the fixes end
- * without landing.
- */
-fixes: Array<string>, 
 /**
  * The landed commit.
  */

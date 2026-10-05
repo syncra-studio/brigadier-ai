@@ -147,7 +147,7 @@ const WORKING: ReadonlySet<Task["state"]> = new Set([
   "starting",
   "running",
   "blocked",
-  "reviewing",
+  "landing",
 ]);
 
 const FINAL: ReadonlySet<Task["state"]> = new Set(["landed", "done", "rejected", "stopped", "failed"]);
@@ -166,7 +166,6 @@ function keepTask(task: Task): boolean {
   return (
     task.state === "failed" ||
     task.state === "paused" ||
-    task.state === "awaitingApproval" ||
     (task.state === "readyToLand" && task.run === null)
   );
 }

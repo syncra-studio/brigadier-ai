@@ -147,7 +147,7 @@ impl SessionManager {
                         TaskState::Queued
                             | TaskState::Starting
                             | TaskState::Running
-                            | TaskState::Reviewing
+                            | TaskState::Landing
                     )
                 })
                 || relanding_in(&board, id)
@@ -315,7 +315,7 @@ fn held_note(held: &[&Task]) -> String {
         .map(|task| format!("task-{} \"{}\"", task.number, task.title))
         .collect();
     format!(
-        "[held, not landed: {}. Nothing of it landed; once what holds it is fixed, call accept_task for it again.]",
+        "[held, not landed: {}. Nothing of it landed; once what holds it is fixed, call land_phase for it again.]",
         list.join(", ")
     )
 }
@@ -382,10 +382,7 @@ pub(super) fn needs_user(board: &Board, request: &str) -> bool {
             .values()
             .any(|p| of(&p.request_id) && p.state == PlanState::Proposed)
         || tasks_in(board, request, |state| {
-            matches!(
-                state,
-                TaskState::Paused | TaskState::AwaitingApproval | TaskState::ReadyToLand
-            )
+            matches!(state, TaskState::Paused | TaskState::ReadyToLand)
         })
 }
 

@@ -109,31 +109,31 @@ test("a revised plan shows once, as its newest revision", () => {
   );
 });
 
-test("a task's row counts every check it had and its fixes", () => {
+test("an older task's row counts every check it had", () => {
   const router = byNumber(26);
   assert.equal(taskState(router).word, "Landed");
   assert.equal(
-    taskRowDetail(router, checkersOf(tasks, [`task:${router.id}`])),
+    taskRowDetail(checkersOf(tasks, [`task:${router.id}`])),
     "checked by 2 reviews + 3 verifies",
   );
   const landing = byNumber(32);
   assert.equal(
-    taskRowDetail(landing, checkersOf(tasks, [`task:${landing.id}`])),
-    "checked by 2 reviews + 2 verifies · 1 fix",
+    taskRowDetail(checkersOf(tasks, [`task:${landing.id}`])),
+    "checked by 2 reviews + 2 verifies",
   );
   const slots = byNumber(37);
   // The run's Stop interrupted its fix round.
   assert.equal(taskState(slots).word, "Stopped");
   // Its checks still failed after the fixes: the change never landed.
   assert.equal(taskState(byNumber(5)).word, "Not landed");
-  assert.equal(taskRowDetail(slots, checkersOf(tasks, [`task:${slots.id}`])), "checked by 2 reviews + 1 verify · 1 fix");
+  assert.equal(taskRowDetail(checkersOf(tasks, [`task:${slots.id}`])), "checked by 2 reviews + 1 verify");
   assert.equal(checksCount(checkersOf(tasks, [`task:${slots.id}`])), "2 reviews + 1 verify");
 });
 
-test("a checker's result reads from its round, or from its report once the round moved on", () => {
+test("an older task's checker result reads from its report", () => {
   const router = byNumber(26);
   const results = checkersOf(tasks, [`task:${router.id}`]).map(
-    (checker) => `task-${checker.number} ${checkResult(checker, router.gate)}`,
+    (checker) => `task-${checker.number} ${checkResult(checker, null)}`,
   );
   assert.deepEqual(results, [
     "task-27 passed",
@@ -216,7 +216,7 @@ test("a normal session's request reads the same way: one row per task, its check
   // A task held for the user says so on its row, and its checks still open from it.
   const task = normalTasks[held]!;
   assert.equal(taskState(task).word, "Ready to land");
-  assert.equal(taskRowDetail(task, checkersOf(normalTasks, [`task:${held}`])), "checked by 2 reviews + 3 verifies");
+  assert.equal(taskRowDetail(checkersOf(normalTasks, [`task:${held}`])), "checked by 2 reviews + 3 verifies");
   // Only the orchestrator's own call is a "Decided for you" line in the thread.
   const decided = sequence(block).flatMap((entry) =>
     entry.kind === "orchestrator" ? entry.steps.filter((step) => step.kind.type === "decided") : [],

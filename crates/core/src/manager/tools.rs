@@ -311,16 +311,10 @@ impl SessionManager {
                 .await?;
                 Ok("Asked the user. The decision arrives later as a message.".into())
             }
-            OrchestratorCall::AcceptTask(args) => {
+            OrchestratorCall::LandPhase(args) => {
                 self.check_plan_mode(id).await?;
                 let task = self.find_task(id, &args.task).await?;
-                let task_id = task.id.clone();
-                let reply = self
-                    .accept_task(id, task, args.commit_message, args.override_checks)
-                    .await?;
-                self.orchestrator_step(id, OrchestratorStepKind::Accepted { task_id })
-                    .await;
-                Ok(reply)
+                self.land_phase(id, task).await
             }
             OrchestratorCall::FinishSession(args) => {
                 self.check_plan_mode(id).await?;

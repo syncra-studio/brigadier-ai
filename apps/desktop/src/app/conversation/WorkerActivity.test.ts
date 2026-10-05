@@ -104,7 +104,7 @@ test("worker activity renders in the thread and expanded background strip", { ti
   const serialized = stdout.match(/<pre id="worker-activity-result">([^<]+)<\/pre>/)?.[1];
   assert.ok(serialized, `Fixture did not render its result:\n${stdout}`);
   const rendering = JSON.parse(serialized) as Rendering;
-  assert.equal(Object.keys(rendering.strip).length, 5, "The strip must be expanded with all five active workers");
+  assert.equal(Object.keys(rendering.strip).length, 4, "The strip must be expanded with all four active workers");
 
   await t.test("active rows render activity, elapsed time and diff", () => {
     for (const rows of [rendering.thread, rendering.strip]) {
@@ -127,14 +127,6 @@ test("worker activity renders in the thread and expanded background strip", { ti
     assert.equal(rendering.thread.blocked?.state, "Waiting for a free worker");
     assert.equal(rendering.thread.quota?.state, "Waiting for Codex quota");
     assert.equal(rendering.thread.queued?.state, "Queued");
-  });
-  await t.test("gate rows render reviewer, verifier and +1 more check", () => {
-    for (const rows of [rendering.thread, rendering.strip]) {
-      assert.deepEqual(rows.gate?.lines, [
-        "Codex reviewing the diff: Thinking… · 3m 12s",
-        "Verifier: $ cargo test -p core · 3m 12s · +1 more check",
-      ]);
-    }
   });
   await t.test("completed rows render no activity subrow", () => {
     assert.match(rendering.thread.completed!.text, /Done/);

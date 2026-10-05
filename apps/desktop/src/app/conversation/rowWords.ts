@@ -3,7 +3,7 @@ import type { Decision, DecisionWords, Gate, GateOwner, GateRole, MachineStepKin
 
 /**
  * The words of a worker's row in the thread ("Router: quota penalty · Landed · checked by
- * 1 review + 1 verify · 1 fix") and of the checks it opens to: plain functions of the board's
+ * 1 review + 1 verify") and of the checks it opens to: plain functions of the board's
  * records, so every row says the same thing about the same task.
  */
 
@@ -65,15 +65,13 @@ export function taskState(task: Task): RowState {
       return { word: "Starting", tone: "live" };
     case "running":
     case "blocked":
-      return { word: task.fixRounds > 0 ? `Fixing (${task.fixRounds} of 2)` : "Working", tone: "live" };
+      return { word: "Working", tone: "live" };
     case "paused":
       return { word: task.quotaWait ? "Waiting for quota" : "Paused", tone: "quiet" };
     case "reported":
       return { word: writes(task) ? "Finished" : "Reported", tone: "live" };
-    case "reviewing":
-      return { word: "Checking", tone: "live" };
-    case "awaitingApproval":
-      return { word: "Waiting for you", tone: "warning" };
+    case "landing":
+      return { word: "Landing", tone: "live" };
     case "readyToLand":
       // In a run nobody waits for the user: the run's lead decides what a held change does.
       return task.run ? { word: "Held", tone: "warning" } : { word: "Ready to land", tone: "warning" };
@@ -92,16 +90,10 @@ export function taskState(task: Task): RowState {
   }
 }
 
-/** What follows a worker's state on its row: its checks and fix rounds ("checked by 1 review + 1 verify · 1 fix"). */
-export function taskRowDetail(task: Task, checkers: readonly Task[]): string {
+/** What follows a worker's state on its row: the checks an older task had ("checked by 1 review + 1 verify"). */
+export function taskRowDetail(checkers: readonly Task[]): string {
   const counted = checksCount(checkers);
-  // One entry per time it was sent back with findings; the round counter resets once it lands.
-  const fixes = task.fixes.length;
-  const parts = [
-    counted && (task.state === "reviewing" ? counted : `checked by ${counted}`),
-    fixes > 0 && `${fixes} ${fixes === 1 ? "fix" : "fixes"}`,
-  ];
-  return parts.filter(Boolean).join(" · ");
+  return counted && `checked by ${counted}`;
 }
 
 /** What a checker came to: from its round on the owner while the owner keeps it, else from its report. */

@@ -21,9 +21,6 @@ use brigadier_router::Author;
 
 use super::super::SessionManager;
 use super::super::conversation::Envelope;
-use super::super::gates::{
-    FIX_ROUNDS, criterion_evidence, review_result, verify_result, without_marker,
-};
 use super::super::workers::TaskExtra;
 use super::policy::PLANNING_PHASE;
 use crate::model::OvernightRunId;
@@ -274,7 +271,6 @@ impl SessionManager {
                     return None;
                 }
                 let gate = Gate {
-                    verification_scope: Default::default(),
                     rebased: false,
                     round,
                     commit: Some(candidate_now.clone()),
@@ -1062,8 +1058,8 @@ fn verify_spec(
 End with submit_report. done_when: exactly one line per criterion, starting with its status and id: \"[met] p1-c1: your evidence\", \"[not met] p1-c2: what fails\", or \"[not checked] p1-c3: the command you tried and its error\". checks: passed, failed, notRun or noChecks, as for any verification ([pre-existing] and [excluded] checks don't make it notRun). open_questions: each problem a worker must fix, and nothing else. needs_user: exactly what only the user can do (name the config key, environment variable, account or action) before a criterion can be met, or nothing. A problem you notice that no criterion or check of this phase covers goes under risks as a plain line, without a marker.{retry}",
         phase_text(run, phase, candidate),
         phase.start_commit.as_deref().unwrap_or("HEAD~1"),
-        setup = super::super::gates::checks_setup(sandboxed),
-        not_run = super::super::gates::not_run_step(sandboxed),
+        setup = checks_setup(sandboxed),
+        not_run = not_run_step(sandboxed),
     )
 }
 
@@ -1679,9 +1675,337 @@ fn ids(findings: &[Finding]) -> String {
         .join(", ")
 }
 
+// ----- reading the checks' reports ---------------------------------------------------------
+
+/// Times Brigadier sends a task back with a gate's findings before the orchestrator decides.
+pub(crate) const FIX_ROUNDS: u32 = 2;
+
+/// The setup of a verifier's checks: what is installed, where a smoke run keeps its data, and
+/// how a check the sandbox or a rule forbids is given (PLAN.md §10.8).
+pub(crate) fn checks_setup(sandboxed: bool) -> String {
+    format!(
+        "Its dependencies are copied into this checkout from the user's while its lockfiles match theirs: don't reinstall them{}. A smoke run that starts the app or a daemon keeps its data in your test data folder, never the app's real data folder{}. A check the task or the run's Rules forbid (\"don't launch the app\") is not run: give it as \"[excluded] <the check>: <the rule>\".",
+        if sandboxed {
+            " (a check that needs one a changed lockfile left out is [not run], with its error)"
+        } else {
+            " (install one only if a check says it is missing)"
+        },
+        if sandboxed {
+            "; in your sandbox it can't open windows, so give it as \"[excluded] <the check>: the sandbox can't open windows\""
+        } else {
+            ""
+        },
+    )
+}
+
+/// How hard a verifier tries a check before calling it not run: in a sandbox, what it
+/// refuses it refuses for the whole check, so there is no other way to try.
+pub(crate) fn not_run_step(sandboxed: bool) -> &'static str {
+    if sandboxed {
+        "Before you call a check not run, run it the way the project runs it; name the command and quote its error."
+    } else {
+        "Workers often decide too early that a check can't run. Never do that yourself: before you call a check not run, try it, then try another way (install what is missing, use the project's own scripts, read how CI runs it). Name each command you tried and quote its error."
+    }
+}
+
+/// A "done when" line's status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Status {
+    Met,
+    NotMet,
+    NotChecked,
+}
+
+/// A line without its list marker: "- ", "* ", "• ", "2. " or "2) ".
+pub(crate) fn without_marker(line: &str) -> &str {
+    let line = line.trim_start_matches(['-', '*', '•', ' ', '\t']);
+    let number = line.trim_start_matches(|c: char| c.is_ascii_digit());
+    match number.strip_prefix(['.', ')']) {
+        Some(rest) if number.len() < line.len() => rest.trim_start(),
+        _ => line,
+    }
+}
+
+/// The status a "done when" line starts with ("[met] …"), and whether evidence follows.
+pub(crate) fn criterion_status(line: &str) -> Option<Status> {
+    let line = without_marker(line).to_lowercase();
+    if line.starts_with("[met]") {
+        Some(Status::Met)
+    } else if line.starts_with("[not met]") {
+        Some(Status::NotMet)
+    } else if line.starts_with("[not checked]") {
+        Some(Status::NotChecked)
+    } else {
+        None
+    }
+}
+
+/// The text after a "done when" line's status.
+pub(crate) fn criterion_text(line: &str) -> &str {
+    let line = without_marker(line);
+    line.find(']').map_or(line, |end| line[end + 1..].trim())
+}
+
+/// The evidence a "done when" line gives after its criterion ("[met] criterion: evidence",
+/// or a dash instead of the colon), if any.
+pub(crate) fn criterion_evidence(line: &str) -> Option<&str> {
+    let text = criterion_text(line);
+    let at = [": ", " — ", " – ", " - ", " -> ", " => "]
+        .iter()
+        .filter_map(|separator| text.find(separator).map(|at| at + separator.len()))
+        .min()?;
+    Some(text[at..].trim()).filter(|evidence| evidence.chars().any(char::is_alphanumeric))
+}
+
+/// A reviewer's result.
+pub(crate) fn review_result(report: &Report) -> GateResult {
+    match report.verdict {
+        Some(ReviewVerdict::Approve) => GateResult::Passed,
+        Some(ReviewVerdict::RequestChanges) => GateResult::Failed {
+            findings: if report.open_questions.is_empty() {
+                vec![report.summary.clone()]
+            } else {
+                report.open_questions.clone()
+            },
+        },
+        None => GateResult::NoResult {
+            reason: "The reviewer gave no verdict.".into(),
+        },
+    }
+}
+
+/// A "[pre-existing] …" gap's check and the evidence that it fails the same way on the
+/// parent ("[pre-existing] check: evidence", or a dash instead of the colon); `None` when
+/// either is missing.
+fn pre_existing_gap(line: &str) -> Option<(&str, &str)> {
+    let evidence = criterion_evidence(line)?;
+    let text = criterion_text(line);
+    let check = text[..text.len() - evidence.len()]
+        .trim_end()
+        .trim_end_matches([':', '—', '–', '-', '>', '='])
+        .trim();
+    check
+        .chars()
+        .any(char::is_alphanumeric)
+        .then_some((check, evidence))
+}
+
+/// The checks a verifier named under risks as unable to run: those that can't run on the
+/// parent either, for the same reason ("[pre-existing] …", a gap the project already had) or
+/// that a rule or the environment forbids ("[excluded] …"), and the others ("[not run] …").
+pub(crate) fn unrun_checks(risks: &[String]) -> (Vec<&String>, Vec<&String>) {
+    let marked = |line: &String, marker: &str| {
+        without_marker(line)
+            .get(..marker.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(marker))
+    };
+    (
+        risks
+            .iter()
+            .filter(|line| marked(line, "[pre-existing]") || marked(line, "[excluded]"))
+            .collect(),
+        risks
+            .iter()
+            .filter(|line| marked(line, "[not run]"))
+            .collect(),
+    )
+}
+
+/// A verifier's result. It passed only when every "done when" criterion is shown met with
+/// evidence (at least as many as the worker listed, `listed`), the project's checks passed
+/// (or it has none), and it found nothing for the worker to fix. A check that can't run on
+/// the parent commit either, for the same reason, is a gap the project already had: named
+/// under risks as "[pre-existing] check: evidence", it doesn't hold the change ("never land
+/// unverified" is about the checks this change could have run). Checks reported `notRun`
+/// never pass, whatever gaps are named beside them.
+pub(crate) fn verify_result(report: &Report, listed: usize) -> GateResult {
+    use crate::work::ChecksResult;
+    let mut unmet = Vec::new();
+    let mut unchecked = Vec::new();
+    let mut met = 0;
+    for line in &report.done_when {
+        match criterion_status(line) {
+            Some(Status::Met) if criterion_evidence(line).is_some() => met += 1,
+            Some(Status::Met) => unchecked.push(format!("{line} (no evidence given)")),
+            Some(Status::NotMet) => unmet.push(line.clone()),
+            Some(Status::NotChecked) | None => unchecked.push(line.clone()),
+        }
+    }
+    // Every criterion shown met, at least as many as the worker listed.
+    let all_met = met > 0 && unchecked.is_empty() && report.done_when.len() >= listed;
+    let checks_failed = report.checks == Some(ChecksResult::Failed);
+    // It was told to put each problem the worker must fix in open_questions.
+    if !unmet.is_empty() || !report.open_questions.is_empty() || (checks_failed && !all_met) {
+        let mut findings = unmet;
+        findings.extend(report.open_questions.iter().cloned());
+        if findings.is_empty() {
+            findings.push(format!("The checks failed: {}", report.summary));
+        }
+        return GateResult::Failed { findings };
+    }
+    let reason = if checks_failed {
+        // A failing check tied to no criterion and nothing named to fix (an optional check
+        // that needs a key nobody set): nothing for the worker to fix, and not proof either.
+        Some(format!(
+            "A check failed, though every \"done when\" criterion is met and it named nothing to fix: {}",
+            report.summary
+        ))
+    } else if met == 0 {
+        Some("It showed no \"done when\" criterion met with evidence.".to_owned())
+    } else if !unchecked.is_empty() {
+        Some(format!("Left unchecked: {}", unchecked.join("; ")))
+    } else if report.done_when.len() < listed {
+        Some(format!(
+            "It covered {} \"done when\" criteria; the worker listed {listed}, so some were not checked.",
+            report.done_when.len()
+        ))
+    } else {
+        let (gaps, unrun) = unrun_checks(&report.risks);
+        // A gap that names no check, or no evidence that the parent fails the same way, is
+        // no proof that the change had nothing to run.
+        let unproven: Vec<&str> = gaps
+            .iter()
+            .filter(|line| pre_existing_gap(line).is_none())
+            .map(|line| without_marker(line))
+            .collect();
+        // Everything that didn't run is excluded by a rule or the environment, or already
+        // failed on the parent: nothing this change could have run is missing.
+        let excluded = gaps.iter().any(|line| {
+            without_marker(line)
+                .to_lowercase()
+                .starts_with("[excluded]")
+        });
+        match report.checks {
+            Some(ChecksResult::NotRun) if unrun.is_empty() && excluded && unproven.is_empty() => {
+                None
+            }
+            Some(ChecksResult::Passed | ChecksResult::NoChecks)
+                if unrun.is_empty() && !unproven.is_empty() =>
+            {
+                Some(format!(
+                    "A check it named as failing on the parent too (or as excluded) gave no check, or no evidence from the parent (or no rule): {}",
+                    unproven.join("; ")
+                ))
+            }
+            Some(ChecksResult::Passed | ChecksResult::NoChecks) if unrun.is_empty() => None,
+            Some(ChecksResult::Passed | ChecksResult::NoChecks | ChecksResult::NotRun) => {
+                Some(format!(
+                    "The project's checks could not run: {}",
+                    if unrun.is_empty() {
+                        report.summary.clone()
+                    } else {
+                        unrun
+                            .iter()
+                            .map(|line| without_marker(line))
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    }
+                ))
+            }
+            None => Some("It did not say whether the project's checks ran.".to_owned()),
+            Some(ChecksResult::Failed) => unreachable!("handled above"),
+        }
+    };
+    match reason {
+        None => GateResult::Passed,
+        Some(reason) => GateResult::Unverified { reason },
+    }
+}
+
+/// What a verifier's checkout holds that its commit doesn't: any changed tracked file and
+/// any new file git doesn't ignore, whatever its kind (a check may have used it). Build
+/// output goes into ignored folders, which don't count.
+fn checkout_changes(changes: &[brigadier_git::Change]) -> Option<String> {
+    let paths: Vec<&str> = changes.iter().map(|change| change.path.as_str()).collect();
+    (!paths.is_empty()).then(|| format!("it changed {}", paths.join(", ")))
+}
+
+fn author_of(choice: &crate::model::ModelChoice) -> Author {
+    Author {
+        provider: choice.provider,
+        model: choice.model.clone(),
+    }
+}
+
+/// Routing of the phase checks' members (their reports, failures and who they must not be).
+impl SessionManager {
+    /// A gate member reported. Called while its report is recorded, before its turn ends, so
+    /// a verifier's checkout is still there to compare with the commit it checked. Only an
+    /// overnight phase's checks have members now; older members are ignored.
+    pub(crate) async fn gate_member_reported(&self, member: &Task) {
+        let Some(link) = member.gate_link.clone() else {
+            return;
+        };
+        if let GateOwner::Phase { run_id, phase_id } = &link.owner {
+            self.phase_member_done(member, run_id, phase_id, &link, None)
+                .await;
+        }
+    }
+
+    /// A gate member failed or was stopped before its result.
+    pub(crate) async fn gate_member_failed(&self, member: &Task, reason: &str) {
+        let Some(link) = member.gate_link.clone() else {
+            return;
+        };
+        if let GateOwner::Phase { run_id, phase_id } = &link.owner {
+            self.phase_member_done(member, run_id, phase_id, &link, Some(reason))
+                .await;
+        }
+    }
+
+    /// What a verifier changed in its checkout: tracked files, a new file git doesn't ignore,
+    /// or another commit. `None` when its checkout is still exactly the commit it checked.
+    pub(crate) async fn verifier_changes(&self, member: &Task) -> Option<String> {
+        let workspace = member.workspace.as_ref()?;
+        let worktree = std::path::PathBuf::from(workspace.worktree.clone()?);
+        let base = brigadier_git::Oid(workspace.base.clone()?);
+        let git = self.git.clone();
+        super::super::blocking(move || {
+            let worktree = git
+                .open_worktree(&worktree)
+                .map_err(super::super::git_error)?;
+            if worktree.head().map_err(super::super::git_error)? != base {
+                return Ok(Some("its checkout is on another commit".to_owned()));
+            }
+            Ok(checkout_changes(
+                &worktree.changes(&base).map_err(super::super::git_error)?,
+            ))
+        })
+        .await
+        .unwrap_or_else(|err| Some(format!("its checkout could not be read: {err}")))
+    }
+
+    /// Who a checking task must not be, for a hand-off to another model: a phase check's
+    /// member, what its round says; a review or verification of a phase's work, the phase's
+    /// author.
+    pub(crate) async fn gate_avoid(&self, member: &Task) -> (Option<Author>, Vec<Author>) {
+        if let Some(GateLink {
+            owner: GateOwner::Phase { run_id, phase_id },
+            ..
+        }) = &member.gate_link
+        {
+            return self.phase_gate_avoid(member, run_id, phase_id).await;
+        }
+        if !matches!(member.kind, TaskKind::Review | TaskKind::Verify)
+            && member.role != Some(crate::work::WorkerRole::Verifier)
+        {
+            return (None, Vec::new());
+        }
+        let Some(subject) = &member.subject else {
+            return (None, Vec::new());
+        };
+        let Ok(subject) = self.task_by_id(&member.conversation_id, subject).await else {
+            return (None, Vec::new());
+        };
+        let author = self.phase_author(&subject).await;
+        (Some(author_of(&author.route.choice)), Vec::new())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::work::ChecksResult;
 
     fn finding(id: &str, text: &str) -> Finding {
         Finding {
@@ -1761,5 +2085,393 @@ mod tests {
         assert!(!names(ask, "p2-c1"));
         assert!(!names("see p2-c20", "p2-c2"));
         assert!(!names("xp2-c2", "p2-c2"));
+    }
+
+    fn report(done_when: &[&str], checks: Option<ChecksResult>) -> Report {
+        Report {
+            summary: "Checked.".into(),
+            changes: Vec::new(),
+            decisions: Vec::new(),
+            verification: Vec::new(),
+            done_when: done_when.iter().map(|line| (*line).to_owned()).collect(),
+            open_questions: Vec::new(),
+            risks: Vec::new(),
+            needs_user: Vec::new(),
+            verdict: None,
+            checks,
+            artifacts: Vec::new(),
+            submitted_at_ms: 0,
+        }
+    }
+
+    #[test]
+    fn every_criterion_met_with_evidence_and_passing_checks_passes() {
+        let report = report(
+            &[
+                "[met] `pnpm test` passes: 41 passed, 0 failed",
+                "- [Met] the flag is documented: README.md line 40",
+            ],
+            Some(ChecksResult::Passed),
+        );
+        assert_eq!(verify_result(&report, 0), GateResult::Passed);
+    }
+
+    #[test]
+    fn a_project_without_checks_passes_on_evidence_alone() {
+        let report = report(
+            &["[met] the page title reads Home: src/app.tsx:12"],
+            Some(ChecksResult::NoChecks),
+        );
+        assert_eq!(verify_result(&report, 0), GateResult::Passed);
+    }
+
+    #[test]
+    fn checks_that_could_not_run_never_pass() {
+        let report = report(
+            &["[met] the endpoint returns 200: curl showed 200 OK"],
+            Some(ChecksResult::NotRun),
+        );
+        assert!(matches!(
+            verify_result(&report, 0),
+            GateResult::Unverified { .. }
+        ));
+    }
+
+    #[test]
+    fn a_check_that_cannot_run_on_the_parent_either_does_not_hold_the_change() {
+        let met = [
+            "[met] CONTRIBUTORS.md lists the bot: CONTRIBUTORS.md:7",
+            "[met] npm test passes: 12 passed, 0 failed",
+        ];
+        let gap = "- [Pre-existing] npm run test:integration: on the parent too it stops at `CALC_API_TOKEN is not set`";
+        let mut passed = report(&met, Some(ChecksResult::Passed));
+        passed.risks = vec![gap.into()];
+        assert_eq!(verify_result(&passed, 2), GateResult::Passed);
+        // Checks called notRun never pass, even beside such a gap: another check may have
+        // failed to run without its own line.
+        let mut not_run = report(&met, Some(ChecksResult::NotRun));
+        not_run.risks = vec![gap.into(), "The diff is small.".into()];
+        assert!(matches!(
+            verify_result(&not_run, 2),
+            GateResult::Unverified { .. }
+        ));
+        // A check this change could have run, but didn't, holds it, and is named.
+        let blocked = "[not run] npm run e2e: the browser download failed";
+        not_run.risks.push(blocked.into());
+        let GateResult::Unverified { reason } = verify_result(&not_run, 2) else {
+            panic!("not unverified");
+        };
+        assert!(reason.contains("npm run e2e"), "{reason}");
+        passed.risks.push(blocked.into());
+        assert!(matches!(
+            verify_result(&passed, 2),
+            GateResult::Unverified { .. }
+        ));
+        // So does any criterion left unchecked.
+        let mut unchecked = report(
+            &[
+                "[met] lint passes: 0 warnings",
+                "[not checked] the API answers: no token",
+            ],
+            Some(ChecksResult::NotRun),
+        );
+        unchecked.risks = vec![gap.into()];
+        assert!(matches!(
+            verify_result(&unchecked, 0),
+            GateResult::Unverified { .. }
+        ));
+    }
+
+    #[test]
+    fn a_check_a_rule_or_the_sandbox_excludes_never_holds_the_change() {
+        let met = ["[met] the note exists: docs/notes.md, 210 lines"];
+        let excluded = "[excluded] pnpm desktop --smoke: the sandbox can't open windows";
+        for checks in [
+            ChecksResult::Passed,
+            ChecksResult::NotRun,
+            ChecksResult::NoChecks,
+        ] {
+            let mut report = report(&met, Some(checks));
+            report.risks = vec![
+                excluded.into(),
+                "[Excluded] daemon start: the task says not to".into(),
+            ];
+            assert_eq!(verify_result(&report, 1), GateResult::Passed, "{checks:?}");
+        }
+        // Without its rule it proves nothing.
+        let mut bare = report(&met, Some(ChecksResult::NotRun));
+        bare.risks = vec!["[excluded] pnpm desktop --smoke".into()];
+        assert!(matches!(
+            verify_result(&bare, 1),
+            GateResult::Unverified { .. }
+        ));
+        // A check that didn't run for another reason still holds it.
+        let mut other = report(&met, Some(ChecksResult::NotRun));
+        other.risks = vec![
+            excluded.into(),
+            "[not run] pnpm test: vitest crashed".into(),
+        ];
+        assert!(matches!(
+            verify_result(&other, 1),
+            GateResult::Unverified { .. }
+        ));
+    }
+
+    #[test]
+    fn a_pre_existing_gap_counts_only_with_its_check_and_evidence_from_the_parent() {
+        let met = ["[met] npm test passes: 12 passed, 0 failed"];
+        for gap in [
+            "[pre-existing]",
+            "[pre-existing] npm run test:integration",
+            "[pre-existing] npm run test:integration:",
+            "[pre-existing] : CALC_API_TOKEN is not set on the parent either",
+            "[pre-existing] npm run test:integration — ",
+        ] {
+            let mut passed = report(&met, Some(ChecksResult::Passed));
+            passed.risks = vec![gap.into()];
+            let GateResult::Unverified { reason } = verify_result(&passed, 1) else {
+                panic!("not unverified: {gap}");
+            };
+            assert!(reason.contains("no evidence from the parent"), "{reason}");
+        }
+        for gap in [
+            "[pre-existing] npm run test:integration: the parent stops at `CALC_API_TOKEN is not set` too",
+            "* [Pre-existing] cargo test --features gpu — no CUDA here or on the parent",
+        ] {
+            let mut passed = report(&met, Some(ChecksResult::Passed));
+            passed.risks = vec![gap.into()];
+            assert_eq!(verify_result(&passed, 1), GateResult::Passed, "{gap}");
+            let mut none = report(&met, Some(ChecksResult::NoChecks));
+            none.risks = vec![gap.into()];
+            assert_eq!(verify_result(&none, 1), GateResult::Passed, "{gap}");
+        }
+        assert_eq!(
+            pre_existing_gap("[pre-existing] npm run lint: the parent fails the same way"),
+            Some(("npm run lint", "the parent fails the same way"))
+        );
+    }
+
+    #[test]
+    fn criteria_reported_all_not_run_are_unverified() {
+        let report = report(
+            &[
+                "[not checked] tests pass: could not run pnpm",
+                "[not checked] the build works: no time",
+            ],
+            Some(ChecksResult::NotRun),
+        );
+        let GateResult::Unverified { reason } = verify_result(&report, 0) else {
+            panic!("not unverified");
+        };
+        assert!(
+            reason.contains("no \"done when\" criterion met"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn a_met_line_without_evidence_or_status_is_unchecked() {
+        let report = report(
+            &[
+                "[met] tests pass: ok passing",
+                "[met] ok",
+                "the build works",
+            ],
+            Some(ChecksResult::Passed),
+        );
+        let GateResult::Unverified { reason } = verify_result(&report, 0) else {
+            panic!("not unverified");
+        };
+        assert!(reason.contains("[met] ok (no evidence given)"), "{reason}");
+        assert!(reason.contains("the build works"), "{reason}");
+    }
+
+    #[test]
+    fn no_criteria_at_all_is_unverified() {
+        assert!(matches!(
+            verify_result(&report(&[], Some(ChecksResult::Passed)), 0),
+            GateResult::Unverified { .. }
+        ));
+    }
+
+    #[test]
+    fn an_unmet_criterion_or_failed_check_fails_with_findings() {
+        let mut failed = report(
+            &[
+                "[met] lint passes: oxlint 0 warnings",
+                "[not met] tests pass: 2 failed in api.test.ts",
+            ],
+            Some(ChecksResult::Failed),
+        );
+        failed.open_questions = vec!["Fix the null check in api.ts".into()];
+        assert_eq!(
+            verify_result(&failed, 0),
+            GateResult::Failed {
+                findings: vec![
+                    "[not met] tests pass: 2 failed in api.test.ts".into(),
+                    "Fix the null check in api.ts".into()
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn numbered_and_bulleted_criteria_are_read() {
+        for line in [
+            "2. [met] tests pass: 41 passed",
+            "2) [met] tests pass: 41 passed",
+            "- [met] tests pass: 41 passed",
+            "* [met] tests pass: 41 passed",
+            "• [met] tests pass: 41 passed",
+            "  10. [Met] tests pass: 41 passed",
+        ] {
+            assert_eq!(criterion_status(line), Some(Status::Met), "{line}");
+            assert_eq!(criterion_evidence(line), Some("41 passed"), "{line}");
+        }
+        assert_eq!(
+            criterion_status("1. [not met] lint passes: 2 errors"),
+            Some(Status::NotMet)
+        );
+        // A number that is not a list marker is not taken for one.
+        assert_eq!(criterion_status("2 [met] tests pass: ok"), None);
+        let numbered = report(
+            &[
+                "1. [met] lerp works: test/math.test.js:14",
+                "2. [not met] npm test passes: the exports test fails",
+            ],
+            Some(ChecksResult::Failed),
+        );
+        assert_eq!(
+            verify_result(&numbered, 0),
+            GateResult::Failed {
+                findings: vec!["2. [not met] npm test passes: the exports test fails".into()]
+            }
+        );
+    }
+
+    #[test]
+    fn a_failed_check_with_every_criterion_met_is_unverified_not_failed() {
+        let mut optional = report(
+            &[
+                "[met] isPrime(1) is true: test/primes.test.js:4 passes",
+                "[met] npm test passes: 12 passed, 0 failed",
+            ],
+            Some(ChecksResult::Failed),
+        );
+        optional.summary = "Integration could not start: CALC_API_TOKEN is missing.".into();
+        let GateResult::Unverified { reason } = verify_result(&optional, 2) else {
+            panic!("not unverified");
+        };
+        assert!(reason.contains("CALC_API_TOKEN"), "{reason}");
+        // Anything named to fix still fails it.
+        optional.open_questions = vec!["Remove debug.log".into()];
+        assert!(matches!(
+            verify_result(&optional, 2),
+            GateResult::Failed { .. }
+        ));
+        // So does a failed check while a criterion is left unchecked.
+        let unchecked = report(
+            &[
+                "[met] lint passes: 0 warnings",
+                "[not checked] tests pass: could not start",
+            ],
+            Some(ChecksResult::Failed),
+        );
+        assert!(matches!(
+            verify_result(&unchecked, 0),
+            GateResult::Failed { .. }
+        ));
+    }
+
+    #[test]
+    fn a_review_without_a_verdict_gives_no_result() {
+        let mut review = report(&[], None);
+        assert!(matches!(
+            review_result(&review),
+            GateResult::NoResult { .. }
+        ));
+        review.verdict = Some(ReviewVerdict::RequestChanges);
+        assert_eq!(
+            review_result(&review),
+            GateResult::Failed {
+                findings: vec!["Checked.".into()]
+            }
+        );
+    }
+
+    #[test]
+    fn any_new_file_counts_as_a_verifier_change() {
+        let change = |path: &str, untracked| brigadier_git::Change {
+            path: path.into(),
+            kind: brigadier_git::ChangeKind::Added,
+            untracked,
+        };
+        assert_eq!(checkout_changes(&[]), None);
+        // Not only source: a migration, a script or a page a check could have used.
+        assert_eq!(
+            checkout_changes(&[change("db/001.sql", true), change("run.sh", true)]),
+            Some("it changed db/001.sql, run.sh".into())
+        );
+        assert_eq!(
+            checkout_changes(&[change("src/app.ts", false)]),
+            Some("it changed src/app.ts".into())
+        );
+    }
+
+    #[test]
+    fn a_verifier_finding_in_open_questions_fails_an_otherwise_passing_report() {
+        let mut found = report(
+            &["[met] tests pass: 41 passed, 0 failed"],
+            Some(ChecksResult::Passed),
+        );
+        found.open_questions = vec!["debug.log is committed; remove it".into()];
+        assert_eq!(
+            verify_result(&found, 1),
+            GateResult::Failed {
+                findings: vec!["debug.log is committed; remove it".into()]
+            }
+        );
+    }
+
+    #[test]
+    fn fewer_criteria_than_the_worker_listed_is_unverified() {
+        let short = report(
+            &["[met] tests pass: 41 passed, 0 failed"],
+            Some(ChecksResult::Passed),
+        );
+        let GateResult::Unverified { reason } = verify_result(&short, 2) else {
+            panic!("not unverified");
+        };
+        assert!(reason.contains("covered 1"), "{reason}");
+        assert!(reason.contains("listed 2"), "{reason}");
+        // As many as the worker listed, or more (the task's own), passes.
+        assert_eq!(verify_result(&short, 1), GateResult::Passed);
+    }
+
+    #[test]
+    fn a_met_line_needs_evidence_after_its_criterion_not_just_length() {
+        let long = report(
+            &[
+                "[met] tests pass: 41 passed",
+                "[met] the settings page shows the new toggle for dark mode",
+            ],
+            Some(ChecksResult::Passed),
+        );
+        let GateResult::Unverified { reason } = verify_result(&long, 0) else {
+            panic!("not unverified");
+        };
+        assert!(reason.contains("(no evidence given)"), "{reason}");
+        assert_eq!(
+            criterion_evidence("[met] the build works — cargo build finished in 12s"),
+            Some("cargo build finished in 12s")
+        );
+        assert_eq!(
+            criterion_evidence("- [met] tests pass - 41 passed"),
+            Some("41 passed")
+        );
+        assert_eq!(criterion_evidence("[met] tests pass:"), None);
+        assert_eq!(criterion_evidence("[met] tests pass: -"), None);
+        // A colon inside a path is not a separator.
+        assert_eq!(criterion_evidence("[met] see src/app.ts:12"), None);
     }
 }

@@ -414,19 +414,6 @@ impl ConvLive {
             .retain(|(_, request)| !request.as_deref().is_some_and(|r| r.starts_with(prefix)));
     }
 
-    /// Takes the envelopes `which` picks back out of the inbox, before a turn reads them.
-    pub(super) async fn take_envelopes(
-        &self,
-        which: impl Fn(&Envelope) -> bool,
-    ) -> Vec<(Envelope, Option<String>)> {
-        let mut state = self.state.lock().await;
-        let (taken, kept) = std::mem::take(&mut state.inbox)
-            .into_iter()
-            .partition(|(envelope, _)| which(envelope));
-        state.inbox = kept;
-        taken
-    }
-
     /// What the driver holds for each request right now.
     pub(super) async fn request_activity(&self) -> RequestActivity {
         let state = self.state.lock().await;

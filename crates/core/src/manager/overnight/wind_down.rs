@@ -143,8 +143,7 @@ impl SessionManager {
                         TaskState::Queued
                             | TaskState::Starting
                             | TaskState::Running
-                            | TaskState::Reviewing
-                            | TaskState::AwaitingApproval
+                            | TaskState::Landing
                     )
                 });
             if !live || now_ms() >= cutoff {

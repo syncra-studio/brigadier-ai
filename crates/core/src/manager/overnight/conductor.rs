@@ -268,7 +268,7 @@ impl SessionManager {
         };
         let briefing = self.phase_brief(&run, &phase).await;
         let kickoff = format!(
-            "[overnight · phase {n}] Lead phase {n} (\u{201c}{name}\u{201d}) now, as your briefing describes. Give it one lead (delegate_task, kind implement) with a complete brief that names the criteria ids it serves; a lead of big work sends an outline for your go-ahead (approve_outline), and accept good reports with accept_task. When every task of the phase has landed or ended, call phase_done. Don't write to the user: reply with exactly {quiet} unless the phase is done.",
+            "[overnight · phase {n}] Lead phase {n} (\u{201c}{name}\u{201d}) now, as your briefing describes. Give it one lead (delegate_task, kind implement) with a complete brief that names the criteria ids it serves; a lead of big work sends an outline for your go-ahead (approve_outline), and land good reports with land_phase. When every task of the phase has landed or ended, call phase_done. Don't write to the user: reply with exactly {quiet} unless the phase is done.",
             n = phase.number,
             name = phase.name,
             quiet = super::super::prompts::QUIET,
@@ -667,7 +667,7 @@ impl SessionManager {
         let open = unsettled(&board, &run, &phase);
         if !open.is_empty() && !force {
             return Err(Error::Invalid(format!(
-                "Phase {} still has work going: {}. Wait for it, accept what reported well (accept_task) or stop what is no longer needed, then call phase_done again.",
+                "Phase {} still has work going: {}. Wait for it, land what reported well (land_phase) or stop what is no longer needed, then call phase_done again.",
                 phase.number,
                 open.join(", ")
             )));
@@ -1070,7 +1070,7 @@ impl SessionManager {
             )
         } else {
             format!(
-                "[overnight · {label}] This phase waits on you: {}. Accept what reported well (accept_task), send back or stop the rest, then go on; call phase_done once all of it has landed or ended.",
+                "[overnight · {label}] This phase waits on you: {}. Land what reported well (land_phase), send back or stop the rest, then go on; call phase_done once all of it has landed or ended.",
                 open.join(", ")
             )
         };
@@ -1118,9 +1118,9 @@ fn unsettled(board: &Board, run: &OvernightRun, phase: &OvernightPhase) -> Vec<S
     open.iter()
         .map(|task| {
             let what = match task.state {
-                TaskState::Reported if task.kind.writes() => "reported, not accepted yet",
+                TaskState::Reported if task.kind.writes() => "reported, not landed yet",
                 TaskState::Reported => "reported",
-                TaskState::Reviewing | TaskState::AwaitingApproval => "being checked",
+                TaskState::Landing => "landing",
                 TaskState::ReadyToLand => "held back from landing",
                 TaskState::Paused => "paused",
                 TaskState::Blocked => "blocked",

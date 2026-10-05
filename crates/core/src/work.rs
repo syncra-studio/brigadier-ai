@@ -169,7 +169,7 @@ pub struct QuotaWait {
     pub messages: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum TaskState {
     /// Waiting for an approved plan, a free slot or the task it depends on.
@@ -184,10 +184,9 @@ pub enum TaskState {
     Paused,
     /// The worker submitted its report; the orchestrator decides what happens next.
     Reported,
-    /// Its candidate commit is being reviewed by another vendor.
-    Reviewing,
-    /// Ask for approval: the landing waits for the user.
-    AwaitingApproval,
+    /// Its commits are being moved onto the target branch (`land_phase`), or it runs a
+    /// quick self-check after they were rebased onto a target that moved.
+    Landing,
     /// Accepted, but it cannot land safely right now (see `blockedReason`). Nothing changed.
     ReadyToLand,
     /// Its commit is on the target branch.
@@ -199,6 +198,51 @@ pub enum TaskState {
     /// Stopped by the user or the orchestrator.
     Stopped,
     Failed,
+}
+
+/// A task state as stored, older names included: `reviewing` and `awaitingApproval` (the
+/// per-change checks and landing card, gone) read as `landing`, which restart recovery treats
+/// as an interrupted landing.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum StoredTaskState {
+    Queued,
+    Starting,
+    Running,
+    Blocked,
+    Paused,
+    Reported,
+    Landing,
+    Reviewing,
+    AwaitingApproval,
+    ReadyToLand,
+    Landed,
+    Done,
+    Rejected,
+    Stopped,
+    Failed,
+}
+
+impl<'de> Deserialize<'de> for TaskState {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match StoredTaskState::deserialize(deserializer)? {
+            StoredTaskState::Queued => Self::Queued,
+            StoredTaskState::Starting => Self::Starting,
+            StoredTaskState::Running => Self::Running,
+            StoredTaskState::Blocked => Self::Blocked,
+            StoredTaskState::Paused => Self::Paused,
+            StoredTaskState::Reported => Self::Reported,
+            StoredTaskState::Landing
+            | StoredTaskState::Reviewing
+            | StoredTaskState::AwaitingApproval => Self::Landing,
+            StoredTaskState::ReadyToLand => Self::ReadyToLand,
+            StoredTaskState::Landed => Self::Landed,
+            StoredTaskState::Done => Self::Done,
+            StoredTaskState::Rejected => Self::Rejected,
+            StoredTaskState::Stopped => Self::Stopped,
+            StoredTaskState::Failed => Self::Failed,
+        })
+    }
 }
 
 impl TaskState {
@@ -368,28 +412,12 @@ pub struct ExcludedFile {
     pub reason: String,
 }
 
-/// The mandatory cross-vendor review of a write task's candidate.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ReviewRecord {
-    /// The review task.
-    pub task_id: TaskId,
-    /// The candidate commit it reviewed.
-    pub commit: String,
-    pub verdict: Option<ReviewVerdict>,
-    /// False when only one vendor was available and another model of it reviewed.
-    pub cross_vendor: bool,
-}
-
 /// One round of independent checks of a change before it lands (reviewers and a verifier, on
 /// one candidate commit) or of a plan before it is approved (reviewers). A new candidate or
 /// a revised plan opens a new round; results of an older round are ignored.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Gate {
-    /// Checks chosen from this candidate. Missing on events written before scoped checks.
-    #[serde(default)]
-    pub verification_scope: VerificationScope,
     /// This candidate was rebased during landing; verify retries must keep full checks.
     #[serde(default)]
     pub rebased: bool,
@@ -417,39 +445,6 @@ pub struct Gate {
     /// the revision to answer one by one.
     #[serde(default)]
     pub findings: Vec<Finding>,
-}
-
-/// The checks required for one candidate, and why they were selected.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum VerificationScope {
-    Full {
-        reason: String,
-    },
-    Scoped {
-        reason: String,
-        crates: Vec<String>,
-        desktop: bool,
-    },
-}
-
-impl Default for VerificationScope {
-    fn default() -> Self {
-        Self::Full {
-            reason: "Scope not determined".into(),
-        }
-    }
-}
-
-/// The orchestrator was handed a write task's failed checks (see [`Task::escalated`]).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Escalated {
-    /// The gate round whose findings it was told.
-    pub round: u32,
-    /// The candidate commit those findings are about.
-    pub commit: String,
-    pub at_ms: i64,
 }
 
 /// A problem a plan's reviewer found, by the id the revision answers it with.
@@ -615,38 +610,16 @@ pub struct Task {
     pub attachments: Vec<AttachmentRef>,
     pub workspace: Option<TaskWorkspace>,
     pub report: Option<Report>,
+    /// Older tasks: the single commit the per-change checks were built on.
     pub candidate: Option<Candidate>,
-    pub review: Option<ReviewRecord>,
-    /// A write task: the current gate round on its candidate (reviewers and a verifier).
-    #[serde(default)]
-    pub gate: Option<Gate>,
-    /// A reviewer or verifier: the gate round it belongs to.
+    /// A reviewer or verifier of an overnight phase's checks: the round it belongs to.
     #[serde(default)]
     pub gate_link: Option<GateLink>,
-    /// A write task: the commit message it was accepted with, while Brigadier lands it on
-    /// its own (it is re-gated after each fix round).
+    /// Set while its work is being landed, or rebased and waiting for its quick self-check:
+    /// its next report lands on its own (fast-forward only, never reviewed again). Older
+    /// tasks: the commit message it was accepted with.
     #[serde(default)]
     pub landing: Option<String>,
-    /// A write task: times Brigadier sent it back with a gate's findings.
-    #[serde(default)]
-    pub fix_rounds: u32,
-    /// A write task: the findings Brigadier sent it back with, one entry per fix round,
-    /// oldest first. Later checks read them, and so does the orchestrator when the fixes end
-    /// without landing.
-    #[serde(default)]
-    pub fixes: Vec<String>,
-    /// A write task Brigadier lands on its own: what its worker wrote after its last report,
-    /// held back from the orchestrator. Its checks read it; the orchestrator gets it only if
-    /// the change does not land.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(skip)]
-    pub addendum: Option<String>,
-    /// A write task: when the orchestrator was told its checks' findings and that nothing
-    /// landed. Only the user's word after that lands the change despite them (`accept_task`
-    /// with `override`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(skip)]
-    pub escalated: Option<Escalated>,
     /// The landed commit.
     pub landed: Option<String>,
     /// Why it is blocked, paused or cannot land yet.
@@ -1061,7 +1034,7 @@ impl WorkerStepKind {
     /// `now`, if the thread shows one. `reported` tells whether it had reported before.
     pub fn between(was: Option<TaskState>, now: TaskState, reported: bool) -> Option<Self> {
         use TaskState as S;
-        let waiting = |state: S| matches!(state, S::AwaitingApproval | S::ReadyToLand);
+        let waiting = |state: S| matches!(state, S::ReadyToLand);
         // A review of its commit is not the worker working again.
         let working = |state: S| matches!(state, S::Queued | S::Starting | S::Running | S::Blocked);
         let Some(was) = was else {
@@ -1076,7 +1049,7 @@ impl WorkerStepKind {
             S::Stopped => Some(Self::Stopped),
             S::Failed => Some(Self::Failed),
             // Back from a review, the reviewer's own row tells it.
-            S::Reported | S::Done if !matches!(was, S::Reported | S::Done | S::Reviewing) => {
+            S::Reported | S::Done if !matches!(was, S::Reported | S::Done | S::Landing) => {
                 Some(if reported {
                     Self::Updated
                 } else {

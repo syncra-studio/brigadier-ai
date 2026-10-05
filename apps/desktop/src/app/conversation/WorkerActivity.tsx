@@ -28,8 +28,7 @@ export function useTaskActivityLine(taskId: string) {
           : undefined,
       };
     };
-    const task = board?.tasks[taskId];
-    return taskActivityLines(source(taskId), task?.gate?.members.map((member) => source(member.taskId)) ?? [], now);
+    return taskActivityLines(source(taskId), now);
   }));
   return { ref, ...lines };
 }
