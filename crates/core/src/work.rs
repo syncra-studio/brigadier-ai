@@ -485,8 +485,7 @@ pub struct GateMember {
     pub avoid: Vec<ModelChoice>,
 }
 
-/// What a gate member does: the overnight run's whole-phase checks still use it, and stores
-/// from before the phase flow keep it.
+/// What a gate member does, as stores from before the phase flow keep it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum GateRole {
@@ -560,7 +559,7 @@ pub enum GateOwner {
     Task { task_id: TaskId },
     /// A proposed plan.
     Plan { plan_id: CardId },
-    /// A whole phase of an overnight run: its candidate is the run branch's tip.
+    /// A whole phase of an older overnight run: its candidate was the run branch's tip.
     Phase {
         run_id: crate::model::OvernightRunId,
         phase_id: String,

@@ -968,7 +968,7 @@ impl SessionManager {
                 return Err(Error::Invalid(format!("`{}` moved since this work was verified. Nothing merged; review and verify the new base before merging.", workspace.base)));
             }
             // A base already included in this phase-verified candidate is safe. Otherwise
-            // its change requires a new candidate and fresh whole-phase checks.
+            // its change must be verified again before it merges.
             let approved_base_tip = base_tip;
             let message = format!("Merge verified overnight work into {}", workspace.base);
             let (commit, base_tip) = match repo.prepare_merge_commit(&workspace.base, &tip, &message).map_err(git_error)? {
