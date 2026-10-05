@@ -525,6 +525,26 @@
   --panel-tab-border: color-mix(in oklab, var(--foreground) 10%, transparent);
   /* Blue: a switch that is on. */
   --toggle-on: oklch(0.63 0.18 259);
+  /* A see-through wash of the foreground over content: the terminal's selection. */
+  --scrim: color-mix(in oklab, var(--foreground) 20%, transparent);
+  /* The terminal's 16 colours, from the palette: the status colours for red, green, yellow
+     and blue, and a brighter step of each. */
+  --ansi-black: oklch(0.315 0.004 var(--tint));
+  --ansi-red: var(--destructive);
+  --ansi-green: var(--success);
+  --ansi-yellow: var(--warning);
+  --ansi-blue: var(--link);
+  --ansi-magenta: oklch(0.72 0.16 320);
+  --ansi-cyan: oklch(0.74 0.12 200);
+  --ansi-white: oklch(0.87 0.002 var(--tint));
+  --ansi-bright-black: oklch(0.556 0.004 var(--tint));
+  --ansi-bright-red: oklch(0.79 0.15 22);
+  --ansi-bright-green: oklch(0.84 0.13 155);
+  --ansi-bright-yellow: oklch(0.86 0.14 85);
+  --ansi-bright-blue: oklch(0.8 0.11 255);
+  --ansi-bright-magenta: oklch(0.81 0.13 320);
+  --ansi-bright-cyan: oklch(0.84 0.1 200);
+  --ansi-bright-white: var(--foreground);
   --sidebar: color-mix(in oklab, var(--background) 65%, var(--chrome));
   --sidebar-foreground: oklch(0.985 0.002 var(--tint));
   --sidebar-primary: oklch(0.488 0.243 264.376);

@@ -1,6 +1,9 @@
 import "@xterm/xterm/css/xterm.css";
 
+import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
+import { SerializeAddon } from "@xterm/addon-serialize";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { type ITheme, Terminal } from "@xterm/xterm";
 import {
   ChevronDown,
@@ -23,11 +26,14 @@ import {
   hasTab,
   noteShell,
   noteShellCwd,
+  noteShellTitle,
+  noteTabReader,
   onTerminalOutput,
   placeConversation,
   selectTab,
   setTerminalOpen,
   tabNames,
+  takeRestoredOutput,
   terminalPlace,
   useTerminalPlace,
 } from "@/state/terminalPlaces";
@@ -37,30 +43,87 @@ import {
  * or Home's. They keep running while the pane is hidden; closing a tab ends its shell.
  */
 
-/** A token colour in hex, which the terminal's renderer understands (tokens are oklch). */
-function tokenColor(name: `--${string}`): string {
+/**
+ * A token colour as #rrggbbaa, which the terminal's renderer understands (tokens are oklch
+ * and colour mixes): resolved on a probe, then read back from a canvas pixel.
+ */
+function tokenColors(names: readonly `--${string}`[]): string[] {
+  const probe = document.createElement("span");
+  probe.style.display = "none";
+  document.body.append(probe);
   const canvas = document.createElement("canvas");
   canvas.width = 1;
   canvas.height = 1;
   const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) return "";
-  context.fillStyle = getComputedStyle(document.documentElement)
-    .getPropertyValue(name)
-    .trim();
-  context.fillRect(0, 0, 1, 1);
-  const [red = 0, green = 0, blue = 0] = context.getImageData(0, 0, 1, 1).data;
-  return `#${[red, green, blue].map((part) => part.toString(16).padStart(2, "0")).join("")}`;
+  const colors = names.map((name) => {
+    probe.style.color = `var(${name})`;
+    if (!context) return "";
+    context.clearRect(0, 0, 1, 1);
+    context.fillStyle = getComputedStyle(probe).color;
+    context.fillRect(0, 0, 1, 1);
+    return `#${[...context.getImageData(0, 0, 1, 1).data]
+      .map((part) => part.toString(16).padStart(2, "0"))
+      .join("")}`;
+  });
+  probe.remove();
+  return colors;
 }
 
+const ANSI = [
+  "black",
+  "red",
+  "green",
+  "yellow",
+  "blue",
+  "magenta",
+  "cyan",
+  "white",
+] as const;
+
+/** The terminal in the app's colours: the page and its text, the scrim for selection, the
+ * palette's 16 colours, and a scrollbar thumb in the border colour. */
 function theme(): ITheme {
+  const [background = "", foreground = "", scrim = "", border = "", ...ansi] = tokenColors([
+    "--background",
+    "--foreground",
+    "--scrim",
+    "--border",
+    ...ANSI.map((name) => `--ansi-${name}` as const),
+    ...ANSI.map((name) => `--ansi-bright-${name}` as const),
+  ]);
+  const colors = Object.fromEntries([
+    ...ANSI.map((name, index) => [name, ansi[index]]),
+    ...ANSI.map((name, index) => [
+      `bright${name[0]!.toUpperCase()}${name.slice(1)}`,
+      ansi[index + ANSI.length],
+    ]),
+  ]) as ITheme;
   return {
-    background: tokenColor("--background"),
-    foreground: tokenColor("--foreground"),
-    cursor: tokenColor("--foreground"),
-    cursorAccent: tokenColor("--background"),
-    selectionBackground: tokenColor("--muted"),
+    ...colors,
+    background,
+    foreground,
+    cursor: foreground,
+    cursorAccent: background,
+    selectionBackground: scrim,
+    selectionInactiveBackground: scrim,
+    scrollbarSliderBackground: border,
+    scrollbarSliderHoverBackground: border,
+    scrollbarSliderActiveBackground: border,
+    overviewRulerBorder: background,
   };
 }
+
+/** The terminal's type: the system's monospace face. */
+const FONT_FAMILY =
+  'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace';
+
+/** OSC 52: shells may set the clipboard, but never read it. */
+const WRITE_ONLY_CLIPBOARD = {
+  readText: () => "",
+  writeText: async (_selection: unknown, text: string) => {
+    await navigator.clipboard.writeText(text);
+  },
+};
 
 const DIM = "\u001b[2m";
 const RESET = "\u001b[0m";
@@ -307,21 +370,45 @@ export function TerminalTab({
     },
     [place, tabId],
   );
-  return <TerminalView key={density} open={open} focus={active} />;
+  const onTitle = useCallback(
+    (title: string) => noteShellTitle(place, tabId, title),
+    [place, tabId],
+  );
+  const reader = useCallback((read: () => string) => noteTabReader(tabId, read), [tabId]);
+  // What the tab showed before it was closed, when it is one brought back.
+  const [restored] = useState(() => takeRestoredOutput(tabId));
+  return (
+    <TerminalView
+      key={density}
+      open={open}
+      focus={active}
+      restored={restored}
+      onTitle={onTitle}
+      reader={reader}
+    />
+  );
 }
 
 /**
  * A shell the daemon runs, shown live: `open` starts it (or re-attaches to it) at the view's
- * size. When it ends, `onExit` hears its exit code (a pane's tab just closes).
+ * size. When it ends, `onExit` hears its exit code (a pane's tab just closes). `restored` is
+ * output shown above the shell's, `onTitle` hears the titles the shell sets, and `reader`
+ * learns how to read what the view shows, until the function it returns is called.
  */
 export function TerminalView({
   open,
   onExit,
+  restored = null,
+  onTitle,
+  reader,
   focus = true,
   className,
 }: {
   open: (cols: number, rows: number) => Promise<TerminalInfo>;
   onExit?: (code: number | null) => void;
+  restored?: string | null;
+  onTitle?: (title: string) => void;
+  reader?: (read: () => string) => () => void;
   /** Takes the keyboard once it is open. */
   focus?: boolean;
   className?: string;
@@ -340,13 +427,18 @@ export function TerminalView({
   useEffect(() => {
     const element = host.current;
     if (!connected || !element) return;
-    const style = getComputedStyle(element);
     const terminal = new Terminal({
-      fontFamily: style.fontFamily,
-      fontSize: Number.parseFloat(style.fontSize),
+      fontFamily: FONT_FAMILY,
+      fontSize: 12,
+      lineHeight: 1.2,
+      letterSpacing: 0,
       theme: theme(),
+      cursorStyle: "bar",
+      cursorInactiveStyle: "bar",
       cursorBlink: true,
       scrollback: 5000,
+      overviewRuler: { width: 10 },
+      // OSC 8 links.
       linkHandler: {
         activate: (_event, uri) => {
           void openUrl(uri).catch(() => {});
@@ -355,9 +447,21 @@ export function TerminalView({
     });
     liveTerminal.current = terminal;
     const fit = new FitAddon();
+    const serialize = new SerializeAddon();
     terminal.loadAddon(fit);
+    terminal.loadAddon(serialize);
+    // Addresses in plain text.
+    terminal.loadAddon(
+      new WebLinksAddon((_event, uri) => {
+        void openUrl(uri).catch(() => {});
+      }),
+    );
+    terminal.loadAddon(new ClipboardAddon(undefined, WRITE_ONLY_CLIPBOARD));
     terminal.open(element);
     fit.fit();
+    if (restored) terminal.write(`${restored}${RESET}\r\n`);
+    const title = onTitle ? terminal.onTitleChange(onTitle) : null;
+    const unread = reader?.(() => serialize.serialize({ scrollback: 5000 }));
 
     let id: string | null = null;
     let ended = false;
@@ -396,6 +500,32 @@ export function TerminalView({
 
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;
+      // ⌘K clears the terminal (not the app's search).
+      if (
+        mac &&
+        event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.code === "KeyK"
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        terminal.clear();
+        return false;
+      }
+      // Off macOS, Ctrl+J, K, T and W are the shell's while it has the keyboard.
+      if (
+        !mac &&
+        event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        ["KeyJ", "KeyK", "KeyT", "KeyW"].includes(event.code)
+      ) {
+        event.stopPropagation();
+        return true;
+      }
       const copy =
         !mac &&
         ((event.ctrlKey &&
@@ -440,21 +570,7 @@ export function TerminalView({
           });
           return false;
         }
-        if (event.code === "KeyC" && terminal.hasSelection()) {
-          event.preventDefault();
-          void navigator.clipboard
-            .writeText(terminal.getSelection())
-            .catch(() => {});
-          return false;
-        }
-        if (event.code === "KeyV") {
-          event.preventDefault();
-          void navigator.clipboard
-            .readText()
-            .then((text) => terminal.paste(text))
-            .catch(() => {});
-          return false;
-        }
+        // ⌘C and ⌘V are the Edit menu's: the terminal copies its selection and pastes.
       }
       return !(
         event.shiftKey &&
@@ -484,10 +600,12 @@ export function TerminalView({
       input.dispose();
       resize.dispose();
       stop();
+      title?.dispose();
+      unread?.();
       liveTerminal.current = null;
       terminal.dispose();
     };
-  }, [open, connected, onExit, mac]);
+  }, [open, connected, onExit, mac, restored, onTitle, reader]);
 
   return (
     <div
