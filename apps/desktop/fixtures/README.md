@@ -71,3 +71,16 @@ The standalone entry is excluded from the production build and never reaches a d
 `src/replay/thinking.ts` samples event envelopes through the app's board reducer, block builder
 and row derivation. `pnpm test` verifies the timed fixture in `src/replay/thinking.test.ts`:
 reasoning appears at 2 seconds, no later frame shows only Thinking, and actions separate thoughts.
+
+# Terminal sessions
+
+`/fixtures/terminal-sessions.html` renders the production bottom terminal and its real
+panel controller with synthetic shell IPC. Use `?name=brigadier-ai` to set the project
+folder name; shell cwd deliberately uses a different worktree folder. No requests
+reach a daemon, and the entry is excluded from the production build.
+
+Open terminal, add/select/close sessions, hide/reopen, resize, and drag below the
+close threshold. Check the strip with many sessions and narrow widths. Cmd+J,
+Ctrl+backquote, Cmd+T, Cmd+W, Cmd+Shift+[ / ], and arrow-key tab navigation use the
+production handlers. `window.terminalFixture` exposes the panel controller, session
+store, live mock shells, and recorded IPC requests for browser assertions.

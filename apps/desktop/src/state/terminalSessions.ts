@@ -96,3 +96,15 @@ export function undoTerminalClose(conversationId: string): boolean {
   }));
   return true;
 }
+
+/** Sessions use the project's own folder, even when their shells run in a worktree. */
+export function terminalSessionName(
+  projectPath: string | undefined,
+  cwd: string | null | undefined,
+  index: number,
+  count: number,
+): string {
+  const name =
+    (projectPath || cwd)?.split(/[\\/]/).filter(Boolean).at(-1) ?? "Terminal";
+  return `${name}${count > 1 ? ` ${index + 1}` : ""}`;
+}
