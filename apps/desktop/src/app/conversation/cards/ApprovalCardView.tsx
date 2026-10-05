@@ -37,7 +37,7 @@ export function Resolution({ state }: { state: CardState }) {
         <>
           <Check className="text-success size-icon-sm" />
           Allowed by {DECIDERS[state.by]}
-          {state.similar && ", and again for this worker"}
+          {state.similar && ", and similar ones in this conversation"}
         </>
       );
     case "denied":

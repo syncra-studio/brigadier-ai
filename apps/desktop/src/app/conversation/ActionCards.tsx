@@ -487,7 +487,8 @@ function ApprovalAction({ id, footer }: { id: string; footer: ReactNode }) {
               {allowLabel}
             </button>
             <GrantMenu
-              command={grant}
+              grant={grant}
+              network={request?.tool === "SandboxNetworkAccess"}
               escalation={request?.escalation ?? false}
               disabled={action.busy}
               onAnswer={answer}
@@ -514,16 +515,19 @@ function ApprovalAction({ id, footer }: { id: string; footer: ReactNode }) {
 }
 
 /**
- * The ⌄ half of the split "Allow once" button. "Allow similar commands" becomes an exact
- * grant: this command, for the rest of this worker's CLI session, never saved.
+ * The ⌄ half of the split "Allow once" button. "Allow similar commands" allows, for the rest
+ * of this conversation and from any of its workers, commands that start with the same words
+ * (`grant`), or connections to the same host; never saved.
  */
 function GrantMenu({
-  command,
+  grant,
+  network,
   escalation,
   disabled,
   onAnswer,
 }: {
-  command: string;
+  grant: string;
+  network: boolean;
   escalation: boolean;
   disabled: boolean;
   onAnswer: (decision: ApprovalDecision) => void;
@@ -552,15 +556,23 @@ function GrantMenu({
             <DropdownMenuItem
               onSelect={() => onAnswer({ type: "allowSimilar" })}
             >
-              Don't ask again for this command
+              Allow similar commands
               <InfoCircle className="ms-auto opacity-75" />
             </DropdownMenuItem>
           </TooltipTrigger>
           <TooltipContent side="right">
-            <span>
-              Allow <code className="font-mono break-all">{command}</code>
-              {escalation && " outside the sandbox"} again for this worker
-            </span>
+            {network ? (
+              <span>
+                Allow connections to <code className="font-mono break-all">{grant}</code> from
+                any worker in this conversation
+              </span>
+            ) : (
+              <span>
+                Allow commands that start with{" "}
+                <code className="font-mono break-all">{grant}</code>
+                {escalation && " outside the sandbox"} from any worker in this conversation
+              </span>
+            )}
           </TooltipContent>
         </Tooltip>
       </DropdownMenuContent>
