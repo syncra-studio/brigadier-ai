@@ -22,6 +22,7 @@ import type {
   RawEntry,
   RunState,
   StreamingMessage,
+  ThinkingSegment,
   Task,
   UserRequest,
   Rating,
@@ -87,6 +88,7 @@ export type Board = {
   /** How full the conversation model's context is; absent until its CLI first said. */
   context: ContextUsage | null;
   streaming: StreamingMessage | null;
+  thinking: ThinkingSegment[];
   notices: Notice[];
   /** What each worker is doing right now, in a few words (from its live events). */
   activity: Record<string, string>;
@@ -225,6 +227,7 @@ export function emptyBoard(conversationId: string): Board {
     doing: null,
     context: null,
     streaming: null,
+    thinking: [],
     notices: [],
     activity: {},
     summaries: {},
@@ -257,6 +260,7 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "workerStepped",
   "orchestratorStepped",
   "machineStepped",
+  "thinkingDelta",
   "compactionUpdated",
   "messageRated",
   "memoryUpdated",
@@ -315,6 +319,7 @@ export function boardFromView(
     doing: keep?.doing ?? null,
     context: view.context,
     streaming: view.streaming,
+    thinking: view.thinking ?? [],
     notices: view.notices.slice(-NOTICES),
     activity: keep?.activity ?? {},
     summaries: keep?.summaries ?? {},
@@ -392,7 +397,7 @@ function placed<T extends { id: string; position: number }>(
   return { ...items, [item.id]: { ...item, position } };
 }
 
-function applyToBoard(board: Board, envelope: EventEnvelope): Board {
+export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
   const { event, streamSeq, atMs } = envelope;
   switch (event.type) {
     case "messageAppended":
@@ -405,6 +410,18 @@ function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       };
     case "branchSwitched":
       return { ...board, head: event.head };
+    case "thinkingDelta": {
+      const known = board.thinking.find((segment) => segment.itemId === event.itemId);
+      if (known && streamSeq <= known.throughPosition) return board;
+      const segment: ThinkingSegment = known
+        ? { ...known, text: event.complete ? event.text : known.complete ? known.text : known.text + event.text,
+            updatedAtMs: event.atMs, throughPosition: streamSeq, complete: known.complete || event.complete }
+        : { itemId: event.itemId, requestId: event.requestId, text: event.text, position: streamSeq,
+            startedAtMs: event.atMs, updatedAtMs: event.atMs, throughPosition: streamSeq, complete: event.complete };
+      return { ...board, thinking: known
+        ? board.thinking.map((item) => item === known ? segment : item)
+        : [...board.thinking, segment] };
+    }
     case "messageDelta": {
       const current = board.streaming;
       const streaming =

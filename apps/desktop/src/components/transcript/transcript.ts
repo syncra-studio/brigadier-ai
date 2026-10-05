@@ -16,7 +16,7 @@ import type {
 /** One row of a raw session's transcript, folded from its events. */
 export type TranscriptItem =
   | { kind: "message"; key: string; role: Role; text: string; streaming: boolean }
-  | { kind: "reasoning"; key: string; text: string; streaming: boolean }
+  | { kind: "reasoning"; key: string; text: string; streaming: boolean; startedAtMs: number; endedAtMs: number }
   | {
       kind: "command";
       key: string;
@@ -100,6 +100,7 @@ function emptyStats(): TranscriptStats {
 export class TranscriptFolder {
   private items: TranscriptItem[] = [];
   private readonly index = new Map<string, number>();
+  private readonly completedReasoning = new Set<string>();
   private stats: TranscriptStats = emptyStats();
   private lastSeq = Number.NEGATIVE_INFINITY;
   private folded: FoldedTranscript = { items: [], stats: emptyStats(), pending: [] };
@@ -112,9 +113,15 @@ export class TranscriptFolder {
     const items = this.items.slice();
     const index = this.index;
     const stats = { ...this.stats };
+    let eventAtMs = 0;
     const upsert = (item: TranscriptItem, merge?: (current: TranscriptItem) => TranscriptItem) => {
       const at = index.get(item.key);
       if (at === undefined) {
+        // New rows settle the preceding thought; updates to an older action do not.
+        const last = items.at(-1);
+        if (last?.kind === "reasoning" && last.streaming) {
+          items[items.length - 1] = { ...last, streaming: false, endedAtMs: eventAtMs };
+        }
         index.set(item.key, items.length);
         items.push(item);
       } else {
@@ -123,7 +130,8 @@ export class TranscriptFolder {
       }
     };
 
-    for (const { event, streamSeq } of fresh) {
+    for (const { event, streamSeq, atMs } of fresh) {
+      eventAtMs = atMs;
       switch (event.type) {
         case "sessionStarted":
           stats.model = event.model ?? stats.model;
@@ -175,20 +183,25 @@ export class TranscriptFolder {
           break;
         case "reasoningDelta":
           upsert(
-            { kind: "reasoning", key: `reasoning:${event.itemId}`, text: event.text, streaming: true },
+            { kind: "reasoning", key: `reasoning:${event.itemId}`, text: event.text, streaming: true, startedAtMs: atMs, endedAtMs: atMs },
             (current) =>
-              current.kind === "reasoning" && current.streaming
-                ? { ...current, text: current.text + event.text }
+              current.kind === "reasoning" && !this.completedReasoning.has(event.itemId)
+                ? { ...current, text: current.text + event.text, endedAtMs: atMs }
                 : current,
           );
           break;
         case "reasoning":
+          this.completedReasoning.add(event.itemId);
           upsert({
             kind: "reasoning",
             key: `reasoning:${event.itemId}`,
             text: event.text,
             streaming: false,
-          });
+            startedAtMs: atMs,
+            endedAtMs: atMs,
+          }, (current) => current.kind === "reasoning"
+            ? { ...current, text: event.text, streaming: false, endedAtMs: atMs }
+            : current);
           break;
         case "command":
           upsert(

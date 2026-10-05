@@ -18,6 +18,7 @@ import {
 import { type FC, lazy, Suspense, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
+import { ThinkingRow } from "@/app/conversation/ThinkingRow";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { InlineImageText } from "@/app/conversation/InlineImage";
 import { MentionText } from "@/app/conversation/Mentions";
@@ -52,7 +53,7 @@ import { RateItem, RateMenu } from "@/components/assistant-ui/rate-menu";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";
-import type { AttachmentRef, ModelChoice } from "@/ipc/generated";
+import type { AttachmentRef, ModelChoice, ThinkingSegment } from "@/ipc/generated";
 import { formatDuration, formatSentAt } from "@/lib/format";
 import { modelName, sameModel, useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
@@ -72,6 +73,7 @@ export type BlockMeta = {
   rows: BlockRow[];
   /** The orchestrator's steps, in order. */
   orchestratorSteps: BlockOrchestratorStep[];
+  thinking?: ThinkingSegment[];
   /** Messages the user steered into the turn, shown as bubbles in the work. */
   steers: { position: number; text: string; atMs: number; attachments: AttachmentRef[] }[];
   /** Compactions of a Chat's context in the turn, or after it. */
@@ -195,6 +197,8 @@ const WorkHeader: FC<{
 
 function entryKey(entry: Entry): string {
   switch (entry.kind) {
+    case "thinking":
+      return `thinking:${entry.segment.itemId}`;
     case "text":
       return `text:${entry.index}`;
     case "card":
@@ -250,6 +254,8 @@ const ReportText: FC<TextMessagePartProps> = (props) => {
 /** A reply, card or row in the block's work. */
 const SequenceEntry: FC<{ entry: Entry; streaming: boolean }> = ({ entry, streaming }) => {
   switch (entry.kind) {
+    case "thinking":
+      return <ThinkingRow text={entry.segment.text} startedAtMs={entry.segment.startedAtMs} endedAtMs={entry.segment.updatedAtMs} live={entry.live} />;
     case "text":
       return (
         <div
@@ -344,7 +350,8 @@ const SteerBubble: FC<{ text: string; atMs: number; attachments: readonly Attach
  * The last line of a working block while the orchestrator itself works: what happens right now
  * ("Thinking", "Delegating…"). Workers show on their own rows.
  */
-const ActivityRow: FC<{ requestIds: string[] }> = ({ requestIds }) => {
+const ActivityRow: FC<{ requestIds: string[]; thinking: boolean }> = ({ requestIds, thinking }) => {
+
   const label = useBoard((s) => {
     const board = s.board;
     if (!board) return null;
@@ -355,7 +362,7 @@ const ActivityRow: FC<{ requestIds: string[] }> = ({ requestIds }) => {
     // Streaming text shows itself.
     return turn ? board.doing || (board.streaming?.text ? null : "Thinking") : null;
   });
-  if (!label) return null;
+  if (!label || thinking) return null;
   return (
     // As wide as its words, so the sweep crosses them rather than the whole row.
     <div data-slot="request-activity" className="shimmer w-fit max-w-full truncate text-sm">
@@ -469,7 +476,7 @@ function turnPhase(
 ): "idle" | "prework" | "final_answer" {
   if (!live) return "idle";
   const streaming = meta.texts.at(-1)?.position === Number.POSITIVE_INFINITY;
-  const work = meta.rows.length > 0 || meta.orchestratorSteps.length > 0 || meta.cards.length > 0;
+  const work = meta.rows.length > 0 || meta.orchestratorSteps.length > 0 || meta.cards.length > 0 || (meta.thinking?.length ?? 0) > 0;
   if (answering || (!work && streaming)) return "final_answer";
   if (work || meta.texts.some((text) => text.position !== Number.POSITIVE_INFINITY)) return "prework";
   return "idle";
@@ -617,7 +624,7 @@ export const RequestBlock: FC = () => {
               }
             />
           ))}
-          {(meta.state === "working" || (phase !== null && live)) && <ActivityRow requestIds={meta.requestIds} />}
+          {(meta.state === "working" || (phase !== null && live)) && <ActivityRow requestIds={meta.requestIds} thinking={sequence.some((entry) => entry.kind === "thinking" && entry.live)} />}
         </div>
       )}
       {/* A run's work is merged from its card, never undone behind the run's back. */}

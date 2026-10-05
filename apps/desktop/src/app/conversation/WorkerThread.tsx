@@ -1,3 +1,4 @@
+import { ThinkingRow } from "@/app/conversation/ThinkingRow";
 import {
   Book,
   Check,
@@ -271,10 +272,12 @@ function ActionRun({ items }: { items: readonly ActionItem[] }) {
   );
 }
 
-function EntryView({ entry }: { entry: ThreadEntry }) {
+function EntryView({ entry, working }: { entry: ThreadEntry; working: boolean }) {
   if (entry.kind === "actions") return <ActionRun items={entry.items} />;
   const { item } = entry;
   switch (item.kind) {
+    case "reasoning":
+      return <ThinkingRow text={item.text} startedAtMs={item.startedAtMs} endedAtMs={item.endedAtMs} live={working && item.streaming} />;
     case "message":
       return item.role === "user" ? (
         <div className="bg-secondary rounded-thread ms-8 self-end px-3 py-2 text-sm whitespace-pre-wrap">
@@ -321,7 +324,7 @@ function liveLabel(entries: readonly ThreadEntry[]): string | null {
   const last = entries.at(-1);
   // A running action says so on its own row.
   if (last?.kind === "actions" && last.items.at(-1)?.status === "inProgress") return null;
-  if (last?.kind === "item" && last.item.kind === "message" && last.item.streaming) return null;
+  if (last?.kind === "item" && (last.item.kind === "message" || last.item.kind === "reasoning") && last.item.streaming && last.item.text.trim()) return null;
   return "Thinking";
 }
 
@@ -471,6 +474,7 @@ export function WorkerThread({ task, model }: { task: Task; model: string }) {
             <EntryView
               key={entry.kind === "actions" ? entry.key : entry.item.key}
               entry={entry}
+              working={working}
             />
           ))}
         {now && <div className="shimmer truncate text-sm motion-reduce:animate-none">{now}</div>}

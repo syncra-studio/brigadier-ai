@@ -203,13 +203,12 @@ function isAction(item: TranscriptItem): item is ActionItem {
 }
 
 /**
- * A worker's transcript as its thread shows it: replies stay, adjacent actions (and the
- * reasoning between them) become one run, turn markers go. A failed or stopped turn stays.
+ * A worker's transcript as its thread shows it: replies and reasoning stay, adjacent actions become one run, turn markers go. A failed or stopped turn stays.
  */
 export function threadEntries(items: readonly TranscriptItem[]): ThreadEntry[] {
   const entries: ThreadEntry[] = [];
   for (const item of items) {
-    if (hidden(item) || item.kind === "reasoning" || item.kind === "turnStarted") continue;
+    if (hidden(item) || item.kind === "turnStarted") continue;
     if (item.kind === "turnCompleted" && item.status === "completed") continue;
     if (isAction(item)) {
       const last = entries.at(-1);

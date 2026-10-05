@@ -215,6 +215,7 @@ function signature(
     block.tasks,
     block.rows,
     block.orchestratorSteps,
+    block.thinking,
     block.compactions,
     block.steers.map((steer) => [steer.message.id, steer.text]),
     block.requestIds,
@@ -280,6 +281,7 @@ function useItems(
           cards: block.cards,
           rows: block.rows,
           orchestratorSteps: block.orchestratorSteps,
+          thinking: block.thinking,
           compactions: block.compactions,
           steers: block.steers.map((steer) => ({
             position: steer.position,
@@ -447,6 +449,7 @@ export function ConversationView({
             plans: s.board.plans,
             requests: s.board.requests,
             orchestratorSteps: s.board.orchestratorSteps,
+            thinking: s.board.thinking,
             machineSteps: s.board.machineSteps,
             decisions: s.board.decisions,
             compactions: s.board.compactions,

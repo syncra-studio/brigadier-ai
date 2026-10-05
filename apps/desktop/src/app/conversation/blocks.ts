@@ -16,6 +16,7 @@ import type {
   Question,
   RequestState,
   Task,
+  ThinkingSegment,
   UserRequest,
 } from "@/ipc/generated";
 import type { Board } from "@/state/board";
@@ -113,6 +114,7 @@ export type Block = {
   rows: BlockRow[];
   /** The orchestrator's steps, in order. */
   orchestratorSteps: BlockOrchestratorStep[];
+  thinking: ThinkingSegment[];
   /** Messages steered into its turn, whose requests it shows too. */
   steers: BlockSteer[];
   /** Compactions in its turn, or after it. */
@@ -133,6 +135,7 @@ export type BoardDigest = {
   plans: Readonly<Record<string, Plan>>;
   requests: Readonly<Record<string, UserRequest>>;
   orchestratorSteps: readonly OrchestratorStep[];
+  thinking?: readonly ThinkingSegment[];
   machineSteps: readonly MachineStep[];
   decisions: readonly Decision[];
   compactions: Readonly<Record<string, Compaction>>;
@@ -199,6 +202,7 @@ function keepPlan(plan: Plan): boolean {
 type Placed =
   | { kind: "message"; position: number; message: Message; text: string }
   | { kind: "card"; position: number; requestId: string | null; card: BlockCard }
+  | { kind: "thinking"; position: number; requestId: string | null; segment: ThinkingSegment; atMs: number }
   | { kind: "task"; position: number; requestId: string | null; id: string }
   | { kind: "row"; position: number; requestId: string | null; row: BlockRow; atMs: number }
   | {
@@ -219,7 +223,7 @@ type Placed =
 
 function createdAt(board: BoardDigest, item: Exclude<Placed, { kind: "message" }>): number {
   if (item.kind === "task") return board.tasks[item.id]?.createdAtMs ?? 0;
-  if (item.kind === "row" || item.kind === "orchestrator" || item.kind === "compaction") return item.atMs;
+  if (item.kind === "row" || item.kind === "orchestrator" || item.kind === "compaction" || item.kind === "thinking") return item.atMs;
   const { type, id } = item.card;
   const card =
     type === "task"
@@ -271,6 +275,11 @@ export function buildBlocks(
         atMs: task.createdAtMs,
       });
     }
+  }
+  for (const segment of board.thinking ?? []) {
+    if (!segment.text.trim()) continue;
+    placed.push({ kind: "thinking", position: segment.position, requestId: segment.requestId,
+      segment, atMs: segment.startedAtMs });
   }
   for (const step of board.orchestratorSteps) {
     // A phase's lead reads and messages its workers all night: the rows say what came of it.
@@ -372,6 +381,7 @@ export function buildBlocks(
         tasks: [],
         rows: [],
         orchestratorSteps: [],
+        thinking: [],
         steers: [],
         compactions: [],
         requestIds: [key],
@@ -432,6 +442,7 @@ export function buildBlocks(
     if (item.kind === "task") block.tasks.push(item.id);
     else if (item.kind === "row") block.rows.push(item.row);
     else if (item.kind === "orchestrator") block.orchestratorSteps.push(item.step);
+    else if (item.kind === "thinking") block.thinking.push(item.segment);
     else if (item.kind === "compaction") block.compactions.push(item.compaction);
     else block.cards.push(item.card);
   }
@@ -472,6 +483,7 @@ export function buildBlocks(
       tasks: [],
       rows: [],
       orchestratorSteps: [],
+      thinking: [],
       steers: [],
       compactions: [],
       requestIds: [entry.localId],
@@ -514,6 +526,7 @@ function joinSteered(blocks: Block[], requests: BoardDigest["requests"]): Block[
       tasks: [...previous.tasks, ...block.tasks],
       rows: [...previous.rows, ...block.rows],
       orchestratorSteps: [...previous.orchestratorSteps, ...block.orchestratorSteps],
+      thinking: [...previous.thinking, ...block.thinking],
       compactions: [...previous.compactions, ...block.compactions],
       steers: [
         ...previous.steers,
@@ -542,11 +555,14 @@ export type SequenceSource = {
   steers: readonly { position: number; text: string; atMs: number; attachments: readonly AttachmentRef[] }[];
   compactions: readonly BlockCompaction[];
   orchestratorSteps: readonly BlockOrchestratorStep[];
+  thinking?: readonly ThinkingSegment[];
+  state?: BlockState;
   rows: readonly BlockRow[];
 };
 
 /** One line or card of a block's work. */
 export type SequenceEntry =
+  | { kind: "thinking"; segment: ThinkingSegment; live: boolean; position: number }
   | { kind: "text"; index: number; position: number }
   | { kind: "card"; card: BlockCard; position: number }
   | { kind: "steer"; text: string; atMs: number; attachments: readonly AttachmentRef[]; position: number }
@@ -560,6 +576,7 @@ export type SequenceEntry =
  */
 export function blockSequence(source: SequenceSource): SequenceEntry[] {
   const entries: SequenceEntry[] = [
+    ...(source.thinking ?? []).map((segment) => ({ kind: "thinking" as const, segment, live: false, position: segment.position })),
     ...source.texts.map((text, index) => ({ kind: "text" as const, index, position: text.position })),
     ...source.cards.map((card) => ({ kind: "card" as const, card, position: card.position })),
     ...source.steers.map((steer) => ({ kind: "steer" as const, ...steer })),
@@ -573,6 +590,8 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
     })),
     ...source.rows.map((row) => ({ kind: "row" as const, row, position: row.position })),
   ].toSorted((a, b) => a.position - b.position);
+  const tail = entries.at(-1);
+  if (tail?.kind === "thinking") tail.live = !tail.segment.complete && (source.state === undefined || source.state === "working");
   const alone = (entry: SequenceEntry) =>
     entry.kind === "orchestrator" &&
     entry.steps.some((step) => step.kind.type === "decided" || step.kind.type === "machine");
@@ -603,6 +622,7 @@ export function blockShows(block: Block): boolean {
     block.cards.length > 0 ||
     block.tasks.length > 0 ||
     block.orchestratorSteps.length > 0 ||
+    block.thinking.length > 0 ||
     block.compactions.length > 0 ||
     block.state !== "done"
   );

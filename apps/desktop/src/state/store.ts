@@ -546,6 +546,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "cleanupCompleted":
     // Conversation views (tasks, cards, queue, streaming) and the Inspector's orchestrator
     // log read these themselves.
+    case "thinkingDelta":
     case "messageDelta":
     case "runStateChanged":
     case "requestUpdated":
