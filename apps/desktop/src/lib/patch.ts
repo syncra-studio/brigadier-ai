@@ -167,6 +167,12 @@ function fold(lines: DiffLine[], leading: boolean, trailing: boolean): DiffRow[]
   return rows;
 }
 
+/** The part of `patch` that changes `path`: its own `diff --git` section. */
+export function filePatch(patch: string, path: string): string {
+  const sections = patch.split(/^(?=diff --git )/m);
+  return sections.filter((section) => readFiles(section).has(path)).join("");
+}
+
 /**
  * The files of `patch`, in the order of `paths`. With `wholeFiles` each hunk is its whole
  * file, so every folded stretch can be opened; otherwise the stretches between hunks are only

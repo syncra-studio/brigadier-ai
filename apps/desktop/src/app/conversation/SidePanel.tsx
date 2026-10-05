@@ -397,6 +397,8 @@ export function useSidePanel(
       if (isReviewKey(event) && kind === "session" && conversationId) {
         event.preventDefault();
         openReviewTab(conversationId, { type: "all" });
+        // The Review tab is in the main area, which a panel in full view hides.
+        setState((current) => (current.fullscreen ? { ...current, fullscreen: false } : current));
         return;
       }
       if (command && event.shiftKey && !event.altKey && event.code === "KeyF") {

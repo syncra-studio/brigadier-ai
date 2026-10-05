@@ -266,6 +266,6 @@ export function stepTab(conversationId: string, step: 1 | -1): void {
 /** ⌘1 is Chat, ⌘2 to ⌘9 the tabs after it (⌘9 the last, as browsers do). */
 export function selectTabNumber(conversationId: string, number: number): void {
   const order = tabOrder(sessionTabs(conversationId));
-  const id = number === 9 && order.length > 9 ? order.at(-1) : order[number - 1];
+  const id = number === 9 ? order.at(-1) : order[number - 1];
   if (id) selectTab(conversationId, id);
 }

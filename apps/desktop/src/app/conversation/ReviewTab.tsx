@@ -54,7 +54,7 @@ import { openFolder, request, revealPath } from "@/ipc/client";
 import type { ReviewDiff, ReviewFile, ReviewScope } from "@/ipc/generated";
 import { formatSentAt } from "@/lib/format";
 import { HIGHLIGHT_CHARS, highlight, languageOf, type Token } from "@/lib/highlight";
-import { changedSpan, type DiffLine, type DiffRow, type PatchFile, parsePatch } from "@/lib/patch";
+import { changedSpan, type DiffLine, type DiffRow, filePatch, type PatchFile, parsePatch } from "@/lib/patch";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
@@ -65,7 +65,7 @@ import {
   setReviewScope,
   useReview,
 } from "@/state/review";
-import { openFileTab, openReviewTab, type ReviewTarget } from "@/state/sessionTabs";
+import { CHAT_TAB, openFileTab, openReviewTab, type ReviewTarget, selectTab } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 
 /**
@@ -216,6 +216,7 @@ export function ReviewTab({
             return {
               ...fullReview,
               files,
+              patch: filePatch(fullReview.patch, single.path),
               insertions: files.reduce((sum, file) => sum + (file.insertions ?? 0), 0),
               deletions: files.reduce((sum, file) => sum + (file.deletions ?? 0), 0),
             };
@@ -1145,7 +1146,7 @@ const SplitLine: FC<{
 
 /**
  * The box a line's "+" opens: the comment goes into the composer with the line quoted, to
- * send to the orchestrator like any message.
+ * send to the orchestrator like any message. Chat comes to the front to show it.
  */
 const CommentBox: FC<{ path: string; line: DiffLine; onClose: () => void }> = ({
   path,
@@ -1153,6 +1154,7 @@ const CommentBox: FC<{ path: string; line: DiffLine; onClose: () => void }> = ({
   onClose,
 }) => {
   const aui = useAui();
+  const { conversationId } = useContext(ReviewContext);
   const [text, setText] = useState("");
   const number = line.kind === "del" ? line.old : line.new;
   const submit = () => {
@@ -1161,6 +1163,7 @@ const CommentBox: FC<{ path: string; line: DiffLine; onClose: () => void }> = ({
     const quote = `\`${path}\` line ${number}:\n> ${line.text.trim()}\n${text.trim()}`;
     composer.setText(current.trim() ? `${current.trimEnd()}\n\n${quote}` : quote);
     onClose();
+    selectTab(conversationId, CHAT_TAB);
     requestAnimationFrame(() => document.querySelector<HTMLElement>(COMPOSER_EDITABLE)?.focus());
   };
   return (

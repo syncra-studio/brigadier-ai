@@ -190,10 +190,18 @@ export function SessionTabBar({
     axis: "x",
   });
 
-  // The tab in front scrolls into view.
+  // The tab in front scrolls into view, and stays there as the strip's room changes.
   useEffect(() => {
-    const element = strip.current?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(active)}"]`);
-    element?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const list = strip.current;
+    if (!list) return;
+    const reveal = () =>
+      list
+        .querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(active)}"]`)
+        ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    reveal();
+    const observer = new ResizeObserver(reveal);
+    observer.observe(list);
+    return () => observer.disconnect();
   }, [active]);
 
   const title = UNTITLED.has(conversation.title) ? "Chat" : conversation.title;
