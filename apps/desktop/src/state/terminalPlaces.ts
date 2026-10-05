@@ -106,7 +106,7 @@ export function placeConversation(place: string): string | null {
 const shells = new Map<string, { place: string; tab: string }>();
 // Output already shown in a tab when its shell was closed, for bringing it back.
 const closed = new Map<string, { tab: TerminalTab; output: string }[]>();
-// Output a reopened tab shows before its new shell's.
+// Output a reopened tab shows before its new shell's, until it closes or is cleared.
 const restored = new Map<string, string>();
 // Each shown tab's way of reading its output, for keeping it when the tab closes.
 const readers = new Map<string, () => string>();
@@ -130,9 +130,16 @@ export function emitTerminalOutput(output: TerminalOutput): void {
   forgetTab(owner.place, owner.tab);
 }
 
-/** The tab's shell is `terminalId` now. */
+/** The tab's shell is `terminalId` now (a daemon started again gives it a new one). */
 export function noteShell(place: string, tab: string, terminalId: string): void {
+  for (const [id, owner] of shells) if (owner.tab === tab) shells.delete(id);
   shells.set(terminalId, { place, tab });
+}
+
+/** The tab's shell ended while its view watched (perhaps before its owner was known). */
+export function noteShellExit(place: string, tab: string): void {
+  for (const [id, owner] of shells) if (owner.tab === tab) shells.delete(id);
+  forgetTab(place, tab);
 }
 
 export function noteShellCwd(place: string, tab: string, cwd: string): void {
@@ -158,11 +165,14 @@ export function noteTabReader(tab: string, read: () => string): () => void {
   };
 }
 
-/** Output to show in a reopened tab before its shell's, taken once. */
-export function takeRestoredOutput(tab: string): string | null {
-  const output = restored.get(tab) ?? null;
+/** Output to show in a reopened tab before its shell's. */
+export function restoredOutput(tab: string): string | null {
+  return restored.get(tab) ?? null;
+}
+
+/** The tab was cleared: what it brought back goes too. */
+export function forgetRestoredOutput(tab: string): void {
   restored.delete(tab);
-  return output;
 }
 
 export function hasTab(place: string, tab: string): boolean {
@@ -227,6 +237,7 @@ export function toggleTerminal(place = currentPlace()): void {
 
 function forgetTab(place: string, tab: string): void {
   readers.delete(tab);
+  restored.delete(tab);
   update(place, (current) => {
     const index = current.tabs.findIndex((each) => each.id === tab);
     if (index < 0) return current;
@@ -281,6 +292,7 @@ export function undoTabClose(place: string): boolean {
 function dropPlace(place: string): void {
   for (const tab of terminalPlace(place).tabs) {
     readers.delete(tab.id);
+    restored.delete(tab.id);
     for (const [terminalId, owner] of shells) if (owner.tab === tab.id) shells.delete(terminalId);
   }
   closed.delete(place);

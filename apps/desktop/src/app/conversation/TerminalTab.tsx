@@ -34,7 +34,9 @@ import {
   selectTab,
   setTerminalOpen,
   tabNames,
-  takeRestoredOutput,
+  forgetRestoredOutput,
+  noteShellExit,
+  restoredOutput,
   terminalPlace,
   useTerminalPlace,
 } from "@/state/terminalPlaces";
@@ -104,17 +106,18 @@ const RESET = "\u001b[0m";
 const MIN_HEIGHT = 160;
 const DEFAULT_HEIGHT = 280;
 
-/** The pane's height, shared by every place and kept across launches. */
-function useTerminalHeight(pane: RefObject<HTMLElement | null>) {
+/** The pane's height, shared by every place and kept across launches. `present` is whether
+ * the pane is in the page (it is while its place has tabs), so its column can be watched. */
+function useTerminalHeight(pane: RefObject<HTMLElement | null>, present: boolean) {
   const [saved, setSaved] = useState(() => savedPaneSizes().terminal ?? null);
   const [room, setRoom] = useState(() => window.innerHeight);
   useEffect(() => {
-    const column = pane.current?.parentElement;
+    const column = present ? pane.current?.parentElement : null;
     if (!column) return;
     const observer = new ResizeObserver(() => setRoom(column.getBoundingClientRect().height));
     observer.observe(column);
     return () => observer.disconnect();
-  }, [pane]);
+  }, [pane, present]);
   const max = Math.max(MIN_HEIGHT, room * 0.5);
   const height = Math.max(MIN_HEIGHT, Math.min(saved ?? DEFAULT_HEIGHT, max));
   const resize = useCallback((next: number | null) => {
@@ -133,7 +136,7 @@ export function TerminalPane({ place }: { place: string }) {
   const open = data.open;
   const start = useRef<{ y: number; height: number } | null>(null);
   const pane = useRef<HTMLElement>(null);
-  const { height, max, resize } = useTerminalHeight(pane);
+  const { height, max, resize } = useTerminalHeight(pane, data.tabs.length > 0);
   const previousFocus = useRef<HTMLElement | null>(null);
   const wasOpen = useRef(false);
   useEffect(() => {
@@ -466,8 +469,11 @@ export function TerminalTab({
     [place, tabId],
   );
   const reader = useCallback((read: () => string) => noteTabReader(tabId, read), [tabId]);
+  // An exit the store missed (it came before the shell's id did) still closes the tab.
+  const onExit = useCallback(() => noteShellExit(place, tabId), [place, tabId]);
+  const onClear = useCallback(() => forgetRestoredOutput(tabId), [tabId]);
   // What the tab showed before it was closed, when it is one brought back.
-  const [restored] = useState(() => takeRestoredOutput(tabId));
+  const restored = useCallback(() => restoredOutput(tabId), [tabId]);
   return (
     <TerminalView
       key={density}
@@ -476,20 +482,24 @@ export function TerminalTab({
       restored={restored}
       onTitle={onTitle}
       reader={reader}
+      onExit={onExit}
+      onClear={onClear}
     />
   );
 }
 
 /**
  * A shell the daemon runs, shown live: `open` starts it (or re-attaches to it) at the view's
- * size. When it ends, `onExit` hears its exit code (a pane's tab just closes). `restored` is
- * output shown above the shell's, `onTitle` hears the titles the shell sets, and `reader`
- * learns how to read what the view shows, until the function it returns is called.
+ * size. When it ends, `onExit` hears its exit code (a pane's tab just closes). `restored` gives
+ * output to show above the shell's, `onClear` hears ⌘K, `onTitle` hears the titles the shell
+ * sets, and `reader` learns how to read what the view shows, until the function it returns is
+ * called.
  */
 export function TerminalView({
   open,
   onExit,
-  restored = null,
+  restored,
+  onClear,
   onTitle,
   reader,
   focus = true,
@@ -497,7 +507,8 @@ export function TerminalView({
 }: {
   open: (cols: number, rows: number) => Promise<TerminalInfo>;
   onExit?: (code: number | null) => void;
-  restored?: string | null;
+  restored?: () => string | null;
+  onClear?: () => void;
   onTitle?: (title: string) => void;
   reader?: (read: () => string) => () => void;
   /** Takes the keyboard once it is open. */
@@ -552,7 +563,8 @@ export function TerminalView({
     terminal.loadAddon(new ClipboardAddon(undefined, WRITE_ONLY_CLIPBOARD));
     terminal.open(element);
     fit.fit();
-    if (restored) terminal.write(`${restored}${RESET}\r\n`);
+    const before = restored?.();
+    if (before) terminal.write(`${before}${RESET}\r\n`);
     const title = onTitle ? terminal.onTitleChange(onTitle) : null;
     const unread = reader?.(() => serialize.serialize({ scrollback: 5000 }));
 
@@ -605,6 +617,7 @@ export function TerminalView({
         event.preventDefault();
         event.stopPropagation();
         terminal.clear();
+        onClear?.();
         // The daemon forgets it too, so reopening the tab doesn't bring it back.
         if (id)
           void request({ method: "clearTerminal", terminalId: id }).catch(
@@ -703,7 +716,7 @@ export function TerminalView({
       liveTerminal.current = null;
       terminal.dispose();
     };
-  }, [open, connected, onExit, mac, restored, onTitle, reader]);
+  }, [open, connected, onExit, mac, restored, onClear, onTitle, reader]);
 
   return (
     <div
