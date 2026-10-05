@@ -338,6 +338,7 @@ const leadTranscript: RawEntry[] = [
     },
     ago(100),
   ),
+  entry({ type: "toolCall", itemId: "x4b", name: "WebSearch", input: JSON.stringify({ query: "radix switch changelog 2026" }), status: "failed", output: "Web search failed: the request timed out after 30 seconds." }, ago(95)),
   entry({ type: "message", itemId: "x5", role: "assistant", text: "The store has no theme yet. I’ll add it, then the switch." }, ago(90)),
   entry({ type: "fileChanges", itemId: "x6", changes: [{ path: "apps/desktop/src/state/settings.ts", kind: "update" }, { path: "apps/desktop/src/app/settings/Appearance.tsx", kind: "update" }], status: "completed" }, ago(60)),
   entry({ type: "command", itemId: "x7", command: "/bin/zsh -lc 'pnpm test settings'", cwd: "/tmp/flow-fixture", status: "failed", exitCode: 1, output: "✖ the switch applies the theme at once\n  AssertionError: expected 'dark' to equal 'light'\nℹ pass 11\nℹ fail 1", durationMs: 4200 }, ago(40)),

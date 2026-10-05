@@ -177,6 +177,15 @@ function actionDetail(item: ActionItem): ReactNode {
       return shellCard(item);
     case "tool": {
       const query = item.name === "WebSearch" ? searchQuery(item.input) : null;
+      if (query !== null && item.status === "failed") {
+        // A failed search found nothing: its query, then what went wrong in full.
+        return (
+          <div className="flex flex-col gap-2 ps-6 pt-1 pb-2">
+            <WebSearch query={query} results={[]} />
+            <ErrorState title="The search failed" detail={item.output || null} />
+          </div>
+        );
+      }
       if (query !== null) {
         return (
           <WebSearch
@@ -209,6 +218,7 @@ function ActionRow({ item }: { item: ActionItem }) {
     <>
       <Icon aria-hidden className="size-icon-md shrink-0" />
       <span className="min-w-0 truncate">{running ? activity.doing : activity.done}</span>
+      {item.status === "failed" && <span className="text-destructive shrink-0">failed</span>}
       {item.kind === "command" && !running && item.durationMs !== null && item.durationMs >= 1000 && (
         <span className="shrink-0 tabular-nums">in {formatDuration(item.durationMs)}</span>
       )}
