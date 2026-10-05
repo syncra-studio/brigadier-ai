@@ -6,21 +6,25 @@ use std::{collections::HashMap, ffi::OsString};
 use crate::{Oid, Repo, Result, command::valid_oid, parse};
 
 /// `message` without its Co-authored-by trailers that name an AI (people's are kept), and
-/// without the blank lines that leaves at its end. Returned unchanged when it has none, or
-/// when nothing else would be left.
+/// without the blank lines that leaves at its end. Only the trailers at its end count: the
+/// same line quoted in its body, with text after it, stays. Returned unchanged when it has
+/// none, or when nothing else would be left.
 pub fn strip_ai_coauthors(message: &str) -> String {
-    let mut removed = false;
-    let mut lines: Vec<&str> = Vec::new();
-    for line in message.lines() {
-        if ai_coauthor(line) {
-            removed = true;
-        } else {
-            lines.push(line);
-        }
+    let all: Vec<&str> = message.lines().collect();
+    let mut end = all.len();
+    while end > 0 && all[end - 1].trim().is_empty() {
+        end -= 1;
     }
-    if !removed {
+    // The trailer block: the `Key: value` lines that end the message, below its subject.
+    let mut start = end;
+    while start > 1 && trailer_line(all[start - 1]) {
+        start -= 1;
+    }
+    if !all[start..end].iter().any(|line| ai_coauthor(line)) {
         return message.to_owned();
     }
+    let mut lines = all[..start].to_vec();
+    lines.extend(all[start..end].iter().filter(|line| !ai_coauthor(line)));
     while lines.last().is_some_and(|line| line.trim().is_empty()) {
         lines.pop();
     }
@@ -32,6 +36,13 @@ pub fn strip_ai_coauthors(message: &str) -> String {
         cleaned.push('\n');
     }
     cleaned
+}
+
+/// Whether `line` has a trailer's shape: a `Key: value` line, its key a token.
+fn trailer_line(line: &str) -> bool {
+    line.split_once(':').is_some_and(|(key, _)| {
+        !key.is_empty() && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    })
 }
 
 /// The names of AI products and their companies.
