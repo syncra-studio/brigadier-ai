@@ -386,9 +386,9 @@ mockIPC((command, payload) => {
   const req = (payload as { request: Request }).request;
   calls.push(req);
   switch (req.method) {
-    case "answerApproval": {
+    case "answerCard": {
       // The daemon settles the card; here it simply goes.
-      const { approvalId } = req as unknown as { approvalId: string };
+      const { cardId: approvalId } = req;
       useBoard.setState((s) => {
         if (!s.board) return s;
         const { [approvalId]: _answered, ...rest } = s.board.approvals;
