@@ -334,9 +334,10 @@ impl Session {
             }
             Request::OpenTerminal {
                 conversation_id,
+                session_id,
                 cols,
                 rows,
-            } => self.open_terminal(&conversation_id, cols, rows),
+            } => self.open_terminal(&conversation_id, session_id.as_deref(), cols, rows),
             Request::OpenSetupTerminal {
                 provider,
                 install,
@@ -470,6 +471,7 @@ impl Session {
     fn open_terminal(
         &mut self,
         conversation_id: &ConversationId,
+        session_id: Option<&str>,
         cols: u16,
         rows: u16,
     ) -> Result<Response, IpcError> {
@@ -478,10 +480,10 @@ impl Session {
         if self.terminal_feed.is_none() {
             self.terminal_feed = Some(self.daemon.terminals.subscribe());
         }
-        let terminal = self
-            .daemon
-            .terminals
-            .open(&conversation_id.0, cwd, cols, rows, None)?;
+        let terminal =
+            self.daemon
+                .terminals
+                .open_session(&conversation_id.0, session_id, cwd, cols, rows)?;
         self.terminals.insert(terminal.id.clone());
         Ok(Response::OpenTerminal { terminal })
     }

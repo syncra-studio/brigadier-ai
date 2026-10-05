@@ -40,7 +40,11 @@ query: string | null, } | { "method": "readFile", conversationId: ConversationId
 /**
  * Relative to the checkout's root.
  */
-path: string, } | { "method": "openTerminal", conversationId: ConversationId, cols: number, rows: number, } | { "method": "openSideChat", conversationId: ConversationId, } | { "method": "openSetupTerminal", provider: ProviderKind, install: boolean, cols: number, rows: number, } | { "method": "writeTerminal", terminalId: string, data: string, } | { "method": "resizeTerminal", terminalId: string, cols: number, rows: number, } | { "method": "closeTerminal", terminalId: string, } | { "method": "getDictation" } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation" } | { "method": "appendDictation", dictationId: string, 
+path: string, } | { "method": "openTerminal", conversationId: ConversationId, 
+/**
+ * Independent shell session; omitted for the original default shell.
+ */
+sessionId?: string, cols: number, rows: number, } | { "method": "openSideChat", conversationId: ConversationId, } | { "method": "openSetupTerminal", provider: ProviderKind, install: boolean, cols: number, rows: number, } | { "method": "writeTerminal", terminalId: string, data: string, } | { "method": "resizeTerminal", terminalId: string, cols: number, rows: number, } | { "method": "closeTerminal", terminalId: string, } | { "method": "getDictation" } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation" } | { "method": "appendDictation", dictationId: string, 
 /**
  * 16 kHz mono 16-bit little-endian PCM, base64-encoded.
  */

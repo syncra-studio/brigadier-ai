@@ -1,4 +1,4 @@
-//! The side panel's Terminal tab: one shell per session, in its checkout, on a
+//! Bottom-pane shells, independently keyed within each session's checkout, on a
 //! pseudo terminal. Its output streams live to the connections that opened it, and a tail is
 //! kept so a tab opened again shows what came before; none of it is stored. A shell ends when
 //! its tab closes, its session is archived or deleted, or the daemon quits.
@@ -38,6 +38,7 @@ pub struct Terminals {
 struct Terminal {
     id: String,
     conversation: String,
+    session: Option<String>,
     shell: String,
     cwd: String,
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -88,6 +89,30 @@ impl Terminals {
         rows: u16,
         run: Option<&str>,
     ) -> Result<TerminalInfo> {
+        self.open_inner(conversation, None, cwd, cols, rows, run)
+    }
+
+    /// Opens an independent shell while keeping archive/delete ownership on the conversation.
+    pub fn open_session(
+        &self,
+        conversation: &str,
+        session: Option<&str>,
+        cwd: String,
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalInfo> {
+        self.open_inner(conversation, session, cwd, cols, rows, None)
+    }
+
+    fn open_inner(
+        &self,
+        conversation: &str,
+        session: Option<&str>,
+        cwd: String,
+        cols: u16,
+        rows: u16,
+        run: Option<&str>,
+    ) -> Result<TerminalInfo> {
         let size = PtySize {
             rows: rows.max(1),
             cols: cols.max(1),
@@ -96,7 +121,9 @@ impl Terminals {
         };
         let running = lock(&self.live)
             .values()
-            .find(|terminal| terminal.conversation == conversation)
+            .find(|terminal| {
+                terminal.conversation == conversation && terminal.session.as_deref() == session
+            })
             .cloned();
         if let Some(terminal) = running {
             if let Err(err) = lock(&terminal.master).resize(size) {
@@ -139,6 +166,7 @@ impl Terminals {
         let terminal = Arc::new(Terminal {
             id: id.clone(),
             conversation: conversation.to_owned(),
+            session: session.map(str::to_owned),
             shell,
             cwd,
             master: Mutex::new(pair.master),
@@ -347,5 +375,37 @@ impl Utf8Stream {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Terminals;
+
+    #[test]
+    fn independent_sessions_reattach_and_close_with_their_conversation() {
+        let terminals = Terminals::new();
+        let cwd = std::env::temp_dir().display().to_string();
+        let first = terminals
+            .open_session("pane-test", Some("first"), cwd.clone(), 80, 24)
+            .unwrap();
+        let second = terminals
+            .open_session("pane-test", Some("second"), cwd.clone(), 80, 24)
+            .unwrap();
+        let other = terminals
+            .open_session("other-chat", Some("first"), cwd.clone(), 80, 24)
+            .unwrap();
+        let reattached = terminals
+            .open_session("pane-test", Some("first"), cwd, 100, 30)
+            .unwrap();
+        assert_ne!(first.id, second.id);
+        assert_ne!(first.id, other.id);
+        assert_eq!(first.id, reattached.id);
+        assert_eq!(terminals.count(), 3);
+        terminals.close_conversation("pane-test");
+        assert_eq!(terminals.count(), 1);
+        assert!(terminals.get(&other.id).is_ok());
+        terminals.close_all();
+        assert_eq!(terminals.count(), 0);
     }
 }

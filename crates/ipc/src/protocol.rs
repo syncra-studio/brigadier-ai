@@ -185,11 +185,15 @@ pub enum Request {
         /// Relative to the checkout's root.
         path: String,
     },
-    /// The session's terminal (the side panel's Terminal tab): a shell in its checkout,
+    /// A bottom-pane shell in the session's checkout,
     /// started if none runs, sized `cols` × `rows`. Its output then streams to this
     /// connection as [`ServerFrame::Terminal`].
     OpenTerminal {
         conversation_id: ConversationId,
+        /// Independent shell session; omitted for the original default shell.
+        #[serde(default)]
+        #[ts(optional)]
+        session_id: Option<String>,
         cols: u16,
         rows: u16,
     },
