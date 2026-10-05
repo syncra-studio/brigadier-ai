@@ -541,6 +541,10 @@ pub struct Settings {
     /// The orchestrator, an overnight run's leads included, answers the user in a few plain
     /// lines (PLAN.md §7). Off, it keeps the plain voice without the length limits.
     pub short_replies: bool,
+    /// Co-authored-by trailers that name an AI are left out of commit messages: the user's
+    /// own commits, what the agents write, and the commits Brigadier lands or keeps.
+    #[serde(default = "default_true")]
+    pub omit_ai_coauthors: bool,
     /// The first-run setup (agents, then projects) was finished or skipped.
     pub onboarded: bool,
     /// When the computer is kept from sleeping.
@@ -568,6 +572,12 @@ pub struct Settings {
     pub settings_version: u32,
 }
 
+/// A setting that is on unless the user turned it off, also in settings saved before it
+/// existed.
+fn default_true() -> bool {
+    true
+}
+
 /// The settings' shape: each step up converts saved settings once (see
 /// [`crate::routing::availability::migrate`]).
 pub const SETTINGS_VERSION: u32 = 1;
@@ -592,6 +602,7 @@ impl Default for Settings {
             show_full_access_notice: true,
             enrich_brain: true,
             short_replies: true,
+            omit_ai_coauthors: true,
             onboarded: false,
             keep_awake: KeepAwake::default(),
             keep_awake_lid_closed: false,

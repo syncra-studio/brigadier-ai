@@ -257,6 +257,7 @@ impl SessionManager {
             auto_compact: true,
             allowed_models: None,
             auto_review: false,
+            omit_ai_coauthors: false,
         };
         let meter = TokenMeter::default();
         let ran = run_web_session(

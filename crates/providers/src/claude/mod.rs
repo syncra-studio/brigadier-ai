@@ -563,6 +563,11 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents) -> Value {
     if let SubAgents::Only(ids) = sub_agents {
         settings["availableModels"] = json!(ids);
     }
+    // No Co-Authored-By trailer or generated-with line in its commits and pull requests.
+    if spec.omit_ai_coauthors {
+        settings["includeCoAuthoredBy"] = json!(false);
+        settings["attribution"] = json!({ "commit": "", "pr": "" });
+    }
     settings
 }
 
@@ -1551,6 +1556,7 @@ mod tests {
             auto_compact: true,
             allowed_models: Some(allowed(ids, &["claude-opus-5-5", "claude-fable-5-1"])),
             auto_review: false,
+            omit_ai_coauthors: false,
         }
     }
 

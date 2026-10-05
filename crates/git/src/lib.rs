@@ -10,12 +10,14 @@ pub mod litter;
 mod parse;
 mod repo;
 mod source;
+mod trailers;
 mod worktree;
 
 use std::{ffi::OsString, path::PathBuf};
 
 pub use command::{FoundRepo, Git};
 pub use repo::Repo;
+pub use trailers::strip_ai_coauthors;
 pub use worktree::Worktree;
 
 /// A git operation's result.

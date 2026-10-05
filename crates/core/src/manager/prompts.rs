@@ -573,6 +573,11 @@ fn preference_lines(preferences: &[String]) -> String {
     text
 }
 
+/// For a Codex worker that writes, while the user leaves AI co-authors out of commits (Claude
+/// is held to it by its settings instead).
+pub(crate) const NO_AI_COAUTHORS: &str =
+    "Don't add Co-authored-by trailers that name an AI to commit messages.";
+
 /// A worker's role and task.
 pub(crate) fn worker(task: &Task, repo_note: &str, instructions: &str, extra: &str) -> String {
     let kind = match task.kind {

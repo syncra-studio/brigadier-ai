@@ -1372,6 +1372,7 @@ fn spec_for(session: &RawSession, origin: Origin, record_to: Option<PathBuf>) ->
         auto_compact: true,
         allowed_models: None,
         auto_review: false,
+        omit_ai_coauthors: false,
     }
 }
 

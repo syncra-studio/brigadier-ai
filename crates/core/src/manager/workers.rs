@@ -1218,6 +1218,11 @@ impl SessionManager {
             (TaskKind::Merge, Some(subject)) => self.merge_brief(subject, &workspace).await,
             _ => String::new(),
         };
+        let omit_ai_coauthors = self.core.settings().omit_ai_coauthors;
+        if omit_ai_coauthors && provider == ProviderKind::Codex && task.kind.writes() {
+            extra.push_str("\n\n");
+            extra.push_str(prompts::NO_AI_COAUTHORS);
+        }
         if self.held_by_plan_mode(task).await {
             extra.push_str("\n\n");
             extra.push_str(super::phases::PLAN_MODE_HOLD);
@@ -1258,6 +1263,7 @@ impl SessionManager {
             auto_compact: true,
             allowed_models: Some(allowed_models.clone()),
             auto_review: self.permission(&conversation_id) == PermissionLevel::ApproveForMe,
+            omit_ai_coauthors,
         };
         let Started { session, events } =
             match self.runtime.start_hosted(&owner, provider, spec).await {

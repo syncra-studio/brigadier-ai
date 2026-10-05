@@ -1796,6 +1796,7 @@ mod tests {
             auto_compact: true,
             allowed_models,
             auto_review: false,
+            omit_ai_coauthors: false,
         }
     }
 

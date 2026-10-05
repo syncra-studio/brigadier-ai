@@ -357,6 +357,7 @@ impl SessionManager {
             auto_compact: false,
             allowed_models: None,
             auto_review: false,
+            omit_ai_coauthors: false,
         };
         let owner = format!("orch:{id}");
         let Started {

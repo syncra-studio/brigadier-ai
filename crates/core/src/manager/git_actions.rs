@@ -154,6 +154,11 @@ impl SessionManager {
                 self.write_commit_message(id, provider, &patch).await?
             }
         };
+        let message = if self.core.settings().omit_ai_coauthors {
+            brigadier_git::strip_ai_coauthors(&message)
+        } else {
+            message
+        };
         let git = self.git.clone();
         let text = message.clone();
         blocking(move || {
@@ -253,6 +258,7 @@ impl SessionManager {
             auto_compact: true,
             allowed_models: None,
             auto_review: false,
+            omit_ai_coauthors: false,
         };
         let shown: String = patch.chars().take(PATCH_CHARS).collect();
         let cut = if shown.len() < patch.len() {

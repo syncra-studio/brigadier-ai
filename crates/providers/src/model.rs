@@ -866,6 +866,10 @@ pub struct SessionSpec {
     /// such requests reach Brigadier (Ask for approval). No effect under [`Access::Full`],
     /// which never asks, or [`Access::ReadOnly`].
     pub auto_review: bool,
+    /// The CLI leaves Co-authored-by trailers that name an AI out of the commits it writes
+    /// (the user's setting, for sessions that commit): Claude through its attribution
+    /// settings; Codex, which has none, is told in its instructions by the caller.
+    pub omit_ai_coauthors: bool,
 }
 
 /// The models a worker's own sub-agents may run on (PLAN.md §7): the router's eligible set for

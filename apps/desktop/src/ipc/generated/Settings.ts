@@ -47,6 +47,11 @@ enrichBrain: boolean,
  */
 shortReplies: boolean, 
 /**
+ * Co-authored-by trailers that name an AI are left out of commit messages: the user's
+ * own commits, what the agents write, and the commits Brigadier lands or keeps.
+ */
+omitAiCoauthors: boolean, 
+/**
  * The first-run setup (agents, then projects) was finished or skipped.
  */
 onboarded: boolean, 

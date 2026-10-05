@@ -566,6 +566,7 @@ impl SessionManager {
             // Claude without its Agent tool).
             allowed_models: Some(brigadier_providers::AllowedModels::default()),
             auto_review: false,
+            omit_ai_coauthors: false,
         };
         let access = spec.access.clone();
         let time = match job.kind {

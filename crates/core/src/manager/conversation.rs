@@ -1599,6 +1599,7 @@ impl SessionManager {
             auto_compact: conv.kind == ConversationKind::Chat,
             allowed_models: None,
             auto_review: false,
+            omit_ai_coauthors: self.core.settings().omit_ai_coauthors,
         };
         let mut resumed = resume.is_some();
         let started = match self
