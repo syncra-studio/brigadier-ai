@@ -8,34 +8,45 @@ import {
 
 type Drag = { id: string; from: number; to: number };
 
-/** Where a dragged row would land, from the pointer's height over the rows' midpoints. */
-function dropIndex(list: HTMLElement, rowSelector: string, y: number, dragged: number): number {
+/** Where a dragged row would land, from the pointer's place over the rows' midpoints along
+ * `axis` (across, a right-to-left list counts from its right). */
+function dropIndex(
+  list: HTMLElement,
+  rowSelector: string,
+  at: number,
+  dragged: number,
+  axis: "x" | "y",
+): number {
   const rows = [...list.querySelectorAll<HTMLElement>(`:scope > ${rowSelector}`)];
+  const rtl = axis === "x" && getComputedStyle(list).direction === "rtl";
   let index = 0;
   for (const [position, row] of rows.entries()) {
     if (position === dragged) continue;
     const rect = row.getBoundingClientRect();
-    if (y > rect.top + rect.height / 2) index++;
+    const middle = axis === "x" ? rect.left + rect.width / 2 : rect.top + rect.height / 2;
+    if (rtl ? at < middle : at > middle) index++;
   }
   return index;
 }
 
 /**
  * A list the user reorders by a grip on each row: dragged with the pointer (rows show in the
- * order they would drop in meanwhile), or moved one place with ↑ and ↓ while the grip has focus.
- * `onMove` gets the row's id and the index it lands at.
+ * order they would drop in meanwhile), or moved one place with ↑ and ↓ while the grip has focus
+ * (← and → for a list across, `axis` "x"). `onMove` gets the row's id and the index it lands at.
  */
 export function useDragReorder<T, E extends HTMLElement = HTMLElement>({
   items,
   idOf,
   rowSelector,
   onMove,
+  axis = "y",
 }: {
   items: readonly T[];
   idOf: (item: T) => string;
   /** Selects the list's direct children that are rows. */
   rowSelector: string;
   onMove: (id: string, to: number) => void;
+  axis?: "x" | "y";
 }): {
   listRef: RefObject<E | null>;
   /** The items in the order to show them. */
@@ -72,7 +83,13 @@ export function useDragReorder<T, E extends HTMLElement = HTMLElement>({
     onPointerMove: (event: ReactPointerEvent<HTMLElement>) => {
       if (!drag || !listRef.current) return;
       const dragged = shown.findIndex((item) => idOf(item) === drag.id);
-      const to = dropIndex(listRef.current, rowSelector, event.clientY, dragged);
+      const to = dropIndex(
+        listRef.current,
+        rowSelector,
+        axis === "x" ? event.clientX : event.clientY,
+        dragged,
+        axis,
+      );
       if (to !== drag.to) setDrag({ ...drag, to });
     },
     onPointerUp: () => {
@@ -82,7 +99,10 @@ export function useDragReorder<T, E extends HTMLElement = HTMLElement>({
     },
     onPointerCancel: () => setDrag(null),
     onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => {
-      const to = event.key === "ArrowUp" ? index - 1 : event.key === "ArrowDown" ? index + 1 : null;
+      const [back, forward] = axis === "x" ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"];
+      const rtl = axis === "x" && getComputedStyle(event.currentTarget).direction === "rtl";
+      const step = event.key === back ? -1 : event.key === forward ? 1 : 0;
+      const to = step === 0 ? null : index + (rtl ? -step : step);
       if (to === null || to < 0 || to >= items.length) return;
       event.preventDefault();
       onMove(id, to);
