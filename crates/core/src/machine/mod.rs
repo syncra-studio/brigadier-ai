@@ -500,13 +500,22 @@ mod tests {
     }
 
     /// A stand-in worker CLI (`sh`) running a stand-in build: a program named `cargo` (a copy
-    /// of `sleep`) run as `cargo test`, which starts a child of its own.
+    /// of `sleep`) run as `cargo test`, which starts a child of its own. Returns once the build
+    /// has started that child, so no test stops it halfway through starting.
     fn worker_with_build(dir: &Path) -> (Child, PathBuf) {
         let bin = dir.join("bin");
         std::fs::create_dir_all(dir).unwrap();
         std::fs::create_dir_all(&bin).unwrap();
         let cargo = bin.join("cargo");
-        std::fs::write(&cargo, "#!/bin/sh\n/bin/sleep 300 &\nwait\n").unwrap();
+        let ready = dir.join("ready");
+        std::fs::write(
+            &cargo,
+            format!(
+                "#!/bin/sh\n/bin/sleep 300 &\ntouch '{}'\nwait\n",
+                ready.display()
+            ),
+        )
+        .unwrap();
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -516,6 +525,7 @@ mod tests {
             .arg(format!("{} test -p core; true", cargo.display()))
             .spawn()
             .unwrap();
+        wait_for(|| ready.exists().then_some(()));
         (child, cargo)
     }
 
@@ -547,21 +557,17 @@ mod tests {
         assert_eq!(seen[0].owner, "task:t");
         assert_eq!(seen[0].command, "cargo test -p core");
         let root = seen[0].root;
-        let stopped = Stopped::new(dir.path().join("stopped.json"));
-        stopped.stop(&*platform, root);
-        let members = stopped.procs().get(&root).cloned().unwrap();
+        let list = Stopped::new(dir.path().join("stopped.json"));
+        list.stop(&*platform, root);
+        let members = list.procs().get(&root).cloned().unwrap();
         assert!(members.len() >= 2, "the build and its child: {members:?}");
         for member in &members {
-            assert!(state(member.pid).starts_with('T'), "stopped, not killed");
+            assert!(stopped(member.pid), "stopped, not killed");
         }
         assert!(dir.path().join("stopped.json").exists());
-        stopped.resume(&*platform, root);
+        list.resume(&*platform, root);
         for member in &members {
-            let now = state(member.pid);
-            assert!(
-                !now.is_empty() && !now.starts_with('T'),
-                "running again: {now}"
-            );
+            assert!(running(member.pid), "running again: {}", state(member.pid));
         }
         assert!(!dir.path().join("stopped.json").exists());
         platform.processes().kill_tree(worker.id()).unwrap();
@@ -581,14 +587,14 @@ mod tests {
         let file = dir.path().join("stopped.json");
         // The daemon that stopped it dies without letting it go on.
         {
-            let stopped = Stopped::new(file.clone());
-            stopped.stop(&*platform, root);
-            assert!(state(root.pid).starts_with('T'));
+            let list = Stopped::new(file.clone());
+            list.stop(&*platform, root);
+            assert!(stopped(root.pid));
         }
         // The next one finds it written down.
         let next = Stopped::new(file.clone());
         assert_eq!(next.sweep(&*platform), 1);
-        assert!(!state(root.pid).starts_with('T'));
+        assert!(running(root.pid));
         assert!(!file.exists());
         platform.processes().kill_tree(worker.id()).unwrap();
         worker.wait().unwrap();
@@ -603,8 +609,25 @@ mod tests {
         memory_tight: false,
     };
 
+    /// Whether `pid` shows as stopped within a few seconds: a stop lands when the process is
+    /// next scheduled, which a loaded machine can put a moment after the signal.
     fn stopped(pid: u32) -> bool {
-        state(pid).starts_with('T')
+        settles(pid, |state| state.starts_with('T'))
+    }
+
+    /// Whether `pid` shows as alive and not stopped within a few seconds.
+    fn running(pid: u32) -> bool {
+        settles(pid, |state| !state.is_empty() && !state.starts_with('T'))
+    }
+
+    fn settles(pid: u32, ok: impl Fn(&str) -> bool) -> bool {
+        for _ in 0..100 {
+            if ok(&state(pid)) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        false
     }
 
     fn end(platform: &dyn Platform, mut worker: Child) {
@@ -626,7 +649,7 @@ mod tests {
         // A build runs while the machine is calm.
         let (first, _) = worker_with_build(&dir.path().join("a"));
         let first_cli = proc_of(&*platform, first.id()).unwrap();
-        let running = wait_for(|| {
+        let calm = wait_for(|| {
             heavy_under(&*platform, first.id(), "task:a")
                 .first()
                 .map(|seen| seen.root)
@@ -661,7 +684,7 @@ mod tests {
             }]
         );
         assert!(stopped(waiting.pid));
-        assert!(!stopped(running.pid), "running work untouched");
+        assert!(running(calm.pid), "running work untouched");
         // The running build ends; still hot, so the new one keeps waiting.
         end(&*platform, first);
         clis.remove(0);
@@ -673,7 +696,7 @@ mod tests {
         watch.guard.fake(MachineLoad::default());
         assert!(worker.await.unwrap());
         watch.tick(&clis, t0 + TICK * 3);
-        assert!(!stopped(waiting.pid));
+        assert!(running(waiting.pid));
         assert!(!dir.path().join("stopped.json").exists());
         end(&*platform, second);
     }
@@ -700,7 +723,7 @@ mod tests {
         watch.guard.fake(CRITICAL);
         assert!(watch.tick(&clis, t0 + Duration::from_secs(1)).is_empty());
         assert!(watch.tick(&clis, t0 + Duration::from_secs(40)).is_empty());
-        assert!(!stopped(build.pid));
+        assert!(running(build.pid));
         let rows = watch.tick(&clis, t0 + Duration::from_secs(62));
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].note, Note::Paused);
@@ -714,7 +737,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].note, Note::Resumed);
         assert_eq!(rows[0].command, "cargo test -p core");
-        assert!(!stopped(build.pid));
+        assert!(running(build.pid));
 
         // Critical again for a minute, and the daemon dies with the build paused.
         watch.guard.fake(CRITICAL);
@@ -726,7 +749,7 @@ mod tests {
         // The next daemon lets it go on as it starts.
         let next = MachineWatch::new(platform.clone(), file.clone());
         assert_eq!(next.recover(), 1);
-        assert!(!stopped(build.pid));
+        assert!(running(build.pid));
         assert!(!file.exists());
         end(&*platform, worker);
     }
@@ -747,7 +770,7 @@ mod tests {
         watch.tick(&[("task:a".to_owned(), cli)], Instant::now());
         assert!(stopped(build.pid));
         watch.quit();
-        assert!(!stopped(build.pid));
+        assert!(running(build.pid));
         end(&*platform, worker);
     }
 
