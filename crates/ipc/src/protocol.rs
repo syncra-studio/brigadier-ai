@@ -9,7 +9,7 @@
 use brigadier_brain::{BrainAnswer, BrainGraph, BrainQuery, Node, NodeFilter};
 use brigadier_core::storage::{
     BranchChoice, CleanReport, ProjectRemoval, RemoveProjectReport, StorageReport, UninstallApp,
-    UninstallPlan, UninstallReport,
+    UninstallPlan, UninstallReport, UnlandedBranch,
 };
 use brigadier_core::{
     AttachmentRef, BrainJobKind, BrainOverview, CardId, Catalog, CheckoutFile, CommitOutcome,
@@ -30,7 +30,7 @@ use ts_rs::TS;
 use crate::metrics::{DaemonMetrics, Diagnostics};
 
 /// Bumped on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// What a development build's injected limit applies to.
 #[cfg(debug_assertions)]
@@ -45,6 +45,17 @@ pub enum FaultTarget {
     Task { task_id: TaskId },
     /// A session's orchestrator or a Chat's model.
     Conversation { conversation_id: ConversationId },
+}
+
+/// What an archive, restore or delete did to one of its conversations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LifecycleOutcome {
+    pub id: ConversationId,
+    /// The conversation as it is now (an archive's or a restore's).
+    pub conversation: Option<Box<Conversation>>,
+    /// Why it failed, in plain words.
+    pub error: Option<String>,
 }
 
 /// Who is connecting.
@@ -561,14 +572,15 @@ pub enum Request {
     Hibernate {
         id: ConversationId,
     },
-    /// Stops workers, removes everything the conversation created (worktrees, CLI session
-    /// files, processes, scratch folders) and hides it in the Archived view.
+    /// Stops workers, removes everything each conversation created (worktrees, CLI session
+    /// files, processes, scratch folders) and hides it in the Archived view. Answered once each
+    /// is stored as archived; the cleanup goes on in the background.
     Archive {
-        id: ConversationId,
+        ids: Vec<ConversationId>,
     },
-    /// Brings an archived conversation back; its model restarts from the transcript.
+    /// Brings archived conversations back; their models restart from the transcript.
     Restore {
-        id: ConversationId,
+        ids: Vec<ConversationId>,
     },
     /// What removing a project takes with it.
     PreviewRemoveProject {
@@ -584,14 +596,21 @@ pub enum Request {
         delete_branches: Vec<BranchChoice>,
         keep_brain: bool,
     },
-    /// Permanently removes a conversation and its transcript.
+    /// Permanently removes conversations: their transcripts, what they created and the
+    /// branches Brigadier created for them, unmerged ones too (what the Brain learned stays).
+    /// Answered once each is marked as being deleted, which hides it; the rest goes on in the
+    /// background.
     Delete {
-        id: ConversationId,
-        /// Also delete its unmerged branches (otherwise they are kept).
-        delete_branches: bool,
-        /// Also forget what the Project Brain learned only from it (its transcript index always
-        /// goes).
-        forget_brain: bool,
+        ids: Vec<ConversationId>,
+    },
+    /// The branches deleting `ids` would take that hold work that never landed, or whose
+    /// standing can't be told.
+    PreviewDelete {
+        ids: Vec<ConversationId>,
+    },
+    /// Waits until the deletes of `ids` under way have finished.
+    DeletesFinished {
+        ids: Vec<ConversationId>,
     },
     RenameConversation {
         id: ConversationId,
@@ -989,10 +1008,10 @@ pub enum Response {
         conversation: Box<Conversation>,
     },
     Archive {
-        conversation: Box<Conversation>,
+        outcomes: Vec<LifecycleOutcome>,
     },
     Restore {
-        conversation: Box<Conversation>,
+        outcomes: Vec<LifecycleOutcome>,
     },
     PreviewRemoveProject {
         removal: Box<ProjectRemoval>,
@@ -1001,6 +1020,12 @@ pub enum Response {
         report: RemoveProjectReport,
     },
     Delete {
+        outcomes: Vec<LifecycleOutcome>,
+    },
+    PreviewDelete {
+        branches: Vec<UnlandedBranch>,
+    },
+    DeletesFinished {
         /// The space compacting the database now gives back, when Storage would offer it.
         compactable_bytes: Option<u64>,
     },

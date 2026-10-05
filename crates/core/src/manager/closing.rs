@@ -11,8 +11,11 @@
 //!   conversation's durable `cleanup_pending` mark.
 //! - **Order**: archive, restore and delete of one conversation run in the order they were
 //!   asked for ([`SessionManager::in_order`]), without holding up anything else.
+//! - **Delete** goes the same way: answered once the fence and a durable `deleting` mark are
+//!   stored (the conversation is gone for the user from then on); its cleanup, the branches and
+//!   the purge go on in the background, and the conversation leaves the catalog last.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -179,20 +182,23 @@ impl SessionManager {
     }
 
     /// Takes the next place in the lifecycle order of each conversation in `ids` (call it in
-    /// the order the changes were asked for; it doesn't wait).
+    /// the order the changes were asked for; it doesn't wait). An id named twice takes one place.
     pub fn in_order(&self, ids: &[ConversationId]) -> Turn {
         let (done, finished) = watch::channel(false);
         let mut order = self.closing.order.lock().unwrap_or_else(|p| p.into_inner());
         // Places of finished changes are dropped, so the map stays small.
         order.retain(|_, before| !*before.borrow());
+        let mut seen = HashSet::new();
         let before = ids
             .iter()
+            .filter(|id| seen.insert(*id))
             .filter_map(|id| order.insert(id.clone(), finished.clone()))
             .collect();
         Turn { before, done }
     }
 
-    /// Runs `cleanup` for conversation `id` in the background, tracked as a cleanup.
+    /// Runs `cleanup` for conversation `id` in the background, tracked as a cleanup, once the
+    /// one already under way for it (an archive's, before a delete's) has finished.
     pub(super) fn start_cleanup(
         &self,
         id: ConversationId,
@@ -205,9 +211,12 @@ impl SessionManager {
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         running.retain(|_, job| !*job.borrow());
-        running.insert(id, finished);
+        let before = running.insert(id, finished);
         drop(running);
         let job = async move {
+            if let Some(mut before) = before {
+                let _ = before.wait_for(|done| *done).await;
+            }
             cleanup.await;
             done.send_replace(true);
         };

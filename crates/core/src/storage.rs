@@ -187,6 +187,17 @@ pub struct RemovalBranch {
     pub command: String,
 }
 
+/// A branch Brigadier created whose work may not have landed, about to be deleted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlandedBranch {
+    pub repo: String,
+    pub name: String,
+    /// Its standing couldn't be told (the branch its work goes to is gone, or git failed):
+    /// it may hold work that never landed.
+    pub unknown: bool,
+}
+
 /// A branch the user chose to delete, at the tip they saw.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

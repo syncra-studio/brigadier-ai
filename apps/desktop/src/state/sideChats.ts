@@ -17,7 +17,7 @@ export function closeSideChat(conversationId: string): void {
     const { [id]: _closed, ...threads } = state.threads;
     return { threads };
   });
-  request({ method: "delete", id, deleteBranches: false, forgetBrain: false }).catch(
+  request({ method: "delete", ids: [id] }).catch(
     (error: unknown) => console.error("deleting the side chat failed", error),
   );
 }

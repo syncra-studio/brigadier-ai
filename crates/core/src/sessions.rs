@@ -131,8 +131,18 @@ impl Core {
         &self.store
     }
 
+    /// Every conversation, those being deleted too: for Brigadier's own bookkeeping.
     pub fn catalog(&self) -> Catalog {
         self.projection().catalog()
+    }
+
+    /// The catalog as the user sees it: a conversation being deleted is already gone.
+    pub fn visible_catalog(&self) -> Catalog {
+        let mut catalog = self.catalog();
+        catalog
+            .conversations
+            .retain(|conversation| !conversation.deleting);
+        catalog
     }
 
     /// What runs and what waits for the user, per conversation (those whose board is loaded:
@@ -299,6 +309,7 @@ impl Core {
             fallback: None,
             quota_wait: None,
             cleanup_pending: false,
+            deleting: false,
         };
         events.insert(
             0,
@@ -424,6 +435,19 @@ impl Core {
             DomainEvent::ProjectRemoved { id },
         )])
         .await?;
+        Ok(())
+    }
+
+    /// Marks a conversation as being deleted, durably: it is gone for the user from now on, and
+    /// a restart finishes its deletion if it was cut off.
+    pub async fn mark_deleting(&self, id: ConversationId) -> Result<()> {
+        if !self.conversation(&id)?.deleting {
+            self.record(vec![(
+                streams::CATALOG.into(),
+                DomainEvent::ConversationDeleting { id },
+            )])
+            .await?;
+        }
         Ok(())
     }
 

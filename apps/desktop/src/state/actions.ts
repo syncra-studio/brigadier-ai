@@ -26,9 +26,12 @@ import type {
   RestoreOutcome,
   Setup,
   SetupRequest,
+  UnlandedBranch,
 } from "@/ipc/generated";
+import { formatBytes } from "@/lib/format";
 import { savePinnedSummary } from "@/lib/pinnedSummary";
 import { setSetting } from "@/state/settings";
+import { compactDatabase } from "@/state/storage";
 import {
   boardFromView,
   boardOf,
@@ -57,7 +60,7 @@ import {
   useApp,
 } from "@/state/store";
 import { forgetDraft } from "@/state/drafts";
-import { dismissToast, toast } from "@/state/toasts";
+import { dismissToast, toast, useToasts } from "@/state/toasts";
 
 /** Messages shown when a conversation opens; older ones load on demand. */
 const PAGE = 200;
@@ -844,94 +847,226 @@ export async function hibernate(id: string): Promise<void> {
   storeConversation(conversation);
 }
 
-/**
- * Archives a conversation and confirms it with an "Archived chat · View · Undo" toast. The row
- * leaves at once; the daemon stops and cleans up in the background. If the archive fails, the
- * row comes back and a toast says why.
- */
-export async function archive(id: string): Promise<void> {
-  const before = useApp.getState().conversations[id];
-  if (!before) {
-    storeConversation((await request({ method: "archive", id })).conversation);
-    return;
-  }
-  if (before.lifecycle === "archived") return;
-  const noun = before.kind === "chat" ? "chat" : "session";
-  storeConversation({ ...before, lifecycle: "archived" });
-  const { selection } = useApp.getState();
-  if (selection.type === "conversation" && selection.id === id) {
-    select({ type: "draft", kind: "chat" });
-  }
-  const archived = toast(before.kind === "chat" ? "Archived chat" : "Archived session", {
-    actions: [
-      { label: "View", run: () => openSettings("archived") },
-      { label: "Undo", run: () => void undoArchive(id) },
-    ],
-  });
-  try {
-    const { conversation } = await request({ method: "archive", id });
-    storeConversation(conversation);
-  } catch (error) {
-    // Back as it was, unless something newer came in meanwhile.
-    if (useApp.getState().conversations[id]?.lifecycle === "archived") storeConversation(before);
-    dismissToast(archived);
-    toast(`Couldn't archive the ${noun} "${before.title}": ${errorMessage(error)}`, {
-      tone: "error",
-    });
-  }
+/** "session", "chat", or "conversation" for a mix, made plural for `count` other than one. */
+export function conversationNoun(conversations: Conversation[], count = conversations.length) {
+  const kinds = new Set(conversations.map((conversation) => conversation.kind));
+  const noun = kinds.size !== 1 ? "conversation" : kinds.has("chat") ? "chat" : "session";
+  return count === 1 ? noun : `${noun}s`;
 }
 
-/** The archive toast's Undo: the row is back at once and opens; it leaves again on failure. */
-async function undoArchive(id: string): Promise<void> {
-  const before = useApp.getState().conversations[id];
-  if (before) storeConversation({ ...before, lifecycle: "active" });
-  openConversation(id);
-  try {
-    await restore(id);
-  } catch (error) {
-    if (before && useApp.getState().conversations[id]?.lifecycle === "active") {
-      storeConversation(before);
-    }
-    toast(`Couldn't bring it back: ${errorMessage(error)}`, { tone: "error" });
+/** "“A”", "“A” and “B”", or "3 sessions". */
+function naming(conversations: Conversation[]): string {
+  if (conversations.length === 1) return `“${conversations[0]?.title}”`;
+  if (conversations.length === 2) return conversations.map((c) => `“${c.title}”`).join(" and ");
+  return `${conversations.length} ${conversationNoun(conversations)}`;
+}
+
+/** The errors of a batch's failures, in one plain sentence each way they failed. */
+function failureText(verb: string, failed: { conversation: Conversation; error: string }[]) {
+  const reasons = [...new Set(failed.map((entry) => entry.error))];
+  return `Couldn't ${verb} ${naming(failed.map((entry) => entry.conversation))}: ${reasons.join("; ")}`;
+}
+
+/** "Archived session", "Archived 3 chats". */
+function archivedText(list: Conversation[]): string {
+  const noun = conversationNoun(list);
+  return list.length === 1 ? `Archived ${noun}` : `Archived ${list.length} ${noun}`;
+}
+
+/** The last archive's ids while its toast shows, for ⌘Z. */
+let lastArchive: { toast: number; ids: () => string[] } | null = null;
+
+/**
+ * Archives conversations and confirms it with an "Archived session · View · Undo" toast
+ * ("Archived 3 sessions" for several). The rows leave at once; the daemon stops each and cleans
+ * up in the background. Those whose archive fails come back, with one toast that says why; Undo
+ * brings back only those archived.
+ */
+export async function archiveAll(ids: string[]): Promise<void> {
+  const { conversations } = useApp.getState();
+  const before = ids
+    .map((id) => conversations[id])
+    .filter((c): c is Conversation => c !== undefined && c.lifecycle !== "archived");
+  if (before.length === 0) return;
+  for (const conversation of before) storeConversation({ ...conversation, lifecycle: "archived" });
+  const { selection } = useApp.getState();
+  if (selection.type === "conversation" && before.some((c) => c.id === selection.id)) {
+    select({ type: "draft", kind: "chat" });
   }
+  let archived = before;
+  const confirm = (list: Conversation[]) => {
+    const id = toast(archivedText(list), {
+      actions: [
+        { label: "View", run: () => openSettings("archived") },
+        { label: "Undo", run: () => void undoArchive(id) },
+      ],
+    });
+    lastArchive = { toast: id, ids: () => archived.map((c) => c.id) };
+    return id;
+  };
+  let shown = confirm(before);
+  const failed: { conversation: Conversation; error: string }[] = [];
+  try {
+    const { outcomes } = await request({ method: "archive", ids: before.map((c) => c.id) });
+    for (const outcome of outcomes) {
+      const conversation = before.find((c) => c.id === outcome.id);
+      if (!conversation) continue;
+      if (outcome.conversation) storeConversation(outcome.conversation);
+      else failed.push({ conversation, error: outcome.error ?? "it failed" });
+    }
+  } catch (error) {
+    for (const conversation of before) failed.push({ conversation, error: errorMessage(error) });
+  }
+  if (failed.length === 0) return;
+  // Back as they were, unless something newer came in meanwhile.
+  for (const { conversation } of failed) {
+    if (useApp.getState().conversations[conversation.id]?.lifecycle === "archived") {
+      storeConversation(conversation);
+    }
+  }
+  archived = before.filter((c) => !failed.some((entry) => entry.conversation.id === c.id));
+  const undoable = lastArchive?.toast === shown;
+  dismissToast(shown);
+  if (lastArchive?.toast === shown) lastArchive = null;
+  if (archived.length > 0 && undoable) shown = confirm(archived);
+  toast(failureText("archive", failed), { tone: "error" });
+}
+
+/** Archives one conversation (see {@link archiveAll}). */
+export function archive(id: string): Promise<void> {
+  return archiveAll([id]);
+}
+
+/** ⌘Z right after an archive: its Undo, while its toast shows. Whether there was one. */
+export function undoLastArchive(): boolean {
+  const last = lastArchive;
+  if (!last || !useToasts.getState().toasts.some((entry) => entry.id === last.toast)) return false;
+  void undoArchive(last.toast);
+  return true;
+}
+
+/** An archive toast's Undo: the archived rows are back at once (one opens again). */
+async function undoArchive(toastId: number): Promise<void> {
+  const last = lastArchive?.toast === toastId ? lastArchive : null;
+  dismissToast(toastId);
+  if (!last) return;
+  lastArchive = null;
+  const ids = last.ids();
+  await restoreAll(ids, { open: ids.length === 1 });
+}
+
+/**
+ * Brings archived conversations back. Their rows are back at once; those that fail leave again,
+ * with one toast that says why. With `open`, the first one opens.
+ */
+export async function restoreAll(ids: string[], { open = false } = {}): Promise<void> {
+  const { conversations } = useApp.getState();
+  const before = ids
+    .map((id) => conversations[id])
+    .filter((c): c is Conversation => c !== undefined && c.lifecycle === "archived");
+  if (before.length === 0) return;
+  for (const conversation of before) storeConversation({ ...conversation, lifecycle: "active" });
+  const first = before[0];
+  if (open && first) openConversation(first.id);
+  const failed: { conversation: Conversation; error: string }[] = [];
+  try {
+    const { outcomes } = await request({ method: "restore", ids: before.map((c) => c.id) });
+    for (const outcome of outcomes) {
+      const conversation = before.find((c) => c.id === outcome.id);
+      if (!conversation) continue;
+      if (outcome.conversation) storeConversation(outcome.conversation);
+      else failed.push({ conversation, error: outcome.error ?? "it failed" });
+    }
+  } catch (error) {
+    for (const conversation of before) failed.push({ conversation, error: errorMessage(error) });
+  }
+  if (failed.length === 0) return;
+  for (const { conversation } of failed) {
+    if (useApp.getState().conversations[conversation.id]?.lifecycle === "active") {
+      storeConversation(conversation);
+    }
+  }
+  toast(failureText("bring back", failed), { tone: "error" });
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Brings an archived conversation back; throws if it can't be. */
 export async function restore(id: string): Promise<void> {
-  const { conversation } = await request({ method: "restore", id });
-  storeConversation(conversation);
+  const [outcome] = (await request({ method: "restore", ids: [id] })).outcomes;
+  if (outcome?.conversation) storeConversation(outcome.conversation);
+  else throw new Error(outcome?.error ?? "It couldn't be brought back.");
 }
 
-/**
- * Deletes a conversation for good. The space compacting the database would give back, when
- * that is worth offering.
- */
-export async function deleteConversation(
-  id: string,
-  deleteBranches: boolean,
-  forgetBrain: boolean,
-): Promise<number | null> {
-  const { compactableBytes } = await request({
-    method: "delete",
-    id,
-    deleteBranches,
-    forgetBrain,
-  });
-  forgetDraft(id);
+/** Takes conversations out of the app's state (they were deleted, or are being). */
+function dropConversations(ids: string[]): void {
+  for (const id of ids) forgetDraft(id);
   const { selection } = useApp.getState();
-  if (selection.type === "conversation" && selection.id === id) {
+  if (selection.type === "conversation" && ids.includes(selection.id)) {
     select({ type: "draft", kind: "chat" });
   }
   useApp.setState((state) => {
-    const { [id]: _deleted, ...conversations } = state.conversations;
-    const { [id]: _thread, ...threads } = state.threads;
+    const conversations = { ...state.conversations };
+    const threads = { ...state.threads };
+    for (const id of ids) {
+      delete conversations[id];
+      delete threads[id];
+    }
     return { conversations, threads };
   });
-  // An older daemon says nothing about it.
-  return compactableBytes ?? null;
+}
+
+/**
+ * Deletes conversations for good. The rows leave at once; the daemon cleans up in the
+ * background. Those whose delete fails come back, with one toast that says why. Once the rest
+ * are gone, a toast offers to compact the database when that gives back enough space.
+ */
+export async function deleteAll(ids: string[]): Promise<void> {
+  const { conversations } = useApp.getState();
+  const before = ids
+    .map((id) => conversations[id])
+    .filter((c): c is Conversation => c !== undefined);
+  if (before.length === 0) return;
+  dropConversations(before.map((c) => c.id));
+  // An archive toast whose rows all go now has nothing left to undo.
+  if (lastArchive?.ids().every((id) => before.some((c) => c.id === id))) {
+    dismissToast(lastArchive.toast);
+    lastArchive = null;
+  }
+  const failed: { conversation: Conversation; error: string }[] = [];
+  try {
+    const { outcomes } = await request({ method: "delete", ids: before.map((c) => c.id) });
+    for (const outcome of outcomes) {
+      const conversation = before.find((c) => c.id === outcome.id);
+      if (conversation && outcome.error !== null) failed.push({ conversation, error: outcome.error });
+    }
+  } catch (error) {
+    for (const conversation of before) failed.push({ conversation, error: errorMessage(error) });
+  }
+  if (failed.length > 0) {
+    for (const { conversation } of failed) {
+      if (!useApp.getState().conversations[conversation.id]) storeConversation(conversation);
+    }
+    toast(failureText("delete", failed), { tone: "error" });
+  }
+  const deleted = before.filter((c) => !failed.some((entry) => entry.conversation.id === c.id));
+  if (deleted.length === 0) return;
+  const { compactableBytes } = await request({
+    method: "deletesFinished",
+    ids: deleted.map((c) => c.id),
+  });
+  if (compactableBytes !== null) {
+    toast(`Deleted. Compact the database to give back ${formatBytes(compactableBytes)}.`, {
+      actions: [{ label: "Compact", run: () => void compactDatabase() }],
+    });
+  }
+}
+
+/** The branches deleting `ids` takes whose work never landed (or may not have). */
+export async function previewDelete(ids: string[]): Promise<UnlandedBranch[]> {
+  return (await request({ method: "previewDelete", ids })).branches;
 }
 
 /** What removing a project takes with it. */

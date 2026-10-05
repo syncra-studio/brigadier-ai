@@ -1425,39 +1425,25 @@ impl SessionManager {
         Ok(nodes)
     }
 
-    /// A conversation was deleted: its transcript index goes, and with `forget` so does what
-    /// the project's Brain and the Personal Brain learned in it.
+    /// A conversation was deleted: its transcript index goes; what the Brains learned in it
+    /// stays.
     pub(crate) async fn forget_brain_conversation(
         &self,
         id: &ConversationId,
         project: Option<ProjectId>,
-        forget: bool,
     ) {
-        let mut brains = Vec::new();
-        if let Some(project) = project
-            && let Ok(project) = self.project_brain(&project).await
-        {
-            brains.push(project.brain.clone());
-        }
-        if forget && let Ok(personal) = self.personal_brain().await {
-            brains.push(personal);
-        }
-        let session = id.0.clone();
-        let forgotten = blocking(move || {
-            let mut nodes = 0;
-            for brain in brains {
-                if forget {
-                    nodes += brain.forget_session(&session).map_err(brain_error)?;
-                } else {
-                    brain.forget_transcript(&session).map_err(brain_error)?;
-                }
-            }
-            Ok(nodes)
-        })
-        .await;
+        let Some(project) = project else {
+            return;
+        };
+        let Ok(project) = self.project_brain(&project).await else {
+            return;
+        };
+        let (brain, session) = (project.brain.clone(), id.0.clone());
+        let forgotten =
+            blocking(move || brain.forget_transcript(&session).map_err(brain_error)).await;
         match forgotten {
-            Ok(nodes) => {
-                tracing::info!(conversation = %id, nodes, forget, "the Brain let go of a deleted conversation")
+            Ok(()) => {
+                tracing::info!(conversation = %id, "the Brain let go of a deleted conversation's transcript")
             }
             Err(err) => {
                 tracing::warn!(conversation = %id, error = %err, "could not clear a deleted conversation from the Brain")

@@ -9,12 +9,12 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use brigadier_core::manager::SessionManager;
 use brigadier_core::runtime::{Runtime, StartRaw};
-use brigadier_core::{ConversationId, Core, MAX_ATTACHMENT_BYTES};
+use brigadier_core::{Conversation, ConversationId, Core, MAX_ATTACHMENT_BYTES};
 use brigadier_ipc::metrics::{DaemonMetrics, Diagnostics, budgets};
 use brigadier_ipc::protocol::{
     ArtifactText, ClientFrame, ClientInfo, DaemonActivity, DaemonInfo, DictationUpdate, ErrorCode,
-    EventEnvelope, IpcError, Outcome, RawJson, Request, Response, SendOutcome, ServerFrame,
-    TerminalOutput,
+    EventEnvelope, IpcError, LifecycleOutcome, Outcome, RawJson, Request, Response, SendOutcome,
+    ServerFrame, TerminalOutput,
 };
 use brigadier_ipc::{Accepted, Connection, Listener, Reader, Token, Writer};
 use brigadier_providers::ProviderKind;
@@ -410,6 +410,8 @@ impl Session {
             }
             // Long: answered beside the connection's other requests.
             request @ (Request::ScanStorage
+            | Request::PreviewDelete { .. }
+            | Request::DeletesFinished { .. }
             | Request::CleanStorage { .. }
             | Request::PreviewRemoveProject { .. }
             | Request::RemoveProject { .. }
@@ -425,22 +427,18 @@ impl Session {
             }
             // Archive, restore and delete of a conversation run in the order they were asked
             // for, beside the connection's other requests: one waiting for a cleanup (a restore
-            // right after an archive) holds up nothing else.
-            request @ (Request::Archive { .. }
+            // right after an archive) holds up nothing else. An id named twice counts once.
+            mut request @ (Request::Archive { .. }
             | Request::Restore { .. }
             | Request::Delete { .. }) => {
-                let (Request::Archive { id: conversation }
-                | Request::Restore { id: conversation }
-                | Request::Delete {
-                    id: conversation, ..
-                }) = &request
+                let (Request::Archive { ids } | Request::Restore { ids } | Request::Delete { ids }) =
+                    &mut request
                 else {
                     unreachable!("matched above")
                 };
-                let mut turn = self
-                    .daemon
-                    .sessions
-                    .in_order(std::slice::from_ref(conversation));
+                let mut seen = HashSet::new();
+                ids.retain(|id| seen.insert(id.clone()));
+                let mut turn = self.daemon.sessions.in_order(ids);
                 let daemon = self.daemon.clone();
                 let late = self.late_tx.clone();
                 self.daemon.supervisor.spawn(async move {
@@ -697,6 +695,32 @@ fn invalid(message: String) -> IpcError {
     }
 }
 
+/// Each conversation's outcome, with the error in plain words.
+fn lifecycle_outcomes(
+    ids: Vec<ConversationId>,
+    outcomes: impl IntoIterator<Item = brigadier_core::Result<Option<Conversation>>>,
+) -> Vec<LifecycleOutcome> {
+    ids.into_iter()
+        .zip(outcomes)
+        .map(|(id, outcome)| match outcome {
+            Ok(conversation) => LifecycleOutcome {
+                id,
+                conversation: conversation.map(Box::new),
+                error: None,
+            },
+            Err(err) => LifecycleOutcome {
+                id,
+                conversation: None,
+                error: Some(match err {
+                    // The row names it already; its id would only be noise.
+                    brigadier_core::Error::NotFound(_) => "it's already gone".to_owned(),
+                    err => IpcError::from(err).message,
+                }),
+            },
+        })
+        .collect()
+}
+
 fn internal(err: brigadier_store::Error) -> IpcError {
     IpcError::from(brigadier_core::Error::from(err))
 }
@@ -706,7 +730,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
     let sessions = &daemon.sessions;
     Ok(match request {
         Request::GetCatalog => Response::GetCatalog {
-            catalog: Box::new(core.catalog()),
+            catalog: Box::new(core.visible_catalog()),
         },
         Request::GetActivity => Response::GetActivity {
             activity: core.activity().await,
@@ -1243,16 +1267,26 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::Hibernate { id } => Response::Hibernate {
             conversation: Box::new(sessions.hibernate(id).await?),
         },
-        Request::Archive { id } => {
-            let conversation = sessions.archive(id.clone()).await?;
-            daemon.terminals.close_conversation(&id.0);
+        Request::Archive { ids } => {
+            let outcomes = sessions.archive_all(&ids).await;
+            for (id, outcome) in ids.iter().zip(&outcomes) {
+                if outcome.is_ok() {
+                    daemon.terminals.close_conversation(&id.0);
+                }
+            }
             Response::Archive {
-                conversation: Box::new(conversation),
+                outcomes: lifecycle_outcomes(ids, outcomes.into_iter().map(|o| o.map(Some))),
             }
         }
-        Request::Restore { id } => Response::Restore {
-            conversation: Box::new(sessions.restore(id).await?),
-        },
+        Request::Restore { ids } => {
+            let mut outcomes = Vec::with_capacity(ids.len());
+            for id in &ids {
+                outcomes.push(sessions.restore(id.clone()).await.map(Some));
+            }
+            Response::Restore {
+                outcomes: lifecycle_outcomes(ids, outcomes),
+            }
+        }
         Request::PreviewRemoveProject { id } => Response::PreviewRemoveProject {
             removal: Box::new(sessions.preview_remove_project(id).await?),
         },
@@ -1276,17 +1310,23 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                     .await?,
             }
         }
-        Request::Delete {
-            id,
-            delete_branches,
-            forget_brain,
-        } => {
-            daemon.terminals.close_conversation(&id.0);
-            sessions.delete(id, delete_branches, forget_brain).await?;
+        Request::Delete { ids } => {
+            let outcomes = sessions.delete_all(&ids).await;
+            for (id, outcome) in ids.iter().zip(&outcomes) {
+                if outcome.is_ok() {
+                    daemon.terminals.close_conversation(&id.0);
+                }
+            }
             Response::Delete {
-                compactable_bytes: sessions.compactable_bytes().await,
+                outcomes: lifecycle_outcomes(ids, outcomes.into_iter().map(|o| o.map(|()| None))),
             }
         }
+        Request::PreviewDelete { ids } => Response::PreviewDelete {
+            branches: sessions.preview_delete(&ids).await,
+        },
+        Request::DeletesFinished { ids } => Response::DeletesFinished {
+            compactable_bytes: sessions.deletes_finished(&ids).await,
+        },
         Request::RenameConversation { id, title } => Response::RenameConversation {
             conversation: Box::new(core.rename_conversation(id, title).await?),
         },

@@ -56,6 +56,11 @@ impl Projection {
                     conversation.cleanup_pending = *pending;
                 }
             }
+            DomainEvent::ConversationDeleting { id } => {
+                if let Some(conversation) = self.conversations.get_mut(id) {
+                    conversation.deleting = true;
+                }
+            }
             DomainEvent::ConversationDeleted { id } => {
                 self.conversations.remove(id);
                 self.deleted.insert(id.clone());

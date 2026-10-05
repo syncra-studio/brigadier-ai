@@ -22,6 +22,7 @@ import type { FolderCheck } from "./FolderCheck";
 import type { FolderListing } from "./FolderListing";
 import type { GitState } from "./GitState";
 import type { KeepAwakeStatus } from "./KeepAwakeStatus";
+import type { LifecycleOutcome } from "./LifecycleOutcome";
 import type { Message } from "./Message";
 import type { MessagePage } from "./MessagePage";
 import type { MessageQueue } from "./MessageQueue";
@@ -50,6 +51,7 @@ import type { StorageReport } from "./StorageReport";
 import type { TerminalInfo } from "./TerminalInfo";
 import type { UninstallPlan } from "./UninstallPlan";
 import type { UninstallReport } from "./UninstallReport";
+import type { UnlandedBranch } from "./UnlandedBranch";
 import type { UsageView } from "./UsageView";
 import type { WorkerDiff } from "./WorkerDiff";
 import type { WorkerPage } from "./WorkerPage";
@@ -77,7 +79,7 @@ diff: DiffStat | null, } | { "method": "pendingOvernightNotifications", notifica
 /**
  * The copy to open.
  */
-path: string, } | { "method": "hibernate", conversation: Conversation, } | { "method": "archive", conversation: Conversation, } | { "method": "restore", conversation: Conversation, } | { "method": "previewRemoveProject", removal: ProjectRemoval, } | { "method": "removeProject", report: RemoveProjectReport, } | { "method": "delete", 
+path: string, } | { "method": "hibernate", conversation: Conversation, } | { "method": "archive", outcomes: Array<LifecycleOutcome>, } | { "method": "restore", outcomes: Array<LifecycleOutcome>, } | { "method": "previewRemoveProject", removal: ProjectRemoval, } | { "method": "removeProject", report: RemoveProjectReport, } | { "method": "delete", outcomes: Array<LifecycleOutcome>, } | { "method": "previewDelete", branches: Array<UnlandedBranch>, } | { "method": "deletesFinished", 
 /**
  * The space compacting the database now gives back, when Storage would offer it.
  */

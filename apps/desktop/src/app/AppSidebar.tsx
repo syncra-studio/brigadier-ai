@@ -15,9 +15,8 @@ import {
   Unpin,
   X,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { memo, useMemo, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 
-import { DeleteDialog } from "@/app/dialogs/DeleteDialog";
 import { errorText } from "@/app/dialogs/fields";
 import { ProjectDialog } from "@/app/dialogs/ProjectDialog";
 import { RemoveProjectDialog } from "@/app/dialogs/RemoveProjectDialog";
@@ -61,6 +60,7 @@ import type { Conversation, Project } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import {
   archive,
+  archiveAll,
   closeSettings,
   openConversation,
   openSettings,
@@ -72,6 +72,7 @@ import {
 import { useRowActivity } from "@/state/activity";
 import { openAddProject } from "@/state/addProject";
 import { exportProjectConventions } from "@/state/brain";
+import { askDelete, clearPicked, pickClick, pickedIn, prunePicked, usePicked } from "@/state/picking";
 import { useApp } from "@/state/store";
 
 // ----- titlebar and rail -----------------------------------------------------------------
@@ -164,8 +165,11 @@ type Sections = {
 /** What the rows can ask the sidebar to do. */
 type RowActions = {
   onRename: (conversation: Conversation) => void;
-  onDelete: (conversation: Conversation) => void;
   onError: (error: string) => void;
+  /** A click with ⌘ (Ctrl off macOS) or Shift picks rows; false for a plain click. */
+  onPick: (id: string, event: MouseEvent) => boolean;
+  /** The picked rows, in the order the sidebar shows them. */
+  picked: () => string[];
 };
 
 function useSections(): Sections {
@@ -227,6 +231,7 @@ function useFoldedSections() {
     }
   };
   return {
+    folded,
     isOpen: (id: SectionId) => !folded.includes(id),
     setOpen,
   };
@@ -247,15 +252,42 @@ export function AppSidebar() {
   const shortcuts = useShortcuts();
   const sections = useFoldedSections();
   const [dialog, setDialog] = useState<DialogState>(null);
-  const [deleting, setDeleting] = useState<Conversation | null>(null);
   const [removing, setRemoving] = useState<Project | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const expandedProjects = useApp((s) => s.expandedProjects);
+  const { folded } = sections;
+
+  // The rows as they show, top to bottom: what a Shift-click picks a range of.
+  const shown = useMemo(() => {
+    const rows: string[] = [];
+    const isOpen = (id: SectionId) => !folded.includes(id);
+    if (isOpen("pinned")) rows.push(...pinned.map((c) => c.id));
+    if (isOpen("projects")) {
+      for (const project of projects) {
+        if (expandedProjects[project.id] ?? true) {
+          rows.push(...(sessions[project.id] ?? NO_SESSIONS).map((c) => c.id));
+        }
+      }
+    }
+    if (isOpen("chats")) rows.push(...chats.map((c) => c.id));
+    return rows;
+  }, [pinned, projects, sessions, chats, expandedProjects, folded]);
+  const shownRef = useRef(shown);
+  useEffect(() => {
+    shownRef.current = shown;
+    prunePicked("sidebar", shown);
+  }, [shown]);
 
   const actions = useMemo<RowActions>(
     () => ({
       onRename: (conversation) => setDialog({ type: "rename", conversation }),
-      onDelete: (conversation) => setDeleting(conversation),
       onError: (message) => setError(message),
+      onPick: (id, event) => {
+        const { info, selection } = useApp.getState();
+        const open = selection.type === "conversation" ? selection.id : null;
+        return pickClick("sidebar", id, shownRef.current, event, info?.platform === "macos", open);
+      },
+      picked: () => pickedIn("sidebar", shownRef.current),
     }),
     [],
   );
@@ -403,7 +435,6 @@ export function AppSidebar() {
         onOpenChange={(open) => !open && setDialog(null)}
         project={dialog?.type === "projectSettings" ? dialog.project : null}
       />
-      <DeleteDialog conversation={deleting} onOpenChange={(open) => !open && setDeleting(null)} />
       <RemoveProjectDialog project={removing} onOpenChange={(open) => !open && setRemoving(null)} />
       <NameDialog
         open={dialog?.type === "rename"}
@@ -598,7 +629,9 @@ function RowStatus({ conversationId }: { conversationId: string }) {
 
 /**
  * A chat or session: its title, its state at the end, and on hover Pin and Archive. A
- * right-click opens its menu (Pin, Rename…, Archive, Delete…).
+ * right-click opens its menu (Pin, Rename…, Archive, Delete…), or on one of several picked
+ * rows the menu for all of them (Archive (N), Delete (N)…). ⌘-click (Ctrl-click off macOS)
+ * picks it, Shift-click picks a range.
  */
 const ConversationRow = memo(function ConversationRow({
   conversation,
@@ -619,17 +652,40 @@ const ConversationRow = memo(function ConversationRow({
     );
   const archiveIt = () =>
     void archive(conversation.id).catch((error: unknown) => actions.onError(errorText(error)));
+  const picked = usePicked((s) => s.list === "sidebar" && s.ids.includes(conversation.id));
+  // What a right-click acts on: every picked row when this is one of several.
+  const [targets, setTargets] = useState<string[]>([]);
 
   return (
     <li className="group/row relative">
-      <ContextMenu modal={false}>
+      <ContextMenu
+        modal={false}
+        onOpenChange={(open) => {
+          if (!open) return;
+          const all = actions.picked();
+          if (all.includes(conversation.id)) setTargets(all);
+          else {
+            // A right-click on a row not picked is about that row alone.
+            clearPicked();
+            setTargets([conversation.id]);
+          }
+        }}
+      >
         <ContextMenuTrigger asChild>
           <button
             type="button"
             data-active={active}
+            data-selected={picked}
             aria-current={active ? "page" : undefined}
-            className={cn(navRow, "pe-1.5", roomForActions, nested && "ps-8")}
-            onClick={() => openConversation(conversation.id)}
+            className={cn(
+              navRow,
+              "data-[selected=true]:bg-link/20 data-[selected=true]:text-foreground pe-1.5",
+              roomForActions,
+              nested && "ps-8",
+            )}
+            onClick={(event) => {
+              if (!actions.onPick(conversation.id, event)) openConversation(conversation.id);
+            }}
           >
             <span className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
               {conversation.title}
@@ -637,25 +693,44 @@ const ConversationRow = memo(function ConversationRow({
             <RowStatus conversationId={conversation.id} />
           </button>
         </ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuItem onSelect={togglePin}>
-            {pinned ? <Unpin /> : <Pin />}
-            {pinned ? `Unpin ${noun}` : `Pin ${noun}`}
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => actions.onRename(conversation)}>
-            <Pencil />
-            Rename {noun}…
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={archiveIt}>
-            <Archive />
-            Archive {noun}
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem variant="destructive" onSelect={() => actions.onDelete(conversation)}>
-            <Trash />
-            Delete {noun}…
-          </ContextMenuItem>
-        </ContextMenuContent>
+        {targets.length > 1 ? (
+          <ContextMenuContent>
+            <ContextMenuItem
+              onSelect={() => {
+                clearPicked();
+                void archiveAll(targets);
+              }}
+            >
+              <Archive />
+              Archive ({targets.length})
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem variant="destructive" onSelect={() => askDelete(targets)}>
+              <Trash />
+              Delete ({targets.length})…
+            </ContextMenuItem>
+          </ContextMenuContent>
+        ) : (
+          <ContextMenuContent>
+            <ContextMenuItem onSelect={togglePin}>
+              {pinned ? <Unpin /> : <Pin />}
+              {pinned ? `Unpin ${noun}` : `Pin ${noun}`}
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => actions.onRename(conversation)}>
+              <Pencil />
+              Rename {noun}…
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={archiveIt}>
+              <Archive />
+              Archive {noun}
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem variant="destructive" onSelect={() => askDelete([conversation.id])}>
+              <Trash />
+              Delete {noun}…
+            </ContextMenuItem>
+          </ContextMenuContent>
+        )}
       </ContextMenu>
       <RowActionsSlot>
         <Tooltip>

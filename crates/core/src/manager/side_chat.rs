@@ -68,7 +68,9 @@ impl SessionManager {
     pub(super) async fn delete_side_chats(&self, parent: &ConversationId) {
         for side in self.side_chats(parent) {
             // A side chat has none of its own, so this goes one level deep.
-            if let Err(err) = Box::pin(self.delete(side.id.clone(), false, false)).await {
+            if let Err(err) =
+                Box::pin(self.delete_conversation(side.id.clone(), false, false)).await
+            {
                 tracing::warn!(side_chat = %side.id, error = %err, "could not delete a side chat");
             }
         }

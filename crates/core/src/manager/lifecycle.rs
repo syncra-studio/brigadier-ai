@@ -9,8 +9,9 @@
 //!   conversation is removed: worktrees, scratch folders, CLI session files, processes.
 //!   Transcript, tasks, artifacts and branches stay; restoring starts a new CLI session from
 //!   the transcript.
-//! - **Delete**: archive, optionally delete the branches Brigadier created for it, then purge
-//!   its streams and the blobs nothing else references.
+//! - **Delete**: answered at once like an archive; in the background it is wound down like on
+//!   archive, the branches Brigadier created for it go, then its streams and the blobs nothing
+//!   else references, and last its catalog entry.
 //! - **Recovery**: after a restart, work that was running has lost its CLI: tasks end (their
 //!   work kept), cards nobody waits for expire, and the ledger finishes every cleanup.
 
@@ -77,6 +78,10 @@ impl SessionManager {
     pub(super) async fn recover(&self) {
         self.runtime.ledger().sweep().await;
         for conversation in self.core.catalog().conversations {
+            // One still being deleted (a delete that failed at launch) gets nothing new.
+            if conversation.deleting {
+                continue;
+            }
             // Messages that waited for quota keep waiting (an archived conversation's never go).
             if conversation.quota_wait.is_some() && conversation.lifecycle != Lifecycle::Archived {
                 self.keep_conversation_wait(&conversation).await;
@@ -319,12 +324,24 @@ impl SessionManager {
         self.core.set_lifecycle(id, Lifecycle::Hibernated).await
     }
 
+    /// Archives conversations, each as [`Self::archive`] does: one outcome per id.
+    pub async fn archive_all(&self, ids: &[ConversationId]) -> Vec<Result<Conversation>> {
+        let mut outcomes = Vec::with_capacity(ids.len());
+        for id in ids {
+            outcomes.push(self.archive(id.clone()).await);
+        }
+        outcomes
+    }
+
     /// Archives a conversation: everything it created goes, except its transcript, tasks,
     /// artifacts and branches. Answers once nothing new of it can start and it is stored as
     /// archived; the rest of the cleanup goes on in the background ([`Self::finish_archive`]).
     pub async fn archive(&self, id: ConversationId) -> Result<Conversation> {
         self.admit()?;
         let conversation = self.core.conversation(&id)?;
+        if conversation.deleting {
+            return Err(being_deleted());
+        }
         if conversation.lifecycle == Lifecycle::Archived {
             return Ok(conversation);
         }
@@ -379,14 +396,21 @@ impl SessionManager {
         }
     }
 
-    /// At launch, before any run resumes: finishes the archives' cleanups a quit or crash cut
-    /// off (their processes are gone; worktrees, session files and runs are not).
+    /// At launch, before any run resumes: finishes the deletes and the archives' cleanups a
+    /// quit or crash cut off (their processes are gone; worktrees, session files, runs and
+    /// streams are not).
     pub(super) async fn finish_cut_off_cleanups(&self) {
         for conversation in self.core.catalog().conversations {
+            let id = conversation.id;
+            if conversation.deleting {
+                tracing::info!(conversation = %id, "finishing a delete cut off by a quit");
+                self.close_fence(&id);
+                self.finish_delete(&id).await;
+                continue;
+            }
             if !conversation.cleanup_pending {
                 continue;
             }
-            let id = conversation.id;
             if conversation.lifecycle != Lifecycle::Archived {
                 let _ = self.core.finish_cleanup(id).await;
                 continue;
@@ -566,6 +590,9 @@ impl SessionManager {
         // What the archive stopped and removed is gone first.
         self.cleanup_finished(&id).await;
         let conversation = self.core.conversation(&id)?;
+        if conversation.deleting {
+            return Err(being_deleted());
+        }
         if conversation.lifecycle != Lifecycle::Archived {
             return Err(Error::Invalid(
                 "only an archived conversation can be restored".into(),
@@ -582,54 +609,115 @@ impl SessionManager {
         Ok(restored)
     }
 
-    /// Deletes a conversation for good. Branches Brigadier created for it (task branches, a
-    /// `brigadier/` session branch) go only if asked; the user's own branches never do. What
-    /// the Brain learned in it stays unless `forget_brain` (its transcript index always goes).
-    /// Unmerged branches it keeps are recorded, so Storage can offer them later.
-    pub async fn delete(
-        &self,
-        id: ConversationId,
-        delete_branches: bool,
-        forget_brain: bool,
-    ) -> Result<()> {
-        self.delete_conversation(id, delete_branches, forget_brain, true)
-            .await
+    /// Deletes conversations for good, each as [`Self::delete`] does: one outcome per id.
+    pub async fn delete_all(&self, ids: &[ConversationId]) -> Vec<Result<()>> {
+        let mut outcomes = Vec::with_capacity(ids.len());
+        for id in ids {
+            outcomes.push(self.delete(id.clone()).await);
+        }
+        outcomes
     }
 
-    /// [`Self::delete`]; `record_kept` records the branches it leaves (a project removal
-    /// records them itself, once the user's choices are through).
+    /// Deletes a conversation for good: its transcript, everything it created, and the branches
+    /// Brigadier created for it (its session, task and overnight-run branches, unmerged ones
+    /// too; the user's own branches never). What the Brain learned in it stays; its transcript
+    /// index goes. Answers once nothing new of it can start and it is durably marked as being
+    /// deleted, which hides it from the app; the rest goes on in the background
+    /// ([`Self::finish_delete`]), after an archive's cleanup still under way.
+    pub async fn delete(&self, id: ConversationId) -> Result<()> {
+        self.admit()?;
+        let conversation = self.core.conversation(&id)?;
+        let sides: Vec<ConversationId> = self
+            .side_chats(&id)
+            .into_iter()
+            .map(|side| side.id)
+            .collect();
+        for fenced in sides.iter().chain([&id]) {
+            self.close_fence(fenced);
+        }
+        let marked = match self.fence_runs(&id).await {
+            Ok(_) => self.core.mark_deleting(id.clone()).await,
+            Err(err) => Err(err),
+        };
+        if let Err(err) = marked {
+            // Still there: an archived one stays closed; one that works goes on working.
+            if conversation.lifecycle != Lifecycle::Archived {
+                for fenced in sides.iter().chain([&id]) {
+                    self.open_fence(fenced);
+                }
+            }
+            return Err(err);
+        }
+        let manager = self.arc();
+        self.start_cleanup(id.clone(), async move {
+            manager.finish_delete(&id).await;
+        });
+        Ok(())
+    }
+
+    /// The background part of a delete. The `deleting` mark stays until every step has
+    /// succeeded, so a restart tries again where this one failed or was cut off.
+    async fn finish_delete(&self, id: &ConversationId) {
+        let Ok(conversation) = self.core.conversation(id) else {
+            // Gone already (deleted twice, or with its project).
+            return;
+        };
+        match self.delete_closed(conversation, true, false).await {
+            Ok(()) => self.open_fence(id),
+            Err(err) => {
+                tracing::warn!(conversation = %id, error = %err, "could not finish deleting a conversation; the next launch tries again")
+            }
+        }
+    }
+
+    /// Waits until the deletes of `ids` under way have finished. The space compacting the
+    /// database would give back then, when that is worth offering.
+    pub async fn deletes_finished(&self, ids: &[ConversationId]) -> Option<u64> {
+        for id in ids {
+            self.cleanup_finished(id).await;
+        }
+        self.compactable_bytes().await
+    }
+
+    /// Deletes a conversation now, after its cleanup under way (a project removal, a side
+    /// chat going with its parent). Branches Brigadier created for it go only with
+    /// `delete_branches`; `record_kept` records those it leaves (a project removal records them
+    /// itself, once the user's choices are through).
     pub(super) async fn delete_conversation(
         &self,
         id: ConversationId,
         delete_branches: bool,
-        forget_brain: bool,
         record_kept: bool,
     ) -> Result<()> {
-        // An archive's cleanup under way finishes first.
+        self.core.conversation(&id)?;
+        // An archive's or a delete's cleanup under way finishes first.
         self.cleanup_finished(&id).await;
-        let conversation = self.core.conversation(&id)?;
+        let Ok(conversation) = self.core.conversation(&id) else {
+            // That cleanup was a delete.
+            return Ok(());
+        };
         self.close_fence(&id);
         let deleted = self
-            .delete_closed(conversation, delete_branches, forget_brain, record_kept)
+            .delete_closed(conversation, delete_branches, record_kept)
             .await;
         // Deleted, or still there and working: either way its fence has no more to hold.
         if deleted.is_ok()
             || self
                 .core
                 .conversation(&id)
-                .is_ok_and(|now| now.lifecycle != Lifecycle::Archived)
+                .is_ok_and(|now| now.lifecycle != Lifecycle::Archived && !now.deleting)
         {
             self.open_fence(&id);
         }
         deleted
     }
 
-    /// [`Self::delete_conversation`] once nothing new of it starts.
+    /// Deletes a conversation once nothing new of it starts. It leaves the catalog last, after
+    /// its streams are purged, so one cut off at any step is still there to finish.
     async fn delete_closed(
         &self,
         conversation: Conversation,
         delete_branches: bool,
-        forget_brain: bool,
         record_kept: bool,
     ) -> Result<()> {
         let id = conversation.id.clone();
@@ -665,6 +753,7 @@ impl SessionManager {
                 }
             }
             let (git, repo) = (self.git.clone(), PathBuf::from(repo));
+            let _lane = self.closing.lane.lock().await;
             blocking(move || {
                 let repo = git.open(&repo).map_err(git_error)?;
                 for branch in branches {
@@ -692,14 +781,14 @@ impl SessionManager {
             streams::draft(&id.to_string()),
         ];
         purge.extend(tasks.iter().map(|task| streams::task(&task.id)));
-        self.forget_brain_conversation(&id, conversation.project_id.clone(), forget_brain)
+        self.forget_brain_conversation(&id, conversation.project_id.clone())
             .await;
         self.forget_routing(&id, &tasks).await;
-        self.core.forget_conversation(id.clone()).await?;
-        self.convs_lock().remove(&id);
         let store = self.core.store().clone();
         // Its own blobs go now, not a day later; then the usual collection of older leftovers.
         let (removed, own) = store.delete_streams_and_blobs(purge).await?;
+        self.core.forget_conversation(id.clone()).await?;
+        self.convs_lock().remove(&id);
         match store.gc_blobs().await {
             Ok(stats) => {
                 tracing::info!(conversation = %id, removed, ?own, ?stats, "conversation deleted")
@@ -740,6 +829,10 @@ impl SessionManager {
             }
         }
     }
+}
+
+fn being_deleted() -> Error {
+    Error::Invalid("It is being deleted.".into())
 }
 
 /// The cleanup-ledger owner and data-dir area of a conversation's CLI session.

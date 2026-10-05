@@ -397,6 +397,11 @@ pub struct Conversation {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(skip)]
     pub cleanup_pending: bool,
+    /// Set once its deletion was asked for: hidden from the app at once, it goes for good when
+    /// its cleanup has finished (a restart finishes one cut off).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(skip)]
+    pub deleting: bool,
 }
 
 /// A conversation's model standing in for the chosen one while that one is at a limit.
@@ -1256,6 +1261,11 @@ pub enum DomainEvent {
         id: ConversationId,
         pending: bool,
     },
+    /// Its deletion was asked for: it is gone for the user; its cleanup goes on until
+    /// [`Self::ConversationDeleted`].
+    ConversationDeleting {
+        id: ConversationId,
+    },
     /// Permanently removed; its streams are purged.
     ConversationDeleted {
         id: ConversationId,
@@ -1417,6 +1427,7 @@ impl DomainEvent {
             Self::ConversationSetUp { .. } => "conversation.setUp",
             Self::ConversationLifecycleChanged { .. } => "conversation.lifecycle",
             Self::ConversationCleanup { .. } => "conversation.cleanup",
+            Self::ConversationDeleting { .. } => "conversation.deleting",
             Self::ConversationDeleted { .. } => "conversation.deleted",
             Self::ProjectRemoved { .. } => "project.removed",
             Self::MessageDelta { .. } => "message.delta",

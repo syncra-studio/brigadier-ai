@@ -10,21 +10,12 @@ import {
   Terminal,
   Unpin,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { type FC, useEffect, useState } from "react";
+import { type FC, useEffect } from "react";
 
 import { FORK_PLACES } from "@/app/conversation/ForkMenu";
 import { useLatestAnswer } from "@/app/conversation/SlashCommands";
 import { NameDialog } from "@/app/NameDialog";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,7 +35,6 @@ import {
   renameConversation,
   setPinned,
 } from "@/state/actions";
-import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
@@ -73,19 +63,6 @@ function useThreadMarkdown(title: string): () => string {
   };
 }
 
-/** The conversation runs: its orchestrator's turn, or any of its workers. */
-function useRunning(conversationId: string): boolean {
-  return useBoard(
-    (s) =>
-      s.board?.conversationId === conversationId &&
-      (s.board.run === "running" ||
-        s.board.run === "starting" ||
-        Object.values(s.board.tasks).some((task) => ACTIVE.has(task.state))),
-  );
-}
-
-const ACTIVE = new Set(["queued", "starting", "running", "blocked", "landing"]);
-
 function fail(cause: unknown) {
   toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" });
 }
@@ -105,26 +82,22 @@ export const ChatActions: FC<{ conversation: Conversation; onRename: () => void 
   onRename,
 }) => {
   const id = conversation.id;
-  const noun = conversation.kind === "chat" ? "chat" : "session";
   const pinned = conversation.pinnedAtMs !== null;
   const archived = conversation.lifecycle === "archived";
   const directory = workingDirectory(conversation);
   const answer = useLatestAnswer();
   const markdown = useThreadMarkdown(conversation.title);
-  const running = useRunning(id);
   const mac = useApp((s) => s.info?.platform === "macos");
-  const [confirming, setConfirming] = useState(false);
 
   const togglePin = () => void setPinned(id, !pinned).catch(fail);
-  const askArchive = () => {
-    if (running) setConfirming(true);
-    else void archive(id).catch(fail);
-  };
+  // No confirmation, even while it runs: archiving stops it, and Undo brings it back stopped.
+  const archiveIt = () => void archive(id).catch(fail);
   const fork = (place: ForkPlace) => {
     if (answer) void forkConversation(id, answer, place).catch(fail);
   };
 
-  // ⌥⌘R, ⌥⌘P and ⇧⌘A (Ctrl on Windows and Linux) while this conversation is open.
+  // ⌥⌘R and ⌥⌘P (Ctrl on Windows and Linux) while this conversation is open. ⇧⌘A is the
+  // app's (useLifecycleShortcuts).
   useEffect(() => {
     if (archived) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -134,9 +107,7 @@ export const ChatActions: FC<{ conversation: Conversation; onRename: () => void 
           ? onRename
           : event.altKey && !event.shiftKey && event.code === "KeyP"
             ? togglePin
-            : event.shiftKey && !event.altKey && event.code === "KeyA"
-              ? askArchive
-              : null;
+            : null;
       if (!action) return;
       event.preventDefault();
       action();
@@ -168,7 +139,7 @@ export const ChatActions: FC<{ conversation: Conversation; onRename: () => void 
                 {pinned ? "Unpin" : "Pin"}
                 <DropdownMenuShortcut>{key("⌥⌘P")}</DropdownMenuShortcut>
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={askArchive}>
+              <DropdownMenuItem onSelect={archiveIt}>
                 <Archive />
                 Archive
                 <DropdownMenuShortcut>{key("⇧⌘A")}</DropdownMenuShortcut>
@@ -250,28 +221,6 @@ export const ChatActions: FC<{ conversation: Conversation; onRename: () => void 
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-      <Dialog open={confirming} onOpenChange={setConfirming}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Stop and archive this {noun}?</DialogTitle>
-            <DialogDescription>You can find it later in your archived {noun}s.</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setConfirming(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => {
-                setConfirming(false);
-                // Archiving stops the orchestrator and the workers first.
-                void archive(id).catch(fail);
-              }}
-            >
-              Stop and archive
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 };

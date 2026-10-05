@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 
 import { AppRail, AppSidebar, TitlebarToggle } from "@/app/AppSidebar";
+import { DeleteDialog } from "@/app/dialogs/DeleteDialog";
+import { useLifecycleShortcuts } from "@/app/lifecycleShortcuts";
 import { AddProjectDialog } from "@/app/dialogs/AddProjectDialog";
 import { StorageDialog } from "@/app/dialogs/StorageDialog";
 import { UninstallDialog } from "@/app/dialogs/UninstallDialog";
@@ -63,6 +65,7 @@ export function App() {
   const catalogLoaded = useApp((s) => s.catalogLoaded);
 
   useEffect(markMounted, []);
+  useLifecycleShortcuts();
 
   // Cold start ends when the app is usable: the loaded catalog painted, the agent CLIs ready
   // (or no longer waited for) and the startup screen gone.
@@ -162,6 +165,7 @@ export function App() {
         <AddProjectDialog />
         <StorageDialog />
         <UninstallDialog />
+        <DeleteDialog />
         <FolderDropZone />
       </SidebarProvider>
     </div>

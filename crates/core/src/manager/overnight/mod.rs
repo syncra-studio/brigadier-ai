@@ -660,7 +660,8 @@ impl SessionManager {
             .recovering
             .store(true, std::sync::atomic::Ordering::Release);
         for conversation in self.core.catalog().conversations {
-            if !matches!(conversation.setup, Some(Setup::Session { .. })) {
+            // One still being deleted resumes nothing.
+            if conversation.deleting || !matches!(conversation.setup, Some(Setup::Session { .. })) {
                 continue;
             }
             if let Ok(board) = self.core.board(&conversation.id).await

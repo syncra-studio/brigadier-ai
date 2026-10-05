@@ -1,6 +1,5 @@
-import { useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 
-import { CheckboxRow, ErrorLine, errorText, RadioChoice } from "@/app/dialogs/fields";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -10,126 +9,124 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { Conversation } from "@/ipc/generated";
-import { formatBytes } from "@/lib/format";
-import { deleteConversation } from "@/state/actions";
-import { compactDatabase } from "@/state/storage";
-import { toast } from "@/state/toasts";
+import type { Conversation, UnlandedBranch } from "@/ipc/generated";
+import { conversationNoun, deleteAll, previewDelete } from "@/state/actions";
+import { clearPicked, useDeleteAsk } from "@/state/picking";
+import { useApp } from "@/state/store";
 
-type BranchChoice = "keep" | "delete";
+/** Branches named in the line before it gives a count instead. */
+const NAMED_BRANCHES = 3;
 
-/** Deletes a session or chat for good, asking what to do with what it leaves behind. */
-export function DeleteDialog({
-  conversation,
-  onOpenChange,
-}: {
-  /** The conversation to delete; the dialog is open while it is set. */
-  conversation: Conversation | null;
-  onOpenChange: (open: boolean) => void;
-}) {
+/**
+ * Confirms deleting the conversations {@link askDelete} names: their transcripts and everything
+ * they made go for good, with the branches Brigadier created for them. One plain line says so
+ * when one of those branches holds work that never landed.
+ */
+export function DeleteDialog() {
+  const ids = useDeleteAsk((s) => s.ids);
   return (
-    <Dialog open={conversation !== null} onOpenChange={onOpenChange}>
+    <Dialog open={ids !== null} onOpenChange={(open) => !open && closeDeleteAsk()}>
       <DialogContent className="max-w-md">
-        {conversation && (
-          <DeleteForm
-            key={conversation.id}
-            conversation={conversation}
-            onOpenChange={onOpenChange}
-          />
-        )}
+        {ids && <DeleteForm key={ids.join(" ")} ids={ids} onClose={closeDeleteAsk} />}
       </DialogContent>
     </Dialog>
   );
 }
 
-function DeleteForm({
-  conversation,
-  onOpenChange,
-}: {
-  conversation: Conversation;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const session = conversation.kind === "session";
-  const [branches, setBranches] = useState<BranchChoice>("keep");
-  const [forgetBrain, setForgetBrain] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+function closeDeleteAsk(): void {
+  useDeleteAsk.setState({ ids: null });
+}
 
-  const confirm = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const compactable = await deleteConversation(
-        conversation.id,
-        session && branches === "delete",
-        forgetBrain,
-      );
-      onOpenChange(false);
-      if (compactable !== null) {
-        toast(`Deleted. Compact the database to give back ${formatBytes(compactable)}.`, {
-          actions: [{ label: "Compact", run: () => void compactDatabase() }],
-        });
-      }
-    } catch (cause) {
-      setError(errorText(cause));
-    } finally {
-      setBusy(false);
-    }
+function DeleteForm({ ids, onClose }: { ids: string[]; onClose: () => void }) {
+  // As they were when asked: the rows leave the store once confirmed.
+  const [conversations] = useState(() => {
+    const all = useApp.getState().conversations;
+    return ids.map((id) => all[id]).filter((c): c is Conversation => c !== undefined);
+  });
+  const [branches, setBranches] = useState<UnlandedBranch[]>([]);
+  useEffect(() => {
+    let current = true;
+    previewDelete(ids)
+      .then((found) => current && setBranches(found))
+      .catch(() => {
+        // Without a preview the confirmation still says what goes.
+      });
+    return () => {
+      current = false;
+    };
+  }, [ids]);
+
+  const count = conversations.length;
+  const noun = conversationNoun(conversations);
+  const confirm = () => {
+    onClose();
+    clearPicked();
+    void deleteAll(conversations.map((c) => c.id));
   };
 
   return (
     <div className="grid gap-4">
       <DialogHeader>
-        <DialogTitle>Delete {session ? "session" : "chat"}?</DialogTitle>
+        <DialogTitle>{count === 1 ? `Delete ${noun}?` : `Delete ${count} ${noun}?`}</DialogTitle>
         <DialogDescription>
-          “{conversation.title}” and its transcript are removed for good. This can't be undone;
-          archive it instead to keep it restorable.
+          {count === 1
+            ? `“${conversations[0]?.title}” and its transcript are removed for good.`
+            : `These ${count} ${noun} and their transcripts are removed for good.`}
         </DialogDescription>
       </DialogHeader>
-      {session && (
-        <>
-          <div className="grid gap-2">
-            <p className="text-muted-foreground text-xs">Unmerged branches</p>
-            <RadioChoice<BranchChoice>
-              label="Unmerged branches"
-              value={branches}
-              onChange={setBranches}
-              options={[
-                {
-                  value: "keep",
-                  label: "Keep unmerged branches",
-                  hint: "Its session, task and overnight run branches stay in the repository.",
-                },
-                {
-                  value: "delete",
-                  label: "Delete unmerged branches",
-                  hint: "Work that never landed is lost.",
-                },
-              ]}
-            />
-          </div>
-          <CheckboxRow
-            label="Forget what the Brain learned from this session"
-            note="Brain notes that came only from this session are removed too."
-            checked={forgetBrain}
-            onCheckedChange={setForgetBrain}
-          />
-        </>
-      )}
-      <ErrorLine error={error} />
+      {branches.length > 0 && <UnlandedLine branches={branches} single={count === 1} />}
       <DialogFooter>
-        <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+        <Button type="button" variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button
-          type="button"
-          variant="destructive"
-          disabled={busy}
-          onClick={() => void confirm()}
-        >
+        <Button type="button" variant="destructive" autoFocus onClick={confirm}>
           Delete
         </Button>
       </DialogFooter>
     </div>
+  );
+}
+
+/**
+ * One line about the branches whose work never landed (or may not have): they go too. `single`:
+ * one conversation is deleted ("Its branch …").
+ */
+function UnlandedLine({ branches, single }: { branches: UnlandedBranch[]; single: boolean }) {
+  const known = branches.some((branch) => !branch.unknown);
+  const has = known ? "has" : "may have";
+  const have = known ? "have" : "may have";
+  const [first] = branches;
+  let line: ReactNode;
+  if (branches.length === 1 && first) {
+    line = (
+      <>
+        {single ? "Its" : "The"} branch {branchName(first)} {has} work that never landed; it's deleted
+        too.
+      </>
+    );
+  } else if (branches.length <= NAMED_BRANCHES) {
+    const names = branches.map(branchName);
+    line = (
+      <>
+        Branches{" "}
+        {names.slice(0, -1).flatMap((entry, index) => (index === 0 ? [entry] : [", ", entry]))} and{" "}
+        {names.at(-1)} {have} work that never landed; they're deleted too.
+      </>
+    );
+  } else {
+    line = (
+      <>
+        {branches.length} branches {have} work that never landed; they're deleted too.
+      </>
+    );
+  }
+  return <p className="text-muted-foreground text-sm">{line}</p>;
+}
+
+function branchName(branch: UnlandedBranch): ReactNode {
+  return (
+    <code key={`${branch.repo} ${branch.name}`} className="text-foreground/85 font-mono text-xs">
+      {branch.name}
+    </code>
   );
 }

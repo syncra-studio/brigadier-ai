@@ -3,7 +3,7 @@
 //! their worktrees, the branches Brigadier created for them (how each stands against the
 //! branch its work goes to) and its Brain. Nothing goes while one of its conversations works.
 //!
-//! Its conversations are deleted as [`SessionManager::delete`] does, keeping every branch;
+//! Its conversations are deleted as [`SessionManager::delete`] does, but keeping every branch;
 //! then only the branches the user picked go, each at the tip the preview showed (merged ones
 //! only while still merged). The ones left are recorded as kept, so Storage can offer them
 //! later. The Brain goes to the Trash unless the user keeps it.
@@ -20,7 +20,7 @@ use crate::model::{Conversation, ConversationId, Environment, KeptBranch, Projec
 use crate::overnight::OvernightRun;
 use crate::storage::{
     BranchChoice, ProjectRemoval, RemovalBranch, RemovalConversation, RemovalWorktree,
-    RemoveProjectReport,
+    RemoveProjectReport, UnlandedBranch,
 };
 use crate::work::Task;
 use crate::{Error, Result};
@@ -81,8 +81,7 @@ impl SessionManager {
             if self.core.conversation(&conversation).is_err() {
                 continue;
             }
-            self.delete_conversation(conversation, false, false, false)
-                .await?;
+            self.delete_conversation(conversation, false, false).await?;
         }
         self.close_project_brain(&id).await;
         self.core.forget_project(id.clone()).await?;
@@ -161,6 +160,42 @@ impl SessionManager {
                 tracing::warn!(repo, error = %err, "could not record kept branches");
             }
         }
+    }
+
+    /// The branches deleting `ids` takes that hold work that never landed, or whose standing
+    /// can't be told. A worktree's uncommitted changes count: they become a WIP commit on its
+    /// branch before the worktree goes.
+    pub async fn preview_delete(&self, ids: &[ConversationId]) -> Vec<UnlandedBranch> {
+        let mut records = Vec::new();
+        let mut worktrees = Vec::new();
+        for id in ids {
+            let Ok(conversation) = self.core.conversation(id) else {
+                continue;
+            };
+            let board = self.core.board(id).await.unwrap_or_default();
+            let tasks = board.sorted_tasks();
+            records.extend(branch_records(&conversation, &tasks, board.runs.values()));
+            if let Some(Setup::Session {
+                environment:
+                    Environment::NewWorktree {
+                        path: Some(path), ..
+                    },
+                ..
+            }) = &conversation.setup
+            {
+                worktrees.push(PathBuf::from(path));
+            }
+            worktrees.extend(
+                tasks
+                    .iter()
+                    .filter_map(|task| task.workspace.as_ref()?.worktree.as_ref())
+                    .map(PathBuf::from),
+            );
+        }
+        let git = self.git.clone();
+        blocking(move || Ok(unlanded(&git, &worktrees, records)))
+            .await
+            .unwrap_or_default()
     }
 
     /// Whether a turn, work waiting for one, or a worker of the conversation is running.
@@ -340,6 +375,85 @@ pub(super) fn survey(
         branches.push(standing);
     }
     (listed, branches)
+}
+
+/// Which of the branches in `records` hold work their target doesn't have, or can't be told.
+fn unlanded(
+    git: &brigadier_git::Git,
+    worktrees: &[PathBuf],
+    records: Vec<BranchRecord>,
+) -> Vec<UnlandedBranch> {
+    let dirty: Vec<PathBuf> = worktrees
+        .iter()
+        .filter(|path| path.exists())
+        .filter(|path| {
+            git.open(path)
+                .and_then(|worktree| worktree.state())
+                .map_or(true, |state| !state.dirty_files.is_empty())
+        })
+        .cloned()
+        .collect();
+    let mut seen = HashSet::new();
+    let mut listed = Vec::new();
+    for record in records {
+        if !seen.insert((record.repo.clone(), record.name.clone())) {
+            continue;
+        }
+        let unknown = |record: &BranchRecord| UnlandedBranch {
+            repo: record.repo.display().to_string(),
+            name: record.name.clone(),
+            unknown: true,
+        };
+        let Ok(repo) = git.open(&record.repo) else {
+            listed.push(unknown(&record));
+            continue;
+        };
+        let tip = match repo.branch_tip(&record.name) {
+            Ok(Some(tip)) => tip,
+            // Already gone: nothing of it is lost.
+            Ok(None) => continue,
+            Err(_) => {
+                listed.push(unknown(&record));
+                continue;
+            }
+        };
+        // A worker's branch targets its session's branch; once that is gone, its work would
+        // land on the repository's default branch.
+        let target = match repo.branch_tip(&record.target) {
+            Ok(Some(target_tip)) => Some((record.target.clone(), target_tip)),
+            _ => repo.default_branch().ok().flatten().and_then(|fallback| {
+                let tip = repo.branch_tip(&fallback).ok().flatten()?;
+                Some((fallback, tip))
+            }),
+        };
+        let Some((target, target_tip)) = target else {
+            listed.push(unknown(&record));
+            continue;
+        };
+        let gains_wip = repo.worktrees().is_ok_and(|list| {
+            list.iter().any(|w| {
+                w.branch.as_deref() == Some(record.name.as_str()) && same_path_in(&w.path, &dirty)
+            })
+        });
+        let landed = match (
+            repo.is_merged(&record.name, &target),
+            repo.count_commits(&target_tip, &tip),
+        ) {
+            (Ok(merged), Ok(ahead)) => merged && ahead == 0 && !gains_wip,
+            _ => {
+                listed.push(unknown(&record));
+                continue;
+            }
+        };
+        if !landed {
+            listed.push(UnlandedBranch {
+                repo: repo.root().display().to_string(),
+                name: record.name,
+                unknown: false,
+            });
+        }
+    }
+    listed
 }
 
 /// Deletes the branches the user `picked` (each at the tip it was listed with; a merged one

@@ -514,6 +514,8 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
         conversations: { ...slice.conversations, [event.id]: next },
       };
     }
+    // Being deleted is gone already, for the user.
+    case "conversationDeleting":
     case "conversationDeleted": {
       if (!slice.conversations[event.id]) return slice;
       const { [event.id]: _deleted, ...conversations } = slice.conversations;
