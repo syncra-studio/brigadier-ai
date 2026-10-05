@@ -437,7 +437,7 @@ impl Writer {
     /// stopped. An automatic one's checkpoint waits for readers only briefly.
     fn compact(&self, automatic: bool) -> Result<Compacted> {
         if self.maintenance.should_stop(automatic) {
-            return Ok(Compacted::GaveWay);
+            return self.stopped();
         }
         let maintenance = self.maintenance.clone();
         self.conn.progress_handler(
@@ -451,7 +451,7 @@ impl Writer {
             Err(rusqlite::Error::SqliteFailure(err, _))
                 if err.code == rusqlite::ErrorCode::OperationInterrupted =>
             {
-                return Ok(Compacted::GaveWay);
+                return self.stopped();
             }
             Err(err) => return Err(err.into()),
         }
@@ -467,6 +467,15 @@ impl Writer {
         }
         checkpointed?;
         Ok(Compacted::Done)
+    }
+
+    /// How a compaction that stopped ended: for the quit, or else (automatic) for a write.
+    fn stopped(&self) -> Result<Compacted> {
+        if self.maintenance.stopped.load(Ordering::SeqCst) {
+            Err(Error::ShuttingDown)
+        } else {
+            Ok(Compacted::GaveWay)
+        }
     }
 
     fn record_wal_size(&self) {
