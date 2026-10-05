@@ -91,7 +91,8 @@ impl Grants {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DelegateTask {
-    /// A short title for the task card, e.g. "Add the --json flag to `list`".
+    /// A plain 2–4 word job name, unique among this chat's workers, e.g. "Add JSON output".
+    /// Describe the job, without roles, phases or internal task ids.
     pub title: String,
     /// What the task does. `implement` and `merge` tasks change code and land as one commit
     /// each; the others only read and report.

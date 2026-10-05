@@ -896,6 +896,20 @@ impl SessionManager {
             (None, Some(request), None) => Some(request),
             (None, None, None) => self.request_for(conversation_id, None).await,
         };
+        let names = self
+            .core
+            .board(conversation_id)
+            .await?
+            .tasks
+            .values()
+            .map(|task| task.title.clone())
+            .collect::<Vec<_>>();
+        let title = job_name(
+            &title,
+            kind,
+            subject.as_ref().map(|task| task.title.as_str()),
+            &names,
+        );
         let task = Task {
             id: extra.id.clone().unwrap_or_else(TaskId::generate),
             conversation_id: conversation_id.clone(),
@@ -3699,6 +3713,54 @@ async fn latest_session_start(store: &brigadier_store::Store, id: &TaskId) -> Op
     }
 }
 
+/// Names remain short and unique even for automatically created reviewers and old callers.
+fn job_name(title: &str, kind: TaskKind, subject: Option<&str>, used: &[String]) -> String {
+    let contains_id = title
+        .split_whitespace()
+        .any(|word| word.trim_matches(['`', '“', '”', '"']).starts_with("task-"));
+    let source = if contains_id {
+        match kind {
+            TaskKind::Review => format!("Review {}", subject.unwrap_or("changes")),
+            TaskKind::Verify => format!("Check {}", subject.unwrap_or("changes")),
+            _ => title.to_owned(),
+        }
+    } else {
+        title.to_owned()
+    };
+    let mut words = source
+        .split_whitespace()
+        .map(|word| word.trim_matches(['`', '#', '*', '“', '”', '"', '(', ')', ':', '·', '—', '–']))
+        .filter(|word| !word.is_empty() && !word.starts_with("task-"))
+        .take(4)
+        .collect::<Vec<_>>();
+    while words.len() > 2
+        && words
+            .last()
+            .is_some_and(|word| ["to", "of", "for", "with", "and", "the", "a", "an"].contains(word))
+    {
+        words.pop();
+    }
+    if words.is_empty() {
+        words.extend(["Worker", "task"]);
+    }
+    if words.len() == 1 {
+        words.push("task");
+    }
+    let base = words.join(" ");
+    if !used.iter().any(|name| name.eq_ignore_ascii_case(&base)) {
+        return base;
+    }
+    let short = words.iter().take(3).copied().collect::<Vec<_>>().join(" ");
+    let mut ordinal = 2;
+    loop {
+        let name = format!("{short} {ordinal}");
+        if !used.iter().any(|used| used.eq_ignore_ascii_case(&name)) {
+            return name;
+        }
+        ordinal += 1;
+    }
+}
+
 /// `brigadier/<session>/task-<n>-<slug>`.
 fn task_branch(conversation_id: &ConversationId, number: u32, title: &str) -> String {
     let session = conversation_id.short();
@@ -4117,5 +4179,44 @@ mod tests {
         // Stopped before its result, or a change that hasn't landed: stopped.
         assert_eq!(stopped_state(&task("review", false)), TaskState::Stopped);
         assert_eq!(stopped_state(&task("implement", true)), TaskState::Stopped);
+    }
+}
+
+#[cfg(test)]
+mod job_name_tests {
+    use super::*;
+    #[test]
+    fn names_are_short_plain_and_unique() {
+        assert_eq!(
+            job_name(
+                "Add JSON output to the list command",
+                TaskKind::Implement,
+                None,
+                &[]
+            ),
+            "Add JSON output"
+        );
+        assert_eq!(
+            job_name(
+                "Review `task-3`",
+                TaskKind::Review,
+                Some("File summary"),
+                &[]
+            ),
+            "Review File summary"
+        );
+        assert_eq!(
+            job_name(
+                "Check results",
+                TaskKind::Verify,
+                None,
+                &["Check results".into(), "Check results 2".into()]
+            ),
+            "Check results 3"
+        );
+        assert_eq!(
+            job_name("task-3", TaskKind::Scout, None, &[]),
+            "Worker task"
+        );
     }
 }
