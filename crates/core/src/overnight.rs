@@ -525,7 +525,7 @@ pub struct AppliedCommand {
 
 /// The morning report's current shape. A finished run whose report is older is rendered again
 /// from its records once (`report_text`).
-pub const REPORT_VERSION: u32 = 1;
+pub const REPORT_VERSION: u32 = 2;
 
 /// One segment of an overnight run: Start to its report. Continue proposes the next segment
 /// on the same branch.
