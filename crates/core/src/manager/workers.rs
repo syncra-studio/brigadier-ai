@@ -1478,9 +1478,12 @@ impl SessionManager {
                 (base, start, false)
             }
             // A review of a worker's work, or a phase's verifier, starts at the work's last
-            // commit; the verifier's commits go on top of it.
+            // commit; the verifier's commits go on top of it. So does a fix of work that hasn't
+            // landed: that work lands with it.
             (_, Some(subject))
-                if task.kind == TaskKind::Review || task.role == Some(WorkerRole::Verifier) =>
+                if task.kind == TaskKind::Review
+                    || task.role == Some(WorkerRole::Verifier)
+                    || (task.kind == TaskKind::Implement && continues_work(subject)) =>
             {
                 self.work_head(subject).await?
             }
@@ -3333,7 +3336,20 @@ impl SessionManager {
         if let Some(live) = self.existing_task_live(&task.id) {
             live.close_cli().await;
         }
-        self.dispose_task(task, TaskState::Done).await;
+        // A verifier or fix continues the work it names, so changing nothing in all means that
+        // work has nothing to land either.
+        let ends = if task.kind.writes() {
+            self.landed_with(task).await
+        } else {
+            vec![task.clone()]
+        };
+        for done in &ends {
+            self.dispose_task(done, TaskState::Done).await;
+        }
+        if task.role == Some(WorkerRole::Verifier) {
+            self.set_phase_stage(task, crate::work::PhaseStage::Done)
+                .await;
+        }
     }
 
     /// Ends a task: unfinished changes are kept (B15), then everything recorded under
@@ -3578,6 +3594,18 @@ pub(crate) fn test_data_dir(id: &TaskId) -> PathBuf {
 
 /// How a stopped task ends: a read task that already reported (a check still ending its turn,
 /// stopped by the orchestrator or a run's end) is done; anything else is stopped.
+/// Whether `subject` is a write task's work still to land, in a worktree of its own: a task
+/// that names it continues from it (and lands it, see `landed_with`).
+fn continues_work(subject: &Task) -> bool {
+    subject.kind.writes()
+        && !subject.state.is_final()
+        && subject.landed.is_none()
+        && subject
+            .workspace
+            .as_ref()
+            .is_some_and(|w| w.worktree.is_some() && w.base.is_some())
+}
+
 fn stopped_state(task: &Task) -> TaskState {
     if !task.kind.writes() && task.report.is_some() {
         TaskState::Done

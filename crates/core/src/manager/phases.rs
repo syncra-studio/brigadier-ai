@@ -213,10 +213,16 @@ impl SessionManager {
         let (plan, index) = self
             .phase_step(&lead.conversation_id, lead.request_id.clone(), number)
             .await?;
+        // In plan mode the lead outlines first: it builds only after its go-ahead.
+        let stage = if self.plan_mode(&lead.conversation_id) {
+            PhaseStage::Outlining
+        } else {
+            PhaseStage::Building
+        };
         self.change_plan(&lead.conversation_id, &plan.id, |plan| {
             let step = &mut plan.steps[index];
             step.task_id = Some(lead.id.clone());
-            step.stage = PhaseStage::Building;
+            step.stage = stage;
             step.started_at_ms.get_or_insert(now_ms());
             step.ended_at_ms = None;
             Ok(())

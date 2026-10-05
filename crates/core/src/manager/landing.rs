@@ -385,8 +385,12 @@ impl SessionManager {
                 );
             }
             Moved::Nothing { excluded } => {
-                self.dispose_task(task, TaskState::Done).await;
-                self.set_phase_stage(task, PhaseStage::Done).await;
+                // Nothing of the work it carries is left to land (all of it was litter, say):
+                // that work ends with it.
+                for done in self.landed_with(task).await {
+                    self.dispose_task(&done, TaskState::Done).await;
+                    self.set_phase_stage(&done, PhaseStage::Done).await;
+                }
                 format!(
                     "[nothing to land task-{}] It has no commits to land.{}",
                     task.number,
@@ -544,7 +548,7 @@ impl SessionManager {
 
     /// The tasks whose work landed with `task`'s: it, and the work it builds on (a verifier's
     /// lead, a merge task's conflicting task).
-    async fn landed_with(&self, task: &Task) -> Vec<Task> {
+    pub(crate) async fn landed_with(&self, task: &Task) -> Vec<Task> {
         let mut tasks = vec![task.clone()];
         let Ok(board) = self.core.board(&task.conversation_id).await else {
             return tasks;

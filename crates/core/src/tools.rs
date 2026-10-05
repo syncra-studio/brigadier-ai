@@ -109,7 +109,9 @@ pub struct DelegateTask {
     #[serde(default)]
     pub effort: Option<String>,
     /// For `review` tasks: the task whose candidate commit is reviewed, e.g. "task-2". For
-    /// `merge` tasks: the task whose work conflicts with the branch it lands on.
+    /// `merge` tasks: the task whose work conflicts with the branch it lands on. For a `fix`:
+    /// the task whose work it fixes (the phase's verifier); it continues from that work and
+    /// lands it with its own.
     #[serde(default)]
     pub subject: Option<String>,
     /// Ids of the user's attachments the worker should get as files.

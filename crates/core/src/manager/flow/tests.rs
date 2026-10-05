@@ -1282,3 +1282,244 @@ async fn a_report_whose_work_cannot_be_committed_is_refused() {
     );
     flow.stop().await;
 }
+
+/// A fix of work that hasn't landed yet starts from that work and lands it with its own: the
+/// fix's checkout holds the lead's file, and both files reach the branch.
+#[tokio::test]
+async fn a_fix_continues_the_unlanded_work_it_fixes_and_lands_both() {
+    let flow = Flow::start(
+        "fix",
+        Options::default(),
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                let reports = reports_in(&turn.input);
+                if reports.contains(&2) {
+                    let reply = turn.call("land_phase", json!({"task": "task-2"})).await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    assert!(reply.text.contains("Landed"), "{}", reply.text);
+                    return Reply::text("Fixed.");
+                }
+                if reports.contains(&1) {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"title": "Fix it", "kind": "implement", "role": "fix",
+                                   "subject": "task-1", "spec": "Fix: add b.txt.",
+                                   "provider": "claude"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"title": "Add a.txt", "kind": "implement",
+                               "spec": "Create a.txt.", "provider": "claude"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            let (file, summary) = if turn.prompt.contains("Fix: add b.txt") {
+                assert!(
+                    turn.cwd.join("a.txt").exists(),
+                    "the fix starts from the work it fixes"
+                );
+                ("b.txt", "Added b.txt.")
+            } else {
+                ("a.txt", "Added a.txt.")
+            };
+            turn.write(file, "x\n");
+            turn.git(&["add", file]);
+            turn.git(&["commit", "-q", "-m", summary]);
+            let reply = turn
+                .call(
+                    "submit_report",
+                    json!({"summary": summary, "changes": [file]}),
+                )
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        }),
+    )
+    .await;
+    flow.say("Add a.txt.").await;
+    let board = flow
+        .until("both land", |board| {
+            board.tasks.len() == 2 && board.tasks.values().all(|task| task.state.is_final())
+        })
+        .await;
+    let lead = Flow::task(&board, 1);
+    assert_eq!(lead.state, TaskState::Landed);
+    assert_eq!(Flow::task(&board, 2).state, TaskState::Landed);
+    let target = lead.workspace.as_ref().unwrap().target.clone().unwrap();
+    let files = super::git(&flow.repo, &["ls-tree", "-r", "--name-only", &target]);
+    for file in ["a.txt", "b.txt"] {
+        assert!(files.contains(file), "{file}: {files}");
+    }
+    flow.stop().await;
+}
+
+/// In plan mode a lead given a phase of the request's plan is held to its outline too: being
+/// assigned a phase is no go-ahead.
+#[tokio::test]
+async fn in_plan_mode_a_phase_lead_outlines_and_builds_nothing() {
+    let flow = Flow::start(
+        "plan-mode-phases",
+        Options {
+            plan_mode: true,
+            ..Options::default()
+        },
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if !turn.input.contains("[outline") {
+                    let reply = turn
+                        .call(
+                            "plan_phases",
+                            json!({"title": "Two files", "phases": [
+                                {"title": "Phase one"}, {"title": "Phase two"}]}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"title": "Phase one", "kind": "implement",
+                                   "spec": "Build phase one.", "phase": 1,
+                                   "provider": "claude"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                }
+                return Reply::text("[quiet]");
+            }
+            assert!(turn.prompt.contains("Plan mode is on: change nothing yet"));
+            for (tool, args) in [
+                ("request_review", json!({})),
+                ("submit_report", json!({"summary": "Built phase one."})),
+            ] {
+                let refused = turn.call(tool, args).await;
+                assert!(refused.is_error, "{tool}: {}", refused.text);
+                assert!(refused.text.contains("Plan mode is on"), "{}", refused.text);
+            }
+            let reply = turn
+                .call("submit_outline", json!({"outline": "1. Create p1.txt"}))
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Waiting for the go-ahead.")
+        }),
+    )
+    .await;
+    flow.say("Make two files, one phase each.").await;
+    let board = flow
+        .until("the outline waits for the user", |board| {
+            board.plans.values().any(|plan| {
+                plan.steps
+                    .iter()
+                    .any(|step| step.stage == crate::work::PhaseStage::AwaitingGoAhead)
+            })
+        })
+        .await;
+    assert!(Flow::task(&board, 1).report.is_none());
+    flow.stop().await;
+}
+
+/// A phase whose only commit is litter has nothing to land: its verifier and its lead both
+/// end, and the phase is done, so nothing is left open for the session.
+#[tokio::test]
+async fn a_phase_with_only_litter_ends_its_lead_with_its_verifier() {
+    let flow = Flow::start(
+        "litter-only",
+        Options::default(),
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if turn.input.contains("[outline review]") {
+                    let reply = turn
+                        .call("approve_outline", json!({"task": "task-1"}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("[phase verifier]") {
+                    return Reply::text("[quiet]");
+                }
+                if let Some(n) = reports_in(&turn.input).last() {
+                    let reply = turn
+                        .call("land_phase", json!({"task": format!("task-{n}")}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    assert!(reply.text.contains("nothing to land"), "{}", reply.text);
+                    return Reply::text("Nothing to land.");
+                }
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"title": "Look into it", "kind": "implement",
+                               "spec": "Look into the logs.", "provider": "claude"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            if is_reviewer(&turn) {
+                let reply = turn
+                    .call("submit_report", json!({"summary": "No findings."}))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Reviewed.");
+            }
+            if turn.prompt.contains("You verify this phase") {
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "Nothing to fix.",
+                               "done_when": "[met] looked: read the log"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Verified.");
+            }
+            if turn.earlier == 0 {
+                let reply = turn
+                    .call(
+                        "submit_outline",
+                        json!({"outline": "1. Read the logs\n2. Report"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Waiting for the go-ahead.");
+            }
+            turn.write("debug.log", "scratch\n");
+            turn.git(&["add", "-f", "debug.log"]);
+            turn.git(&["commit", "-q", "-m", "Keep a log"]);
+            let reply = turn
+                .call(
+                    "submit_report",
+                    json!({"summary": "Looked; nothing to change."}),
+                )
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        }),
+    )
+    .await;
+    flow.say("Look into the logs, carefully.").await;
+    let board = flow
+        .until("every task ends", |board| {
+            board
+                .tasks
+                .values()
+                .any(|task| task.role == Some(crate::work::WorkerRole::Verifier))
+                && board.tasks.values().all(|task| task.state.is_final())
+        })
+        .await;
+    let lead = Flow::task(&board, 1);
+    assert_eq!(lead.state, TaskState::Done);
+    let plan = board.plans.values().next().expect("its one-phase plan");
+    assert_eq!(plan.steps[0].stage, crate::work::PhaseStage::Done);
+    let target = lead.workspace.as_ref().unwrap().target.clone().unwrap();
+    let files = super::git(&flow.repo, &["ls-tree", "-r", "--name-only", &target]);
+    assert!(!files.contains("debug.log"), "{files}");
+    flow.stop().await;
+}
