@@ -167,6 +167,7 @@ const WORKER_ROLES: Record<WorkerRole, string> = {
   verifier: "Verifier",
   fix: "Fix",
   merge: "Merge",
+  reviewer: "Reviewer",
 };
 
 /**

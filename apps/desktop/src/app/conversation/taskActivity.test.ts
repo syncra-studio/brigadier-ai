@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { taskState } from "@/app/conversation/rowWords";
+import { taskState, workerName } from "@/app/conversation/rowWords";
 import { taskActivityLines, taskActivityTicks, taskWaitWords } from "@/app/conversation/taskActivity";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
 import type { Task } from "@/ipc/generated";
@@ -81,4 +81,10 @@ test("a user pause says Paused and freezes at updatedAtMs without keeping the cl
     assert.equal(taskActivityTicks({ ...worker, state: "running" }), true);
   }
   assert.equal(taskActivityTicks(task({ state: "paused", blockedReason: "Waiting for a dependency" })), true);
+});
+
+test("a worker of a request's flow is named by its part and phase, the outline reviewer too", () => {
+  assert.equal(workerName({}, task({ role: "lead", phase: 1 })), "Lead · Phase 1");
+  assert.equal(workerName({}, task({ role: "reviewer", phase: 2 })), "Reviewer · Phase 2");
+  assert.equal(workerName({}, task({ role: "reviewer", phase: null })), "Reviewer");
 });
