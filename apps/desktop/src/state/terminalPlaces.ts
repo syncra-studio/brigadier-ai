@@ -298,12 +298,16 @@ export function undoTabClose(place: string): boolean {
   return true;
 }
 
-/** Forgets a place whose conversation was archived or deleted (the daemon ends its shells). */
+/**
+ * Forgets a place whose conversation was archived or deleted. The daemon ends its shells once
+ * that succeeds; they are ended from here too, as the place goes before the answer does, so a
+ * failed archive or delete leaves none running that no tab shows.
+ */
 function dropPlace(place: string): void {
   for (const tab of terminalPlace(place).tabs) {
     readers.delete(tab.id);
     restored.delete(tab.id);
-    for (const [terminalId, owner] of shells) if (owner.tab === tab.id) shells.delete(terminalId);
+    endShell(tab.id);
   }
   closed.delete(place);
   update(place, () => EMPTY);

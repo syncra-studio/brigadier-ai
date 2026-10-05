@@ -540,9 +540,9 @@ impl Session {
     /// repository, else the home folder. An archived or deleted one has none.
     fn conversation_terminal_dir(&self, id: &ConversationId) -> Result<String, IpcError> {
         let conversation = self.daemon.core.conversation(id)?;
-        if conversation.lifecycle == Lifecycle::Archived {
+        if conversation.lifecycle == Lifecycle::Archived || conversation.deleting {
             return Err(brigadier_core::Error::Invalid(
-                "an archived thread has no terminal".into(),
+                "an archived or deleted thread has no terminal".into(),
             )
             .into());
         }
