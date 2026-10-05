@@ -1180,13 +1180,17 @@ impl SessionManager {
             Some(worktree) => instructions::for_worker(provider, worktree).await,
             None => String::new(),
         };
-        let extra = match (&task.kind, subject) {
+        let mut extra = match (&task.kind, subject) {
             (TaskKind::Review | TaskKind::Verify, Some(subject)) => {
                 self.review_brief(subject, &workspace.scratch).await
             }
             (TaskKind::Merge, Some(subject)) => self.merge_brief(subject, &workspace).await,
             _ => String::new(),
         };
+        if self.held_by_plan_mode(task).await {
+            extra.push_str("\n\n");
+            extra.push_str(super::phases::PLAN_MODE_HOLD);
+        }
         let prompt = prompts::worker(task, &repo_note, &native, &extra);
 
         let worker_grant = self.grants.issue(
@@ -2403,6 +2407,9 @@ impl SessionManager {
                 task.number
             )));
         }
+        if self.held_by_plan_mode(&task).await {
+            return Err(Error::Invalid(super::phases::PLAN_MODE_HOLD.into()));
+        }
         let size = input.summary.len()
             + [
                 &input.changes,
@@ -2465,8 +2472,12 @@ impl SessionManager {
             } else {
                 format!("{}\n\n{subject}", task.title)
             };
+            // Uncommitted work would be left out of what the verifier checks and what lands:
+            // the worker commits it first.
             if let Err(err) = self.commit_leftovers(&task, &input.changes, &message).await {
-                tracing::warn!(task = %task.id, error = %err, "could not commit a worker's work at its report");
+                return Err(Error::Invalid(format!(
+                    "Your work could not be committed, so nothing was reported: {err}\nFix that and commit your work, then call submit_report again."
+                )));
             }
         }
         // A phase with an outline ends with a fresh verifier, which the orchestrator lands.

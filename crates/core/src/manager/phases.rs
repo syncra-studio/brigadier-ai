@@ -22,6 +22,8 @@ use crate::{Error, Result, now_ms};
 
 /// What a lead waiting for its go-ahead is blocked on (the turn-end check reads it too).
 pub(crate) const WAITING_FOR_GO_AHEAD: &str = "Waiting for the go-ahead on its outline";
+/// What an implement worker hears in plan mode, before its outline's go-ahead.
+pub(crate) const PLAN_MODE_HOLD: &str = "Plan mode is on: change nothing yet. Read the code, send your outline with submit_outline (even for small work) and stop; you build only after the go-ahead.";
 
 /// Reviews a worker waits for (`request_review`) or the orchestrator gets (an outline's), by
 /// the reviewer's task: its report, or why it gave none.
@@ -603,6 +605,23 @@ impl SessionManager {
         Ok(())
     }
 
+    /// In plan mode an implement worker only outlines: it builds after its go-ahead.
+    pub(crate) async fn held_by_plan_mode(&self, task: &Task) -> bool {
+        if task.kind != TaskKind::Implement || !self.plan_mode(&task.conversation_id) {
+            return false;
+        }
+        match self.phase_of(task).await {
+            Some((plan, index)) => !matches!(
+                plan.steps[index].stage,
+                PhaseStage::Building
+                    | PhaseStage::Verifying
+                    | PhaseStage::Landing
+                    | PhaseStage::Done
+            ),
+            None => true,
+        }
+    }
+
     /// `request_review`: one review of the caller's committed work (from its phase's start)
     /// by the vendor other than the phase's author. Blocks until the findings are in; never
     /// gates anything.
@@ -617,6 +636,9 @@ impl SessionManager {
             return Err(Error::Invalid(
                 "Only a worker that builds a change asks for its review.".into(),
             ));
+        }
+        if self.held_by_plan_mode(&task).await {
+            return Err(Error::Invalid(PLAN_MODE_HOLD.into()));
         }
         if !matches!(task.state, TaskState::Starting | TaskState::Running) {
             return Err(Error::Invalid(format!(
@@ -645,6 +667,9 @@ impl SessionManager {
             number = task.number,
             title = task.title,
         );
+        // An overnight run's worker gives its slot to its reviewer while it waits (with one
+        // worker allowed, the review could not start otherwise), and takes one back after.
+        self.release_run_task(&task.id);
         let outcome = self
             .run_review(
                 &task,
@@ -652,6 +677,7 @@ impl SessionManager {
                 spec,
             )
             .await;
+        self.admit_run_task(&task).await?;
         Ok(match outcome {
             Ok(findings) => format!(
                 "[review]\n{findings}\n[/review]\nFix each finding you agree with and commit; for one you don't, say why in your report. There are no review rounds."

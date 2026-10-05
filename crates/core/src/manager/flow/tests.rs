@@ -1148,3 +1148,137 @@ async fn an_outlined_request_of_one_phase_keeps_its_phase_and_pill() {
     assert!(board.approvals.is_empty(), "no cards");
     flow.stop().await;
 }
+
+/// In plan mode a lead only outlines, even for small work: it is told so, and a report or a
+/// review before its go-ahead is refused.
+#[tokio::test]
+async fn in_plan_mode_a_lead_outlines_and_builds_nothing() {
+    let flow = Flow::start(
+        "plan-mode",
+        Options {
+            plan_mode: true,
+            ..Options::default()
+        },
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if !turn.input.contains("[outline") {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"title": "Add a file", "kind": "implement",
+                                   "spec": "Create one.txt.", "provider": "claude"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                }
+                return Reply::text("[quiet]");
+            }
+            assert!(turn.prompt.contains("Plan mode is on: change nothing yet"));
+            for (tool, args) in [
+                ("request_review", json!({})),
+                ("submit_report", json!({"summary": "Added one.txt."})),
+            ] {
+                let refused = turn.call(tool, args).await;
+                assert!(refused.is_error, "{tool}: {}", refused.text);
+                assert!(refused.text.contains("Plan mode is on"), "{}", refused.text);
+            }
+            let reply = turn
+                .call("submit_outline", json!({"outline": "1. Create one.txt"}))
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Waiting for the go-ahead.")
+        }),
+    )
+    .await;
+    flow.say("Add one.txt.").await;
+    let board = flow
+        .until("the outline waits for the user", |board| {
+            board.plans.values().any(|plan| {
+                plan.steps
+                    .iter()
+                    .any(|step| step.stage == crate::work::PhaseStage::AwaitingGoAhead)
+            })
+        })
+        .await;
+    assert!(Flow::task(&board, 1).report.is_none());
+    flow.stop().await;
+}
+
+/// A report whose work can't be committed (here a commit hook refuses it) is refused, so no
+/// verifier or landing ever sees part of the work; once committed, it is taken.
+#[tokio::test]
+async fn a_report_whose_work_cannot_be_committed_is_refused() {
+    let flow = Flow::start(
+        "hook",
+        Options::default(),
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if let Some(n) = reports_in(&turn.input).first() {
+                    let reply = turn
+                        .call("land_phase", json!({"task": format!("task-{n}")}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Added.");
+                }
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"title": "Add a file", "kind": "implement",
+                               "spec": "Create one.txt.", "provider": "codex"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            let hook = std::path::PathBuf::from(turn.git(&["rev-parse", "--git-common-dir"]))
+                .join("hooks/pre-commit");
+            let hook = if hook.is_absolute() {
+                hook
+            } else {
+                turn.cwd.join(hook)
+            };
+            if turn.earlier == 0 {
+                std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+                std::fs::write(&hook, "#!/bin/sh\necho 'refused by the hook' >&2\nexit 1\n")
+                    .unwrap();
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+                turn.write("one.txt", "one\n");
+                let refused = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "Added one.txt.", "changes": ["one.txt"]}),
+                    )
+                    .await;
+                assert!(refused.is_error, "{}", refused.text);
+                assert!(
+                    refused.text.contains("could not be committed"),
+                    "{}",
+                    refused.text
+                );
+                return Reply::text("The hook refused my commit.");
+            }
+            // Asked again to report: it deals with the hook, and the report is taken.
+            std::fs::remove_file(&hook).unwrap();
+            let reply = turn
+                .call(
+                    "submit_report",
+                    json!({"summary": "Added one.txt.", "changes": ["one.txt"]}),
+                )
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        }),
+    )
+    .await;
+    flow.say("Add one.txt.").await;
+    let board = flow.settled().await;
+    let lead = Flow::task(&board, 1);
+    assert_eq!(lead.state, TaskState::Landed);
+    let target = lead.workspace.as_ref().unwrap().target.clone().unwrap();
+    super::git(
+        &flow.repo,
+        &["cat-file", "-e", &format!("{target}:one.txt")],
+    );
+    flow.stop().await;
+}
