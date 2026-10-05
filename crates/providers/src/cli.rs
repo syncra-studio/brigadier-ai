@@ -45,6 +45,7 @@ impl CliEnv {
         for name in NESTED_SESSION_VARS {
             vars.remove(OsStr::new(name));
         }
+        add_toolchain_bins(&mut vars);
         Self { vars }
     }
 
@@ -96,6 +97,44 @@ impl CliEnv {
     }
 }
 
+/// Toolchains that install their programs in a folder of the home directory and add it to
+/// PATH from a shell profile, which an install may have left out: the folder, and the variable
+/// that moves it (the programs are then in its `bin`).
+const TOOLCHAIN_BINS: &[(&str, &str)] = &[(".cargo/bin", "CARGO_HOME")];
+
+/// Puts each toolchain folder that exists but isn't on PATH at its end, so a worker's `cargo`
+/// works without hunting for it. What PATH already holds keeps its order and wins.
+fn add_toolchain_bins(vars: &mut BTreeMap<OsString, OsString>) {
+    let home = vars
+        .get(OsStr::new("HOME"))
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir);
+    let mut paths: Vec<PathBuf> = vars
+        .get(OsStr::new("PATH"))
+        .map(|path| std::env::split_paths(path).collect())
+        .unwrap_or_default();
+    let mut added = false;
+    for (folder, moved_by) in TOOLCHAIN_BINS {
+        let dir = match vars
+            .get(OsStr::new(moved_by))
+            .filter(|value| !value.is_empty())
+        {
+            Some(root) => PathBuf::from(root).join("bin"),
+            None => match &home {
+                Some(home) => home.join(folder),
+                None => continue,
+            },
+        };
+        if dir.is_dir() && !paths.contains(&dir) {
+            paths.push(dir);
+            added = true;
+        }
+    }
+    if added && let Ok(path) = std::env::join_paths(paths) {
+        vars.insert(OsString::from("PATH"), path);
+    }
+}
+
 /// Adds a session's extra environment to a spawn spec.
 pub fn apply_session_env(spec: &mut SpawnSpec, env: &[(String, String)], unset: &[String]) {
     spec.env
@@ -131,4 +170,42 @@ pub fn parse_version(output: &str) -> Option<String> {
         .split_whitespace()
         .find(|word| word.chars().next().is_some_and(|c| c.is_ascii_digit()))
         .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vars(pairs: &[(&str, &OsStr)]) -> BTreeMap<OsString, OsString> {
+        pairs
+            .iter()
+            .map(|(key, value)| (OsString::from(key), value.to_os_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_toolchain_the_login_path_misses_is_added_at_the_end_once() {
+        let home = std::env::temp_dir().join(format!("brigadier-cli-env-{}", std::process::id()));
+        let bin = home.join(".cargo/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let mut env = vars(&[
+            ("HOME", home.as_os_str()),
+            ("PATH", OsStr::new("/usr/bin:/bin")),
+        ]);
+        add_toolchain_bins(&mut env);
+        let expected = format!("/usr/bin:/bin:{}", bin.display());
+        assert_eq!(env[OsStr::new("PATH")], OsString::from(&expected));
+        // Already there: nothing changes.
+        add_toolchain_bins(&mut env);
+        assert_eq!(env[OsStr::new("PATH")], OsString::from(&expected));
+        // `CARGO_HOME` moves it; one that doesn't exist adds nothing.
+        let mut moved = vars(&[
+            ("HOME", home.as_os_str()),
+            ("CARGO_HOME", home.join("nowhere").as_os_str()),
+            ("PATH", OsStr::new("/usr/bin")),
+        ]);
+        add_toolchain_bins(&mut moved);
+        assert_eq!(moved[OsStr::new("PATH")], OsString::from("/usr/bin"));
+        std::fs::remove_dir_all(&home).unwrap();
+    }
 }
