@@ -8,18 +8,25 @@ import { BarButton } from "@/app/sidebar/nav";
 import { toggleSettings } from "@/state/actions";
 import { useBarActions } from "@/state/barActions";
 import { useApp } from "@/state/store";
-import { placeOf, toggleTerminal, useTerminalPlaces } from "@/state/terminalPlaces";
+import {
+  placeOf,
+  terminalWorksHere,
+  toggleTerminal,
+  useTerminalPlaces,
+} from "@/state/terminalPlaces";
 
 /**
  * The bar along the window's bottom, on the window chrome under the sidebar panel and the
  * content alike, and always there: Settings, the agents' usage and keeping awake at its start;
- * what is only sometimes there (updates, Side chat) and the terminal at its end.
+ * what is only sometimes there (updates, Side chat) and the terminal at its end. The terminal
+ * is there everywhere but in an archived thread, which can't start one.
  */
 export function BottomBar() {
   const inSettings = useApp((s) => s.selection.type === "settings");
   const shortcuts = useShortcuts();
   const sideChat = useBarActions((s) => s.sideChat);
   const place = useApp((s) => placeOf(s.selection));
+  const terminalWorks = useApp(terminalWorksHere);
   // On while it shows: full view can hide an open one.
   const terminalCovered = useBarActions((s) => s.terminalCover !== null);
   const terminalOn =
@@ -52,14 +59,16 @@ export function BottomBar() {
           <PlusCircle />
         </BarButton>
       </BarItem>
-      <BarButton
-        label="Terminal"
-        shortcut={shortcuts.terminal}
-        selected={terminalOn}
-        onClick={() => toggleTerminal()}
-      >
-        <Terminal />
-      </BarButton>
+      <BarItem show={terminalWorks}>
+        <BarButton
+          label="Terminal"
+          shortcut={shortcuts.terminal}
+          selected={terminalOn}
+          onClick={() => toggleTerminal()}
+        >
+          <Terminal />
+        </BarButton>
+      </BarItem>
     </footer>
   );
 }

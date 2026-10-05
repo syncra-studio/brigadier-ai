@@ -5,7 +5,7 @@ import { request } from "@/ipc/client";
 import type { TerminalOutput } from "@/ipc/generated";
 import { useBarActions } from "@/state/barActions";
 import { notePaneClose } from "@/state/closedPanes";
-import { type Selection, useApp } from "@/state/store";
+import { type AppState, type Selection, useApp } from "@/state/store";
 
 /**
  * The bottom terminal's shells, by place: each conversation has its own (`conv:<id>`), and
@@ -76,6 +76,15 @@ export function placeOf(selection: Selection): string {
 /** The place the window shows now. */
 export function currentPlace(): string {
   return placeOf(useApp.getState().selection);
+}
+
+/** Whether a terminal can open where the window is: everywhere but an archived thread. */
+export function terminalWorksHere(state: AppState): boolean {
+  const { selection } = state;
+  return (
+    selection.type !== "conversation" ||
+    state.conversations[selection.id]?.lifecycle !== "archived"
+  );
 }
 
 export function terminalPlace(place: string): TerminalPlace {
@@ -226,6 +235,7 @@ export function setTerminalOpen(place: string, open: boolean): void {
 
 /** Shows or hides the place's pane; hidden under full view, it is shown by leaving full view. */
 export function toggleTerminal(place = currentPlace()): void {
+  if (place === currentPlace() && !terminalWorksHere(useApp.getState())) return;
   const cover = useBarActions.getState().terminalCover;
   if (cover && place === currentPlace()) {
     cover();
