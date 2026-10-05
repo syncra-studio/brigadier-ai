@@ -5,7 +5,6 @@ import { useShallow } from "zustand/react/shallow";
 import { isFinal } from "@/app/conversation/blocks";
 import { STEP_ROW } from "@/app/conversation/OrchestratorSteps";
 import { type RowState } from "@/app/conversation/rowWords";
-import { TaskActivity } from "@/app/conversation/WorkerActivity";
 import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversation/WorkerChip";
 import type { Task } from "@/ipc/generated";
 import { useNow } from "@/hooks/use-now";
@@ -79,7 +78,7 @@ export const TaskRow = memo(function TaskRow({ taskId }: { taskId: string }) {
         title={name}
         className={cn(STEP_ROW, "group hover:text-foreground focus-visible:ring-ring/50 rounded-control w-full text-start outline-none focus-visible:ring-1")}
       >
-        <WorkerGlyph taskId={taskId} working={live} className="size-icon-sm shrink-0" />
+        <WorkerGlyph taskId={taskId} working={live} className="size-icon-md shrink-0" />
         <span className="min-w-0 truncate">
           <span className="text-foreground/90">{name}</span>{" "}
           <span aria-live="polite" className={TONES[tone]}>{word}</span>
@@ -90,7 +89,6 @@ export const TaskRow = memo(function TaskRow({ taskId }: { taskId: string }) {
           className="size-icon-xs shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
         />
       </button>
-      {!final && <TaskActivity taskId={taskId} className="ps-6 pb-1" />}
     </div>
   );
 });

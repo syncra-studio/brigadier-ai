@@ -282,10 +282,16 @@ export function buildBlocks(
     placed.push({ kind: "thinking", position: segment.position, requestId: segment.requestId,
       segment, atMs: segment.startedAtMs });
   }
+  const authoredResults = [
+    ...board.orchestratorSteps.filter((step) => step.kind.type === "tool" || (!ON_TASK_ROW.has(step.kind.type) && !isRunRequest(step.requestId))),
+    ...board.decisions.filter(judgementCall).map((decision) => ({
+      requestId: decision.requestId, position: decision.position, kind: { type: "decided" },
+    })),
+  ].toSorted((a, b) => a.position - b.position);
   for (const step of board.orchestratorSteps) {
     // A phase's lead reads and messages its workers all night: the rows say what came of it.
     if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "tool")) continue;
-    if (step.kind.type === "tool" && toolHasOwnResult(step.kind)) continue;
+    if (step.kind.type === "tool" && toolHasOwnResult(step.kind, authoredResults, step.requestId, step.position)) continue;
     placed.push({
       kind: "orchestrator",
       position: step.position,

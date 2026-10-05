@@ -48,7 +48,7 @@ type Rendering = { thread: Record<string, Row>; strip: Record<string, Row> };
 
 // Vite serves the real React components, and Chromium clicks the real Collapsible trigger.
 // Disposable profiles and Vite's cache use the system temporary folder, never the app's data.
-test("worker activity renders in the thread and expanded background strip", { timeout: 60000 }, async (t) => {
+test("worker lifecycle stays compact while the expanded background strip shows activity", { timeout: 60000 }, async (t) => {
   const binary = chromium();
   const scratch = mkdtempSync(join(tmpdir(), "worker-render-"));
   // Keep Vite outside the pure-module test loader, which only resolves TypeScript imports.
@@ -107,7 +107,9 @@ test("worker activity renders in the thread and expanded background strip", { ti
   assert.equal(Object.keys(rendering.strip).length, 4, "The strip must be expanded with all four active workers");
 
   await t.test("active rows render activity, elapsed time and diff", () => {
-    for (const rows of [rendering.thread, rendering.strip]) {
+    assert.deepEqual(rendering.thread.active?.lines, []);
+    assert.equal(rendering.thread.active?.subrows, 0);
+    for (const rows of [rendering.strip]) {
       assert.deepEqual(rows.active?.lines, ["Editing apps/desktop/src/composer/Paste.tsx · 3m 12s · +209 −102"]);
       assert.equal(rows.active?.subrows, 1);
     }
@@ -118,7 +120,8 @@ test("worker activity renders in the thread and expanded background strip", { ti
       quota: "Waiting for Codex quota: Codex weekly quota resets tomorrow · 40s",
       queued: "Queued: waiting for step 1 · 3m 12s",
     };
-    for (const rows of [rendering.thread, rendering.strip]) {
+    for (const id of Object.keys(waits)) assert.deepEqual(rendering.thread[id]?.lines, []);
+    for (const rows of [rendering.strip]) {
       for (const [id, expected] of Object.entries(waits)) {
         assert.deepEqual(rows[id]?.lines, [expected]);
         assert.doesNotMatch(rows[id]!.text, /Working/);

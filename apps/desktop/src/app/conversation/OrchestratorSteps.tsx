@@ -14,9 +14,10 @@ import {
 import { type FC, type ReactNode, useContext } from "react";
 
 import type { BlockOrchestratorStep, DecidedStep, MachineWords } from "@/app/conversation/blocks";
-import { toolWords } from "@/app/conversation/toolWords";
+import { toolActivity, toolWords, type ToolKind } from "@/app/conversation/toolWords";
 import { machineWords } from "@/app/conversation/rowWords";
 import { AgentsPanelContext, useWorkerName, WorkerGlyph, WorkerLine } from "@/app/conversation/WorkerChip";
+import { ACTIVITY_ROW, ACTIVITY_DETAIL, ACTIVITY_ICONS } from "@/components/assistant-ui/elements/activity-row";
 import { WebSearch } from "@/components/assistant-ui/elements/web-search";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { OrchestratorStepKind } from "@/ipc/generated";
@@ -25,6 +26,7 @@ import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
 type Kind = BlockOrchestratorStep["kind"]["type"];
+export type SummaryKind = Kind | ToolKind | "worker";
 
 const ICONS: Record<Kind, FC<{ className?: string }>> = {
   tool: Book,
@@ -43,8 +45,21 @@ const ICONS: Record<Kind, FC<{ className?: string }>> = {
 };
 
 /** How a run of the thread's work sums it up ("Created a worker, answered a worker"). */
-export const PLURALS: Record<Kind | "worker", [one: string, many: string]> = {
-  tool: ["used a tool", "used tools"],
+export const PLURALS: Record<SummaryKind, [one: string, many: string]> = {
+  tool: ["completed an action", "completed actions"],
+  read: ["read a file", "read files"],
+  search: ["searched files", "searched files"],
+  list: ["listed files", "listed files"],
+  edit: ["edited a file", "edited files"],
+  run: ["ran a command", "ran commands"],
+  message: ["sent a message", "sent messages"],
+  memory: ["saved project memory", "saved project memory"],
+  plan: ["planned the work", "planned the work"],
+  approval: ["requested approval", "requested approvals"],
+  land: ["landed changes", "landed changes"],
+  report: ["sent a report", "sent reports"],
+  web: ["searched the web", "searched the web"],
+  image: ["created an image", "created images"],
   messaged: ["messaged a worker", "messaged workers"],
   readReport: ["read a report", "read reports"],
   readArtifact: ["read a file", "read files"],
@@ -61,24 +76,29 @@ export const PLURALS: Record<Kind | "worker", [one: string, many: string]> = {
 };
 
 /** "Created workers, answered a worker": the kinds of a run, in the order they first came. */
-export function summarizeKinds(kinds: readonly (Kind | "worker")[]): string {
-  const counts = new Map<Kind | "worker", number>();
-  for (const kind of kinds) counts.set(kind, (counts.get(kind) ?? 0) + 1);
-  const text = [...counts].map(([kind, count]) => PLURALS[kind][count === 1 ? 0 : 1]).join(", ");
+export function summarizeKinds(kinds: readonly SummaryKind[], actions: readonly (string | null)[] = []): string {
+  const counts = new Map<string, { kind: SummaryKind; action: string | null; count: number }>();
+  kinds.forEach((kind, index) => {
+    const action = actions[index] ?? null;
+    const key = action ?? kind;
+    const known = counts.get(key);
+    counts.set(key, { kind, action, count: (known?.count ?? 0) + 1 });
+  });
+  const text = [...counts.values()].map(({ kind, action, count }) => action?.toLowerCase() ?? PLURALS[kind][count === 1 ? 0 : 1]).join(", ");
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** The kind whose icon a run of the thread's work shows: its most frequent. */
-function dominant(kinds: readonly (Kind | "worker")[]): Kind | "worker" {
-  const counts = new Map<Kind | "worker", number>();
+function dominant(kinds: readonly SummaryKind[]): SummaryKind {
+  const counts = new Map<SummaryKind, number>();
   for (const kind of kinds) counts.set(kind, (counts.get(kind) ?? 0) + 1);
   return [...counts].toSorted((a, b) => b[1] - a[1])[0]?.[0] ?? "created";
 }
 
-const RUN_ICONS: Record<Kind | "worker", FC<{ className?: string }>> = { ...ICONS, worker: Sparkle };
+const RUN_ICONS: Record<SummaryKind, FC<{ className?: string }>> = { ...ACTIVITY_ICONS, ...ICONS, worker: Sparkle };
 
 /** A grey line of the thread's work. */
-export const STEP_ROW = "text-muted-foreground flex min-h-row-sm min-w-0 items-center gap-2 text-sm";
+export const STEP_ROW = ACTIVITY_ROW;
 const row = STEP_ROW;
 
 /** The chevron at the end of a line that opens: shown on hover, turned while open. */
@@ -129,10 +149,10 @@ function firstLine(text: string): string {
 }
 
 /** A step's line; a worker it names opens its thread. */
-function label(kind: OrchestratorStepKind, spec: string | null): ReactNode {
+function label(kind: OrchestratorStepKind, spec: string | null, toolLabel: string): ReactNode {
   switch (kind.type) {
     case "tool":
-      return <span className={cn("min-w-0 truncate", kind.status === "inProgress" && "shimmer")}>{toolWords(kind)}</span>;
+      return <span title={toolLabel} className={cn("min-w-0 truncate", kind.status === "inProgress" && "shimmer")}>{toolLabel}</span>;
     case "messaged":
       return (
         <>
@@ -159,7 +179,7 @@ function label(kind: OrchestratorStepKind, spec: string | null): ReactNode {
         </>
       );
     case "searchedWeb":
-      return <span className="min-w-0 truncate">Searched the web for {kind.query}</span>;
+      return <span className="min-w-0 truncate">Searched the web</span>;
     case "readPage":
       return <span className="min-w-0 truncate">Read {hostOf(kind.url)}</span>;
     case "created":
@@ -266,14 +286,15 @@ export const StepRow: FC<{ step: BlockOrchestratorStep }> = ({ step }) =>
 
 const WorkStepRow: FC<{ kind: OrchestratorStepKind | DecidedStep }> = ({ kind }) => {
   const spec = useBoard((s) => (kind.type === "created" ? (s.board?.tasks[kind.taskId]?.spec ?? null) : null));
-  const Icon = ICONS[kind.type];
+  const toolLabel = useBoard((s) => kind.type === "tool" ? toolWords(kind, s.board?.tasks) : "");
+  const Icon = kind.type === "tool" ? ACTIVITY_ICONS[toolActivity(kind.name).kind] : ICONS[kind.type];
   const line =
     kind.type === "decided" ? (
       <span className="min-w-0 truncate">
         Decided: <WorkerLine text={kind.what} />
       </span>
     ) : (
-      label(kind, spec)
+      label(kind, spec, toolLabel)
     );
   const more = details(kind, spec);
   if (!more) {
@@ -304,7 +325,7 @@ const WorkStepRow: FC<{ kind: OrchestratorStepKind | DecidedStep }> = ({ kind })
           <ChevronRight aria-hidden className={OPENER} />
         </div>
       </CollapsibleTrigger>
-      <CollapsibleContent className="text-muted-foreground flex max-h-action-list flex-col gap-1 overflow-y-auto ps-6 pt-1 pb-2 text-sm wrap-break-word">
+      <CollapsibleContent className={cn(ACTIVITY_DETAIL, "wrap-break-word")}>
         {more}
       </CollapsibleContent>
     </Collapsible>
@@ -312,28 +333,41 @@ const WorkStepRow: FC<{ kind: OrchestratorStepKind | DecidedStep }> = ({ kind })
 };
 
 /** What the orchestrator did between two replies, one grey line per step. */
-export const OrchestratorSteps: FC<{ steps: readonly BlockOrchestratorStep[] }> = ({ steps }) => (
-  <>
-    {steps.map((step) => (
-      <StepRow key={step.position} step={step} />
-    ))}
-  </>
-);
+export const OrchestratorSteps: FC<{ steps: readonly BlockOrchestratorStep[]; grouped?: boolean }> = ({ steps, grouped = true }) => {
+  const settled = steps.filter((step) => step.kind.type !== "tool" || step.kind.status !== "inProgress");
+  const active = steps.filter((step) => step.kind.type === "tool" && step.kind.status === "inProgress");
+  const lines = settled.map((step) => <StepRow key={step.position} step={step} />);
+  return <div className="flex min-w-0 flex-col gap-1">
+    {grouped && settled.length > 1 ? <WorkGroup kinds={settled.map(stepSummaryKind)} actions={settled.map(stepSummaryAction)}>{lines}</WorkGroup> : lines}
+    {active.map((step) => <StepRow key={step.position} step={step} />)}
+  </div>;
+};
+
+export function stepSummaryAction(step: BlockOrchestratorStep): string | null {
+  if (step.kind.type !== "tool") return null;
+  const activity = toolActivity(step.kind.name);
+  // Standard file/command verbs pluralize; memory and project searches keep their meaning.
+  return ["search", "list", "memory", "plan", "tool"].includes(activity.kind) ? activity.done : null;
+}
+
+export function stepSummaryKind(step: BlockOrchestratorStep): SummaryKind {
+  return step.kind.type === "tool" ? toolActivity(step.kind.name).kind : step.kind.type;
+}
 
 /**
  * A run of the thread's work, folded into one line that sums it up ("Created a worker, answered
  * a worker, landed commits") and opens to each of its lines.
  */
-export const WorkGroup: FC<{ kinds: readonly (Kind | "worker")[]; children: ReactNode }> = ({ kinds, children }) => {
+export const WorkGroup: FC<{ kinds: readonly SummaryKind[]; actions?: readonly (string | null)[]; children: ReactNode }> = ({ kinds, actions, children }) => {
   const Icon = RUN_ICONS[dominant(kinds)];
   return (
     <Collapsible data-slot="work-group">
       <CollapsibleTrigger className={cn(row, "group hover:text-foreground focus-visible:ring-ring/50 rounded-control w-full text-start outline-none focus-visible:ring-1")}>
         <Icon aria-hidden className="size-icon-md shrink-0" />
-        <span className="text-foreground/90 min-w-0 truncate">{summarizeKinds(kinds)}</span>
+        <span className="min-w-0 truncate">{summarizeKinds(kinds, actions)}</span>
         <ChevronRight aria-hidden className={OPENER} />
       </CollapsibleTrigger>
-      <CollapsibleContent className="flex flex-col">{children}</CollapsibleContent>
+      <CollapsibleContent className="flex min-w-0 flex-col gap-1 pt-1">{children}</CollapsibleContent>
     </Collapsible>
   );
 };

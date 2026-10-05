@@ -21,6 +21,7 @@ export type TranscriptItem =
       kind: "command";
       key: string;
       command: string;
+      startedAtMs?: number;
       cwd: string | null;
       status: ItemStatus;
       exitCode: number | null;
@@ -209,6 +210,7 @@ export class TranscriptFolder {
               kind: "command",
               key: `command:${event.itemId}`,
               command: event.command,
+              startedAtMs: atMs,
               cwd: event.cwd,
               status: event.status,
               exitCode: event.exitCode,
@@ -236,6 +238,7 @@ export class TranscriptFolder {
               kind: "command",
               key: `command:${event.itemId}`,
               command: "",
+              startedAtMs: atMs,
               cwd: null,
               status: "inProgress",
               exitCode: null,

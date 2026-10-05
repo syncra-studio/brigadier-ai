@@ -22,7 +22,7 @@ import { ThinkingRow } from "@/app/conversation/ThinkingRow";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { InlineImageText } from "@/app/conversation/InlineImage";
 import { MentionText } from "@/app/conversation/Mentions";
-import { OrchestratorSteps, STEP_ROW, WorkGroup } from "@/app/conversation/OrchestratorSteps";
+import { OrchestratorSteps, STEP_ROW, WorkGroup, stepSummaryKind, stepSummaryAction } from "@/app/conversation/OrchestratorSteps";
 import {
   type BlockCard,
   type BlockCompaction,
@@ -169,7 +169,7 @@ const WorkHeader: FC<{
     return (
       <div
         data-slot="request-work-header"
-        className="border-border flex h-control-sm items-center border-b"
+        className="border-border flex items-center border-b pb-2"
       >
         {text}
       </div>
@@ -181,7 +181,7 @@ const WorkHeader: FC<{
       data-slot="request-work-header"
       aria-expanded={open}
       onClick={(event) => onToggle(event.currentTarget)}
-      className="group border-border flex h-control-sm items-center gap-1 border-b text-start"
+      className="group border-border flex items-center gap-1 border-b pb-2 text-start"
     >
       {text}
       <ChevronRight
@@ -252,7 +252,7 @@ const ReportText: FC<TextMessagePartProps> = (props) => {
 };
 
 /** A reply, card or row in the block's work. */
-const SequenceEntry: FC<{ entry: Entry; streaming: boolean }> = ({ entry, streaming }) => {
+const SequenceEntry: FC<{ entry: Entry; streaming: boolean; grouped?: boolean }> = ({ entry, streaming, grouped = true }) => {
   switch (entry.kind) {
     case "thinking":
       return <ThinkingRow text={entry.segment.text} startedAtMs={entry.segment.startedAtMs} endedAtMs={entry.segment.updatedAtMs} live={entry.live} />;
@@ -270,7 +270,7 @@ const SequenceEntry: FC<{ entry: Entry; streaming: boolean }> = ({ entry, stream
     case "steer":
       return <SteerBubble text={entry.text} atMs={entry.atMs} attachments={entry.attachments} />;
     case "orchestrator":
-      return <OrchestratorSteps steps={entry.steps} />;
+      return <OrchestratorSteps steps={entry.steps} grouped={grouped} />;
     case "compaction":
       return <CompactionRow compaction={entry.compaction} />;
     case "row":
@@ -311,7 +311,7 @@ const CompactionBlock: FC<{ compaction: BlockCompaction }> = ({ compaction }) =>
   return (
     <div data-slot="compaction-block" className="mt-4 flex flex-col gap-2">
       {live && elapsed >= HEADER_AFTER_MS && (
-        <div className="border-border flex h-control-sm items-center border-b">
+        <div className="border-border flex items-center border-b pb-2">
           <span className="text-muted-foreground text-sm">{headerLabel("working", elapsed)}</span>
         </div>
       )}
@@ -435,7 +435,7 @@ function workKinds(entries: readonly Entry[]): Parameters<typeof WorkGroup>[0]["
     ),
   );
   return entries.flatMap((entry) => {
-    if (entry.kind === "orchestrator") return entry.steps.map((step) => step.kind.type);
+    if (entry.kind === "orchestrator") return entry.steps.map(stepSummaryKind);
     if (entry.kind === "row" && created.has(entry.row.taskId)) return [];
     return ["worker" as const];
   });
@@ -444,9 +444,14 @@ function workKinds(entries: readonly Entry[]): Parameters<typeof WorkGroup>[0]["
 const FoldedWork: FC<{ item: FoldItem }> = ({ item }) => {
   if (item.kind === "entry") return <SequenceEntry entry={item.entry} streaming={false} />;
   const [only] = item.entries;
-  const lines = item.entries.map((entry) => <SequenceEntry key={entryKey(entry)} entry={entry} streaming={false} />);
-  if (item.entries.length === 1 && only && (only.kind !== "orchestrator" || only.steps.length === 1)) return lines;
-  return <WorkGroup kinds={workKinds(item.entries)}>{lines}</WorkGroup>;
+  if (item.entries.length === 1 && only) return <SequenceEntry entry={only} streaming={false} />;
+  const lines = item.entries.map((entry) => <SequenceEntry key={entryKey(entry)} entry={entry} streaming={false} grouped={false} />);
+  // Lifecycle rows whose creation is already counted do not add another summary segment.
+  const created = new Set(item.entries.flatMap((entry) => entry.kind === "orchestrator"
+    ? entry.steps.flatMap((step) => step.kind.type === "created" ? [step.kind.taskId] : []) : []));
+  const aligned = item.entries.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map(stepSummaryAction)
+    : entry.kind === "row" && created.has(entry.row.taskId) ? [] : [null]);
+  return <WorkGroup kinds={workKinds(item.entries)} actions={aligned}>{lines}</WorkGroup>;
 };
 
 /** The block's error: what went wrong in full, and Try again where a Chat can answer again. */
