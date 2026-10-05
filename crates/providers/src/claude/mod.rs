@@ -480,8 +480,13 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents) -> Value {
             }
             // A writer may commit into a repository's git folder, but not plant hooks or
             // change its config: those run outside the sandbox the next time the user runs git.
+            // Claude's file tools work outside the OS sandbox: deny them there too.
             for root in writable_roots.iter().filter(|root| is_git_dir(root)) {
                 let root = resolved(root);
+                for tool in ["Edit", "Write", "NotebookEdit"] {
+                    deny.push(format!("{tool}({})", rule_path(&root.join("hooks"))));
+                    deny.push(format!("{tool}(/{})", root.join("config").display()));
+                }
                 deny_write.extend([root.join("hooks"), root.join("config")]);
             }
             if !deny_write.is_empty() {
@@ -1612,8 +1617,20 @@ mod tests {
             ..spec(cwd.path(), &["claude-sonnet-5"])
         };
         let models = SubAgents::Only(vec!["claude-sonnet-5".to_owned()]);
-        let filesystem = &settings(&spec, cwd.path(), &models)["sandbox"]["filesystem"];
+        let settings = settings(&spec, cwd.path(), &models);
+        let filesystem = &settings["sandbox"]["filesystem"];
         let git = resolved(&git);
+        let deny = settings["permissions"]["deny"]
+            .as_array()
+            .expect("deny rules");
+        for tool in ["Edit", "Write", "NotebookEdit"] {
+            for rule in [
+                format!("{tool}(/{}/**)", git.join("hooks").display()),
+                format!("{tool}(/{})", git.join("config").display()),
+            ] {
+                assert!(deny.contains(&json!(rule)), "{rule}");
+            }
+        }
         assert_eq!(filesystem["allowWrite"], json!([git.display().to_string()]));
         assert_eq!(
             filesystem["denyWrite"],
