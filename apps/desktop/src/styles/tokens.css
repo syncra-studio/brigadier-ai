@@ -227,6 +227,8 @@
   /* The side panel beside the thread. Its width is at least side-panel-min and leaves the
      thread at least side-panel-chat-min; by default it takes side-panel-preferred, or more
      where the thread keeps side-panel-chat-room (see SidePanel.tsx). */
+  --spacing-browser-pane: 31.25rem;
+  --spacing-workers-pane: 26.25rem;
   --spacing-side-panel-min: 20rem;
   --spacing-side-panel-chat-min: 22rem;
   --spacing-side-panel-preferred: 40rem;

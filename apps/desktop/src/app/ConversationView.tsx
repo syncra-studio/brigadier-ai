@@ -22,6 +22,7 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 
+import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { ChatActions, RenameDialog } from "@/app/conversation/ChatActions";
 import { PinnedSummary, PinnedSummaryToggle, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
@@ -772,8 +773,9 @@ export function ConversationView({
                     <div
                       ref={embedded ? undefined : sidePanel.workspace}
                       data-embedded-view={embedded || undefined}
-                      className="relative flex h-full min-h-0"
+                      className="relative flex h-full min-h-0 flex-col"
                     >
+                      <div className="relative flex min-h-0 flex-1">
                       <div className={cn("flex h-full min-w-0 flex-1 flex-col", fullscreen && "hidden")}>
                         {/* The summary's popover, where it floats: opened in the top bar, under it. */}
                         <SummaryFloat>
@@ -819,6 +821,8 @@ export function ConversationView({
                       </div>
                       {!embedded && <SidePanel conversationId={conversationId} />}
                       {!embedded && <PanelButtons />}
+                      </div>
+                      {!embedded && conversationId && <TerminalPane conversationId={conversationId} />}
                     </div>
                   </OpenFileContext.Provider>
                   {conversation && (
