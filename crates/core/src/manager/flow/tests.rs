@@ -643,6 +643,10 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                         turn.cwd.join("p1.txt").exists(),
                         "it starts from the lead's work"
                     );
+                    assert!(
+                        turn.prompt.contains("Name the file p1.txt."),
+                        "it checks against the outline's corrections"
+                    );
                     let review = turn.call("request_review", json!({})).await;
                     assert!(!review.is_error, "{}", review.text);
                     turn.write("p1-fix.txt", "fixed\n");

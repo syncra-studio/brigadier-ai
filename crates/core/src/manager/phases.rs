@@ -424,7 +424,10 @@ impl SessionManager {
             provider: author.route.choice.provider,
             model: author.route.choice.model.clone(),
         });
-        let reviewer = self
+        // Waited for before the reviewer starts, so a review that ends at once still arrives.
+        let id = TaskId::generate();
+        let rx = self.reviews.wait(&id);
+        let created = self
             .create_task_as(
                 &of.conversation_id,
                 title,
@@ -440,14 +443,20 @@ impl SessionManager {
                 None,
                 Vec::new(),
                 TaskExtra {
+                    id: Some(id.clone()),
                     role: Some(WorkerRole::Reviewer),
                     phase: of.phase,
                     ..TaskExtra::default()
                 },
             )
-            .await
-            .map_err(|err| err.to_string())?;
-        let rx = self.reviews.wait(&reviewer.id);
+            .await;
+        let reviewer = match created {
+            Ok(reviewer) => reviewer,
+            Err(err) => {
+                self.reviews.settle(&id, Err(String::new()));
+                return Err(err.to_string());
+            }
+        };
         if let Some(wait) = &reviewer.quota_wait {
             let why = format!(
                 "no model of the other vendor can review now ({})",
@@ -591,12 +600,22 @@ impl SessionManager {
 
     /// Sends a lead "Go ahead." with the corrections; its phase builds.
     pub(crate) async fn go_ahead(&self, lead: &Task, corrections: Option<String>) -> Result<()> {
-        let text = match corrections {
+        let text = match &corrections {
             Some(corrections) => format!(
                 "Go ahead, with these corrections to your outline (they win over it):\n{corrections}"
             ),
             None => "Go ahead.".to_owned(),
         };
+        // Kept with the lead: its verifier and their reviews check the work against them too.
+        if corrections.is_some() {
+            let kept = text.clone();
+            self.update_task(&lead.conversation_id, &lead.id, |task| {
+                if !task.messages.contains(&kept) {
+                    task.messages.push(kept);
+                }
+            })
+            .await?;
+        }
         self.set_task_blocked(&lead.id, None).await;
         let now = self.task_by_id(&lead.conversation_id, &lead.id).await?;
         self.message_worker(&lead.conversation_id, &now, text, "the orchestrator")

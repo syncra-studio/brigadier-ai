@@ -897,7 +897,7 @@ impl SessionManager {
             (None, None, None) => self.request_for(conversation_id, None).await,
         };
         let task = Task {
-            id: TaskId::generate(),
+            id: extra.id.clone().unwrap_or_else(TaskId::generate),
             conversation_id: conversation_id.clone(),
             number,
             position: 0,
@@ -3538,6 +3538,8 @@ pub(crate) fn needs_of(
 /// What only Brigadier sets on a task it makes itself.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TaskExtra {
+    /// Its id, chosen before it starts (a review someone waits for is waited for first).
+    pub id: Option<TaskId>,
     /// Its overnight run context, instead of the one the session's active run gives.
     pub run: Option<crate::overnight::RunTaskContext>,
     /// The routing category, instead of the one its kind maps to (a phase's judge routes as
