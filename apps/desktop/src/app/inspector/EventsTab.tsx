@@ -54,6 +54,10 @@ function summary(event: DomainEvent): string {
       return "model rankings changed";
     case "providerChecked":
       return event.overview.provider;
+    case "updatesChanged":
+      return event.updates.items.length === 0
+        ? "up to date"
+        : event.updates.items.map((item) => `${item.target} ${item.latest}`).join(", ");
     case "projectUpdated":
       return event.project.name;
     case "conversationSetUp":

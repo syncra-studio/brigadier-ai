@@ -137,6 +137,7 @@ impl Projection {
             | DomainEvent::CleanupCompleted { .. }
             | DomainEvent::RankingsChanged
             | DomainEvent::ProviderChecked { .. }
+            | DomainEvent::UpdatesChanged { .. }
             | DomainEvent::DraftPinned { .. }
             | DomainEvent::BrainJobUpdated { .. }
             | DomainEvent::MemoryUpdated { .. }

@@ -575,6 +575,8 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "decidedForYou":
     case "waitingOnYou":
     case "waitingResolved":
+    // The rail's update button reads these (state/updates).
+    case "updatesChanged":
       return slice;
   }
 }

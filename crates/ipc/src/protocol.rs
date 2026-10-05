@@ -19,7 +19,7 @@ use brigadier_core::{
     OvernightRunId, ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan,
     ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession,
     RawSessionId, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, Settings, Setup,
-    SetupRequest, TaskId, UsageView, WorkerDiff, WorkerPage,
+    SetupRequest, TaskId, UpdateTarget, UpdatesView, UsageView, WorkerDiff, WorkerPage,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -664,6 +664,13 @@ pub enum Request {
     /// Lets Brigadier disable sleep with the lid closed without asking again: asks for an
     /// administrator password once (macOS). Answers the status after.
     SetUpLidClosed,
+    /// The newer versions of Brigadier and the agent CLIs the last check found; changes
+    /// arrive as `updatesChanged`.
+    GetUpdates,
+    /// Updates an agent CLI in the background; how it goes arrives as `updatesChanged`.
+    RunUpdate {
+        target: UpdateTarget,
+    },
     /// Providers (login, models, quota), raw sessions and replayable fixtures.
     GetProviders,
     /// Checks every provider (or only `provider`) again in the background; results arrive as
@@ -1069,6 +1076,10 @@ pub enum Response {
     SetUpLidClosed {
         status: KeepAwakeStatus,
     },
+    GetUpdates {
+        updates: UpdatesView,
+    },
+    RunUpdate,
     GetProviders {
         view: ProvidersView,
     },

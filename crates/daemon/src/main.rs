@@ -33,6 +33,7 @@ mod storage;
 mod supervisor;
 mod terminals;
 mod uninstall;
+mod updates;
 mod upgrade;
 
 use std::path::PathBuf;
@@ -341,6 +342,7 @@ async fn run(
     supervisor.spawn(idle::exit_when_idle(daemon.clone(), stopping.clone()));
     supervisor.spawn(storage::housekeeping(daemon.clone(), stopping.clone()));
     supervisor.spawn(registry::keep_current(daemon.clone(), stopping.clone()));
+    supervisor.spawn(updates::keep_current(daemon.clone(), stopping.clone()));
     supervisor.spawn(overnight_supervisor::keep_in_step(
         daemon.clone(),
         platform.paths().data_dir.clone(),

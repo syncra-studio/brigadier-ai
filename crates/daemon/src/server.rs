@@ -32,6 +32,7 @@ use crate::storage::Storage;
 use crate::supervisor::Supervisor;
 use crate::terminals::Terminals;
 use crate::uninstall::Uninstall;
+use crate::updates::Updates;
 use crate::upgrade;
 
 /// Frames buffered between a connection's reader task and its handler.
@@ -73,6 +74,8 @@ pub struct Daemon {
     pub storage: Storage,
     /// Uninstall Brigadier…'s plans and teardown.
     pub uninstall: Uninstall,
+    /// Newer versions of Brigadier and the agent CLIs, and the update running.
+    pub updates: Updates,
     next_connection: AtomicU64,
 }
 
@@ -109,6 +112,7 @@ impl Daemon {
             awake,
             storage: Storage::default(),
             uninstall: Uninstall::default(),
+            updates: Updates::default(),
             next_connection: AtomicU64::new(1),
         }
     }
@@ -1394,6 +1398,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             let (burst, run) = core.probe_burst(count, interval_ms)?;
             daemon.supervisor.spawn(run);
             Response::ProbeBurst { burst }
+        }
+        Request::GetUpdates => Response::GetUpdates {
+            updates: daemon.updates.view(),
+        },
+        Request::RunUpdate { target } => {
+            crate::updates::start(daemon, target).map_err(brigadier_core::Error::Invalid)?;
+            Response::RunUpdate
         }
         Request::GetProviders => Response::GetProviders {
             view: daemon.runtime.view().await,

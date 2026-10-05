@@ -15,6 +15,7 @@ import { applyBoardEvents, sideBoardIds, useBoard } from "@/state/board";
 import { applyBrainEvents } from "@/state/brain";
 import { applyEvents, useApp } from "@/state/store";
 import { startMenuBar } from "@/state/menuBar";
+import { applyUpdateEvents, loadUpdates } from "@/state/updates";
 import { applyUsageEvents } from "@/state/usage";
 import { onDictationDisconnected, onDictationUpdate } from "@/state/dictation";
 import { openUninstall } from "@/state/storage";
@@ -35,6 +36,7 @@ function flush() {
   applyActivityEvents(batch);
   applyBrainEvents(batch);
   applyUsageEvents(batch);
+  applyUpdateEvents(batch);
   noteFlush(started, batch.map(({ event }) => event.type));
   for (const { atMs, event } of batch) {
     markApplied(atMs, event.type === "probe" ? event.burstId : null);
@@ -54,7 +56,7 @@ async function resync() {
       shown.flatMap((id) => (threads[id] ? [[id, threads[id]] as const] : [])),
     ),
   });
-  await Promise.all([loadCatalog(), loadActivity()]);
+  await Promise.all([loadCatalog(), loadActivity(), loadUpdates()]);
   const log = useBoard.getState().orchestrator;
   if (log) void openOrchestratorLog(log.conversationId);
   await Promise.all(shown.map((id) => loadConversation(id)));

@@ -961,6 +961,65 @@ pub struct ProviderOverview {
     pub checked_at_ms: Option<i64>,
 }
 
+/// What can be updated: Brigadier itself or an agent CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum UpdateTarget {
+    App,
+    Claude,
+    Codex,
+}
+
+/// What the Update button does.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum UpdateAction {
+    /// Opens the release's download page.
+    Download { url: String },
+    /// Brigadier runs `command` (shown as written) with the login shell's environment.
+    Run { command: String },
+    /// Brigadier can't update this install; the user runs `command` themselves.
+    Manual { command: String },
+}
+
+/// How an update Brigadier runs is going.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum UpdateProgress {
+    Available,
+    Updating,
+    Updated,
+    Failed { error: String },
+}
+
+/// A newer version of Brigadier or an agent CLI that can be installed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateItem {
+    pub target: UpdateTarget,
+    /// The version installed (after an update, the one it moved to).
+    pub current: String,
+    pub latest: String,
+    pub action: UpdateAction,
+    pub progress: UpdateProgress,
+}
+
+/// The newer versions found by the last check, and any update running or just finished.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatesView {
+    pub items: Vec<UpdateItem>,
+    pub checked_at_ms: Option<i64>,
+}
+
 /// Brigadier's own use of a provider in one of its usage windows (since the window began).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1244,6 +1303,10 @@ pub enum DomainEvent {
     ProviderChecked {
         overview: ProviderOverview,
     },
+    /// What can be updated changed: a check finished, or an update started or ended.
+    UpdatesChanged {
+        updates: UpdatesView,
+    },
     /// A project's name, repositories or remembered choices changed (full snapshot).
     ProjectUpdated {
         project: Project,
@@ -1423,6 +1486,7 @@ impl DomainEvent {
             Self::CleanupCompleted { .. } => "cleanup.completed",
             Self::RankingsChanged => "rankings.changed",
             Self::ProviderChecked { .. } => "provider.checked",
+            Self::UpdatesChanged { .. } => "updates.changed",
             Self::ProjectUpdated { .. } => "project.updated",
             Self::ConversationSetUp { .. } => "conversation.setUp",
             Self::ConversationLifecycleChanged { .. } => "conversation.lifecycle",
@@ -1473,6 +1537,8 @@ pub mod streams {
     /// The cleanup ledger of every CLI session.
     pub const CLEANUP: &str = "cleanup";
     pub const PROVIDERS: &str = "providers";
+    /// Newer versions of Brigadier and the agent CLIs.
+    pub const UPDATES: &str = "updates";
 
     pub fn raw_session(id: &super::RawSessionId) -> String {
         format!("raw:{id}")

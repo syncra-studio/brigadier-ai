@@ -27,6 +27,7 @@ import type { Setup } from "./Setup";
 import type { SetupRequest } from "./SetupRequest";
 import type { TaskId } from "./TaskId";
 import type { UninstallApp } from "./UninstallApp";
+import type { UpdateTarget } from "./UpdateTarget";
 
 /**
  * Commands and queries.
@@ -82,7 +83,7 @@ before: number | null, limit: number, } | { "method": "readBlobText", hash: stri
 /**
  * Also stream daemon metrics once a second.
  */
-metrics: boolean, } | { "method": "setMetricsStreaming", enabled: boolean, } | { "method": "eventsSince", afterSeq: number, limit: number, } | { "method": "getDiagnostics" } | { "method": "probeBurst", count: number, intervalMs: number, } | { "method": "getKeepAwake" } | { "method": "setUpLidClosed" } | { "method": "getProviders" } | { "method": "refreshProviders", provider: ProviderKind | null, } | { "method": "getUsage", projectId: ProjectId | null, } | { "method": "previewRoutes", projectId: ProjectId | null, areas: Array<Area>, } | { "method": "checkRegistry" } | { "method": "refreshRankings" } | { "method": "getRankingsRefresh" } | { "method": "resetRankings" } | { "method": "debugInjectLimit", target: FaultTarget, provider: ProviderKind, 
+metrics: boolean, } | { "method": "setMetricsStreaming", enabled: boolean, } | { "method": "eventsSince", afterSeq: number, limit: number, } | { "method": "getDiagnostics" } | { "method": "probeBurst", count: number, intervalMs: number, } | { "method": "getKeepAwake" } | { "method": "setUpLidClosed" } | { "method": "getUpdates" } | { "method": "runUpdate", target: UpdateTarget, } | { "method": "getProviders" } | { "method": "refreshProviders", provider: ProviderKind | null, } | { "method": "getUsage", projectId: ProjectId | null, } | { "method": "previewRoutes", projectId: ProjectId | null, areas: Array<Area>, } | { "method": "checkRegistry" } | { "method": "refreshRankings" } | { "method": "getRankingsRefresh" } | { "method": "resetRankings" } | { "method": "debugInjectLimit", target: FaultTarget, provider: ProviderKind, 
 /**
  * The window that runs out (`five_hour`, `seven_day`, `primary`, …).
  */
