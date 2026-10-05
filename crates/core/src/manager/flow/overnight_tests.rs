@@ -276,6 +276,27 @@ async fn a_run_told_to_stop_after_phase_2_verifies_two_phases_and_stops() {
         assert_eq!(of(WorkerRole::Verifier), 1, "phase {}", phase.number);
         assert_eq!(of(WorkerRole::Lead), 1, "phase {}", phase.number);
         assert!(phase.verified_commit.is_some());
+        // The phase had no outline: its verifier's review still comes from the vendor other
+        // than the lead's, not the verifier's.
+        let in_phase = |role| {
+            board.tasks.values().find(|task| {
+                task.role == Some(role)
+                    && task.run.as_ref().and_then(|c| c.phase_id.as_deref())
+                        == Some(phase.id.as_str())
+            })
+        };
+        let lead = in_phase(WorkerRole::Lead).unwrap();
+        let verifier = in_phase(WorkerRole::Verifier).unwrap();
+        let review = board
+            .tasks
+            .values()
+            .find(|task| task.subject.as_ref() == Some(&verifier.id))
+            .expect("the verifier's review");
+        assert_ne!(
+            review.route.choice.provider, lead.route.choice.provider,
+            "phase {}",
+            phase.number
+        );
     }
     assert!(
         board

@@ -474,11 +474,18 @@ impl SessionManager {
     }
 
     /// Whose work a review of `task` checks: the phase's lead (the vendor that wrote the
-    /// phase), else `task` itself.
+    /// phase), else the lead a verifier checks (an overnight phase without an outline), else
+    /// `task` itself.
     pub(crate) async fn phase_author(&self, task: &Task) -> Task {
         if let Some((plan, index)) = self.phase_of(task).await
             && let Some(lead) = &plan.steps[index].task_id
             && lead != &task.id
+            && let Ok(lead) = self.task_by_id(&task.conversation_id, lead).await
+        {
+            return lead;
+        }
+        if task.role == Some(WorkerRole::Verifier)
+            && let Some(lead) = &task.subject
             && let Ok(lead) = self.task_by_id(&task.conversation_id, lead).await
         {
             return lead;
