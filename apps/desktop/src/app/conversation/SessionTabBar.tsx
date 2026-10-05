@@ -229,6 +229,8 @@ export function SessionTabBar({
         data-tauri-drag-region
         className="hide-scrollbar flex min-w-0 flex-1 scroll-px-1 items-center gap-0.5 overflow-x-auto"
         onKeyDown={(event) => {
+          // Alt+←/→ moved the tab itself (its drag handle's keys).
+          if (event.defaultPrevented || event.altKey) return;
           if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
           if (!(event.target instanceof HTMLElement) || event.target.getAttribute("role") !== "tab")
             return;
