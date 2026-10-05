@@ -2738,9 +2738,8 @@ impl SessionManager {
 
     /// What the worker wrote after its report, in the turn that reported: kept as an artifact
     /// of the report and sent to the orchestrator, when it is long enough to be findings or
-    /// the report points at it ("the findings are below"). While Brigadier lands the task's
-    /// change on its own, it is held with the task instead: its checks read it, and the
-    /// orchestrator gets it only if the change does not land. Answers the task as it is now.
+    /// the report points at it ("the findings are below"). A review's or check's is left
+    /// alone: whoever asked for it reads its report. Answers the task as it is now.
     async fn late_findings(&self, live: &Arc<TaskLive>, task: Task) -> Task {
         let message = live.state.lock().await.last_message.take();
         let (Some(message), Some(report)) = (message, task.report.as_ref()) else {

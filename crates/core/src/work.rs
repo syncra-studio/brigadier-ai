@@ -485,8 +485,8 @@ pub struct GateMember {
     pub avoid: Vec<ModelChoice>,
 }
 
-/// What a gate member does. The Phase 6 fusion panel adds an analyst that weighs the
-/// reviewers' findings (`SessionManager::panel_size` decides the panel).
+/// What a gate member does: the overnight run's whole-phase checks still use it, and stores
+/// from before the phase flow keep it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum GateRole {
