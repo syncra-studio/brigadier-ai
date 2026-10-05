@@ -198,7 +198,6 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
             "CmdOrCtrl+Shift+T",
         ),
         ("address", "Focus browser address", "CmdOrCtrl+L"),
-        ("find", "Find in page", "CmdOrCtrl+F"),
         ("full", "Toggle full view", "CmdOrCtrl+Shift+F"),
         ("previous", "Previous page or terminal", "CmdOrCtrl+Shift+["),
         ("next", "Next page or terminal", "CmdOrCtrl+Shift+]"),

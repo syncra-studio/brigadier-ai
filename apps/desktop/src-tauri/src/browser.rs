@@ -216,27 +216,7 @@ mod embedded {
         })
     }
 
-    pub fn go(id: &str, action: &str, value: Option<&str>) -> Result<(), IpcError> {
-        if action == "print" {
-            return with_webview(id, WebView::print);
-        }
-        if action == "clear" {
-            return with_webview(id, WebView::clear_all_browsing_data);
-        }
-        if action == "zoom" {
-            let scale = value
-                .and_then(|v| v.parse::<f64>().ok())
-                .filter(|v| v.is_finite() && (0.25..=3.0).contains(v))
-                .ok_or_else(|| failed("invalid page zoom"))?;
-            return with_webview(id, |view| view.zoom(scale));
-        }
-        if action == "find" {
-            let query = serde_json::to_string(&value.unwrap_or_default())
-                .map_err(|err| failed(err.to_string()))?;
-            return with_webview(id, |view| {
-                view.evaluate_script(&format!("window.find({query}, false, false, true)"))
-            });
-        }
+    pub fn go(id: &str, action: &str) -> Result<(), IpcError> {
         let script = match action {
             "back" => "history.back()",
             "forward" => "history.forward()",
@@ -283,7 +263,7 @@ mod embedded {
         Ok(())
     }
 
-    pub fn go(_id: &str, _action: &str, _value: Option<&str>) -> Result<(), IpcError> {
+    pub fn go(_id: &str, _action: &str) -> Result<(), IpcError> {
         Ok(())
     }
 
@@ -332,8 +312,8 @@ pub fn browser_place(id: String, bounds: Option<BrowserBounds>) -> Result<(), Ip
 
 /// Back, forward, reload or stop in the tab's page.
 #[tauri::command]
-pub fn browser_go(id: String, action: String, value: Option<String>) -> Result<(), IpcError> {
-    embedded::go(&id, &action, value.as_deref())
+pub fn browser_go(id: String, action: String) -> Result<(), IpcError> {
+    embedded::go(&id, &action)
 }
 
 /// Drops every tab's page (on the main thread): the app's own page started again.

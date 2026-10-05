@@ -3,6 +3,7 @@ import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
 import { type ITheme, Terminal } from "@xterm/xterm";
 import {
+  Check,
   ChevronDown,
   Plus,
   Terminal as TerminalIcon,
@@ -11,6 +12,15 @@ import {
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import { SidePanelContext, useReveal } from "@/app/conversation/SidePanel";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import {
   addTerminalSession,
@@ -95,6 +105,14 @@ export function TerminalPane({ conversationId }: { conversationId: string }) {
     [conversationId],
   );
   const active = data?.active;
+  const sessionName = (index: number) => {
+    const session = data?.sessions[index];
+    return session
+      ? `${session.title}${data.sessions.length > 1 ? ` ${index + 1}` : ""}`
+      : "Terminal";
+  };
+  const activeIndex =
+    data?.sessions.findIndex((session) => session.id === active) ?? -1;
   const close = useCallback(() => {
     if (!active) return;
     removeTerminalSession(conversationId, active);
@@ -226,21 +244,57 @@ export function TerminalPane({ conversationId }: { conversationId: string }) {
             aria-hidden
             className="size-icon-md text-toolbar-foreground shrink-0"
           />
-          <select
-            aria-label="Terminal session"
-            value={active ?? ""}
-            onChange={(event) =>
-              selectTerminalSession(conversationId, event.target.value)
-            }
-            className="bg-panel-tab shadow-panel-tab rounded-lg min-w-0 max-w-64 px-2 py-1 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            {data?.sessions.map((session, index) => (
-              <option key={session.id} value={session.id}>
-                {session.title}
-                {data.sessions.length > 1 ? ` ${index + 1}` : ""}
-              </option>
-            ))}
-          </select>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="Terminal session"
+                className="bg-panel-tab shadow-panel-tab hover:bg-toolbar-hover flex h-8 min-w-0 max-w-64 items-center gap-2 rounded-lg px-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <span className="truncate">{sessionName(activeIndex)}</span>
+                <ChevronDown
+                  aria-hidden
+                  className="size-icon-xs text-toolbar-foreground shrink-0"
+                />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              onCloseAutoFocus={(event) => {
+                event.preventDefault();
+                requestAnimationFrame(() => {
+                  const input = [
+                    ...(pane.current?.querySelectorAll<HTMLTextAreaElement>(
+                      ".xterm-helper-textarea",
+                    ) ?? []),
+                  ].find((element) => element.getClientRects().length > 0);
+                  input?.focus();
+                });
+              }}
+            >
+              <DropdownMenuRadioGroup
+                value={active ?? ""}
+                onValueChange={(id) =>
+                  selectTerminalSession(conversationId, id)
+                }
+              >
+                {data?.sessions.map((session, index) => (
+                  <DropdownMenuRadioItem
+                    key={session.id}
+                    value={session.id}
+                    indicator={<Check className="size-icon-md" />}
+                  >
+                    {sessionName(index)}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={newSession}>
+                <Plus />
+                New terminal
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <TitlebarTips>
             <TitlebarButton
               tooltip="Close terminal session"

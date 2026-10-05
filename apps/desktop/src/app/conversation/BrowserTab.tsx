@@ -8,8 +8,6 @@ import {
   Globe,
   Reload,
   Plus,
-  Search,
-  Minus,
   X,
 } from "@openai/apps-sdk-ui/components/Icon";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
@@ -35,9 +33,6 @@ import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button
 import { browserGo, browserPlace, openUrl } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
 import {
-  browserControls,
-  updateBrowserControls,
-  useBrowserControls,
   closeBrowserTab,
   dismissBlocked,
   newBrowserTab,
@@ -312,20 +307,6 @@ function BrowserPageView({
   const made = page !== undefined;
   const site = siteAddress(page?.url);
   const { state } = useContext(SidePanelContext);
-  const [finding, setFinding] = useState(false);
-  const [query, setQuery] = useState("");
-  const controls = useBrowserControls((store) => store.pages[conversationId]);
-  const { zoom, device, history } = controls ?? browserControls(conversationId);
-  const setZoom = (value: number) =>
-    updateBrowserControls(conversationId, { zoom: value });
-  const setDevice = (value: boolean) =>
-    updateBrowserControls(conversationId, { device: value });
-  const [showHistory, setShowHistory] = useState(false);
-  useEffect(() => {
-    if (made)
-      void browserGo(conversationId, "zoom", String(zoom / 100)).catch(failed);
-  }, [conversationId, made, zoom]);
-
   useEffect(() => {
     if (!initialUrl || made || !area.current) return;
     void openPage(conversationId, initialUrl, pageBounds(area.current)).catch(
@@ -389,11 +370,6 @@ function BrowserPageView({
     const onKeyDown = (event: KeyboardEvent) => {
       const command = mac ? event.metaKey : event.ctrlKey;
       if (!command || event.shiftKey || event.altKey) return;
-      if (event.code === "KeyF" && made) {
-        event.preventDefault();
-        setFinding(true);
-        return;
-      }
       if (event.code !== "KeyL") return;
       event.preventDefault();
       field.current?.focus();
@@ -401,7 +377,7 @@ function BrowserPageView({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mac, made]);
+  }, [mac]);
 
   const go = (text: string) => {
     const url = webAddress(text);
@@ -420,8 +396,8 @@ function BrowserPageView({
     if (!area.current) return;
     openPage(conversationId, url, pageBounds(area.current)).catch(failed);
   };
-  const act = (action: Parameters<typeof browserGo>[1], value?: string) => {
-    browserGo(conversationId, action, value).catch(failed);
+  const act = (action: Parameters<typeof browserGo>[1]) => {
+    browserGo(conversationId, action).catch(failed);
   };
 
   return (
@@ -549,67 +525,6 @@ function BrowserPageView({
             align="end"
             className="w-browser-menu rounded-browser-menu [&_[role=menuitem]]:h-browser-menu-item"
           >
-            <DropdownMenuItem
-              disabled={!made}
-              onSelect={() => setFinding(true)}
-            >
-              <Search />
-              Find in page
-            </DropdownMenuItem>
-            <DropdownMenuItem disabled={!made} onSelect={() => act("print")}>
-              Print
-            </DropdownMenuItem>
-            <div
-              role="group"
-              aria-label="Page zoom"
-              className="flex h-control-sm items-center gap-1 px-2 text-sm"
-            >
-              <span className="flex-1">Zoom</span>
-              <button
-                className="rounded-control px-1 hover:bg-toolbar-hover"
-                disabled={!made}
-                onClick={() => setZoom(100)}
-                aria-label="Reset page zoom"
-              >
-                {zoom}%
-              </button>
-              <TooltipIconButton
-                size="icon-xs"
-                tooltip="Zoom out"
-                disabled={!made || zoom <= 25}
-                onClick={() => setZoom(Math.max(25, zoom - 25))}
-              >
-                <Minus />
-              </TooltipIconButton>
-              <TooltipIconButton
-                size="icon-xs"
-                tooltip="Zoom in"
-                disabled={!made || zoom >= 300}
-                onClick={() => setZoom(Math.min(300, zoom + 25))}
-              >
-                <Plus />
-              </TooltipIconButton>
-            </div>
-            <DropdownMenuItem onSelect={() => setDevice(!device)}>
-              {device ? "Hide" : "Show"} device toolbar
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              disabled={!history.length}
-              onSelect={() => setShowHistory((old) => !old)}
-            >
-              History
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={!made}
-              onSelect={() => {
-                act("clear");
-                updateBrowserControls(conversationId, { history: [] });
-              }}
-            >
-              Clear browsing data
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
             <DropdownMenuItem disabled={!made} onSelect={() => act("reload")}>
               <Reload />
               Reload page
@@ -634,67 +549,6 @@ function BrowserPageView({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      {finding && (
-        <form
-          className="border-border flex items-center gap-2 border-b px-3 py-1"
-          onSubmit={(event) => {
-            event.preventDefault();
-            act("find", query);
-          }}
-        >
-          <input
-            aria-label="Find in page"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            ref={(input) => input?.focus()}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") setFinding(false);
-            }}
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none"
-          />
-          <button
-            type="submit"
-            className="rounded-control px-2 text-sm hover:bg-toolbar-hover"
-          >
-            Find next
-          </button>
-          <TooltipIconButton
-            size="icon-xs"
-            tooltip="Close find"
-            onClick={() => setFinding(false)}
-          >
-            <X />
-          </TooltipIconButton>
-        </form>
-      )}
-      {showHistory && (
-        <div className="border-border max-h-40 overflow-auto border-b p-2">
-          {history.map((url, index) => (
-            <button
-              key={`${url}-${index}`}
-              className="hover:bg-toolbar-hover block w-full truncate rounded-control px-2 py-1 text-start text-sm"
-              onClick={() => {
-                go(url);
-                setShowHistory(false);
-              }}
-            >
-              {url}
-            </button>
-          ))}
-        </div>
-      )}
-      {device && (
-        <div className="border-border flex items-center justify-center gap-2 border-b p-2 text-sm">
-          Mobile preview · 390px{" "}
-          <TooltipIconButton
-            size="icon-xs"
-            tooltip="Close device toolbar"
-            onClick={() => setDevice(false)}
-          >
-            <X />
-          </TooltipIconButton>
-        </div>
-      )}
       {page?.blocked && (
         <div
           role="status"
@@ -725,10 +579,7 @@ function BrowserPageView({
       <div
         ref={area}
         data-slot="browser-page"
-        className={cn(
-          "mx-auto flex min-h-0 w-full flex-1",
-          device && "max-w-browser-mobile",
-        )}
+        className="flex min-h-0 w-full flex-1"
       >
         {!made && (
           <p className="text-muted-foreground m-auto max-w-xs p-4 text-center text-sm">

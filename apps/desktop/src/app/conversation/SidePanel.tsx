@@ -412,7 +412,6 @@ export function useSidePanel(
       new: { code: "KeyT" },
       reopen: { code: "KeyT", shift: true },
       address: { code: "KeyL" },
-      find: { code: "KeyF" },
       full: { code: "KeyF", shift: true },
       close: { code: "KeyW" },
       previous: { code: "BracketLeft", shift: true },

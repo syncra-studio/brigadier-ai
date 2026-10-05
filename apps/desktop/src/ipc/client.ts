@@ -206,10 +206,9 @@ export function browserPlace(id: string, bounds: BrowserBounds | null): Promise<
 /** Back, forward, reload or stop in the Browser tab's page. */
 export function browserGo(
   id: string,
-  action: "back" | "forward" | "reload" | "stop" | "find" | "print" | "zoom" | "clear",
-  value?: string,
+  action: "back" | "forward" | "reload" | "stop",
 ): Promise<void> {
-  return invoke("browser_go", { id, action, value: value ?? null });
+  return invoke("browser_go", { id, action });
 }
 
 /** Drops the Browser tab's page and all it stored. */
