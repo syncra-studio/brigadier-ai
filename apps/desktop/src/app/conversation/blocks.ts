@@ -1,3 +1,4 @@
+import { toolHasOwnResult } from "@/app/conversation/toolWords";
 import type { CardType } from "@/app/conversation/cards/CardBody";
 import { decisionWords } from "@/app/conversation/rowWords";
 import type {
@@ -283,7 +284,8 @@ export function buildBlocks(
   }
   for (const step of board.orchestratorSteps) {
     // A phase's lead reads and messages its workers all night: the rows say what came of it.
-    if (ON_TASK_ROW.has(step.kind.type) || isRunRequest(step.requestId)) continue;
+    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "tool")) continue;
+    if (step.kind.type === "tool" && toolHasOwnResult(step.kind)) continue;
     placed.push({
       kind: "orchestrator",
       position: step.position,

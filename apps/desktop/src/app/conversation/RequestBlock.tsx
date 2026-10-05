@@ -359,6 +359,9 @@ const ActivityRow: FC<{ requestIds: string[]; thinking: boolean }> = ({ requestI
       board.runRequest !== null &&
       requestIds.includes(board.runRequest) &&
       (board.run === "running" || board.run === "starting");
+    // The running call already has its own action row.
+    if (turn && board.orchestratorSteps.some((step) => step.requestId === board.runRequest
+      && step.kind.type === "tool" && step.kind.status === "inProgress")) return null;
     // Streaming text shows itself.
     return turn ? board.doing || (board.streaming?.text ? null : "Thinking") : null;
   });

@@ -2006,8 +2006,8 @@ impl SessionManager {
         })
     }
 
-    /// Stores the conversation CLI's events: streaming text into the transcript, the rest
-    /// into `orch:<id>` for the Inspector.
+    /// Stores the conversation CLI's text, reasoning and tool calls in the thread,
+    /// and keeps the complete provider events in `orch:<id>` for the Inspector.
     async fn pump_conversation(
         self: Arc<Self>,
         conv: Arc<ConvLive>,
@@ -2424,12 +2424,45 @@ impl SessionManager {
                 self.notice(&conv.id, *level, message).await;
             }
             ProviderEvent::ToolCall {
+                item_id,
                 name,
                 input,
-                status: ItemStatus::Completed,
+                status,
                 ..
-            } if conv.kind == ConversationKind::Chat => {
-                if let Some(kind) = web_step(name, input.as_deref()) {
+            } => {
+                let name = name.rsplit("__").next().unwrap_or(name);
+                let name = name.rsplit('.').next().unwrap_or(name);
+                let args: serde_json::Value = input
+                    .as_deref()
+                    .and_then(|input| serde_json::from_str(input).ok())
+                    .unwrap_or_default();
+                let detail = [
+                    "query",
+                    "pattern",
+                    "file_path",
+                    "path",
+                    "url",
+                    "title",
+                    "task",
+                ]
+                .into_iter()
+                .find_map(|key| args.get(key).and_then(serde_json::Value::as_str))
+                .map(|text| text.chars().take(240).collect());
+                self.orchestrator_step(
+                    &conv.id,
+                    OrchestratorStepKind::Tool {
+                        item_id: item_id.clone(),
+                        name: name.to_owned(),
+                        detail,
+                        status: *status,
+                        through_position: 0,
+                    },
+                )
+                .await;
+                if conv.kind == ConversationKind::Chat
+                    && *status == ItemStatus::Completed
+                    && let Some(kind) = web_step(name, input.as_deref())
+                {
                     self.orchestrator_step(&conv.id, kind).await;
                 }
             }

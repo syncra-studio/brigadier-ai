@@ -1091,6 +1091,16 @@ pub struct WorkerStep {
     rename_all_fields = "camelCase"
 )]
 pub enum OrchestratorStepKind {
+    /// A provider tool call, visible as soon as its input starts streaming.
+    Tool {
+        item_id: String,
+        name: String,
+        detail: Option<String>,
+        status: brigadier_providers::ItemStatus,
+        // Latest folded update: concurrent view replay must not regress this call.
+        #[serde(default)]
+        through_position: i64,
+    },
     /// "Sent message to {worker}".
     Messaged { task_id: TaskId },
     /// "Read {worker}'s report".

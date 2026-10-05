@@ -175,6 +175,21 @@ impl Board {
             }
             DomainEvent::OrchestratorStepped { step } => {
                 let mut step = step.clone();
+                if let crate::work::OrchestratorStepKind::Tool {
+                    item_id,
+                    through_position,
+                    ..
+                } = &mut step.kind
+                {
+                    *through_position = stream_seq;
+                    if let Some(known) = self.orchestrator_steps.iter_mut().find(|known| {
+                        matches!(&known.kind, crate::work::OrchestratorStepKind::Tool { item_id: id, .. } if id == item_id)
+                    }) {
+                        // Input and result updates stay where the call first appeared.
+                        known.kind = step.kind;
+                        return;
+                    }
+                }
                 step.position = stream_seq;
                 self.orchestrator_steps.push(step);
             }

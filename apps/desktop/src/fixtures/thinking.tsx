@@ -29,3 +29,23 @@ useBoard.setState(({ board }) => {
     transcripts: { ...board.transcripts, t2: { ...transcript, entries: raw } } } };
 });
 
+const tool = (itemId: string, position: number, name: string, status: "inProgress" | "completed" | "failed", detail: string | null) => ({
+  requestId: "r2", position, atMs: now - 30000,
+  kind: { type: "tool" as const, itemId, name, status, detail, throughPosition: position },
+});
+
+// Tool-only opening moments, including a failed unqualified call and a streaming delegation.
+if (query.get("tools") === "1") {
+  useBoard.setState(({ board }) => {
+    if (!board) return {};
+    return { board: { ...board, thinking: [],
+      tasks: Object.fromEntries(Object.entries(board.tasks).filter(([, task]) => task.requestId !== "r2")),
+      orchestratorSteps: [
+        ...board.orchestratorSteps.filter((step) => step.requestId !== "r2"),
+        tool("first-brain", 11.2, "query_brain", "failed", null),
+        tool("brain", 11.4, "query_brain", "completed", "composer attachments and paste handling"),
+        tool("delegate", 11.6, "delegate_task", "inProgress", null),
+      ],
+    } };
+  });
+}

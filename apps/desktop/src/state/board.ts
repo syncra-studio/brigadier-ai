@@ -474,13 +474,19 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return board.workerSteps.some((step) => step.position === streamSeq)
         ? board
         : { ...board, workerSteps: [...board.workerSteps, { ...event.step, position: streamSeq }] };
-    case "orchestratorStepped":
-      return board.orchestratorSteps.some((step) => step.position === streamSeq)
-        ? board
-        : {
-            ...board,
-            orchestratorSteps: [...board.orchestratorSteps, { ...event.step, position: streamSeq }],
-          };
+    case "orchestratorStepped": {
+      const kind = event.step.kind;
+      const known = kind.type === "tool"
+        ? board.orchestratorSteps.find((step) => step.kind.type === "tool" && step.kind.itemId === kind.itemId)
+        : board.orchestratorSteps.find((step) => step.position === streamSeq);
+      if (known && (known.kind.type !== "tool" || streamSeq <= known.kind.throughPosition)) return board;
+      const step = known
+        ? { ...known, kind: { ...kind, throughPosition: streamSeq } }
+        : { ...event.step, position: streamSeq, kind: kind.type === "tool" ? { ...kind, throughPosition: streamSeq } : kind };
+      return { ...board, orchestratorSteps: known
+        ? board.orchestratorSteps.map((item) => item === known ? step : item)
+        : [...board.orchestratorSteps, step] };
+    }
     case "machineStepped":
       return board.machineSteps.some((step) => step.position === streamSeq)
         ? board

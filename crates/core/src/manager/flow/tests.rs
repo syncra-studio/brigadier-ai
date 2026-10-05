@@ -1544,3 +1544,79 @@ async fn a_phase_with_only_litter_ends_its_lead_with_its_verifier() {
     assert!(!files.contains("debug.log"), "{files}");
     flow.stop().await;
 }
+
+#[tokio::test]
+async fn orchestrator_tools_are_visible_while_running_and_keep_their_first_position() {
+    use crate::work::OrchestratorStepKind;
+    use brigadier_providers::{ItemStatus, ProviderEvent};
+    let release = Arc::new(tokio::sync::Notify::new());
+    let gate = release.clone();
+    let mut flow = Flow::start(
+        "live-tools",
+        Options::default(),
+        script(move |turn| {
+            let gate = gate.clone();
+            async move {
+                turn.events
+                    .send(ProviderEvent::ToolCall {
+                        item_id: "brain-call".into(),
+                        name: "mcp__brigadier__query_brain".into(),
+                        input: None,
+                        status: ItemStatus::InProgress,
+                        output: None,
+                    })
+                    .await
+                    .unwrap();
+                gate.notified().await;
+                turn.events
+                    .send(ProviderEvent::ToolCall {
+                        item_id: "brain-call".into(),
+                        name: "mcp__brigadier__query_brain".into(),
+                        input: Some(json!({"query":"composer attachments"}).to_string()),
+                        status: ItemStatus::Completed,
+                        output: Some("Found the composer".into()),
+                    })
+                    .await
+                    .unwrap();
+                Reply::text("The composer handles attachments.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Find the composer").await;
+    let running = flow
+        .until("a running tool in the thread", |board| {
+            board.orchestrator_steps.iter().any(|step| {
+                matches!(
+                    step.kind,
+                    OrchestratorStepKind::Tool {
+                        status: ItemStatus::InProgress,
+                        ..
+                    }
+                )
+            })
+        })
+        .await;
+    let first = &running.orchestrator_steps[0];
+    assert!(first.request_id.is_some());
+    assert!(
+        running
+            .requests
+            .values()
+            .any(|request| request.state == RequestState::Working)
+    );
+    release.notify_one();
+    let finished = flow.settled().await;
+    assert_eq!(finished.orchestrator_steps.len(), 1);
+    let last = &finished.orchestrator_steps[0];
+    assert_eq!(last.position, first.position);
+    assert_eq!(last.at_ms, first.at_ms);
+    assert!(
+        matches!(&last.kind, OrchestratorStepKind::Tool { name, detail: Some(detail), status: ItemStatus::Completed, through_position, .. }
+        if name == "query_brain" && detail == "composer attachments" && *through_position > last.position)
+    );
+    flow.restart().await;
+    let restored = flow.board().await;
+    assert_eq!(restored.orchestrator_steps, finished.orchestrator_steps);
+    flow.stop().await;
+}

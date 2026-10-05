@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { blockSequence, buildBlocks } from "@/app/conversation/blocks";
 import type { ConversationView, DomainEvent, EventEnvelope, Message } from "@/ipc/generated";
+import { toolHasOwnResult, toolWords } from "@/app/conversation/toolWords";
 import { replayThinking } from "@/replay/thinking";
 import { applyToBoard, boardFromView, emptyBoard } from "@/state/board";
 
@@ -51,4 +52,61 @@ test("a snapshot read replays reasoning deltas once and completion replaces stre
   assert.ok(rows.every((row) => row.kind !== "thinking" || !row.live));
   // Views created before reasoning was added still load.
   assert.deepEqual(boardFromView({ ...view, thinking: undefined } as unknown as ConversationView, null, []).thinking, []);
+});
+
+const tool = (itemId: string, name: string, status: "inProgress" | "completed" | "failed", atMs: number, detail: string | null = null): DomainEvent => ({
+  type: "orchestratorStepped", step: { requestId: "request", atMs, position: 0,
+    kind: { type: "tool", itemId, name, detail, status, throughPosition: 0 } },
+});
+
+test("tool-only Claude turns stay visible through the recorded initial gap", () => {
+  // Phase E offsets from the user's first message. No reasoning is needed for these rows.
+  const calls = [
+    envelope(3, 3719, tool("wrong-name", "query_brain", "inProgress", 3719)),
+    envelope(4, 3721, tool("wrong-name", "query_brain", "failed", 3721)),
+    envelope(5, 5093, tool("brain", "query_brain", "inProgress", 5093)),
+    envelope(6, 5113, tool("brain", "query_brain", "completed", 5113, "composer attachments")),
+    envelope(7, 31396, tool("delegate", "delegate_task", "inProgress", 31396)),
+  ];
+  const frames = replayThinking(conversationId, [...events.slice(0, 2), ...calls], 0, 32000);
+  assert.equal(frames.filter((frame) => frame.onlyThinking).length, 4);
+  assert.ok(frames.filter((frame) => frame.atMs >= 4000).every((frame) => !frame.onlyThinking));
+  assert.ok(frames.every((frame) => frame.liveText === null));
+});
+
+test("tool updates and concurrent snapshot replay keep one row at its first position", () => {
+  const calls = [envelope(3, 3000, tool("brain", "query_brain", "inProgress", 3000)),
+    envelope(4, 4000, tool("brain", "query_brain", "completed", 4000, "composer"))];
+  const board = [...events.slice(0, 2), ...calls].reduce(applyToBoard, emptyBoard(conversationId));
+  assert.equal(board.orchestratorSteps.length, 1);
+  const step = board.orchestratorSteps[0]!;
+  assert.equal(step.position, 3);
+  assert.equal(step.atMs, 3000);
+  assert.equal(step.kind.type, "tool");
+  assert.equal(applyToBoard(board, calls[0]!), board);
+  assert.equal(applyToBoard(board, calls[1]!), board);
+  const view = { conversation: { id: conversationId }, tasks: [], approvals: [], questions: [], plans: [],
+    overnight: [], requests: Object.values(board.requests), workerSteps: [], orchestratorSteps: board.orchestratorSteps,
+    machineSteps: [], decisions: [], waiting: [], compactions: [], ratings: {}, queue: board.queue,
+    run: "running", runRequest: "request", head: message.id, context: null, streaming: null,
+    thinking: [], notices: [], memories: [] } as unknown as ConversationView;
+  assert.deepEqual(boardFromView(view, null, calls).orchestratorSteps, board.orchestratorSteps);
+});
+
+test("delegation is visible while its input streams and its successful result uses the worker row", () => {
+  const call = envelope(3, 3000, tool("delegate", "delegate_task", "inProgress", 3000));
+  let board = [...events.slice(0, 2), call].reduce(applyToBoard, emptyBoard(conversationId));
+  let block = buildBlocks([message], {}, false, board, [])[0]!;
+  assert.equal(block.orchestratorSteps.length, 1);
+  board = applyToBoard(board, envelope(4, 4000, tool("delegate", "delegate_task", "completed", 4000)));
+  block = buildBlocks([message], {}, false, board, [])[0]!;
+  assert.equal(block.orchestratorSteps.length, 0);
+  board = applyToBoard(board, envelope(5, 5000, tool("delegate", "delegate_task", "failed", 5000)));
+  block = buildBlocks([message], {}, false, board, [])[0]!;
+  assert.equal(block.orchestratorSteps.length, 1);
+  const kind = board.orchestratorSteps[0]!.kind;
+  assert.ok(kind.type === "tool");
+  assert.equal(toolWords(kind), "Creating a worker — failed");
+  assert.equal(toolHasOwnResult(kind), false);
+  assert.equal(toolWords({ ...kind, name: "Read", detail: "README.md", status: "completed" }), "Read a file: README.md");
 });

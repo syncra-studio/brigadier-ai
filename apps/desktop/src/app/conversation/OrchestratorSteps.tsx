@@ -14,6 +14,7 @@ import {
 import { type FC, type ReactNode, useContext } from "react";
 
 import type { BlockOrchestratorStep, DecidedStep, MachineWords } from "@/app/conversation/blocks";
+import { toolWords } from "@/app/conversation/toolWords";
 import { machineWords } from "@/app/conversation/rowWords";
 import { AgentsPanelContext, useWorkerName, WorkerGlyph, WorkerLine } from "@/app/conversation/WorkerChip";
 import { WebSearch } from "@/components/assistant-ui/elements/web-search";
@@ -26,6 +27,7 @@ import { useApp } from "@/state/store";
 type Kind = BlockOrchestratorStep["kind"]["type"];
 
 const ICONS: Record<Kind, FC<{ className?: string }>> = {
+  tool: Book,
   messaged: Chat,
   readReport: Book,
   readArtifact: Book,
@@ -42,6 +44,7 @@ const ICONS: Record<Kind, FC<{ className?: string }>> = {
 
 /** How a run of the thread's work sums it up ("Created a worker, answered a worker"). */
 export const PLURALS: Record<Kind | "worker", [one: string, many: string]> = {
+  tool: ["used a tool", "used tools"],
   messaged: ["messaged a worker", "messaged workers"],
   readReport: ["read a report", "read reports"],
   readArtifact: ["read a file", "read files"],
@@ -128,6 +131,8 @@ function firstLine(text: string): string {
 /** A step's line; a worker it names opens its thread. */
 function label(kind: OrchestratorStepKind, spec: string | null): ReactNode {
   switch (kind.type) {
+    case "tool":
+      return <span className={cn("min-w-0 truncate", kind.status === "inProgress" && "shimmer")}>{toolWords(kind)}</span>;
     case "messaged":
       return (
         <>
