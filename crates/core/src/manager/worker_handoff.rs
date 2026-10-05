@@ -44,13 +44,16 @@ fn wrap_up_prompt(tokens: i64) -> String {
     format!(
         "[Brigadier] Your context is now about {}k tokens, so Brigadier will continue this task in \
 a fresh session of the same model, in the same worktree, with your full transcript kept on disk. \
-If the task is done apart from its report, call submit_report now as usual. Otherwise finish the \
-step you are in, but don't start another command or edit, and end your turn with a handoff note \
-for the fresh session instead of a report. Write it in plain text under these headings: Goal and \
-state; Decisions made (each with its reason); Commitments to the orchestrator; Done and verified; \
-Traps learned (commands that fail and why, wrong turns, versions that matter); How to verify (the \
-exact commands and what passing looks like); Next steps. Include anything you found or ruled out \
-that isn't in the code. At most about 800 words. Don't call submit_report for this.",
+If the task is done apart from its report, call submit_report now as usual. Otherwise stop \
+starting new work: finish only the step you are in, commit the finished steps (not broken work), \
+and end your turn with a handoff note for the fresh session instead of a report, written so that \
+someone with no memory of this session can carry on. Write it in plain text under these \
+headings: Goal and where it stands; Done (with commit hashes); In progress (exact files and \
+state, and anything uncommitted); Next steps (ordered and concrete); Decisions and approvals \
+already given (including the orchestrator's answers and go-aheads, so they aren't asked again); \
+Gotchas learned (versions, commands that work, traps); How to verify (the exact commands and \
+what passing looks like). Include anything you found or ruled out that isn't in the code. At \
+most about 800 words. Don't call submit_report for this.",
         tokens / 1_000
     )
 }
@@ -58,9 +61,17 @@ that isn't in the code. At most about 800 words. Don't call submit_report for th
 impl SessionManager {
     /// A worker reported its context size: past the hand-off size mid-turn, it is asked to wrap
     /// up with a handoff note.
-    pub(crate) async fn worker_context(&self, live: &Arc<TaskLive>, cli: &Arc<Cli>, tokens: i64) {
-        let start = live.note_context(tokens).await;
-        if !self.worker_handoff_due(live, tokens, Some(start)).await || !live.ask_handoff().await {
+    pub(crate) async fn worker_context(
+        &self,
+        live: &Arc<TaskLive>,
+        cli: &Arc<Cli>,
+        tokens: i64,
+        window: Option<i64>,
+    ) {
+        let start = live.note_context(tokens, window).await;
+        if !self.worker_handoff_due(tokens, Some(start), live.window().await)
+            || !live.ask_handoff().await
+        {
             return;
         }
         tracing::info!(task = %live.id, tokens, "asking the worker to wrap up for a hand-off");
@@ -91,29 +102,14 @@ impl SessionManager {
 
     /// Whether the worker's session, at `tokens` and started at `start`, is handed over now
     /// (see [`knowledge::worker_handoff_due`]).
-    pub(crate) async fn worker_handoff_due(
+    /// `window` is its model's context window, when known.
+    pub(crate) fn worker_handoff_due(
         &self,
-        live: &Arc<TaskLive>,
         tokens: i64,
         start: Option<i64>,
+        window: Option<i64>,
     ) -> bool {
-        let at = knowledge::worker_handoff_tokens();
-        if !knowledge::worker_handoff_due(tokens, start, at, 0) {
-            return false;
-        }
-        let handovers = match live.handovers() {
-            Some(count) => count,
-            None => {
-                let count = self.count_handovers(live).await;
-                live.set_handovers(Some(count));
-                count
-            }
-        };
-        let due = knowledge::worker_handoff_due(tokens, start, at, handovers);
-        if !due {
-            tracing::debug!(task = %live.id, tokens, handovers, "no more hand-overs this attempt");
-        }
-        due
+        knowledge::worker_handoff_due(tokens, start, knowledge::worker_handoff_tokens(window))
     }
 
     /// The worker's context is past the hand-off size (after a restart, from its recorded
@@ -124,7 +120,7 @@ impl SessionManager {
             (None, _) => self.last_worker_context(id).await,
         };
         match tokens {
-            Some(tokens) => self.worker_handoff_due(live, tokens, start).await,
+            Some(tokens) => self.worker_handoff_due(tokens, start, live.window().await),
             None => false,
         }
     }
@@ -157,49 +153,6 @@ impl SessionManager {
             )
             .collect();
         session_sizes(&events, history_complete)
-    }
-
-    /// Hand-overs the task's current attempt made, from its recorded events.
-    async fn count_handovers(&self, live: &Arc<TaskLive>) -> u32 {
-        let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await else {
-            return 0;
-        };
-        let since = task
-            .attempts
-            .last()
-            .map_or(0, |attempt| attempt.started_at_ms);
-        let mut events: Vec<(i64, ProviderEvent)> = Vec::new();
-        let mut before = None;
-        loop {
-            let page = self
-                .core
-                .store()
-                .read_stream(
-                    streams::task(&live.id),
-                    StreamPage {
-                        before,
-                        kinds: vec!["worker.event".into()],
-                        limit: EVENTS_PAGE,
-                    },
-                )
-                .await
-                .unwrap_or_default();
-            let Some(oldest) = page.last() else {
-                break;
-            };
-            before = Some(oldest.stream_seq);
-            let full = page.len() == EVENTS_PAGE as usize;
-            events.extend(page.iter().filter_map(|stored| {
-                match serde_json::from_str::<DomainEvent>(stored.payload.get()) {
-                    Ok(DomainEvent::WorkerEvent { event, .. }) => Some((stored.at_ms, event)),
-                    _ => None,
-                }
-            }));
-            if !full || oldest.at_ms < since {
-                break;
-            }
-        }
-        handovers_since(&events, since)
     }
 
     /// Continues `task` in a fresh session of the same model: closes its CLI (between turns,
@@ -339,7 +292,6 @@ impl SessionManager {
             },
         )
         .await;
-        live.set_handovers(live.handovers().map(|count| count + 1));
         tracing::info!(task = %task.id, ?tokens, ?why, with_note = note.is_some(), "worker handed over to a fresh session");
         let workspace = task
             .workspace
@@ -612,20 +564,6 @@ fn handover_text(
     text
 }
 
-/// The hand-overs among `events` (each with when it was recorded) since `since_ms`.
-fn handovers_since(events: &[(i64, ProviderEvent)], since_ms: i64) -> u32 {
-    let count = events
-        .iter()
-        .filter(|(at_ms, event)| *at_ms >= since_ms && is_handover(event))
-        .count();
-    u32::try_from(count).unwrap_or(u32::MAX)
-}
-
-/// Whether `event` is the notice of a hand-over.
-fn is_handover(event: &ProviderEvent) -> bool {
-    matches!(event, ProviderEvent::Notice { message, .. } if message.starts_with(HANDED_OVER))
-}
-
 /// The last context size of the latest CLI session in `events` (newest first), and its first:
 /// the session may have been resumed, which starts it again under the same id. Without any
 /// session start in `events` (a long session), only the last size is known. A start under the
@@ -722,12 +660,7 @@ mod tests {
         let (last, first) = session_sizes(&events, false);
         assert_eq!((last, first), (Some(115_000), None));
         // Use the plain 100k threshold, not the resume's 110k + 50k guard.
-        assert!(knowledge::worker_handoff_due(
-            last.unwrap(),
-            first,
-            100_000,
-            0
-        ));
+        assert!(knowledge::worker_handoff_due(last.unwrap(), first, 100_000));
     }
 
     #[test]
@@ -749,31 +682,5 @@ mod tests {
             level: NoticeLevel::Info,
             message,
         }
-    }
-
-    #[test]
-    fn the_cap_holds_after_a_restart() {
-        // The attempt started at 1_000: one hand-over before it (an earlier attempt), five
-        // in it. A restarted daemon counts them again from the events and hands over no more.
-        let handed = |at: i64| (at, notice(format!("{HANDED_OVER}; the hand-off is in /x.")));
-        let mut events = vec![handed(500), (900, size(30_000))];
-        events.extend((1..=5).map(|n| handed(1_000 + n)));
-        events.push((2_000, notice("Context at about 40k tokens".into())));
-        let count = handovers_since(&events, 1_000);
-        assert_eq!(count, knowledge::WORKER_HANDOFFS_MAX);
-        assert!(!knowledge::worker_handoff_due(
-            900_000,
-            Some(30_000),
-            160_000,
-            count
-        ));
-    }
-
-    #[test]
-    fn only_hand_over_notices_count() {
-        assert!(is_handover(&notice(format!(
-            "{HANDED_OVER} at about 40k tokens; the hand-off is in /x."
-        ))));
-        assert!(!is_handover(&notice("Context at about 40k tokens".into())));
     }
 }

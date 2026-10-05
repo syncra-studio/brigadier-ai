@@ -45,7 +45,13 @@ pub(crate) struct Turn {
     pub earlier: u32,
     grant: String,
     host: Arc<SessionManager>,
+    events: mpsc::Sender<ProviderEvent>,
+    answers: Answers,
 }
+
+/// The approvals a scripted CLI asked for and waits on, by request id.
+type Answers =
+    Arc<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<ApprovalDecision>>>>;
 
 /// What a scripted turn ends with.
 #[derive(Default)]
@@ -85,6 +91,42 @@ impl Turn {
     pub async fn call(&self, name: &str, args: Value) -> ToolReply {
         let call = tool_call(name, args, self.is_orchestrator());
         ToolHost::call(&*self.host, &self.grant, call).await
+    }
+
+    /// Asks for approval to run `command` outside the sandbox, as a CLI would, and waits for
+    /// the answer (`None`: none came in time).
+    pub async fn ask_approval(&self, command: &str, grant: &str) -> Option<ApprovalDecision> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.answers.lock().unwrap().insert(id.clone(), tx);
+        let request = brigadier_providers::ApprovalRequest {
+            id,
+            kind: brigadier_providers::model::ApprovalKind::Command,
+            tool: "Bash".into(),
+            command: Some(command.into()),
+            cwd: Some(self.cwd.display().to_string()),
+            paths: Vec::new(),
+            reason: Some("It needs the network.".into()),
+            escalation: true,
+            input: None,
+            grant: Some(grant.into()),
+        };
+        self.events
+            .send(ProviderEvent::ApprovalRequested { request })
+            .await
+            .ok()?;
+        tokio::time::timeout(PATIENCE, rx).await.ok()?.ok()
+    }
+
+    /// Reports the session's context size mid-turn, as a CLI does after each model call.
+    pub async fn report_context(&self, tokens: i64) {
+        let _ = self
+            .events
+            .send(ProviderEvent::ContextSize {
+                used_tokens: tokens,
+                window_tokens: Some(1_000_000),
+            })
+            .await;
     }
 
     /// Runs git in the session's folder.
@@ -170,9 +212,10 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
         .expect("git runs");
     assert!(
         output.status.success(),
-        "git {args:?} in {}: {}",
+        "git {args:?} in {}: {}{}",
         dir.display(),
-        String::from_utf8_lossy(&output.stderr)
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
     );
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
@@ -288,6 +331,8 @@ impl Provider for FakeCli {
                 host: self.host.clone(),
                 events: Mutex::new(Some(tx)),
                 turns: std::sync::atomic::AtomicU32::new(0),
+                answers: Answers::default(),
+                running: Arc::default(),
             });
             Ok(Started { session, events })
         })
@@ -325,6 +370,9 @@ struct FakeSession {
     host: Arc<OnceLock<Weak<SessionManager>>>,
     events: Mutex<Option<mpsc::Sender<ProviderEvent>>>,
     turns: std::sync::atomic::AtomicU32,
+    answers: Answers,
+    /// A turn is running: a steer joins it rather than starting another.
+    running: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl FakeSession {
@@ -369,8 +417,12 @@ impl ProviderSession for FakeSession {
                 earlier,
                 grant: self.grant.clone(),
                 host,
+                events: tx.clone(),
+                answers: self.answers.clone(),
             };
             let script = self.script.clone();
+            let running = self.running.clone();
+            running.store(true, std::sync::atomic::Ordering::SeqCst);
             tokio::spawn(async move {
                 let _ = tx.send(ProviderEvent::TurnStarted { turn_id: None }).await;
                 let reply = script(turn).await;
@@ -391,6 +443,7 @@ impl ProviderSession for FakeSession {
                         })
                         .await;
                 }
+                running.store(false, std::sync::atomic::Ordering::SeqCst);
                 let _ = tx
                     .send(ProviderEvent::TurnCompleted {
                         turn_id: None,
@@ -405,6 +458,10 @@ impl ProviderSession for FakeSession {
     }
 
     fn steer(&self, input: TurnInput) -> BoxFuture<'_, brigadier_providers::Result<()>> {
+        // A script's turn has already decided its reply: a steer into it changes nothing.
+        if self.running.load(std::sync::atomic::Ordering::SeqCst) {
+            return Box::pin(async { Ok(()) });
+        }
         self.send(input)
     }
 
@@ -414,9 +471,12 @@ impl ProviderSession for FakeSession {
 
     fn answer(
         &self,
-        _approval_id: String,
-        _decision: ApprovalDecision,
+        approval_id: String,
+        decision: ApprovalDecision,
     ) -> BoxFuture<'_, brigadier_providers::Result<()>> {
+        if let Some(waiter) = self.answers.lock().unwrap().remove(&approval_id) {
+            let _ = waiter.send(decision);
+        }
         Box::pin(async { Ok(()) })
     }
 

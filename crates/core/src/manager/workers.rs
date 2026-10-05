@@ -126,6 +126,8 @@ struct TaskLiveState {
     transient: u32,
     /// The worker's latest context size, in tokens.
     context: Option<i64>,
+    /// Its model's context window, in tokens, when the CLI said.
+    window: Option<i64>,
     /// The CLI session's first context size, in tokens (a fresh session starts with its
     /// hand-off).
     session_start: Option<i64>,
@@ -184,8 +186,6 @@ pub(crate) struct TaskLive {
     pub(crate) reroute: tokio::sync::Mutex<()>,
     /// Counts the quota-wait timers set for the task; only the newest one retries.
     wait_timer: std::sync::atomic::AtomicU64,
-    /// Hand-overs the current attempt made, once counted from its recorded events.
-    handovers: std::sync::Mutex<Option<u32>>,
     /// A stall watchdog action on the worker is under way: the next rounds leave it be.
     pub(crate) watchdog_busy: std::sync::atomic::AtomicBool,
     /// Versions the task's reports before their Brain writes are spawned, so late findings
@@ -225,10 +225,18 @@ impl TaskLive {
     }
 
     /// Notes the worker's context size; answers the CLI session's first one.
-    pub(crate) async fn note_context(&self, tokens: i64) -> i64 {
+    pub(crate) async fn note_context(&self, tokens: i64, window: Option<i64>) -> i64 {
         let mut state = self.state.lock().await;
         state.context = Some(tokens);
+        if window.is_some() {
+            state.window = window;
+        }
         *state.session_start.get_or_insert(tokens)
+    }
+
+    /// Its model's context window, when its CLI said.
+    pub(crate) async fn window(&self) -> Option<i64> {
+        self.state.lock().await.window
     }
 
     /// Whether to ask the worker, now, to end its turn with a handoff note: once per turn,
@@ -256,16 +264,6 @@ impl TaskLive {
     /// The CLI session now running (or last run) for the task.
     pub(crate) async fn generation(&self) -> u64 {
         self.state.lock().await.generation
-    }
-
-    /// Hand-overs the current attempt made, if counted yet.
-    pub(crate) fn handovers(&self) -> Option<u32> {
-        *self.handovers.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// Sets the current attempt's hand-over count (`None`: count it again from the events).
-    pub(crate) fn set_handovers(&self, count: Option<u32>) {
-        *self.handovers.lock().unwrap_or_else(|e| e.into_inner()) = count;
     }
 
     /// Holds a fresh session's first message until the paused task is resumed.
@@ -452,7 +450,6 @@ impl TaskLive {
             settle: tokio::sync::Mutex::new(()),
             reroute: tokio::sync::Mutex::new(()),
             wait_timer: std::sync::atomic::AtomicU64::new(0),
-            handovers: std::sync::Mutex::new(None),
             watchdog_busy: std::sync::atomic::AtomicBool::new(false),
             learning: Arc::default(),
             turn_end: tokio::sync::Mutex::new(()),
@@ -1948,8 +1945,12 @@ impl SessionManager {
                 )
                 .await;
             }
-            ProviderEvent::ContextSize { used_tokens, .. } => {
-                self.worker_context(live, cli, *used_tokens).await;
+            ProviderEvent::ContextSize {
+                used_tokens,
+                window_tokens,
+            } => {
+                self.worker_context(live, cli, *used_tokens, *window_tokens)
+                    .await;
             }
             ProviderEvent::TurnStarted { .. } => {
                 live.state.lock().await.last_message = None;
@@ -2895,10 +2896,7 @@ impl SessionManager {
         let hand_over = !state.busy
             && state.cli.is_some()
             && match state.context {
-                Some(tokens) => {
-                    self.worker_handoff_due(&live, tokens, state.session_start)
-                        .await
-                }
+                Some(tokens) => self.worker_handoff_due(tokens, state.session_start, state.window),
                 None => false,
             };
         let restart = !state.busy

@@ -139,7 +139,10 @@ pub(crate) fn setting_texts(
                 }
             ),
         ),
-        None => (environment_text(environment), permission_text(permission)),
+        None => (
+            environment_text(environment),
+            permission_text(permission).to_owned(),
+        ),
     }
 }
 
@@ -154,17 +157,17 @@ fn environment_text(environment: &Environment) -> String {
     }
 }
 
-fn permission_text(permission: PermissionLevel) -> String {
+fn permission_text(permission: PermissionLevel) -> &'static str {
     match permission {
-        PermissionLevel::AskForApproval => format!(
+        PermissionLevel::AskForApproval => {
             "Ask for approval: the user gives each outline's go-ahead (approve_outline shows them a \"Start this plan?\" card), and workers ask them before anything outside their sandbox."
-        ),
-        PermissionLevel::ApproveForMe => format!(
+        }
+        PermissionLevel::ApproveForMe => {
             "Approve for me: you give outlines their go-ahead on the user's behalf. Small tasks just go. Ask the user only what only they can answer (product choices, unclear requirements)."
-        ),
-        PermissionLevel::FullAccess => format!(
+        }
+        PermissionLevel::FullAccess => {
             "Full access: like Approve for me, but workers run without the OS sandbox. Be careful."
-        ),
+        }
     }
 }
 

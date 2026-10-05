@@ -199,10 +199,13 @@ pub fn cold_rebirth_min_tokens(provider: ProviderKind, window: Option<i64>) -> i
     COLD_REBIRTH_MIN_TOKENS.min(rebirth_thresholds(provider, window).prepare_tokens)
 }
 
-/// The worker context at which a worker is handed over to a fresh session (PLAN.md §7). A
-/// debug build takes `BRIGADIER_WORKER_HANDOFF_TOKENS`, so a hand-off can be tried on a small
-/// task.
-pub fn worker_handoff_tokens() -> i64 {
+/// The most context a worker carries before it is handed over to a fresh session.
+const WORKER_HANDOFF_MAX_TOKENS: i64 = 300_000;
+
+/// The worker context at which a worker is handed over to a fresh session (PLAN.md §7): 300k
+/// tokens or 70% of its model's context window, whichever comes first. A debug build takes
+/// `BRIGADIER_WORKER_HANDOFF_TOKENS`, so a hand-off can be tried on a small task.
+pub fn worker_handoff_tokens(window: Option<i64>) -> i64 {
     if cfg!(debug_assertions)
         && let Some(tokens) = std::env::var("BRIGADIER_WORKER_HANDOFF_TOKENS")
             .ok()
@@ -211,19 +214,17 @@ pub fn worker_handoff_tokens() -> i64 {
     {
         return tokens;
     }
-    160_000
+    let size = window.filter(|size| *size > 0).unwrap_or(DEFAULT_WINDOW);
+    WORKER_HANDOFF_MAX_TOKENS.min(size * 7 / 10)
 }
 
-/// Hand-overs one attempt of a task may make: past this, its session keeps growing (the CLI
-/// compacts it) rather than handing over again and again.
-pub const WORKER_HANDOFFS_MAX: u32 = 5;
-
-/// Whether a worker session at `tokens` is handed over, given the hand-off size `at`, the
-/// session's first context size `start` (a fresh session already carries its hand-off) and the
-/// hand-overs its attempt made so far. A session must grow by at least half the hand-off size
-/// since it started, so one that starts near the size is not handed over again at once.
-pub fn worker_handoff_due(tokens: i64, start: Option<i64>, at: i64, handovers: u32) -> bool {
-    handovers < WORKER_HANDOFFS_MAX && tokens >= at.max(start.unwrap_or(0) + at / 2)
+/// Whether a worker session at `tokens` is handed over, given the hand-off size `at` and the
+/// session's first context size `start` (a fresh session already carries its hand-off). A
+/// session must grow by at least half the hand-off size since it started, so one that starts
+/// near the size is not handed over again at once; there is no limit on how many hand-overs a
+/// task makes.
+pub fn worker_handoff_due(tokens: i64, start: Option<i64>, at: i64) -> bool {
+    tokens >= at.max(start.unwrap_or(0) + at / 2)
 }
 
 /// A project's Brain at a glance (or the Personal Brain's), for the Inspector.
@@ -293,32 +294,28 @@ mod tests {
 
     #[test]
     fn a_first_session_hands_over_at_the_size() {
-        assert!(!worker_handoff_due(159_999, Some(15_000), 160_000, 0));
-        assert!(worker_handoff_due(160_000, Some(15_000), 160_000, 0));
-        assert!(worker_handoff_due(160_000, None, 160_000, 0));
+        assert!(!worker_handoff_due(159_999, Some(15_000), 160_000));
+        assert!(worker_handoff_due(160_000, Some(15_000), 160_000));
+        assert!(worker_handoff_due(160_000, None, 160_000));
     }
 
     #[test]
     fn a_fresh_session_near_the_size_needs_headroom() {
         // Started at 28k with the size at 25k: not at once, only after growing by half of it.
-        assert!(!worker_handoff_due(28_000, Some(28_000), 25_000, 1));
-        assert!(!worker_handoff_due(40_000, Some(28_000), 25_000, 1));
-        assert!(worker_handoff_due(40_500, Some(28_000), 25_000, 1));
+        assert!(!worker_handoff_due(28_000, Some(28_000), 25_000));
+        assert!(!worker_handoff_due(40_000, Some(28_000), 25_000));
+        assert!(worker_handoff_due(40_500, Some(28_000), 25_000));
     }
 
     #[test]
-    fn hand_overs_stop_at_the_cap() {
-        assert!(worker_handoff_due(
-            500_000,
-            Some(20_000),
-            160_000,
-            WORKER_HANDOFFS_MAX - 1
-        ));
-        assert!(!worker_handoff_due(
-            500_000,
-            Some(20_000),
-            160_000,
-            WORKER_HANDOFFS_MAX
-        ));
+    fn a_worker_hands_over_at_300k_or_70_percent_of_its_window_and_again_after() {
+        if std::env::var_os("BRIGADIER_WORKER_HANDOFF_TOKENS").is_some() {
+            return;
+        }
+        assert_eq!(worker_handoff_tokens(Some(1_000_000)), 300_000);
+        assert_eq!(worker_handoff_tokens(Some(272_000)), 190_400);
+        assert_eq!(worker_handoff_tokens(None), 140_000);
+        // No limit on how many: a successor that started small hands over again.
+        assert!(worker_handoff_due(300_000, Some(30_000), 300_000));
     }
 }

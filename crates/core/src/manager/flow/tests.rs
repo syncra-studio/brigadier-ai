@@ -885,3 +885,169 @@ async fn the_orchestrator_answers_a_workers_questions_and_logs_each_answer() {
     assert_eq!(logged, 2, "{:?}", board.decisions);
     flow.stop().await;
 }
+
+/// Done when (3): a worker whose context passes the hand-off size ends its turn with a handoff
+/// note, and a fresh session of the same model carries on from it: with the note, the
+/// orchestrator's earlier answer and the user's "Allow similar commands" grant, so nothing is
+/// asked again.
+#[tokio::test]
+async fn a_worker_past_the_handoff_size_continues_in_a_fresh_session_that_keeps_its_grants() {
+    use brigadier_providers::ApprovalDecision;
+    let continued = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let carried_on = continued.clone();
+    let flow = Flow::start(
+        "handoff",
+        Options {
+            permission: crate::model::PermissionLevel::AskForApproval,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let continued = carried_on.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    if turn.input.contains("[question from task-1") {
+                        let reply = turn
+                            .call(
+                                "answer_worker",
+                                json!({"task": "task-1", "answer": "Tabs.",
+                                       "why": "your recommendation fits"}),
+                            )
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        return Reply::text("[quiet]");
+                    }
+                    if let Some(n) = reports_in(&turn.input).first() {
+                        let reply = turn
+                            .call("land_phase", json!({"task": format!("task-{n}")}))
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        return Reply::text("Both files are in.");
+                    }
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"title": "Add two files", "kind": "implement",
+                                   "spec": "Create a.txt and b.txt.", "provider": "claude"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                const NOTE: &str =
+                    "Goal and where it stands: a.txt is committed.\nNext steps: write b.txt.";
+                if turn.input.contains("[Brigadier] Your context is now about") {
+                    return Reply::text(NOTE);
+                }
+                if turn
+                    .input
+                    .contains("You are continuing task-1 in a fresh session")
+                {
+                    continued.store(true, std::sync::atomic::Ordering::SeqCst);
+                    assert!(turn.input.contains("note.md"), "{}", turn.input);
+                    assert!(
+                        turn.input.contains("Next steps: write b.txt."),
+                        "{}",
+                        turn.input
+                    );
+                    let dir = turn
+                        .input
+                        .split("Its hand-off is in ")
+                        .nth(1)
+                        .and_then(|rest| rest.split(": ").next())
+                        .expect("the hand-off folder");
+                    let spec = std::fs::read_to_string(std::path::Path::new(dir).join("spec.md"))
+                        .expect("spec.md");
+                    assert!(spec.contains("Tabs."), "the answer carries over: {spec}");
+                    // The user's grant holds for the successor: no second card.
+                    let decision = turn
+                        .ask_approval("curl -sI https://example.com", "curl")
+                        .await;
+                    assert!(
+                        matches!(
+                            decision,
+                            Some(ApprovalDecision::Allow | ApprovalDecision::AllowSimilar)
+                        ),
+                        "{decision:?}"
+                    );
+                    turn.write("b.txt", "b\n");
+                    turn.git(&["add", "b.txt"]);
+                    turn.git(&["commit", "-qm", "Add b.txt"]);
+                    let reply = turn
+                        .call(
+                            "submit_report",
+                            json!({"summary": "Added a.txt and b.txt.",
+                                   "changes": ["a.txt", "b.txt"]}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Reported.");
+                }
+                // The first session: it starts small, asks one card (allowed for similar
+                // commands) and a question, commits a step and grows past the size.
+                turn.report_context(20_000).await;
+                let decision = turn
+                    .ask_approval("curl -sI https://example.com", "curl")
+                    .await;
+                assert!(
+                    matches!(
+                        decision,
+                        Some(ApprovalDecision::Allow | ApprovalDecision::AllowSimilar)
+                    ),
+                    "{decision:?}"
+                );
+                let answer = turn
+                    .call(
+                        "ask_orchestrator",
+                        json!({"question": "Tabs or spaces? I recommend tabs."}),
+                    )
+                    .await;
+                assert_eq!(answer.text, "Tabs.");
+                turn.write("a.txt", "a\n");
+                turn.git(&["add", "a.txt"]);
+                turn.git(&["commit", "-qm", "Add a.txt"]);
+                Reply {
+                    text: NOTE.into(),
+                    context_tokens: Some(310_000),
+                }
+            }
+        }),
+    )
+    .await;
+    flow.say("Add a.txt and b.txt.").await;
+    let board = flow
+        .until("the approval card", |board| {
+            board
+                .approvals
+                .values()
+                .any(|card| card.state == CardState::Pending)
+        })
+        .await;
+    let card = board
+        .approvals
+        .values()
+        .find(|card| card.state == CardState::Pending)
+        .unwrap()
+        .id
+        .clone();
+    flow.manager
+        .answer_card(
+            flow.conversation.clone(),
+            card,
+            brigadier_providers::ApprovalDecision::AllowSimilar,
+        )
+        .await
+        .unwrap();
+    let board = flow.settled().await;
+    assert!(
+        continued.load(std::sync::atomic::Ordering::SeqCst),
+        "a fresh session took over"
+    );
+    let lead = Flow::task(&board, 1);
+    assert_eq!(lead.state, TaskState::Landed);
+    assert_eq!(board.approvals.len(), 1, "the grant spared a second card");
+    let target = lead.workspace.as_ref().unwrap().target.clone().unwrap();
+    for file in ["a.txt", "b.txt"] {
+        super::git(&flow.repo, &["cat-file", "-e", &format!("{target}:{file}")]);
+    }
+    flow.stop().await;
+}

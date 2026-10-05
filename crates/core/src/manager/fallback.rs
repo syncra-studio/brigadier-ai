@@ -134,8 +134,7 @@ impl SessionManager {
             return;
         }
         live.close_cli().await;
-        // A new attempt: its hand-overs and stalls are counted afresh.
-        live.set_handovers(None);
+        // A new attempt: its stalls are counted afresh.
         live.reset_stalls().await;
         let from = task.route.choice.clone();
         if let AttemptEnd::Limit { limit } = &end {
