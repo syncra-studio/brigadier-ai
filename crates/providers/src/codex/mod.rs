@@ -1489,6 +1489,7 @@ impl CodexSession {
                     thread_id: self.thread_id.clone(),
                     input: Self::input(input)?,
                     effort,
+                    summary: Some(p::ReasoningSummary::Auto),
                     sandbox_policy: (!self.profiled).then(|| sandbox_policy(&self.access)),
                     approval_policy: Some(approval_policy(&self.access)),
                     approvals_reviewer: Some(reviewer(self.auto_review)),

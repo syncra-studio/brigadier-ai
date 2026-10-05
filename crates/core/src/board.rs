@@ -19,6 +19,7 @@ const NOTICES_KEPT: usize = 20;
 /// Event kinds the board is folded from (everything on a conversation stream but messages).
 pub(crate) const KINDS: &[&str] = &[
     "conversation.run",
+    "thinking.delta",
     "conversation.notice",
     "task.updated",
     "approval.updated",
@@ -60,6 +61,7 @@ pub(crate) struct Board {
     /// The last message of the branch shown, and the stream sequence that set it.
     pub(crate) head: Option<(String, i64)>,
     pub(crate) streaming: Option<StreamingMessage>,
+    pub(crate) thinking: Vec<crate::model::ThinkingSegment>,
     pub(crate) notices: Vec<Notice>,
     /// A Chat's saved memories, the latest change per node, in the order first saved.
     pub(crate) memories: Vec<MemoryChange>,
@@ -242,6 +244,40 @@ impl Board {
                     self.notices.remove(0);
                 }
             }
+            DomainEvent::ThinkingDelta {
+                item_id,
+                request_id,
+                text,
+                at_ms,
+                complete,
+                ..
+            } => {
+                if let Some(segment) = self
+                    .thinking
+                    .iter_mut()
+                    .find(|segment| segment.item_id == *item_id)
+                {
+                    if *complete {
+                        segment.text.clone_from(text);
+                    } else if !segment.complete {
+                        segment.text.push_str(text);
+                    }
+                    segment.updated_at_ms = *at_ms;
+                    segment.through_position = stream_seq;
+                    segment.complete |= *complete;
+                } else {
+                    self.thinking.push(crate::model::ThinkingSegment {
+                        item_id: item_id.clone(),
+                        request_id: request_id.clone(),
+                        text: text.clone(),
+                        position: stream_seq,
+                        started_at_ms: *at_ms,
+                        updated_at_ms: *at_ms,
+                        complete: *complete,
+                        through_position: stream_seq,
+                    });
+                }
+            }
             DomainEvent::MessageDelta {
                 message_id, text, ..
             } => match &mut self.streaming {
@@ -340,5 +376,42 @@ impl Board {
     /// The run that owns the session now (started and not finished), if any.
     pub(crate) fn active_run(&self) -> Option<&OvernightRun> {
         self.runs.values().find(|run| run.state.is_active())
+    }
+}
+
+#[cfg(test)]
+mod thinking_tests {
+    use super::*;
+
+    #[test]
+    fn reasoning_keeps_its_position_and_final_summary_replaces_deltas() {
+        let mut board = Board::default();
+        let delta = |text: &str, at_ms, complete| DomainEvent::ThinkingDelta {
+            conversation_id: ConversationId("chat".into()),
+            item_id: "summary".into(),
+            request_id: Some("request".into()),
+            text: text.into(),
+            at_ms,
+            complete,
+        };
+        board.apply(&delta("I will read", 1000, false), 2);
+        board.apply(&delta(" the file.", 2000, false), 3);
+        assert_eq!(board.thinking[0].text, "I will read the file.");
+        board.apply(&delta("Read the file first.", 5000, true), 8);
+        let segment = &board.thinking[0];
+        assert_eq!(segment.position, 2);
+        assert_eq!(segment.through_position, 8);
+        assert_eq!(segment.started_at_ms, 1000);
+        assert_eq!(segment.updated_at_ms, 5000);
+        assert_eq!(segment.request_id.as_deref(), Some("request"));
+        assert_eq!(segment.text, "Read the file first.");
+        assert!(segment.complete);
+        // Legacy events still deserialize and leave reasoning absent.
+        let old: DomainEvent = serde_json::from_str(
+            r#"{"type":"messageDelta","conversationId":"chat","messageId":"old","text":"Hello"}"#,
+        )
+        .unwrap();
+        board.apply(&old, 9);
+        assert_eq!(board.streaming.unwrap().text, "Hello");
     }
 }

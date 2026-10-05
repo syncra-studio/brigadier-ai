@@ -686,6 +686,21 @@ pub struct ConversationStatus {
     pub quota: Option<QuotaSnapshot>,
 }
 
+/// A provider's reasoning summary, kept in order with the turn's actions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThinkingSegment {
+    pub item_id: String,
+    pub request_id: Option<String>,
+    pub text: String,
+    pub position: i64,
+    pub started_at_ms: i64,
+    pub updated_at_ms: i64,
+    /// Last delta folded, so events arriving during a snapshot read are applied only once.
+    pub through_position: i64,
+    pub complete: bool,
+}
+
 /// Everything a conversation view shows, in one read. Live changes follow on the
 /// conversation's event stream.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -710,6 +725,8 @@ pub struct ConversationView {
     /// in the order they happened.
     #[serde(default)]
     pub machine_steps: Vec<MachineStep>,
+    #[serde(default)]
+    pub thinking: Vec<ThinkingSegment>,
     /// Every compaction of a Chat's context, in the order they happened.
     pub compactions: Vec<Compaction>,
     /// What was decided on the user's behalf, in the order it was decided.
@@ -1243,6 +1260,15 @@ pub enum DomainEvent {
         message_id: String,
         text: String,
     },
+    /// Reasoning text in timeline order. A complete event replaces the accumulated deltas.
+    ThinkingDelta {
+        conversation_id: ConversationId,
+        item_id: String,
+        request_id: Option<String>,
+        text: String,
+        at_ms: i64,
+        complete: bool,
+    },
     RunStateChanged {
         conversation_id: ConversationId,
         state: RunState,
@@ -1383,6 +1409,7 @@ impl DomainEvent {
             Self::ConversationDeleted { .. } => "conversation.deleted",
             Self::ProjectRemoved { .. } => "project.removed",
             Self::MessageDelta { .. } => "message.delta",
+            Self::ThinkingDelta { .. } => "thinking.delta",
             Self::RunStateChanged { .. } => "conversation.run",
             Self::RequestUpdated { .. } => "request.updated",
             Self::WorkerStepped { .. } => "worker.step",

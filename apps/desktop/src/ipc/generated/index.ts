@@ -299,6 +299,7 @@ export type { TaskState } from "./TaskState";
 export type { TaskWorkspace } from "./TaskWorkspace";
 export type { TerminalInfo } from "./TerminalInfo";
 export type { TerminalOutput } from "./TerminalOutput";
+export type { ThinkingSegment } from "./ThinkingSegment";
 export type { TokenCount } from "./TokenCount";
 export type { TokenUsage } from "./TokenUsage";
 export type { TrialState } from "./TrialState";

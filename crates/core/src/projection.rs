@@ -100,6 +100,7 @@ impl Projection {
             // fold the rest of a conversation's stream.
             DomainEvent::RawSessionCreated { .. }
             | DomainEvent::MessageDelta { .. }
+            | DomainEvent::ThinkingDelta { .. }
             | DomainEvent::RunStateChanged { .. }
             | DomainEvent::RequestUpdated { .. }
             | DomainEvent::WorkerStepped { .. }

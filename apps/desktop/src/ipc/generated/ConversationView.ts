@@ -17,6 +17,7 @@ import type { Rating } from "./Rating";
 import type { RunState } from "./RunState";
 import type { StreamingMessage } from "./StreamingMessage";
 import type { Task } from "./Task";
+import type { ThinkingSegment } from "./ThinkingSegment";
 import type { UserRequest } from "./UserRequest";
 import type { WaitingItem } from "./WaitingItem";
 import type { WorkerStep } from "./WorkerStep";
@@ -50,7 +51,7 @@ orchestratorSteps: Array<OrchestratorStep>,
  * Every row about the machine (waiting for it to cool down, builds paused and resumed),
  * in the order they happened.
  */
-machineSteps: Array<MachineStep>, 
+machineSteps: Array<MachineStep>, thinking: Array<ThinkingSegment>, 
 /**
  * Every compaction of a Chat's context, in the order they happened.
  */

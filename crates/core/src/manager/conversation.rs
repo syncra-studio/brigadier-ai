@@ -2036,7 +2036,7 @@ impl SessionManager {
                     }
                     Some(event) => {
                         deadline = None;
-                        self.store_deltas(&conv.id, quiet.pass(std::mem::take(&mut deltas))).await;
+                        self.store_deltas(&conv, quiet.pass(std::mem::take(&mut deltas))).await;
                         let mut exited = false;
                         for event in
                             self.session_events(EventSource::Conversation(&conv.id), &cli, event)
@@ -2075,11 +2075,11 @@ impl SessionManager {
                 },
                 () = flush_at => {
                     deadline = None;
-                    self.store_deltas(&conv.id, quiet.pass(std::mem::take(&mut deltas))).await;
+                    self.store_deltas(&conv, quiet.pass(std::mem::take(&mut deltas))).await;
                 }
             }
         }
-        self.store_deltas(&conv.id, quiet.pass(deltas)).await;
+        self.store_deltas(&conv, quiet.pass(deltas)).await;
         if let Some(reply) = held.take() {
             self.on_conversation_event(&conv, &cli, reply).await;
         }
@@ -2120,7 +2120,9 @@ impl SessionManager {
         self.settle_requests(&conv.id).await;
     }
 
-    async fn store_deltas(&self, id: &ConversationId, deltas: Vec<ProviderEvent>) {
+    async fn store_deltas(&self, conv: &ConvLive, deltas: Vec<ProviderEvent>) {
+        let id = &conv.id;
+        let request_id = conv.state.lock().await.request.clone();
         let events: Vec<DomainEvent> = deltas
             .into_iter()
             .filter_map(|event| match event {
@@ -2129,6 +2131,16 @@ impl SessionManager {
                     message_id: item_id,
                     text,
                 }),
+                ProviderEvent::ReasoningDelta { item_id, text } => {
+                    Some(DomainEvent::ThinkingDelta {
+                        conversation_id: id.clone(),
+                        item_id,
+                        text,
+                        request_id: request_id.clone(),
+                        at_ms: now_ms(),
+                        complete: false,
+                    })
+                }
                 _ => None,
             })
             .collect();
@@ -2301,6 +2313,26 @@ impl SessionManager {
         event: ProviderEvent,
     ) {
         match &event {
+            ProviderEvent::Reasoning { item_id, text } => {
+                let request_id = conv.state.lock().await.request.clone();
+                if let Err(err) = self
+                    .core
+                    .record_conversation(
+                        &conv.id,
+                        vec![DomainEvent::ThinkingDelta {
+                            conversation_id: conv.id.clone(),
+                            item_id: item_id.clone(),
+                            text: text.clone(),
+                            request_id,
+                            at_ms: now_ms(),
+                            complete: true,
+                        }],
+                    )
+                    .await
+                {
+                    tracing::debug!(conversation = %conv.id, error = %err, "could not store reasoning summary");
+                }
+            }
             ProviderEvent::Message {
                 item_id,
                 role: ProviderRole::Assistant,

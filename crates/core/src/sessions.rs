@@ -1015,6 +1015,7 @@ impl Core {
             worker_steps: board.worker_steps.clone(),
             orchestrator_steps: board.orchestrator_steps.clone(),
             machine_steps: board.machine_steps.clone(),
+            thinking: board.thinking.clone(),
             compactions: board.sorted_compactions(),
             decisions: board.decisions.clone(),
             waiting: board.sorted_waiting(),
