@@ -282,9 +282,24 @@ pub(crate) fn still(platform: &dyn Platform, proc: Proc) -> bool {
 }
 
 /// The heavy commands running under `cli` (a CLI process Brigadier started), the topmost
-/// heavy process of each branch. The CLI itself never counts.
+/// heavy process of each branch. A CLI never counts, but the ledger also tracks the group
+/// leaders of the commands a CLI runs: one that is itself heavy is the command, and what it
+/// starts (each `rustc` of a `cargo build`) belongs to it.
 pub(crate) fn heavy_under(platform: &dyn Platform, cli: u32, owner: &str) -> Vec<Seen> {
     let processes = platform.processes();
+    if let Some(argv) = processes.command_line(cli)
+        && heavy::is_heavy(&argv)
+    {
+        return proc_of(platform, cli)
+            .map(|root| Seen {
+                root,
+                owner: owner.to_owned(),
+                command: heavy::label(&argv),
+                active: true,
+            })
+            .into_iter()
+            .collect();
+    }
     let mut found = Vec::new();
     let mut queue = processes.children(cli).unwrap_or_default();
     let mut visited = 0;
@@ -503,6 +518,11 @@ mod tests {
     /// of `sleep`) run as `cargo test`, which starts a child of its own. Returns once the build
     /// has started that child, so no test stops it halfway through starting.
     fn worker_with_build(dir: &Path) -> (Child, PathBuf) {
+        worker_with_build_running(dir, "/bin/sleep 300")
+    }
+
+    /// [`worker_with_build`] whose build's child runs `child` (a shell command line).
+    fn worker_with_build_running(dir: &Path, child: &str) -> (Child, PathBuf) {
         let bin = dir.join("bin");
         std::fs::create_dir_all(dir).unwrap();
         std::fs::create_dir_all(&bin).unwrap();
@@ -510,10 +530,7 @@ mod tests {
         let ready = dir.join("ready");
         std::fs::write(
             &cargo,
-            format!(
-                "#!/bin/sh\n/bin/sleep 300 &\ntouch '{}'\nwait\n",
-                ready.display()
-            ),
+            format!("#!/bin/sh\n{child} &\ntouch '{}'\nwait\n", ready.display()),
         )
         .unwrap();
         {
@@ -570,6 +587,36 @@ mod tests {
             assert!(running(member.pid), "running again: {}", state(member.pid));
         }
         assert!(!dir.path().join("stopped.json").exists());
+        platform.processes().kill_tree(worker.id()).unwrap();
+        worker.wait().unwrap();
+    }
+
+    #[test]
+    fn a_tracked_build_is_one_command_not_one_per_compiler() {
+        // The ledger tracks a command's group leader next to its CLI. Looked at on its own, a
+        // build is still the command: the compilers it starts don't each wait for the lease.
+        let dir = TempDir::new();
+        let platform = platform(dir.path());
+        let rustc = dir.path().join("rustc");
+        std::fs::write(&rustc, "#!/bin/sh\n/bin/sleep 300\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let (mut worker, _) = worker_with_build_running(dir.path(), &rustc.display().to_string());
+        let build = wait_for(|| {
+            let seen = heavy_under(&*platform, worker.id(), "task:t");
+            (seen.len() == 1
+                && platform
+                    .processes()
+                    .children(seen[0].root.pid)
+                    .is_ok_and(|children| !children.is_empty()))
+            .then(|| seen[0].root)
+        });
+        let seen = heavy_under(&*platform, build.pid, "task:t");
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert_eq!(seen[0].root, build);
+        assert_eq!(seen[0].command, "cargo test -p core");
         platform.processes().kill_tree(worker.id()).unwrap();
         worker.wait().unwrap();
     }
