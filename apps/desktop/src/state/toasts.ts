@@ -15,11 +15,14 @@ export const useToasts = create<{ toasts: Toast[] }>(() => ({ toasts: [] }));
 
 let nextId = 0;
 
-/** Shows a toast at the top of the thread, confirming an action (e.g. "Archived chat"). */
+/**
+ * Shows a toast at the top of the thread, confirming an action (e.g. "Archived chat"). Its id,
+ * for taking it back.
+ */
 export function toast(
   text: string,
   options: { tone?: Toast["tone"]; actions?: ToastAction[] } = {},
-): void {
+): number {
   const entry: Toast = {
     id: nextId++,
     text,
@@ -27,6 +30,7 @@ export function toast(
     actions: options.actions ?? [],
   };
   useToasts.setState((state) => ({ toasts: [...state.toasts, entry] }));
+  return entry.id;
 }
 
 export function dismissToast(id: number): void {

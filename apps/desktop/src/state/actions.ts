@@ -57,7 +57,7 @@ import {
   useApp,
 } from "@/state/store";
 import { forgetDraft } from "@/state/drafts";
-import { toast } from "@/state/toasts";
+import { dismissToast, toast } from "@/state/toasts";
 
 /** Messages shown when a conversation opens; older ones load on demand. */
 const PAGE = 200;
@@ -844,28 +844,60 @@ export async function hibernate(id: string): Promise<void> {
   storeConversation(conversation);
 }
 
-/** Archives a conversation and confirms it with an "Archived chat · View · Undo" toast. */
+/**
+ * Archives a conversation and confirms it with an "Archived chat · View · Undo" toast. The row
+ * leaves at once; the daemon stops and cleans up in the background. If the archive fails, the
+ * row comes back and a toast says why.
+ */
 export async function archive(id: string): Promise<void> {
-  const { conversation } = await request({ method: "archive", id });
-  storeConversation(conversation);
+  const before = useApp.getState().conversations[id];
+  if (!before) {
+    storeConversation((await request({ method: "archive", id })).conversation);
+    return;
+  }
+  if (before.lifecycle === "archived") return;
+  const noun = before.kind === "chat" ? "chat" : "session";
+  storeConversation({ ...before, lifecycle: "archived" });
   const { selection } = useApp.getState();
   if (selection.type === "conversation" && selection.id === id) {
     select({ type: "draft", kind: "chat" });
   }
-  toast(conversation.kind === "chat" ? "Archived chat" : "Archived session", {
+  const archived = toast(before.kind === "chat" ? "Archived chat" : "Archived session", {
     actions: [
       { label: "View", run: () => openSettings("archived") },
-      {
-        label: "Undo",
-        run: () =>
-          void restore(id)
-            .then(() => openConversation(id))
-            .catch((error: unknown) =>
-              toast(error instanceof Error ? error.message : String(error), { tone: "error" }),
-            ),
-      },
+      { label: "Undo", run: () => void undoArchive(id) },
     ],
   });
+  try {
+    const { conversation } = await request({ method: "archive", id });
+    storeConversation(conversation);
+  } catch (error) {
+    // Back as it was, unless something newer came in meanwhile.
+    if (useApp.getState().conversations[id]?.lifecycle === "archived") storeConversation(before);
+    dismissToast(archived);
+    toast(`Couldn't archive the ${noun} "${before.title}": ${errorMessage(error)}`, {
+      tone: "error",
+    });
+  }
+}
+
+/** The archive toast's Undo: the row is back at once and opens; it leaves again on failure. */
+async function undoArchive(id: string): Promise<void> {
+  const before = useApp.getState().conversations[id];
+  if (before) storeConversation({ ...before, lifecycle: "active" });
+  openConversation(id);
+  try {
+    await restore(id);
+  } catch (error) {
+    if (before && useApp.getState().conversations[id]?.lifecycle === "active") {
+      storeConversation(before);
+    }
+    toast(`Couldn't bring it back: ${errorMessage(error)}`, { tone: "error" });
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export async function restore(id: string): Promise<void> {

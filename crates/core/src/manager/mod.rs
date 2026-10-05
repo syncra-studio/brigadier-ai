@@ -19,6 +19,7 @@ mod brain_jobs;
 mod brains;
 mod branches;
 mod cards;
+mod closing;
 mod cold;
 mod conversation;
 pub(crate) mod decisions;
@@ -80,6 +81,7 @@ use crate::work::{DiffStat, TaskId, TaskState, WorkerDiff};
 use crate::{Core, Error, Result};
 
 pub use brains::{BrainCounters, IndexRunStats};
+pub use closing::Turn;
 pub use conversation::SendOutcome;
 pub use uninstall::TearDown;
 
@@ -134,6 +136,8 @@ pub struct SessionManager {
     overnight: overnight::Runs,
     /// Holds new work while the machine struggles, and runs heavy commands one at a time.
     machine: Arc<crate::machine::MachineWatch>,
+    /// Conversations being archived or deleted: their fences and cleanups.
+    closing: closing::Closing,
 }
 
 impl SessionManager {
@@ -197,9 +201,12 @@ impl SessionManager {
             research: research::Research::default(),
             overnight: overnight::Runs::default(),
             machine,
+            closing: closing::Closing::default(),
         });
         manager.install_worktree_remover();
         manager.start_machine_watch().await;
+        // Cleanups a quit cut off finish before anything of those conversations resumes.
+        manager.finish_cut_off_cleanups().await;
         manager.recover_active_runs().await;
         manager.recover().await;
         manager.resume_runs().await;
@@ -224,6 +231,8 @@ impl SessionManager {
     /// Ends every live CLI session (their work stays in the log, ready to continue).
     pub async fn shutdown(&self) {
         self.admitting.store(false, Ordering::Release);
+        // Archives under way finish first (bounded) while the providers and the store are up.
+        self.finish_cleanups_for_quit().await;
         self.runtime.registry().cancel_refresh();
         self.research.stop.cancel();
         self.research.jobs.close();

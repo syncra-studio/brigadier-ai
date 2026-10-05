@@ -25,6 +25,7 @@ use super::{SessionManager, blocking, git_error};
 use crate::model::{
     Conversation, ConversationId, ConversationKind, Environment, Lifecycle, Setup, streams,
 };
+use crate::overnight::OvernightRun;
 use crate::work::{InjectionKind, Task, TaskState};
 use crate::{Error, Result, now_ms};
 
@@ -319,15 +320,88 @@ impl SessionManager {
     }
 
     /// Archives a conversation: everything it created goes, except its transcript, tasks,
-    /// artifacts and branches.
+    /// artifacts and branches. Answers once nothing new of it can start and it is stored as
+    /// archived; the rest of the cleanup goes on in the background ([`Self::finish_archive`]).
     pub async fn archive(&self, id: ConversationId) -> Result<Conversation> {
+        self.admit()?;
         let conversation = self.core.conversation(&id)?;
-        self.delete_side_chats(&id).await;
-        let runs = self.fence_runs(&id).await;
+        if conversation.lifecycle == Lifecycle::Archived {
+            return Ok(conversation);
+        }
+        let sides: Vec<ConversationId> = self
+            .side_chats(&id)
+            .into_iter()
+            .map(|side| side.id)
+            .collect();
+        for fenced in sides.iter().chain([&id]) {
+            self.close_fence(fenced);
+        }
+        let archived = match self.fence_runs(&id).await {
+            Ok(runs) => self
+                .core
+                .mark_archived(id.clone())
+                .await
+                .map(|archived| (archived, runs)),
+            Err(err) => Err(err),
+        };
+        let (archived, runs) = match archived {
+            Ok(archived) => archived,
+            Err(err) => {
+                for fenced in sides.iter().chain([&id]) {
+                    self.open_fence(fenced);
+                }
+                return Err(err);
+            }
+        };
+        let manager = self.arc();
+        self.start_cleanup(id.clone(), async move {
+            manager.finish_archive(&id, runs).await;
+        });
+        Ok(archived)
+    }
+
+    /// The cleanup of an archive: once the work that passed the fence has finished, its side
+    /// chats go, everything it runs stops, and what it created is removed. The cleanup mark
+    /// goes last, so a restart finishes a cleanup cut off at any step.
+    pub(super) async fn finish_archive(&self, id: &ConversationId, runs: Vec<OvernightRun>) {
+        if !self.drain(id).await {
+            tracing::warn!(conversation = %id, "work of an archived session is still going; cleaning up anyway");
+        }
+        self.delete_side_chats(id).await;
+        let Ok(conversation) = self.core.conversation(id) else {
+            return;
+        };
         self.wind_down(&conversation).await;
         self.close_runs(runs, true).await;
-        self.release_conversation_runs(&id).await;
-        self.core.set_lifecycle(id, Lifecycle::Archived).await
+        self.release_conversation_runs(id).await;
+        if let Err(err) = self.core.finish_cleanup(id.clone()).await {
+            tracing::warn!(conversation = %id, error = %err, "could not record the end of an archive's cleanup; the next launch looks again");
+        }
+    }
+
+    /// At launch, before any run resumes: finishes the archives' cleanups a quit or crash cut
+    /// off (their processes are gone; worktrees, session files and runs are not).
+    pub(super) async fn finish_cut_off_cleanups(&self) {
+        for conversation in self.core.catalog().conversations {
+            if !conversation.cleanup_pending {
+                continue;
+            }
+            let id = conversation.id;
+            if conversation.lifecycle != Lifecycle::Archived {
+                let _ = self.core.finish_cleanup(id).await;
+                continue;
+            }
+            tracing::info!(conversation = %id, "finishing an archive's cleanup cut off by a quit");
+            self.close_fence(&id);
+            let runs = match self.fence_runs(&id).await {
+                Ok(runs) => runs,
+                Err(err) => {
+                    tracing::warn!(conversation = %id, error = %err, "could not fence the archived session's runs");
+                    Vec::new()
+                }
+            };
+            self.finish_archive(&id, runs).await;
+        }
     }
 
     /// Stops everything a conversation runs and removes what it created.
@@ -339,6 +413,20 @@ impl SessionManager {
             self.drop_waiting(&conv).await;
             conv.close_cli().await;
         }
+        // The workers' CLI sessions end side by side; then their worktrees go, one cleanup's
+        // git work at a time.
+        if let Ok(tasks) = self.core.tasks(id).await {
+            let mut closing = tokio::task::JoinSet::new();
+            for live in tasks
+                .iter()
+                .filter(|task| !task.state.is_final())
+                .filter_map(|task| self.existing_task_live(&task.id))
+            {
+                closing.spawn(async move { live.close_cli().await });
+            }
+            closing.join_all().await;
+        }
+        let _lane = self.closing.lane.lock().await;
         if let Ok(tasks) = self.core.tasks(id).await {
             for task in tasks.into_iter().filter(|task| !task.state.is_final()) {
                 if let Some(live) = self.existing_task_live(&task.id) {
@@ -475,6 +563,8 @@ impl SessionManager {
 
     /// Brings an archived conversation back; its next turn starts from the transcript.
     pub async fn restore(&self, id: ConversationId) -> Result<Conversation> {
+        // What the archive stopped and removed is gone first.
+        self.cleanup_finished(&id).await;
         let conversation = self.core.conversation(&id)?;
         if conversation.lifecycle != Lifecycle::Archived {
             return Err(Error::Invalid(
@@ -484,7 +574,12 @@ impl SessionManager {
         if let Ok(conv) = self.conv(&id) {
             conv.mark_reseed().await;
         }
-        self.core.set_lifecycle(id, Lifecycle::Active).await
+        let restored = self
+            .core
+            .set_lifecycle(id.clone(), Lifecycle::Active)
+            .await?;
+        self.open_fence(&id);
+        Ok(restored)
     }
 
     /// Deletes a conversation for good. Branches Brigadier created for it (task branches, a
@@ -510,9 +605,39 @@ impl SessionManager {
         forget_brain: bool,
         record_kept: bool,
     ) -> Result<()> {
+        // An archive's cleanup under way finishes first.
+        self.cleanup_finished(&id).await;
         let conversation = self.core.conversation(&id)?;
+        self.close_fence(&id);
+        let deleted = self
+            .delete_closed(conversation, delete_branches, forget_brain, record_kept)
+            .await;
+        // Deleted, or still there and working: either way its fence has no more to hold.
+        if deleted.is_ok()
+            || self
+                .core
+                .conversation(&id)
+                .is_ok_and(|now| now.lifecycle != Lifecycle::Archived)
+        {
+            self.open_fence(&id);
+        }
+        deleted
+    }
+
+    /// [`Self::delete_conversation`] once nothing new of it starts.
+    async fn delete_closed(
+        &self,
+        conversation: Conversation,
+        delete_branches: bool,
+        forget_brain: bool,
+        record_kept: bool,
+    ) -> Result<()> {
+        let id = conversation.id.clone();
+        if !self.drain(&id).await {
+            tracing::warn!(conversation = %id, "work of a deleted conversation is still going; deleting anyway");
+        }
         self.delete_side_chats(&id).await;
-        let runs = self.fence_runs(&id).await;
+        let runs = self.fence_runs(&id).await?;
         self.wind_down(&conversation).await;
         self.close_runs(runs, false).await;
         let runs = self.release_conversation_runs(&id).await;

@@ -1098,13 +1098,18 @@ impl SessionManager {
     }
 
     /// Puts an envelope in the inbox without starting a turn (see [`Self::deliver_for`]): the
-    /// conversation, unless it is gone, archived or no longer takes the envelope's task.
+    /// conversation, unless it is gone, closing, archived or no longer takes the envelope's
+    /// task.
     pub(crate) async fn queue_envelope(
         &self,
         id: &ConversationId,
         envelope: Envelope,
         request: Option<String>,
     ) -> Option<Arc<ConvLive>> {
+        // A closing conversation takes nothing more (and gets no live state back).
+        if self.is_closing(id) {
+            return None;
+        }
         let conv = self.conv(id).ok()?;
         let archived = matches!(
             self.core.conversation(id).map(|c| c.lifecycle),
@@ -1471,6 +1476,7 @@ impl SessionManager {
         if let Some(cli) = conv.state.lock().await.cli.clone() {
             return Ok(cli);
         }
+        let _fence = self.enter(&conv.id)?;
         let conversation = self.core.conversation(&conv.id)?;
         let (owner, area) = match conv.kind {
             ConversationKind::Session => (format!("orch:{}", conv.id), "orch"),
@@ -1659,8 +1665,13 @@ impl SessionManager {
         conv.state.lock().await.cli = Some(cli.clone());
         let manager = self.arc();
         let pumped = cli.clone();
-        let conv = conv.clone();
-        self.spawn(async move { manager.pump_conversation(conv, pumped, events).await });
+        let pumping = conv.clone();
+        self.spawn(async move { manager.pump_conversation(pumping, pumped, events).await });
+        // A cleanup that stopped waiting for this start has already passed this conversation.
+        if self.is_closing(&conv.id) {
+            conv.close_cli().await;
+            return Err(super::closing::closing_error());
+        }
         Ok(cli)
     }
 

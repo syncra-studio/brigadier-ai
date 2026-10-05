@@ -423,6 +423,34 @@ impl Session {
                 });
                 return Ok(Flow::Continue);
             }
+            // Archive, restore and delete of a conversation run in the order they were asked
+            // for, beside the connection's other requests: one waiting for a cleanup (a restore
+            // right after an archive) holds up nothing else.
+            request @ (Request::Archive { .. }
+            | Request::Restore { .. }
+            | Request::Delete { .. }) => {
+                let (Request::Archive { id: conversation }
+                | Request::Restore { id: conversation }
+                | Request::Delete {
+                    id: conversation, ..
+                }) = &request
+                else {
+                    unreachable!("matched above")
+                };
+                let mut turn = self
+                    .daemon
+                    .sessions
+                    .in_order(std::slice::from_ref(conversation));
+                let daemon = self.daemon.clone();
+                let late = self.late_tx.clone();
+                self.daemon.supervisor.spawn(async move {
+                    turn.ready().await;
+                    let outcome = handle_request(&daemon, request).await;
+                    drop(turn);
+                    let _ = late.send((id, outcome)).await;
+                });
+                return Ok(Flow::Continue);
+            }
             Request::RefreshRankings => {
                 let daemon = self.daemon.clone();
                 let admitted = self.daemon.sessions.refresh_rankings(async move {

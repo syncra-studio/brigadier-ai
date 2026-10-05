@@ -750,6 +750,7 @@ impl SessionManager {
         extra: TaskExtra,
     ) -> Result<Task> {
         self.admit()?;
+        let _fence = self.enter(conversation_id)?;
         let conversation = self.core.conversation(conversation_id)?;
         if !matches!(conversation.setup, Some(Setup::Session { .. })) {
             return Err(Error::Invalid("tasks belong to a session".into()));
@@ -997,6 +998,8 @@ impl SessionManager {
         subject: Option<Task>,
     ) -> Result<()> {
         let conversation_id = task.conversation_id.clone();
+        // Held while its worktree is made and recorded; the launch below enters again.
+        let fence = self.enter(&conversation_id)?;
         self.set_task_state(&conversation_id, &task.id, TaskState::Starting)
             .await?;
         let owner = format!("task:{}", task.id);
@@ -1020,6 +1023,7 @@ impl SessionManager {
             })
             .await?;
         let files = self.worker_files(&task, &workspace.scratch).await;
+        drop(fence);
         // Instructions the orchestrator sent while the task waited to start go with it.
         let mut text = String::from("Start the task.");
         if !task.messages.is_empty() {
@@ -1065,9 +1069,22 @@ impl SessionManager {
         } else {
             self.admit_run_task(task).await?;
         }
-        let launched = self
-            .launch_admitted(live, task, subject, origin, first)
-            .await;
+        // Held until its CLI session is registered, where the session's cleanup finds it.
+        let launched = match self.enter(&task.conversation_id) {
+            Ok(_fence) => {
+                self.launch_admitted(live, task, subject, origin, first)
+                    .await
+            }
+            Err(err) => Err(err),
+        };
+        // A cleanup that stopped waiting for this launch has already passed this task.
+        let launched = match launched {
+            Ok(()) if self.is_closing(&task.conversation_id) => {
+                live.close_cli().await;
+                Err(super::closing::closing_error())
+            }
+            launched => launched,
+        };
         if launched.is_err() {
             self.release_run_task(&task.id);
         }
@@ -2832,6 +2849,7 @@ impl SessionManager {
         text: String,
         from: &str,
     ) -> Result<(String, bool)> {
+        drop(self.enter(conversation_id)?);
         // An idle worker of an overnight run starts a turn only with a free worker slot: when
         // its run has none, the message waits for one rather than holding up the caller.
         if task.run.is_some()

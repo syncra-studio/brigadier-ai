@@ -219,10 +219,13 @@ impl SessionManager {
     /// goes. The fence is durable (an active run is `WindingDown`, a proposal is dropped), so
     /// no new phase, task, fix or retry starts and nothing new is admitted, and the deadline
     /// clock leaves the ending to [`Self::close_runs`]. The runs it fenced.
-    pub(crate) async fn fence_runs(&self, conversation_id: &ConversationId) -> Vec<OvernightRun> {
+    pub(crate) async fn fence_runs(
+        &self,
+        conversation_id: &ConversationId,
+    ) -> Result<Vec<OvernightRun>> {
         let _held = self.overnight.changes.lock().await;
         let Ok(board) = self.core.board(conversation_id).await else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let mut fenced = Vec::new();
         let mut events = Vec::new();
@@ -237,10 +240,8 @@ impl SessionManager {
                 fenced.push(now);
             }
         }
-        if !events.is_empty()
-            && let Err(err) = self.record_runs(conversation_id, events).await
-        {
-            tracing::warn!(conversation = %conversation_id, error = %err, "could not fence the session's runs");
+        if !events.is_empty() {
+            self.record_runs(conversation_id, events).await?;
         }
         let mut winding = self
             .overnight
@@ -250,7 +251,7 @@ impl SessionManager {
         for run in &fenced {
             winding.insert(run.id.clone());
         }
-        fenced
+        Ok(fenced)
     }
 
     /// Ends the runs [`Self::fence_runs`] fenced, once the session's work stopped: what they

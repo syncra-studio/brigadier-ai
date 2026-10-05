@@ -392,6 +392,11 @@ pub struct Conversation {
     /// wait, and go on their own when one can take them.
     #[serde(default)]
     pub quota_wait: Option<crate::work::QuotaWait>,
+    /// Set while what it created is still being cleaned up after it was archived: a restart
+    /// finishes the cleanup before anything of it runs again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(skip)]
+    pub cleanup_pending: bool,
 }
 
 /// A conversation's model standing in for the chosen one while that one is at a limit.
@@ -1246,6 +1251,11 @@ pub enum DomainEvent {
         id: ConversationId,
         lifecycle: Lifecycle,
     },
+    /// The cleanup after an archive started (`pending`), or finished.
+    ConversationCleanup {
+        id: ConversationId,
+        pending: bool,
+    },
     /// Permanently removed; its streams are purged.
     ConversationDeleted {
         id: ConversationId,
@@ -1406,6 +1416,7 @@ impl DomainEvent {
             Self::ProjectUpdated { .. } => "project.updated",
             Self::ConversationSetUp { .. } => "conversation.setUp",
             Self::ConversationLifecycleChanged { .. } => "conversation.lifecycle",
+            Self::ConversationCleanup { .. } => "conversation.cleanup",
             Self::ConversationDeleted { .. } => "conversation.deleted",
             Self::ProjectRemoved { .. } => "project.removed",
             Self::MessageDelta { .. } => "message.delta",

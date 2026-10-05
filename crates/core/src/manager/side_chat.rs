@@ -53,7 +53,7 @@ impl SessionManager {
     }
 
     /// The conversation's side chats that weren't archived.
-    fn side_chats(&self, parent: &ConversationId) -> Vec<Conversation> {
+    pub(super) fn side_chats(&self, parent: &ConversationId) -> Vec<Conversation> {
         self.core
             .catalog()
             .conversations

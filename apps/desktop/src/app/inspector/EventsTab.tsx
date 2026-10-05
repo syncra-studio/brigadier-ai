@@ -60,6 +60,8 @@ function summary(event: DomainEvent): string {
       return event.setup.type;
     case "conversationLifecycleChanged":
       return event.lifecycle;
+    case "conversationCleanup":
+      return event.pending ? "cleaning up" : "cleaned up";
     case "conversationDeleted":
     case "projectRemoved":
       return "deleted";

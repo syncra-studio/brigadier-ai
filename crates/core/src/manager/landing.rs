@@ -74,6 +74,7 @@ impl SessionManager {
     /// `land_phase`: lands a reported write task's commits (and so its phase's: a verifier
     /// works on top of its lead's commits) on the session's branch. Returns the outcome.
     pub(crate) async fn land_phase(&self, id: &ConversationId, task: Task) -> Result<String> {
+        let _fence = self.enter(id)?;
         if !task.kind.writes() {
             return Err(Error::Invalid(format!(
                 "task-{} is a {:?} task: only implement and merge tasks land",
@@ -125,6 +126,9 @@ impl SessionManager {
     /// now, on their own (fast-forward, or another rebase and self-check if the target moved
     /// again). The orchestrator hears the outcome.
     pub(crate) async fn land_after_self_check(&self, task: &Task) {
+        let Ok(_fence) = self.enter(&task.conversation_id) else {
+            return;
+        };
         let Ok(task) = self
             .update_task(&task.conversation_id, &task.id, |t| {
                 t.state = TaskState::Landing;

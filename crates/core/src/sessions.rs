@@ -298,6 +298,7 @@ impl Core {
             side_of: origin.side_of,
             fallback: None,
             quota_wait: None,
+            cleanup_pending: false,
         };
         events.insert(
             0,
@@ -377,6 +378,42 @@ impl Core {
             .await?;
         }
         self.conversation(&id)
+    }
+
+    /// Archives a conversation and marks its cleanup as pending, in one durable write: once
+    /// this returns, a restart finishes the cleanup if it was cut off.
+    pub async fn mark_archived(&self, id: ConversationId) -> Result<Conversation> {
+        self.conversation(&id)?;
+        self.record(vec![
+            (
+                streams::CATALOG.into(),
+                DomainEvent::ConversationLifecycleChanged {
+                    id: id.clone(),
+                    lifecycle: Lifecycle::Archived,
+                },
+            ),
+            (
+                streams::CATALOG.into(),
+                DomainEvent::ConversationCleanup {
+                    id: id.clone(),
+                    pending: true,
+                },
+            ),
+        ])
+        .await?;
+        self.conversation(&id)
+    }
+
+    /// The cleanup after an archive finished: nothing is left for a restart to do.
+    pub async fn finish_cleanup(&self, id: ConversationId) -> Result<()> {
+        if self.conversation(&id)?.cleanup_pending {
+            self.record(vec![(
+                streams::CATALOG.into(),
+                DomainEvent::ConversationCleanup { id, pending: false },
+            )])
+            .await?;
+        }
+        Ok(())
     }
 
     /// Removes a project from the catalog. Its conversations are deleted by the caller first.

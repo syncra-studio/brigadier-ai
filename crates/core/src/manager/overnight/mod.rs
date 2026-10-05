@@ -178,6 +178,7 @@ impl SessionManager {
         command_id: String,
         revision: u32,
     ) -> Result<OvernightRun> {
+        let _fence = self.enter(&conversation_id)?;
         let applied = command_id.clone();
         let run = self
             .change_run(&conversation_id, &run_id, command_id, |run, board| {
@@ -470,6 +471,7 @@ impl SessionManager {
         command_id: String,
         words: String,
     ) -> Result<OvernightRun> {
+        let _fence = self.enter(&conversation_id)?;
         let _held = self.overnight.changes.lock().await;
         let board = self.core.board(&conversation_id).await?;
         if let Some(run) = board

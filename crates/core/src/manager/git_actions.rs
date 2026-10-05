@@ -88,6 +88,7 @@ impl SessionManager {
         push: bool,
     ) -> Result<CommitOutcome> {
         self.admit()?;
+        let _fence = self.enter(id)?;
         let (path, provider) = self.checkout(id)?;
         let message = match message.map(|text| text.trim().to_owned()) {
             Some(text) if !text.is_empty() => text,
@@ -124,6 +125,7 @@ impl SessionManager {
     /// The user's push of the checkout's branch.
     pub async fn push_changes(&self, id: &ConversationId) -> Result<String> {
         self.admit()?;
+        let _fence = self.enter(id)?;
         let (path, _) = self.checkout(id)?;
         let git = self.git.clone();
         blocking(move || {
