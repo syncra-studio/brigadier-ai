@@ -750,6 +750,16 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
             "phase one is reviewed by the vendor other than its lead's"
         );
     }
+    // A Claude lead and a Codex verifier: the verifier's review still comes from the vendor
+    // other than the lead's (the phase's author), here the verifier's own.
+    use brigadier_providers::ProviderKind;
+    assert_eq!(lead.route.choice.provider, ProviderKind::Claude);
+    assert_eq!(verifier.route.choice.provider, ProviderKind::Codex);
+    let of_verifier = reviewers
+        .iter()
+        .find(|task| task.subject.as_ref() == Some(&verifier.id))
+        .expect("the verifier's review");
+    assert_eq!(of_verifier.route.choice.provider, ProviderKind::Codex);
     assert!(board.tasks.values().all(|task| task.gate_link.is_none()));
     assert!(board.approvals.is_empty(), "no cards");
     assert_eq!(board.plans.len(), 1, "one plan, no rounds");
