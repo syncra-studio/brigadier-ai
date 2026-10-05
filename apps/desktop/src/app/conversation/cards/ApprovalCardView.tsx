@@ -124,7 +124,7 @@ function describe(
             {subject.branch}?
           </>
         ),
-        subtitle: "One reviewed commit",
+        subtitle: "One commit",
         body: <DiffStatView stat={subject.diffStat} />,
       };
     case "finishSession":
