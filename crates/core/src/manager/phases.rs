@@ -695,7 +695,7 @@ impl SessionManager {
             .map(|focus| format!("\n\nThe worker asks you to look hardest at: {focus}"))
             .unwrap_or_default();
         let spec = format!(
-            "Review the work of task-{number} \u{201c}{title}\u{201d}: your checkout is at its last commit, and the brief below says where its work starts. Read the whole diff from there, and the code around it (precise reads, line ranges). Find what is wrong: bugs, a \"done when\" not really met, missing or weak verification, stray files, needless scope, slop. Don't restate the change or praise it. Report each finding in open_questions as one line: what is wrong, where (file:line), and the fix. No findings: say so in the summary. Change nothing.{focus}",
+            "Review the work of task-{number} \u{201c}{title}\u{201d}: your checkout is at its last commit, and the brief below says where its work starts. Read the whole diff from there, and the code around it (precise reads, line ranges). Find what is wrong: bugs, a \"done when\" not really met, missing or weak verification, stray files, needless scope, slop. This is a code review: don't rebuild or re-run the author's checks; run a command only to confirm a specific defect you suspect. Don't restate the change or praise it. Report each finding in open_questions as one line: what is wrong, where (file:line), and the fix. No findings: say so in the summary. Change nothing.{focus}",
             number = task.number,
             title = task.title,
         );
