@@ -163,8 +163,8 @@ impl SessionManager {
     }
 
     /// The branches deleting `ids` takes that hold work that never landed, or whose standing
-    /// can't be told. A worktree's uncommitted changes count: they become a WIP commit on its
-    /// branch before the worktree goes.
+    /// can't be told. A worktree's uncommitted changes count (a task's, a run's or the
+    /// session's): they become a WIP commit on its branch before the worktree goes.
     pub async fn preview_delete(&self, ids: &[ConversationId]) -> Vec<UnlandedBranch> {
         let mut records = Vec::new();
         let mut worktrees = Vec::new();
@@ -189,6 +189,12 @@ impl SessionManager {
                 tasks
                     .iter()
                     .filter_map(|task| task.workspace.as_ref()?.worktree.as_ref())
+                    .chain(
+                        board
+                            .runs
+                            .values()
+                            .filter_map(|run| Some(&run.workspace.as_ref()?.path)),
+                    )
                     .map(PathBuf::from),
             );
         }

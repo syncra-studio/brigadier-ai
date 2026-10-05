@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import { archive, archiveAll, undoLastArchive } from "@/state/actions";
+import { archive, archiveAll, lastArchiveShown, undoLastArchive } from "@/state/actions";
 import { askDelete, clearPicked, useDeleteAsk, usePicked } from "@/state/picking";
 import { useApp } from "@/state/store";
 
@@ -16,13 +16,42 @@ function editsText(target: EventTarget | null): boolean {
   );
 }
 
+/** When text was last typed anywhere (`performance.now()`). */
+let typedAtMs = -Infinity;
+
+/**
+ * Whether ⌘Z at `target` belongs to its text: always outside an archive's Undo, and during one
+ * when the field had focus at the archive or text was typed since. A field the archive moved
+ * focus to (the composer of the conversation shown next) has nothing of its own to undo yet.
+ */
+function undoesText(target: EventTarget | null): boolean {
+  if (!editsText(target)) return false;
+  const last = lastArchiveShown();
+  return !last || last.focus === target || typedAtMs > last.atMs;
+}
+
 /**
  * ⇧⌘A archives the picked sidebar rows, else the open conversation. ⌘⌫ asks to delete the
  * picked rows. ⌘Z right after an archive (while its toast shows) undoes it. Esc lets go of the
- * picked rows. (Ctrl for ⌘ on Windows and Linux.) ⌘⌫, ⌘Z and Esc leave text fields alone.
+ * picked rows. (Ctrl for ⌘ on Windows and Linux.) ⌘⌫ and Esc leave text fields alone, and so
+ * does ⌘Z where it has text to undo.
  */
 export function useLifecycleShortcuts(): void {
   useEffect(() => {
+    const onInput = () => {
+      typedAtMs = performance.now();
+    };
+    // Before the field's own handling, in a field the archive moved focus to.
+    const onUndoInField = (event: KeyboardEvent) => {
+      const mac = useApp.getState().info?.platform === "macos";
+      const command = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey;
+      if (!command || event.shiftKey || event.altKey || event.code !== "KeyZ") return;
+      if (event.isComposing || !editsText(event.target) || undoesText(event.target)) return;
+      if (document.querySelector('[role="dialog"], [role="menu"]') !== null) return;
+      if (!undoLastArchive()) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing) return;
       const state = useApp.getState();
@@ -50,7 +79,8 @@ export function useLifecycleShortcuts(): void {
         void archive(selection.id);
         return;
       }
-      if (typing || event.shiftKey || open) return;
+      if (event.shiftKey || open) return;
+      if (typing) return;
       if (event.key === "Backspace" || event.key === "Delete") {
         if (picked.ids.length === 0 || useDeleteAsk.getState().ids) return;
         event.preventDefault();
@@ -59,7 +89,13 @@ export function useLifecycleShortcuts(): void {
       }
       if (event.code === "KeyZ" && undoLastArchive()) event.preventDefault();
     };
+    window.addEventListener("beforeinput", onInput, true);
+    window.addEventListener("keydown", onUndoInField, true);
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("beforeinput", onInput, true);
+      window.removeEventListener("keydown", onUndoInField, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
   }, []);
 }

@@ -30,6 +30,9 @@ const QUEUED_REQUESTS: usize = 256;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// A clone is answered when it ends: big repositories on slow links take a while.
 const CLONE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// Archive, restore and delete of a conversation wait for its cleanup under way (an Undo right
+/// after an archive), and that waits for work already started, two minutes at most.
+const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// How long to wait for a freshly launched daemon to accept connections.
 const LAUNCH_WAIT: Duration = Duration::from_secs(10);
 const CONNECT_POLL: Duration = Duration::from_millis(20);
@@ -117,6 +120,10 @@ impl Bridge {
         }
         let timeout = match &request {
             Request::CloneProject { .. } => CLONE_TIMEOUT,
+            Request::Archive { .. }
+            | Request::Restore { .. }
+            | Request::Delete { .. }
+            | Request::DeletesFinished { .. } => LIFECYCLE_TIMEOUT,
             _ => REQUEST_TIMEOUT,
         };
         let (reply, response) = oneshot::channel();

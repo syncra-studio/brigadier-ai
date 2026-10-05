@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -43,18 +43,23 @@ function DeleteForm({ ids, onClose }: { ids: string[]; onClose: () => void }) {
     const all = useApp.getState().conversations;
     return ids.map((id) => all[id]).filter((c): c is Conversation => c !== undefined);
   });
-  const [branches, setBranches] = useState<UnlandedBranch[]>([]);
+  // Delete waits for the preview, so the line about unlanded work is never skipped; `failed`
+  // when it couldn't be told.
+  const [branches, setBranches] = useState<UnlandedBranch[] | "failed" | null>(null);
   useEffect(() => {
     let current = true;
     previewDelete(ids)
       .then((found) => current && setBranches(found))
-      .catch(() => {
-        // Without a preview the confirmation still says what goes.
-      });
+      .catch(() => current && setBranches("failed"));
     return () => {
       current = false;
     };
   }, [ids]);
+  const deleteButton = useRef<HTMLButtonElement>(null);
+  const ready = branches !== null;
+  useEffect(() => {
+    if (ready) deleteButton.current?.focus();
+  }, [ready]);
 
   const count = conversations.length;
   const noun = conversationNoun(conversations);
@@ -74,12 +79,26 @@ function DeleteForm({ ids, onClose }: { ids: string[]; onClose: () => void }) {
             : `These ${count} ${noun} and their transcripts are removed for good.`}
         </DialogDescription>
       </DialogHeader>
-      {branches.length > 0 && <UnlandedLine branches={branches} single={count === 1} />}
+      {branches === "failed"
+        ? conversations.some((c) => c.kind === "session") && (
+            <p className="text-muted-foreground text-sm">
+              {count === 1 ? "Its branches" : "Their branches"} may have work that never landed;
+              they're deleted too.
+            </p>
+          )
+        : branches &&
+          branches.length > 0 && <UnlandedLine branches={branches} single={count === 1} />}
       <DialogFooter>
         <Button type="button" variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button type="button" variant="destructive" autoFocus onClick={confirm}>
+        <Button
+          ref={deleteButton}
+          type="button"
+          variant="destructive"
+          disabled={!ready}
+          onClick={confirm}
+        >
           Delete
         </Button>
       </DialogFooter>
