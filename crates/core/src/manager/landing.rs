@@ -254,6 +254,8 @@ impl SessionManager {
                     }
                     // 2. Litter over the whole range: a committed new file needs a report
                     // that names it, as an untracked one does.
+                    // A file added and removed again within the series counts too: its
+                    // content would stay in the history that lands.
                     let range: Vec<_> = worktree
                         .changes(&base)
                         .map_err(git_error)?
@@ -264,6 +266,17 @@ impl SessionManager {
                             }
                             change
                         })
+                        .chain(
+                            worktree
+                                .passing_files(&base)
+                                .map_err(git_error)?
+                                .into_iter()
+                                .map(|path| brigadier_git::Change {
+                                    path,
+                                    kind: ChangeKind::Added,
+                                    untracked: true,
+                                }),
+                        )
                         .collect();
                     let mut drop = Vec::new();
                     for (change, verdict) in litter::classify(&range, &reported) {

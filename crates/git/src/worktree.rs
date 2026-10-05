@@ -67,6 +67,46 @@ impl Worktree {
         self.repo.tree_changes(base, &tree, &untracked)
     }
 
+    /// Files a commit of `base..HEAD` (first-parent) adds and a later one removes again:
+    /// absent from both `base` and HEAD, so [`Self::changes`] never shows them, yet their
+    /// content stays in the series' history.
+    pub fn passing_files(&self, base: &Oid) -> Result<Vec<String>> {
+        valid_oid(base)?;
+        let head = self.head()?;
+        let range = format!("{}..{}", base.0, head.0);
+        let list = self
+            .repo
+            .cmd(&["rev-list", "--first-parent", "--parents", &range], true)?;
+        let mut added = BTreeSet::new();
+        for line in parse::text(&list)?.lines() {
+            let mut ids = line.split_whitespace().map(|id| Oid(id.to_owned()));
+            let (Some(commit), Some(parent)) = (ids.next(), ids.next()) else {
+                continue;
+            };
+            for change in self.repo.tree_changes(&parent, &commit, &BTreeSet::new())? {
+                if matches!(change.kind, ChangeKind::Added | ChangeKind::Renamed { .. }) {
+                    added.insert(change.path);
+                }
+            }
+        }
+        if added.is_empty() {
+            return Ok(Vec::new());
+        }
+        let present = |tree: &Oid| -> Result<BTreeSet<String>> {
+            let mut args = vec!["ls-tree", "-r", "--name-only", tree.0.as_str(), "--"];
+            args.extend(added.iter().map(String::as_str));
+            Ok(parse::text(&self.repo.cmd(&args, true)?)?
+                .lines()
+                .map(str::to_owned)
+                .collect())
+        };
+        let (at_base, at_head) = (present(base)?, present(&head)?);
+        Ok(added
+            .into_iter()
+            .filter(|path| !at_base.contains(path) && !at_head.contains(path))
+            .collect())
+    }
+
     /// Fold all worker content since base onto onto before inclusion selection and review.
     /// Conflicts are computed with merge-tree first and leave HEAD, index and files untouched.
     /// A snapshot base subtracts the user's original uncommitted content from the worker delta.
@@ -695,6 +735,32 @@ mod tests {
             replayed(f.wt.replay_series(&f.base, &f.base, &[]).expect("replay"));
         assert_eq!((tip, commits, rewritten), (head.clone(), 2, false));
         assert_eq!(f.wt.head().expect("HEAD"), head);
+    }
+
+    #[test]
+    fn a_file_added_and_removed_within_the_series_is_found_and_left_out() {
+        let f = fixture("passing");
+        let repo = &f.wt.repo;
+        commit(
+            repo,
+            "Add a and a log",
+            &[("a.rs", "a\n"), ("debug.log", "secret\n")],
+        );
+        fs::remove_file(repo.root().join("debug.log")).expect("remove the log");
+        commit(repo, "Drop the log", &[("b.rs", "b\n")]);
+        // shared.txt is in the base: never a passing file, whatever happens to it.
+        assert_eq!(
+            f.wt.passing_files(&f.base).expect("passing files"),
+            ["debug.log"]
+        );
+        let (tip, _, _) = replayed(
+            f.wt.replay_series(&f.base, &f.base, &["debug.log".into()])
+                .expect("replay"),
+        );
+        let commits = text(repo, &["rev-list", &format!("{}..{}", f.base.0, tip.0)]);
+        for commit in commits.lines() {
+            assert!(!paths(repo, &Oid(commit.to_owned())).contains(&"debug.log".to_owned()));
+        }
     }
 
     #[test]
