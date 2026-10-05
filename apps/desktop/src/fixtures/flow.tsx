@@ -32,6 +32,7 @@ import type {
   UserRequest,
   WaitingItem,
 } from "@/ipc/generated";
+import { useActivity } from "@/state/activity";
 import { type Board, emptyBoard, useBoard } from "@/state/board";
 import { emptyThread, useApp } from "@/state/store";
 
@@ -373,10 +374,23 @@ useBoard.setState({
   } as Board,
 });
 useApp.setState({
+  selection: { type: "conversation", id },
   conversations: { [id]: conversation },
   threads: { [id]: { ...emptyThread, items: messages } },
   pinnedSummary: query.get("summary") !== "0",
   connection: { status: "connected", daemon: null, reason: null },
+});
+
+// The sidebar row's spinner or "Awaiting approval" pill.
+useActivity.setState({
+  byConversation: {
+    [id]: {
+      run: done ? "idle" : "running",
+      tasks: Object.fromEntries(Object.values(tasks).map((each) => [each.id, each.state])),
+      approvals: new Set(Object.keys(pending)),
+      questions: new Set(),
+    },
+  },
 });
 
 const calls: unknown[] = [];
@@ -393,6 +407,13 @@ mockIPC((command, payload) => {
         if (!s.board) return s;
         const { [approvalId]: _answered, ...rest } = s.board.approvals;
         return { board: { ...s.board, approvals: rest } };
+      });
+      useActivity.setState((s) => {
+        const activity = s.byConversation[id];
+        if (!activity) return s;
+        const left = new Set(activity.approvals);
+        left.delete(approvalId);
+        return { byConversation: { ...s.byConversation, [id]: { ...activity, approvals: left } } };
       });
       return { method: req.method };
     }
