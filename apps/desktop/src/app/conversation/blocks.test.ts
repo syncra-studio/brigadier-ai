@@ -49,48 +49,19 @@ function sequence(block: Block) {
   });
 }
 
-/** Each entry as a short line: what the thread shows, top to bottom. */
-function lines(block: Block): string[] {
-  return sequence(block).map((entry) => {
-    switch (entry.kind) {
-      case "row":
-        return `task-${tasks[entry.row.taskId]?.number}`;
-      case "orchestrator":
-        return entry.steps.map((step) => step.kind.type).join("+");
-      case "card":
-        return `${entry.card.type} card`;
-      default:
-        return entry.kind;
-    }
-  });
-}
-
-test("Phase 2 of the night shows one row per worker task: 7 rows instead of 53", () => {
-  const shown = lines(blockOf("run-09cc7d53-phase-2-g1"));
-  assert.deepEqual(shown, [
-    "plan card",
-    "task-26",
-    "task-32",
-    "task-37",
-    "task-41",
-    "decided",
-    "text",
-  ]);
-});
-
-test("Phase 1 of the night: its three attempts, then its old whole-phase checks as workers", () => {
-  const shown = lines(blockOf("run-09cc7d53-phase-1-g1"));
-  assert.deepEqual(shown, ["task-1", "task-5", "task-13", "text", "task-21", "task-22", "task-23"]);
-});
-
-test("an older task's or plan's checker has no row of its own", () => {
-  const rows = buildBlocks(messages, {}, false, board, []).flatMap((block) => block.rows);
-  const shown = new Set(rows.map((row) => row.taskId));
-  for (const task of Object.values(tasks)) {
-    const ownRow = task.gateLink === null || task.gateLink.owner.type === "phase";
-    assert.equal(shown.has(task.id), ownRow, `task-${task.number}`);
+test("all workers in stored phases remain visible, including reviews and verifiers", () => {
+  for (const request of ["run-09cc7d53-phase-2-g1", "run-09cc7d53-phase-1-g1"]) {
+    const block = blockOf(request);
+    const ids = sequence(block).flatMap((entry) => entry.kind === "row" ? entry.row.taskIds ?? [entry.row.taskId] : []);
+    const expected = Object.values(tasks).filter((task) => task.requestId === request).map((task) => task.id);
+    assert.deepEqual(new Set(ids), new Set(expected));
+    assert.equal(block.cards.filter((card) => card.type === "task").length, 0);
   }
-  assert.equal(shown.size, 10);
+});
+
+test("an older task's or plan's checker has its own openable lifecycle row", () => {
+  const rows = buildBlocks(messages, {}, false, board, []).flatMap((block) => block.rows);
+  assert.deepEqual(new Set(rows.map((row) => row.taskId)), new Set(Object.keys(tasks)));
 });
 
 test("a decision never folds into a summary of reads", () => {
@@ -201,13 +172,13 @@ function normalSession() {
   return { block, normalTasks, held };
 }
 
-test("a normal session's request reads the same way: one row per task, its checks folded in, its plans out of the thread", () => {
+test("a normal session includes helper workers and keeps approved plans out of the thread", () => {
   const { block, normalTasks, held } = normalSession();
   const rows = block.rows.flatMap((row) => (row.type === "task" ? [row.taskId] : []));
-  // Each worker once; none of its checkers.
+  // Every worker, including each reviewer and verifier.
   assert.deepEqual(
     rows.map((id) => normalTasks[id]?.number),
-    [26, 32, 37, 41],
+    Object.values(normalTasks).filter((task) => task.requestId === block.key).map((task) => task.number),
   );
   // Approved plans at work show in the side panel and the phase pill, not in the thread.
   assert.deepEqual(
@@ -288,4 +259,23 @@ test("a report rendered again shows, and copies, in place of the text it was wri
   assert.equal(shown?.text, again);
   // The stored message is untouched.
   assert.equal(messages.find((message) => message.id === id)?.text, stored);
+});
+
+test("stored lifecycle events append completions and group adjacent starts on replay", () => {
+  const user = { ...messages[0]!, id: "life", requestId: "life", seq: 1 };
+  const one = { ...byNumber(1), id: "one", requestId: "life", position: 2 };
+  const two = { ...byNumber(1), id: "two", requestId: "life", position: 3 };
+  const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: { one, two },
+    orchestratorSteps: [], requests: {}, workerSteps: [
+      { taskId: "one", requestId: "life", kind: "started", position: 2, atMs: 10 },
+      { taskId: "two", requestId: "life", kind: "started", position: 3, atMs: 20 },
+      { taskId: "two", requestId: "life", kind: "finished", position: 4, atMs: 30 },
+      { taskId: "one", requestId: "life", kind: "finished", position: 5, atMs: 40 },
+      { taskId: "one", requestId: "life", kind: "landed", position: 6, atMs: 50 },
+    ] };
+  const rows = sequence(buildBlocks([user], {}, false, replay, [])[0]!).flatMap((entry) => entry.kind === "row" ? [entry.row] : []);
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows[0]?.taskIds, ["one", "two"]);
+  assert.deepEqual(rows.map((row) => row.kind), ["started", "finished", "finished"]);
+  assert.deepEqual(rows.slice(1).map((row) => row.taskId), ["two", "one"]);
 });

@@ -1,4 +1,4 @@
-import { toolHasOwnResult } from "@/app/conversation/toolWords";
+import { toolActivity, toolHasOwnResult } from "@/app/conversation/toolWords";
 import type { CardType } from "@/app/conversation/cards/CardBody";
 import { decisionWords } from "@/app/conversation/rowWords";
 import type {
@@ -19,6 +19,8 @@ import type {
   Task,
   ThinkingSegment,
   UserRequest,
+  WorkerStep,
+  WorkerStepKind,
 } from "@/ipc/generated";
 import type { Board } from "@/state/board";
 import { shownIdOf } from "@/state/shownIds";
@@ -53,7 +55,7 @@ export type BlockText = {
  * it. An older task's checks open from its row; an older overnight phase's checks are workers
  * like any other.
  */
-export type BlockRow = { type: "task"; taskId: string; position: number };
+export type BlockRow = { type: "task"; taskId: string; taskIds?: string[]; kind?: WorkerStepKind; position: number };
 
 /**
  * A judgement call made on the user's behalf, shown as a quiet row among the orchestrator's.
@@ -131,6 +133,7 @@ export type Block = {
 /** The parts of the board the blocks depend on (not worker activity or transcripts). */
 export type BoardDigest = {
   tasks: Readonly<Record<string, Task>>;
+  workerSteps?: readonly WorkerStep[];
   approvals: Readonly<Record<string, Approval>>;
   questions: Readonly<Record<string, Question>>;
   plans: Readonly<Record<string, Plan>>;
@@ -159,21 +162,10 @@ export function isFinal(task: Task): boolean {
   return FINAL.has(task.state);
 }
 
-/**
- * A worker whose card stays in view: it failed, or it waits for the user. A checker shows on
- * the row of what it checks, and an overnight run's held change waits for the run, not the user.
- */
-function keepTask(task: Task): boolean {
-  if (task.gateLink !== null) return false;
-  return (
-    task.state === "failed" ||
-    task.state === "paused" ||
-    (task.state === "readyToLand" && task.run === null)
-  );
-}
-
-/** Steps that belong to a worker's row (accepting, reading or messaging it), not rows of their own. */
-const ON_TASK_ROW: ReadonlySet<OrchestratorStepKind["type"]> = new Set(["accepted", "readReport", "messaged"]);
+/** Worker operations are represented by lifecycle sentences, never their tool calls. */
+const ON_TASK_ROW: ReadonlySet<OrchestratorStepKind["type"]> = new Set([
+  "created", "accepted", "readReport", "messaged", "answered",
+]);
 
 /** Whether a decision is a judgement call the thread shows, rather than a task's, plan's or phase's routine outcome. */
 export function judgementCall(decision: Decision): boolean {
@@ -257,25 +249,18 @@ export function buildBlocks(
   }));
   for (const task of Object.values(board.tasks)) {
     placed.push({ kind: "task", position: task.position, requestId: task.requestId, id: task.id });
-    // Each worker is one row; one that failed or waits for the user shows its card too.
-    if (keepTask(task)) {
-      placed.push({
-        kind: "card",
-        position: task.position,
-        requestId: task.requestId,
-        card: { type: "task", id: task.id, position: task.position, keep: true },
-      });
+    // Old conversations without lifecycle events still have a quiet start line.
+    if (!(board.workerSteps ?? []).some((step) => step.taskId === task.id && step.kind === "started")) {
+      placed.push({ kind: "row", position: task.position, requestId: task.requestId,
+        row: { type: "task", taskId: task.id, kind: "started", position: task.position },
+        atMs: task.createdAtMs });
     }
-    const owner = task.gateLink?.owner.type;
-    if (!owner || owner === "phase") {
-      placed.push({
-        kind: "row",
-        position: task.position,
-        requestId: task.requestId,
-        row: { type: "task", taskId: task.id, position: task.position },
-        atMs: task.createdAtMs,
-      });
-    }
+  }
+  for (const step of board.workerSteps ?? []) {
+    if (!board.tasks[step.taskId] || ["updated", "landed"].includes(step.kind)) continue;
+    placed.push({ kind: "row", position: step.position, requestId: step.requestId,
+      row: { type: "task", taskId: step.taskId, kind: step.kind, position: step.position },
+      atMs: step.atMs });
   }
   for (const segment of board.thinking ?? []) {
     if (!segment.text.trim()) continue;
@@ -290,6 +275,7 @@ export function buildBlocks(
   ].toSorted((a, b) => a.position - b.position);
   for (const step of board.orchestratorSteps) {
     // A phase's lead reads and messages its workers all night: the rows say what came of it.
+    if (step.kind.type === "tool" && ["worker", "message", "report"].includes(toolActivity(step.kind.name).kind)) continue;
     if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "tool")) continue;
     if (step.kind.type === "tool" && toolHasOwnResult(step.kind, authoredResults, step.requestId, step.position)) continue;
     placed.push({
@@ -301,6 +287,7 @@ export function buildBlocks(
     });
   }
   for (const step of board.machineSteps) {
+    if (step.taskId !== null) continue;
     placed.push({
       kind: "orchestrator",
       position: step.position,
@@ -606,6 +593,10 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
   const merged: SequenceEntry[] = [];
   for (const entry of entries) {
     const previous = merged.at(-1);
+    if (entry.kind === "row" && previous?.kind === "row" && entry.row.kind === "started" && previous.row.kind === "started") {
+      previous.row = { ...previous.row, taskIds: [...new Set([...(previous.row.taskIds ?? [previous.row.taskId]), entry.row.taskId])] };
+      continue;
+    }
     if (entry.kind === "orchestrator" && previous?.kind === "orchestrator" && !alone(entry) && !alone(previous)) {
       previous.steps.push(...entry.steps);
     } else merged.push(entry);

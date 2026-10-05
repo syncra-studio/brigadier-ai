@@ -1,22 +1,14 @@
-import { useAui } from "@assistant-ui/react";
-import {
-  ArrowLeft,
-  AtSign,
-  DotsHorizontal,
-  Pause,
-  Play,
-  Stop,
-} from "@openai/apps-sdk-ui/components/Icon";
+import { ArrowLeft, DotsHorizontal } from "@openai/apps-sdk-ui/components/Icon";
 import { memo, useContext, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { isFinal, isWorking } from "@/app/conversation/blocks";
-import { HandoffLine, RouteReason } from "@/app/conversation/cards/RouteDetails";
-import { isStoppable } from "@/app/conversation/cards/TaskCardView";
+import { workerDone, workerWorking, workerState, workerPreview } from "@/app/conversation/workerPresentation";
+import { TaskDetails } from "@/app/conversation/cards/TaskCardView";
+import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import {
   AgentsPanelContext,
-  taskStateLabel,
   useWorkerName,
+  useWorkerText,
   WorkerGlyph,
 } from "@/app/conversation/WorkerChip";
 import { WorkerThread } from "@/app/conversation/WorkerThread";
@@ -26,45 +18,35 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useNow } from "@/hooks/use-now";
 import type { Task } from "@/ipc/generated";
-import { formatAgo } from "@/lib/format";
-import { withResetTime } from "@/lib/routing";
+import { formatAgo, formatDuration } from "@/lib/format";
 import { modelName, useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
-import { pauseTask, resumeTask, stopTask } from "@/state/actions";
-import { useBoard, type WorkerSummary } from "@/state/board";
-import { toast } from "@/state/toasts";
+import { useBoard } from "@/state/board";
 
 /** What the UI calls a session's workers (the user chose "Workers" over "Subagents"). */
 export const WORKERS_LABEL = "Workers";
 
-/**
- * The session's workers ("agents"): a side panel listing them all, where one opens to show its
- * live transcript, commands and diff. In the thread each has one row (TaskRow).
- */
+/** The session's flat worker list and read-only worker threads. */
 
 /** Glyphs stacked in a summary row. */
 const STACKED = 4;
 
-/** Several workers' glyphs stacked, overlapping, each sliding in as it joins; a dot on those working. */
+/** Up to four workers' seeded glyphs in a row. */
 export function WorkerGlyphs({
   taskIds,
-  working,
 }: {
   taskIds: readonly string[];
-  working?: ReadonlySet<string>;
 }) {
   return (
-    <span className="flex shrink-0 items-center -space-x-1">
+    <span className="flex shrink-0 items-center gap-1.5">
       {taskIds.slice(0, STACKED).map((id) => (
         <WorkerGlyph
           key={id}
           taskId={id}
-          working={working?.has(id)}
           className="animate-glyph-in motion-reduce:animate-none"
         />
       ))}
@@ -72,79 +54,43 @@ export function WorkerGlyphs({
   );
 }
 
-/**
- * A worker's live status under its name in the list: at work, its latest reply's first line,
- * or "Thinking" before it said anything; otherwise its state in a word or two.
- */
-function statusLine(task: Task, summary: WorkerSummary | undefined, now: number): string | null {
-  switch (task.state) {
-    case "queued":
-      return "Queued";
-    case "starting":
-      return "Starting";
-    case "running":
-      return summary?.text ?? "Thinking";
-    case "blocked":
-      return "Asked the orchestrator";
-    case "paused":
-      return task.quotaWait
-        ? `Waiting for quota: ${withResetTime(task.quotaWait.reason, task.quotaWait.resetsAtMs, now)}`
-        : "Paused";
-    case "reported":
-      return "Reported";
-    case "landing":
-      return "Landing";
-    case "readyToLand":
-      return "Waiting for you";
-    case "rejected":
-      return "Turned down";
-    case "stopped":
-      return "Interrupted";
-    case "failed":
-      return "Failed";
-    case "landed":
-    case "done":
-      return null;
-  }
-}
-
-/** When it last said something or changed state ("now", "3m ago"). */
-function RowTime({ task, summary }: { task: Task; summary: WorkerSummary | undefined }) {
-  const now = useNow(60_000);
-  const at = Math.max(task.updatedAtMs, isFinal(task) ? 0 : (summary?.atMs ?? 0));
-  return (
-    <span className="text-muted-foreground shrink-0 text-xs tabular-nums">{formatAgo(at, now)}</span>
-  );
+/** Live elapsed time; done rows show recency and remain openable. */
+function RowTime({ task }: { task: Task }) {
+  const done = workerDone(task);
+  const now = useNow(done ? 60_000 : 1000);
+  const start = task.attempts.at(-1)?.startedAtMs ?? task.createdAtMs;
+  return <span className="text-foreground/50 shrink-0 text-xs tabular-nums">
+    {done ? formatAgo(task.updatedAtMs, now) : formatDuration(Math.max(0, now - start))}
+  </span>;
 }
 
 const AgentRow = memo(function AgentRow({ taskId }: { taskId: string }) {
   const task = useBoard((s) => s.board?.tasks[taskId]);
-  const summary = useBoard((s) => s.board?.summaries[taskId]);
   const name = useWorkerName(taskId);
   const { setPanel } = useContext(AgentsPanelContext);
-  const now = useNow(task?.quotaWait ? 60_000 : null);
   if (!task) return null;
-  const status = statusLine(task, summary, now);
+  const status = workerPreview(task);
   return (
     <li>
       <button
         type="button"
         data-task={`task-${task.number}`}
-        title={taskStateLabel(task)}
+        aria-label={`${name} ${workerState(task)}`}
         onClick={() => setPanel(task.id)}
-        className="hover:bg-foreground/5 rounded-control flex w-full items-start gap-3 px-2 py-2 text-start transition-colors"
+        className="hover:bg-foreground/5 rounded-lg flex min-h-10 w-full items-start gap-3 px-2 py-2 text-start transition-colors"
       >
         <WorkerGlyph taskId={task.id} className="size-6" />
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="flex items-baseline gap-2">
-            <span className="min-w-0 flex-1 truncate text-sm">{name}</span>
-            <RowTime task={task} summary={summary} />
+          <span className="flex min-h-6 items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-label">{name}</span>
+            <RowTime task={task} />
           </span>
           {status && (
             <span
               className={cn(
-                "line-clamp-2 text-sm",
-                task.state === "failed" ? "text-destructive" : "text-muted-foreground",
+                "truncate text-label leading-5",
+                workerWorking(task) && "shimmer",
+                "text-foreground/65",
               )}
             >
               {status}
@@ -183,14 +129,14 @@ function AgentSection({
   const hidden = ids.length - shown.length;
   return (
     <section className={cn("flex flex-col", className)}>
-      <h3 className="text-muted-foreground mb-2 flex items-center gap-2 px-2 text-sm">
+      <h3 className="text-muted-foreground mb-2 flex items-center gap-2 px-2 text-label">
         <span className="flex-1">{counted ? `${title} · ${ids.length}` : title}</span>
         {trailing && <span className="text-xs tabular-nums">{trailing}</span>}
       </h3>
       {ids.length === 0 ? (
         <p className="text-muted-foreground px-2 text-sm">{empty}</p>
       ) : (
-        <ul className="flex flex-col gap-0.5">
+        <ul className="flex flex-col gap-1">
           {shown.map((id) => (
             <AgentRow key={id} taskId={id} />
           ))}
@@ -209,80 +155,28 @@ function AgentSection({
   );
 }
 
-/**
- * The worker detail's ⋯ menu: pause or resume it, stop it, or mention it in the composer so the
- * next message goes to the orchestrator about it.
- */
-function WorkerMenu({ task }: { task: Task }) {
-  const aui = useAui();
-  const run = (label: string, action: () => Promise<unknown>) => {
-    action().catch((cause: unknown) => {
-      const reason = cause instanceof Error ? cause.message : String(cause);
-      toast(`Couldn't ${label} ${task.title}: ${reason}`, { tone: "error" });
-    });
-  };
-  const mention = () => {
-    const composer = aui.composer();
-    const text = composer.getState().text;
-    const tag = `@task-${task.number} `;
-    composer.setText(text && !text.endsWith(" ") ? `${text} ${tag}` : `${text}${tag}`);
-  };
-  const stoppable = isStoppable(task);
-  const working = task.state === "running" || task.state === "starting";
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <TooltipIconButton tooltip={`${WORKERS_LABEL.slice(0, -1)} actions`} size="icon-sm">
-          <DotsHorizontal />
-        </TooltipIconButton>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        {task.state === "paused" && !task.quotaWait && (
-          <DropdownMenuItem onSelect={() => run("resume", () => resumeTask(task.id))}>
-            <Play />
-            Resume
-          </DropdownMenuItem>
-        )}
-        {working && (
-          <DropdownMenuItem
-            title={
-              task.route.choice.provider === "codex"
-                ? "Pausing Codex lets its current command finish first."
-                : undefined
-            }
-            onSelect={() => run("pause", () => pauseTask(task.id))}
-          >
-            <Pause />
-            Pause
-          </DropdownMenuItem>
-        )}
-        {stoppable && (
-          <DropdownMenuItem onSelect={() => run("stop", () => stopTask(task.id))}>
-            <Stop />
-            Stop
-          </DropdownMenuItem>
-        )}
-        {stoppable && <DropdownMenuSeparator />}
-        <DropdownMenuItem onSelect={mention}>
-          <AtSign />
-          Mention
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
+function WorkerMenu({ onDetails }: { onDetails: () => void }) {
+  return <DropdownMenu>
+    <DropdownMenuTrigger asChild>
+      <TooltipIconButton tooltip="Worker actions" size="icon-sm"><DotsHorizontal /></TooltipIconButton>
+    </DropdownMenuTrigger>
+    <DropdownMenuContent align="end">
+      <DropdownMenuItem onSelect={onDetails}>Details</DropdownMenuItem>
+    </DropdownMenuContent>
+  </DropdownMenu>;
 }
 
-/** Active workers first, then the finished ones, each by number. */
+/** Active workers first, then finished workers, newest first within each group. */
 export function useWorkerIds(conversationId: string): { active: string[]; finished: string[] } {
   const ids = useBoard(
     useShallow((s) => {
       if (s.board?.conversationId !== conversationId) return [];
-      const tasks = Object.values(s.board.tasks).toSorted((a, b) => a.number - b.number);
+      const tasks = Object.values(s.board.tasks).toSorted((a, b) => b.createdAtMs - a.createdAtMs || b.number - a.number);
       // `|` separates the two lists.
       return [
-        ...tasks.filter((task) => !isFinal(task)).map((task) => task.id),
+        ...tasks.filter((task) => !workerDone(task)).map((task) => task.id),
         "|",
-        ...tasks.filter(isFinal).map((task) => task.id),
+        ...tasks.filter(workerDone).map((task) => task.id),
       ];
     }),
   );
@@ -296,45 +190,32 @@ export function useWorkerIds(conversationId: string): { active: string[]; finish
 const ACTIVE_PAGE = 4;
 const DONE_PAGE = 10;
 
-/** Every worker of the session. The rows hold still while the pointer is over them. */
+/** Every worker of the session, ordered by recency. */
 function WorkerList({ conversationId }: { conversationId: string }) {
   const lists = useWorkerIds(conversationId);
-  const [held, setHeld] = useState<typeof lists | null>(null);
   const waiting = useBoard(
     (s) =>
       s.board?.conversationId === conversationId
-        ? Object.values(s.board.tasks).filter((task) => !isFinal(task) && !isWorking(task))
+        ? Object.values(s.board.tasks).filter((task) => !workerDone(task) && !workerWorking(task))
             .length
         : 0,
   );
-  const shown = held ?? lists;
-  if (lists.active.length + lists.finished.length === 0) {
-    return (
-      <p className="text-muted-foreground p-4 text-sm">
-        No {WORKERS_LABEL.toLowerCase()} yet.
-      </p>
-    );
-  }
-  // A worker that started while the list was held joins it at the end.
-  const heldIds = new Set([...shown.active, ...shown.finished]);
-  const joined = [...lists.active, ...lists.finished].filter((id) => !heldIds.has(id));
   return (
     <div
       className="min-h-0 flex-1 overflow-y-auto px-3 py-5"
-      onPointerEnter={() => setHeld(lists)}
-      onPointerLeave={() => setHeld(null)}
     >
       <div className="max-w-thread mx-auto flex w-full flex-col">
         <AgentSection
           title="Active"
-          ids={[...shown.active, ...joined]}
+          counted
+          ids={lists.active}
           page={ACTIVE_PAGE}
           trailing={waiting > 0 ? `${waiting} waiting` : undefined}
           empty={`No active ${WORKERS_LABEL.toLowerCase()}`}
         />
         <AgentSection
           title="Done"
-          ids={shown.finished}
+          ids={lists.finished}
           page={DONE_PAGE}
           counted
           className="mt-6"
@@ -348,36 +229,41 @@ function WorkerList({ conversationId }: { conversationId: string }) {
 function WorkerDetail({ task }: { task: Task }) {
   const { setPanel } = useContext(AgentsPanelContext);
   const name = useWorkerName(task.id);
+  const [details, setDetails] = useState(false);
+  const instructions = useWorkerText(task.spec);
   const groups = useModelGroups();
   const choice = task.route.choice;
   const model = `${modelName(groups, choice)}${choice.effort ? ` · ${effortLabel(choice.effort)}` : ""}`;
   return (
     <>
-      <header className="border-border flex h-12 shrink-0 items-center gap-2 border-b px-4">
+      <header className="border-border flex h-10 shrink-0 items-center gap-2 border-b px-4">
         <TooltipIconButton
-          tooltip={`Back to ${WORKERS_LABEL.toLowerCase()}`}
+          tooltip={details ? "Back to worker" : `Back to ${WORKERS_LABEL.toLowerCase()}`}
           size="icon-sm"
-          onClick={() => setPanel(null)}
+          onClick={() => details ? setDetails(false) : setPanel(null)}
         >
           <ArrowLeft />
         </TooltipIconButton>
         <WorkerGlyph taskId={task.id} className="size-6" />
         <h2
-          className="min-w-0 flex-1 truncate text-sm font-medium"
+          className="min-w-0 flex-1 truncate text-label font-medium"
           title={name ?? task.title}
         >
           {name ?? task.title}
         </h2>
-        <span className="text-muted-foreground shrink-0 text-xs">{model}</span>
-        <WorkerMenu task={task} />
+        <span className="text-foreground/50 max-w-1/2 truncate text-xs">{model}</span>
+        <WorkerMenu onDetails={() => setDetails(true)} />
       </header>
-      {(task.route.reason || task.attempts.length > 1) && (
-        <div className="border-border flex shrink-0 flex-col gap-0.5 border-b px-4 py-1.5">
-          <RouteReason task={task} />
-          <HandoffLine task={task} groups={groups} />
+      {details ? <div data-slot="worker-details" data-selectable className="min-h-0 flex-1 overflow-y-auto px-8 py-5">
+        <div className="flex flex-col gap-4">
+          <h3 className="text-sm font-medium">Details</h3>
+          <TaskDetails task={task} model={model} inThread detailsPage />
+          <section className="flex flex-col gap-2">
+            <h3 className="text-sm font-medium">Instructions</h3>
+            <MarkdownBlock text={instructions} />
+          </section>
         </div>
-      )}
-      <WorkerThread key={task.id} task={task} model={model} />
+      </div> : <WorkerThread key={task.id} task={task} />}
     </>
   );
 }
@@ -386,6 +272,6 @@ function WorkerDetail({ task }: { task: Task }) {
 export function WorkersTab({ conversationId }: { conversationId: string }) {
   const { panel } = useContext(AgentsPanelContext);
   const selected = useBoard((s) => (panel ? s.board?.tasks[panel] : undefined));
-  if (selected) return <WorkerDetail task={selected} />;
+  if (selected) return <WorkerDetail key={selected.id} task={selected} />;
   return <WorkerList conversationId={conversationId} />;
 }

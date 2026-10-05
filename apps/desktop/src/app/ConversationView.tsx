@@ -444,6 +444,7 @@ export function ConversationView({
       s.board?.conversationId === conversationId
         ? {
             tasks: s.board.tasks,
+            workerSteps: s.board.workerSteps,
             approvals: s.board.approvals,
             questions: s.board.questions,
             plans: s.board.plans,
@@ -701,7 +702,7 @@ export function ConversationView({
       await regenerate(conversationId, storedIdOf(parentId)).catch(fail);
     },
     isLoading: thread.loading && thread.items.length === 0,
-    isRunning: running || waitingForQuota,
+    isRunning: running || waitingForQuota || Object.values(digest?.tasks ?? {}).some((task) => ["queued", "starting", "running", "blocked", "paused", "landing", "readyToLand"].includes(task.state)),
     isDisabled: archived,
     isSendDisabled: conversation === null && resolved.problem !== null,
     queue,

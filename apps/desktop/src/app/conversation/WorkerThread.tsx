@@ -1,13 +1,14 @@
+import { useWorkerText, WorkerLine } from "@/app/conversation/WorkerChip";
 import { ThinkingRow } from "@/app/conversation/ThinkingRow";
 import {
   Book,
+  Chat,
   Check,
   ChevronRight,
   Copy,
   EditPencil,
   Folder,
   Globe,
-  Reply,
   Search,
   ShieldCheck,
   Terminal,
@@ -23,11 +24,12 @@ import {
   useState,
 } from "react";
 
-import { isFinal, isWorking } from "@/app/conversation/blocks";
-import { QuotaWaitLine } from "@/app/conversation/cards/RouteDetails";
-import { TaskDetails } from "@/app/conversation/cards/TaskCardView";
+import { ArtifactFiles } from "@/app/conversation/cards/TaskCardView";
+import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
+import { workerDone, workerWorking, workerPreview } from "@/app/conversation/workerPresentation";
+import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
+import { ACTIVITY_ROW } from "@/components/assistant-ui/elements/activity-row";
 import { useAction } from "@/app/conversation/useAction";
-import { taskStateLabel } from "@/app/conversation/WorkerChip";
 import { RateItem, RateMenu } from "@/components/assistant-ui/rate-menu";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -47,28 +49,16 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";
-import type { ErrorKind, Rating, RawEntry, Task } from "@/ipc/generated";
+import type { ArtifactRef, ErrorKind, Rating, RawEntry, Task } from "@/ipc/generated";
 import { formatDuration, formatSentAt } from "@/lib/format";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { loadEarlierWorkerEntries, openWorkerTranscript, rateMessage } from "@/state/actions";
 import { useBoard } from "@/state/board";
 
-/**
- * A worker's own thread in the workers panel, told like a main-thread answer: "Working for
- * 34s", its replies with its actions summed up between them ("Read files, ran commands"),
- * what it does right now, and its report as the final answer. Once it reported, the work
- * before the report folds into "Worked for 55s".
- */
+/** Read-only worker replies and activity, with instructions and early steps folded above. */
 
 const NO_ENTRIES: RawEntry[] = [];
-
-/** Milliseconds a task has worked: until now while it is active, until its last update after. */
-export function useTaskElapsed(task: Task): number {
-  const final = isFinal(task);
-  const now = useNow(final ? null : 1000);
-  return Math.max(0, (final ? task.updatedAtMs : now) - task.createdAtMs);
-}
 
 /**
  * Folds a growing transcript incrementally: live entries are applied on top of what was
@@ -93,7 +83,7 @@ const ICONS: Record<ActivityKind, FC<{ className?: string }>> = {
   search: Search,
   edit: EditPencil,
   run: Terminal,
-  report: Reply,
+  report: Chat,
   tool: Tools,
 };
 
@@ -117,7 +107,7 @@ const ERROR_TITLES: Record<ErrorKind, string> = {
   stalled: "It stopped responding",
 };
 
-const row = "text-muted-foreground flex min-h-row-sm min-w-0 items-center gap-2 text-sm";
+const row = ACTIVITY_ROW;
 
 /** A command's box: "Shell", the command and what it printed, then how it ended. */
 function shellCard(item: Extract<ActionItem, { kind: "command" }>): ReactNode {
@@ -217,7 +207,7 @@ function ActionRow({ item }: { item: ActionItem }) {
   const running = item.status === "inProgress";
   const label = (
     <>
-      <Icon aria-hidden className="size-icon-md shrink-0" />
+      <Icon aria-hidden className="size-4 shrink-0" />
       <span className="min-w-0 truncate">{running ? activity.doing : activity.done}</span>
       {item.status === "failed" && <span className="text-destructive shrink-0">failed</span>}
       {item.kind === "command" && !running && item.durationMs !== null && item.durationMs >= 1000 && (
@@ -225,20 +215,7 @@ function ActionRow({ item }: { item: ActionItem }) {
       )}
     </>
   );
-  const detail = actionDetail(item);
-  if (!detail) return <div className={row}>{label}</div>;
-  return (
-    <Collapsible>
-      <CollapsibleTrigger className={cn(row, "group hover:text-foreground w-full text-start")}>
-        {label}
-        <ChevronRight
-          aria-hidden
-          className="size-icon-xs shrink-0 opacity-0 transition-[rotate,opacity] group-hover:opacity-100 group-data-[state=open]:rotate-90 group-data-[state=open]:opacity-100"
-        />
-      </CollapsibleTrigger>
-      <CollapsibleContent>{detail}</CollapsibleContent>
-    </Collapsible>
-  );
+  return <ThreadActivity detail={actionDetail(item)}>{label}</ThreadActivity>;
 }
 
 /** A run of actions between two replies, summed up in one line; it opens to each of them. */
@@ -246,30 +223,23 @@ function ActionRun({ items }: { items: readonly ActionItem[] }) {
   const [first] = items;
   if (items.length === 1 && first) return <ActionRow item={first} />;
   const activities = items.map(activityOf);
+  const commands = items.every((item) => item.kind === "command");
   const counts = new Map<ActivityKind, number>();
   for (const activity of activities) counts.set(activity.kind, (counts.get(activity.kind) ?? 0) + 1);
   // Edits win the icon; otherwise the most frequent kind does.
   const [dominant] = counts.has("edit")
     ? ["edit" as const]
     : ([...counts].toSorted((a, b) => b[1] - a[1])[0] ?? ["run" as const]);
-  const Icon = ICONS[dominant];
-  return (
-    <Collapsible>
-      <CollapsibleTrigger className={cn(row, "group hover:text-foreground w-full text-start")}>
-        <Icon aria-hidden className="size-icon-md shrink-0" />
-        <span className="min-w-0 truncate">{summarize(activities)}</span>
-        <ChevronRight
-          aria-hidden
-          className="size-icon-xs shrink-0 opacity-0 transition-[rotate,opacity] group-hover:opacity-100 group-data-[state=open]:rotate-90 group-data-[state=open]:opacity-100"
-        />
-      </CollapsibleTrigger>
-      <CollapsibleContent className="max-h-action-list overflow-y-auto ps-6">
-        {items.map((item) => (
-          <ActionRow key={item.key} item={item} />
-        ))}
-      </CollapsibleContent>
-    </Collapsible>
-  );
+  const Icon = commands ? Terminal : ICONS[dominant];
+  return <ThreadActivity detailClassName="max-h-action-list overflow-y-auto ps-6"
+    detail={items.map((item) => <ActionRow key={item.key} item={item} />)}>
+    <Icon aria-hidden className="size-4 shrink-0" />
+    <span className="min-w-0 truncate">{commands ? "Ran commands" : summarize(activities)}</span>
+  </ThreadActivity>;
+}
+
+function WorkerMarkdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
+  return <MarkdownBlock text={useWorkerText(text)} streaming={streaming} />;
 }
 
 function EntryView({ entry, working }: { entry: ThreadEntry; working: boolean }) {
@@ -285,7 +255,7 @@ function EntryView({ entry, working }: { entry: ThreadEntry; working: boolean })
         </div>
       ) : (
         <div className="text-foreground leading-relaxed wrap-break-word">
-          <MarkdownBlock text={item.text} streaming={item.streaming} />
+          <WorkerMarkdown text={item.text} streaming={item.streaming} />
         </div>
       );
     case "approval": {
@@ -294,7 +264,7 @@ function EntryView({ entry, working }: { entry: ThreadEntry; working: boolean })
       const what = item.request.command ? shownCommand(item.request.command) : item.request.paths.join(", ") || item.request.tool;
       return (
         <div className={cn(row, "text-warning")}>
-          <ShieldCheck aria-hidden className="size-icon-md shrink-0" />
+          <ShieldCheck aria-hidden className="size-4 shrink-0" />
           <span className="min-w-0 truncate">Waiting for your approval: {what}</span>
         </div>
       );
@@ -313,7 +283,7 @@ function EntryView({ entry, working }: { entry: ThreadEntry; working: boolean })
         </p>
       );
     case "turnCompleted":
-      return <p className="text-muted-foreground text-sm">Its turn {item.status}.</p>;
+      return null;
     default:
       return null;
   }
@@ -328,29 +298,16 @@ function liveLabel(entries: readonly ThreadEntry[]): string | null {
   return "Thinking";
 }
 
-function header(task: Task, elapsed: number): string {
-  const time = formatDuration(elapsed);
-  if (isWorking(task)) return elapsed < 1000 ? "Working" : `Working for ${time}`;
-  switch (task.state) {
-    case "failed":
-      return `Failed after ${time}`;
-    case "stopped":
-      return `Stopped after ${time}`;
-    case "paused":
-      return task.quotaWait ? `Waiting for quota after ${time}` : `Paused after ${time}`;
-    default:
-      return `Worked for ${time}`;
-  }
-}
-
 /** The report as the thread's answer, with copy and rate; when it came shows on hover. */
-function Answer({ task }: { task: Task }) {
+function Answer({ task, text }: { task: Task; text?: string | undefined }) {
   const { isCopied, copyToClipboard } = useCopyToClipboard();
   const now = useNow(60_000);
   const subject = `task:${task.id}`;
   const rated = useBoard((s) => s.board?.ratings[subject] ?? null);
   const action = useAction();
-  const summary = task.report?.summary;
+  const summary = useWorkerText(text ?? task.report?.summary ?? "");
+  const [artifact, setArtifact] = useState<ArtifactRef | null>(null);
+  const files = [...new Map([...(task.report?.artifacts ?? []), ...task.outputs].map((file) => [file.id, file])).values()];
   if (!summary) return null;
   const rate = (rating: Rating) =>
     action.run(() => rateMessage(task.conversationId, subject, rating));
@@ -359,6 +316,9 @@ function Answer({ task }: { task: Task }) {
       <div className="text-foreground leading-relaxed wrap-break-word">
         <MarkdownBlock text={summary} />
       </div>
+      {files.length > 0 && <ArtifactFiles artifacts={files} onView={setArtifact} />}
+      {task.report?.needsUser.map((need, index) => <p key={index} className="leading-relaxed"><WorkerLine text={need} /></p>)}
+      <ArtifactDialog artifact={artifact} onOpenChange={(next) => !next && setArtifact(null)} />
       <div className="text-muted-foreground -ms-1 flex items-center gap-1">
         <TooltipIconButton
           tooltip={isCopied ? "Copied" : "Copy"}
@@ -383,7 +343,7 @@ function Answer({ task }: { task: Task }) {
   );
 }
 
-export function WorkerThread({ task, model }: { task: Task; model: string }) {
+export function WorkerThread({ task }: { task: Task }) {
   const transcript = useBoard((s) => s.board?.transcripts[task.id]);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -394,11 +354,15 @@ export function WorkerThread({ task, model }: { task: Task; model: string }) {
 
   const [folding] = useState(() => new IncrementalFold());
   const raw = transcript?.entries ?? NO_ENTRIES;
-  const entries = useMemo(() => threadEntries(folding.fold(raw)), [folding, raw]);
-  const elapsed = useTaskElapsed(task);
-  const working = isWorking(task);
-  // With its report in and nothing running, the work before it folds.
-  const foldable = !working && task.report !== null && entries.length > 0;
+  const entries = useMemo(() => threadEntries(folding.fold(raw)).filter((entry) => !(entry.kind === "item" && entry.item.kind === "message" && entry.item.role === "user")), [folding, raw]);
+  const working = workerWorking(task);
+  // The prompt and early steps belong to the same previous-messages disclosure.
+  const tail = entries.at(-1);
+  const finalReply = workerDone(task) && tail?.kind === "item" && tail.item.kind === "message" && tail.item.role === "assistant" ? tail.item.text : undefined;
+  const visibleEntries = finalReply ? entries.slice(0, -1) : entries;
+  const previous = visibleEntries.slice(0, Math.max(0, visibleEntries.length - 3));
+  const previousCount = 1 + task.messages.length + previous.reduce((count, entry) => count + (entry.kind === "actions" ? entry.items.length : 1), 0);
+  const recent = visibleEntries.slice(previous.length);
   const [open, setOpen] = useState(false);
 
   // Follow new output while the view is scrolled to the bottom.
@@ -409,90 +373,43 @@ export function WorkerThread({ task, model }: { task: Task; model: string }) {
     if (pinned.current && element && entries.length > 0) element.scrollTop = element.scrollHeight;
   }, [entries]);
 
-  const label = header(task, elapsed);
   const now = working ? liveLabel(entries) : null;
   return (
     <div
       ref={scrollRef}
       data-slot="worker-thread"
       data-selectable
-      className="min-h-0 flex-1 overflow-y-auto px-4 py-3"
+      className="min-h-0 flex-1 overflow-y-auto px-8 pb-6"
       onScroll={(event) => {
         const element = event.currentTarget;
         pinned.current =
           element.scrollHeight - element.scrollTop - element.clientHeight < tokenPx("--spacing-row");
       }}
     >
-      <div className="flex flex-col gap-3">
-        {transcript?.hasMore && (!foldable || open) && (
-          <Button
-            size="xs"
-            variant="ghost"
-            className="self-center"
-            disabled={transcript.loading}
-            onClick={() => void loadEarlierWorkerEntries(task.conversationId, task.id)}
-          >
-            Load earlier
-          </Button>
-        )}
-        {foldable ? (
-          <button
-            type="button"
-            aria-expanded={open}
-            onClick={() => setOpen(!open)}
-            className="group border-border flex h-control-sm items-center gap-1 self-stretch border-b text-start"
-          >
-            <span className="text-muted-foreground text-sm">{label}</span>
-            <ChevronRight
-              aria-hidden
-              className={cn(
-                "text-muted-foreground size-icon-xs transition-[rotate,opacity] duration-200 motion-reduce:transition-none",
-                open ? "rotate-90" : "opacity-0 group-hover:opacity-100",
-              )}
-            />
-          </button>
-        ) : (
-          <div className="border-border flex h-control-sm items-center border-b">
-            <span
-              className={cn(
-                "text-sm",
-                working ? "shimmer motion-reduce:animate-none" : "text-muted-foreground",
-                task.state === "failed" && "text-destructive",
-              )}
-            >
-              {label}
-            </span>
-          </div>
-        )}
+      <div className="max-w-thread mx-auto flex flex-col gap-4">
+        <Collapsible open={open} onOpenChange={setOpen}>
+          <CollapsibleTrigger className="text-foreground/50 border-border hover:text-foreground flex min-h-7 w-full items-center gap-1 border-b text-start text-sm">
+            {previousCount} previous {previousCount === 1 ? "message" : "messages"}
+            <ChevronRight aria-hidden className={cn("size-3", open ? "-rotate-90" : "rotate-90")} />
+          </CollapsibleTrigger>
+          <CollapsibleContent className="flex flex-col gap-4 py-4">
+            {transcript?.hasMore && <Button size="xs" variant="ghost" className="self-start" disabled={transcript.loading}
+              onClick={() => void loadEarlierWorkerEntries(task.conversationId, task.id)}>Load earlier</Button>}
+            <div data-slot="worker-instructions" className="text-foreground leading-relaxed wrap-break-word"><WorkerMarkdown text={task.spec} /></div>
+            {task.messages.map((text, index) => <WorkerMarkdown key={index} text={text} />)}
+            {previous.map((entry) => <EntryView key={entry.kind === "actions" ? entry.key : entry.item.key} entry={entry} working={working} />)}
+          </CollapsibleContent>
+        </Collapsible>
         {error && (
           <p role="alert" className="text-destructive text-xs">
             {error}
           </p>
         )}
-        {(!foldable || open) &&
-          entries.map((entry) => (
-            <EntryView
-              key={entry.kind === "actions" ? entry.key : entry.item.key}
-              entry={entry}
-              working={working}
-            />
-          ))}
+        {recent.map((entry) => <EntryView key={entry.kind === "actions" ? entry.key : entry.item.key} entry={entry} working={working} />)}
         {now && <div className="shimmer truncate text-sm motion-reduce:animate-none">{now}</div>}
-        {!working && !task.report && !isFinal(task) && (
-          <p className="text-muted-foreground text-sm">{taskStateLabel(task)}</p>
-        )}
-        <Answer task={task} />
+        {!working && !workerDone(task) && <p className="text-foreground/65 text-sm">{workerPreview(task)}</p>}
+        <Answer task={task} text={finalReply} />
         {task.error && <p className="text-destructive text-sm">{task.error}</p>}
-        {task.quotaWait ? (
-          <p className="text-muted-foreground text-sm">
-            <QuotaWaitLine wait={task.quotaWait} />
-          </p>
-        ) : (
-          task.blockedReason && <p className="text-warning text-sm">{task.blockedReason}</p>
-        )}
-        <div className="flex flex-col gap-3 pt-2">
-          <TaskDetails task={task} model={model} inThread />
-        </div>
       </div>
     </div>
   );

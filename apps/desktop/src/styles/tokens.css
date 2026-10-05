@@ -310,6 +310,8 @@
   /* A Settings page's title; a Settings row's label. */
   --text-page-title: 1.75rem;
   --text-page-title--line-height: 2.125rem;
+  --text-worker-count: 1rem;
+  --text-worker-count--line-height: 1.5rem;
   --text-label: 0.8125rem;
   --text-label--line-height: 1.125rem;
   /* The sidebar panel's title ("Brigadier", "Settings"). */

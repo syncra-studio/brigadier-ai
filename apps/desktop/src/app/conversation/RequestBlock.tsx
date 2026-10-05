@@ -210,7 +210,7 @@ function entryKey(entry: Entry): string {
     case "compaction":
       return `compaction:${entry.compaction.id}`;
     case "row":
-      return `task:${entry.row.taskId}`;
+      return `task:${entry.row.taskId}:${entry.position}`;
   }
 }
 
@@ -274,7 +274,7 @@ const SequenceEntry: FC<{ entry: Entry; streaming: boolean; grouped?: boolean }>
     case "compaction":
       return <CompactionRow compaction={entry.compaction} />;
     case "row":
-      return <TaskRow taskId={entry.row.taskId} />;
+      return <TaskRow taskId={entry.row.taskId} taskIds={entry.row.taskIds} kind={entry.row.kind} />;
   }
 };
 
@@ -407,7 +407,7 @@ type FoldItem = { kind: "entry"; entry: Entry } | { kind: "group"; key: string; 
 
 /** Lines of work (steps, workers) that fold into one summing-up line when they run together. */
 function isWorkLine(entry: Entry): boolean {
-  return entry.kind === "orchestrator" || entry.kind === "row";
+  return entry.kind === "orchestrator";
 }
 
 /**

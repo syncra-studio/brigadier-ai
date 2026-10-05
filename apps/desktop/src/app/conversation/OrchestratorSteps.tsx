@@ -17,6 +17,7 @@ import type { BlockOrchestratorStep, DecidedStep, MachineWords } from "@/app/con
 import { toolActivity, toolName, toolWords, type ToolKind } from "@/app/conversation/toolWords";
 import { machineWords } from "@/app/conversation/rowWords";
 import { AgentsPanelContext, useWorkerName, WorkerGlyph, WorkerLine } from "@/app/conversation/WorkerChip";
+import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
 import { ACTIVITY_ROW, ACTIVITY_DETAIL, ACTIVITY_ICONS } from "@/components/assistant-ui/elements/activity-row";
 import { WebSearch } from "@/components/assistant-ui/elements/web-search";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -298,39 +299,11 @@ const WorkStepRow: FC<{ kind: OrchestratorStepKind | DecidedStep }> = ({ kind })
   const workerRow = isWorkerKind(kind);
   const row = workerRow ? STEP_ROW : ACTIVITY_ROW;
   const more = details(kind, spec);
-  if (!more) {
-    return (
-      <div data-slot="orchestrator-step" data-kind={kind.type} className={row}>
-        <Icon aria-hidden className="size-icon-md shrink-0" />
-        <span className="flex min-w-0 flex-1 items-center gap-1.5">{line}</span>
-      </div>
-    );
-  }
-  return (
-    <Collapsible data-slot="orchestrator-step" data-kind={kind.type}>
-      <CollapsibleTrigger asChild>
-        <div
-          role="button"
-          tabIndex={0}
-          onKeyDown={(event) => {
-            // A line with a worker's name in it is no button element; keys open it as one.
-            if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
-              event.preventDefault();
-              event.currentTarget.click();
-            }
-          }}
-          className={cn(row, "group hover:text-foreground focus-visible:ring-ring/50 rounded-control w-full cursor-pointer text-start outline-none focus-visible:ring-1")}
-        >
-          <Icon aria-hidden className="size-icon-md shrink-0" />
-          <span className="flex min-w-0 items-center gap-1.5">{line}</span>
-          <ChevronRight aria-hidden className={OPENER} />
-        </div>
-      </CollapsibleTrigger>
-      <CollapsibleContent className={workerRow ? "text-muted-foreground flex max-h-action-list flex-col gap-1 overflow-y-auto ps-6 pt-1 pb-2 text-sm wrap-break-word" : cn(ACTIVITY_DETAIL, "wrap-break-word")}>
-        {more}
-      </CollapsibleContent>
-    </Collapsible>
-  );
+  return <ThreadActivity data-slot="orchestrator-step" data-kind={kind.type} className={row}
+    detail={more} detailClassName={workerRow ? "text-muted-foreground flex max-h-action-list flex-col gap-1 overflow-y-auto ps-6 pt-1 pb-2 text-sm wrap-break-word" : cn(ACTIVITY_DETAIL, "wrap-break-word")}>
+    <Icon aria-hidden className="size-icon-md shrink-0" />
+    <span className="flex min-w-0 flex-1 items-center gap-1.5">{line}</span>
+  </ThreadActivity>;
 };
 
 /** What the orchestrator did between two replies, one grey line per step. */

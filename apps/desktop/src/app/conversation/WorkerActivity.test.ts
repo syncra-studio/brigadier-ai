@@ -43,12 +43,11 @@ function chromium(): string {
   throw new Error("Worker activity rendering test needs Chromium. Set CHROME_BIN to an installed Chrome/Chromium.");
 }
 
-type Row = { text: string; state: string; lines: string[]; subrows: number };
-type Rendering = { thread: Record<string, Row>; strip: Record<string, Row> };
+type Rendering = { thread: Record<string, string>; summary: string; list: string; strip: number; avatars: number[] };
 
 // Vite serves the real React components, and Chromium clicks the real Collapsible trigger.
 // Disposable profiles and Vite's cache use the system temporary folder, never the app's data.
-test("worker activity renders in the thread and expanded background strip", { timeout: 60000 }, async (t) => {
+test("worker lifecycle and overview stay quiet and include waiting and done workers", { timeout: 60000 }, async (t) => {
   const binary = chromium();
   const scratch = mkdtempSync(join(tmpdir(), "worker-render-"));
   // Keep Vite outside the pure-module test loader, which only resolves TypeScript imports.
@@ -104,34 +103,18 @@ test("worker activity renders in the thread and expanded background strip", { ti
   const serialized = stdout.match(/<pre id="worker-activity-result">([^<]+)<\/pre>/)?.[1];
   assert.ok(serialized, `Fixture did not render its result:\n${stdout}`);
   const rendering = JSON.parse(serialized) as Rendering;
-  assert.equal(Object.keys(rendering.strip).length, 4, "The strip must be expanded with all four active workers");
-
-  await t.test("active rows render activity, elapsed time and diff", () => {
-    for (const rows of [rendering.thread, rendering.strip]) {
-      assert.deepEqual(rows.active?.lines, ["Editing apps/desktop/src/composer/Paste.tsx · 3m 12s · +209 −102"]);
-      assert.equal(rows.active?.subrows, 1);
-    }
-  });
-  await t.test("blocked, quota and queued rows render wait reasons instead of Working", () => {
-    const waits = {
-      blocked: "Waiting for a free worker · 3m 12s",
-      quota: "Waiting for Codex quota: Codex weekly quota resets tomorrow · 40s",
-      queued: "Queued: waiting for step 1 · 3m 12s",
-    };
-    for (const rows of [rendering.thread, rendering.strip]) {
-      for (const [id, expected] of Object.entries(waits)) {
-        assert.deepEqual(rows[id]?.lines, [expected]);
-        assert.doesNotMatch(rows[id]!.text, /Working/);
-      }
-    }
-    assert.equal(rendering.thread.blocked?.state, "is waiting");
-    assert.equal(rendering.thread.quota?.state, "is waiting for quota");
-    assert.equal(rendering.thread.queued?.state, "is queued");
-  });
-  await t.test("completed rows render no activity subrow", () => {
-    assert.match(rendering.thread.completed!.text, /finished/);
-    assert.deepEqual(rendering.thread.completed?.lines, []);
-    assert.equal(rendering.thread.completed?.subrows, 0);
-    assert.equal(rendering.strip.completed, undefined);
-  });
+  assert.equal(rendering.strip, 0, "There is no composer worker strip");
+  assert.match(rendering.thread.active!, /Check active started working/);
+  assert.match(rendering.thread.blocked!, /Check blocked is waiting/);
+  assert.match(rendering.thread.completed!, /Check completed finished/);
+  assert.match(rendering.summary, /3 working/);
+  assert.match(rendering.summary, /1 done/);
+  assert.match(rendering.list, /Active · 3/);
+  assert.match(rendering.list, /Done · 1/);
+  assert.match(rendering.list, /Waiting for its plan to be reviewed/);
+  assert.match(rendering.list, /Waiting for a free slot/);
+  assert.match(rendering.list, /3m 12s/);
+  assert.match(rendering.list, /2m ago/);
+  assert.ok(rendering.avatars.every((width) => width === 16));
+  assert.doesNotMatch(Object.values(rendering.thread).join(" "), /task-\d+|Editing|Ran |Used a tool|\d+m|\+\d+/);
 });

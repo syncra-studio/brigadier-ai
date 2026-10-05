@@ -1,5 +1,5 @@
 import { taskWaitWords } from "@/app/conversation/taskActivity";
-import type { Decision, DecisionWords, GateOwner, GateRole, MachineStepKind, Task, WorkerRole } from "@/ipc/generated";
+import type { Decision, DecisionWords, GateOwner, GateRole, MachineStepKind, Task } from "@/ipc/generated";
 
 /**
  * The words of a worker's row in the thread ("Router: quota penalty · Landed · checked by
@@ -144,42 +144,31 @@ export function taskDecisions(decisions: readonly Decision[], taskId: string): D
   return decisions.filter((decision) => decision.source.type === "task" && decision.source.taskId === taskId);
 }
 
-/** A worker's part in a request's flow, as its name says it. */
-const WORKER_ROLES: Record<WorkerRole, string> = {
-  lead: "Lead",
-  parallel: "Worker",
-  verifier: "Verifier",
-  fix: "Fix",
-  merge: "Merge",
-  reviewer: "Reviewer",
-};
-
-/**
- * A worker of a request's flow named by its part and phase: "Lead · Phase 1", "Verifier ·
- * Phase 2", "Lead" for a request without phases. A parallel worker keeps its title, as
- * several share a phase.
- */
-function roleName(task: Task): string | null {
-  if (!task.role) return null;
-  const part = task.role === "parallel" ? task.title : WORKER_ROLES[task.role];
-  return task.phase === null ? part : `${part} · Phase ${task.phase}`;
+/** Old verbose titles are shortened too; roles are metadata, not names. */
+export function shortWorkerName(title: string, fallback = "Worker task"): string {
+  const words = title.replace(/task-\d+|phase\s+\d+/gi, "").replace(/[`#*“”"():·—–]/g, " ")
+    .replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  const short = words.slice(0, 4);
+  while (short.length > 2 && /^(?:to|of|for|with|and|the|a|an)$/i.test(short.at(-1) ?? "")) short.pop();
+  const name = short.join(" ") || fallback;
+  return name.split(" ").length === 1 ? `${name} task` : name;
 }
 
-/**
- * What a worker is called wherever the user reads it: its title, or for a check of another
- * worker "Review of", "Second review of" or "Check of" and that worker's name. Its `task-N`
- * stays in records and prompts only; a title that names one gets the worker's name instead.
- */
-export function workerName(tasks: Readonly<Record<string, Task>>, task: Task, depth = 0): string {
-  const role = roleName(task);
-  if (role) return role;
-  const subject = task.subject ? tasks[task.subject] : undefined;
-  if (subject && depth < 2) {
-    const of = workerName(tasks, subject, depth + 1);
-    if (task.kind === "review") return `${/^second review/i.test(task.title) ? "Second review" : "Review"} of ${of}`;
-    if (task.kind === "verify") return `Check of ${of}`;
+/** Unique in a chat, including old stored workers created before names were constrained. */
+export function workerName(tasks: Readonly<Record<string, Task>>, task: Task, _depth = 0): string {
+  const ordered = Object.values(tasks).toSorted((a, b) => a.number - b.number);
+  if (!ordered.some((other) => other.id === task.id)) ordered.push(task);
+  const used = new Set<string>();
+  for (const other of ordered) {
+    const fallback = other.kind === "review" ? "Review changes" : other.kind === "verify" ? "Check changes" : "Worker task";
+    const base = shortWorkerName(other.title, fallback);
+    let name = base;
+    let ordinal = 2;
+    while (used.has(name.toLowerCase())) name = `${base.split(" ").slice(0, 3).join(" ")} ${ordinal++}`;
+    used.add(name.toLowerCase());
+    if (other.id === task.id) return name;
   }
-  return depth < 2 ? namedTasks(task.title, tasks, depth + 1) : task.title;
+  return "Worker task";
 }
 
 /**

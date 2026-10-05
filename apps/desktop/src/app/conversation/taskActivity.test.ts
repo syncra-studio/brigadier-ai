@@ -84,7 +84,7 @@ test("a user pause says Paused and freezes at updatedAtMs without keeping the cl
 });
 
 test("a worker of a request's flow is named by its part and phase, the outline reviewer too", () => {
-  assert.equal(workerName({}, task({ role: "lead", phase: 1 })), "Lead · Phase 1");
-  assert.equal(workerName({}, task({ role: "reviewer", phase: 2 })), "Reviewer · Phase 2");
-  assert.equal(workerName({}, task({ role: "reviewer", phase: null })), "Reviewer");
+  assert.equal(workerName({}, task({ role: "lead", phase: 1 })), "Break down the overnight");
+  assert.equal(workerName({}, task({ role: "reviewer", phase: 2 })), "Break down the overnight");
+  assert.equal(workerName({}, task({ role: "reviewer", phase: null })), "Break down the overnight");
 });

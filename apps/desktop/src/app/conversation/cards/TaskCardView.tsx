@@ -1,11 +1,12 @@
 import { Branch, BranchAlt, Pause, Play, Stop } from "@openai/apps-sdk-ui/components/Icon";
 import { memo, type ReactNode, useState } from "react";
 
+import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
-import { DiffStatView, Lines, Section, short } from "@/app/conversation/cards/common";
+import { DiffStatView, Section, short } from "@/app/conversation/cards/common";
 import { useAction } from "@/app/conversation/useAction";
 import { HandoffLine, QuotaWaitLine, RouteSections } from "@/app/conversation/cards/RouteDetails";
-import { taskStateLabel, WorkerChip, WorkerMention } from "@/app/conversation/WorkerChip";
+import { taskStateLabel, useWorkerText, WorkerChip, WorkerMention } from "@/app/conversation/WorkerChip";
 import { WorkerTranscript } from "@/app/conversation/WorkerTranscript";
 import { mono } from "@/components/assistant-ui/elements/surfaces";
 import { TaskCard } from "@/components/assistant-ui/elements/task-card";
@@ -241,56 +242,22 @@ function fileNameOf(artifact: ArtifactRef): string {
 }
 
 /** One stored file: view it (text), open it in its app, or save it where the user picks. */
-function ArtifactFile({
-  artifact,
-  onView,
-}: {
-  artifact: ArtifactRef;
-  onView: (artifact: ArtifactRef) => void;
-}) {
+function ArtifactFile({ artifact, onView }: { artifact: ArtifactRef; onView: (artifact: ArtifactRef) => void }) {
   const action = useAction();
-  const [saved, setSaved] = useState(false);
   const name = fileNameOf(artifact);
-  const open = () => action.run(() => openArtifact(artifact.id, name));
-  const save = () =>
-    action.run(async () => {
-      setSaved(await saveArtifact(artifact.id, name));
-    });
-  return (
-    <li className="flex flex-col gap-0.5">
-      <div className="flex items-center gap-1.5">
-        <Button
-          size="xs"
-          variant="ghost"
-          className="min-w-0 flex-1 justify-start"
-          onClick={isText(artifact) ? () => onView(artifact) : open}
-        >
-          <span className="truncate">{artifact.title}</span>
-          {name !== artifact.title && (
-            <span className="text-muted-foreground truncate font-mono">{name}</span>
-          )}
-        </Button>
-        <span className="text-muted-foreground shrink-0 text-xs">
-          {formatBytes(artifact.bytes)}
-        </span>
-        <Button size="xs" variant="outline" disabled={action.busy} onClick={open}>
-          Open
-        </Button>
-        <Button size="xs" variant="outline" disabled={action.busy} onClick={save}>
-          Save to…
-        </Button>
-      </div>
-      {saved && !action.error && <p className="text-muted-foreground text-xs">Saved.</p>}
-      {action.error && (
-        <p role="alert" className="text-destructive text-xs">
-          {action.error}
-        </p>
-      )}
-    </li>
-  );
+  const title = useWorkerText(artifact.title);
+  return <li className="border-border rounded-lg flex min-w-0 items-center gap-3 border px-3 py-2.5">
+    <button type="button" onClick={isText(artifact) ? () => onView(artifact) : () => action.run(() => openArtifact(artifact.id, name))}
+      className="focus-visible:ring-ring flex min-w-0 flex-1 flex-col text-start outline-none focus-visible:ring-1">
+      <span className="truncate text-sm">{name}</span>
+      <span className="text-muted-foreground truncate text-xs">{title} · {formatBytes(artifact.bytes)}</span>
+    </button>
+    <Button size="xs" variant="ghost" disabled={action.busy} onClick={() => action.run(() => saveArtifact(artifact.id, name))}>Save</Button>
+    {action.error && <p role="alert" className="text-destructive text-xs">{action.error}</p>}
+  </li>;
 }
 
-function ArtifactFiles({
+export function ArtifactFiles({
   artifacts,
   onView,
 }: {
@@ -304,6 +271,14 @@ function ArtifactFiles({
       ))}
     </ul>
   );
+}
+
+function ReportLine({ text }: { text: string }) { return useWorkerText(text); }
+function ReportLines({ items }: { items: readonly string[] }) {
+  if (!items.length) return <p className="text-muted-foreground text-xs">None.</p>;
+  return <ul className="flex list-disc flex-col gap-0.5 ps-4 text-sm">
+    {items.map((text, index) => <li key={index}><ReportLine text={text} /></li>)}
+  </ul>;
 }
 
 /** Unfinished work saved as a patch (its branch is gone), with "Restore as branch". */
@@ -369,10 +344,12 @@ export function TaskDetails({
   task,
   model,
   inThread = false,
+  detailsPage = false,
 }: {
   task: Task;
   model: string;
   inThread?: boolean;
+  detailsPage?: boolean;
 }) {
   const [artifact, setArtifact] = useState<ArtifactRef | null>(null);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
@@ -382,10 +359,11 @@ export function TaskDetails({
     task.subject && s.board?.tasks[task.subject] ? task.subject : null,
   );
   const { report, candidate, workspace, kept } = task;
+  const reportSummary = useWorkerText(report?.summary ?? "");
 
   return (
     <>
-      <RouteSections task={task} model={model} groups={groups} inThread={inThread} />
+      <RouteSections task={task} model={model} groups={groups} inThread={detailsPage ? false : inThread} />
 
       {(workspace || subject !== null) && (
         <Section title="Workspace">
@@ -416,38 +394,38 @@ export function TaskDetails({
 
       {report ? (
         <>
-          {!inThread && (
+          {(!inThread || detailsPage) && (
             <Section title="Report">
-              <p className="text-sm whitespace-pre-wrap">{report.summary}</p>
+              <MarkdownBlock text={reportSummary} />
             </Section>
           )}
           <Section title="Changes">
-            <Lines items={report.changes} />
+            <ReportLines items={report.changes} />
           </Section>
           <Section title="Decisions">
-            <Lines items={report.decisions} />
+            <ReportLines items={report.decisions} />
           </Section>
           <Section title="Verification">
-            <Lines items={report.verification} />
+            <ReportLines items={report.verification} />
           </Section>
           {report.doneWhen.length > 0 && (
             <Section title="Done when">
-              <Lines items={report.doneWhen} />
+              <ReportLines items={report.doneWhen} />
             </Section>
           )}
           {report.openQuestions.length > 0 && (
             <Section title="Open questions">
-              <Lines items={report.openQuestions} />
+              <ReportLines items={report.openQuestions} />
             </Section>
           )}
           {report.risks.length > 0 && (
             <Section title="Risks">
-              <Lines items={report.risks} />
+              <ReportLines items={report.risks} />
             </Section>
           )}
           {report.needsUser.length > 0 && (
             <Section title="Needs you">
-              <Lines items={report.needsUser} />
+              <ReportLines items={report.needsUser} />
             </Section>
           )}
           {report.verdict && (

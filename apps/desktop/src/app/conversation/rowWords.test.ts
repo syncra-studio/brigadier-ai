@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import { decisionWords, namedTasks, workerName } from "@/app/conversation/rowWords";
+import { decisionWords, namedTasks, shortWorkerName, workerName } from "@/app/conversation/rowWords";
 import type { Decision, Task } from "@/ipc/generated";
 
 const tasks = night.tasks as unknown as Record<string, Task>;
@@ -12,12 +12,13 @@ const byNumber = (number: number): Task => {
   return task;
 };
 
-test("a check is named for the worker it checks, never by its task-N", () => {
-  const title = byNumber(1).title;
-  assert.equal(workerName(tasks, byNumber(1)), title);
-  assert.equal(workerName(tasks, byNumber(2)), `Review of ${title}`);
-  assert.equal(workerName(tasks, byNumber(3)), `Second review of ${title}`);
-  assert.equal(workerName(tasks, byNumber(4)), `Check of ${title}`);
+test("every worker uses a short plain unique job name, regardless of role", () => {
+  const names = Object.values(tasks).map((task) => workerName(tasks, task));
+  assert.ok(names.every((name) => name.split(" ").length >= 2 && name.split(" ").length <= 4));
+  assert.equal(new Set(names).size, names.length);
+  assert.ok(names.every((name) => !/task-\d+|Phase \d/.test(name)));
+  assert.equal(shortWorkerName("Build search results with pagination"), "Build search results");
+  assert.equal(workerName({}, { ...byNumber(1), title: "File summary", role: "lead", phase: 1 }), "File summary");
 });
 
 test("a line's task-N reads as the worker's name, once where the line already quotes it", () => {
@@ -27,11 +28,11 @@ test("a line's task-N reads as the worker's name, once where the line already qu
   );
   assert.equal(
     namedTasks("Sent task-5 back to fix what its checks found", tasks),
-    `Sent “${byNumber(5).title}” back to fix what its checks found`,
+    `Sent “${workerName(tasks, byNumber(5))}” back to fix what its checks found`,
   );
   assert.equal(
     namedTasks("The checks of task-5's change waited for it", tasks),
-    `The checks of “${byNumber(5).title}”'s change waited for it`,
+    `The checks of “${workerName(tasks, byNumber(5))}”'s change waited for it`,
   );
   // A number the session has no worker for stays as it is.
   assert.equal(namedTasks("task-999 is gone", tasks), "task-999 is gone");
@@ -39,7 +40,7 @@ test("a line's task-N reads as the worker's name, once where the line already qu
   for (const kept of ["on `brigadier/x/task-13-fix`", "docs/task-13.md", "read task-13.diff", "task-13x", "subtask-13"]) {
     assert.equal(namedTasks(kept, tasks), kept);
   }
-  assert.equal(namedTasks("Sent task-5.", tasks), `Sent “${byNumber(5).title}”.`);
+  assert.equal(namedTasks("Sent task-5.", tasks), `Sent “${workerName(tasks, byNumber(5))}”.`);
 });
 
 test("a decision recorded in older, longer words reads in the board's short ones", () => {

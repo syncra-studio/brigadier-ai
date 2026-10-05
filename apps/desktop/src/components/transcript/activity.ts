@@ -1,3 +1,4 @@
+import { toolActivity } from "@/app/conversation/toolWords";
 import type { TranscriptItem } from "@/components/transcript/transcript";
 
 /**
@@ -111,8 +112,8 @@ function classifyCommand(raw: string): Activity {
   }
   if (LISTERS.has(program)) {
     const dir = target(words);
-    return dir && dir !== "."
-      ? { kind: "list", done: `Listed files in ${dir}`, doing: `Listing files in ${dir}` }
+    return dir
+      ? { kind: "list", done: `Listed files in ${dir} folder`, doing: `Listing files in ${dir} folder` }
       : { kind: "list", done: "Listed files", doing: "Listing files" };
   }
   if (SEARCHERS.has(program)) {
@@ -172,9 +173,11 @@ function classifyTool(name: string, input: string | null): Activity {
       return { kind: "edit", done: `Edited ${file ?? "a file"}`, doing: `Editing ${file ?? "a file"}` };
   }
   if (short.endsWith("submit_report")) {
-    return { kind: "report", done: "Sent its report", doing: "Sending its report" };
+    return { kind: "report", done: "Sent message to parent", doing: "Sending message to parent" };
   }
-  return { kind: "tool", done: `Used ${short}`, doing: `Using ${short}` };
+  const activity = toolActivity(name);
+  const kind = activity.kind === "web" ? "search" : ["read", "list", "search", "edit", "run", "report"].includes(activity.kind) ? activity.kind as ActivityKind : "tool";
+  return { kind, done: activity.done, doing: activity.doing, ...(activity.kind === "web" && { web: true }) };
 }
 
 export function activityOf(item: ActionItem): Activity {
@@ -212,7 +215,7 @@ export function threadEntries(items: readonly TranscriptItem[]): ThreadEntry[] {
     if (item.kind === "turnCompleted" && item.status === "completed") continue;
     if (isAction(item)) {
       const last = entries.at(-1);
-      if (last?.kind === "actions") last.items.push(item);
+      if (last?.kind === "actions" && activityOf(item).kind !== "report" && last.items.every((action) => activityOf(action).kind !== "report")) last.items.push(item);
       else entries.push({ kind: "actions", key: item.key, items: [item] });
       continue;
     }
@@ -227,7 +230,7 @@ const PLURALS: Record<ActivityKind, [one: string, many: string]> = {
   search: ["searched", "searched"],
   edit: ["edited a file", "edited files"],
   run: ["ran a command", "ran commands"],
-  report: ["sent its report", "sent its report"],
+  report: ["sent message to parent", "sent messages to parent"],
   tool: ["used a tool", "used tools"],
 };
 

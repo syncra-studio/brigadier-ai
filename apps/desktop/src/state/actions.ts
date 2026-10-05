@@ -582,7 +582,15 @@ export async function resumeQueue(conversationId: string): Promise<void> {
 
 /** Stops the running turn; the queue pauses until resumed. */
 export async function interrupt(conversationId: string): Promise<void> {
-  await request({ method: "interrupt", conversationId });
+  const tasks = useBoard.getState().board;
+  const ids = tasks?.conversationId === conversationId
+    ? Object.values(tasks.tasks).filter((task) => ["queued", "starting", "running", "blocked", "paused", "landing", "readyToLand"].includes(task.state)).map((task) => task.id)
+    : [];
+  const results = await Promise.allSettled([
+    request({ method: "interrupt", conversationId }), ...ids.map(stopTask),
+  ]);
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed?.status === "rejected") throw failed.reason;
 }
 
 /** Continues the latest request after the user stopped it, in the same block. */

@@ -73,6 +73,11 @@ export function useWorkerName(taskId: string): string | null {
   });
 }
 
+/** Worker prose uses job names; paths and code identifiers keep their literal spelling. */
+export function useWorkerText(text: string): string {
+  return useBoard((s) => namedTasks(text, s.board?.tasks ?? {}).replace(/(?<![\p{L}\p{N}_/-])task-\d+(?![\p{L}\p{N}_/-]|\.\w)/gu, "a worker"));
+}
+
 /** A decision's or a waiting item's line as the user reads it: plain, its workers by name. */
 export const WorkerLine = memo(function WorkerLine({ text }: { text: string }) {
   return useBoard((s) => plainLine(namedTasks(text, s.board?.tasks ?? {})));

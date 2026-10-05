@@ -93,15 +93,15 @@ test("tool updates and concurrent snapshot replay keep one row at its first posi
   assert.deepEqual(boardFromView(view, null, calls).orchestratorSteps, board.orchestratorSteps);
 });
 
-test("delegation is visible while its input streams and its successful result uses the worker row", () => {
+test("delegation calls stay out of the parent thread while their stored events remain available", () => {
   const call = envelope(3, 3000, tool("delegate", "delegate_task", "inProgress", 3000));
   let board = [...events.slice(0, 2), call].reduce(applyToBoard, emptyBoard(conversationId));
   let block = buildBlocks([message], {}, false, board, [])[0]!;
-  assert.equal(block.orchestratorSteps.length, 1);
+  assert.equal(block.orchestratorSteps.length, 0);
   board = applyToBoard(board, envelope(4, 4000, tool("delegate", "delegate_task", "completed", 4000)));
   block = buildBlocks([message], {}, false, board, [])[0]!;
   // A successful call is kept until its authored result arrives, including on replay.
-  assert.equal(block.orchestratorSteps.length, 1);
+  assert.equal(block.orchestratorSteps.length, 0);
   board = applyToBoard(board, envelope(5, 4100, { type: "orchestratorStepped", step: {
     requestId: "request", atMs: 4100, position: 0, kind: { type: "created", taskId: "worker" },
   } }));
@@ -109,7 +109,7 @@ test("delegation is visible while its input streams and its successful result us
   assert.equal(block.orchestratorSteps.filter((step) => step.kind.type === "tool").length, 0);
   board = applyToBoard(board, envelope(6, 5000, tool("delegate", "delegate_task", "failed", 5000)));
   block = buildBlocks([message], {}, false, board, [])[0]!;
-  assert.equal(block.orchestratorSteps.filter((step) => step.kind.type === "tool").length, 1);
+  assert.equal(block.orchestratorSteps.filter((step) => step.kind.type === "tool").length, 0);
   const kind = board.orchestratorSteps[0]!.kind;
   assert.ok(kind.type === "tool");
   assert.equal(toolWords(kind), "Created a worker — failed");

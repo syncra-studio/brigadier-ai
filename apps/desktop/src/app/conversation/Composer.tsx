@@ -31,7 +31,6 @@ import {
 import type { ComposerInputProps } from "@/app/conversation/ComposerEditor";
 import { type MentionMemory, Mentions } from "@/app/conversation/Mentions";
 import { SlashCommands } from "@/app/conversation/SlashCommands";
-import { BackgroundWorkers } from "@/app/conversation/BackgroundWorkers";
 import {
   COMPOSER_EDITABLE,
   type ComposerTarget,
@@ -141,9 +140,6 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
             <StatusCard conversationId={conversation.id} onClose={() => statusCard.setOpen(false)} />
           )}
           {conversation && !archived && <QueueCard conversationId={conversation.id} />}
-          {conversation?.kind === "session" && !archived && (
-            <BackgroundWorkers conversationId={conversation.id} />
-          )}
           {current && (
             <PendingActionCard
               action={current}
