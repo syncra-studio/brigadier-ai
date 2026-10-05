@@ -8,6 +8,8 @@ import {
   Globe,
   Reload,
   Plus,
+  Search,
+  Minus,
   X,
 } from "@openai/apps-sdk-ui/components/Icon";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
@@ -23,11 +25,19 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { browserGo, browserPlace, openUrl } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
 import {
+  browserControls,
+  updateBrowserControls,
+  useBrowserControls,
   closeBrowserTab,
   dismissBlocked,
   newBrowserTab,
@@ -81,6 +91,36 @@ function covered(area: DOMRect, layers: readonly Element[]): boolean {
   });
 }
 
+function siteAddress(url: string | undefined): URL | null {
+  try {
+    const site = new URL(url ?? "");
+    return ["http:", "https:"].includes(site.protocol) ? site : null;
+  } catch {
+    return null;
+  }
+}
+
+function pageBounds(
+  element: HTMLElement,
+  rect = element.getBoundingClientRect(),
+): BrowserBounds {
+  // A native child webview paints above the app DOM. End its rectangle above the
+  // floating editor, so the same editor stays accessible without a second webview.
+  const composer = element
+    .closest('[data-slot="pane-workspace"]')
+    ?.querySelector('[data-slot="floating-composer"]')
+    ?.getBoundingClientRect();
+  return {
+    x: rect.left,
+    y: rect.top,
+    width: rect.width,
+    height:
+      composer && composer.height > 0
+        ? Math.min(rect.height, Math.max(0, composer.top - rect.top - 12))
+        : rect.height,
+  };
+}
+
 function failed(cause: unknown) {
   toast(cause instanceof Error ? cause.message : String(cause), {
     tone: "error",
@@ -97,6 +137,15 @@ export function BrowserTab({ conversationId }: { conversationId: string }) {
   const pages = useBrowsers((s) => s.pages);
   const { hide, state, setFullscreen } = useContext(SidePanelContext);
   const host = useRef<HTMLDivElement>(null);
+  const [stripWidth, setStripWidth] = useState(0);
+  useEffect(() => {
+    const strip = host.current;
+    if (!strip) return;
+    const observer = new ResizeObserver(() => setStripWidth(strip.clientWidth));
+    observer.observe(strip);
+    return () => observer.disconnect();
+  }, []);
+  const compactTabs = stripWidth / Math.max(1, tabs?.ids.length ?? 1) < 96;
   const mac = useApp((s) => s.info?.platform === "macos");
   const create = useCallback(
     () => newBrowserTab(conversationId),
@@ -164,13 +213,13 @@ export function BrowserTab({ conversationId }: { conversationId: string }) {
           ref={host}
           role="tablist"
           aria-label="Browser pages"
-          className="hide-scrollbar flex min-w-0 flex-1 overflow-x-auto"
+          className="hide-scrollbar flex min-w-0 flex-1 overflow-x-auto scroll-px-1"
         >
           {tabs?.ids.map((id) => (
             <div
               key={id}
               className={cn(
-                "group/tab flex h-8 min-w-16 max-w-60 flex-1 items-center gap-1 rounded-lg px-2 text-sm",
+                "group/tab flex h-8 min-w-browser-tab-min max-w-browser-tab-max flex-1 items-center rounded-lg p-1 text-sm",
                 id === tabs.active
                   ? "bg-panel-tab shadow-panel-tab"
                   : "text-toolbar-foreground hover:bg-toolbar-hover",
@@ -181,11 +230,17 @@ export function BrowserTab({ conversationId }: { conversationId: string }) {
                 data-page={id}
                 type="button"
                 aria-selected={id === tabs.active}
+                aria-label={pages[id]?.title || pages[id]?.url || "New tab"}
                 onClick={() => selectBrowserTab(conversationId, id)}
-                className="flex min-w-0 flex-1 items-center gap-1.5 outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex min-w-0 flex-1 items-center justify-center gap-1.5 px-0.5 outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <Globe className="size-icon-sm shrink-0" />
-                <span className="truncate">
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate",
+                    compactTabs && "hidden",
+                  )}
+                >
                   {pages[id]?.title || pages[id]?.url || "New tab"}
                 </span>
               </button>
@@ -196,7 +251,12 @@ export function BrowserTab({ conversationId }: { conversationId: string }) {
                   closeBrowserTab(conversationId, id);
                   if (tabs.ids.length === 1) hide();
                 }}
-                className="hover:bg-toolbar-hover flex size-5 shrink-0 items-center justify-center rounded opacity-60 hover:opacity-100 focus-visible:ring-1 focus-visible:ring-ring"
+                className={cn(
+                  "hover:bg-toolbar-hover flex size-5 shrink-0 items-center justify-center rounded-full opacity-60 hover:opacity-100 focus-visible:ring-1 focus-visible:ring-ring",
+                  compactTabs &&
+                    id !== tabs.active &&
+                    "hidden group-hover/tab:flex group-focus-within/tab:flex",
+                )}
               >
                 <X className="size-icon-xs" />
               </button>
@@ -250,16 +310,27 @@ function BrowserPageView({
   const field = useRef<HTMLInputElement>(null);
   const [typed, setTyped] = useState<string | null>(null);
   const made = page !== undefined;
+  const site = siteAddress(page?.url);
+  const { state } = useContext(SidePanelContext);
+  const [finding, setFinding] = useState(false);
+  const [query, setQuery] = useState("");
+  const controls = useBrowserControls((store) => store.pages[conversationId]);
+  const { zoom, device, history } = controls ?? browserControls(conversationId);
+  const setZoom = (value: number) =>
+    updateBrowserControls(conversationId, { zoom: value });
+  const setDevice = (value: boolean) =>
+    updateBrowserControls(conversationId, { device: value });
+  const [showHistory, setShowHistory] = useState(false);
+  useEffect(() => {
+    if (made)
+      void browserGo(conversationId, "zoom", String(zoom / 100)).catch(failed);
+  }, [conversationId, made, zoom]);
 
   useEffect(() => {
     if (!initialUrl || made || !area.current) return;
-    const rect = area.current.getBoundingClientRect();
-    void openPage(conversationId, initialUrl, {
-      x: rect.left,
-      y: rect.top,
-      width: rect.width,
-      height: rect.height,
-    }).catch(failed);
+    void openPage(conversationId, initialUrl, pageBounds(area.current)).catch(
+      failed,
+    );
   }, [conversationId, initialUrl, made]);
 
   // Keep the page over this tab's area, and hide it when the tab goes or is covered.
@@ -284,14 +355,19 @@ function BrowserPageView({
       const box = clip?.getBoundingClientRect();
       const whole =
         !box || (rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5);
+      const placedBounds = pageBounds(element, rect);
+      const rendered = new DOMRect(
+        placedBounds.x,
+        placedBounds.y,
+        placedBounds.width,
+        placedBounds.height,
+      );
       const bounds: BrowserBounds | null =
-        whole && rect.width > 0 && rect.height > 0 && !covered(rect, layers)
-          ? {
-              x: rect.left,
-              y: rect.top,
-              width: rect.width,
-              height: rect.height,
-            }
+        whole &&
+        placedBounds.width > 0 &&
+        placedBounds.height > 0 &&
+        !covered(rendered, layers)
+          ? placedBounds
           : null;
       const key = JSON.stringify(bounds);
       if (key !== placed) {
@@ -312,15 +388,20 @@ function BrowserPageView({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const command = mac ? event.metaKey : event.ctrlKey;
-      if (!command || event.shiftKey || event.altKey || event.code !== "KeyL")
+      if (!command || event.shiftKey || event.altKey) return;
+      if (event.code === "KeyF" && made) {
+        event.preventDefault();
+        setFinding(true);
         return;
+      }
+      if (event.code !== "KeyL") return;
       event.preventDefault();
       field.current?.focus();
       field.current?.select();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mac]);
+  }, [mac, made]);
 
   const go = (text: string) => {
     const url = webAddress(text);
@@ -336,45 +417,47 @@ function BrowserPageView({
       openUrl(url).catch(failed);
       return;
     }
-    const rect = area.current?.getBoundingClientRect();
-    if (!rect) return;
-    openPage(conversationId, url, {
-      x: rect.left,
-      y: rect.top,
-      width: rect.width,
-      height: rect.height,
-    }).catch(failed);
+    if (!area.current) return;
+    openPage(conversationId, url, pageBounds(area.current)).catch(failed);
   };
-  const act = (action: "back" | "forward" | "reload" | "stop") => {
-    browserGo(conversationId, action).catch(() => {});
+  const act = (action: Parameters<typeof browserGo>[1], value?: string) => {
+    browserGo(conversationId, action, value).catch(failed);
   };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="border-border flex shrink-0 items-center gap-1 border-b p-2">
         {embedded && (
-          <div className="bg-muted/50 flex shrink-0 items-center gap-0.5 rounded-full px-1">
+          <div className="flex shrink-0 items-center gap-0.5">
             <TooltipIconButton
               tooltip="Back"
+              className="size-7 rounded-full"
               disabled={!made}
               onClick={() => act("back")}
             >
               <ArrowLeft />
             </TooltipIconButton>
+            <span aria-hidden className="bg-border mx-0.5 h-4 w-px" />
             <TooltipIconButton
               tooltip="Forward"
+              className="size-7 rounded-full"
               disabled={!made}
               onClick={() => act("forward")}
             >
               <ArrowRight />
             </TooltipIconButton>
             {page?.loading ? (
-              <TooltipIconButton tooltip="Stop" onClick={() => act("stop")}>
+              <TooltipIconButton
+                tooltip="Stop"
+                className="size-7 rounded-full"
+                onClick={() => act("stop")}
+              >
                 <X />
               </TooltipIconButton>
             ) : (
               <TooltipIconButton
                 tooltip="Reload"
+                className="size-7 rounded-full"
                 disabled={!made}
                 onClick={() => act("reload")}
               >
@@ -392,9 +475,33 @@ function BrowserPageView({
         >
           <label
             title={page?.title || undefined}
-            className="bg-muted/50 flex h-control-md items-center gap-1.5 rounded-full px-3"
+            className="border-border/60 flex h-8 items-center gap-1.5 rounded-full border px-2"
           >
-            <Globe className="text-muted-foreground size-icon-sm shrink-0" />
+            {site ? (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <TooltipIconButton
+                    type="button"
+                    tooltip="View site information"
+                    className="size-7 rounded-full"
+                  >
+                    <Globe />
+                  </TooltipIconButton>
+                </PopoverTrigger>
+                <PopoverContent
+                  align="start"
+                  className="w-browser-menu text-sm"
+                >
+                  <p className="truncate font-medium">{site.host}</p>
+                  <p className="text-muted-foreground mt-2">
+                    This page uses{" "}
+                    {site.protocol === "https:" ? "HTTPS" : "HTTP"}.
+                  </p>
+                </PopoverContent>
+              </Popover>
+            ) : (
+              <Globe className="text-muted-foreground size-icon-sm shrink-0" />
+            )}
             <input
               ref={field}
               // ⌘T opens the tab to type an address at once.
@@ -414,17 +521,95 @@ function BrowserPageView({
                   setTyped(null);
                 }
               }}
-              className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none"
+              className={cn(
+                "placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none",
+                !made && "text-center",
+              )}
             />
           </label>
         </form>
+        {state.fullscreen && page?.url && (
+          <TooltipIconButton
+            tooltip="Open in external browser"
+            onClick={() => openOutside(page.url)}
+          >
+            <ExternalLink />
+          </TooltipIconButton>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <TooltipIconButton tooltip="Browser options">
+            <TooltipIconButton
+              tooltip="Browser options"
+              className="size-8 rounded-full"
+            >
               <DotsHorizontal />
             </TooltipIconButton>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
+          <DropdownMenuContent
+            align="end"
+            className="w-browser-menu rounded-browser-menu [&_[role=menuitem]]:h-browser-menu-item"
+          >
+            <DropdownMenuItem
+              disabled={!made}
+              onSelect={() => setFinding(true)}
+            >
+              <Search />
+              Find in page
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={!made} onSelect={() => act("print")}>
+              Print
+            </DropdownMenuItem>
+            <div
+              role="group"
+              aria-label="Page zoom"
+              className="flex h-control-sm items-center gap-1 px-2 text-sm"
+            >
+              <span className="flex-1">Zoom</span>
+              <button
+                className="rounded-control px-1 hover:bg-toolbar-hover"
+                disabled={!made}
+                onClick={() => setZoom(100)}
+                aria-label="Reset page zoom"
+              >
+                {zoom}%
+              </button>
+              <TooltipIconButton
+                size="icon-xs"
+                tooltip="Zoom out"
+                disabled={!made || zoom <= 25}
+                onClick={() => setZoom(Math.max(25, zoom - 25))}
+              >
+                <Minus />
+              </TooltipIconButton>
+              <TooltipIconButton
+                size="icon-xs"
+                tooltip="Zoom in"
+                disabled={!made || zoom >= 300}
+                onClick={() => setZoom(Math.min(300, zoom + 25))}
+              >
+                <Plus />
+              </TooltipIconButton>
+            </div>
+            <DropdownMenuItem onSelect={() => setDevice(!device)}>
+              {device ? "Hide" : "Show"} device toolbar
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              disabled={!history.length}
+              onSelect={() => setShowHistory((old) => !old)}
+            >
+              History
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={!made}
+              onSelect={() => {
+                act("clear");
+                updateBrowserControls(conversationId, { history: [] });
+              }}
+            >
+              Clear browsing data
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
             <DropdownMenuItem disabled={!made} onSelect={() => act("reload")}>
               <Reload />
               Reload page
@@ -449,6 +634,67 @@ function BrowserPageView({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      {finding && (
+        <form
+          className="border-border flex items-center gap-2 border-b px-3 py-1"
+          onSubmit={(event) => {
+            event.preventDefault();
+            act("find", query);
+          }}
+        >
+          <input
+            aria-label="Find in page"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            ref={(input) => input?.focus()}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setFinding(false);
+            }}
+            className="min-w-0 flex-1 bg-transparent text-sm outline-none"
+          />
+          <button
+            type="submit"
+            className="rounded-control px-2 text-sm hover:bg-toolbar-hover"
+          >
+            Find next
+          </button>
+          <TooltipIconButton
+            size="icon-xs"
+            tooltip="Close find"
+            onClick={() => setFinding(false)}
+          >
+            <X />
+          </TooltipIconButton>
+        </form>
+      )}
+      {showHistory && (
+        <div className="border-border max-h-40 overflow-auto border-b p-2">
+          {history.map((url, index) => (
+            <button
+              key={`${url}-${index}`}
+              className="hover:bg-toolbar-hover block w-full truncate rounded-control px-2 py-1 text-start text-sm"
+              onClick={() => {
+                go(url);
+                setShowHistory(false);
+              }}
+            >
+              {url}
+            </button>
+          ))}
+        </div>
+      )}
+      {device && (
+        <div className="border-border flex items-center justify-center gap-2 border-b p-2 text-sm">
+          Mobile preview · 390px{" "}
+          <TooltipIconButton
+            size="icon-xs"
+            tooltip="Close device toolbar"
+            onClick={() => setDevice(false)}
+          >
+            <X />
+          </TooltipIconButton>
+        </div>
+      )}
       {page?.blocked && (
         <div
           role="status"
@@ -476,7 +722,14 @@ function BrowserPageView({
           </TooltipIconButton>
         </div>
       )}
-      <div ref={area} data-slot="browser-page" className="flex min-h-0 flex-1">
+      <div
+        ref={area}
+        data-slot="browser-page"
+        className={cn(
+          "mx-auto flex min-h-0 w-full flex-1",
+          device && "max-w-browser-mobile",
+        )}
+      >
         {!made && (
           <p className="text-muted-foreground m-auto max-w-xs p-4 text-center text-sm">
             {embedded

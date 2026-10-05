@@ -5,6 +5,7 @@ export type PaneKind =
   | "review"
   | "terminal"
   | "browser"
+  | "browserComposer"
   | "files"
   | "source"
   | "sideChat";
@@ -14,6 +15,7 @@ const PANES: readonly string[] = [
   "review",
   "terminal",
   "browser",
+  "browserComposer",
   "files",
   "source",
   "sideChat",

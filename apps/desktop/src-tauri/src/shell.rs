@@ -8,6 +8,8 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::Duration;
 
 use brigadier_ipc::app::{BridgeEvent, RunningChat};
+#[cfg(target_os = "macos")]
+use tauri::Emitter;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
@@ -154,7 +156,16 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
         if let Some(file) = item.as_submenu()
             && file.text()? == "File"
         {
-            file.insert_items(&[&open, &separator], 0)?;
+            // Cmd+W belongs to the focused browser page or terminal shell. Keep window
+            // closing explicit, so a native page cannot make it bypass the pane handler.
+            file.remove_at(0)?;
+            let close = MenuItemBuilder::with_id("pane:close", "Close page or terminal")
+                .accelerator("CmdOrCtrl+W")
+                .build(app)?;
+            let close_window = MenuItemBuilder::with_id("close-main-window", "Close Window")
+                .accelerator("CmdOrCtrl+Shift+W")
+                .build(app)?;
+            file.insert_items(&[&open, &separator, &close, &close_window], 0)?;
         }
     }
     // The app menu (macOS): Settings… (⌘,) after About, and Uninstall Brigadier… just above
@@ -176,8 +187,41 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
         let quit_at = app_menu.items()?.len().saturating_sub(1);
         app_menu.insert_items(&[&uninstall, &separator], quit_at)?;
     }
+    let panes = tauri::menu::Submenu::new(app, "Panes", true)?;
+    for (id, title, accelerator) in [
+        ("terminal", "Toggle bottom terminal", "CmdOrCtrl+J"),
+        ("terminal-alternate", "Open terminal", "Ctrl+`"),
+        ("new", "New browser page or terminal", "CmdOrCtrl+T"),
+        (
+            "reopen",
+            "Reopen closed page or terminal",
+            "CmdOrCtrl+Shift+T",
+        ),
+        ("address", "Focus browser address", "CmdOrCtrl+L"),
+        ("find", "Find in page", "CmdOrCtrl+F"),
+        ("full", "Toggle full view", "CmdOrCtrl+Shift+F"),
+        ("previous", "Previous page or terminal", "CmdOrCtrl+Shift+["),
+        ("next", "Next page or terminal", "CmdOrCtrl+Shift+]"),
+    ] {
+        panes.append(
+            &MenuItemBuilder::with_id(format!("pane:{id}"), title)
+                .accelerator(accelerator)
+                .build(app)?,
+        )?;
+    }
+    menu.append(&panes)?;
     app.set_menu(menu)?;
     app.on_menu_event(|app, event| {
+        if let Some(shortcut) = event.id().as_ref().strip_prefix("pane:") {
+            let _ = app.emit_to(MAIN_WINDOW, "pane-shortcut", shortcut);
+            return;
+        }
+        if event.id().as_ref() == "close-main-window" {
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+                let _ = window.close();
+            }
+            return;
+        }
         let bridge_event = match event.id().as_ref() {
             OPEN_FOLDER_ITEM => BridgeEvent::OpenFolderMenu,
             UNINSTALL_ITEM => BridgeEvent::UninstallMenu,

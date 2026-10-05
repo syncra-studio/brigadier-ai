@@ -228,9 +228,16 @@
      thread at least side-panel-chat-min; by default it takes side-panel-preferred, or more
      where the thread keeps side-panel-chat-room (see SidePanel.tsx). */
   --spacing-browser-pane: 31.25rem;
+  --spacing-browser-tab-max: 14.875rem;
+  --spacing-browser-tab-min: 3rem;
+  --spacing-browser-composer: 35.75rem;
+  --spacing-browser-menu: 15rem;
+  --spacing-browser-menu-item: 1.8125rem;
+  --spacing-browser-mobile: 24.375rem;
+  --radius-browser-menu: 1.25rem;
   --spacing-workers-pane: 26.25rem;
   --spacing-side-panel-min: 20rem;
-  --spacing-side-panel-chat-min: 22rem;
+  --spacing-side-panel-chat-min: 20rem;
   --spacing-side-panel-preferred: 40rem;
   --spacing-side-panel-chat-room: 31.25rem;
   --spacing-panel-resize-step: 0.625rem;
@@ -555,8 +562,8 @@
   --spacing-page-toolbar: 2.5rem;
   --spacing-titlebar: 2.5rem;
   --spacing-agents: 22rem;
-  --spacing-side-panel-min: 17.5rem;
-  --spacing-side-panel-chat-min: 19.5rem;
+  --spacing-side-panel-min: 20rem;
+  --spacing-side-panel-chat-min: 20rem;
   --spacing-side-panel-preferred: 35rem;
   --spacing-side-panel-chat-room: 27.5rem;
   --spacing-panel-resize-step: 0.5rem;

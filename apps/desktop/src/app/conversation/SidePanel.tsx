@@ -22,6 +22,8 @@ import {
   useState,
 } from "react";
 
+import { listen } from "@tauri-apps/api/event";
+
 import { WORKERS_LABEL, WorkersTab } from "@/app/conversation/Agents";
 import type { FileTarget } from "@/app/conversation/FilesTab";
 import type { AgentsPanelState } from "@/app/conversation/WorkerChip";
@@ -202,6 +204,9 @@ export type SidePanelApi = {
   width: number;
   limits: { min: number; max: number };
   resize: (width: number | null) => void;
+  composerWidth: number;
+  composerLimits: { min: number; max: number };
+  resizeComposer: (width: number | null) => void;
   terminalHeight: number;
   terminalMaxHeight: number;
   resizeTerminal: (height: number | null) => void;
@@ -226,6 +231,9 @@ export const SidePanelContext = createContext<SidePanelApi>({
   width: 0,
   limits: { min: 0, max: 0 },
   resize: () => {},
+  composerWidth: 572,
+  composerLimits: { min: 372, max: 917 },
+  resizeComposer: () => {},
   terminalHeight: 280,
   terminalMaxHeight: 400,
   resizeTerminal: () => {},
@@ -322,6 +330,14 @@ export function useSidePanel(
     preferred === undefined
       ? panelWidth(null, room)
       : Math.round(Math.min(limits.max, Math.max(limits.min, preferred)));
+  const composerLimits = useMemo(() => {
+    const max = Math.max(0, room.workspace - 20);
+    return { min: Math.min(372, max), max };
+  }, [room.workspace]);
+  const composerWidth = Math.min(
+    composerLimits.max,
+    Math.max(composerLimits.min, sizes.browserComposer ?? 572),
+  );
   const terminalHeight = Math.max(
     160,
     Math.min(sizes.terminal ?? 280, room.height * 0.5),
@@ -382,6 +398,56 @@ export function useSidePanel(
       ),
     [],
   );
+  // Native menu accelerators keep working while the isolated browser owns keyboard focus.
+  useEffect(() => {
+    if (!mac || kind === "sideChat") return;
+    let disposed = false;
+    let unsubscribe: (() => void) | undefined;
+    const keys: Record<
+      string,
+      { code: string; shift?: boolean; control?: boolean }
+    > = {
+      terminal: { code: "KeyJ" },
+      "terminal-alternate": { code: "Backquote", control: true },
+      new: { code: "KeyT" },
+      reopen: { code: "KeyT", shift: true },
+      address: { code: "KeyL" },
+      find: { code: "KeyF" },
+      full: { code: "KeyF", shift: true },
+      close: { code: "KeyW" },
+      previous: { code: "BracketLeft", shift: true },
+      next: { code: "BracketRight", shift: true },
+    };
+    void listen<string>("pane-shortcut", ({ payload }) => {
+      const key = keys[payload];
+      if (!key) return;
+      const browser =
+        state.open && state.active === "browser"
+          ? document.querySelector('[data-pane="browser"]')
+          : null;
+      const target =
+        (!document.hasFocus() && browser) || document.activeElement || window;
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          code: key.code,
+          metaKey: !key.control,
+          ctrlKey: key.control ?? false,
+          shiftKey: key.shift ?? false,
+        }),
+      );
+    })
+      .then((off) => {
+        if (disposed) off();
+        else unsubscribe = off;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, [mac, kind, state.open, state.active]);
   // A mounted view can change conversation without carrying its selected worker/file over.
   const [scope, setScope] = useState(conversationId);
   if (scope !== conversationId) {
@@ -466,6 +532,12 @@ export function useSidePanel(
         if (state.active)
           setSizes((current) => changedPaneSize(current, state.active!, next));
       },
+      composerWidth,
+      composerLimits,
+      resizeComposer: (next) =>
+        setSizes((current) =>
+          changedPaneSize(current, "browserComposer", next),
+        ),
       terminalHeight,
       terminalMaxHeight: Math.max(160, room.height * 0.5),
       resizeTerminal: (next) =>
@@ -494,6 +566,8 @@ export function useSidePanel(
       width,
       limits,
       terminalHeight,
+      composerWidth,
+      composerLimits,
       room.height,
       workspace,
       file,
@@ -544,7 +618,8 @@ export function useSidePanel(
  * least and greatest.
  */
 function Splitter() {
-  const { width, limits, resize, hide } = useContext(SidePanelContext);
+  const { width, limits, resize, hide, setFullscreen } =
+    useContext(SidePanelContext);
   const start = useRef<{ x: number; width: number } | null>(null);
   const [resizing, setResizing] = useState(false);
 
@@ -589,12 +664,16 @@ function Splitter() {
           return;
         }
         resize(Math.min(limits.max, Math.max(limits.min, wanted)));
+        if (wanted > limits.max) {
+          end(event);
+          setFullscreen(true);
+        }
       }}
       onPointerUp={end}
       onPointerCancel={end}
       onDoubleClick={() => resize(null)}
       onKeyDown={(event) => {
-        const step = tokenPx("--spacing-panel-resize-step");
+        const step = 10;
         const next =
           event.key === "ArrowLeft"
             ? width + step

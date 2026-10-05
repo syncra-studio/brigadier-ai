@@ -22,6 +22,7 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 
+import { PaneComposer, FloatingComposerSlot } from "@/app/conversation/PaneComposer";
 import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { ChatActions, RenameDialog } from "@/app/conversation/ChatActions";
@@ -43,7 +44,6 @@ import {
   buildThread,
   type ThreadNode,
 } from "@/app/conversation/blocks";
-import { ConversationComposer } from "@/app/conversation/Composer";
 import {
   type ComposerTarget,
   ComposerTargetContext,
@@ -773,6 +773,7 @@ export function ConversationView({
                     <div
                       ref={embedded ? undefined : sidePanel.workspace}
                       data-embedded-view={embedded || undefined}
+                      data-slot="pane-workspace"
                       className="relative flex h-full min-h-0 flex-col"
                     >
                       <div className="relative flex min-h-0 flex-1">
@@ -821,6 +822,7 @@ export function ConversationView({
                       </div>
                       {!embedded && <SidePanel conversationId={conversationId} />}
                       {!embedded && <PanelButtons />}
+                      {!embedded && <FloatingComposerSlot />}
                       </div>
                       {!embedded && conversationId && <TerminalPane conversationId={conversationId} />}
                     </div>
@@ -988,6 +990,6 @@ const THREAD_COMPONENTS: ThreadComponents = {
   UserAttachments,
   AboveComposer,
   Capsule: ComposerCapsule,
-  Composer: ConversationComposer,
+  Composer: PaneComposer,
   UserText: UserMessageText,
 };

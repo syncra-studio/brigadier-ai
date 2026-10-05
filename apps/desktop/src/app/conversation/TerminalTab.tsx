@@ -187,7 +187,7 @@ export function TerminalPane({ conversationId }: { conversationId: string }) {
         onPointerMove={(event) => {
           if (!start.current) return;
           const height = start.current.height + start.current.y - event.clientY;
-          if (height < 80) {
+          if (height < 90) {
             resizeTerminal(160);
             start.current = null;
             closeTab("terminal");

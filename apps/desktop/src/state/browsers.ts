@@ -24,7 +24,34 @@ export const useBrowsers = create<{ pages: Record<string, BrowserPage> }>(
   () => ({ pages: {} }),
 );
 
+type BrowserControls = { zoom: number; device: boolean; history: string[] };
+const defaultControls: BrowserControls = {
+  zoom: 100,
+  device: false,
+  history: [],
+};
+export const useBrowserControls = create<{
+  pages: Record<string, BrowserControls>;
+}>(() => ({ pages: {} }));
+export function browserControls(id: string): BrowserControls {
+  return useBrowserControls.getState().pages[id] ?? defaultControls;
+}
+export function updateBrowserControls(
+  id: string,
+  patch: Partial<BrowserControls>,
+): void {
+  useBrowserControls.setState(({ pages }) => ({
+    pages: { ...pages, [id]: { ...defaultControls, ...pages[id], ...patch } },
+  }));
+}
+function rememberUrl(id: string, url: string): void {
+  const history = browserControls(id).history;
+  if (history.at(-1) !== url)
+    updateBrowserControls(id, { history: [...history, url].slice(-100) });
+}
+
 function update(id: string, patch: Partial<BrowserPage>): void {
+  if (patch.url) rememberUrl(id, patch.url);
   useBrowsers.setState(({ pages }) => {
     const page = pages[id];
     return page
@@ -39,6 +66,7 @@ export async function openPage(
   url: string,
   bounds: BrowserBounds,
 ): Promise<void> {
+  rememberUrl(id, url);
   const page = useBrowsers.getState().pages[id];
   useBrowsers.setState(({ pages }) => ({
     pages: {
@@ -70,6 +98,10 @@ export function dismissBlocked(id: string): void {
 
 /** The tab closed, or its conversation did: the page and all it stored go. */
 export function closePage(id: string): void {
+  useBrowserControls.setState(({ pages }) => {
+    const { [id]: _closed, ...rest } = pages;
+    return { pages: rest };
+  });
   if (!useBrowsers.getState().pages[id]) return;
   made.delete(id);
   useBrowsers.setState(({ pages }) => {
