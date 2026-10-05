@@ -8,6 +8,10 @@ import type { Lifecycle } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/state/store";
 
+/** The names the daemon gives a conversation until its first message titles it. */
+const UNTITLED = new Set(["New session", "New chat"]);
+
+/** The open thread's title, or "" while it has none of its own (drafts too). */
 function useTitle(): {
   project: string | null;
   title: string;
@@ -24,7 +28,7 @@ function useTitle(): {
           : null;
         return {
           project,
-          title: conversation?.title ?? "",
+          title: conversation && !UNTITLED.has(conversation.title) ? conversation.title : "",
           lifecycle: conversation?.lifecycle ?? null,
           session: conversation?.kind === "session",
         };
@@ -32,12 +36,12 @@ function useTitle(): {
       if (selection.type === "draft" && selection.kind === "session") {
         return {
           project: s.projects[selection.projectId]?.name ?? null,
-          title: "New session",
+          title: "",
           lifecycle: null,
           session: false,
         };
       }
-      return { project: null, title: "New chat", lifecycle: null, session: false };
+      return { project: null, title: "", lifecycle: null, session: false };
     }),
   );
 }
@@ -69,13 +73,13 @@ export function TopBar({
       )}
     >
       <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
-        {session && (
+        {session && title && (
           <Folder
             aria-label={project ?? undefined}
             className="text-muted-foreground size-icon-md shrink-0"
           />
         )}
-        {onRename ? (
+        {!title ? null : onRename ? (
           <button
             type="button"
             title={project ? `${project} · Rename` : "Rename"}
