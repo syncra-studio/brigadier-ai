@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -15,6 +15,9 @@ use crate::{
 
 /// SQLite virtual machine steps between two looks at whether a compaction should stop.
 const STOP_CHECK_STEPS: i32 = 1000;
+/// How long an automatic compaction's TRUNCATE checkpoint waits for a reader still on the
+/// snapshot from before the `VACUUM`, holding up every write meanwhile.
+const AUTOMATIC_CHECKPOINT_WAIT: Duration = Duration::from_millis(50);
 
 pub(crate) struct WriteCommand {
     pub(crate) op: WriteOp,
@@ -431,7 +434,7 @@ impl Writer {
     /// checkpoint so the WAL gives its space back too. It stops, rolled back whole, once
     /// maintenance should, up to its copy back into the file (SQLite can't stop that part): the
     /// progress handler looks only while this `VACUUM` runs, so no other statement is ever
-    /// stopped.
+    /// stopped. An automatic one's checkpoint waits for readers only briefly.
     fn compact(&self, automatic: bool) -> Result<Compacted> {
         if self.maintenance.should_stop(automatic) {
             return Ok(Compacted::GaveWay);
@@ -452,7 +455,17 @@ impl Writer {
             }
             Err(err) => return Err(err.into()),
         }
-        self.checkpoint("TRUNCATE")?;
+        // A reader on the old snapshot would hold the checkpoint, and every write behind it,
+        // for the whole busy timeout: an automatic one waits only briefly and leaves what it
+        // can't copy yet to the next checkpoint.
+        if automatic {
+            self.conn.busy_timeout(AUTOMATIC_CHECKPOINT_WAIT)?;
+        }
+        let checkpointed = self.checkpoint("TRUNCATE");
+        if automatic {
+            self.conn.busy_timeout(schema::WRITER_BUSY_TIMEOUT)?;
+        }
+        checkpointed?;
         Ok(Compacted::Done)
     }
 

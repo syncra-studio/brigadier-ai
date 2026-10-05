@@ -63,6 +63,9 @@ pub(crate) fn migrate(conn: &mut Connection) -> rusqlite_migration::Result<()> {
     migrations().to_latest(conn)
 }
 
+/// How long the writer waits for a lock or for readers before giving up.
+pub(crate) const WRITER_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Pragmas for the single read-write connection.
 pub(crate) fn configure_writer(conn: &Connection) -> rusqlite::Result<()> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -77,7 +80,7 @@ pub(crate) fn configure_writer(conn: &Connection) -> rusqlite::Result<()> {
     // checkpointed WAL is trimmed back to this size.
     conn.pragma_update(None, "wal_autocheckpoint", 1000)?;
     conn.pragma_update(None, "journal_size_limit", 16 * 1024 * 1024)?;
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    conn.busy_timeout(WRITER_BUSY_TIMEOUT)?;
     Ok(())
 }
 
