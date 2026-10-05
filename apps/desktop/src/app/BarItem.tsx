@@ -13,34 +13,42 @@ function prefersReducedMotion(): boolean {
  * shrinks and fades out, over 200ms, so its neighbours glide. Leaving, it can't be focused or
  * clicked at once; it is gone when the motion ends (at once with reduced motion). Shown again
  * while leaving, it turns back.
+ *
+ * Whether it is there follows `show` itself, not a copy of it set while rendering: with the
+ * window hidden, such a copy was lost and the item never came back. The timers only open it
+ * and keep it while it leaves, so a late one can't hide it while it should show.
  */
 export function BarItem({ show, children }: { show: boolean; children: ReactNode }) {
-  const [seen, setSeen] = useState(show);
-  const [mounted, setMounted] = useState(show);
-  const [open, setOpen] = useState(show);
-  if (seen !== show) {
-    setSeen(show);
-    const instant = prefersReducedMotion();
-    if (show) {
-      setMounted(true);
-      if (instant) setOpen(true);
-    } else {
-      setOpen(false);
-      if (instant) setMounted(false);
-    }
-  }
+  // Kept while leaving, until the motion ends.
+  const [kept, setKept] = useState(show);
+  // Has had the closed frame it opens from.
+  const [opened, setOpened] = useState(show);
   useEffect(() => {
     if (show) {
-      // Laid out closed first, so the opening has somewhere to start from.
+      const open = () => {
+        setKept(true);
+        setOpened(true);
+      };
+      // Laid out closed first, so the opening has somewhere to start from. Frames stop while
+      // the window is hidden, so a timer opens it too.
       let frame = requestAnimationFrame(() => {
-        frame = requestAnimationFrame(() => setOpen(true));
+        frame = requestAnimationFrame(open);
       });
-      return () => cancelAnimationFrame(frame);
+      const timer = window.setTimeout(open, ITEM_MS / 4);
+      return () => {
+        cancelAnimationFrame(frame);
+        window.clearTimeout(timer);
+      };
     }
-    const timer = window.setTimeout(() => setMounted(false), ITEM_MS);
+    const timer = window.setTimeout(() => {
+      setKept(false);
+      setOpened(false);
+    }, ITEM_MS);
     return () => window.clearTimeout(timer);
   }, [show]);
-  if (!mounted) return null;
+  const instant = prefersReducedMotion();
+  if (!show && (!kept || instant)) return null;
+  const open = show && (opened || instant);
   return (
     <div
       inert={!show}
