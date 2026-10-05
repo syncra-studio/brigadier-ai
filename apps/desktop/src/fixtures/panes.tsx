@@ -5,6 +5,7 @@ import {
   type ThreadMessage,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
+import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
@@ -16,6 +17,10 @@ import {
   SidePanelContext,
   useSidePanel,
 } from "@/app/conversation/SidePanel";
+import {
+  ComposerPlacement,
+  FloatingComposerSlot,
+} from "@/app/conversation/PaneComposer";
 import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { SidebarProvider } from "@/components/ui/sidebar";
@@ -105,84 +110,87 @@ function place(pageId: string, bounds: BrowserBounds | null) {
       height: `${bounds.height}px`,
     });
 }
-mockIPC((command, args) => {
-  calls.push({ command, args });
-  const values = args as Record<string, unknown>;
-  if (command === "browser_open" || command === "browser_navigate") {
-    const pageId = values.id as string;
-    let page = nativePages.get(pageId);
-    if (!page) {
-      page = document.createElement("div");
-      page.dataset.fixtureWebview = pageId;
-      Object.assign(page.style, {
-        position: "fixed",
-        zIndex: "2",
-        overflow: "auto",
-        background: "#fafafa",
-        color: "#202020",
-        padding: "40px",
-        font: "15px system-ui",
-      });
-      document.body.append(page);
-      nativePages.set(pageId, page);
-    }
-    page.innerHTML = `<p style="font-size:12px;color:#666">Illustrative browser fixture</p><h1 style="font-size:28px;margin:18px 0">${String(values.url).includes("guide") ? "Project guide" : "Development preview"}</h1><p style="line-height:1.6;max-width:40ch">A local page running beside the conversation. Each browser tab keeps its own page and navigation history.</p>`;
-    place(pageId, values.bounds as BrowserBounds);
-    setTimeout(
-      () =>
-        useBrowsers.setState(({ pages }) => ({
-          pages: {
-            ...pages,
-            [pageId]: {
-              ...pages[pageId]!,
-              url: values.url as string,
-              title: String(values.url).includes("guide")
-                ? "Project guide"
-                : "Development preview",
-              loading: false,
-              blocked: null,
+mockIPC(
+  (command, args) => {
+    calls.push({ command, args });
+    const values = args as Record<string, unknown>;
+    if (command === "browser_open" || command === "browser_navigate") {
+      const pageId = values.id as string;
+      let page = nativePages.get(pageId);
+      if (!page) {
+        page = document.createElement("div");
+        page.dataset.fixtureWebview = pageId;
+        Object.assign(page.style, {
+          position: "fixed",
+          zIndex: "2",
+          overflow: "auto",
+          background: "#fafafa",
+          color: "#202020",
+          padding: "40px",
+          font: "15px system-ui",
+        });
+        document.body.append(page);
+        nativePages.set(pageId, page);
+      }
+      page.innerHTML = `<p style="font-size:12px;color:#666">Illustrative browser fixture</p><h1 style="font-size:28px;margin:18px 0">${String(values.url).includes("guide") ? "Project guide" : "Development preview"}</h1><p style="line-height:1.6;max-width:40ch">A local page running beside the conversation. Each browser tab keeps its own page and navigation history.</p>`;
+      place(pageId, values.bounds as BrowserBounds);
+      setTimeout(
+        () =>
+          useBrowsers.setState(({ pages }) => ({
+            pages: {
+              ...pages,
+              [pageId]: {
+                ...pages[pageId]!,
+                url: values.url as string,
+                title: String(values.url).includes("guide")
+                  ? "Project guide"
+                  : "Development preview",
+                loading: false,
+                blocked: null,
+              },
             },
-          },
-        })),
-      30,
-    );
-  }
-  if (command === "browser_place")
-    place(values.id as string, values.bounds as BrowserBounds | null);
-  if (command === "browser_close") {
-    nativePages.get(values.id as string)?.remove();
-    nativePages.delete(values.id as string);
-  }
-  if (command !== "ipc_request") return null;
-  const req = values.request as Request;
-  if (req.method === "openTerminal") {
-    const key = req.sessionId ?? "default";
-    const terminalId = shells.get(key) ?? `fixture-${key}`;
-    shells.set(key, terminalId);
-    return {
-      method: req.method,
-      terminal: {
-        id: terminalId,
-        shell: "/bin/zsh",
-        cwd: "/tmp/brigadier/panes",
-        scrollback:
-          "stephen@workstation panes % pnpm dev\r\n\r\n  VITE v8.3.0  ready in 142 ms\r\n\r\n  ➜  Local:   http://localhost:3000/\r\n\r\nstephen@workstation panes % ",
-      },
-    };
-  }
-  if (req.method === "writeTerminal")
-    emitTerminalOutput({
-      type: "data",
-      terminalId: req.terminalId,
-      data: req.data,
-    });
-  if (req.method === "closeTerminal")
-    for (const [key, terminalId] of shells)
-      if (terminalId === req.terminalId) shells.delete(key);
-  if (req.method === "listWorkerEvents")
-    return { method: req.method, page: { entries: [], hasMore: false } };
-  return { method: req.method };
-});
+          })),
+        30,
+      );
+    }
+    if (command === "browser_place")
+      place(values.id as string, values.bounds as BrowserBounds | null);
+    if (command === "browser_close") {
+      nativePages.get(values.id as string)?.remove();
+      nativePages.delete(values.id as string);
+    }
+    if (command !== "ipc_request") return null;
+    const req = values.request as Request;
+    if (req.method === "openTerminal") {
+      const key = req.sessionId ?? "default";
+      const terminalId = shells.get(key) ?? `fixture-${key}`;
+      shells.set(key, terminalId);
+      return {
+        method: req.method,
+        terminal: {
+          id: terminalId,
+          shell: "/bin/zsh",
+          cwd: "/tmp/brigadier/panes",
+          scrollback:
+            "stephen@workstation panes % pnpm dev\r\n\r\n  VITE v8.3.0  ready in 142 ms\r\n\r\n  ➜  Local:   http://localhost:3000/\r\n\r\nstephen@workstation panes % ",
+        },
+      };
+    }
+    if (req.method === "writeTerminal")
+      emitTerminalOutput({
+        type: "data",
+        terminalId: req.terminalId,
+        data: req.data,
+      });
+    if (req.method === "closeTerminal")
+      for (const [key, terminalId] of shells)
+        if (terminalId === req.terminalId) shells.delete(key);
+    if (req.method === "listWorkerEvents")
+      return { method: req.method, page: { entries: [], hasMore: false } };
+    return { method: req.method };
+  },
+  { shouldMockEvents: true },
+);
 
 function Fixture() {
   const { panel, agents } = useSidePanel(id, "session");
@@ -192,7 +200,15 @@ function Fixture() {
   });
   useEffect(() => {
     Object.assign(window, {
-      panes: { panel, agents, calls, shells, useBrowsers, useTerminalSessions },
+      panes: {
+        panel,
+        agents,
+        calls,
+        shells,
+        useBrowsers,
+        useTerminalSessions,
+        emitPaneShortcut: (shortcut: string) => emit("pane-shortcut", shortcut),
+      },
     });
   }, [panel, agents]);
   const full = panel.visible && panel.state.fullscreen;
@@ -211,6 +227,7 @@ function Fixture() {
             </aside>
             <main
               ref={panel.workspace}
+              data-slot="pane-workspace"
               className="relative flex min-w-0 flex-1 flex-col"
             >
               <div className="relative flex min-h-0 flex-1">
@@ -244,13 +261,25 @@ function Fixture() {
                       Context · 1 worker
                     </button>
                     <div className="flex-1" />
-                    <div className="bg-muted rounded-control p-4 text-muted-foreground">
-                      Do anything
-                    </div>
+                    <ComposerPlacement>
+                      <div className="bg-background border-border rounded-capsule border p-3 shadow-menu">
+                        <textarea
+                          aria-label="Message"
+                          placeholder="Do anything"
+                          className="block w-full resize-none bg-transparent outline-none"
+                          rows={1}
+                        />
+                        <div className="text-muted-foreground mt-2 flex justify-between text-xs">
+                          <span>＋　 Model　 ◇</span>
+                          <button aria-label="Send message">↑</button>
+                        </div>
+                      </div>
+                    </ComposerPlacement>
                   </div>
                 </div>
                 <SidePanel conversationId={id} />
                 <PanelButtons />
+                <FloatingComposerSlot capsule={false} />
               </div>
               <TerminalPane conversationId={id} />
             </main>
