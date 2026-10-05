@@ -3105,10 +3105,10 @@ impl SessionManager {
             .await?
             .ok_or_else(|| Error::NotFound("the saved patch".into()))?;
         let repo = self.task_repo(&task)?;
-        let message = format!(
+        let message = self.commit_message(format!(
             "task-{} {} (restored from its saved patch)",
             task.number, task.title
-        );
+        ));
         let git = self.git.clone();
         let outcome = blocking(move || {
             let repo = git.open(&repo).map_err(git_error)?;
@@ -3455,12 +3455,13 @@ impl SessionManager {
             return (None, false);
         };
         let (git, path) = (self.git.clone(), PathBuf::from(path));
-        let message = format!(
+        let message = self.commit_message(format!(
             "WIP: task-{} {} (unfinished, kept by Brigadier)",
             task.number, task.title
-        );
+        ));
         let base = workspace.base.clone().map(Oid);
         let on_snapshot = workspace.on_snapshot;
+        let omit_ai_coauthors = self.core.settings().omit_ai_coauthors;
         let result = blocking(move || {
             let worktree = git.open_worktree(&path).map_err(git_error)?;
             worktree.commit_wip(&message).map_err(git_error)?;
@@ -3469,6 +3470,17 @@ impl SessionManager {
                 return Ok(Unfinished::None);
             };
             if !on_snapshot {
+                // Kept as the user wants its messages (work on a snapshot is kept as one
+                // commit of Brigadier's instead).
+                if omit_ai_coauthors {
+                    match worktree.clean_ai_coauthors(&base, &head) {
+                        Ok(Some(cleaned)) => return Ok(Unfinished::Commit(cleaned)),
+                        Ok(None) => {}
+                        Err(err) => {
+                            tracing::warn!(error = %err, "could not leave AI co-authors out of the kept commits");
+                        }
+                    }
+                }
                 return Ok(Unfinished::Commit(head));
             }
             Ok(

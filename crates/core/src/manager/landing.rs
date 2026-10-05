@@ -205,10 +205,11 @@ impl SessionManager {
         let reported = self.phase_reported(task).await;
         let squash = task.kind == crate::work::TaskKind::Merge;
         let on_snapshot = workspace.on_snapshot;
-        let leftovers = format!(
+        let leftovers = self.commit_message(format!(
             "{}\n\nWhat task-{} left uncommitted, committed as it landed.",
             task.title, task.number
-        );
+        ));
+        let omit_ai_coauthors = self.core.settings().omit_ai_coauthors;
         let git = self.git.clone();
         let moved = blocking(move || {
             let repo = git.open(&repo).map_err(git_error)?;
@@ -339,6 +340,19 @@ impl SessionManager {
                         excluded,
                     });
                 }
+                // The messages as the user wants them, before they land: the worker's branch
+                // moves to the rewritten commits, so it is found merged once they have landed.
+                let tip = if omit_ai_coauthors {
+                    match worktree.clean_ai_coauthors(&onto, &tip) {
+                        Ok(cleaned) => cleaned.unwrap_or(tip),
+                        Err(err) => {
+                            tracing::warn!(error = %err, "could not leave AI co-authors out of the commits that land");
+                            tip
+                        }
+                    }
+                } else {
+                    tip
+                };
                 // 4. Fast-forward.
                 let request = LandRequest {
                     branch: target.clone(),
@@ -506,7 +520,7 @@ impl SessionManager {
         };
         let mut reported = self.phase_reported(task).await;
         reported.extend(extra.iter().map(|p| normalize(p)));
-        let (git, message) = (self.git.clone(), message.to_owned());
+        let (git, message) = (self.git.clone(), self.commit_message(message.to_owned()));
         blocking(move || {
             let worktree = git.open_worktree(Path::new(&worktree)).map_err(git_error)?;
             let head = worktree.head().map_err(git_error)?;
@@ -1043,9 +1057,11 @@ impl SessionManager {
                 open.join(", ")
             )));
         }
-        let message = message
-            .filter(|m| !m.trim().is_empty())
-            .unwrap_or_else(|| format!("Merge {branch} into {base}"));
+        let message = self.commit_message(
+            message
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or_else(|| format!("Merge {branch} into {base}")),
+        );
         let (git, repo_path, base_name, branch_name) = (
             self.git.clone(),
             PathBuf::from(&repo),
@@ -1158,6 +1174,15 @@ impl SessionManager {
                 .await;
         });
         Ok("Asked the user to approve merging the session branch; the outcome arrives as a message.".into())
+    }
+
+    /// A commit message Brigadier writes, without AI co-authors while the user leaves them out.
+    pub(super) fn commit_message(&self, message: String) -> String {
+        if self.core.settings().omit_ai_coauthors {
+            brigadier_git::strip_ai_coauthors(&message)
+        } else {
+            message
+        }
     }
 
     pub(super) fn task_repo(&self, task: &Task) -> Result<PathBuf> {

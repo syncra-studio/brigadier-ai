@@ -522,6 +522,32 @@ impl Worktree {
         Ok((message.to_owned(), env))
     }
 
+    /// [`Repo::clean_ai_coauthors`] on the commits from `base` to `tip`, which must be HEAD:
+    /// a rewritten series becomes HEAD (and so its branch) with a CAS update. Its tree is the
+    /// same, so the index and files stay as they are. `None` when nothing was rewritten.
+    pub fn clean_ai_coauthors(&self, base: &Oid, tip: &Oid) -> Result<Option<Oid>> {
+        self.ensure_idle()?;
+        if self.head()? != *tip {
+            return Ok(None);
+        }
+        let Some(cleaned) = self.repo.clean_ai_coauthors(base, tip)? else {
+            return Ok(None);
+        };
+        self.repo.cmd(
+            &[
+                "update-ref",
+                "-m",
+                "Brigadier commit messages without AI co-authors",
+                "HEAD",
+                &cleaned.0,
+                &tip.0,
+            ],
+            false,
+        )?;
+        *self.prepared.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        Ok(Some(cleaned))
+    }
+
     /// Preserve all remaining tracked/untracked non-ignored work as one WIP commit. Plumbing
     /// intentionally avoids validation hooks so unfinished work can survive worktree removal.
     /// Identity comes from git config. Nothing is created for a clean checkout.
