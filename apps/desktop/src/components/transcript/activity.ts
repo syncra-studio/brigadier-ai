@@ -40,15 +40,30 @@ export function unwrapCommand(command: string): string {
 /** Brigadier's own folder of tool shims, before a tool's name: `/…/gate/bin/git` → `git`. */
 const GATE_PATH = /(^|[\s'"(;&|])(?:\/[\w.@+-]+(?: [\w.@+-]+)*)*?\/gate\/bin\//g;
 
-/** git's `-c name=value` settings, which say nothing about what the command does. */
+/** git's `-c name=value` settings right after `git`. */
 const GIT_SETTINGS = /(\bgit)((?:\s+-c\s+[\w.-]+=\S*)+)/g;
 
 /**
+ * Settings that change only how git prints or keeps its index, never what a command does.
+ * Any other setting (`core.hooksPath`, `user.email`, an alias) stays in view: it can change
+ * what the user is asked to allow.
+ */
+const QUIET_SETTING = /^(?:core\.splitIndex|merge\.autoStash|core\.quotePath|core\.pager|color\.[\w.-]+|advice\.[\w.-]+|pager\.[\w.-]+|column\.ui|gc\.auto|maintenance\.auto)=/i;
+
+function withoutQuietSettings(git: string, settings: string): string {
+  const kept = [...settings.matchAll(/\s+-c\s+(\S+)/g)]
+    .filter((match) => !QUIET_SETTING.test(match[1] ?? ""))
+    .map((match) => match[0]);
+  return git + kept.join("");
+}
+
+/**
  * A command as the card shows it: what the shell wrapper runs, with Brigadier's gate folder
- * and git's `-c` settings left out (`/bin/zsh -lc '/…/gate/bin/git -c a=b push'` → `git push`).
+ * and git's display-only `-c` settings left out (`/bin/zsh -lc '/…/gate/bin/git -c
+ * color.ui=never push'` → `git push`).
  */
 export function shownCommand(command: string): string {
-  return unwrapCommand(command).replace(GATE_PATH, "$1").replace(GIT_SETTINGS, "$1").trim();
+  return unwrapCommand(command).replace(GATE_PATH, "$1").replace(GIT_SETTINGS, (_, git: string, settings: string) => withoutQuietSettings(git, settings)).trim();
 }
 
 function basename(path: string): string {
