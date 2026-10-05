@@ -60,3 +60,14 @@ wait in the composer's place (a command, a keychain action, "Start this plan?").
 removes it, as the daemon would. Query: `view=done` (the second request finished, with what waits on the
 user), `approvals=0`, `sidebar=0`, `summary=0`, `density=compact`. `window.flow` holds the stores and
 the recorded requests (`calls`).
+
+# Live thinking
+
+`/fixtures/thinking.html?approvals=0&summary=0` extends the phase flow with reasoning before
+and after action rows. `view=done` shows the finished turn folded into its work header.
+Open the lead's name to see the same live snippet and expandable thoughts in its own thread.
+The standalone entry is excluded from the production build and never reaches a daemon.
+
+`src/replay/thinking.ts` samples event envelopes through the app's board reducer, block builder
+and row derivation. `pnpm test` verifies the timed fixture in `src/replay/thinking.test.ts`:
+reasoning appears at 2 seconds, no later frame shows only Thinking, and actions separate thoughts.

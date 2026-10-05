@@ -322,7 +322,7 @@ function entry(event: ProviderEvent, at: number): RawEntry {
 }
 
 /** The lead's own transcript, for its thread in the Workers panel. */
-const leadTranscript: RawEntry[] = [
+export const leadTranscript: RawEntry[] = [
   entry({ type: "message", itemId: "x1", role: "assistant", text: "I’ll read the settings code first, then outline the change." }, ago(110)),
   entry({ type: "toolCall", itemId: "x2", name: "Read", input: JSON.stringify({ file_path: "apps/desktop/src/app/settings/Appearance.tsx" }), status: "completed", output: "…" }, ago(108)),
   entry({ type: "command", itemId: "x3", command: "/bin/zsh -lc 'rg -n theme apps/desktop/src/state'", cwd: "/tmp/flow-fixture", status: "completed", exitCode: 0, output: "state/settings.ts:41:  theme?: never;\nstate/settings.ts:88:  // theme follows the system", durationMs: 120 }, ago(106)),
