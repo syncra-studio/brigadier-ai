@@ -463,6 +463,10 @@ impl SessionManager {
                 self.submit_outline(&conversation_id, &task_id, args.outline)
                     .await
             }
+            WorkerCall::RequestReview(args) => {
+                self.request_review(&conversation_id, &task_id, args.focus)
+                    .await
+            }
             WorkerCall::SubmitReport(args) => {
                 self.worker_report(&conversation_id, &task_id, args).await
             }

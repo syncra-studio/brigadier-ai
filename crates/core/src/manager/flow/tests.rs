@@ -448,3 +448,319 @@ async fn reported_work_lands_with_its_own_commits_and_a_self_check_after_a_rebas
     flow.settled().await;
     flow.stop().await;
 }
+
+/// The task numbers of the reports in an orchestrator's input, in order.
+fn reports_in(input: &str) -> Vec<u32> {
+    input
+        .split("[report task-")
+        .skip(1)
+        .filter_map(|rest| {
+            rest.split(|c: char| !c.is_ascii_digit())
+                .next()?
+                .parse()
+                .ok()
+        })
+        .collect()
+}
+
+/// Done when (1): a small request goes straight to a lead, with no outline. The lead (Codex,
+/// which can't commit from its sandbox, so Brigadier commits for it) asks for its own review,
+/// which comes from the other vendor and reads its work; then the orchestrator lands it. No
+/// verifier, no cards.
+#[tokio::test]
+async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() {
+    let flow = Flow::start(
+        "small",
+        Options::default(),
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if let Some(n) = reports_in(&turn.input).first() {
+                    let reply = turn
+                        .call("land_phase", json!({"task": format!("task-{n}")}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    assert!(reply.text.contains("Landed"), "{}", reply.text);
+                    return Reply::text("Added the greeting.");
+                }
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"title": "Add a greeting", "kind": "implement",
+                               "spec": "Create hello.txt.", "provider": "codex"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            if is_reviewer(&turn) {
+                assert!(
+                    turn.cwd.join("hello.txt").exists(),
+                    "the reviewer's checkout holds the work"
+                );
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "One finding.",
+                               "open_questions": "hello.txt lacks a trailing newline"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Reviewed.");
+            }
+            // The lead never commits: its sandbox can't.
+            turn.write("hello.txt", "hello");
+            let review = turn.call("request_review", json!({})).await;
+            assert!(!review.is_error, "{}", review.text);
+            assert!(review.text.contains("trailing newline"), "{}", review.text);
+            turn.write("hello.txt", "hello\n");
+            let reply = turn
+                .call(
+                    "submit_report",
+                    json!({"summary": "Added hello.txt; fixed the review's finding.",
+                           "changes": ["hello.txt"]}),
+                )
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        }),
+    )
+    .await;
+    flow.say("Add a greeting file.").await;
+    let board = flow.settled().await;
+    let lead = Flow::task(&board, 1);
+    let reviewer = Flow::task(&board, 2);
+    assert_eq!(
+        board.tasks.len(),
+        2,
+        "a lead and its one reviewer, no verifier"
+    );
+    assert_eq!(lead.state, TaskState::Landed);
+    assert_eq!(reviewer.role, Some(crate::work::WorkerRole::Reviewer));
+    assert_ne!(reviewer.route.choice.provider, lead.route.choice.provider);
+    assert!(board.plans.is_empty(), "a small request has no phases");
+    assert!(board.approvals.is_empty(), "no cards");
+    let target = lead.workspace.as_ref().unwrap().target.clone().unwrap();
+    assert_eq!(
+        super::git(
+            &flow.repo,
+            &["cat-file", "-s", &format!("{target}:hello.txt")]
+        )
+        .trim(),
+        "6",
+        "the lead's fix after its review landed (\"hello\\n\")"
+    );
+    flow.stop().await;
+}
+
+/// Done when (2): a request of two phases. Phase 1's lead outlines, gets one review of its
+/// outline from the other vendor and the go-ahead, builds and reports; a fresh verifier asks
+/// for one review of the phase (from the vendor other than the lead's), fixes, commits and
+/// reports; the orchestrator lands the phase and starts phase 2, whose lead reviews its own
+/// small change; then the final answer. No plan rounds, no per-change checks, no cards.
+#[tokio::test]
+async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
+    let heard: Heard = Arc::default();
+    let log = heard.clone();
+    let landed = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let flow = Flow::start(
+        "phases",
+        Options::default(),
+        script(move |turn| {
+            log.lock().unwrap().push(turn.input.clone());
+            let landed = landed.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    if turn.input.contains("[outline review]") {
+                        let reply = turn
+                            .call(
+                                "approve_outline",
+                                json!({"task": "task-1", "corrections": "Name the file p1.txt."}),
+                            )
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        return Reply::text("[quiet]");
+                    }
+                    if turn.input.contains("[phase verifier]") {
+                        // The lead's report: the verifier lands the phase.
+                        let refused = turn.call("land_phase", json!({"task": "task-1"})).await;
+                        assert!(refused.is_error, "the lead alone doesn't land");
+                        return Reply::text("[quiet]");
+                    }
+                    if let Some(n) = reports_in(&turn.input).last() {
+                        let reply = turn
+                            .call("land_phase", json!({"task": format!("task-{n}")}))
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        assert!(reply.text.contains("Landed"), "{}", reply.text);
+                        if landed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                            let reply = turn
+                                .call(
+                                    "delegate_task",
+                                    json!({"title": "Phase two", "kind": "implement",
+                                           "spec": "Build phase two: create p2.txt.",
+                                           "phase": 2, "provider": "codex"}),
+                                )
+                                .await;
+                            assert!(!reply.is_error, "{}", reply.text);
+                            return Reply::text("[quiet]");
+                        }
+                        return Reply::text("Both phases are done.\n\nWaiting on you: nothing.");
+                    }
+                    let reply = turn
+                        .call(
+                            "plan_phases",
+                            json!({"title": "Two files", "phases": [
+                                {"title": "Phase one"}, {"title": "Phase two"}]}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"title": "Phase one", "kind": "implement",
+                                   "spec": "Build phase one.", "phase": 1,
+                                   "provider": "claude"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                if is_reviewer(&turn) {
+                    let reply = turn
+                        .call("submit_report", json!({"summary": "No findings."}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Reviewed.");
+                }
+                if turn.prompt.contains("You verify this phase") {
+                    assert!(
+                        turn.cwd.join("p1.txt").exists(),
+                        "it starts from the lead's work"
+                    );
+                    let review = turn.call("request_review", json!({})).await;
+                    assert!(!review.is_error, "{}", review.text);
+                    turn.write("p1-fix.txt", "fixed\n");
+                    turn.git(&["add", "p1-fix.txt"]);
+                    turn.git(&["commit", "-q", "-m", "Fix what the review found"]);
+                    let reply = turn
+                        .call(
+                            "submit_report",
+                            json!({"summary": "Phase one passes; fixed one thing.",
+                                   "changes": ["p1-fix.txt"],
+                                   "done_when": "[met] p1.txt exists: ls shows it"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Verified.");
+                }
+                if turn.prompt.contains("Build phase two") {
+                    turn.write("p2.txt", "two\n");
+                    turn.git(&["add", "p2.txt"]);
+                    turn.git(&["commit", "-q", "-m", "Add p2.txt"]);
+                    let review = turn.call("request_review", json!({})).await;
+                    assert!(!review.is_error, "{}", review.text);
+                    let reply = turn
+                        .call(
+                            "submit_report",
+                            json!({"summary": "Added p2.txt.", "changes": ["p2.txt"]}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Reported.");
+                }
+                // Phase one's lead.
+                if turn.earlier == 0 {
+                    let reply = turn
+                        .call(
+                            "submit_outline",
+                            json!({"outline": "1. Create the file\n2. Check it"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Waiting for the go-ahead.");
+                }
+                assert!(turn.input.contains("Go ahead"), "{}", turn.input);
+                turn.write("p1.txt", "one\n");
+                turn.git(&["add", "p1.txt"]);
+                turn.git(&["commit", "-q", "-m", "Add p1.txt"]);
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "Added p1.txt.", "changes": ["p1.txt"]}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("Reported.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Make two files, one phase each.").await;
+    let board = flow
+        .until("the final answer", |board| {
+            board
+                .tasks
+                .values()
+                .filter(|task| task.kind.writes())
+                .count()
+                == 3
+                && board.tasks.values().all(|task| task.state.is_final())
+                && board
+                    .requests
+                    .values()
+                    .all(|request| request.state == RequestState::Done)
+        })
+        .await;
+    use crate::work::WorkerRole as R;
+    let roles: Vec<_> = {
+        let mut tasks: Vec<_> = board.tasks.values().collect();
+        tasks.sort_by_key(|task| task.number);
+        tasks.iter().map(|task| (task.number, task.role)).collect()
+    };
+    let lead = Flow::task(&board, 1);
+    let verifier = board
+        .tasks
+        .values()
+        .find(|task| task.role == Some(R::Verifier))
+        .expect("a verifier");
+    assert_eq!(verifier.subject.as_ref(), Some(&lead.id));
+    assert_eq!(lead.state, TaskState::Landed, "{roles:?}");
+    assert_eq!(verifier.state, TaskState::Landed);
+    // Three reviews in all: the outline's, the verifier's and phase two's lead's.
+    let reviewers: Vec<_> = board
+        .tasks
+        .values()
+        .filter(|task| task.role == Some(R::Reviewer))
+        .collect();
+    assert_eq!(reviewers.len(), 3, "{roles:?}");
+    let of_phase_one: Vec<_> = reviewers
+        .iter()
+        .filter(|task| task.phase == Some(1))
+        .collect();
+    assert_eq!(of_phase_one.len(), 2);
+    for reviewer in of_phase_one {
+        assert_ne!(
+            reviewer.route.choice.provider, lead.route.choice.provider,
+            "phase one is reviewed by the vendor other than its lead's"
+        );
+    }
+    assert!(board.tasks.values().all(|task| task.gate_link.is_none()));
+    assert!(board.approvals.is_empty(), "no cards");
+    assert_eq!(board.plans.len(), 1, "one plan, no rounds");
+    let plan = board.plans.values().next().unwrap();
+    assert!(
+        plan.steps
+            .iter()
+            .all(|step| step.stage == crate::work::PhaseStage::Done),
+        "{:?}",
+        plan.steps.iter().map(|s| s.stage).collect::<Vec<_>>()
+    );
+    let target = lead.workspace.as_ref().unwrap().target.clone().unwrap();
+    let files = super::git(&flow.repo, &["ls-tree", "-r", "--name-only", &target]);
+    for file in ["p1.txt", "p1-fix.txt", "p2.txt"] {
+        assert!(files.contains(file), "{file}: {files}");
+    }
+    let said = heard.lock().unwrap().join("\n");
+    assert_eq!(said.matches("[outline review]").count(), 1);
+    flow.stop().await;
+}

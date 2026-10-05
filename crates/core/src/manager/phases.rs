@@ -603,6 +603,135 @@ impl SessionManager {
         Ok(())
     }
 
+    /// `request_review`: one review of the caller's committed work (from its phase's start)
+    /// by the vendor other than the phase's author. Blocks until the findings are in; never
+    /// gates anything.
+    pub(crate) async fn request_review(
+        &self,
+        conversation_id: &ConversationId,
+        task_id: &TaskId,
+        focus: Option<String>,
+    ) -> Result<String> {
+        let task = self.task_by_id(conversation_id, task_id).await?;
+        if !task.kind.writes() || task.kind == TaskKind::Merge {
+            return Err(Error::Invalid(
+                "Only a worker that builds a change asks for its review.".into(),
+            ));
+        }
+        if !matches!(task.state, TaskState::Starting | TaskState::Running) {
+            return Err(Error::Invalid(format!(
+                "task-{} is {:?}: ask for the review while you work, before your report",
+                task.number, task.state
+            )));
+        }
+        // Every new file but litter: no report names them yet, and the landing checks their
+        // provenance over the whole range anyway.
+        self.commit_leftovers(
+            &task,
+            &[".".to_owned()],
+            &format!(
+                "{}\n\nWork in progress, committed for its review.",
+                task.title
+            ),
+        )
+        .await?;
+        let focus = focus
+            .map(|focus| focus.trim().to_owned())
+            .filter(|focus| !focus.is_empty())
+            .map(|focus| format!("\n\nThe worker asks you to look hardest at: {focus}"))
+            .unwrap_or_default();
+        let spec = format!(
+            "Review the work of task-{number} \u{201c}{title}\u{201d}: your checkout is at its last commit, and the brief below says where its work starts. Read the whole diff from there, and the code around it (precise reads, line ranges). Find what is wrong: bugs, a \"done when\" not really met, missing or weak verification, stray files, needless scope, slop. Don't restate the change or praise it. Report each finding in open_questions as one line: what is wrong, where (file:line), and the fix. No findings: say so in the summary. Change nothing.{focus}",
+            number = task.number,
+            title = task.title,
+        );
+        let outcome = self
+            .run_review(
+                &task,
+                format!("Review the work of task-{}", task.number),
+                spec,
+            )
+            .await;
+        Ok(match outcome {
+            Ok(findings) => format!(
+                "[review]\n{findings}\n[/review]\nFix each finding you agree with and commit; for one you don't, say why in your report. There are no review rounds."
+            ),
+            Err(why) => format!(
+                "The review could not run: {why}. Review your diff yourself, carefully, and say so in your report."
+            ),
+        })
+    }
+
+    /// Whether `task`'s report ends a phase that had an outline: a fresh verifier then checks
+    /// the phase before it lands.
+    pub(crate) async fn needs_verifier(&self, task: &Task) -> bool {
+        if task.kind != TaskKind::Implement
+            || !matches!(task.role, Some(WorkerRole::Lead | WorkerRole::Parallel))
+        {
+            return false;
+        }
+        let Some((plan, index)) = self.phase_of(task).await else {
+            return false;
+        };
+        plan.steps[index].outline.is_some() && self.verifier_of(task).await.is_none()
+    }
+
+    /// Starts the fresh verifier of `lead`'s phase: its own worktree on a branch from the
+    /// lead's last commit, the phase's brief, outline and the lead's report. It runs one
+    /// review by the other vendor, checks every "done when" for real, fixes and commits what
+    /// fails, and reports; the orchestrator then lands the phase with it.
+    pub(crate) async fn start_verifier(
+        &self,
+        lead: &Task,
+        report: &crate::work::Report,
+    ) -> Result<Task> {
+        let (outline, phase_title) = match self.phase_of(lead).await {
+            Some((plan, index)) => (
+                plan.steps[index].outline.clone().unwrap_or_default(),
+                plan.steps[index].title.clone(),
+            ),
+            None => (String::new(), lead.title.clone()),
+        };
+        let mut brief = lead.spec.clone();
+        for message in &lead.messages {
+            brief.push_str(&format!("\n---\n{message}"));
+        }
+        let mut summary = report.summary.clone();
+        for line in report.done_when.iter().chain(&report.verification) {
+            summary.push_str(&format!("\n- {line}"));
+        }
+        let report = summary;
+        let spec = format!(
+            "You verify this phase (\u{201c}{phase_title}\u{201d}) before it lands. Its lead, task-{number}, built it and reported; your worktree is a new branch at the lead's last commit, so its commits are yours to finish.\n1. Call request_review once: a reviewer from the other vendor reads the whole phase. Fix each finding you agree with; for one you don't, say why.\n2. Check every \"done when\" of the brief for real (run it, read it), and run the project's checks: typecheck, lint, build and the tests of what changed.\n3. Fix and commit whatever fails, in small steps. Don't redo the lead's work or widen the scope.\n4. submit_report: pass or fail per \"done when\" with its evidence, what the review found and what you fixed, and what is left. needs_user: only what the user alone can do.\n\nThe brief the lead worked from:\n{brief}\n\nThe outline it followed:\n{outline}\n\nThe lead's report:\n{report}",
+            number = lead.number,
+        );
+        let verifier = self
+            .create_task_as(
+                &lead.conversation_id,
+                format!("Verify {}", phase_title),
+                TaskKind::Implement,
+                spec,
+                None,
+                None,
+                Vec::new(),
+                None,
+                Some(lead.clone()),
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+                TaskExtra {
+                    role: Some(WorkerRole::Verifier),
+                    phase: lead.phase,
+                    request: lead.request_id.clone(),
+                    ..TaskExtra::default()
+                },
+            )
+            .await?;
+        self.set_phase_stage(lead, PhaseStage::Verifying).await;
+        Ok(verifier)
+    }
+
     /// Whether `task` is a lead whose outline waits for its go-ahead: its turn ending is
     /// expected, not a missing report.
     pub(crate) fn waits_for_go_ahead(task: &Task) -> bool {

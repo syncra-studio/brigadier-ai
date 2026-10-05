@@ -7,8 +7,8 @@ use brigadier_core::tools::{
     ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch, DelegateTask,
     FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser, OrchestratorCall, PhaseDone,
     PlanPhases, ProposeOvernight, ProposePhases, QueryBrain, ReadArtifact, RecordNodes, Remember,
-    ReportRef, RequestApproval, Role, RouteFollowUp, SaveMemory, SearchTranscript, SubmitOutline,
-    SubmitReport, TaskRef, ToolCall, WorkerCall,
+    ReportRef, RequestApproval, RequestReview, Role, RouteFollowUp, SaveMemory, SearchTranscript,
+    SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
@@ -97,6 +97,13 @@ money, using credentials or the keychain, or destroying something outside this s
 work. Not for pushes, pull requests or deploys the user asked for (just do those) nor for work \
 inside the session. Returns at once; the decision arrives later as a message.";
 
+const REQUEST_REVIEW: &str = "Have your committed work reviewed once by a model from the other \
+vendor, from where your work started to your last commit (uncommitted changes are committed for \
+you first). Blocks until the findings are in, then returns them. Fix what you agree with and \
+commit; for a finding you don't, say why in your report. It is advisory: nothing waits on it and \
+there are no rounds. The lead of a small change calls it once before its report; a phase's \
+verifier calls it once.";
+
 const LAND_PHASE: &str = "Land a finished `implement` or `merge` task's commits on the \
 session's branch: a phase's verifier once its report is in (its commits hold the lead's), or the \
 lead of a small request after its own review. Call it after reading the report. Brigadier \
@@ -175,7 +182,12 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
         Role::Worker { checks: true, .. } => CHECKER.get_or_init(|| {
             worker_tools()
                 .into_iter()
-                .filter(|tool| tool.name != "ask_orchestrator" && tool.name != "submit_outline")
+                .filter(|tool| {
+                    !matches!(
+                        tool.name.as_ref(),
+                        "ask_orchestrator" | "submit_outline" | "request_review"
+                    )
+                })
                 .collect()
         }),
         Role::BrainJob { .. } => JOB.get_or_init(job_tools),
@@ -263,6 +275,11 @@ fn worker_tools() -> Vec<Tool> {
             "submit_outline",
             SUBMIT_OUTLINE,
             input_schema::<SubmitOutline>(),
+        ),
+        tool(
+            "request_review",
+            REQUEST_REVIEW,
+            input_schema::<RequestReview>(),
         ),
         tool(
             "submit_report",
@@ -363,6 +380,9 @@ pub fn parse_call(
                 }
                 "submit_outline" if !checks => {
                     WorkerCall::SubmitOutline(args::<SubmitOutline>(name, arguments)?)
+                }
+                "request_review" if !checks => {
+                    WorkerCall::RequestReview(args::<RequestReview>(name, arguments)?)
                 }
                 "submit_report" => WorkerCall::SubmitReport(args::<SubmitReport>(name, arguments)?),
                 "code_search" => WorkerCall::CodeSearch(args::<CodeSearch>(name, arguments)?),

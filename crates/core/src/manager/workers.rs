@@ -1476,6 +1476,13 @@ impl SessionManager {
                 let (base, start) = self.merge_start(subject).await?;
                 (base, start, false)
             }
+            // A review of a worker's work, or a phase's verifier, starts at the work's last
+            // commit; the verifier's commits go on top of it.
+            (_, Some(subject))
+                if task.kind == TaskKind::Review || task.role == Some(WorkerRole::Verifier) =>
+            {
+                self.work_head(subject).await?
+            }
             // A whole-phase check looks at the phase's candidate exactly.
             _ if let Some(candidate) = task.run.as_ref().and_then(|run| run.candidate.clone()) => {
                 let commit = Oid(candidate);
@@ -2394,6 +2401,21 @@ impl SessionManager {
             && task.landing.is_some()
             && input.needs_user.is_empty()
             && !unchanged;
+        // Its work is committed before anyone reads or builds on it (a Codex worker can't
+        // commit from its sandbox).
+        if task.kind.writes() && !unchanged {
+            let subject = input.summary.lines().next().unwrap_or_default().trim();
+            let message = if subject.is_empty() {
+                task.title.clone()
+            } else {
+                format!("{}\n\n{subject}", task.title)
+            };
+            if let Err(err) = self.commit_leftovers(&task, &input.changes, &message).await {
+                tracing::warn!(task = %task.id, error = %err, "could not commit a worker's work at its report");
+            }
+        }
+        // A phase with an outline ends with a fresh verifier, which the orchestrator lands.
+        let verify = !relanding && !reviewing && !unchanged && self.needs_verifier(&task).await;
         let report = Report {
             summary: self.redact_for(&live, &input.summary).await,
             changes: input.changes.clone(),
@@ -2407,6 +2429,12 @@ impl SessionManager {
             checks: input.checks.filter(|_| task.kind == TaskKind::Verify),
             artifacts,
             submitted_at_ms: now_ms(),
+        };
+        // Started before the orchestrator reads the report, so it never lands the lead alone.
+        let verifier = if verify {
+            Some(self.start_verifier(&task, &report).await)
+        } else {
+            None
         };
         let reported = |task: &mut Task| {
             task.report = Some(report.clone());
@@ -2442,9 +2470,21 @@ impl SessionManager {
             let mut text = prompts::report_envelope(&shown, &report, &route_label(&shown));
             if unchanged {
                 text.push_str(&format!(
-                    "\n[nothing to land task-{}] It changed no files, so it is done; there is nothing to accept.",
+                    "\n[nothing to land task-{}] It changed no files, so it is done; there is nothing to land.",
                     task.number
                 ));
+            }
+            match &verifier {
+                Some(Ok(verifier)) => text.push_str(&format!(
+                    "\n[phase verifier] Brigadier started task-{v}, a fresh verifier of this phase, on top of task-{n}'s commits. Land the phase with land_phase on task-{v} once it reports, not on task-{n}.",
+                    v = verifier.number,
+                    n = task.number
+                )),
+                Some(Err(err)) => text.push_str(&format!(
+                    "\n[phase verifier] The phase's verifier could not start: {err}. Delegate one, or land task-{} with land_phase yourself.",
+                    task.number
+                )),
+                None => {}
             }
             let envelope = Envelope {
                 kind: InjectionKind::Report,
@@ -2501,6 +2541,30 @@ impl SessionManager {
             self.kick(&conv);
         }
         Ok("Report received. Your part is done: end your turn now.".into())
+    }
+
+    /// Where a check of `subject`'s work starts: its base, its worktree's last commit, and
+    /// whether that base is a snapshot of the user's uncommitted files.
+    async fn work_head(&self, subject: &Task) -> Result<(Oid, Oid, bool)> {
+        let workspace = subject
+            .workspace
+            .clone()
+            .ok_or_else(|| Error::Invalid(format!("task-{} has no workspace", subject.number)))?;
+        let (Some(worktree), Some(base)) = (workspace.worktree, workspace.base) else {
+            return Err(Error::Invalid(format!(
+                "task-{} has no worktree",
+                subject.number
+            )));
+        };
+        let git = self.git.clone();
+        let head = blocking(move || {
+            git.open_worktree(Path::new(&worktree))
+                .map_err(git_error)?
+                .head()
+                .map_err(git_error)
+        })
+        .await?;
+        Ok((Oid(base), head, workspace.on_snapshot))
     }
 
     /// The worker's changes so far against its base, untracked files included (write tasks);

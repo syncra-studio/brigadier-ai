@@ -579,6 +579,16 @@ pub struct SubmitOutline {
     pub outline: String,
 }
 
+/// `request_review`: one review of the worker's committed work by the other vendor; blocks
+/// until the findings are in.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RequestReview {
+    /// What the reviewer should look at hardest, if anything.
+    #[serde(default)]
+    pub focus: Option<String>,
+}
+
 /// A file the worker saved in its scratch folder, attached to its report.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -695,6 +705,7 @@ fn empty_item(item: &str) -> bool {
 pub enum WorkerCall {
     AskOrchestrator(AskOrchestrator),
     SubmitOutline(SubmitOutline),
+    RequestReview(RequestReview),
     SubmitReport(SubmitReport),
     CodeSearch(CodeSearch),
     CodeRefs(CodeRefs),
@@ -707,6 +718,7 @@ impl WorkerCall {
         match self {
             Self::AskOrchestrator(_) => "ask_orchestrator",
             Self::SubmitOutline(_) => "submit_outline",
+            Self::RequestReview(_) => "request_review",
             Self::SubmitReport(_) => "submit_report",
             Self::CodeSearch(_) => "code_search",
             Self::CodeRefs(_) => "code_refs",

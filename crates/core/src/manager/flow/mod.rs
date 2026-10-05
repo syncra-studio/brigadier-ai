@@ -124,6 +124,7 @@ fn tool_call(name: &str, args: Value) -> ToolCall {
         "ask_orchestrator" => ToolCall::Worker(W::AskOrchestrator(arg(name, args))),
         "submit_outline" => ToolCall::Worker(W::SubmitOutline(arg(name, args))),
         "submit_report" => ToolCall::Worker(W::SubmitReport(arg(name, args))),
+        "request_review" => ToolCall::Worker(W::RequestReview(arg(name, args))),
         "project_map" => ToolCall::Worker(W::ProjectMap),
         other => panic!("the flow harness doesn't know the tool {other}"),
     }

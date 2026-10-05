@@ -458,6 +458,47 @@ impl SessionManager {
         (false, text)
     }
 
+    /// Commits what a write task left uncommitted in its worktree (litter left out; `extra`:
+    /// paths a report not stored yet names), so a review or a verifier starts from its
+    /// committed work. A Codex worker's sandbox can't write the worktree's git directory, so
+    /// Brigadier commits for it.
+    pub(crate) async fn commit_leftovers(
+        &self,
+        task: &Task,
+        extra: &[String],
+        message: &str,
+    ) -> Result<()> {
+        if !task.kind.writes() || task.kind == crate::work::TaskKind::Merge {
+            return Ok(());
+        }
+        let Some(worktree) = task.workspace.as_ref().and_then(|w| w.worktree.clone()) else {
+            return Ok(());
+        };
+        let mut reported = self.phase_reported(task).await;
+        reported.extend(extra.iter().map(|p| normalize(p)));
+        let (git, message) = (self.git.clone(), message.to_owned());
+        blocking(move || {
+            let worktree = git.open_worktree(Path::new(&worktree)).map_err(git_error)?;
+            let head = worktree.head().map_err(git_error)?;
+            let left = worktree.changes(&head).map_err(git_error)?;
+            let include = keep_paths(&left, &reported, &mut Vec::new());
+            if include.is_empty() {
+                return Ok(());
+            }
+            match worktree
+                .commit_candidate(&include, &message)
+                .map_err(git_error)?
+            {
+                CommitOutcome::HookFailed { output } => Err(Error::Invalid(format!(
+                    "The repository's commit hooks refused to commit the work:\n{}",
+                    clip(&output, 2_000)
+                ))),
+                _ => Ok(()),
+            }
+        })
+        .await
+    }
+
     /// Every file a report of `task`'s phase names: the provenance a new file needs to land.
     async fn phase_reported(&self, task: &Task) -> Vec<String> {
         let mut reported: Vec<String> = Vec::new();
