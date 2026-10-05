@@ -49,7 +49,7 @@ use crate::model::{
 };
 use crate::routing::TokenMeter;
 use crate::runtime::{is_delta, merge_delta};
-use crate::sessions::push_block;
+use crate::sessions::{inline_image_tokens, push_block};
 use crate::tools::Role;
 use crate::work::{
     AttachmentRef, Compaction, CompactionState, ContextInjection, InjectionKind, OrchestratorEntry,
@@ -4107,32 +4107,11 @@ fn image_plan<'a>(
     attachments: &'a [AttachmentRef],
     copied: &HashMap<String, Option<InputFile>>,
 ) -> ImagePlan<'a> {
-    let mut tokens = Vec::new();
-    let mut used = HashSet::new();
-    let mut cursor = 0;
-    while let Some(offset) = text[cursor..].find("[image:") {
-        let start = cursor + offset;
-        let id_start = start + 7;
-        // A nested opening bracket means this token is incomplete. Resume there so a real
-        // token after the malformed prefix can still match.
-        let Some(boundary) = text[id_start..].find(['[', ']']) else {
-            break;
-        };
-        let end = id_start + boundary;
-        if text.as_bytes()[end] == b'[' {
-            cursor = end;
-            continue;
-        }
-        let id = &text[id_start..end];
-        if let Some(attachment) = attachments
-            .iter()
-            .find(|a| a.inline && a.id == id && is_image(&a.mime))
-        {
-            tokens.push((start..end + 1, attachment));
-            used.insert(id);
-        }
-        cursor = end + 1;
-    }
+    let tokens = inline_image_tokens(text, attachments);
+    let used: HashSet<_> = tokens
+        .iter()
+        .map(|(_, attachment)| attachment.id.as_str())
+        .collect();
     let rows = attachments
         .iter()
         .filter(|a| !(a.inline && is_image(&a.mime) && used.contains(a.id.as_str())))

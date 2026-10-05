@@ -495,7 +495,7 @@ impl Core {
                 .find(|text| !text.trim().is_empty())
                 .unwrap_or_default()
         } else {
-            trimmed
+            display_text(&trimmed, &message.attachments)
         };
 
         let mut events = vec![
@@ -723,7 +723,7 @@ impl Core {
     /// A user message's words for a transcript or a note: its text, then the start of each
     /// text they pasted.
     pub(crate) async fn brief_words(&self, text: &str, attachments: &[AttachmentRef]) -> String {
-        let mut words = text.to_owned();
+        let mut words = display_text(text, attachments);
         for pasted in self.pasted_texts(attachments).await {
             let start = prefix(&pasted, PREVIEW_BYTES);
             let cut = if start.len() < pasted.len() {
@@ -734,6 +734,32 @@ impl Core {
             push_block(&mut words, &format!("{start}{cut}"));
         }
         words
+    }
+
+    /// A derived snippet may quote a user message; match images against its conversation.
+    pub(crate) async fn display_quote(&self, id: &ConversationId, text: &str) -> String {
+        if !text.contains("[image:") {
+            return text.to_owned();
+        }
+        let mut attachments = Vec::new();
+        for message in self.all_messages(id).await.unwrap_or_default() {
+            if message.role != MessageRole::User {
+                continue;
+            }
+            let original = match &message.blob {
+                Some(hash) => self
+                    .read_blob_text(hash.clone())
+                    .await
+                    .unwrap_or_else(|_| message.text.clone()),
+                None => message.text.clone(),
+            };
+            attachments.extend(
+                inline_image_tokens(&original, &message.attachments)
+                    .into_iter()
+                    .map(|(_, attachment)| attachment.clone()),
+            );
+        }
+        display_text(text, &attachments)
     }
 
     /// Keeps a composer draft's attachments stored until it is sent or discarded (see
@@ -1797,6 +1823,51 @@ fn clean_name(name: &str, what: &str) -> Result<String> {
     Ok(name)
 }
 
+/// Valid inline image tokens, using the same attachment rules as model input.
+pub(crate) fn inline_image_tokens<'a>(
+    text: &str,
+    attachments: &'a [AttachmentRef],
+) -> Vec<(std::ops::Range<usize>, &'a AttachmentRef)> {
+    let mut tokens = Vec::new();
+    let mut cursor = 0;
+    while let Some(offset) = text[cursor..].find("[image:") {
+        let start = cursor + offset;
+        let id_start = start + 7;
+        // A nested opening bracket means this token is incomplete. Resume there so a real
+        // token after the malformed prefix can still match.
+        let Some(boundary) = text[id_start..].find(['[', ']']) else {
+            break;
+        };
+        let end = id_start + boundary;
+        if text.as_bytes()[end] == b'[' {
+            cursor = end;
+            continue;
+        }
+        let id = &text[id_start..end];
+        if let Some(attachment) = attachments
+            .iter()
+            .find(|a| a.inline && a.id == id && brigadier_providers::model::is_image_mime(&a.mime))
+        {
+            tokens.push((start..end + 1, attachment));
+        }
+        cursor = end + 1;
+    }
+    tokens
+}
+
+/// Plain text for titles, previews and quoted snippets; never changes the stored message.
+pub(crate) fn display_text(text: &str, attachments: &[AttachmentRef]) -> String {
+    let mut shown = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for (range, _) in inline_image_tokens(text, attachments) {
+        shown.push_str(&text[cursor..range.start]);
+        shown.push_str("[image]");
+        cursor = range.end;
+    }
+    shown.push_str(&text[cursor..]);
+    shown
+}
+
 fn title_from(text: &str) -> String {
     let line = text
         .lines()
@@ -1880,4 +1951,195 @@ fn prefix(text: &str, bytes: usize) -> &str {
         end -= 1;
     }
     &text[..end]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image(id: &str, inline: bool, mime: &str) -> AttachmentRef {
+        AttachmentRef {
+            id: id.into(),
+            name: "icon.png".into(),
+            mime: mime.into(),
+            bytes: 1,
+            pasted: false,
+            inline,
+        }
+    }
+
+    #[test]
+    fn previews_only_replace_eligible_inline_images_and_preserve_literal_text() {
+        let attachments = [
+            image("a", true, "image/png"),
+            image("row", false, "image/png"),
+            image("svg", true, "image/svg+xml"),
+        ];
+        let text = "前[image:a][image:a][image:unknown][image:row][image:svg][Image:a][image:broken[image:a]後[image:unclosed";
+        assert_eq!(
+            display_text(text, &attachments),
+            "前[image][image][image:unknown][image:row][image:svg][Image:a][image:broken[image]後[image:unclosed"
+        );
+        assert_eq!(display_text(text, &[]), text);
+    }
+
+    #[tokio::test]
+    async fn auto_titles_and_request_previews_hide_image_ids_without_changing_messages() {
+        let dir = std::env::temp_dir().join(format!("brigadier-title-{}", uuid::Uuid::now_v7()));
+        let store = Store::open(brigadier_store::StoreConfig {
+            db_path: dir.join("test.db"),
+            blobs_dir: dir.join("blobs"),
+            readers: 1,
+        })
+        .unwrap();
+        let core = Core::load(store.clone()).await.unwrap();
+        let mut attachment = core
+            .add_attachment("icon.png".into(), "image/png".into(), vec![1], false)
+            .await
+            .unwrap();
+        attachment.inline = true;
+        for (text, expected) in [
+            (
+                format!("Paste test. Here is an icon: [image:{}]", attachment.id),
+                "Paste test. Here is an icon: [image]".to_owned(),
+            ),
+            (format!("[image:{}]", attachment.id), "[image]".to_owned()),
+            (
+                format!(
+                    "See [image:{}] twice [image:{}]",
+                    attachment.id, attachment.id
+                ),
+                "See [image] twice [image]".to_owned(),
+            ),
+            (
+                format!("\n Иконка [image:{}] after\nsecond line", attachment.id),
+                "Иконка [image] after".to_owned(),
+            ),
+            (
+                format!("{}[image:{}] after", "界".repeat(54), attachment.id),
+                format!("{}[imag…", "界".repeat(54)),
+            ),
+        ] {
+            let conversation = core
+                .create_conversation(
+                    ConversationId::generate(),
+                    ConversationKind::Chat,
+                    None,
+                    None,
+                    None,
+                    Origin::default(),
+                )
+                .await
+                .unwrap();
+            let message = core
+                .append_user_message(
+                    conversation.id.clone(),
+                    text.clone(),
+                    vec![attachment.clone()],
+                    vec![],
+                )
+                .await
+                .unwrap();
+            assert_eq!(core.conversation(&conversation.id).unwrap().title, expected);
+            let board = core.board(&conversation.id).await.unwrap();
+            assert_eq!(
+                board.requests[&message.id].preview,
+                preview(&display_text(&text, &message.attachments))
+            );
+            assert!(!board.requests[&message.id].preview.contains(&attachment.id));
+            assert_eq!(
+                core.display_quote(&conversation.id, &text).await,
+                display_text(&text, &message.attachments)
+            );
+            assert_eq!(message.text, text);
+            assert_eq!(
+                core.list_messages(conversation.id.clone(), None, 10)
+                    .await
+                    .unwrap()
+                    .messages[0]
+                    .text,
+                text
+            );
+            assert_eq!(
+                core.brief_words(&text, &message.attachments).await,
+                display_text(&text, &message.attachments)
+            );
+            let reloaded = Core::load(store.clone()).await.unwrap();
+            assert_eq!(
+                reloaded.conversation(&conversation.id).unwrap().title,
+                expected
+            );
+        }
+        // A token that is ordinary typed text must remain ordinary text, even in a title.
+        for inline in [false, true] {
+            let conversation = core
+                .create_conversation(
+                    ConversationId::generate(),
+                    ConversationKind::Chat,
+                    None,
+                    None,
+                    None,
+                    Origin::default(),
+                )
+                .await
+                .unwrap();
+            let token = "Literal [image:unknown]";
+            let refs = if inline {
+                vec![attachment.clone()]
+            } else {
+                vec![]
+            };
+            core.append_user_message(conversation.id.clone(), token.into(), refs, vec![])
+                .await
+                .unwrap();
+            assert_eq!(core.conversation(&conversation.id).unwrap().title, token);
+        }
+        let conversation = core
+            .create_conversation(
+                ConversationId::generate(),
+                ConversationKind::Chat,
+                None,
+                None,
+                None,
+                Origin::default(),
+            )
+            .await
+            .unwrap();
+        core.append_user_message(
+            conversation.id.clone(),
+            "No inline image here".into(),
+            vec![attachment.clone()],
+            vec![],
+        )
+        .await
+        .unwrap();
+        let token = format!("Literal [image:{}]", attachment.id);
+        assert_eq!(core.display_quote(&conversation.id, &token).await, token);
+        let mut row = attachment.clone();
+        row.inline = false;
+        let conversation = core
+            .create_conversation(
+                ConversationId::generate(),
+                ConversationKind::Chat,
+                None,
+                None,
+                None,
+                Origin::default(),
+            )
+            .await
+            .unwrap();
+        let message = core
+            .append_user_message(conversation.id.clone(), token.clone(), vec![row], vec![])
+            .await
+            .unwrap();
+        assert_eq!(
+            core.conversation(&conversation.id).unwrap().title,
+            title_from(&token)
+        );
+        assert_eq!(core.brief_words(&token, &message.attachments).await, token);
+        store.shutdown().await.unwrap();
+        drop(core);
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

@@ -26,6 +26,12 @@ export function inlineRefs(text: string, refs: Iterable<AttachmentRef>): Attachm
   });
 }
 
+/** Plain text for previews and tooltips; only this message's eligible refs count. */
+export function imagePreview(text: string, refs: Iterable<AttachmentRef>): string {
+  const known = new Set(inlineRefs(text, refs).map((ref) => ref.id));
+  return text.replace(/\[image:([^[\]]*)\]/g, (token, id: string) => known.has(id) ? "[image]" : token);
+}
+
 /** The daemon's limit per attachment list, draft pins included (MAX_ATTACHMENTS in the core). */
 export const MAX_ATTACHMENTS = 20;
 

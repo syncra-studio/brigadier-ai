@@ -110,13 +110,16 @@ impl SessionManager {
             true,
         ));
         let now = now_ms();
+        let mut name_plan = plan.clone();
+        name_plan.name = self.core.display_quote(&conversation_id, &plan.name).await;
+        let name_words = self.core.display_quote(&conversation_id, &words).await;
         let run = OvernightRun {
             id: OvernightRunId::generate(),
             conversation_id: conversation_id.clone(),
             segment: 1,
             predecessor: None,
             plan_id: None,
-            name: name_of(&plan, &words),
+            name: name_of(&name_plan, &name_words),
             goal: plan.goal.clone().unwrap_or_else(|| words.clone()),
             rules: plan.rules.clone().unwrap_or_default(),
             words,
@@ -283,7 +286,11 @@ impl SessionManager {
         let Ok(conversation) = self.core.conversation(&run.conversation_id) else {
             return;
         };
-        if conversation.title == run.name || !words_title(&conversation.title, &run.words) {
+        let words = self
+            .core
+            .display_quote(&run.conversation_id, &run.words)
+            .await;
+        if conversation.title == run.name || !words_title(&conversation.title, &words) {
             return;
         }
         if let Err(err) = self

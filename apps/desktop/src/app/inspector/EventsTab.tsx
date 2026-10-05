@@ -4,6 +4,7 @@ import { memo, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { DomainEvent, EventEnvelope } from "@/ipc/generated";
 import { formatClock, formatMs } from "@/lib/format";
+import { imagePreview } from "@/lib/inlineImages";
 import { probeSamples, summarize } from "@/lib/perf";
 import { tokenPx } from "@/lib/tokens";
 import { runProbeBurst } from "@/state/actions";
@@ -26,7 +27,7 @@ function summary(event: DomainEvent): string {
     case "conversationWaiting":
       return event.wait === null ? "no longer waiting" : `waits: ${event.wait.reason}`;
     case "messageAppended":
-      return event.message.text.slice(0, 120).replace(/\s+/g, " ");
+      return imagePreview(event.message.text, event.message.attachments).slice(0, 120).replace(/\s+/g, " ");
     case "settingsChanged":
       return `density ${event.settings.density}`;
     case "probe":

@@ -974,7 +974,10 @@ impl SessionManager {
                     MessageRole::Assistant => "assistant",
                     MessageRole::System => "brigadier",
                 };
-                let text = self.full_words(&message).await;
+                let text = crate::sessions::display_text(
+                    &self.full_words(&message).await,
+                    &message.attachments,
+                );
                 Some((role, message.request_id, text))
             }
             DomainEvent::TaskUpdated { task } => {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { IMAGE_UPLOAD, INLINE_IMAGE, InlineImages, MAX_ATTACHMENTS, draftRefs, imageSegments, imageToken, imageTokens, inlineRefs, isInlineImage, queuedImageRefs, reconcileImages, uploadToken } from "@/lib/inlineImages";
+import { IMAGE_UPLOAD, INLINE_IMAGE, InlineImages, MAX_ATTACHMENTS, draftRefs, imageSegments, imageToken, imageTokens, imagePreview, inlineRefs, isInlineImage, queuedImageRefs, reconcileImages, uploadToken } from "@/lib/inlineImages";
 import type { AttachmentRef } from "@/ipc/generated";
 
 const ref = (id: string, inline = true, mime = "image/png"): AttachmentRef => ({ id, inline, mime, name: `${id}.png`, bytes: 10, pasted: false });
@@ -125,4 +125,17 @@ test("draft pins keep the text's images and the newest retained ones within the 
   assert.deepEqual(pinned.slice(0, 4).map((attachment) => attachment.id), ["row", "r3", "r29", "r28"]);
   assert.equal(pinned.filter((attachment) => attachment.id === "r3").length, 1);
   assert.deepEqual(draftRefs("", [], [ref("a"), ref("b")]).map((attachment) => attachment.id), ["b", "a"]);
+});
+
+
+test("plain previews replace every valid image before truncation without changing message text", () => {
+  const id = "a".repeat(64);
+  const text = `Иконка [image:${id}] again [image:${id}] then [image:unknown] [image:row] [image:svg] [Image:${id}] [image:broken[image:${id}]`;
+  const refs = [ref(id), ref("row", false), ref("svg", true, "image/svg+xml")];
+  const before = JSON.stringify({ text, refs });
+  const shown = imagePreview(text, refs);
+  assert.equal(shown, `Иконка [image] again [image] then [image:unknown] [image:row] [image:svg] [Image:${id}] [image:broken[image]`);
+  assert.equal(imagePreview(`Иконка [image:${id}] after`, refs).slice(0, 20), "Иконка [image] after");
+  assert.equal(imagePreview("[image:unknown] [image:unclosed", refs), "[image:unknown] [image:unclosed");
+  assert.equal(JSON.stringify({ text, refs }), before);
 });

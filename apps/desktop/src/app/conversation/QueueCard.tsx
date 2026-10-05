@@ -1,3 +1,4 @@
+import { imagePreview } from "@/lib/inlineImages";
 import { useAui, useAuiState } from "@assistant-ui/react";
 import {
   ArrowCurvedRight,
@@ -146,7 +147,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                 )
               }
             >
-              <span className="min-w-0 flex-1 truncate" title={item.text || undefined}>
+              <span className="min-w-0 flex-1 truncate" title={imagePreview(item.text, item.attachments) || undefined}>
                 {item.text ? (
                   <>
                     <InlineImageText text={item.text} attachments={item.attachments} />

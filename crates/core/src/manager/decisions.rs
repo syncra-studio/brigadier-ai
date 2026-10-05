@@ -90,6 +90,8 @@ impl SessionManager {
         what: String,
         why: String,
     ) {
+        let what = self.core.display_quote(conversation_id, &what).await;
+        let why = self.core.display_quote(conversation_id, &why).await;
         // What the user reads names a worker as the app shows it, never as "task-N".
         let (what, why) = match self.core.board(conversation_id).await {
             Ok(board) => (named(&what, &board), named(&why, &board)),
@@ -128,7 +130,8 @@ impl SessionManager {
         source: WaitingSource,
         what: &str,
     ) -> Result<bool> {
-        let what = one_line(what, LINE_CHARS);
+        let what = self.core.display_quote(conversation_id, what).await;
+        let what = one_line(&what, LINE_CHARS);
         if what.is_empty() {
             return Err(Error::Invalid("say what the user must do".into()));
         }
@@ -193,6 +196,11 @@ impl SessionManager {
         let request = self
             .request_for(&task.conversation_id, Some(&task.id))
             .await;
+        let mut shown = Vec::with_capacity(lines.len());
+        for line in lines {
+            shown.push(self.core.display_quote(&task.conversation_id, line).await);
+        }
+        let lines = &shown;
         let changed = {
             let _held = self.waiting.lock().await;
             let Ok(board) = self.core.board(&task.conversation_id).await else {
@@ -261,9 +269,17 @@ impl SessionManager {
     /// what the user marked done).
     pub(crate) async fn reconcile_waiting(&self, conversation_id: &ConversationId) {
         let _held = self.waiting.lock().await;
-        let Ok(board) = self.core.board(conversation_id).await else {
+        let Ok(mut board) = self.core.board(conversation_id).await else {
             return;
         };
+        // Recovered worker reports also pass through the display path before line limits.
+        for task in board.tasks.values_mut() {
+            if let Some(report) = &mut task.report {
+                for line in &mut report.needs_user {
+                    *line = self.core.display_quote(conversation_id, line).await;
+                }
+            }
+        }
         let (listed, gone) =
             reconciled_waits(&board, now_ms(), || uuid::Uuid::now_v7().to_string());
         let events: Vec<DomainEvent> = listed

@@ -103,7 +103,23 @@ impl SessionManager {
         }
         .unwrap_or_else(|| landed_commits(run, &board));
         let usage = self.run_usage(run, &board, now).await;
-        let mut text = render(run, &board, &commits, &usage, now);
+        // Summaries are shortened by render, so replace quoted image tokens first.
+        let mut shown_board = board.clone();
+        for task in shown_board.tasks.values_mut() {
+            if let Some(report) = &mut task.report {
+                report.summary = self.core.display_quote(id, &report.summary).await;
+            }
+        }
+        let mut shown_run = run.clone();
+        for phase in &mut shown_run.phases {
+            if let Some(summary) = &mut phase.summary {
+                *summary = self.core.display_quote(id, summary).await;
+            }
+        }
+        let mut text = self
+            .core
+            .display_quote(id, &render(&shown_run, &shown_board, &commits, &usage, now))
+            .await;
         if let Some(message) = &written {
             // Reconciliation uses the text already posted, not newly rendered facts.
             text = self.full_text(message).await;

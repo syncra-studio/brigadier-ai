@@ -19,7 +19,7 @@ use super::SessionManager;
 use super::conversation::ConvLive;
 use crate::board::Board;
 use crate::model::{ConversationId, ConversationKind, MessageRole};
-use crate::sessions::{branch_of, one_line, parent_of};
+use crate::sessions::{branch_of, display_text, one_line, parent_of};
 use crate::work::{ApprovalSubject, AttachmentRef, CardState, PlanState, QuestionKind};
 use crate::{Error, Result, now_ms};
 
@@ -168,7 +168,12 @@ impl SessionManager {
                     .iter()
                     .rev()
                     .find(|message| message.role == MessageRole::User)
-                    .map(|message| one_line(&message.text, NOTE_PREVIEW_CHARS))
+                    .map(|message| {
+                        one_line(
+                            &display_text(&message.text, &message.attachments),
+                            NOTE_PREVIEW_CHARS,
+                        )
+                    })
                     .unwrap_or_default();
                 Some(format!(
                     "[Brigadier: the user switched the thread back to another version of their message: \"{shown}\". Messages from now on continue from that version.]"

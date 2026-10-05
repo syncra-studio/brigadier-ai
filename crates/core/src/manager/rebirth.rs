@@ -883,7 +883,13 @@ impl SessionManager {
             text.push_str("The user's queued messages (they reach you later, one by one):\n");
             for item in &board.queue.items {
                 items += 1;
-                text.push_str(&format!("- {}\n", one_line(&item.text, 300)));
+                text.push_str(&format!(
+                    "- {}\n",
+                    one_line(
+                        &crate::sessions::display_text(&item.text, &item.attachments),
+                        300
+                    )
+                ));
             }
         }
         let mut plans = board.sorted_plans();
