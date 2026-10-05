@@ -1,5 +1,6 @@
 use crate::{
-    Change, ChangeKind, CollisionKind, DiffStat, Error, FileStat, Oid, Result, WorktreeInfo,
+    Change, ChangeKind, CollisionKind, DiffStat, Error, FileStat, Oid, Result, SourceChanges,
+    SourceEntry, SourceKind, WorktreeInfo,
 };
 use std::{collections::BTreeSet, path::PathBuf};
 
@@ -124,6 +125,85 @@ pub(crate) fn status(bytes: &[u8]) -> Result<Status> {
         }
     }
     Ok(status)
+}
+
+/// `git status --porcelain=v2 -z` with both sides of each entry kept: the index code (X) on
+/// the staged side, the files code (Y) on the other, a rename's or copy's source on the side
+/// that moved it. Unmerged entries are only conflicted changes. Ignored entries are skipped.
+pub(crate) fn source_changes(bytes: &[u8]) -> Result<SourceChanges> {
+    let mut result = SourceChanges::default();
+    let mut records = fields(bytes);
+    while let Some(record) = records.next() {
+        if record.is_empty() {
+            continue;
+        }
+        let s = text(record)?;
+        if s.starts_with("# ") || s.starts_with("! ") {
+            continue;
+        }
+        if let Some(path) = s.strip_prefix("? ") {
+            result.changes.push(SourceEntry {
+                path: path.to_owned(),
+                old_path: None,
+                kind: SourceKind::Untracked,
+            });
+            continue;
+        }
+        let count = match record[0] {
+            b'1' => 9,
+            b'2' => 10,
+            b'u' => 11,
+            _ => return Err(Error::Parse(s.into())),
+        };
+        let parts: Vec<_> = s.splitn(count, ' ').collect();
+        if parts.len() != count || parts[1].len() != 2 {
+            return Err(Error::Parse(s.into()));
+        }
+        let path = parts[count - 1].to_owned();
+        if record[0] == b'u' {
+            result.changes.push(SourceEntry {
+                path,
+                old_path: None,
+                kind: SourceKind::Conflicted,
+            });
+            continue;
+        }
+        let from = if record[0] == b'2' {
+            let from = records
+                .next()
+                .ok_or_else(|| Error::Parse("missing rename source".into()))?;
+            Some(text(from)?.to_owned())
+        } else {
+            None
+        };
+        let codes = parts[1].as_bytes();
+        for (code, side) in [
+            (codes[0], &mut result.staged),
+            (codes[1], &mut result.changes),
+        ] {
+            let kind = match code {
+                b'.' => continue,
+                b'M' => SourceKind::Modified,
+                b'A' => SourceKind::Added,
+                b'D' => SourceKind::Deleted,
+                b'R' => SourceKind::Renamed,
+                b'C' => SourceKind::Copied,
+                b'T' => SourceKind::TypeChanged,
+                _ => return Err(Error::Parse(s.into())),
+            };
+            let old_path = matches!(kind, SourceKind::Renamed | SourceKind::Copied)
+                .then(|| from.clone())
+                .flatten();
+            side.push(SourceEntry {
+                path: path.clone(),
+                old_path,
+                kind,
+            });
+        }
+    }
+    result.staged.sort_by(|a, b| a.path.cmp(&b.path));
+    result.changes.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(result)
 }
 
 pub(crate) fn worktrees(bytes: &[u8]) -> Result<Vec<WorktreeInfo>> {

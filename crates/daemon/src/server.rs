@@ -1147,6 +1147,30 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::PushChanges { conversation_id } => Response::PushChanges {
             branch: sessions.push_changes(&conversation_id).await?,
         },
+        Request::GetSourceState { conversation_id } => Response::GetSourceState {
+            state: sessions.source_state(&conversation_id).await?,
+        },
+        Request::StageFiles {
+            conversation_id,
+            paths,
+        } => Response::StageFiles {
+            state: sessions.stage_files(&conversation_id, paths).await?,
+        },
+        Request::UnstageFiles {
+            conversation_id,
+            paths,
+        } => Response::UnstageFiles {
+            state: sessions.unstage_files(&conversation_id, paths).await?,
+        },
+        Request::DiscardFiles {
+            conversation_id,
+            scope,
+            paths,
+        } => Response::DiscardFiles {
+            state: sessions
+                .discard_files(&conversation_id, scope, paths)
+                .await?,
+        },
         Request::GetReviewDiff {
             conversation_id,
             scope,

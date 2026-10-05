@@ -9,6 +9,7 @@ mod command;
 pub mod litter;
 mod parse;
 mod repo;
+mod source;
 mod worktree;
 
 use std::{ffi::OsString, path::PathBuf};
@@ -417,6 +418,49 @@ pub struct CheckoutTrees {
     pub files: Oid,
     /// Files git does not track yet.
     pub untracked: Vec<String>,
+}
+
+/// How a file differs on one side of a checkout: its index from HEAD, or its files from the
+/// index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    /// Changed contents or executable bit.
+    Modified,
+    /// New path.
+    Added,
+    /// Removed path.
+    Deleted,
+    /// Moved from another path.
+    Renamed,
+    /// Copied from another path.
+    Copied,
+    /// Changed object type (for example file to symlink).
+    TypeChanged,
+    /// Not tracked by git (never on the staged side).
+    Untracked,
+    /// Unmerged index entries (never on the staged side).
+    Conflicted,
+}
+
+/// One file of a checkout's source control list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceEntry {
+    /// Repo-relative path.
+    pub path: String,
+    /// The path a rename or copy came from.
+    pub old_path: Option<String>,
+    /// How it differs.
+    pub kind: SourceKind,
+}
+
+/// A checkout's files split as `git status` sees them, each list sorted by path.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceChanges {
+    /// The index against HEAD.
+    pub staged: Vec<SourceEntry>,
+    /// The files against the index, untracked and conflicted files included. A partly staged
+    /// file is in both lists.
+    pub changes: Vec<SourceEntry>,
 }
 
 /// Where a branch pushes, and how far it is ahead.

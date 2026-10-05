@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use brigadier_git::Oid;
+use brigadier_git::{Oid, Repo, SourceEntry, SourceKind};
 use brigadier_providers::{
     Access, Origin, ProviderEvent, ProviderKind, Role, SessionSpec, Started, ToolSet, TurnInput,
 };
@@ -14,7 +14,7 @@ use brigadier_providers::{
 use super::landing::diff_stat_of;
 use super::{SessionManager, blocking, git_error};
 use crate::model::{ConversationId, Environment, Setup};
-use crate::work::{CommitOutcome, GitState};
+use crate::work::{CommitOutcome, GitState, SourceFile, SourceScope, SourceState, SourceStatus};
 use crate::{Error, Result};
 
 /// How much of the patch the message writer reads.
@@ -74,6 +74,63 @@ impl SessionManager {
                 upstream: remote.as_ref().and_then(|state| state.upstream.clone()),
                 ahead: remote.map_or(0, |state| state.ahead),
             })
+        })
+        .await
+    }
+
+    /// What the Source panel lists: the checkout's staged and unstaged files, and where its
+    /// branch pushes.
+    pub async fn source_state(&self, id: &ConversationId) -> Result<SourceState> {
+        let (path, _) = self.checkout(id)?;
+        let git = self.git.clone();
+        blocking(move || source_state_of(&git.open(&path).map_err(git_error)?)).await
+    }
+
+    /// The user's staging of the listed changes (every change with `None`).
+    pub async fn stage_files(
+        &self,
+        id: &ConversationId,
+        paths: Option<Vec<String>>,
+    ) -> Result<SourceState> {
+        self.change_source(id, move |repo| repo.stage(paths.as_deref()))
+            .await
+    }
+
+    /// The user's unstaging of the listed staged files (every one with `None`).
+    pub async fn unstage_files(
+        &self,
+        id: &ConversationId,
+        paths: Option<Vec<String>>,
+    ) -> Result<SourceState> {
+        self.change_source(id, move |repo| repo.unstage(paths.as_deref()))
+            .await
+    }
+
+    /// The user's Discard of the listed files on one side (all of that side with `None`).
+    pub async fn discard_files(
+        &self,
+        id: &ConversationId,
+        scope: SourceScope,
+        paths: Option<Vec<String>>,
+    ) -> Result<SourceState> {
+        let staged = scope == SourceScope::Staged;
+        self.change_source(id, move |repo| repo.discard(staged, paths.as_deref()))
+            .await
+    }
+
+    /// Runs one of the Source panel's changes in the checkout, then reads it again.
+    async fn change_source(
+        &self,
+        id: &ConversationId,
+        change: impl FnOnce(&Repo) -> brigadier_git::Result<()> + Send + 'static,
+    ) -> Result<SourceState> {
+        self.admit()?;
+        let (path, _) = self.checkout(id)?;
+        let git = self.git.clone();
+        blocking(move || {
+            let repo = git.open(&path).map_err(git_error)?;
+            change(&repo).map_err(git_error)?;
+            source_state_of(&repo)
         })
         .await
     }
@@ -285,6 +342,43 @@ impl SessionManager {
         let effort = (provider == ProviderKind::Codex).then(|| "low".to_owned());
         Ok((model, effort))
     }
+}
+
+/// A checkout's Source panel state.
+fn source_state_of(repo: &Repo) -> Result<SourceState> {
+    let changes = repo.source_changes().map_err(git_error)?;
+    let branch = repo.state().map_err(git_error)?.current_branch;
+    let remote = match &branch {
+        Some(branch) => Some(repo.remote_state(branch).map_err(git_error)?),
+        None => None,
+    };
+    let files = |entries: Vec<SourceEntry>| {
+        entries
+            .into_iter()
+            .map(|entry| SourceFile {
+                path: entry.path,
+                old_path: entry.old_path,
+                status: match entry.kind {
+                    SourceKind::Modified => SourceStatus::Modified,
+                    SourceKind::Added => SourceStatus::Added,
+                    SourceKind::Deleted => SourceStatus::Deleted,
+                    SourceKind::Renamed => SourceStatus::Renamed,
+                    SourceKind::Copied => SourceStatus::Copied,
+                    SourceKind::TypeChanged => SourceStatus::TypeChanged,
+                    SourceKind::Untracked => SourceStatus::Untracked,
+                    SourceKind::Conflicted => SourceStatus::Conflicted,
+                },
+            })
+            .collect()
+    };
+    Ok(SourceState {
+        branch,
+        remote: remote.as_ref().and_then(|state| state.remote.clone()),
+        upstream: remote.as_ref().and_then(|state| state.upstream.clone()),
+        ahead: remote.map_or(0, |state| state.ahead),
+        staged: files(changes.staged),
+        changes: files(changes.changes),
+    })
 }
 
 /// The writer's reply as a commit message: no code fences or surrounding quotes, and no

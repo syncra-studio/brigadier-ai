@@ -1416,6 +1416,62 @@ pub struct GitState {
     pub ahead: u32,
 }
 
+/// A session checkout's files for the Source panel: what is staged, what is not, and where
+/// the branch pushes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceState {
+    /// The branch checked out; absent on a detached HEAD.
+    pub branch: Option<String>,
+    /// The remote the branch pushes to, if any.
+    pub remote: Option<String>,
+    pub upstream: Option<String>,
+    /// Commits not pushed yet.
+    pub ahead: u32,
+    /// The index against HEAD, sorted by path.
+    pub staged: Vec<SourceFile>,
+    /// The files against the index, untracked and conflicted files included, sorted by path.
+    /// A partly staged file is in both lists.
+    pub changes: Vec<SourceFile>,
+}
+
+/// One file of the Source panel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceFile {
+    /// Repo-relative path.
+    pub path: String,
+    /// Where a rename or copy came from.
+    pub old_path: Option<String>,
+    pub status: SourceStatus,
+}
+
+/// How a Source panel file differs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceStatus {
+    Modified,
+    Added,
+    Deleted,
+    Renamed,
+    Copied,
+    TypeChanged,
+    /// Not tracked by git; only among the changes.
+    Untracked,
+    /// Unmerged; only among the changes.
+    Conflicted,
+}
+
+/// Which side of the Source panel a Discard throws away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceScope {
+    /// The index and files go back to HEAD's.
+    Staged,
+    /// The files go back to the index's; untracked files are deleted.
+    Unstaged,
+}
+
 /// The GitHub pull request of a session's branch (the pinned card's row).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

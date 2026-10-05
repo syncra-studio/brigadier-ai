@@ -19,7 +19,8 @@ use brigadier_core::{
     OvernightRunId, ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan,
     ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession,
     RawSessionId, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, Settings, Setup,
-    SetupRequest, TaskId, UpdateTarget, UpdatesView, UsageView, WorkerDiff, WorkerPage,
+    SetupRequest, SourceScope, SourceState, TaskId, UpdateTarget, UpdatesView, UsageView,
+    WorkerDiff, WorkerPage,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -443,6 +444,29 @@ pub enum Request {
     /// The user's push of a session checkout's branch.
     PushChanges {
         conversation_id: ConversationId,
+    },
+    /// A session checkout's staged and unstaged files, for the Source panel.
+    GetSourceState {
+        conversation_id: ConversationId,
+    },
+    /// Stages the listed changes in a session checkout (every change, untracked files
+    /// included, when absent).
+    StageFiles {
+        conversation_id: ConversationId,
+        paths: Option<Vec<String>>,
+    },
+    /// Unstages the listed staged files in a session checkout (every one when absent).
+    UnstageFiles {
+        conversation_id: ConversationId,
+        paths: Option<Vec<String>>,
+    },
+    /// Throws away the listed files of one side in a session checkout (the whole side when
+    /// absent): unstaged changes go back to the index (untracked files are deleted), staged
+    /// ones back to HEAD in both the index and the files.
+    DiscardFiles {
+        conversation_id: ConversationId,
+        scope: SourceScope,
+        paths: Option<Vec<String>>,
     },
     /// Answers an approval card.
     AnswerCard {
@@ -970,6 +994,18 @@ pub enum Response {
     },
     PushChanges {
         branch: String,
+    },
+    GetSourceState {
+        state: SourceState,
+    },
+    StageFiles {
+        state: SourceState,
+    },
+    UnstageFiles {
+        state: SourceState,
+    },
+    DiscardFiles {
+        state: SourceState,
     },
     AnswerCard,
     AnswerQuestion,
