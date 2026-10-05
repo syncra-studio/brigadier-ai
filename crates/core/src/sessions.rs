@@ -704,7 +704,7 @@ impl Core {
             mime,
             bytes: size,
             pasted,
-            inline: false,
+            inline: None,
         })
     }
 
@@ -738,7 +738,7 @@ impl Core {
 
     /// A derived snippet may quote a user message; match images against its conversation.
     pub(crate) async fn display_quote(&self, id: &ConversationId, text: &str) -> String {
-        if !text.contains("[image:") {
+        if !text.contains("[image:") && !text.contains("[Image #") {
             return text.to_owned();
         }
         let mut attachments = Vec::new();
@@ -1845,14 +1845,25 @@ pub(crate) fn inline_image_tokens<'a>(
             continue;
         }
         let id = &text[id_start..end];
-        if let Some(attachment) = attachments
-            .iter()
-            .find(|a| a.inline && a.id == id && brigadier_providers::model::is_image_mime(&a.mime))
-        {
+        if let Some(attachment) = attachments.iter().find(|a| {
+            a.inline.is_some() && a.id == id && brigadier_providers::model::is_image_mime(&a.mime)
+        }) {
             tokens.push((start..end + 1, attachment));
         }
         cursor = end + 1;
     }
+    // Numbered markers from the AB composer share the same display/title rules.
+    for attachment in attachments.iter().filter(|a| {
+        a.inline.is_some_and(|n| n > 0) && brigadier_providers::model::is_image_mime(&a.mime)
+    }) {
+        let marker = format!("[Image #{}]", attachment.inline.unwrap());
+        for (start, _) in text.match_indices(&marker) {
+            tokens.push((start..start + marker.len(), attachment));
+        }
+    }
+    tokens.sort_by_key(|(range, _)| range.start);
+    tokens.dedup_by(|a, b| a.0 == b.0);
+
     tokens
 }
 
@@ -1965,8 +1976,21 @@ mod tests {
             mime: mime.into(),
             bytes: 1,
             pasted: false,
-            inline,
+            inline: inline.then_some(0),
         }
+    }
+
+    #[test]
+    fn numbered_images_keep_main_title_cleaning_and_literal_markers() {
+        let mut attachment = image("a", true, "image/png");
+        attachment.inline = Some(2);
+        assert_eq!(
+            display_text(
+                "前[Image #2] again [Image #2] literal [Image #3]",
+                &[attachment]
+            ),
+            "前[image] again [image] literal [Image #3]"
+        );
     }
 
     #[test]
@@ -1998,7 +2022,7 @@ mod tests {
             .add_attachment("icon.png".into(), "image/png".into(), vec![1], false)
             .await
             .unwrap();
-        attachment.inline = true;
+        attachment.inline = Some(0);
         for (text, expected) in [
             (
                 format!("Paste test. Here is an icon: [image:{}]", attachment.id),
@@ -2117,7 +2141,7 @@ mod tests {
         let token = format!("Literal [image:{}]", attachment.id);
         assert_eq!(core.display_quote(&conversation.id, &token).await, token);
         let mut row = attachment.clone();
-        row.inline = false;
+        row.inline = None;
         let conversation = core
             .create_conversation(
                 ConversationId::generate(),

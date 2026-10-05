@@ -29,9 +29,27 @@ pub struct AttachmentRef {
     /// they wrote, so it goes to the model as their message.
     #[serde(default)]
     pub pasted: bool,
-    /// A pasted image placed at its `[image:<id>]` token in the message.
-    #[serde(default)]
-    pub inline: bool,
+    /// An image pasted at `[Image #n]`. Zero reads legacy `[image:<id>]` messages.
+    #[serde(default, deserialize_with = "read_inline_image")]
+    pub inline: Option<u32>,
+}
+
+// Read both installed-main booleans and the AB branch's numbered references.
+fn read_inline_image<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u32>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Saved {
+        Number(u32),
+        Legacy(bool),
+    }
+    Ok(
+        Option::<Saved>::deserialize(deserializer)?.and_then(|saved| match saved {
+            Saved::Number(n) => Some(n),
+            Saved::Legacy(inline) => inline.then_some(0),
+        }),
+    )
 }
 
 // ----- tasks and workers ------------------------------------------------------------------
@@ -1688,15 +1706,33 @@ mod attachment_tests {
     use super::*;
 
     #[test]
+    fn attachments_read_both_saved_inline_formats() {
+        for (saved, expected) in [
+            ("true", Some(0)),
+            ("false", None),
+            ("1", Some(1)),
+            ("null", None),
+        ] {
+            let json = format!(
+                r#"{{"id":"hash","name":"photo.png","mime":"image/png","bytes":12,"inline":{saved}}}"#
+            );
+            assert_eq!(
+                serde_json::from_str::<AttachmentRef>(&json).unwrap().inline,
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn old_attachment_defaults_to_non_inline() {
         let attachment: AttachmentRef = serde_json::from_str(
             r#"{"id":"hash","name":"photo.png","mime":"image/png","bytes":12}"#,
         )
         .unwrap();
-        assert!(!attachment.inline);
+        assert!(attachment.inline.is_none());
         assert!(!attachment.pasted);
         let mut inline = attachment;
-        inline.inline = true;
+        inline.inline = Some(0);
         let saved = serde_json::to_string(&inline).unwrap();
         assert_eq!(
             serde_json::from_str::<AttachmentRef>(&saved).unwrap(),

@@ -309,7 +309,10 @@ fn edited_attachments(text: &str, attachments: &[AttachmentRef]) -> Vec<Attachme
     attachments
         .iter()
         .filter(|attachment| {
-            !attachment.inline || text.contains(&format!("[image:{}]", attachment.id))
+            attachment.inline.is_none()
+                || crate::sessions::inline_image_tokens(text, std::slice::from_ref(attachment))
+                    .len()
+                    > 0
         })
         .cloned()
         .collect()
@@ -327,10 +330,10 @@ mod tests {
             mime: "image/png".into(),
             bytes: 1,
             pasted: false,
-            inline: false,
+            inline: None,
         };
         let mut inline = row.clone();
-        inline.inline = true;
+        inline.inline = Some(0);
         let mut removed = inline.clone();
         removed.id = "b".into();
         let attachments = vec![row.clone(), inline.clone(), removed];

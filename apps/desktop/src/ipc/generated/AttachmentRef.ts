@@ -14,6 +14,6 @@ id: string, name: string, mime: string, bytes: number,
  */
 pasted: boolean, 
 /**
- * A pasted image placed at its `[image:<id>]` token in the message.
+ * An image pasted at `[Image #n]`. Zero reads legacy `[image:<id>]` messages.
  */
-inline: boolean, };
+inline: number | null, };

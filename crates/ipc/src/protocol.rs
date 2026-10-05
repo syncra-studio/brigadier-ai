@@ -1424,6 +1424,6 @@ mod inline_edit_tests {
         else {
             panic!("expected refs")
         };
-        assert!(refs[0].inline);
+        assert!(refs[0].inline.is_some());
     }
 }

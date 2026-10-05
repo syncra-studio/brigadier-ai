@@ -1756,8 +1756,15 @@ impl SessionManager {
                     self.attachment_file(conv, attachment).await,
                 );
             }
-            let mut inline = inline_image_parts(&user_text, &plan.tokens, &copied);
-            for attachment in &plan.rows {
+            let text = name_inline_images(
+                &user_text,
+                &message.attachments,
+                &copied,
+                conv.kind,
+                &mut files,
+            );
+            let mut inline = vec![InputPart::Text(text)];
+            for attachment in plan.rows.iter().filter(|a| a.inline.is_none()) {
                 if attachment.pasted
                     && let Ok(pasted) = self.core.read_blob_text(attachment.id.clone()).await
                 {
@@ -4162,7 +4169,6 @@ fn pasted_inline(text: &str, attachment: &AttachmentRef, kind: ConversationKind)
 
 /// Image placement and attachment work for one message. Copy candidates exclude cached ids.
 struct ImagePlan<'a> {
-    tokens: Vec<(std::ops::Range<usize>, &'a AttachmentRef)>,
     rows: Vec<&'a AttachmentRef>,
     copies: Vec<&'a AttachmentRef>,
 }
@@ -4179,47 +4185,97 @@ fn image_plan<'a>(
         .collect();
     let rows = attachments
         .iter()
-        .filter(|a| !(a.inline && is_image(&a.mime) && used.contains(a.id.as_str())))
+        .filter(|a| !(a.inline.is_some() && is_image(&a.mime) && used.contains(a.id.as_str())))
         .collect();
     let mut seen: HashSet<_> = copied.keys().map(String::as_str).collect();
     let copies = attachments
         .iter()
         .filter(|a| is_image(&a.mime) && seen.insert(a.id.as_str()))
         .collect();
-    ImagePlan {
-        tokens,
-        rows,
-        copies,
+    ImagePlan { rows, copies }
+}
+
+/// The AB input: one image file per inline reference, named at every pasted position.
+fn name_inline_images(
+    user_text: &str,
+    attachments: &[AttachmentRef],
+    copied: &HashMap<String, Option<InputFile>>,
+    kind: ConversationKind,
+    files: &mut Vec<InputFile>,
+) -> String {
+    let mut text = user_text.to_owned();
+    let mut image_numbers = HashMap::new();
+    for attachment in attachments.iter().filter(|a| a.inline.is_some()) {
+        let n = attachment.inline.filter(|n| *n > 0).unwrap_or_else(|| {
+            let next = image_numbers.len() as u32 + 1;
+            *image_numbers.entry(attachment.id.clone()).or_insert(next)
+        });
+        let sent = copied
+            .get(&attachment.id)
+            .and_then(Option::as_ref)
+            .map(|file| {
+                files.push(file.clone());
+                files.len()
+            });
+        let marker = if attachment.inline == Some(0) {
+            format!("[image:{}]", attachment.id)
+        } else {
+            format!("[Image #{n}]")
+        };
+        place_inline_image(
+            &mut text,
+            &marker,
+            n,
+            &inline_image_note(sent, attachment, kind),
+        );
+    }
+    text
+}
+
+/// What stands for an image pasted into the text: which of the turn's images it is (`sent`,
+/// counting from 1), or that it could not be sent. In a session it names the attachment, so
+/// the orchestrator can give it to a worker.
+fn inline_image_note(
+    sent: Option<usize>,
+    attachment: &AttachmentRef,
+    kind: ConversationKind,
+) -> String {
+    let what = match sent {
+        Some(index) => format!("image {index} of the images sent with this message"),
+        None => format!(
+            "\"{}\", which could not be sent as an image",
+            attachment.name
+        ),
+    };
+    if kind == ConversationKind::Session {
+        format!(
+            "{what}; attachment {} ({}, {} bytes): pass its id to delegate_task so a worker \
+             can see it",
+            attachment.id, attachment.mime, attachment.bytes
+        )
+    } else {
+        what
     }
 }
 
-/// Materialize the plan's ordered parts without changing any unmatched text.
-fn inline_image_parts(
-    text: &str,
-    tokens: &[(std::ops::Range<usize>, &AttachmentRef)],
-    files: &HashMap<String, Option<InputFile>>,
-) -> Vec<InputPart> {
-    let mut parts = Vec::new();
-    let mut cursor = 0;
-    for (number, (range, attachment)) in tokens.iter().enumerate() {
-        parts.push(InputPart::Text(format!(
-            "{}[pasted image {} here: {}, attachment id {}]",
-            &text[cursor..range.start],
-            number + 1,
-            attachment.name,
-            attachment.id
-        )));
-        if let Some(Some(file)) = files.get(&attachment.id) {
-            parts.push(InputPart::Image(InputFile {
-                path: file.path.clone(),
-                name: attachment.name.clone(),
-                mime: attachment.mime.clone(),
-            }));
-        }
-        cursor = range.end;
+/// Puts image `n` where the user pasted it: its first `[Image #n]` in `text` says it was
+/// pasted there and which image it is (`note`); any later one (the same image pasted again)
+/// says it is that image again, not another. Without one (edited out), the note goes at the
+/// end.
+fn place_inline_image(text: &mut String, marker: &str, n: u32, note: &str) {
+    if text.contains(marker) {
+        *text = text
+            .replacen(marker, &format!("[Image #{n}, pasted here: {note}]"), 1)
+            .replace(
+                marker,
+                &format!("[Image #{n} again: the same image as above, not another one]"),
+            );
+    } else {
+        push_block(
+            text,
+            &format!("[Image #{n}, pasted with this message: {note}]"),
+        );
     }
-    parts.push(InputPart::Text(text[cursor..].into()));
-    parts
 }
 
 fn append_input_text(parts: &mut Vec<InputPart>, text: &str) {
@@ -4335,7 +4391,7 @@ mod tests {
             mime: mime.into(),
             bytes: 3,
             pasted: false,
-            inline,
+            inline: inline.then_some(0),
         }
     }
 
@@ -4356,56 +4412,81 @@ mod tests {
     }
 
     #[test]
-    fn inline_images_follow_token_order_and_number_each_occurrence() {
-        let attachments = vec![
-            image_ref("a", true, "image/png"),
-            image_ref("b", true, "image/jpeg"),
-        ];
-        let files = image_files(&attachments);
-        let text = "before [image:a] between [image:b] again [image:a] after";
-        let plan = image_plan(text, &attachments, &HashMap::new());
-        let parts = inline_image_parts(text, &plan.tokens, &files);
-        assert_eq!(
-            parts,
-            vec![
-                InputPart::Text("before [pasted image 1 here: a.png, attachment id a]".into()),
-                InputPart::Image(files["a"].clone().unwrap()),
-                InputPart::Text(" between [pasted image 2 here: b.png, attachment id b]".into()),
-                InputPart::Image(files["b"].clone().unwrap()),
-                InputPart::Text(" again [pasted image 3 here: a.png, attachment id a]".into()),
-                InputPart::Image(files["a"].clone().unwrap()),
-                InputPart::Text(" after".into()),
-            ]
-        );
-        assert_eq!(plan.tokens.len(), 3);
-        let plan = image_plan("[image:a]", &attachments, &files);
-        let one = inline_image_parts("[image:a]", &plan.tokens, &files);
-        assert_eq!(one.len(), 3);
-        assert_eq!(one[1], InputPart::Image(files["a"].clone().unwrap()));
-        let text = "é [image:unknown] [image:a] [image:unfinished";
-        let plan = image_plan(text, &attachments, &files);
-        let mixed = inline_image_parts(text, &plan.tokens, &files);
-        assert_eq!(
-            mixed[0],
-            InputPart::Text(
-                "é [image:unknown] [pasted image 1 here: a.png, attachment id a]".into()
-            )
-        );
-        assert_eq!(mixed[2], InputPart::Text(" [image:unfinished".into()));
+    fn ab_and_legacy_messages_send_one_image_for_many_places() {
+        for (text, number) in [
+            ("before [Image #1] again [Image #1]", 1),
+            ("before [image:a] again [image:a]", 0),
+        ] {
+            let mut attachment = image_ref("a", true, "image/png");
+            attachment.inline = Some(number);
+            let attachments = vec![attachment];
+            let copied = image_files(&attachments);
+            let mut sent = Vec::new();
+            let words = name_inline_images(
+                text,
+                &attachments,
+                &copied,
+                ConversationKind::Chat,
+                &mut sent,
+            );
+            assert_eq!(sent.len(), 1);
+            assert_eq!(
+                words,
+                "before [Image #1, pasted here: image 1 of the images sent with this message] again [Image #1 again: the same image as above, not another one]"
+            );
+        }
     }
 
     #[test]
-    fn unknown_row_unsupported_and_unclosed_tokens_stay_literal() {
-        let attachments = vec![
-            image_ref("row", false, "image/png"),
-            image_ref("svg", true, "image/svg+xml"),
-        ];
-        let text = "literal [image:unknown] [image:row] [image:svg] [image:] [image:unfinished";
-        let files = image_files(&attachments);
-        let plan = image_plan(text, &attachments, &files);
-        let parts = inline_image_parts(text, &plan.tokens, &files);
-        assert_eq!(parts, vec![InputPart::Text(text.into())]);
-        assert!(plan.tokens.is_empty());
+    fn images_are_named_at_each_place_but_sent_once() {
+        let attachment = image_ref("a", true, "image/png");
+        let mut text = "before [Image #1] between [Image #1] after".to_owned();
+        place_inline_image(
+            &mut text,
+            "[Image #1]",
+            1,
+            &inline_image_note(Some(1), &attachment, ConversationKind::Chat),
+        );
+        assert_eq!(
+            text,
+            "before [Image #1, pasted here: image 1 of the images sent with this message] between [Image #1 again: the same image as above, not another one] after"
+        );
+        assert!(
+            inline_image_note(Some(2), &attachment, ConversationKind::Session)
+                .contains("attachment a")
+        );
+        assert!(
+            inline_image_note(Some(2), &attachment, ConversationKind::Session)
+                .contains("delegate_task")
+        );
+    }
+
+    #[test]
+    fn old_tokens_and_missing_images_keep_their_positions_and_notes() {
+        let attachment = image_ref("a", true, "image/png");
+        let mut text = "é [image:a] [image:unknown] [image:a]".to_owned();
+        place_inline_image(
+            &mut text,
+            "[image:a]",
+            1,
+            &inline_image_note(None, &attachment, ConversationKind::Chat),
+        );
+        assert!(text.starts_with(
+            "é [Image #1, pasted here: \"a.png\", which could not be sent as an image]"
+        ));
+        assert!(text.contains("[image:unknown]"));
+        assert!(text.ends_with("[Image #1 again: the same image as above, not another one]"));
+        let mut text = "Look at this".to_owned();
+        place_inline_image(
+            &mut text,
+            "[Image #3]",
+            3,
+            "image 1 of the images sent with this message",
+        );
+        assert_eq!(
+            text,
+            "Look at this\n\n[Image #3, pasted with this message: image 1 of the images sent with this message]"
+        );
     }
 
     #[test]
@@ -4419,50 +4500,24 @@ mod tests {
         let plan = image_plan("[image:a] again [image:a]", &attachments, &HashMap::new());
         assert_eq!(plan.rows, vec![&attachments[0], &attachments[2]]);
         assert_eq!(plan.copies, vec![&attachments[0], &attachments[2]]);
-        let parts = inline_image_parts("[image:a] again [image:a]", &plan.tokens, &files);
-        assert_eq!(parts[1], InputPart::Image(files["a"].clone().unwrap()));
-        assert_eq!(parts[3], parts[1]);
-        let next = image_plan("no token", &attachments, &files);
-        assert_eq!(next.rows, attachments.iter().collect::<Vec<_>>());
-        assert!(next.copies.is_empty());
-        let failed = HashMap::from([("a".into(), None)]);
-        let next = image_plan("[image:a]", &attachments, &failed);
-        assert_eq!(next.copies, vec![&attachments[2]]);
+        assert!(
+            image_plan("no token", &attachments, &files)
+                .copies
+                .is_empty()
+        );
     }
 
     #[test]
     fn whitespace_only_text_with_a_pasted_attachment_preserves_the_whole_paste() {
-        let attachment = AttachmentRef {
-            mime: "text/plain".into(),
-            pasted: true,
-            ..image_ref("text", false, "text/plain")
-        };
+        let attachment = image_ref("text", false, "text/plain");
         for text in [" \n", "                    ", "\u{2003}"] {
-            let plan = image_plan(text, std::slice::from_ref(&attachment), &HashMap::new());
-            let mut parts = inline_image_parts(text, &plan.tokens, &HashMap::new());
-            let pasted = pasted_inline("é", &attachment, ConversationKind::Chat);
-            push_input_block(&mut parts, &pasted);
+            let mut parts = vec![InputPart::Text(text.into())];
+            push_input_block(
+                &mut parts,
+                &pasted_inline("é", &attachment, ConversationKind::Chat),
+            );
             assert_eq!(parts, vec![InputPart::Text("é".into())]);
-            push_input_block(&mut parts, "another paste");
-            assert_eq!(parts, vec![InputPart::Text("é\n\nanother paste".into())]);
         }
-    }
-
-    #[test]
-    fn an_unclosed_token_does_not_swallow_a_following_image() {
-        let attachments = vec![image_ref("a", true, "image/png")];
-        let files = image_files(&attachments);
-        let text = "[image:x [image:a]";
-        let plan = image_plan(text, &attachments, &files);
-        assert_eq!(plan.tokens.len(), 1);
-        assert_eq!(
-            inline_image_parts(text, &plan.tokens, &files),
-            vec![
-                InputPart::Text("[image:x [pasted image 1 here: a.png, attachment id a]".into()),
-                InputPart::Image(files["a"].clone().unwrap()),
-                InputPart::Text(String::new()),
-            ]
-        );
     }
 
     #[test]
