@@ -27,7 +27,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { request } from "@/ipc/client";
 import type { SourceFile, SourceScope, SourceState, SourceStatus } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { useBoard } from "@/state/board";
+import { useCheckoutChanges } from "@/state/board";
 import { noteSourceState, setReviewScope } from "@/state/review";
 import { openReviewTab } from "@/state/sessionTabs";
 import { setSetting } from "@/state/settings";
@@ -68,28 +68,13 @@ const LETTERS: Record<SourceStatus, { letter: string; label: string; className: 
   conflicted: { letter: "!", label: "Conflicted", className: "text-destructive" },
 };
 
-/** Something about the board that changes the checkout: a landing, an Undo or Reapply. */
-function useChangeKey(conversationId: string): string {
-  return useBoard((s) => {
-    const board = s.board;
-    if (!board || board.conversationId !== conversationId) return "";
-    const landed = Object.values(board.tasks)
-      .map((task) => task.landed ?? "")
-      .join();
-    const undone = Object.values(board.requests)
-      .map((entry) => entry.undo?.commits.at(-1) ?? "")
-      .join();
-    return `${landed}|${undone}`;
-  });
-}
-
 /** The checkout's state, read now, again while it shows, and as the board changes it. */
 function useSourceState(conversationId: string) {
   const [read, setRead] = useState<{ state: SourceState | null; error: string | null }>({
     state: null,
     error: null,
   });
-  const changeKey = useChangeKey(conversationId);
+  const changeKey = useCheckoutChanges(conversationId);
   const load = useCallback(() => {
     request({ method: "getSourceState", conversationId })
       .then(({ state }) => {
@@ -125,6 +110,9 @@ type Discarding = { scope: SourceScope; files: SourceFile[] };
 export function SourcePanel({ conversationId }: { conversationId: string }) {
   const { state, error, set, load } = useSourceState(conversationId);
   const [busy, setBusy] = useState(false);
+  // A commit reads the staged diff for its message, then commits the index: it stays as is.
+  const [committing, setCommitting] = useState(false);
+  const locked = busy || committing;
   const [discarding, setDiscarding] = useState<Discarding | null>(null);
   const showMain = useShowMain();
   const review = (path: string, staged: boolean) => {
@@ -161,7 +149,13 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
 
   return (
     <div data-slot="source-panel" className="flex min-h-0 flex-1 flex-col">
-      <CommitBox conversationId={conversationId} state={state} onCommitted={load} />
+      <CommitBox
+        conversationId={conversationId}
+        state={state}
+        staging={busy}
+        onCommitting={setCommitting}
+        onCommitted={load}
+      />
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {error && !state && <p className="text-destructive p-2 text-sm">{error}</p>}
         {state && staged.length === 0 && changes.length === 0 && (
@@ -175,7 +169,7 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
               <TooltipIconButton
                 tooltip="Unstage all"
                 size="icon-xs"
-                disabled={busy}
+                disabled={locked}
                 onClick={() => unstage(null)}
               >
                 <Minus />
@@ -191,7 +185,7 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
                 <TooltipIconButton
                   tooltip="Discard"
                   size="icon-xs"
-                  disabled={busy}
+                  disabled={locked}
                   onClick={() => setDiscarding({ scope: "staged", files: [file] })}
                 >
                   <Undo />
@@ -199,7 +193,7 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
                 <TooltipIconButton
                   tooltip="Unstage"
                   size="icon-xs"
-                  disabled={busy}
+                  disabled={locked}
                   onClick={() => unstage([file.path])}
                 >
                   <Minus />
@@ -216,7 +210,7 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
               <TooltipIconButton
                 tooltip="Stage all"
                 size="icon-xs"
-                disabled={busy}
+                disabled={locked}
                 onClick={() => stage(null)}
               >
                 <Plus />
@@ -232,7 +226,7 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
                 <TooltipIconButton
                   tooltip="Discard"
                   size="icon-xs"
-                  disabled={busy}
+                  disabled={locked}
                   onClick={() => setDiscarding({ scope: "unstaged", files: [file] })}
                 >
                   <Undo />
@@ -240,7 +234,7 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
                 <TooltipIconButton
                   tooltip="Stage"
                   size="icon-xs"
-                  disabled={busy || file.status === "conflicted"}
+                  disabled={locked || file.status === "conflicted"}
                   onClick={() => stage([file.path])}
                 >
                   <Plus />
@@ -382,16 +376,23 @@ type Busy = null | "commit" | "commitAndPush";
 const CommitBox: FC<{
   conversationId: string;
   state: SourceState | null;
+  /** A stage, unstage or discard is under way. */
+  staging: boolean;
+  onCommitting: (committing: boolean) => void;
   onCommitted: () => void;
-}> = ({ conversationId, state, onCommitted }) => {
+}> = ({ conversationId, state, staging, onCommitting, onCommitted }) => {
   const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState<Busy>(null);
+  const [busy, setBusyState] = useState<Busy>(null);
+  const setBusy = (next: Busy) => {
+    setBusyState(next);
+    onCommitting(next !== null);
+  };
   const showMain = useShowMain();
   const omit = useApp((s) => s.settings.omitAiCoauthors);
   const mac = useApp((s) => s.info?.platform === "macos");
   const nothing = !state || state.staged.length === 0;
   const commit = (push: boolean) => {
-    if (nothing || busy) return;
+    if (nothing || busy || staging) return;
     setBusy(push ? "commitAndPush" : "commit");
     request({
       method: "commitChanges",
@@ -478,7 +479,7 @@ const CommitBox: FC<{
         <Button
           size="sm"
           className="flex-1"
-          disabled={nothing || busy !== null}
+          disabled={nothing || busy !== null || staging}
           title={nothing ? "Stage changes to commit them" : undefined}
           onClick={() => commit(false)}
         >
@@ -491,7 +492,7 @@ const CommitBox: FC<{
             size="sm"
             variant="secondary"
             className="flex-1"
-            disabled={nothing || busy !== null}
+            disabled={nothing || busy !== null || staging}
             onClick={() => commit(true)}
           >
             {glyph("commitAndPush", <UploadDocuments />)}

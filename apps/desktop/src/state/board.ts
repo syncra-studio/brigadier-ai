@@ -148,6 +148,21 @@ export function useBoard<T>(selector: (state: BoardState) => T): T {
 useBoard.getState = mainBoard.getState;
 useBoard.setState = mainBoard.setState;
 
+/** Something about the board that changes the checkout: a landing, an Undo or Reapply. */
+export function useCheckoutChanges(conversationId: string): string {
+  return useBoard((s) => {
+    const board = s.board;
+    if (!board || board.conversationId !== conversationId) return "";
+    const landed = Object.values(board.tasks)
+      .map((task) => task.landed ?? "")
+      .join();
+    const undone = Object.values(board.requests)
+      .map((entry) => entry.undo?.commits.at(-1) ?? "")
+      .join();
+    return `${landed}|${undone}`;
+  });
+}
+
 /** A board for a side chat, fed by the same events as the open one's until disposed. */
 export function createSideBoard(conversationId: string): BoardStore {
   const store = createStore<BoardState>()(() => ({
