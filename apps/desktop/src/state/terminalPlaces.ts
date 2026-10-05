@@ -169,10 +169,10 @@ export function hasTab(place: string, tab: string): boolean {
 }
 
 /** Each tab's name: the shell's title, else its folder's (numbered when two share one), else
- * "Terminal N". */
-export function tabNames(tabs: readonly TerminalTab[]): string[] {
+ * "Terminal N". The folder is the project's, even when the shell runs in a worktree of it. */
+export function tabNames(tabs: readonly TerminalTab[], projectPath?: string | null): string[] {
   const folder = (tab: TerminalTab) =>
-    tab.cwd?.split(/[\\/]/).filter(Boolean).at(-1) ?? null;
+    (projectPath || tab.cwd)?.split(/[\\/]/).filter(Boolean).at(-1) ?? null;
   const counts = new Map<string, number>();
   for (const tab of tabs) {
     const name = folder(tab);

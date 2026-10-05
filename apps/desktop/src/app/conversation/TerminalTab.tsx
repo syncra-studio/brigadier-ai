@@ -17,6 +17,7 @@ import { useReveal } from "@/app/conversation/SidePanel";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { openUrl, request } from "@/ipc/client";
 import type { TerminalInfo, TerminalOutput } from "@/ipc/generated";
+import { tokenColor, tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { changedPaneSize, savedPaneSizes } from "@/state/paneSizes";
 import { useApp } from "@/state/store";
@@ -43,32 +44,6 @@ import {
  * or Home's. They keep running while the pane is hidden; closing a tab ends its shell.
  */
 
-/**
- * A token colour as #rrggbbaa, which the terminal's renderer understands (tokens are oklch
- * and colour mixes): resolved on a probe, then read back from a canvas pixel.
- */
-function tokenColors(names: readonly `--${string}`[]): string[] {
-  const probe = document.createElement("span");
-  probe.style.display = "none";
-  document.body.append(probe);
-  const canvas = document.createElement("canvas");
-  canvas.width = 1;
-  canvas.height = 1;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  const colors = names.map((name) => {
-    probe.style.color = `var(${name})`;
-    if (!context) return "";
-    context.clearRect(0, 0, 1, 1);
-    context.fillStyle = getComputedStyle(probe).color;
-    context.fillRect(0, 0, 1, 1);
-    return `#${[...context.getImageData(0, 0, 1, 1).data]
-      .map((part) => part.toString(16).padStart(2, "0"))
-      .join("")}`;
-  });
-  probe.remove();
-  return colors;
-}
-
 const ANSI = [
   "black",
   "red",
@@ -83,14 +58,16 @@ const ANSI = [
 /** The terminal in the app's colours: the page and its text, the scrim for selection, the
  * palette's 16 colours, and a scrollbar thumb in the border colour. */
 function theme(): ITheme {
-  const [background = "", foreground = "", scrim = "", border = "", ...ansi] = tokenColors([
-    "--background",
-    "--foreground",
+  const tokens: `--${string}`[] = [
+    "--terminal-background",
+    "--terminal-foreground",
     "--scrim",
     "--border",
     ...ANSI.map((name) => `--ansi-${name}` as const),
     ...ANSI.map((name) => `--ansi-bright-${name}` as const),
-  ]);
+  ];
+  const [background = "", foreground = "", scrim = "", border = "", ...ansi] =
+    tokens.map(tokenColor);
   const colors = Object.fromEntries([
     ...ANSI.map((name, index) => [name, ansi[index]]),
     ...ANSI.map((name, index) => [
@@ -112,10 +89,6 @@ function theme(): ITheme {
     overviewRulerBorder: background,
   };
 }
-
-/** The terminal's type: the system's monospace face. */
-const FONT_FAMILY =
-  'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace';
 
 /** OSC 52: shells may set the clipboard, but never read it. */
 const WRITE_ONLY_CLIPBOARD = {
@@ -187,7 +160,31 @@ export function TerminalPane({ place }: { place: string }) {
   } else if (arrival && (arrival.open !== open || arrival.active !== data.active)) {
     setArrival(null);
   }
-  const names = tabNames(data.tabs);
+  const projectPath = useApp((s) => {
+    const conversationId = placeConversation(place);
+    const projectId = conversationId ? s.conversations[conversationId]?.projectId : null;
+    return projectId ? s.projects[projectId]?.repos[0]?.path : undefined;
+  });
+  const names = tabNames(data.tabs, projectPath);
+  // With too many tabs for their names, they show only their icons.
+  const strip = useRef<HTMLDivElement>(null);
+  const [compactTabs, setCompactTabs] = useState(false);
+  useEffect(() => {
+    const element = strip.current;
+    if (!open || !data.active || !element) return;
+    const fitTabs = () => {
+      const selected = element.querySelector<HTMLElement>('[aria-selected="true"]');
+      setCompactTabs(
+        (selected?.parentElement?.getBoundingClientRect().width ?? 0) <
+          tokenPx("--spacing-terminal-tab-label-min"),
+      );
+      selected?.parentElement?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    };
+    fitTabs();
+    const observer = new ResizeObserver(fitTabs);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [open, data.active]);
   const hide = useCallback(() => setTerminalOpen(place, false), [place]);
   useEffect(() => {
     if (!open) return;
@@ -223,7 +220,7 @@ export function TerminalPane({ place }: { place: string }) {
       aria-label="Terminal"
       inert={!open}
       className={cn(
-        "bg-background relative flex min-h-0 shrink-0 flex-col",
+        "bg-terminal-background relative flex min-h-0 shrink-0 flex-col",
         reveal.moving && "ease-panel transition-[height] duration-500 motion-reduce:transition-none",
       )}
       style={{
@@ -283,57 +280,104 @@ export function TerminalPane({ place }: { place: string }) {
       >
         <span className="bg-input absolute inset-x-0 top-1 h-px opacity-0 group-hover/resize:opacity-100 group-focus-visible/resize:opacity-100" />
       </div>
-      <div className="border-border flex h-full min-h-0 flex-col overflow-hidden border-t">
-        <TitlebarTips>
-          <header className="border-border flex h-10 shrink-0 items-center gap-1 border-b px-2">
-            <div role="tablist" aria-label="Terminals" className="flex min-w-0 items-center gap-1">
-              {data.tabs.map((tab, index) => {
-                const selected = tab.id === data.active;
-                return (
-                  <div
-                    key={tab.id}
+      <div className="border-terminal-divider flex h-full min-h-0 flex-col overflow-hidden border-t">
+        <header
+          data-slot="terminal-header"
+          className="border-terminal-divider h-terminal-header flex shrink-0 items-center gap-1 border-b px-2"
+        >
+          <div
+            ref={strip}
+            role="tablist"
+            aria-label="Terminals"
+            tabIndex={-1}
+            className="hide-scrollbar flex min-w-0 scroll-px-1 gap-0.5 overflow-x-auto"
+            style={{
+              width: `calc(var(--spacing-terminal-tab) * ${data.tabs.length || 1} + var(--spacing) * 0.5 * ${Math.max(0, data.tabs.length - 1)})`,
+            }}
+            onKeyDown={(event) => {
+              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+              if (!data.tabs.length) return;
+              event.preventDefault();
+              const index = data.tabs.findIndex((tab) => tab.id === data.active);
+              const next =
+                event.key === "Home"
+                  ? 0
+                  : event.key === "End"
+                    ? data.tabs.length - 1
+                    : (index + (event.key === "ArrowLeft" ? -1 : 1) + data.tabs.length) %
+                      data.tabs.length;
+              const id = data.tabs[next]!.id;
+              selectTab(place, id);
+              requestAnimationFrame(() =>
+                strip.current?.querySelector<HTMLButtonElement>(`[data-tab="${id}"]`)?.focus(),
+              );
+            }}
+          >
+            {data.tabs.map((tab, index) => {
+              const selected = tab.id === data.active;
+              return (
+                <div
+                  key={tab.id}
+                  className={cn(
+                    "group/terminal-tab h-terminal-tab-height min-w-terminal-tab-min max-w-terminal-tab ps-terminal-tab-start pe-terminal-tab-end font-terminal-tab flex flex-1 items-center gap-1 rounded-lg py-1 text-[length:var(--text-terminal-tab)] leading-[var(--text-terminal-tab--line-height)]",
+                    selected
+                      ? "bg-terminal-tab text-terminal-tab-active shadow-terminal-tab"
+                      : "text-terminal-tab-inactive hover:bg-toolbar-hover",
+                    compactTabs && "px-1",
+                  )}
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    data-tab={tab.id}
+                    id={`terminal-tab-${tab.id}`}
+                    aria-controls={`terminal-panel-${tab.id}`}
+                    aria-selected={selected}
+                    tabIndex={selected ? 0 : -1}
+                    aria-label={names[index]}
+                    onClick={() => selectTab(place, tab.id)}
+                    className="focus-visible:ring-ring flex min-w-0 flex-1 items-center gap-1 rounded-sm outline-none focus-visible:ring-1"
+                  >
+                    <TerminalIcon aria-hidden className="size-icon-md shrink-0" />
+                    <TabLabel key={names[index]} name={names[index]!} hidden={compactTabs} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Close ${names[index]} tab`}
+                    onClick={() => closeTab(place, tab.id)}
                     className={cn(
-                      "group/tab flex h-8 w-60 min-w-16 shrink items-center gap-2 rounded-lg ps-2 pe-1 text-sm",
-                      selected
-                        ? "bg-panel-tab shadow-panel-tab text-foreground"
-                        : "text-muted-foreground hover:bg-toolbar-hover hover:text-foreground",
+                      "text-terminal-tab-inactive hover:bg-toolbar-hover hover:text-terminal-tab-active focus-visible:ring-ring flex size-5 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-1",
+                      !selected &&
+                        "hidden group-focus-within/terminal-tab:flex group-hover/terminal-tab:flex",
                     )}
                   >
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={selected}
-                      className="flex min-w-0 flex-1 items-center gap-2 self-stretch outline-none focus-visible:underline"
-                      onClick={() => selectTab(place, tab.id)}
-                    >
-                      <TerminalIcon aria-hidden className="size-icon-md shrink-0" />
-                      <span className="truncate">{names[index]}</span>
-                    </button>
-                    <TitlebarButton
-                      tooltip="Close terminal"
-                      shortcut="⌘W"
-                      size="icon-xs"
-                      className={cn(!selected && "opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100")}
-                      onClick={() => closeTab(place, tab.id)}
-                    >
-                      <X />
-                    </TitlebarButton>
-                  </div>
-                );
-              })}
-            </div>
-            <TitlebarButton tooltip="New terminal" shortcut="⌘T" onClick={() => addTab(place)}>
+                    <X aria-hidden className="size-icon-xs" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <TitlebarTips>
+            <TitlebarButton
+              tooltip="New terminal"
+              shortcut="⌘T"
+              className="shrink-0"
+              onClick={() => addTab(place)}
+            >
               <Plus />
             </TitlebarButton>
             <div className="flex-1" />
-            <TitlebarButton tooltip="Hide terminal" shortcut="⌘J" onClick={hide}>
+            <TitlebarButton tooltip="Hide terminal" shortcut="⌘J" className="shrink-0" onClick={hide}>
               <ChevronDown />
             </TitlebarButton>
-          </header>
-        </TitlebarTips>
+          </TitlebarTips>
+        </header>
         {data.tabs.map((tab) => (
           <div
             key={tab.id}
+            id={`terminal-panel-${tab.id}`}
+            role="tabpanel"
+            aria-labelledby={`terminal-tab-${tab.id}`}
             className={tab.id === data.active ? "flex min-h-0 flex-1 flex-col" : "hidden"}
           >
             <TerminalTab
@@ -345,6 +389,37 @@ export function TerminalPane({ place }: { place: string }) {
         ))}
       </div>
     </section>
+  );
+}
+
+/** A tab's name; clipped, it fades at the edge rather than losing its end to dots. */
+function TabLabel({ name, hidden }: { name: string; hidden: boolean }) {
+  const label = useRef<HTMLSpanElement>(null);
+  const [overflowing, setOverflowing] = useState(false);
+  useEffect(() => {
+    const element = label.current;
+    if (!element) return;
+    const measure = () => setOverflowing(element.scrollWidth > element.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <span
+      ref={label}
+      className={cn(
+        "min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap",
+        hidden && "hidden",
+      )}
+      style={{
+        maskImage: overflowing
+          ? "linear-gradient(to right, black calc(100% - var(--spacing-terminal-label-fade)), transparent)"
+          : undefined,
+      }}
+    >
+      {name}
+    </span>
   );
 }
 
@@ -443,9 +518,11 @@ export function TerminalView({
   useEffect(() => {
     const element = host.current;
     if (!connected || !element) return;
+    // The type is the host's (font-terminal, text-terminal): the system's monospace face.
+    const style = getComputedStyle(element);
     const terminal = new Terminal({
-      fontFamily: FONT_FAMILY,
-      fontSize: 12,
+      fontFamily: style.fontFamily,
+      fontSize: Number.parseFloat(style.fontSize),
       lineHeight: 1.2,
       letterSpacing: 0,
       theme: theme(),
@@ -630,7 +707,7 @@ export function TerminalView({
 
   return (
     <div
-      className={cn("bg-background flex min-h-0 flex-1 flex-col", className)}
+      className={cn("bg-terminal-background flex min-h-0 flex-1 flex-col", className)}
     >
       {error && (
         <p role="alert" className="text-destructive shrink-0 px-4 py-2 text-sm">
@@ -640,7 +717,7 @@ export function TerminalView({
       <div
         ref={host}
         data-slot="terminal"
-        className="min-h-0 flex-1 ps-4 pe-2 pt-2 pb-3 font-mono text-xs"
+        className="font-terminal text-terminal min-h-0 flex-1 ps-4 pe-2 pt-2 pb-3"
       />
     </div>
   );

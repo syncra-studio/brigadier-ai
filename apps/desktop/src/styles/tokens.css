@@ -242,12 +242,15 @@
   --spacing-terminal-tab-start: 0.625rem;
   --spacing-terminal-tab-end: 0.4375rem;
   --spacing-terminal-label-fade: 1rem;
-  --font-terminal: "Menlo", "Consolas", "DejaVu Sans Mono", monospace;
+  /* The shell's type: the system's monospace face at 12px, lines 1.2 apart. */
+  --font-terminal:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
   --font-weight-terminal-tab: 430;
   --text-terminal-tab: 0.8125rem;
   --text-terminal-tab--line-height: 1.25rem;
   --text-terminal: 0.75rem;
-  --text-terminal--line-height: 1.03125rem;
+  --text-terminal--line-height: 0.9rem;
   --color-terminal-background: var(--terminal-background);
   --color-terminal-divider: var(--terminal-divider);
   --color-terminal-foreground: var(--terminal-foreground);
@@ -514,10 +517,11 @@
   --toolbar-active: color-mix(in oklab, var(--foreground) 16%, transparent);
   --toolbar-pressed: color-mix(in oklab, var(--foreground) 5%, transparent);
   --toolbar-pressed-hover: color-mix(in oklab, var(--foreground) 10%, transparent);
-  /* Bottom terminal surface and shell session tabs. */
-  --terminal-background: oklch(0.209 0 0);
+  /* Bottom terminal surface and shell session tabs: the page and its text, with the tabs'
+     own fills. */
+  --terminal-background: var(--background);
   --terminal-divider: oklch(1 0 0 / 8.2%);
-  --terminal-foreground: oklch(0.904 0 0);
+  --terminal-foreground: var(--foreground);
   --terminal-tab: oklch(1 0 0 / 8%);
   --terminal-tab-active: oklch(1 0 0);
   --terminal-tab-inactive: oklch(1 0 0 / 50%);

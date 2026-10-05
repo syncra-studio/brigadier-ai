@@ -1,19 +1,17 @@
-// oxlint-disable react/refs -- The fixture exposes the real panel controller to browser checks.
-/** Production terminal and panel controller, synthetic IPC; never contacts a daemon. */
+/** Production terminal and its per-place store, synthetic IPC; never contacts a daemon. */
 import { mockIPC } from "@tauri-apps/api/mocks";
-import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
-import { SidePanelContext, useSidePanel } from "@/app/conversation/SidePanel";
 import { TerminalPane } from "@/app/conversation/TerminalTab";
+import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, Project, Request } from "@/ipc/generated";
 import { useApp } from "@/state/store";
-import { useTerminalSessions } from "@/state/terminalSessions";
-import { emitTerminalOutput } from "@/state/terminals";
+import { emitTerminalOutput, setTerminalOpen, useTerminalPlaces } from "@/state/terminalPlaces";
 
 const id = "terminal-fixture";
+const place = `conv:${id}`;
 const name = new URLSearchParams(location.search).get("name") ?? "brigadier-ai";
 useApp.setState({
   info: {
@@ -25,6 +23,7 @@ useApp.setState({
     budgetTolerance: 1,
   },
   connection: { status: "connected", daemon: null, reason: null },
+  selection: { type: "conversation", id },
   conversations: { [id]: { id, projectId: "project" } as Conversation },
   projects: {
     project: {
@@ -66,30 +65,22 @@ mockIPC((command, args) => {
   return { method: req.method };
 });
 
+Object.assign(window, { terminalFixture: { place, shells, calls, useTerminalPlaces } });
+
 function Fixture() {
-  const { panel } = useSidePanel(id, "session");
-  useEffect(() => {
-    Object.assign(window, {
-      terminalFixture: { panel, shells, calls, useTerminalSessions },
-    });
-  }, [panel]);
+  usePaneShortcuts();
   return (
-    <SidePanelContext.Provider value={panel}>
-      <main
-        ref={panel.workspace}
-        className="flex h-screen w-full min-w-0 flex-col"
-      >
-        <div className="flex min-h-0 flex-1 flex-col items-start gap-4 p-4">
-          <button type="button" onClick={() => panel.openTab("terminal")}>
-            Open terminal
-          </button>
-          <div data-slot="composer">
-            <textarea aria-label="Message" />
-          </div>
+    <main className="flex h-screen w-full min-w-0 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col items-start gap-4 p-4">
+        <button type="button" onClick={() => setTerminalOpen(place, true)}>
+          Open terminal
+        </button>
+        <div data-slot="composer">
+          <textarea aria-label="Message" />
         </div>
-        <TerminalPane conversationId={id} />
-      </main>
-    </SidePanelContext.Provider>
+      </div>
+      <TerminalPane place={place} />
+    </main>
   );
 }
 createRoot(document.getElementById("root")!).render(

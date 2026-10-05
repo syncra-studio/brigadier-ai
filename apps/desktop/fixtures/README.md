@@ -75,12 +75,12 @@ reasoning appears at 2 seconds, no later frame shows only Thinking, and actions 
 # Terminal sessions
 
 `/fixtures/terminal-sessions.html` renders the production bottom terminal and its real
-panel controller with synthetic shell IPC. Use `?name=brigadier-ai` to set the project
+per-place terminal store with synthetic shell IPC. Use `?name=brigadier-ai` to set the project
 folder name; shell cwd deliberately uses a different worktree folder. No requests
 reach a daemon, and the entry is excluded from the production build.
 
 Open terminal, add/select/close sessions, hide/reopen, resize, and drag below the
 close threshold. Check the strip with many sessions and narrow widths. Cmd+J,
 Ctrl+backquote, Cmd+T, Cmd+W, Cmd+Shift+[ / ], and arrow-key tab navigation use the
-production handlers. `window.terminalFixture` exposes the panel controller, session
-store, live mock shells, and recorded IPC requests for browser assertions.
+production handlers. `window.terminalFixture` exposes the place, the terminal store, live
+mock shells, and recorded IPC requests for browser assertions.
