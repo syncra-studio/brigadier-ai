@@ -30,6 +30,7 @@ export type SettingsPageId =
   | "usage"
   | "providers"
   | "routing"
+  | "git"
   | "storage"
   | "inspector"
   | "archived";
@@ -201,6 +202,7 @@ export const useApp = create<AppState>()(() => ({
     disabledProviders: [],
     hiddenModels: [],
     knownModels: [],
+    omitAiCoauthors: true,
     settingsVersion: 1,
   },
   threads: {},

@@ -1,5 +1,6 @@
 import {
   Archive,
+  Branch,
   Chats,
   MemoryOnRemember,
   Robot,
@@ -14,6 +15,7 @@ import { lazy, type ComponentType, type SVGProps } from "react";
 import { ARCHIVED_ROWS, ArchivedPage } from "@/app/settings/ArchivedPage";
 import { CONVERSATIONS_ROWS, ConversationsPage } from "@/app/settings/ConversationsPage";
 import { GENERAL_ROWS, GeneralPage } from "@/app/settings/GeneralPage";
+import { GIT_ROWS, GitPage } from "@/app/settings/GitPage";
 import { PERSONALIZATION_ROWS, PersonalizationPage } from "@/app/settings/PersonalizationPage";
 import { STORAGE_ROWS, StoragePage } from "@/app/settings/StoragePage";
 import { PROVIDERS_ROWS, ProvidersPage } from "@/app/providers/ProvidersPage";
@@ -115,6 +117,14 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "Agents",
     component: RoutingPage,
     rows: Object.values(ROUTING_PAGE_ROWS),
+  },
+  {
+    id: "git",
+    label: "Git",
+    icon: Branch,
+    group: "Agents",
+    component: GitPage,
+    rows: Object.values(GIT_ROWS),
   },
   {
     id: "storage",
