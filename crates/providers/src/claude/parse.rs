@@ -227,6 +227,13 @@ impl Parser {
                     BlockKind::Tool { id, .. } => id.clone(),
                     _ => self.block_item_id(index),
                 };
+                // Tool input (especially a delegation spec) may take seconds to generate.
+                // Show the call immediately; its final block fills in the input once ready.
+                if let BlockKind::Tool { id, name } = &kind
+                    && matches!(tool_kind(name), ToolKind::Other)
+                {
+                    self.tool_started(id.clone(), name.clone(), Value::Null, out);
+                }
                 self.blocks.insert(
                     index,
                     OpenBlock {
@@ -389,7 +396,9 @@ impl Parser {
     }
 
     fn tool_started(&mut self, id: String, name: String, input: Value, out: &mut Vec<Output>) {
-        if self.tools.contains_key(&id) {
+        if let Some(known) = self.tools.get(&id)
+            && (known.input == input || !known.input.is_null())
+        {
             return;
         }
         let event = match tool_kind(&name) {
@@ -410,7 +419,7 @@ impl Parser {
             ToolKind::Other => ProviderEvent::ToolCall {
                 item_id: id.clone(),
                 name: name.clone(),
-                input: Some(clip(&input.to_string(), OUTPUT_CLIP)),
+                input: (!input.is_null()).then(|| clip(&input.to_string(), OUTPUT_CLIP)),
                 status: ItemStatus::InProgress,
                 output: None,
             },
@@ -1169,6 +1178,56 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn a_tool_is_visible_before_its_arguments_finish_and_updates_once() {
+        let mut parser = Parser::live();
+        let start = json!({"type":"stream_event", "event":{"type":"content_block_start", "index":1,
+            "content_block":{"type":"tool_use", "id":"call", "name":"mcp__brigadier__delegate_task", "input":{}}}});
+        let events = parser.feed(&start.to_string());
+        assert!(
+            matches!(&events[..], [Output::Event(ProviderEvent::ToolCall { item_id, input: None, status: ItemStatus::InProgress, .. })] if item_id == "call")
+        );
+        let partial = json!({"type":"stream_event", "event":{"type":"content_block_delta", "index":1,
+            "delta":{"type":"input_json_delta", "partial_json":"{\"title\":\"Read code\"}"}}});
+        assert!(parser.feed(&partial.to_string()).is_empty());
+        let final_block = json!({"type":"assistant", "message":{"id":"msg", "content":[
+            {"type":"tool_use", "id":"call", "name":"mcp__brigadier__delegate_task", "input":{"title":"Read code"}}]}});
+        let events = parser.feed(&final_block.to_string());
+        assert!(
+            matches!(&events[..], [Output::Event(ProviderEvent::ToolCall { input: Some(input), status: ItemStatus::InProgress, .. })] if input.contains("Read code"))
+        );
+        assert!(parser.feed(&final_block.to_string()).is_empty());
+        let stop = json!({"type":"stream_event", "event":{"type":"content_block_stop", "index":1}});
+        assert!(parser.feed(&stop.to_string()).is_empty());
+        let result = json!({"type":"user", "message":{"content":[{"type":"tool_result", "tool_use_id":"call", "content":"Created task-1"}]}});
+        let events = parser.feed(&result.to_string());
+        assert!(
+            matches!(&events[..], [Output::Event(ProviderEvent::ToolCall { input: Some(input), status: ItemStatus::Completed, .. })] if input.contains("Read code"))
+        );
+    }
+
+    #[test]
+    fn a_streamed_tool_without_a_final_message_keeps_its_input() {
+        let mut parser = Parser::live();
+        parser.feed(
+            &json!({"type":"stream_event", "event":{"type":"content_block_start", "index":0,
+            "content_block":{"type":"tool_use", "id":"read", "name":"Read", "input":{}}}})
+            .to_string(),
+        );
+        parser.feed(
+            &json!({"type":"stream_event", "event":{"type":"content_block_delta", "index":0,
+            "delta":{"type":"input_json_delta", "partial_json":"{\"file_path\":\"README.md\"}"}}})
+            .to_string(),
+        );
+        let events = parser.feed(
+            &json!({"type":"stream_event", "event":{"type":"content_block_stop", "index":0}})
+                .to_string(),
+        );
+        assert!(
+            matches!(&events[..], [Output::Event(ProviderEvent::ToolCall { input: Some(input), .. })] if input.contains("README.md"))
+        );
+    }
 
     #[test]
     fn a_tool_search_result_names_the_tools_it_loaded() {

@@ -178,7 +178,7 @@ impl Claude {
         result
     }
 
-    fn session_args(&self, spec: &SessionSpec, cwd: &Path, native_id: &str) -> Result<Vec<String>> {
+    fn session_args(spec: &SessionSpec, cwd: &Path, native_id: &str) -> Result<Vec<String>> {
         let mut args: Vec<String> = [
             "-p",
             "--input-format",
@@ -717,7 +717,7 @@ impl Provider for Claude {
                 Origin::Resume { native_id } => native_id.clone(),
                 Origin::New | Origin::Fork { .. } => uuid::Uuid::new_v4().to_string(),
             };
-            let args = self.session_args(&spec, &cwd, &native_id)?;
+            let args = Self::session_args(&spec, &cwd, &native_id)?;
 
             // Recorded before the CLI can create them.
             if let Some(config) = self.config_dir() {
@@ -1540,6 +1540,28 @@ mod tests {
             auto_compact: true,
             allowed_models: Some(allowed(ids, &["claude-opus-5-5", "claude-fable-5-1"])),
             auto_review: false,
+        }
+    }
+
+    #[test]
+    fn every_session_requests_readable_thinking_in_print_mode() {
+        let dir = Temp::new();
+        let mut spec = spec(dir.path(), &["claude-sonnet-5-5"]);
+        for origin in [
+            Origin::New,
+            Origin::Resume {
+                native_id: "00000000-0000-4000-8000-000000000000".into(),
+            },
+        ] {
+            spec.origin = origin;
+            let args =
+                Claude::session_args(&spec, dir.path(), "00000000-0000-4000-8000-000000000000")
+                    .unwrap();
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair == ["--thinking-display", "summarized"])
+            );
+            assert!(args.iter().any(|arg| arg == "--include-partial-messages"));
         }
     }
 
