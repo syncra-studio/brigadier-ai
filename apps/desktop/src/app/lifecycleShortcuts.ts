@@ -34,7 +34,7 @@ function undoesText(target: EventTarget | null): boolean {
  * ⇧⌘A archives the picked sidebar rows, else the open conversation. ⌘⌫ asks to delete the
  * picked rows. ⌘Z right after an archive (while its toast shows) undoes it. Esc lets go of the
  * picked rows. (Ctrl for ⌘ on Windows and Linux.) ⌘⌫ and Esc leave text fields alone, and so
- * does ⌘Z where it has text to undo.
+ * does ⌘Z where it has text to undo. None of them act while a dialog or menu is open.
  */
 export function useLifecycleShortcuts(): void {
   useEffect(() => {
@@ -67,6 +67,8 @@ export function useLifecycleShortcuts(): void {
       if (!command || event.altKey || (mac && event.ctrlKey)) return;
       if (event.shiftKey && event.code === "KeyA") {
         event.preventDefault();
+        // Not behind a dialog or menu, where what it would archive can't be seen.
+        if (open) return;
         if (picked.list === "sidebar" && picked.ids.length > 0) {
           const ids = picked.ids;
           clearPicked();
