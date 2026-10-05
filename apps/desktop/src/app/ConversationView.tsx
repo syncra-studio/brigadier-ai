@@ -760,6 +760,13 @@ export function ConversationView({
   );
 
   const fullscreen = sidePanel.visible && sidePanel.state.fullscreen;
+  // Full view hides the thread column and its terminal; the bar's Terminal shows it again.
+  const { setFullscreen } = sidePanel;
+  useEffect(() => {
+    if (embedded) return;
+    useBarActions.setState({ terminalCover: fullscreen ? () => setFullscreen(false) : null });
+    return () => useBarActions.setState({ terminalCover: null });
+  }, [embedded, fullscreen, setFullscreen]);
   // The pinned summary, in a session's own view.
   const summary = setup?.type === "session" && !embedded;
   // A file link in an answer opens in the Files tab when it is one of the session's files.

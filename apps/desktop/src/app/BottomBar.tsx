@@ -20,7 +20,10 @@ export function BottomBar() {
   const shortcuts = useShortcuts();
   const sideChat = useBarActions((s) => s.sideChat);
   const place = useApp((s) => placeOf(s.selection));
-  const terminalOn = useTerminalPlaces((s) => s.places[place]?.open ?? false);
+  // On while it shows: full view can hide an open one.
+  const terminalCovered = useBarActions((s) => s.terminalCover !== null);
+  const terminalOn =
+    useTerminalPlaces((s) => s.places[place]?.open ?? false) && !terminalCovered;
   return (
     <footer
       aria-label="App bar"

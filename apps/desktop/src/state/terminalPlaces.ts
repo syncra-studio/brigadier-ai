@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 
 import { request } from "@/ipc/client";
 import type { TerminalOutput } from "@/ipc/generated";
+import { useBarActions } from "@/state/barActions";
 import { notePaneClose } from "@/state/closedPanes";
 import { type Selection, useApp } from "@/state/store";
 
@@ -213,7 +214,14 @@ export function setTerminalOpen(place: string, open: boolean): void {
   update(place, (current) => ({ ...current, open }));
 }
 
+/** Shows or hides the place's pane; hidden under full view, it is shown by leaving full view. */
 export function toggleTerminal(place = currentPlace()): void {
+  const cover = useBarActions.getState().terminalCover;
+  if (cover && place === currentPlace()) {
+    cover();
+    setTerminalOpen(place, true);
+    return;
+  }
   setTerminalOpen(place, !terminalPlace(place).open);
 }
 
