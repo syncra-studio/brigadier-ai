@@ -539,7 +539,11 @@ function Flyout({
         align="start"
         sideOffset={besideStrip()}
         aria-label={label}
-        onOpenAutoFocus={(event) => event.preventDefault()}
+        // Focus the list itself, not its first row, so Tab goes on into the rows.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
+        }}
         className="flex max-h-(--radix-popover-content-available-height) w-72 flex-col overflow-y-auto p-1.5"
       >
         {children(pick)}
