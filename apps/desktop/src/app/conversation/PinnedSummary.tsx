@@ -249,7 +249,7 @@ function WaitingRow({
           aria-expanded={open}
           onClick={() => setOpen(!open)}
           className={cn(
-            "rounded-control focus-visible:ring-ring/50 w-full min-w-0 text-start outline-none focus-visible:ring-1",
+            "rounded-control w-full min-w-0 text-start",
             open ? "whitespace-normal wrap-break-word" : "truncate",
           )}
         >

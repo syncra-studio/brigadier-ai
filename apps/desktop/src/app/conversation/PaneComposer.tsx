@@ -122,7 +122,7 @@ export function FloatingComposerSlot({
           aria-valuemin={panel.composerLimits.min}
           aria-valuemax={panel.composerLimits.max}
           tabIndex={0}
-          className="w-resize-handle absolute inset-y-0 start-0 z-10 -translate-x-1/2 cursor-col-resize rounded-control focus-visible:ring-1 focus-visible:ring-ring"
+          className="w-resize-handle absolute inset-y-0 start-0 z-10 -translate-x-1/2 cursor-col-resize rounded-control"
           onPointerDown={(event) => {
             if (event.button !== 0) return;
             event.preventDefault();

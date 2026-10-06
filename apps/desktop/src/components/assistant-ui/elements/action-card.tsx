@@ -108,7 +108,7 @@ export function ActionCardQuestion({
         aria-label="Dismiss"
         title="Dismiss"
         onClick={onDismiss}
-        className="text-foreground/50 hover:bg-foreground/8 focus-visible:ring-ring rounded-capsule size-icon-button-sm [&_svg]:size-icon-sm -mt-0.5 flex shrink-0 items-center justify-center transition-colors outline-none focus-visible:ring-2"
+        className="text-foreground/50 hover:bg-foreground/8 rounded-capsule size-icon-button-sm [&_svg]:size-icon-sm -mt-0.5 flex shrink-0 items-center justify-center transition-colors"
       >
         <X />
       </button>
@@ -119,7 +119,7 @@ export function ActionCardQuestion({
 /** A button's look on the card: a capsule, the primary filled, the other outlined. */
 export function actionButton(variant: "primary" | "outline", className?: string): string {
   return cn(
-    "group/action h-control-sm rounded-capsule border-foreground/8 focus-visible:ring-ring text-code inline-flex shrink-0 cursor-default items-center gap-1 border px-2 leading-4.5 font-normal whitespace-nowrap transition-colors outline-none select-none focus-visible:ring-2 disabled:opacity-40",
+    "group/action h-control-sm rounded-capsule border-foreground/8 text-code inline-flex shrink-0 cursor-default items-center gap-1 border px-2 leading-4.5 font-normal whitespace-nowrap transition-colors select-none disabled:opacity-40",
     variant === "primary"
       ? "bg-foreground text-composer enabled:hover:bg-foreground/80 data-[state=open]:bg-foreground/80"
       : "bg-foreground/3 text-foreground enabled:hover:bg-foreground/8 data-[state=open]:bg-foreground/8",
@@ -201,7 +201,7 @@ export function ActionCardCode({ children }: { children: ReactNode }) {
             <button
               type="button"
               onClick={() => setExpanded(!expanded)}
-              className="text-foreground/50 hover:bg-foreground/8 focus-visible:ring-ring text-code rounded-lg px-2 py-0.5 font-sans leading-4.5 transition-colors outline-none focus-visible:ring-2"
+              className="text-foreground/50 hover:bg-foreground/8 text-code rounded-lg px-2 py-0.5 font-sans leading-4.5 transition-colors"
             >
               {expanded ? "Collapse" : "Expand"}
             </button>
@@ -284,7 +284,7 @@ export function ActionOption({
       data-highlighted={highlighted || undefined}
       aria-label={label}
       className={cn(
-        "group focus-visible:ring-ring text-code flex min-h-8 w-full items-center gap-2 rounded-xl px-2 py-1.5 text-start outline-none focus-visible:ring-2",
+        "group text-code flex min-h-8 w-full items-center gap-2 rounded-xl px-2 py-1.5 text-start",
         highlighted ? "bg-foreground/5" : "hover:bg-foreground/5",
         className,
       )}

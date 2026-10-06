@@ -289,7 +289,7 @@ const FileRow: FC<{ file: SourceFile; onOpen: () => void; children: ReactNode }>
         type="button"
         title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
         onClick={onOpen}
-        className="focus-visible:ring-ring flex min-w-0 flex-1 items-center gap-1.5 rounded-sm ps-2 text-start text-sm outline-none focus-visible:ring-1"
+        className="flex min-w-0 flex-1 items-center gap-1.5 rounded-sm ps-2 text-start text-sm"
       >
         <FileTypeIcon name={file.path} className="size-icon-sm shrink-0" />
         <span className={cn("shrink-0", file.status === "deleted" && "line-through")}>
@@ -454,7 +454,7 @@ const CommitBox: FC<{
             commit(false);
           }
         }}
-        className="border-border rounded-control placeholder:text-muted-foreground focus-visible:ring-ring/50 resize-none border bg-transparent px-2 py-1.5 text-sm outline-none focus-visible:ring-1"
+        className="border-border rounded-control placeholder:text-muted-foreground resize-none border bg-transparent px-2 py-1.5 text-sm"
       />
       <label className="flex cursor-pointer items-center gap-2 px-1 text-sm">
         <input

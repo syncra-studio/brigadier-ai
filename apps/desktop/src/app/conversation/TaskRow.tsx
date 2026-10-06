@@ -15,7 +15,7 @@ function WorkerLink({ taskId }: { taskId: string }) {
   const name = useWorkerName(taskId);
   const { setPanel } = useContext(AgentsPanelContext);
   return <button type="button" onClick={() => setPanel(taskId)} aria-label={`Open ${name ?? "worker"}`}
-    className="hover:text-foreground focus-visible:ring-ring rounded-control inline text-start outline-none focus-visible:ring-1">
+    className="hover:text-foreground rounded-control inline text-start">
     {name ?? "Worker"}
   </button>;
 }

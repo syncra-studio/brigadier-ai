@@ -483,7 +483,7 @@ export function ApprovalAction({
               <button
                 type="button"
                 data-slot="approval-reply"
-                className="text-foreground/55 hover:text-foreground hover:bg-foreground/8 focus-visible:ring-ring text-code rounded-capsule h-control-sm inline-flex shrink-0 items-center gap-1.5 px-2 outline-none transition-colors focus-visible:ring-2"
+                className="text-foreground/55 hover:text-foreground hover:bg-foreground/8 text-code rounded-capsule h-control-sm inline-flex shrink-0 items-center gap-1.5 px-2 transition-colors"
                 onClick={onReply}
               >
                 <Reply className="size-icon-sm" />
@@ -517,7 +517,7 @@ export function ApprovalAction({
               type="button"
               className={actionButton(
                 "primary",
-                "min-w-0 rounded-e-none border-e-0 pe-1 focus-visible:ring-inset @max-md/approval-card:flex-1 @max-md/approval-card:justify-center @max-md/approval-card:ps-6",
+                "min-w-0 rounded-e-none border-e-0 pe-1 @max-md/approval-card:flex-1 @max-md/approval-card:justify-center @max-md/approval-card:ps-6",
               )}
               disabled={action.busy}
               onClick={() => answer({ type: "allow" })}
@@ -556,7 +556,7 @@ export function ApprovalAction({
 function StepCounter({ step }: { step: ApprovalStep }) {
   const { index, total, onStep } = step;
   const arrow =
-    "text-foreground/50 hover:text-foreground hover:bg-foreground/8 focus-visible:ring-ring rounded-capsule size-control-xs flex items-center justify-center outline-none transition-colors focus-visible:ring-2 disabled:opacity-30 [&_svg]:size-icon-xs";
+    "text-foreground/50 hover:text-foreground hover:bg-foreground/8 rounded-capsule size-control-xs flex items-center justify-center transition-colors disabled:opacity-30 [&_svg]:size-icon-xs";
   return (
     <span data-slot="approval-step" className="ms-auto flex shrink-0 items-center gap-0.5 tabular-nums">
       <button type="button" aria-label="Previous request" className={arrow} disabled={index === 0} onClick={() => onStep(index - 1)}>
@@ -622,7 +622,7 @@ function GrantMenu({
           aria-label="Approval options"
           className={actionButton(
             "primary",
-            "gap-0 rounded-s-none border-s-0 ps-0.5 pe-1.5 focus-visible:ring-inset",
+            "gap-0 rounded-s-none border-s-0 ps-0.5 pe-1.5",
           )}
           disabled={disabled}
         >

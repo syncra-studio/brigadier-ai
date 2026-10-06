@@ -124,7 +124,7 @@ export function RadioChoice<T extends string>({
             <RadioGroup.Item
               id={id}
               value={option.value}
-              className="border-input data-[state=checked]:border-primary focus-visible:ring-ring/50 mt-0.5 flex size-icon-md shrink-0 items-center justify-center rounded-full border outline-none focus-visible:ring-1"
+              className="border-input data-[state=checked]:border-primary mt-0.5 flex size-icon-md shrink-0 items-center justify-center rounded-full border"
             >
               <RadioGroup.Indicator className="bg-primary size-1.5 rounded-full" />
             </RadioGroup.Item>
@@ -161,7 +161,7 @@ export function CheckboxRow({
         checked={checked}
         disabled={disabled}
         onCheckedChange={(state) => onCheckedChange(state === true)}
-        className="border-input data-[state=checked]:bg-primary data-[state=checked]:border-primary data-[state=checked]:text-primary-foreground focus-visible:ring-ring/50 rounded-xs mt-0.5 flex size-icon-md shrink-0 items-center justify-center border outline-none focus-visible:ring-1 disabled:cursor-not-allowed"
+        className="border-input data-[state=checked]:bg-primary data-[state=checked]:border-primary data-[state=checked]:text-primary-foreground rounded-xs mt-0.5 flex size-icon-md shrink-0 items-center justify-center border disabled:cursor-not-allowed"
       >
         <CheckboxPrimitive.Indicator>
           <Check className="size-icon-xs" />

@@ -142,7 +142,7 @@ const PastedText: FC<{ source: AttachmentSource; busy: boolean; remove: ReactNod
             type="button"
             disabled={busy}
             onClick={() => void show()}
-            className="hover:text-foreground focus-visible:ring-ring inline-flex items-center gap-0.5 underline underline-offset-2 outline-none focus-visible:ring-2"
+            className="hover:text-foreground inline-flex items-center gap-0.5 underline underline-offset-2"
           >
             Show in text field
             <ChevronRight aria-hidden className="size-icon-xs" />

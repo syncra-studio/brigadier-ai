@@ -16,11 +16,11 @@ export const fieldInteractive = "bg-foreground/5 transition-colors hover:bg-fore
  * target, washed while hovered and pressed, its edges a step outside the text it lines up with.
  */
 export const disclosureRow =
-  "rounded-control hover:bg-foreground/5 active:bg-foreground/10 -mx-1.5 cursor-pointer px-1.5 text-start outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring";
+  "rounded-control hover:bg-foreground/5 active:bg-foreground/10 -mx-1.5 cursor-pointer px-1.5 text-start transition-colors";
 
 /** A quiet round icon button. */
 export const ghostButton =
-  "text-muted-foreground hover:bg-foreground/10 hover:text-foreground focus-visible:ring-ring/50 inline-flex shrink-0 items-center justify-center rounded-capsule outline-none transition-colors focus-visible:ring-1 disabled:pointer-events-none disabled:opacity-50";
+  "text-muted-foreground hover:bg-foreground/10 hover:text-foreground inline-flex shrink-0 items-center justify-center rounded-capsule transition-colors disabled:pointer-events-none disabled:opacity-50";
 
 /** Small monospace meta text (ids, counts, models). */
 export const mono = "font-mono text-2xs tracking-tight";
@@ -38,4 +38,4 @@ export const floatingMenu =
  * hovered or open.
  */
 export const composerPill =
-  "h-control-sm rounded-capsule hover:bg-foreground/8 data-[state=open]:bg-foreground/8 inline-flex min-w-0 shrink-0 items-center gap-1.5 px-2 text-sm transition-colors outline-none focus-visible:ring-1 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-icon-md [&_svg]:shrink-0";
+  "h-control-sm rounded-capsule hover:bg-foreground/8 data-[state=open]:bg-foreground/8 inline-flex min-w-0 shrink-0 items-center gap-1.5 px-2 text-sm transition-colors disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-icon-md [&_svg]:shrink-0";

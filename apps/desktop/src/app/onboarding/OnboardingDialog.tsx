@@ -171,7 +171,7 @@ function Progress({
                   disabled={index > furthest}
                   onClick={() => onStep(entry.step)}
                   className={cn(
-                    "rounded-capsule relative h-1 transition-all outline-none before:absolute before:-inset-x-1 before:-inset-y-2 focus-visible:ring-1 focus-visible:ring-ring/50",
+                    "rounded-capsule relative h-1 transition-all before:absolute before:-inset-x-1 before:-inset-y-2",
                     active
                       ? "bg-foreground w-10"
                       : done
@@ -697,7 +697,7 @@ function ProjectCard({
         disabled={disabled || added}
         onClick={onToggle}
         className={cn(
-          "rounded-surface focus-visible:ring-ring/50 relative flex w-full min-w-0 flex-col gap-2 border p-3.5 text-start transition-colors outline-none focus-visible:ring-1",
+          "rounded-surface relative flex w-full min-w-0 flex-col gap-2 border p-3.5 text-start transition-colors",
           on
             ? "border-primary/50 bg-primary/5 ring-primary/20 ring-2"
             : "bg-muted/30 hover:bg-muted/60",

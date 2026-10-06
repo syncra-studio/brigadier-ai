@@ -99,7 +99,7 @@ export function WorkersSummary({ conversationId }: { conversationId: string }) {
     <SummarySection foldKey="workers" title={WORKERS_LABEL} aria-label="Session workers">
       <button type="button" aria-label="Open workers" data-slot="workers-summary"
         onClick={() => setPanel(null)}
-        className="hover:bg-foreground/5 focus-visible:ring-ring rounded-control flex min-h-10 w-full items-center gap-3 py-2 text-start text-worker-count outline-none focus-visible:ring-1">
+        className="hover:bg-foreground/5 rounded-control flex min-h-10 w-full items-center gap-3 py-2 text-start text-worker-count">
         <span aria-hidden className="flex shrink-0 items-center gap-1.5">
           {avatars.slice(0, 4).map((task) => <WorkerGlyph key={task.id} taskId={task.id} className="size-4" />)}
         </span>

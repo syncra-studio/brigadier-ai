@@ -430,8 +430,16 @@
   [data-selectable] {
     @apply select-text;
   }
+  /* One focus ring, for the keyboard only: never after a click. The root is marked
+     data-input="pointer" from a click until the keyboard moves around (lib/focusRing.ts). */
   :focus-visible {
+    outline: 1px solid var(--ring);
+    outline-offset: -1px;
     box-shadow: none;
+  }
+  :focus:not(:focus-visible),
+  [data-input="pointer"] :focus {
+    outline: none;
   }
 }
 

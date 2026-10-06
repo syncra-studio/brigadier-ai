@@ -125,7 +125,7 @@ function SearchBody({ onDone }: { onDone: () => void }) {
             setActive(0);
           }}
           onKeyDown={onKeyDown}
-          className="bg-transparent focus-visible:bg-transparent border-none focus-visible:ring-0"
+          className="bg-transparent focus-visible:bg-transparent border-none outline-none"
         />
       </div>
       <div

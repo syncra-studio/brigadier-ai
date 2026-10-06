@@ -130,7 +130,7 @@ export const WorkerName: FC<{ taskId: string }> = ({ taskId }) => {
         setPanel(taskId);
       }}
       title={`Open ${name}`}
-      className="text-foreground/90 hover:text-foreground focus-visible:ring-ring/50 rounded-control inline-flex max-w-1/2 min-w-0 shrink-0 items-center gap-1 outline-none focus-visible:ring-1"
+      className="text-foreground/90 hover:text-foreground rounded-control inline-flex max-w-1/2 min-w-0 shrink-0 items-center gap-1"
     >
       <WorkerGlyph taskId={taskId} className="size-icon-xs shrink-0" />
       <span className="min-w-0 truncate">{name}</span>
@@ -352,7 +352,7 @@ export const WorkGroup: FC<{ kinds: readonly SummaryKind[]; actions?: readonly (
   const row = workerGroup ? STEP_ROW : ACTIVITY_ROW;
   return (
     <Collapsible data-slot="work-group">
-      <CollapsibleTrigger className={cn(row, "group hover:text-foreground focus-visible:ring-ring/50 rounded-control w-full text-start outline-none focus-visible:ring-1")}>
+      <CollapsibleTrigger className={cn(row, "group hover:text-foreground rounded-control w-full text-start")}>
         <Icon aria-hidden className="size-icon-md shrink-0" />
         <span className={cn("min-w-0 truncate", workerGroup && "text-foreground/90")}>{summarizeKinds(kinds, actions)}</span>
         <ChevronRight aria-hidden className={OPENER} />

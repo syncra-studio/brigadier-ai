@@ -248,7 +248,7 @@ function ArtifactFile({ artifact, onView }: { artifact: ArtifactRef; onView: (ar
   const title = useWorkerText(artifact.title);
   return <li className="border-border rounded-lg flex min-w-0 items-center gap-3 border px-3 py-2.5">
     <button type="button" onClick={isText(artifact) ? () => onView(artifact) : () => action.run(() => openArtifact(artifact.id, name))}
-      className="focus-visible:ring-ring flex min-w-0 flex-1 flex-col text-start outline-none focus-visible:ring-1">
+      className="flex min-w-0 flex-1 flex-col text-start">
       <span className="truncate text-sm">{name}</span>
       <span className="text-muted-foreground truncate text-xs">{title} · {formatBytes(artifact.bytes)}</span>
     </button>

@@ -204,7 +204,7 @@ function PlaceRow({
         aria-label={`Move #${position}, ${name} (${position} of ${count}); drag, or press up and down`}
         title="Drag to reorder, or focus and press ↑ ↓"
         disabled={count < 2}
-        className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 size-icon-button-sm rounded-control grid shrink-0 cursor-grab touch-none place-items-center outline-none focus-visible:ring-2 active:cursor-grabbing disabled:cursor-default disabled:opacity-40"
+        className="text-muted-foreground hover:text-foreground size-icon-button-sm rounded-control grid shrink-0 cursor-grab touch-none place-items-center active:cursor-grabbing disabled:cursor-default disabled:opacity-40"
         {...grip}
       >
         <DotsHorizontal aria-hidden className="size-icon-sm rotate-90" />

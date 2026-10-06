@@ -45,7 +45,7 @@ export function TaskCard({
             aria-expanded={open}
             aria-label={`${open ? "Hide" : "Show"} details of ${label}`}
             onClick={() => onOpenChange(!open)}
-            className="rounded-control focus-visible:ring-ring/50 absolute inset-0 outline-none focus-visible:ring-1"
+            className="rounded-control absolute inset-0"
           />
           <span className="pointer-events-none relative flex min-w-0 items-center gap-1.5 [&_a]:pointer-events-auto [&_button]:pointer-events-auto">
             {name}

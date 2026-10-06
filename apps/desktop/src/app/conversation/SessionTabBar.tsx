@@ -266,7 +266,7 @@ export function SessionTabBar({
               aria-selected={active === CHAT_TAB}
               tabIndex={active === CHAT_TAB ? 0 : -1}
               title={conversation.title}
-              className="focus-visible:ring-ring flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm outline-none focus-visible:ring-1"
+              className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
             >
               <Chat aria-hidden className="size-icon-sm shrink-0" />
               <span className="min-w-0 truncate">{title}</span>
@@ -330,7 +330,7 @@ export function SessionTabBar({
                     onKeyDown={(event) => {
                       if (event.altKey) handlers.onKeyDown(event);
                     }}
-                    className="focus-visible:ring-ring flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm outline-none focus-visible:ring-1"
+                    className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
                   >
                     {tab.kind === "file" ? (
                       <FileTypeIcon name={tab.path} className="size-icon-sm shrink-0" />
@@ -349,7 +349,7 @@ export function SessionTabBar({
                       closeTab(id, tab.id);
                     }}
                     className={cn(
-                      "hover:bg-toolbar-hover focus-visible:ring-ring flex size-5 shrink-0 items-center justify-center rounded-full opacity-60 outline-none hover:opacity-100 focus-visible:ring-1",
+                      "hover:bg-toolbar-hover flex size-5 shrink-0 items-center justify-center rounded-full opacity-60 hover:opacity-100",
                       !selected && "invisible group-focus-within/tab:visible group-hover/tab:visible",
                     )}
                   >

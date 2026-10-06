@@ -163,7 +163,7 @@ export function CategoryCard({
 
   return (
     <Collapsible data-slot="routing-kind">
-      <CollapsibleTrigger className="hover:bg-foreground/4 focus-visible:ring-ring/50 group flex w-full items-center gap-3 px-4 py-3 text-start outline-none focus-visible:ring-2 focus-visible:ring-inset">
+      <CollapsibleTrigger className="hover:bg-foreground/4 group flex w-full items-center gap-3 px-4 py-3 text-start">
         <ChevronRight
           aria-hidden
           className="text-muted-foreground size-icon-xs shrink-0 transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"

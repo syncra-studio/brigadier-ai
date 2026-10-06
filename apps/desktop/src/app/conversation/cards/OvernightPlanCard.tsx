@@ -106,7 +106,7 @@ function PhaseWork({
                     type="button"
                     title={title}
                     onClick={() => setPanel(taskId)}
-                    className="hover:text-foreground rounded-control focus-visible:ring-ring/50 flex min-w-0 items-center gap-1 text-start outline-none focus-visible:ring-1"
+                    className="hover:text-foreground rounded-control flex min-w-0 items-center gap-1 text-start"
                   >
                     {text}
                   </button>

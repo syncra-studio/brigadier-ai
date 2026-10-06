@@ -66,7 +66,7 @@ export function InlineImage({
           aria-label={`Preview ${label}`}
           title={label}
           disabled={!url}
-          className="focus-visible:ring-ring inline-flex items-center gap-1 rounded-sm pe-0.5 outline-none focus-visible:ring-2"
+          className="inline-flex items-center gap-1 rounded-sm pe-0.5"
         >
           {url ? (
             <img

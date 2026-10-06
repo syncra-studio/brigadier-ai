@@ -91,7 +91,7 @@ export function AgentPlan({
           type="button"
           aria-expanded={showAll}
           aria-controls={listId}
-          className="text-muted-foreground hover:text-foreground rounded-control self-start text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="text-muted-foreground hover:text-foreground rounded-control self-start text-xs"
           onClick={() => setShowAll(!showAll)}
         >
           {showAll ? "Show less" : `Show ${hidden} more`}

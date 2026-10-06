@@ -306,7 +306,7 @@ function Composer({
             send(event.shiftKey);
           }
         }}
-        className="bg-muted/60 focus-visible:bg-background rounded-control focus-visible:ring-ring/50 w-full resize-none border border-transparent p-2 text-xs outline-none focus-visible:ring-1 disabled:opacity-50"
+        className="bg-muted/60 focus-visible:bg-background rounded-control w-full resize-none border border-transparent p-2 text-xs disabled:opacity-50"
       />
       <div className="flex items-center gap-2">
         <span className="text-muted-foreground flex-1 text-xs">

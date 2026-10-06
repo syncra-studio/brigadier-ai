@@ -28,7 +28,7 @@ export function ThinkingRow({ text, startedAtMs, endedAtMs, live, compact = fals
   const elapsed = Math.max(0, endedAtMs - startedAtMs);
   return (
     <Collapsible data-slot="thinking-settled">
-      <CollapsibleTrigger className={compact ? "text-foreground/60 group hover:text-foreground focus-visible:ring-ring rounded-control flex min-h-5 max-w-full items-center gap-1 text-start text-sm outline-none focus-visible:ring-1" : "text-muted-foreground group hover:text-foreground focus-visible:ring-ring/50 rounded-control flex min-h-row-sm w-full items-center gap-2 text-start text-sm outline-none focus-visible:ring-1"}>
+      <CollapsibleTrigger className={compact ? "text-foreground/60 group hover:text-foreground rounded-control flex min-h-5 max-w-full items-center gap-1 text-start text-sm" : "text-muted-foreground group hover:text-foreground rounded-control flex min-h-row-sm w-full items-center gap-2 text-start text-sm"}>
         {!compact && <Clock aria-hidden className="size-icon-md shrink-0" />}
         <span>{elapsed < 1000 ? "Thought" : `Thought for ${formatDuration(elapsed)}`}</span>
         <ChevronRight aria-hidden className="size-icon-xs shrink-0 opacity-0 transition-[rotate,opacity] group-hover:opacity-100 group-focus-visible:opacity-100 group-data-[state=open]:rotate-90 group-data-[state=open]:opacity-100 motion-reduce:transition-none" />

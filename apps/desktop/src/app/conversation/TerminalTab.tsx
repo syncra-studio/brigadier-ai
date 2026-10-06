@@ -290,7 +290,7 @@ export function TerminalPane({ place }: { place: string }) {
                     tabIndex={selected ? 0 : -1}
                     aria-label={names[index]}
                     onClick={() => selectTab(place, tab.id)}
-                    className="focus-visible:ring-ring flex min-w-0 flex-1 items-center gap-1 rounded-sm outline-none focus-visible:ring-1"
+                    className="flex min-w-0 flex-1 items-center gap-1 rounded-sm"
                   >
                     <TerminalIcon aria-hidden className="size-icon-md shrink-0" />
                     <TabLabel key={names[index]} name={names[index]!} hidden={compactTabs} />
@@ -300,7 +300,7 @@ export function TerminalPane({ place }: { place: string }) {
                     aria-label={`Close ${names[index]} tab`}
                     onClick={() => closeTab(place, tab.id)}
                     className={cn(
-                      "text-terminal-tab-inactive hover:bg-toolbar-hover hover:text-terminal-tab-active focus-visible:ring-ring flex size-5 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-1",
+                      "text-terminal-tab-inactive hover:bg-toolbar-hover hover:text-terminal-tab-active flex size-5 shrink-0 items-center justify-center rounded-full",
                       !selected &&
                         "hidden group-focus-within/terminal-tab:flex group-hover/terminal-tab:flex",
                     )}

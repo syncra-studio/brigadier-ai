@@ -71,7 +71,7 @@ export function ErrorState({ title, detail, retrying = false, onRetry, className
             type="button"
             aria-expanded={open}
             onClick={() => setOpen(!open)}
-            className="text-destructive/75 hover:text-destructive focus-visible:ring-ring/50 rounded-control w-fit text-xs outline-none focus-visible:ring-1"
+            className="text-destructive/75 hover:text-destructive rounded-control w-fit text-xs"
           >
             {open ? "Show less" : "Show more"}
           </button>
@@ -81,7 +81,7 @@ export function ErrorState({ title, detail, retrying = false, onRetry, className
         <button
           type="button"
           onClick={onRetry}
-          className="text-destructive hover:bg-destructive/10 focus-visible:ring-ring/50 rounded-capsule ms-auto flex shrink-0 items-center gap-1.5 px-3 py-1 text-xs font-medium outline-none transition-colors focus-visible:ring-1"
+          className="text-destructive hover:bg-destructive/10 rounded-capsule ms-auto flex shrink-0 items-center gap-1.5 px-3 py-1 text-xs font-medium transition-colors"
         >
           <Regenerate aria-hidden className="size-icon-xs" />
           Retry

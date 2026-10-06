@@ -133,7 +133,7 @@ export function SettingsAdvanced({
 }) {
   return (
     <Collapsible data-slot="settings-advanced">
-      <CollapsibleTrigger className="focus-visible:ring-ring/50 group flex w-full items-start gap-2 rounded-xs text-start outline-none focus-visible:ring-2">
+      <CollapsibleTrigger className="group flex w-full items-start gap-2 rounded-xs text-start">
         <ChevronRight
           aria-hidden
           className="text-muted-foreground size-icon-sm mt-0.5 shrink-0 transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
@@ -303,7 +303,7 @@ export function Segmented<T extends string>({
           key={option.value}
           value={option.value}
           className={cn(
-            "text-foreground/50 hover:text-foreground data-[state=on]:bg-foreground/5 data-[state=on]:text-foreground focus-visible:ring-ring/50 rounded-capsule text-label h-6 shrink-0 border border-transparent px-2 whitespace-nowrap transition-colors outline-none focus-visible:ring-2 disabled:opacity-50",
+            "text-foreground/50 hover:text-foreground data-[state=on]:bg-foreground/5 data-[state=on]:text-foreground rounded-capsule text-label h-6 shrink-0 border border-transparent px-2 whitespace-nowrap transition-colors disabled:opacity-50",
             fill && "data-[state=on]:bg-foreground/10 min-w-0 flex-auto truncate",
           )}
         >
@@ -316,7 +316,7 @@ export function Segmented<T extends string>({
 
 /** The look of a button that opens a menu of choices (a select, the model pickers). */
 export const selectTrigger =
-  "border-divider bg-foreground/3 hover:bg-foreground/6 data-[state=open]:bg-foreground/6 focus-visible:ring-ring/50 rounded-nav text-label h-7 max-w-full min-w-0 items-center border px-3 transition-colors outline-none focus-visible:ring-2 disabled:opacity-50";
+  "border-divider bg-foreground/3 hover:bg-foreground/6 data-[state=open]:bg-foreground/6 rounded-nav text-label h-7 max-w-full min-w-0 items-center border px-3 transition-colors disabled:opacity-50";
 
 /** One of several choices in a menu, shown as a button with the chosen one's label. */
 export function SettingsSelect<T extends string>({

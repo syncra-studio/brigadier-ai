@@ -60,7 +60,7 @@ export function SummarySection({
           aria-expanded={!folded}
           aria-controls={bodyId}
           onClick={toggle}
-          className="group/fold text-muted-foreground hover:text-foreground rounded-control focus-visible:ring-ring -ms-1 inline-flex min-w-0 flex-1 items-center gap-1.5 py-0.5 ps-1 pe-1 text-start text-label outline-none transition-colors focus-visible:ring-1"
+          className="group/fold text-muted-foreground hover:text-foreground rounded-control -ms-1 inline-flex min-w-0 flex-1 items-center gap-1.5 py-0.5 ps-1 pe-1 text-start text-label transition-colors"
         >
           <span className="min-w-0 truncate">{title}</span>
           {folded && (summary || (count !== undefined && count > 0)) && (

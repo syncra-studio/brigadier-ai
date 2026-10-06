@@ -93,7 +93,7 @@ const Pill: FC<{ tip: ReactNode; label?: string; children: ReactNode }> = ({ tip
         <button
           type="button"
           aria-label={label}
-          className="hover:text-foreground rounded-control focus-visible:ring-ring flex min-w-0 items-center gap-1.5 text-start outline-none transition-colors focus-visible:ring-1"
+          className="hover:text-foreground rounded-control flex min-w-0 items-center gap-1.5 text-start transition-colors"
         >
           {children}
         </button>

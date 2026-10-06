@@ -227,7 +227,7 @@ export function BrowserTab({ conversationId }: { conversationId: string }) {
                 aria-selected={id === tabs.active}
                 aria-label={pages[id]?.title || pages[id]?.url || "New tab"}
                 onClick={() => selectBrowserTab(conversationId, id)}
-                className="flex min-w-0 flex-1 items-center justify-center gap-1.5 px-0.5 outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex min-w-0 flex-1 items-center justify-center gap-1.5 px-0.5"
               >
                 <Globe className="size-icon-sm shrink-0" />
                 <span
@@ -247,7 +247,7 @@ export function BrowserTab({ conversationId }: { conversationId: string }) {
                   if (tabs.ids.length === 1) hide();
                 }}
                 className={cn(
-                  "hover:bg-toolbar-hover flex size-5 shrink-0 items-center justify-center rounded-full opacity-60 hover:opacity-100 focus-visible:ring-1 focus-visible:ring-ring",
+                  "hover:bg-toolbar-hover flex size-5 shrink-0 items-center justify-center rounded-full opacity-60 hover:opacity-100",
                   compactTabs &&
                     id !== tabs.active &&
                     "hidden group-hover/tab:flex group-focus-within/tab:flex",

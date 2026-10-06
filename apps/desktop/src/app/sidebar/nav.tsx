@@ -14,11 +14,11 @@ import { cn } from "@/lib/utils";
 
 /** A navigation row: icon, label, then anything at its end. Hovered or selected, it is filled. */
 export const navRow =
-  "h-nav-row rounded-nav text-foreground/85 hover:bg-foreground/8 focus-visible:ring-ring/50 aria-[current=page]:bg-foreground/8 data-[active=true]:bg-foreground/8 relative flex w-full min-w-0 items-center gap-2 px-2 text-start text-sm outline-none focus-visible:ring-2 [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-icon-md";
+  "h-nav-row rounded-nav text-foreground/85 hover:bg-foreground/8 aria-[current=page]:bg-foreground/8 data-[active=true]:bg-foreground/8 relative flex w-full min-w-0 items-center gap-2 px-2 text-start text-sm [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-icon-md";
 
 /** An icon button on a row's end, shown while the row is hovered or focused. */
 export const rowAction =
-  "text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex size-icon-button-xs shrink-0 items-center justify-center rounded-xs outline-none focus-visible:ring-2 [&_svg]:size-icon-md";
+  "text-muted-foreground hover:text-foreground flex size-icon-button-xs shrink-0 items-center justify-center rounded-xs [&_svg]:size-icon-md";
 
 /** The panel's header: its title, and icon buttons at the end. */
 export function NavHeader({ title, actions }: { title: ReactNode; actions?: ReactNode }) {
@@ -58,7 +58,7 @@ export function NavSection({
             type="button"
             aria-expanded={open}
             onClick={() => onOpenChange(!open)}
-            className="text-foreground/50 focus-visible:ring-ring/50 flex min-w-0 items-center gap-1 rounded-xs text-sm font-medium opacity-75 outline-none focus-visible:ring-2"
+            className="text-foreground/50 flex min-w-0 items-center gap-1 rounded-xs text-sm font-medium opacity-75"
           >
             <span className="truncate">{title}</span>
             <ChevronDown
@@ -137,7 +137,7 @@ export function footMenuPlacement(expanded: boolean) {
  */
 const stripItem = (selected: boolean) =>
   cn(
-    "h-nav-row rounded-strip-button focus-visible:ring-ring/50 relative flex shrink-0 items-center justify-center outline-none transition-colors duration-150 focus-visible:ring-2 [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-icon-md",
+    "h-nav-row rounded-strip-button relative flex shrink-0 items-center justify-center transition-colors duration-150 [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-icon-md",
     "hover:bg-foreground/8 data-[state=open]:bg-foreground/8",
     selected
       ? "bg-foreground/8 text-foreground"

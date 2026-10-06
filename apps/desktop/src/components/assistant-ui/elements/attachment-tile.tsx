@@ -196,7 +196,7 @@ export function TileRemove({
       title={label}
       {...props}
       className={cn(
-        "bg-foreground text-background focus-visible:ring-ring absolute end-1.5 top-1.5 z-10 flex size-icon-md items-center justify-center rounded-capsule outline-none focus-visible:ring-2",
+        "bg-foreground text-background absolute end-1.5 top-1.5 z-10 flex size-icon-md items-center justify-center rounded-capsule",
         onHover &&
           "opacity-0 transition-opacity group-hover/tile:opacity-100 focus-visible:opacity-100",
         className,
@@ -232,7 +232,7 @@ export function ImageTile({
           aria-label={`Preview ${name}`}
           title={name}
           disabled={!url}
-          className="bg-muted focus-visible:ring-ring size-full overflow-hidden rounded-2xl outline-none focus-visible:ring-2"
+          className="bg-muted size-full overflow-hidden rounded-2xl"
         >
           {url && (
             <img
@@ -342,7 +342,7 @@ export function ImagePreview({
           <DialogPrimitive.Close
             aria-label="Close"
             title="Close"
-            className="bg-secondary hover:bg-accent focus-visible:ring-ring size-icon-button-lg rounded-capsule absolute end-4 top-4 z-10 flex items-center justify-center outline-none focus-visible:ring-2"
+            className="bg-secondary hover:bg-accent size-icon-button-lg rounded-capsule absolute end-4 top-4 z-10 flex items-center justify-center"
           >
             <X aria-hidden className="size-icon-md" />
           </DialogPrimitive.Close>
@@ -388,7 +388,7 @@ export function ImagePreview({
               title="Zoom out"
               disabled={current <= ZOOM_MIN}
               onClick={() => zoom(1 / ZOOM_STEP)}
-              className="hover:bg-accent focus-visible:ring-ring size-icon-button-lg rounded-capsule flex items-center justify-center outline-none focus-visible:ring-2 disabled:opacity-50"
+              className="hover:bg-accent size-icon-button-lg rounded-capsule flex items-center justify-center disabled:opacity-50"
             >
               <Minus aria-hidden className="size-icon-md" />
             </button>
@@ -402,7 +402,7 @@ export function ImagePreview({
               title="Zoom in"
               disabled={current >= ZOOM_MAX}
               onClick={() => zoom(ZOOM_STEP)}
-              className="hover:bg-accent focus-visible:ring-ring size-icon-button-lg rounded-capsule flex items-center justify-center outline-none focus-visible:ring-2 disabled:opacity-50"
+              className="hover:bg-accent size-icon-button-lg rounded-capsule flex items-center justify-center disabled:opacity-50"
             >
               <Plus aria-hidden className="size-icon-md" />
             </button>

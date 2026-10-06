@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "@/app/App";
 import { appInfo } from "@/ipc/client";
 import { applyDensity, cachedDensity } from "@/lib/density";
+import { trackFocusInput } from "@/lib/focusRing";
 import { trackFullscreen } from "@/lib/fullscreen";
 import { showStartupError, watchStartup } from "@/lib/splash";
 import { markStartup } from "@/lib/startup";
@@ -17,6 +18,7 @@ watchStartup();
 try {
   // Density and platform are known before the first React paint, so nothing jumps.
   applyDensity(cachedDensity());
+  trackFocusInput();
   const info = await appInfo();
   document.documentElement.dataset.platform = info.platform;
   if (info.platform === "macos") {

@@ -147,7 +147,7 @@ export const PlanSection = memo(function PlanSection({
       id={`plan-${plan.id}`}
       tabIndex={-1}
       aria-label={`Plan: ${plan.title}`}
-      className="outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+      className=""
     >
       <div className="flex flex-col gap-0.5 pb-1">
         {onShowCurrent && (
@@ -157,7 +157,7 @@ export const PlanSection = memo(function PlanSection({
             <button
               type="button"
               onClick={onShowCurrent}
-              className="text-link rounded-control focus-visible:ring-ring/50 outline-none hover:underline focus-visible:ring-1"
+              className="text-link rounded-control hover:underline"
             >
               Show the current plan
             </button>

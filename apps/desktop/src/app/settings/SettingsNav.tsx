@@ -72,7 +72,7 @@ export function SettingsNav() {
       </div>
       <NavHeader title="Settings" />
       <div className="px-2 pb-2">
-        <label className="h-nav-search rounded-capsule bg-foreground/8 focus-within:ring-ring/50 flex items-center gap-2 px-3 focus-within:ring-2">
+        <label className="h-nav-search rounded-capsule bg-foreground/8 flex items-center gap-2 px-3">
           <MagnifyingGlassSearch aria-hidden className="text-foreground/65 size-icon-md shrink-0" />
           <input
             type="search"

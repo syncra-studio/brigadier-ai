@@ -122,7 +122,7 @@ export const WorkerChip = memo(function WorkerChip({
           className={cn(
             "bg-muted/60 border-border text-foreground hover:bg-muted rounded-capsule inline-flex h-control-xs max-w-2xs min-w-0 shrink items-center gap-1.5 border ps-2 pe-2.5 align-middle text-sm leading-normal transition-colors",
             // A ring for keyboard focus only, as on buttons.
-            "focus-visible:border-ring focus-visible:ring-ring/50 outline-none focus-visible:ring-1",
+            "",
             className,
           )}
         >

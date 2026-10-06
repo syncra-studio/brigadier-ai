@@ -181,7 +181,7 @@ const WorkHeader: FC<{
       data-slot="request-work-header"
       aria-expanded={open}
       onClick={(event) => onToggle(event.currentTarget)}
-      className="group border-border focus-visible:ring-ring/50 flex items-center gap-1 border-b pb-2 text-start outline-none focus-visible:ring-1"
+      className="group border-border flex items-center gap-1 border-b pb-2 text-start"
     >
       {text}
       <ChevronRight
@@ -240,7 +240,7 @@ const ReportText: FC<TextMessagePartProps> = (props) => {
     <div className="flex flex-col gap-3">
       <MarkdownBlock text={report.head} />
       <details data-slot="report-details">
-        <summary className="text-muted-foreground rounded-control cursor-pointer text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring">
+        <summary className="text-muted-foreground rounded-control cursor-pointer text-sm">
           Details
         </summary>
         <div className="pt-2">

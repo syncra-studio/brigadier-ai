@@ -70,7 +70,7 @@ export function WebSearch({
                     event.preventDefault();
                     openUrl(result.url).catch((error: unknown) => console.error("opening a link failed", error));
                   }}
-                  className="fade-in animate-in hover:bg-foreground/5 focus-visible:ring-ring/50 rounded-control -mx-2 flex items-center gap-2.5 px-2 py-1 outline-none transition-colors duration-300 focus-visible:ring-1"
+                  className="fade-in animate-in hover:bg-foreground/5 rounded-control -mx-2 flex items-center gap-2.5 px-2 py-1 transition-colors duration-300"
                 >
                   <span className="bg-foreground/5 text-foreground/45 rounded-control flex size-icon-sm shrink-0 items-center justify-center text-2xs font-medium">
                     {domain.charAt(0).toUpperCase()}

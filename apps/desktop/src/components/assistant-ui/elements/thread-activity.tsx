@@ -21,7 +21,7 @@ export function ThreadActivity({ detail, detailClassName, className, children, .
             event.currentTarget.click();
           }
         }}
-        className={cn(row, "group hover:text-foreground focus-visible:ring-ring/50 rounded-control w-full cursor-pointer text-start outline-none focus-visible:ring-1")}>
+        className={cn(row, "group hover:text-foreground rounded-control w-full cursor-pointer text-start")}>
         {children}
         <ChevronRight aria-hidden className="size-icon-xs shrink-0 opacity-0 transition-[rotate,opacity] group-hover:opacity-100 group-focus-visible:opacity-100 group-data-[state=open]:rotate-90 group-data-[state=open]:opacity-100" />
       </div>

@@ -274,7 +274,7 @@ function WindowRow({
       : null;
   return (
     <Collapsible open={open} onOpenChange={setOpen} data-slot="usage-window">
-      <CollapsibleTrigger className="hover:bg-foreground/4 focus-visible:ring-ring/50 group flex w-full flex-col gap-1 px-4 py-2 text-start outline-none focus-visible:ring-2 focus-visible:ring-inset">
+      <CollapsibleTrigger className="hover:bg-foreground/4 group flex w-full flex-col gap-1 px-4 py-2 text-start">
         <span className="flex w-full items-center gap-4">
           <span className="flex w-36 min-w-0 shrink items-center gap-1.5">
             <ChevronRight
