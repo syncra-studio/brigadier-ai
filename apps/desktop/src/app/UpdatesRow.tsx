@@ -97,9 +97,14 @@ export function UpdatesRow() {
   );
 }
 
-/** "Codex update available", "Brigadier and Codex updates available", "Updating Codex". */
+/**
+ * "Codex update available", "Brigadier and Codex updates available", "Brigadier, Claude Code
+ * and Codex updates available", "Updating Codex".
+ */
 function rowLabel(items: readonly UpdateItem[]): string {
-  const names = items.map((item) => UPDATE_NAMES[item.target]).join(" and ");
+  const all = items.map((item) => UPDATE_NAMES[item.target]);
+  const names =
+    all.length > 1 ? `${all.slice(0, -1).join(", ")} and ${all.at(-1)}` : (all[0] ?? "");
   if (items.some((item) => item.progress.type === "updating")) return `Updating ${names}`;
   return `${names} ${items.length > 1 ? "updates" : "update"} available`;
 }
