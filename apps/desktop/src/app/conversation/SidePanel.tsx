@@ -693,7 +693,6 @@ export function SidePanel({
   conversationId: string | null;
 }) {
   const { state, visible, width, hide, reveal } = useContext(SidePanelContext);
-  const { state: sidebar } = useSidebar();
   const { mounted, out, moving } = reveal;
   if (!mounted || !state.active) return null;
   const full = state.fullscreen && visible;
@@ -731,7 +730,7 @@ export function SidePanel({
               data-tauri-drag-region
               className={cn(
                 "h-titlebar flex shrink-0 items-center gap-2 px-3",
-                full && sidebar === "collapsed" && "ps-titlebar-clear",
+                full && "ps-clear-3",
               )}
             >
               <h2 className="min-w-0 flex-1 truncate text-sm font-medium">

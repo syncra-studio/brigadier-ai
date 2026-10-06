@@ -49,10 +49,11 @@
  *               page-corner page-corner-{top,bottom}-{start,end}  a page surface corner kept
  *                                             round over the columns
  *               h-titlebar, ps-traffic-lights top bars; inset clearing the macOS traffic lights
- *               start-titlebar-start          where the sidebar toggle sits in the titlebar
- *               h-titlebar-toggle             the band it centres in (level with the lights)
- *               ps-titlebar-clear             the top bar's inset clearing it while the
- *                                             sidebar panel is closed
+ *               start-titlebar-start          where Back, Forward and the sidebar toggle sit
+ *                                             in the titlebar
+ *               h-titlebar-toggle             the band they centre in (level with the lights)
+ *               ps-clear-N                    a top bar's start padding, N spacing steps or
+ *                                             more to clear them (globals.css)
  *               w-agents                      a session's agents panel
  *               rounded-toolbar-button        the titlebar's icon buttons
  *               side-panel-{min,chat-min,preferred,chat-room}  the side panel's width: its
@@ -213,16 +214,15 @@
   /* Window chrome: top bars, room for the macOS traffic lights. */
   --spacing-titlebar: 2.75rem;
   --spacing-traffic-lights: 4.75rem;
-  /* The sidebar toggle stays in the titlebar where it starts (just after the traffic lights
-     on macOS, see below); with the panel closed, the top bar starts this far in, clear of
-     it. */
+  /* Back, Forward and the sidebar toggle stay in the titlebar where they start (just after the
+     traffic lights on macOS, see below), 6px apart; they end at titlebar-nav-end, which the
+     top bars beside them keep clear of (ps-clear-*). */
   --spacing-titlebar-start: calc(var(--spacing) * 2);
-  /* The band the sidebar toggle centres in: the titlebar, or on macOS the traffic lights'. */
-  --spacing-titlebar-toggle: var(--spacing-titlebar);
-  --spacing-titlebar-clear: calc(
-    var(--spacing-titlebar-start) + var(--spacing-icon-button-md) + var(--spacing) * 2 -
-      var(--spacing-surface-inset)
+  --spacing-titlebar-nav-end: calc(
+    var(--spacing-titlebar-start) + var(--spacing-icon-button-md) * 3 + var(--spacing) * 3
   );
+  /* The band they centre in: the titlebar, or on macOS the traffic lights'. */
+  --spacing-titlebar-toggle: var(--spacing-titlebar);
   --spacing-agents: 26rem;
   /* The side panel beside the thread. Its width is at least side-panel-min and leaves the
      thread at least side-panel-chat-min; by default it takes side-panel-preferred, or more
@@ -563,8 +563,8 @@
   --sidebar-ring: oklch(0.556 0.004 var(--tint));
 }
 
-/* On macOS the toggle's centre sits 26px past the traffic lights and level with them (they
-   stay put at any density); in full screen they are gone and it moves to the titlebar's start. */
+/* On macOS Back's centre sits 26px past the traffic lights and level with them (they stay put
+   at any density); in full screen they are gone and it moves to the titlebar's start. */
 :root[data-platform="macos"]:not([data-fullscreen]) {
   --spacing-titlebar-start: calc(
     var(--spacing-traffic-lights) + 1.625rem - var(--spacing-icon-button-md) / 2

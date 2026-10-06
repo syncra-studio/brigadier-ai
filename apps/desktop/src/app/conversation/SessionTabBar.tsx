@@ -19,7 +19,6 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { useSidebar } from "@/components/ui/sidebar";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { Conversation } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -174,7 +173,6 @@ export function SessionTabBar({
   onRename: () => void;
   children?: ReactNode;
 }) {
-  const { state } = useSidebar();
   const id = conversation.id;
   const { tabs, active } = useSessionTabsOf(id);
   const connection = useApp((s) => s.connection.status);
@@ -215,10 +213,7 @@ export function SessionTabBar({
     <header
       data-tauri-drag-region
       data-slot="session-tabs"
-      className={cn(
-        "h-titlebar ease-sidebar flex shrink-0 items-center gap-1 ps-2 pe-1 transition-[padding] duration-300 motion-reduce:transition-none",
-        state === "collapsed" && "ps-titlebar-clear",
-      )}
+      className="h-titlebar ease-sidebar ps-clear-2 flex shrink-0 items-center gap-1 pe-1 transition-[padding] duration-300 motion-reduce:transition-none"
     >
       <div
         ref={strip}

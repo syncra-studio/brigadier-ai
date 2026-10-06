@@ -136,6 +136,31 @@
   );
 }
 
+/* How wide the sidebar panel shows beside the content: its width, or nothing while closed. */
+[data-slot="sidebar-wrapper"] {
+  --sidebar-shown: 0px;
+}
+[data-slot="sidebar-wrapper"][data-state="expanded"] {
+  --sidebar-shown: clamp(
+    var(--spacing-sidebar-min),
+    var(--sidebar-width, var(--spacing-sidebar)),
+    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - 20rem))
+  );
+}
+
+/* A top bar's start padding beside the sidebar panel: its own N spacing steps, or more where
+   Back, Forward and the sidebar toggle reach past the panel's edge (a narrow panel, or none),
+   so its first control starts 8px after them. */
+@utility ps-clear-* {
+  padding-inline-start: max(
+    --spacing(--value(integer)),
+    calc(
+      var(--spacing-titlebar-nav-end) + var(--spacing) * 2 - var(--spacing-surface-inset) -
+        var(--sidebar-shown)
+    )
+  );
+}
+
 /* A corner of the page surface: it paints the window chrome (and the surface's hairline edge)
    outside the surface's rounded corner, over whatever the columns draw there, so the corner
    stays round whichever column's background reaches it. Each corner's utility places its cap

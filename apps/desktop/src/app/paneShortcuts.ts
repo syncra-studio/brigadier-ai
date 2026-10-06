@@ -5,7 +5,7 @@ import { takePaneClose } from "@/state/closedPanes";
 import { useApp } from "@/state/store";
 import { HOME_PLACE, toggleTerminal, undoTabClose } from "@/state/terminalPlaces";
 
-/** The Panes menu's items (macOS), as the key presses the views listen for. */
+/** The Panes and View menus' items (macOS), as the key presses the views listen for. */
 const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?: boolean }> = {
   terminal: { code: "KeyJ" },
   "terminal-alternate": { code: "Backquote", control: true },
@@ -16,6 +16,10 @@ const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?: boole
   close: { code: "KeyW" },
   previous: { code: "BracketLeft", shift: true },
   next: { code: "BracketRight", shift: true },
+  // The View menu's.
+  back: { code: "BracketLeft" },
+  forward: { code: "BracketRight" },
+  sidebar: { code: "KeyB" },
 };
 
 /**

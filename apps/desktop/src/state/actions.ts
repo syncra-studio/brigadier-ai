@@ -29,6 +29,7 @@ import type {
   UnlandedBranch,
 } from "@/ipc/generated";
 import { savePinnedSummary } from "@/lib/pinnedSummary";
+import { recordPlace, replacePlace, stepPlace, type HistoryMode } from "@/state/history";
 import { setSetting } from "@/state/settings";
 import {
   boardFromView,
@@ -164,7 +165,19 @@ export async function loadFullText(
   }
 }
 
-export function select(selection: Selection): void {
+/** Where leaving Settings goes back to: what was shown when it opened. */
+let beforeSettings: Selection = { type: "draft", kind: "chat" };
+
+/**
+ * Shows `selection`. By default it is a new entry of the history Back and Forward go through
+ * (see state/history.ts); `mode` can put it in place of the current entry, or leave the
+ * history alone.
+ */
+export function select(selection: Selection, mode: HistoryMode = "push"): void {
+  const { selection: shown } = useApp.getState();
+  // What leaving Settings goes back to, however it was reached (Back and Forward too).
+  if (selection.type === "settings" && shown.type !== "settings") beforeSettings = shown;
+  recordPlace(selection, mode);
   useApp.setState({ selection });
   const { board } = useBoard.getState();
   if (selection.type !== "conversation") {
@@ -179,18 +192,13 @@ export function select(selection: Selection): void {
   });
 }
 
-/** Where leaving Settings goes back to: what was shown when it opened. */
-let beforeSettings: Selection = { type: "draft", kind: "chat" };
-
 /** What was shown when Settings opened (what the Inspector's Orchestrator tab starts on). */
 export function shownBeforeSettings(): Selection {
   return beforeSettings;
 }
 
-/** Shows a page of Settings, remembering what to go back to. */
+/** Shows a page of Settings (what to go back to is remembered by `select`). */
 export function openSettings(page: SettingsPageId = "general"): void {
-  const { selection } = useApp.getState();
-  if (selection.type !== "settings") beforeSettings = selection;
   select({ type: "settings", page });
 }
 
@@ -207,6 +215,30 @@ export function closeSettings(): void {
 export function toggleSettings(): void {
   if (useApp.getState().selection.type === "settings") closeSettings();
   else openSettings();
+}
+
+/**
+ * Back (-1) and Forward (1) through the history. A conversation deleted since, or a draft whose
+ * project was removed, can't show again: arriving there shows Home in its place.
+ */
+export function stepHistory(delta: -1 | 1): void {
+  const target = stepPlace(delta);
+  if (!target) return;
+  const { conversations, projects } = useApp.getState();
+  const gone =
+    (target.type === "conversation" && !conversations[target.id]) ||
+    (target.type === "draft" && target.kind === "session" && !projects[target.projectId]);
+  if (gone) {
+    const home: Selection = { type: "draft", kind: "chat" };
+    replacePlace(home);
+    select(home, "none");
+    return;
+  }
+  if (target.type === "conversation") {
+    const conversation = conversations[target.id];
+    if (conversation?.projectId) setProjectExpanded(conversation.projectId, true);
+  }
+  select(target, "none");
 }
 
 export function openConversation(id: string): void {
@@ -380,7 +412,8 @@ export async function send(
     // Only follow the new conversation if the user is still looking at the draft.
     if (useApp.getState().selection === selection) {
       useApp.setState({ draft: emptyDraft(null) });
-      select({ type: "conversation", id: conversationId });
+      // The draft is gone: Back goes to where it was opened from.
+      select({ type: "conversation", id: conversationId }, "replace");
     }
   } else {
     return;
@@ -896,7 +929,7 @@ export async function archiveAll(ids: string[]): Promise<void> {
   for (const conversation of before) storeConversation({ ...conversation, lifecycle: "archived" });
   const { selection } = useApp.getState();
   if (selection.type === "conversation" && before.some((c) => c.id === selection.id)) {
-    select({ type: "draft", kind: "chat" });
+    select({ type: "draft", kind: "chat" }, "replace");
   }
   let archived = before;
   const confirm = (list: Conversation[]) => {
@@ -1020,7 +1053,7 @@ export async function restore(id: string): Promise<void> {
 function dropConversations(ids: string[]): void {
   const { selection } = useApp.getState();
   if (selection.type === "conversation" && ids.includes(selection.id)) {
-    select({ type: "draft", kind: "chat" });
+    select({ type: "draft", kind: "chat" }, "replace");
   }
   useApp.setState((state) => {
     const conversations = { ...state.conversations };
@@ -1102,7 +1135,7 @@ export async function removeProject(
     (selection.type === "conversation" && gone.includes(selection.id)) ||
     (selection.type === "draft" && selection.kind === "session" && selection.projectId === id)
   ) {
-    select({ type: "draft", kind: "chat" });
+    select({ type: "draft", kind: "chat" }, "replace");
   }
   useApp.setState((state) => {
     const { [id]: _removed, ...projects } = state.projects;

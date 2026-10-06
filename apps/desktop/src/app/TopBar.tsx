@@ -3,9 +3,7 @@ import type { ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { Badge } from "@/components/ui/badge";
-import { useSidebar } from "@/components/ui/sidebar";
 import type { Lifecycle } from "@/ipc/generated";
-import { cn } from "@/lib/utils";
 import { useApp } from "@/state/store";
 
 /** The names the daemon gives a conversation until its first message titles it. */
@@ -57,20 +55,16 @@ export function TopBar({
   onRename?: (() => void) | undefined;
   children?: ReactNode;
 }) {
-  const { state } = useSidebar();
   const { project, title, lifecycle, session } = useTitle();
   const connection = useApp((s) => s.connection.status);
 
   return (
+    // In the titlebar strip, above the page surface. It starts clear of Back, Forward and the
+    // sidebar toggle, which stay where they are. Its end sits in the surface inset already, so
+    // pe-1 leaves its buttons 8px from the window's edge.
     <header
       data-tauri-drag-region
-      className={cn(
-        // In the titlebar strip, above the page surface. With the sidebar panel closed it
-        // starts clear of the sidebar toggle, which stays where it is. Its end sits in the
-        // surface inset already, so pe-1 leaves its buttons 8px from the window's edge.
-        "h-titlebar ease-sidebar flex shrink-0 items-center gap-1 ps-3 pe-1 transition-[padding] duration-300 motion-reduce:transition-none",
-        state === "collapsed" && "ps-titlebar-clear",
-      )}
+      className="h-titlebar ease-sidebar ps-clear-3 flex shrink-0 items-center gap-1 pe-1 transition-[padding] duration-300 motion-reduce:transition-none"
     >
       <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
         {session && title && (

@@ -10,7 +10,7 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
-import { AppSidebar, TitlebarToggle } from "@/app/AppSidebar";
+import { AppSidebar, TitlebarNav } from "@/app/AppSidebar";
 import { BottomBar } from "@/app/BottomBar";
 import { ConversationView } from "@/app/ConversationView";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
@@ -160,7 +160,7 @@ function NightPage() {
             </main>
           </div>
           <BottomBar />
-          <TitlebarToggle />
+          <TitlebarNav />
         </SidebarProvider>
       </div>
     </TooltipProvider>

@@ -166,7 +166,11 @@ export function ProjectCombobox({
   const shown = sorted.filter((entry) => entry.name.toLowerCase().includes(needle));
   const choose = (id: string | null) => {
     setOpen(false);
-    select(id ? { type: "draft", kind: "session", projectId: id } : { type: "draft", kind: "chat" });
+    // The same draft, for another project: no new place to go back from.
+    select(
+      id ? { type: "draft", kind: "session", projectId: id } : { type: "draft", kind: "chat" },
+      "replace",
+    );
   };
   const rows: ProjectRow[] = [
     ...shown.map((entry) => ({ key: entry.id, run: () => choose(entry.id) })),

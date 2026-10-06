@@ -1,5 +1,6 @@
 import {
   Archive,
+  ArrowLeft,
   ComposeEditSquare,
   DotsHorizontal,
   Download,
@@ -10,6 +11,8 @@ import {
   Pin,
   Plus,
   SettingsCog,
+  Sidebar,
+  SidebarFloatingLeft,
   Trash,
   Unpin,
   X,
@@ -32,7 +35,7 @@ import {
   rowAction,
 } from "@/app/sidebar/nav";
 import { Spinner } from "@/components/glyphs/spinner";
-import { TITLEBAR_BUTTON, TitlebarTips } from "@/components/titlebar-button";
+import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -49,7 +52,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
-import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar";
+import { useSidebar } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { openFolder } from "@/ipc/client";
 import type { Conversation, Project } from "@/ipc/generated";
@@ -62,35 +65,59 @@ import {
   select,
   setPinned,
   setProjectExpanded,
+  stepHistory,
 } from "@/state/actions";
 import { useRowActivity } from "@/state/activity";
 import { openAddProject } from "@/state/addProject";
 import { exportProjectConventions } from "@/state/brain";
+import { useCanStep } from "@/state/history";
 import { askDelete, clearPicked, pickClick, pickedIn, prunePicked, usePicked } from "@/state/picking";
 import { useApp } from "@/state/store";
 
 // ----- titlebar --------------------------------------------------------------------------
 
+/** The buttons' glyphs dim to this while there is nowhere to go. */
+const NOWHERE = "disabled:opacity-40";
+
 /**
- * The sidebar toggle, at a fixed spot in the titlebar on the traffic lights' line: just after
- * them on macOS, at the titlebar's start in full screen (where they are gone) and elsewhere.
- * It stays put while the panel opens and closes.
+ * Back, Forward and the sidebar toggle, at a fixed spot in the titlebar on the traffic lights'
+ * line: Back where the lights end on macOS, at the titlebar's start in full screen (where they
+ * are gone) and elsewhere. They stay put while the sidebar collapses and expands.
  */
-export function TitlebarToggle() {
-  const { open } = useSidebar();
-  const { sidebar } = useShortcuts();
+export function TitlebarNav() {
+  const { open, toggleSidebar } = useSidebar();
+  const shortcuts = useShortcuts();
+  const can = useCanStep();
   return (
-    <div className="h-titlebar-toggle start-titlebar-start absolute top-0 z-20 flex items-center">
+    <div className="h-titlebar-toggle start-titlebar-start absolute top-0 z-20 flex items-center gap-1.5">
       <TitlebarTips>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <SidebarTrigger className={TITLEBAR_BUTTON} />
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {open ? "Hide sidebar" : "Show sidebar"}
-            <Kbd>{sidebar}</Kbd>
-          </TooltipContent>
-        </Tooltip>
+        <TitlebarButton
+          tooltip="Back"
+          shortcut={shortcuts.back}
+          disabled={!can.back}
+          className={NOWHERE}
+          onClick={() => stepHistory(-1)}
+        >
+          <ArrowLeft />
+        </TitlebarButton>
+        <TitlebarButton
+          tooltip="Forward"
+          shortcut={shortcuts.forward}
+          disabled={!can.forward}
+          className={NOWHERE}
+          onClick={() => stepHistory(1)}
+        >
+          <ArrowLeft className="-scale-x-100" />
+        </TitlebarButton>
+        <TitlebarButton
+          tooltip="Toggle sidebar"
+          shortcut={shortcuts.sidebar}
+          aria-label={open ? "Hide sidebar" : "Show sidebar"}
+          aria-expanded={open}
+          onClick={toggleSidebar}
+        >
+          {open ? <Sidebar /> : <SidebarFloatingLeft />}
+        </TitlebarButton>
       </TitlebarTips>
     </div>
   );

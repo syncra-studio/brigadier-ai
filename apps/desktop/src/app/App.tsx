@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import { AppSidebar, TitlebarToggle } from "@/app/AppSidebar";
+import { AppSidebar, TitlebarNav } from "@/app/AppSidebar";
 import { BottomBar } from "@/app/BottomBar";
 import { DeleteDialog } from "@/app/dialogs/DeleteDialog";
 import { useLifecycleShortcuts } from "@/app/lifecycleShortcuts";
@@ -14,6 +14,7 @@ import { GlobalSearch } from "@/app/SearchDialog";
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
 import { TerminalPane } from "@/app/conversation/TerminalTab";
+import { useNavigationShortcuts } from "@/app/navigationShortcuts";
 import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { runSmoke } from "@/app/smoke";
 import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
@@ -71,6 +72,7 @@ export function App() {
   useEffect(markMounted, []);
   useLifecycleShortcuts();
   usePaneShortcuts();
+  useNavigationShortcuts();
 
   // Cold start ends when the app is usable: the loaded catalog painted, the agent CLIs ready
   // (or no longer waited for) and the startup screen gone.
@@ -166,7 +168,7 @@ export function App() {
           </main>
         </div>
         <BottomBar />
-        <TitlebarToggle />
+        <TitlebarNav />
         <GlobalSearch />
         <OnboardingDialog />
         <AddProjectDialog />

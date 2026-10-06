@@ -11,7 +11,7 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
-import { AppSidebar, TitlebarToggle } from "@/app/AppSidebar";
+import { AppSidebar, TitlebarNav } from "@/app/AppSidebar";
 import { BottomBar } from "@/app/BottomBar";
 import { ConversationView } from "@/app/ConversationView";
 import { revealPlan, useSummary } from "@/app/conversation/summaryState";
@@ -454,7 +454,7 @@ function FlowPage() {
             </main>
           </div>
           <BottomBar />
-          <TitlebarToggle />
+          <TitlebarNav />
         </SidebarProvider>
       </div>
     </TooltipProvider>
