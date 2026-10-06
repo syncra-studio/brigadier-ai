@@ -188,6 +188,25 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
         let quit_at = app_menu.items()?.len().saturating_sub(1);
         app_menu.insert_items(&[&uninstall, &separator], quit_at)?;
     }
+    // View › Toggle Sidebar, Back and Forward at its end; the webview handles them as keys.
+    for item in menu.items()? {
+        if let Some(view) = item.as_submenu()
+            && view.text()? == "View"
+        {
+            view.append(&tauri::menu::PredefinedMenuItem::separator(app)?)?;
+            for (id, title, accelerator) in [
+                ("sidebar", "Toggle Sidebar", "CmdOrCtrl+B"),
+                ("back", "Back", "CmdOrCtrl+["),
+                ("forward", "Forward", "CmdOrCtrl+]"),
+            ] {
+                view.append(
+                    &MenuItemBuilder::with_id(format!("pane:{id}"), title)
+                        .accelerator(accelerator)
+                        .build(app)?,
+                )?;
+            }
+        }
+    }
     let panes = tauri::menu::Submenu::new(app, "Panes", true)?;
     for (id, title, accelerator) in [
         ("terminal", "Toggle bottom terminal", "CmdOrCtrl+J"),
