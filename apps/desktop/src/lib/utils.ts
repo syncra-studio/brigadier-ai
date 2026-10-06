@@ -68,6 +68,7 @@ const twMerge = extendTailwindMerge({
         "capsule",
         "page",
         "nav",
+        "strip-button",
         "settings",
         "summary",
       ],

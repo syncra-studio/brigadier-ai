@@ -76,7 +76,8 @@
  *               card), rounded-rail (the rail's top corners), rounded-menu (menus), rounded-tooltip,
  *               rounded-summary (the pinned summary's cards), rounded-capsule,
  *               rounded-document, rounded-page (the page surface), rounded-nav (sidebar and
- *               Settings navigation rows), rounded-settings (a Settings card),
+ *               Settings navigation rows), rounded-strip-button (an icon on the sidebar's strip
+ *               or foot), rounded-settings (a Settings card),
  *               plus rounded-{xs,sm,md,lg,xl,2xl}
  *   Type        text-{2xs,xs,sm,base,lg,xl,2xl} (UI roles, each with its line height), text-hero,
  *               text-page-title (a Settings page's title), text-label (a Settings row's label),
@@ -315,6 +316,8 @@
   /* The titlebar's icon buttons (the sidebar toggle, the side panel's buttons). */
   --radius-toolbar-button: 0.625rem;
   --radius-nav: 0.78125rem;
+  /* An icon on the sidebar's strip or at its foot, and a flyout's trigger: its highlight. */
+  --radius-strip-button: 0.75rem;
   --radius-settings: 1.25rem;
 
   --text-2xs: 0.6875rem;
@@ -639,6 +642,7 @@
   --radius-nav: 0.625rem;
   --radius-settings: 1rem;
   --radius-toolbar-button: 0.5rem;
+  --radius-strip-button: 0.5rem;
 
   --text-2xs: 0.625rem;
   --text-2xs--line-height: 0.875rem;

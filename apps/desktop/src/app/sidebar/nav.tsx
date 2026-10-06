@@ -133,12 +133,11 @@ export function footMenuPlacement(expanded: boolean) {
 
 /**
  * An icon button on the strip or at the sidebar's foot: a muted glyph that brightens on hover,
- * filled while hovered, selected or while its menu is open. Its corners are only slightly
- * rounded, so the small square never reads as a pill or a circle.
+ * filled while hovered, selected or while its menu is open.
  */
 const stripItem = (selected: boolean) =>
   cn(
-    "h-nav-row rounded-sm focus-visible:ring-ring/50 relative flex shrink-0 items-center justify-center outline-none transition-colors duration-150 focus-visible:ring-2 [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-icon-md",
+    "h-nav-row rounded-strip-button focus-visible:ring-ring/50 relative flex shrink-0 items-center justify-center outline-none transition-colors duration-150 focus-visible:ring-2 [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-icon-md",
     "hover:bg-foreground/8 data-[state=open]:bg-foreground/8",
     selected
       ? "bg-foreground/8 text-foreground"
