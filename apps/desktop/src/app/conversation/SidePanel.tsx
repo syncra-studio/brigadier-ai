@@ -325,18 +325,27 @@ export function useSidePanel(
     composerLimits.max,
     Math.max(composerLimits.min, sizes.browserComposer ?? 572),
   );
-  // A session's tools need its checkout; a draft, like Home, has the Browser only.
-  const available = useMemo<SideTab[]>(
-    () =>
+  const archived = useApp(
+    (s) =>
+      conversationId !== null &&
+      s.conversations[conversationId]?.lifecycle === "archived",
+  );
+  // A session's tools need its checkout; a draft, like Home, has the Browser only. An archived
+  // thread takes no side chat, as it takes no terminal.
+  const available = useMemo<SideTab[]>(() => {
+    const tabs: SideTab[] =
       kind === "session" && conversationId
         ? ["workers", "browser", "files", "source", "sideChat"]
         : kind === "chat"
           ? ["sideChat", "browser"]
           : kind === "sideChat"
             ? []
-            : ["browser"],
-    [kind, conversationId],
-  );
+            : ["browser"];
+    return archived ? tabs.filter((tab) => tab !== "sideChat") : tabs;
+  }, [kind, conversationId, archived]);
+  // Archiving the thread closes its open side chat.
+  if (archived && state.open && state.active === "sideChat")
+    setState((current) => ({ ...current, open: false, fullscreen: false }));
   // Home's and the drafts' pages are Home's, as their terminals are.
   const browserId = conversationId ?? HOME_PLACE;
   const openTab = useCallback((tab: SideTab) => {
