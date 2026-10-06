@@ -31,8 +31,10 @@ pub fn leave_host() {
     HOST.store(false, Ordering::Release);
 }
 
-/// The bundle remembers its own last data directory for activation after a complete exit.
-/// Explicit CLI/environment paths take precedence; bare development binaries remember none.
+/// The data directory of the bundle's last shown run notification, for a click on it after a
+/// complete exit; none once that directory is gone. Other launches (a smoke check, a run on a
+/// throwaway directory) don't change it. Explicit CLI/environment paths take precedence; bare
+/// development binaries remember none.
 #[cfg(target_os = "macos")]
 pub fn activation_data_dir() -> Option<std::path::PathBuf> {
     mac::data_dir()

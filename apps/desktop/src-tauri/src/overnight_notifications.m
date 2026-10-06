@@ -34,14 +34,27 @@ static Activated activated;
 @end
 static BrigadierRunNoticeDelegate *delegate;
 static NSString *restoredData;
+// This instance's data directory. It is remembered for the bundle only once a run notification
+// from it is shown, the one case a launch with no data directory of its own (a click on that
+// notification after the app quit) must find it; any other launch (a smoke check, a run on a
+// throwaway directory) must not change where the bundle opens from Finder, the Dock or a launcher.
+static NSString *runDataDir;
+static NSString *const RUN_DATA_DIR_KEY = @"BrigadierRunDataDir";
 const char *brigadier_notice_data_dir(void) {
     if (!NSBundle.mainBundle.bundleIdentifier) return NULL;
-    restoredData = [NSUserDefaults.standardUserDefaults stringForKey:@"BrigadierRunDataDir"];
+    restoredData = [NSUserDefaults.standardUserDefaults stringForKey:RUN_DATA_DIR_KEY];
+    // A directory since deleted (a throwaway one) would open as an empty Brigadier.
+    BOOL directory = NO;
+    if (!restoredData || ![NSFileManager.defaultManager fileExistsAtPath:restoredData
+                                                             isDirectory:&directory]
+        || !directory) {
+        return NULL;
+    }
     return restoredData.UTF8String;
 }
 void brigadier_notice_init(Activated callback, const char *dataDir) {
-    [NSUserDefaults.standardUserDefaults setObject:@(dataDir) forKey:@"BrigadierRunDataDir"];
     if (!NSBundle.mainBundle.bundleIdentifier) return;
+    runDataDir = @(dataDir);
     activated = callback;
     delegate = [BrigadierRunNoticeDelegate new];
     UNUserNotificationCenter.currentNotificationCenter.delegate = delegate;
@@ -93,6 +106,9 @@ void brigadier_notice_send(const char *identifier, const char *title, const char
             return;
         }
         [center addNotificationRequest:request withCompletionHandler:^(NSError *error) {
+            if (!error && runDataDir) {
+                [NSUserDefaults.standardUserDefaults setObject:runDataDir forKey:RUN_DATA_DIR_KEY];
+            }
             submitted(ticket, error ? error.localizedDescription.UTF8String : NULL);
         }];
     }];
