@@ -173,6 +173,9 @@ export function TerminalPane({ place }: { place: string }) {
       className={cn(
         "bg-terminal-background relative flex min-h-0 shrink-0 flex-col",
         reveal.moving && "ease-panel transition-[height] duration-500 motion-reduce:transition-none",
+        // Closed at the window's bottom edge, nothing of it (its resize grip) may reach past
+        // the window, or the whole window could scroll.
+        !reveal.out && !reveal.moving && "overflow-hidden",
       )}
       style={{
         height: reveal.out ? height : 0,
