@@ -124,7 +124,7 @@ export function besideStrip(): number {
   return tokenPx("--spacing") * 3;
 }
 
-/** Where a foot row's menu opens: above it, or beside the strip while collapsed. */
+/** Where a foot icon's menu opens: above it, or beside the strip while collapsed. */
 export function footMenuPlacement(expanded: boolean) {
   return expanded
     ? ({ side: "top", align: "start" } as const)
@@ -132,14 +132,27 @@ export function footMenuPlacement(expanded: boolean) {
 }
 
 /**
- * A row at the sidebar's foot (Keep awake, Usage, Updates, Settings): its icon where the strip's
- * icons sit, then its label and anything at its end, which fade while the sidebar is collapsed to
- * the strip. Collapsed, its name (`tip`, and shortcut) shows in a tooltip to its right; expanded,
- * only when `tip` says more than the label. `dot` marks the icon (a background colour class).
+ * An icon button on the strip or at the sidebar's foot: a muted glyph that brightens on hover,
+ * filled while hovered, selected or while its menu is open.
  */
-export function FootRow({
-  label,
-  tip = label,
+const stripItem = (selected: boolean) =>
+  cn(
+    "h-nav-row rounded-nav focus-visible:ring-ring/50 relative flex shrink-0 items-center justify-center outline-none transition-colors duration-150 focus-visible:ring-2 [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-icon-md",
+    "hover:bg-foreground/8 data-[state=open]:bg-foreground/8",
+    selected
+      ? "bg-foreground/8 text-foreground"
+      : "text-foreground/85 hover:text-foreground data-[state=open]:text-foreground",
+  );
+
+/**
+ * An icon at the sidebar's foot (Keep awake, Usage, Updates, Settings): in a row along its
+ * bottom while the sidebar is expanded, stacked where the strip's icons sit while it is
+ * collapsed, the same size either way. Its name and how it stands (`tip`, and shortcut) show in
+ * a tooltip above it, or to its right on the strip. `dot` marks the icon (a background colour
+ * class); `end` follows the icon (the Updates pill's marks).
+ */
+export function FootButton({
+  tip,
   shortcut,
   icon,
   dot,
@@ -148,8 +161,7 @@ export function FootRow({
   className,
   ...props
 }: ComponentProps<"button"> & {
-  label: string;
-  tip?: string;
+  tip: string;
   shortcut?: string | undefined;
   icon: ReactNode;
   dot?: string | null | undefined;
@@ -157,10 +169,6 @@ export function FootRow({
   selected?: boolean;
 }) {
   const { open } = useSidebar();
-  const fade = cn(
-    "transition-opacity duration-150 motion-reduce:transition-none",
-    !open && "opacity-0",
-  );
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -168,12 +176,7 @@ export function FootRow({
           type="button"
           aria-label={tip}
           aria-pressed={selected || undefined}
-          className={cn(
-            navRow,
-            "overflow-hidden transition-colors duration-150 data-[state=open]:bg-foreground/8",
-            selected && "bg-foreground/8 text-foreground",
-            className,
-          )}
+          className={cn(stripItem(selected), "min-w-strip-button gap-1.5", className)}
           {...props}
         >
           <span className="relative flex shrink-0">
@@ -185,24 +188,20 @@ export function FootRow({
               />
             )}
           </span>
-          <span className={cn("min-w-0 flex-1 truncate whitespace-nowrap", fade)}>{label}</span>
-          {end && <span className={cn("flex shrink-0 items-center", fade)}>{end}</span>}
+          {end}
         </button>
       </TooltipTrigger>
-      {(!open || tip !== label) && (
-        <TooltipContent side={open ? "top" : "right"}>
-          {tip}
-          {shortcut && <Kbd>{shortcut}</Kbd>}
-        </TooltipContent>
-      )}
+      <TooltipContent side={open ? "top" : "right"}>
+        {tip}
+        {shortcut && <Kbd>{shortcut}</Kbd>}
+      </TooltipContent>
     </Tooltip>
   );
 }
 
 /**
- * An icon on the collapsed sidebar's strip, where its expanded row's icon sits: a muted glyph
- * that brightens on hover, filled while hovered, selected or while its menu is open, its name
- * (and shortcut) in a tooltip to its right.
+ * An icon on the collapsed sidebar's strip, where its expanded row's icon sits, its name (and
+ * shortcut) in a tooltip to its right.
  */
 export function StripButton({
   label,
@@ -219,14 +218,7 @@ export function StripButton({
           type="button"
           aria-label={label}
           aria-pressed={selected || undefined}
-          className={cn(
-            "h-nav-row rounded-nav focus-visible:ring-ring/50 relative flex w-full shrink-0 items-center justify-center outline-none transition-colors duration-150 focus-visible:ring-2 [&_svg]:size-icon-md [&_svg]:shrink-0",
-            "hover:bg-foreground/8 data-[state=open]:bg-foreground/8",
-            selected
-              ? "bg-foreground/8 text-foreground"
-              : "text-foreground/85 hover:text-foreground data-[state=open]:text-foreground",
-            className,
-          )}
+          className={cn(stripItem(selected), "w-full", className)}
           {...props}
         >
           {children}

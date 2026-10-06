@@ -45,6 +45,7 @@
  *   Layout      w-sidebar, min-w-sidebar-min, max-w-sidebar-max  the sidebar panel: default
  *                                             width and how far it resizes
  *               w-sidebar-strip               the sidebar panel collapsed to its icons
+ *               min-w-strip-button            an icon button on the strip or at the sidebar's foot
  *               p-surface-inset               the page surface's gap to the window's sides and bottom
  *               page-corner page-corner-{top,bottom}-{start,end}  a page surface corner kept
  *                                             round over the columns
@@ -182,6 +183,8 @@
   /* The sidebar panel collapsed to a strip of icons: each icon where it sits in the expanded
      rows (a 16px icon 16px in, the rows' insets), centred. */
   --spacing-sidebar-strip: calc(var(--spacing) * 8 + var(--spacing-icon-md));
+  /* An icon button on the strip or at the sidebar's foot: the strip's width less its insets. */
+  --spacing-strip-button: calc(var(--spacing-sidebar-strip) - var(--spacing) * 4);
   --spacing-nav-row: 1.875rem;
   /* The sidebar panel's header (its title and actions); the Settings search field. */
   --spacing-nav-header: 3.25rem;

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { BarItem } from "@/app/BarItem";
 import { errorText } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { FootRow, footMenuPlacement } from "@/app/sidebar/nav";
+import { FootButton, footMenuPlacement } from "@/app/sidebar/nav";
 import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
@@ -25,9 +25,9 @@ const UPDATE_NAMES: Record<UpdateTarget, string> = {
 const CLIS = ["claude", "codex"] as const;
 
 /**
- * Updates at the sidebar's foot, there only while something has a newer version: "Updates
- * available" with the outdated app's and agents' marks, or a download icon with a dot on the
- * collapsed strip. It opens their versions, to update or skip.
+ * Updates at the sidebar's foot, there only while something has a newer version: a pill of a
+ * download icon and the outdated app's and agents' marks in the expanded sidebar's row, or a
+ * download icon with a dot on the collapsed strip. It opens their versions, to update or skip.
  */
 export function UpdatesRow() {
   const view = useUpdates((s) => s.view);
@@ -42,15 +42,14 @@ export function UpdatesRow() {
   const outdated = new Set(rows.map((item) => item.target));
   const busy = rows.some((item) => item.progress.type === "updating");
   return (
-    <BarItem show={items.length > 0} axis="y">
+    <BarItem show={items.length > 0} axis={expanded ? "x" : "y"}>
       <Popover
         onOpenChange={(opened) => {
           if (!opened) noteUpdatesSeen();
         }}
       >
         <PopoverTrigger asChild>
-          <FootRow
-            label={busy ? "Updating…" : "Updates available"}
+          <FootButton
             tip={rowLabel(rows)}
             icon={
               busy ? (
@@ -60,17 +59,20 @@ export function UpdatesRow() {
               )
             }
             dot={expanded || busy ? null : "bg-foreground"}
+            className={expanded ? "px-2" : undefined}
             end={
-              <>
-                <BarItem show={outdated.has("app")}>
-                  <BrigadierGlyph aria-hidden className="size-icon-sm mx-0.5 shrink-0" />
-                </BarItem>
-                {CLIS.map((cli) => (
-                  <BarItem key={cli} show={outdated.has(cli)}>
-                    <ProviderGlyph provider={cli} className="size-icon-sm mx-0.5 shrink-0" />
+              expanded && (
+                <span className="flex items-center">
+                  <BarItem show={outdated.has("app")}>
+                    <BrigadierGlyph aria-hidden className="size-icon-sm mx-0.5 shrink-0" />
                   </BarItem>
-                ))}
-              </>
+                  {CLIS.map((cli) => (
+                    <BarItem key={cli} show={outdated.has(cli)}>
+                      <ProviderGlyph provider={cli} className="size-icon-sm mx-0.5 shrink-0" />
+                    </BarItem>
+                  ))}
+                </span>
+              )
             }
           />
         </PopoverTrigger>

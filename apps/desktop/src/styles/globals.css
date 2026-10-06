@@ -454,3 +454,16 @@
 @utility thinking-snippet {
   mask-image: linear-gradient(to bottom, transparent, black 25%);
 }
+
+/* A sidebar foot icon landing where the foot has just turned (a row while the sidebar is
+   expanded, a stack in the strip while collapsed): it fades in there. */
+@keyframes foot-row {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes foot-stack {
+  from {
+    opacity: 0;
+  }
+}

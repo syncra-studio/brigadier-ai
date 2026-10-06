@@ -4,7 +4,7 @@ import { useEffect, useId, useState } from "react";
 import { errorText } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { Segmented } from "@/app/settings/parts";
-import { FootRow, footMenuPlacement } from "@/app/sidebar/nav";
+import { FootButton, footMenuPlacement } from "@/app/sidebar/nav";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import {
   DropdownMenu,
@@ -189,8 +189,7 @@ export function UsageMenu() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <FootRow
-          label="Usage"
+        <FootButton
           tip={label}
           selected={onPage}
           icon={<Usage className={alert ?? undefined} />}
@@ -324,8 +323,7 @@ export function KeepAwakeMenu() {
       }}
     >
       <PopoverTrigger asChild>
-        <FootRow
-          label="Keep awake"
+        <FootButton
           tip={`Keep awake: ${option?.label ?? ""} · ${state.text}`}
           icon={
             <Lightbulb
