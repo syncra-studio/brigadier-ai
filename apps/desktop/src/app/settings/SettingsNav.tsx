@@ -11,7 +11,7 @@ import {
   SETTINGS_PAGES,
   type SettingsSearchResult,
 } from "@/app/settings/pages";
-import { navRow, NavHeader, NavList, NavSection, StripButton } from "@/app/sidebar/nav";
+import { navRow, NavHeader, NavList, NavSection } from "@/app/sidebar/nav";
 import { cn } from "@/lib/utils";
 import { closeSettings, openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";
@@ -170,42 +170,5 @@ export function SettingsNav() {
         )}
       </div>
     </>
-  );
-}
-
-/**
- * Settings' panel collapsed: the way back to the app where its row sits, then each page's icon
- * by group, the open one filled.
- */
-export function SettingsStrip() {
-  const current = useApp((s) => (s.selection.type === "settings" ? s.selection.page : null));
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="px-2 pt-2">
-        <StripButton label="Back to app" onClick={closeSettings}>
-          <ArrowLeft aria-hidden className="text-foreground/65" />
-        </StripButton>
-      </div>
-      <div className="scroll-edge-fade hide-scrollbar flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-2 pt-4 pb-2">
-        {SETTINGS_GROUPS.map((group) => (
-          <NavList key={group}>
-            {SETTINGS_PAGES.filter((page) => page.group === group).map((page) => {
-              const Icon = page.icon;
-              return (
-                <li key={page.id}>
-                  <StripButton
-                    label={page.label}
-                    selected={page.id === current}
-                    onClick={() => openSettings(page.id)}
-                  >
-                    <Icon aria-hidden />
-                  </StripButton>
-                </li>
-              );
-            })}
-          </NavList>
-        ))}
-      </div>
-    </div>
   );
 }

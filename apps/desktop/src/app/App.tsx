@@ -10,7 +10,7 @@ import { FolderDropZone } from "@/app/FolderDropZone";
 import { ConversationView } from "@/app/ConversationView";
 import { OnboardingDialog } from "@/app/onboarding/OnboardingDialog";
 import { GlobalSearch } from "@/app/SearchDialog";
-import { SettingsNav, SettingsStrip } from "@/app/settings/SettingsNav";
+import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
 import { TerminalButton } from "@/app/conversation/SidePanel";
 import { TerminalPane } from "@/app/conversation/TerminalTab";
@@ -139,7 +139,10 @@ export function App() {
 
   return (
     <div className="bg-chrome flex h-full flex-col">
-      <SidebarProvider className="relative min-h-0 flex-1 flex-col">
+      <SidebarProvider
+        keepOpen={selection.type === "settings"}
+        className="relative min-h-0 flex-1 flex-col"
+      >
         {/* The page surface the sidebar panel and the content sit on; their headers stay
             above it, in the titlebar strip. */}
         <div
@@ -149,8 +152,9 @@ export function App() {
         />
         <PageCorners />
         <div className="relative flex min-h-0 min-w-0 flex-1 ps-surface-inset pe-surface-inset pb-surface-inset">
+          {/* Settings keeps the panel open: it has no strip. */}
           <SidebarPanel
-            strip={selection.type === "settings" ? <SettingsStrip /> : <AppStrip />}
+            strip={selection.type === "settings" ? null : <AppStrip />}
             foot={<SidebarFoot />}
           >
             {selection.type === "settings" ? <SettingsNav /> : <AppSidebar />}
