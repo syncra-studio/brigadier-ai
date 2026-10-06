@@ -8,24 +8,20 @@ import { UpdatesRow } from "@/app/UpdatesRow";
 import { useSidebar } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 import { toggleSettings } from "@/state/actions";
-import { useApp } from "@/state/store";
 
 /**
- * The icons at the sidebar's foot, in Settings too: keeping awake, the agents' usage, updates
- * while there are any, and Settings (filled while it is open, when it closes it). Expanded,
- * they make one row along the bottom, Settings first; collapsed, they stack in the strip,
- * Settings last. Settings stays in the corner either way, and the others fade in where they
+ * The icons at the sidebar's foot, outside Settings: keeping awake, the agents' usage, updates
+ * while there are any, and Settings. Expanded, they make one row along the bottom, Settings
+ * first; collapsed, they stack in the strip, Settings last. Settings stays in the corner either way, and the others fade in where they
  * move to, so the foot doesn't jump as the sidebar collapses or expands.
  */
 export function SidebarFoot() {
-  const inSettings = useApp((s) => s.selection.type === "settings");
   const shortcuts = useShortcuts();
   const { open } = useSidebar();
   const settings = (
     <FootButton
-      tip={inSettings ? "Close settings" : "Settings"}
+      tip="Settings"
       shortcut={shortcuts.settings}
-      selected={inSettings}
       icon={<Settings />}
       onClick={toggleSettings}
     />

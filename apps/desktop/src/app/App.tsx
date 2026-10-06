@@ -152,10 +152,10 @@ export function App() {
         />
         <PageCorners />
         <div className="relative flex min-h-0 min-w-0 flex-1 ps-surface-inset pe-surface-inset pb-surface-inset">
-          {/* Settings keeps the panel open: it has no strip. */}
+          {/* Settings keeps the panel open: it has no strip, and no foot. */}
           <SidebarPanel
             strip={selection.type === "settings" ? null : <AppStrip />}
-            foot={<SidebarFoot />}
+            foot={selection.type === "settings" ? null : <SidebarFoot />}
           >
             {selection.type === "settings" ? <SettingsNav /> : <AppSidebar />}
           </SidebarPanel>
