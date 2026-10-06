@@ -9,7 +9,6 @@ import {
 } from "react";
 
 import { ChatActions } from "@/app/conversation/ChatActions";
-import { FileTabView } from "@/app/conversation/FileTabView";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { Badge } from "@/components/ui/badge";
@@ -377,6 +376,9 @@ export function SessionTabBar({
   );
 }
 
+const FileTabView = lazy(() =>
+  import("@/app/conversation/FileTabView").then((module) => ({ default: module.FileTabView })),
+);
 const ReviewTab = lazy(() =>
   import("@/app/conversation/ReviewTab").then((module) => ({ default: module.ReviewTab })),
 );
@@ -400,13 +402,13 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
             inert={!shown}
             className={cn("bg-background absolute inset-0 flex flex-col", !shown && "invisible")}
           >
-            {tab.kind === "file" ? (
-              <FileTabView conversationId={conversationId} tab={tab} active={shown} />
-            ) : (
-              <Suspense fallback={null}>
+            <Suspense fallback={null}>
+              {tab.kind === "file" ? (
+                <FileTabView conversationId={conversationId} tab={tab} active={shown} />
+              ) : (
                 <ReviewTab conversationId={conversationId} target={tab.target} active={shown} />
-              </Suspense>
-            )}
+              )}
+            </Suspense>
           </div>
         );
       })}

@@ -16,7 +16,7 @@ import { useApp } from "@/state/store";
 
 // The terminal (xterm) loads only when an agent needs installing or signing in.
 const TerminalView = lazy(() =>
-  import("@/app/conversation/TerminalTab").then((module) => ({ default: module.TerminalView })),
+  import("@/app/conversation/TerminalView").then((module) => ({ default: module.TerminalView })),
 );
 
 /** How often an agent is checked again while its install or sign-in terminal is open. */
