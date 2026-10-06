@@ -25,7 +25,7 @@ const UPDATE_NAMES: Record<UpdateTarget, string> = {
 const CLIS = ["claude", "codex"] as const;
 
 /**
- * Updates at the sidebar's foot, there only while something has a newer version: a pill of a
+ * Updates at the sidebar's foot, there only while something has a newer version: a chip of a
  * download icon and the outdated app's and agents' marks in the expanded sidebar's row, or a
  * download icon with a dot on the collapsed strip. It opens their versions, to update or skip.
  */
@@ -59,7 +59,8 @@ export function UpdatesRow() {
               )
             }
             dot={expanded || busy ? null : "bg-foreground"}
-            className={expanded ? "px-2" : undefined}
+            // In the row, a chip: outlined, round-ended, filled only on hover.
+            className={expanded ? "border-border rounded-full border px-2" : undefined}
             end={
               expanded && (
                 <span className="flex items-center">

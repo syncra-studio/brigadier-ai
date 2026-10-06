@@ -34,6 +34,7 @@ const twMerge = extendTailwindMerge({
         "sidebar-min",
         "sidebar-max",
         "sidebar-strip",
+        "strip-button",
         "nav-row",
         "nav-header",
         "nav-search",
