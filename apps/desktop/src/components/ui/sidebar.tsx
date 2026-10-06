@@ -1,26 +1,21 @@
 import * as React from "react";
-import { SidebarFloatingLeft } from "@openai/apps-sdk-ui/components/Icon";
 
-import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 
 /**
- * The sidebar panel beside the navigation rail: open or closed, and how wide. It opens from
- * nothing to its width on a spring (the content beside it moves with it) and its contents keep
- * their full width, so they are revealed rather than squeezed. ⌘B or ⌘⇧S (Ctrl on Windows and
- * Linux) toggle it. Its edge can be dragged to resize it; dragging it below half its smallest
- * width closes it. The width is remembered. In a narrow window it closes by itself, and opens
- * again once there is room. While it is closed, resting the pointer on a rail button peeks
- * it: the panel floats over the content until the pointer has left both for a moment.
+ * The sidebar panel: expanded to its width, or collapsed to a strip of icons. It eases between
+ * the two on a spring (the content beside it moves with it) while its contents cross-fade; the
+ * expanded contents keep their full width, so they are revealed rather than squeezed. ⌘B or
+ * ⌘⇧S (Ctrl on Windows and Linux) toggle it, and which it is is remembered. Its edge can be
+ * dragged to resize it; dragging it below half its smallest width collapses it. The width is
+ * remembered too. In a narrow window it collapses by itself, and expands again once there is
+ * room if it was expanded before.
  */
 
 const WIDTH_KEY = "brigadier.sidebarWidth";
-/** How long the pointer rests on a rail button before the closed panel peeks, and how long
-    after it leaves before the peek goes. */
-const PEEK_OPEN_MS = 100;
-const PEEK_CLOSE_MS = 300;
+const COLLAPSED_KEY = "brigadier.sidebarCollapsed";
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed";
@@ -32,12 +27,6 @@ type SidebarContextProps = {
   setWidth: (width: number | null) => void;
   resizing: boolean;
   setResizing: (resizing: boolean) => void;
-  /** The closed panel floats over the content while the pointer is on a rail button or it. */
-  peeking: boolean;
-  /** The pointer came onto a rail button or the peeking panel: peek (after a moment). */
-  holdPeek: () => void;
-  /** The pointer left them: stop peeking (after a moment, unless it comes back). */
-  releasePeek: () => void;
 };
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null);
@@ -68,33 +57,53 @@ function saveWidth(width: number | null): void {
   }
 }
 
+function cachedOpen(): boolean {
+  try {
+    return localStorage.getItem(COLLAPSED_KEY) !== "1";
+  } catch {
+    return true;
+  }
+}
+
+function saveOpen(open: boolean): void {
+  try {
+    if (open) localStorage.removeItem(COLLAPSED_KEY);
+    else localStorage.setItem(COLLAPSED_KEY, "1");
+  } catch {
+    // Storage can be unavailable; the sidebar then opens expanded on the next launch.
+  }
+}
+
 function subscribeNarrow(onChange: () => void) {
   window.addEventListener("resize", onChange);
   return () => window.removeEventListener("resize", onChange);
 }
 
-/** Whether the window is too narrow for the panel beside the content (it then closes). */
+/** Whether the window is too narrow for the expanded panel beside the content. */
 function isNarrow() {
   return window.innerWidth < tokenPx("--spacing-narrow-window");
 }
 
 function SidebarProvider({
-  defaultOpen = true,
+  defaultOpen,
   className,
   style,
   children,
   ...props
 }: React.ComponentProps<"div"> & { defaultOpen?: boolean }) {
   const narrow = React.useSyncExternalStore(subscribeNarrow, isNarrow);
-  // The user's choice while the window has room, and while it is narrow (closed on becoming
-  // narrow, so the panel doesn't crowd the content).
-  const [wideOpen, setWideOpen] = React.useState(defaultOpen);
+  // The user's choice while the window has room (remembered), and while it is narrow
+  // (collapsed on becoming narrow, so the panel doesn't crowd the content).
+  const [wideOpen, setWideOpen] = React.useState(() => defaultOpen ?? cachedOpen());
   const [narrowOpen, setNarrowOpen] = React.useState(false);
   const [seenNarrow, setSeenNarrow] = React.useState(narrow);
   if (seenNarrow !== narrow) {
     setSeenNarrow(narrow);
     setNarrowOpen(false);
   }
+  React.useEffect(() => {
+    if (defaultOpen === undefined) saveOpen(wideOpen);
+  }, [defaultOpen, wideOpen]);
   const open = narrow ? narrowOpen : wideOpen;
   const setOpen = narrow ? setNarrowOpen : setWideOpen;
   const toggleSidebar = React.useCallback(() => setOpen((value) => !value), [setOpen]);
@@ -106,31 +115,14 @@ function SidebarProvider({
   }, []);
   const [resizing, setResizing] = React.useState(false);
 
-  const [peekWanted, setPeekWanted] = React.useState(false);
-  const peekTimer = React.useRef<number | undefined>(undefined);
-  const schedulePeek = React.useCallback((wanted: boolean, delay: number) => {
-    window.clearTimeout(peekTimer.current);
-    peekTimer.current = window.setTimeout(() => setPeekWanted(wanted), delay);
-  }, []);
-  const holdPeek = React.useCallback(() => schedulePeek(true, PEEK_OPEN_MS), [schedulePeek]);
-  const releasePeek = React.useCallback(() => schedulePeek(false, PEEK_CLOSE_MS), [schedulePeek]);
-  React.useEffect(() => () => window.clearTimeout(peekTimer.current), []);
-  // Opening or closing the panel ends a peek.
-  const [seenOpen, setSeenOpen] = React.useState(open);
-  if (seenOpen !== open) {
-    setSeenOpen(open);
-    setPeekWanted(false);
-  }
-  const peeking = !open && peekWanted;
-
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.isComposing) return;
       const toggle =
         (event.code === "KeyB" && !event.shiftKey) || (event.code === "KeyS" && event.shiftKey);
       if (!toggle) return;
       event.preventDefault();
-      toggleSidebar();
+      if (!event.repeat) toggleSidebar();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -138,20 +130,8 @@ function SidebarProvider({
 
   const state = open ? "expanded" : "collapsed";
   const contextValue = React.useMemo<SidebarContextProps>(
-    () => ({
-      state,
-      open,
-      setOpen,
-      toggleSidebar,
-      width,
-      setWidth,
-      resizing,
-      setResizing,
-      peeking,
-      holdPeek,
-      releasePeek,
-    }),
-    [state, open, setOpen, toggleSidebar, width, setWidth, resizing, peeking, holdPeek, releasePeek],
+    () => ({ state, open, setOpen, toggleSidebar, width, setWidth, resizing, setResizing }),
+    [state, open, setOpen, toggleSidebar, width, setWidth, resizing],
   );
 
   return (
@@ -175,46 +155,59 @@ function SidebarProvider({
 
 /**
  * The sidebar panel: its column's top (in the titlebar strip) is left to the window chrome,
- * the rest is the panel's own surface. Only the column's width animates. While it peeks, the
- * closed column lets the panel float over the content, as a card inset from its edges.
+ * the rest is the panel's own surface. Only the column's width animates, between the panel's
+ * width and the strip's. The expanded contents (`children`) and the strip's (`strip`) cross-fade
+ * in the same place, their icons at the same spots; `foot` is shared by both, its labels
+ * fading while collapsed.
  */
-function SidebarPanel({ className, children, ...props }: React.ComponentProps<"div">) {
-  const { open, resizing, peeking, holdPeek, releasePeek } = useSidebar();
+function SidebarPanel({
+  strip,
+  foot,
+  className,
+  children,
+  ...props
+}: React.ComponentProps<"div"> & { strip?: React.ReactNode; foot?: React.ReactNode }) {
+  const { open, resizing } = useSidebar();
   return (
     <div data-slot="sidebar-panel" data-state={open ? "expanded" : "collapsed"} className="relative flex h-full shrink-0">
       <div
-        inert={!open && !peeking}
         className={cn(
-          "h-full transition-[width] duration-300 ease-sidebar motion-reduce:transition-none",
-          open ? "sidebar-panel-width" : "w-0",
-          peeking ? "overflow-visible" : "overflow-hidden",
+          "h-full overflow-hidden transition-[width] duration-300 ease-sidebar motion-reduce:transition-none",
+          open ? "sidebar-panel-width" : "w-sidebar-strip",
           resizing && "transition-none",
         )}
       >
-        <div
-          data-peeking={peeking || undefined}
-          // While peeking, only the card takes the pointer: the strip above it leaves the
-          // titlebar's controls reachable.
-          className={cn(
-            "sidebar-panel-width flex h-full flex-col",
-            peeking && "pointer-events-none relative z-30",
-          )}
-        >
+        <div className="flex h-full flex-col">
           <div data-tauri-drag-region className="h-titlebar shrink-0" />
           <div
             data-sidebar="sidebar"
             className={cn(
-              "text-sidebar-foreground flex min-h-0 flex-1 flex-col",
-              peeking
-                ? "bg-popover rounded-peek shadow-peek pointer-events-auto my-1 ms-1"
-                : "bg-sidebar rounded-s-page",
+              "text-sidebar-foreground bg-sidebar rounded-s-page flex min-h-0 flex-1 flex-col",
               className,
             )}
-            onPointerEnter={peeking ? holdPeek : undefined}
-            onPointerLeave={peeking ? releasePeek : undefined}
             {...props}
           >
-            {children}
+            <div className="relative min-h-0 flex-1">
+              <div
+                inert={!open}
+                className={cn(
+                  "sidebar-panel-width absolute inset-y-0 start-0 flex flex-col transition-opacity duration-150 motion-reduce:transition-none",
+                  open ? "opacity-100" : "opacity-0",
+                )}
+              >
+                {children}
+              </div>
+              <div
+                inert={open}
+                className={cn(
+                  "w-sidebar-strip absolute inset-y-0 start-0 flex flex-col transition-opacity duration-150 motion-reduce:transition-none",
+                  open ? "opacity-0" : "opacity-100",
+                )}
+              >
+                {strip}
+              </div>
+            </div>
+            {foot}
           </div>
         </div>
       </div>
@@ -286,27 +279,4 @@ function SidebarResizeHandle() {
   );
 }
 
-/** Shows or hides the sidebar panel; its label says which. */
-function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
-  const { open, toggleSidebar } = useSidebar();
-  return (
-    <Button
-      data-sidebar="trigger"
-      data-slot="sidebar-trigger"
-      variant="ghost"
-      size="icon-md"
-      aria-label={open ? "Hide sidebar" : "Show sidebar"}
-      aria-expanded={open}
-      className={className}
-      onClick={(event) => {
-        onClick?.(event);
-        toggleSidebar();
-      }}
-      {...props}
-    >
-      <SidebarFloatingLeft />
-    </Button>
-  );
-}
-
-export { SidebarPanel, SidebarProvider, SidebarTrigger, useSidebar };
+export { SidebarPanel, SidebarProvider, useSidebar };

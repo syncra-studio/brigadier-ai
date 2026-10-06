@@ -1,11 +1,13 @@
 import {
   Archive,
   ArrowLeft,
+  Chats,
   ComposeEditSquare,
   DotsHorizontal,
   Download,
   Folder,
   FolderOpen,
+  Folders,
   MagnifyingGlassSearch,
   Pencil,
   Pin,
@@ -33,7 +35,9 @@ import {
   NavList,
   NavSection,
   rowAction,
+  StripButton,
 } from "@/app/sidebar/nav";
+import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
 import { Spinner } from "@/components/glyphs/spinner";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { Button } from "@/components/ui/button";
@@ -52,6 +56,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSidebar } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { openFolder } from "@/ipc/client";
@@ -271,7 +276,12 @@ export function AppSidebar() {
   return (
     <>
       <NavHeader
-        title="Brigadier"
+        title={
+          <span className="-ms-0.5 flex items-center gap-2">
+            <BrigadierGlyph className="size-5 shrink-0" />
+            Brigadier
+          </span>
+        }
         actions={
           <Tooltip>
             <TooltipTrigger asChild>
@@ -433,6 +443,241 @@ export function AppSidebar() {
 }
 
 const NO_SESSIONS: Conversation[] = [];
+
+// ----- the strip -------------------------------------------------------------------------
+
+/**
+ * The Brigadier mark atop the collapsed strip, where it sits in the expanded header. Hovered
+ * or focused it turns into the button that expands the sidebar.
+ */
+export function StripMark() {
+  const { setOpen } = useSidebar();
+  const { sidebar } = useShortcuts();
+  return (
+    <div className="h-nav-header flex shrink-0 items-center px-2">
+      <StripButton
+        label="Show sidebar"
+        shortcut={sidebar}
+        className="group/mark"
+        onClick={() => setOpen(true)}
+      >
+        <BrigadierGlyph className="size-5! group-hover/mark:hidden group-focus-visible/mark:hidden" />
+        <Sidebar className="hidden group-hover/mark:block group-focus-visible/mark:block" />
+      </StripButton>
+    </div>
+  );
+}
+
+/**
+ * The Home panel collapsed: the mark, New chat, Search, and Projects and Chats, each opening
+ * its list beside the strip.
+ */
+export function AppStrip() {
+  const isChatDraft = useApp((s) => s.selection.type === "draft" && s.selection.kind === "chat");
+  const shortcuts = useShortcuts();
+  return (
+    <>
+      <StripMark />
+      <NavList className="mb-2 px-2">
+        <li>
+          <StripButton
+            label="New chat"
+            selected={isChatDraft}
+            onClick={() => select({ type: "draft", kind: "chat" })}
+          >
+            <ComposeEditSquare />
+          </StripButton>
+        </li>
+      </NavList>
+      <NavList className="px-2 pt-1">
+        <li>
+          <StripButton label="Search" shortcut={shortcuts.search} onClick={() => openSearch()}>
+            <MagnifyingGlassSearch />
+          </StripButton>
+        </li>
+        <li>
+          <Flyout label="Projects" icon={<Folders />}>
+            {(pick) => <ProjectsFlyout pick={pick} />}
+          </Flyout>
+        </li>
+        <li>
+          <Flyout label="Chats" icon={<Chats />}>
+            {(pick) => <ChatsFlyout pick={pick} />}
+          </Flyout>
+        </li>
+      </NavList>
+    </>
+  );
+}
+
+/**
+ * A strip icon that opens a list beside the strip, to pick from without expanding the sidebar.
+ * It closes on a pick (`pick` runs the choice and closes it), on Esc and on a click outside.
+ */
+function Flyout({
+  label,
+  icon,
+  children,
+}: {
+  label: string;
+  icon: ReactNode;
+  children: (pick: (choose: () => void) => void) => ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const pick = (choose: () => void) => {
+    setOpen(false);
+    choose();
+  };
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <StripButton label={label}>{icon}</StripButton>
+      </PopoverTrigger>
+      <PopoverContent
+        side="right"
+        align="start"
+        aria-label={label}
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        className="flex max-h-(--radix-popover-content-available-height) w-72 flex-col overflow-y-auto p-1.5"
+      >
+        {children(pick)}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** A heading in a flyout's list ("Pinned", "Chats"). */
+function FlyoutHeading({ children }: { children: ReactNode }) {
+  return <h2 className="text-foreground/50 px-2 pt-1 pb-1 text-sm font-medium">{children}</h2>;
+}
+
+/** A chat or session in a flyout: its title and state; picking it opens it. */
+function FlyoutConversation({
+  conversation,
+  active,
+  nested = false,
+  pick,
+}: {
+  conversation: Conversation;
+  active: boolean;
+  nested?: boolean;
+  pick: (choose: () => void) => void;
+}) {
+  return (
+    <li>
+      <button
+        type="button"
+        data-active={active}
+        aria-current={active ? "page" : undefined}
+        className={cn(navRow, "pe-1.5", nested && "ps-8")}
+        onClick={() => pick(() => openConversation(conversation.id))}
+      >
+        <span className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
+          {conversation.title}
+        </span>
+        <RowStatus conversationId={conversation.id} />
+      </button>
+    </li>
+  );
+}
+
+/** The Projects flyout: each project, picked to start a session in it, with its sessions. */
+function ProjectsFlyout({ pick }: { pick: (choose: () => void) => void }) {
+  const { projects, sessions } = useSections();
+  const activeId = useApp((s) => (s.selection.type === "conversation" ? s.selection.id : null));
+  const draftProjectId = useApp((s) =>
+    s.selection.type === "draft" && s.selection.kind === "session" ? s.selection.projectId : null,
+  );
+  if (projects.length === 0) {
+    return (
+      <p className="text-muted-foreground px-2 py-1 text-sm">
+        Projects group sessions on a repository.{" "}
+        <button
+          type="button"
+          className="text-foreground/85 underline-offset-4 hover:underline"
+          onClick={() => pick(() => openAddProject())}
+        >
+          Add a project
+        </button>
+      </p>
+    );
+  }
+  return (
+    <NavList>
+      {projects.map((project) => (
+        <li key={project.id} className="flex flex-col">
+          <button
+            type="button"
+            title={`New session in ${project.name}`}
+            data-active={draftProjectId === project.id}
+            className={navRow}
+            onClick={() =>
+              pick(() => {
+                setProjectExpanded(project.id, true);
+                select({ type: "draft", kind: "session", projectId: project.id });
+              })
+            }
+          >
+            <Folder />
+            <span className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
+              {project.name}
+            </span>
+          </button>
+          <NavList className="pt-px pb-1">
+            {(sessions[project.id] ?? NO_SESSIONS).map((conversation) => (
+              <FlyoutConversation
+                key={conversation.id}
+                conversation={conversation}
+                active={conversation.id === activeId}
+                nested
+                pick={pick}
+              />
+            ))}
+          </NavList>
+        </li>
+      ))}
+    </NavList>
+  );
+}
+
+/** The Chats flyout: the pinned chats and sessions, then the chats. */
+function ChatsFlyout({ pick }: { pick: (choose: () => void) => void }) {
+  const { pinned, chats } = useSections();
+  const activeId = useApp((s) => (s.selection.type === "conversation" ? s.selection.id : null));
+  return (
+    <div className="flex flex-col gap-3">
+      {pinned.length > 0 && (
+        <section>
+          <FlyoutHeading>Pinned</FlyoutHeading>
+          <NavList>
+            {pinned.map((conversation) => (
+              <FlyoutConversation
+                key={conversation.id}
+                conversation={conversation}
+                active={conversation.id === activeId}
+                pick={pick}
+              />
+            ))}
+          </NavList>
+        </section>
+      )}
+      <section>
+        <FlyoutHeading>Chats</FlyoutHeading>
+        <NavList>
+          {chats.map((conversation) => (
+            <FlyoutConversation
+              key={conversation.id}
+              conversation={conversation}
+              active={conversation.id === activeId}
+              pick={pick}
+            />
+          ))}
+          {chats.length === 0 && <NavEmpty>Chats you start appear here.</NavEmpty>}
+        </NavList>
+      </section>
+    </div>
+  );
+}
 
 /** A row's hover actions, over its end; the row's status gives way to them. */
 function RowActionsSlot({ children }: { children: ReactNode }) {

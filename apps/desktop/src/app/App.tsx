@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import { AppSidebar, TitlebarNav } from "@/app/AppSidebar";
+import { AppSidebar, AppStrip, TitlebarNav } from "@/app/AppSidebar";
 import { BottomBar } from "@/app/BottomBar";
 import { DeleteDialog } from "@/app/dialogs/DeleteDialog";
 import { useLifecycleShortcuts } from "@/app/lifecycleShortcuts";
@@ -11,12 +11,14 @@ import { FolderDropZone } from "@/app/FolderDropZone";
 import { ConversationView } from "@/app/ConversationView";
 import { OnboardingDialog } from "@/app/onboarding/OnboardingDialog";
 import { GlobalSearch } from "@/app/SearchDialog";
-import { SettingsNav } from "@/app/settings/SettingsNav";
+import { SettingsNav, SettingsStrip } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
+import { TerminalButton } from "@/app/conversation/SidePanel";
 import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { useNavigationShortcuts } from "@/app/navigationShortcuts";
 import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { runSmoke } from "@/app/smoke";
+import { TitlebarTips } from "@/components/titlebar-button";
 import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/toast";
 import { appReady, nowEpochMs } from "@/ipc/client";
@@ -147,13 +149,22 @@ export function App() {
         />
         <PageCorners />
         <div className="relative flex min-h-0 min-w-0 flex-1 ps-surface-inset pe-surface-inset">
-          <SidebarPanel>{selection.type === "settings" ? <SettingsNav /> : <AppSidebar />}</SidebarPanel>
+          <SidebarPanel strip={selection.type === "settings" ? <SettingsStrip /> : <AppStrip />}>
+            {selection.type === "settings" ? <SettingsNav /> : <AppSidebar />}
+          </SidebarPanel>
           <main className="body-divider relative flex h-full min-w-0 flex-1">
             <div className="relative flex h-full min-w-0 flex-1 flex-col">
               {selection.type === "settings" ? (
                 <>
-                  {/* The page's strip of the titlebar: empty, for dragging the window. */}
-                  <div data-tauri-drag-region className="h-titlebar shrink-0" />
+                  {/* The page's strip of the titlebar, for dragging the window: only Terminal. */}
+                  <div
+                    data-tauri-drag-region
+                    className="h-titlebar flex shrink-0 items-center justify-end pe-1"
+                  >
+                    <TitlebarTips>
+                      <TerminalButton />
+                    </TitlebarTips>
+                  </div>
                   <div className="min-h-0 flex-1">
                     <SettingsView page={selection.page} />
                   </div>

@@ -136,9 +136,10 @@
   );
 }
 
-/* How wide the sidebar panel shows beside the content: its width, or nothing while closed. */
+/* How wide the sidebar panel shows beside the content: its width, or the strip's while
+   collapsed. */
 [data-slot="sidebar-wrapper"] {
-  --sidebar-shown: 0px;
+  --sidebar-shown: var(--spacing-sidebar-strip);
 }
 [data-slot="sidebar-wrapper"][data-state="expanded"] {
   --sidebar-shown: clamp(

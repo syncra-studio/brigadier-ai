@@ -45,6 +45,7 @@
  *   Layout      h-bottom-bar                  the bar along the window's bottom
  *               w-sidebar, min-w-sidebar-min, max-w-sidebar-max  the sidebar panel: default
  *                                             width and how far it resizes
+ *               w-sidebar-strip               the sidebar panel collapsed to its icons
  *               p-surface-inset               the page surface's gap to the window's sides
  *               page-corner page-corner-{top,bottom}-{start,end}  a page surface corner kept
  *                                             round over the columns
@@ -74,8 +75,7 @@
  *               rounded-dialog, rounded-thread (message bubbles), rounded-composer (the composer
  *               card), rounded-rail (the rail's top corners), rounded-menu (menus), rounded-tooltip,
  *               rounded-summary (the pinned summary's cards), rounded-capsule,
- *               rounded-document, rounded-page (the page surface), rounded-peek (the sidebar
- *               panel peeking over the content), rounded-nav (sidebar and
+ *               rounded-document, rounded-page (the page surface), rounded-nav (sidebar and
  *               Settings navigation rows), rounded-settings (a Settings card),
  *               plus rounded-{xs,sm,md,lg,xl,2xl}
  *   Type        text-{2xs,xs,sm,base,lg,xl,2xl} (UI roles, each with its line height), text-hero,
@@ -86,7 +86,7 @@
  *   Fonts       font-sans, font-display, font-mono (system stacks, no downloads)
  *   Shadows     shadow-hairline (the composer card's inner edge), shadow-menu, shadow-tooltip,
  *               shadow-summary (the pinned summary), shadow-thumb (a switch's thumb),
- *               shadow-page (the page surface), shadow-peek (the sidebar panel peeking),
+ *               shadow-page (the page surface),
  *               shadow-side-panel (the side panel over the thread), shadow-panel-tab (its
  *               active tab)
  *   Motion      ease-summary-shift, ease-summary-card (the pinned summary), ease-sidebar (the
@@ -183,6 +183,9 @@
   --spacing-sidebar: 18rem;
   --spacing-sidebar-min: 11.75rem;
   --spacing-sidebar-max: 29.25rem;
+  /* The sidebar panel collapsed to a strip of icons: each icon where it sits in the expanded
+     rows (a 16px icon 16px in, the rows' insets), centred. */
+  --spacing-sidebar-strip: calc(var(--spacing) * 8 + var(--spacing-icon-md));
   --spacing-nav-row: 1.875rem;
   /* The bottom bar's buttons (and its update pills), leaving the bar's height a surface-inset
      gap above and below them; the sidebar panel's header (its title and actions); the Settings
@@ -196,7 +199,7 @@
   --spacing-scroll-fade-bottom: 2.5rem;
   /* The grab area straddling the sidebar panel's edge. */
   --spacing-resize-handle: 1rem;
-  /* A window narrower than this closes the sidebar panel by itself. */
+  /* A window narrower than this collapses the sidebar panel by itself. */
   --spacing-narrow-window: 60rem;
   /* The page surface (sidebar panel, content, Inspector) keeps this gap to the window's
      sides; the bottom bar is below it. */
@@ -313,8 +316,6 @@
   --radius-capsule: 9999px;
   /* The page surface; sidebar and Settings navigation rows; a Settings card. */
   --radius-page: 0.75rem;
-  /* The closed sidebar panel peeking over the content. */
-  --radius-peek: 0.5rem;
   /* The titlebar's icon buttons (the sidebar toggle, the side panel's buttons). */
   --radius-toolbar-button: 0.625rem;
   --radius-nav: 0.78125rem;
@@ -358,8 +359,6 @@
   /* A switch's thumb; the page surface's hairline edge and soft drop. */
   --shadow-thumb: 0 1px 2px oklch(0 0 0 / 20%);
   --shadow-page: 0 0 0 0.5px oklch(1 0 0 / 6%), 0 4px 16px oklch(0 0 0 / 5%);
-  /* The closed sidebar panel peeking over the content: a hairline inside, a soft drop. */
-  --shadow-peek: inset 0 0 0 0.5px oklch(1 0 0 / 8.2%), 0 4px 16px oklch(0 0 0 / 5%);
   /* The side panel casting onto the thread beside it; its active tab lifted off the strip. */
   --shadow-side-panel: -8px 0 16px -8px oklch(0 0 0 / 18%);
   --shadow-panel-tab: inset 0 0 0 0.5px var(--panel-tab-border), 0 1px 2px oklch(0 0 0 / 8%);

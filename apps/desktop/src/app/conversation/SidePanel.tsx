@@ -3,12 +3,14 @@ import {
   Folders,
   Globe,
   PlusCircle,
+  Terminal,
   X,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
   createContext,
   type CSSProperties,
   type FC,
+  Fragment,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   lazy,
@@ -21,6 +23,7 @@ import {
   useState,
 } from "react";
 
+import { BarItem } from "@/app/BarItem";
 import { WORKERS_LABEL, WorkersTab } from "@/app/conversation/Agents";
 import type { AgentsPanelState } from "@/app/conversation/WorkerChip";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
@@ -30,7 +33,14 @@ import { cn } from "@/lib/utils";
 import { takePaneClose } from "@/state/closedPanes";
 import { newBrowserTab, reopenBrowserTab } from "@/state/browsers";
 import { openReviewTab, reopenTab } from "@/state/sessionTabs";
-import { HOME_PLACE, undoTabClose } from "@/state/terminalPlaces";
+import {
+  HOME_PLACE,
+  placeOf,
+  terminalWorksHere,
+  toggleTerminal,
+  undoTabClose,
+  useTerminalPlaces,
+} from "@/state/terminalPlaces";
 import { changedPaneSize, savedPaneSizes, withSavedTerminal } from "@/state/paneSizes";
 import { useApp } from "@/state/store";
 
@@ -78,9 +88,9 @@ const TABS: Record<
   sideChat: { title: "Side chat", icon: <PlusCircle />, keys: "⌥⌘S" },
 };
 
-/** The tabs the titlebar has a button for, in order. Side chat and Terminal are on the bottom
- * bar; Review is one of a session's main tabs. */
-const TOOLS: readonly SideTab[] = ["files", "source", "browser"];
+/** The tabs the titlebar has a button for, in order; Terminal comes before Browser. Review is
+ * one of a session's main tabs. */
+const TOOLS: readonly SideTab[] = ["files", "source", "sideChat", "browser"];
 
 /** The panel's own shortcuts: show or hide it, and full view. */
 
@@ -611,21 +621,57 @@ export const PanelButtons: FC = () => {
         className="h-titlebar absolute top-0 z-20 flex items-center gap-1.5"
         style={{ insetInlineEnd: visible && !state.fullscreen ? width + 4 : 4 }}
       >
-        {TOOLS.filter((tab) => available.includes(tab)).map((tab) => (
-          <TitlebarButton
-            key={tab}
-            tooltip={TABS[tab].title}
-            shortcut={keys(TABS[tab].keys)}
-            aria-pressed={visible && state.active === tab}
-            onClick={() => toggleTab(tab)}
-          >
-            {TABS[tab].icon}
-          </TitlebarButton>
-        ))}
+        {TOOLS.map((tab) => {
+          const button = (
+            <TitlebarButton
+              tooltip={TABS[tab].title}
+              shortcut={keys(TABS[tab].keys)}
+              aria-pressed={visible && state.active === tab}
+              onClick={() => toggleTab(tab)}
+            >
+              {TABS[tab].icon}
+            </TitlebarButton>
+          );
+          return (
+            <Fragment key={tab}>
+              {tab === "browser" && <TerminalButton covered={visible && state.fullscreen} />}
+              {/* Side chat comes and goes with where it works; the others stay with the view. */}
+              {tab === "sideChat" ? (
+                <BarItem show={available.includes(tab)}>{button}</BarItem>
+              ) : (
+                available.includes(tab) && button
+              )}
+            </Fragment>
+          );
+        })}
       </div>
     </TitlebarTips>
   );
 };
+
+/**
+ * Terminal, beside the panel's tools: there wherever a terminal works (not in an archived
+ * thread), pressed while the place's terminal shows. Full view hides it (`covered`); pressing
+ * Terminal then leaves full view.
+ */
+export function TerminalButton({ covered = false }: { covered?: boolean }) {
+  const mac = useApp((s) => s.info?.platform === "macos");
+  const works = useApp(terminalWorksHere);
+  const place = useApp((s) => placeOf(s.selection));
+  const open = useTerminalPlaces((s) => s.places[place]?.open ?? false);
+  return (
+    <BarItem show={works}>
+      <TitlebarButton
+        tooltip="Terminal"
+        shortcut={shortcutLabel("⌘J", mac)}
+        aria-pressed={open && !covered}
+        onClick={() => toggleTerminal()}
+      >
+        <Terminal />
+      </TitlebarButton>
+    </BarItem>
+  );
+}
 
 /** Room for tools in the conversation titlebar, or the full-view pane header. */
 export function PanelButtonsRoom({

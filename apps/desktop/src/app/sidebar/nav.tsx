@@ -151,3 +151,44 @@ export function BarButton({
     </Tooltip>
   );
 }
+
+/**
+ * An icon on the collapsed sidebar's strip, where its expanded row's icon sits: a muted glyph
+ * that brightens on hover, filled while hovered, selected or while its menu is open, its name
+ * (and shortcut) in a tooltip to its right.
+ */
+export function StripButton({
+  label,
+  shortcut,
+  selected = false,
+  children,
+  className,
+  ...props
+}: ComponentProps<"button"> & { label: string; shortcut?: string | undefined; selected?: boolean }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          aria-pressed={selected || undefined}
+          className={cn(
+            "h-nav-row rounded-nav focus-visible:ring-ring/50 relative flex w-full shrink-0 items-center justify-center outline-none transition-colors duration-150 focus-visible:ring-2 [&_svg]:size-icon-md [&_svg]:shrink-0",
+            "hover:bg-foreground/8 data-[state=open]:bg-foreground/8",
+            selected
+              ? "bg-foreground/8 text-foreground"
+              : "text-foreground/85 hover:text-foreground data-[state=open]:text-foreground",
+            className,
+          )}
+          {...props}
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="right">
+        {label}
+        {shortcut && <Kbd>{shortcut}</Kbd>}
+      </TooltipContent>
+    </Tooltip>
+  );
+}

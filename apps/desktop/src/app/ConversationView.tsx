@@ -104,9 +104,8 @@ import {
 } from "@/state/actions";
 import { toast } from "@/state/toasts";
 import { type Board, useBoard } from "@/state/board";
-import { useBarActions } from "@/state/barActions";
 import { CHAT_TAB, openFileTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
-import { placeOf } from "@/state/terminalPlaces";
+import { placeOf, setTerminalCover } from "@/state/terminalPlaces";
 import {
   emptyThread,
   type PendingMessage,
@@ -556,21 +555,6 @@ export function ConversationView({
           : null,
   );
   const [renaming, setRenaming] = useState(false);
-  // The bottom bar's Side chat acts on this view while it is the window's own.
-  const sideChatOn = sidePanel.visible && sidePanel.state.active === "sideChat";
-  const { available, toggleTab } = sidePanel;
-  useEffect(() => {
-    if (embedded) return;
-    useBarActions.setState({
-      sideChat: available.includes("sideChat")
-        ? { on: sideChatOn, toggle: () => toggleTab("sideChat") }
-        : null,
-    });
-  }, [embedded, available, sideChatOn, toggleTab]);
-  useEffect(() => {
-    if (embedded) return;
-    return () => useBarActions.setState({ sideChat: null });
-  }, [embedded]);
 
   // A new scope must not inherit uploads or refs from the previous composer.
   // oxlint-disable-next-line react-hooks/exhaustive-deps, react/memo-dependencies
@@ -762,12 +746,12 @@ export function ConversationView({
   );
 
   const fullscreen = sidePanel.visible && sidePanel.state.fullscreen;
-  // Full view hides the thread column and its terminal; the bar's Terminal shows it again.
+  // Full view hides the thread column and its terminal; Terminal and ⌘J show it again.
   const { setFullscreen } = sidePanel;
   useEffect(() => {
     if (embedded) return;
-    useBarActions.setState({ terminalCover: fullscreen ? () => setFullscreen(false) : null });
-    return () => useBarActions.setState({ terminalCover: null });
+    setTerminalCover(fullscreen ? () => setFullscreen(false) : null);
+    return () => setTerminalCover(null);
   }, [embedded, fullscreen, setFullscreen]);
   // The pinned summary, in a session's own view.
   const summary = setup?.type === "session" && !embedded;
