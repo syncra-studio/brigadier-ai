@@ -26,8 +26,8 @@
  *               h-pill, px-pill               badges and status pills
  *               h-row, h-row-sm               list rows (event rows, menus)
  *               h-nav-row                     sidebar and Settings navigation rows
- *               size-bar-button, h-nav-header, h-nav-search  the bottom bar's buttons, the
- *                                             sidebar panel's header, the Settings search field
+ *               h-nav-header, h-nav-search    the sidebar panel's header, the Settings search
+ *                                             field
  *               w-resize-handle               the sidebar panel's grab area
  *               w-switch-width, h-switch-height, size-switch-thumb, translate-x-switch-travel
  *                                             an on/off switch
@@ -42,11 +42,10 @@
  *               max-h-queue-max               the queue card's maximum height (then it scrolls)
  *               size-attachment-thumb, w-attachment-card  an image attachment, a file attachment
  *               mx-rail-inset, -mb-rail-tuck  the composer rail: its side inset, the tuck under the card
- *   Layout      h-bottom-bar                  the bar along the window's bottom
- *               w-sidebar, min-w-sidebar-min, max-w-sidebar-max  the sidebar panel: default
+ *   Layout      w-sidebar, min-w-sidebar-min, max-w-sidebar-max  the sidebar panel: default
  *                                             width and how far it resizes
  *               w-sidebar-strip               the sidebar panel collapsed to its icons
- *               p-surface-inset               the page surface's gap to the window's sides
+ *               p-surface-inset               the page surface's gap to the window's sides and bottom
  *               page-corner page-corner-{top,bottom}-{start,end}  a page surface corner kept
  *                                             round over the columns
  *               h-titlebar, ps-traffic-lights top bars; inset clearing the macOS traffic lights
@@ -176,10 +175,7 @@
   /* The composer rail: inset from the card's sides, tucked under its top edge. */
   --spacing-rail-inset: 0.8125rem;
   --spacing-rail-tuck: 0.25rem;
-  /* The bar along the window's bottom, under the sidebar panel and the content alike; and the
-     sidebar panel: its width, and how far it resizes. The panel opens from nothing to its
-     width. */
-  --spacing-bottom-bar: 2rem;
+  /* The sidebar panel: its width, and how far it resizes. */
   --spacing-sidebar: 18rem;
   --spacing-sidebar-min: 11.75rem;
   --spacing-sidebar-max: 29.25rem;
@@ -187,10 +183,7 @@
      rows (a 16px icon 16px in, the rows' insets), centred. */
   --spacing-sidebar-strip: calc(var(--spacing) * 8 + var(--spacing-icon-md));
   --spacing-nav-row: 1.875rem;
-  /* The bottom bar's buttons (and its update pills), leaving the bar's height a surface-inset
-     gap above and below them; the sidebar panel's header (its title and actions); the Settings
-     search field. */
-  --spacing-bar-button: 1.5rem;
+  /* The sidebar panel's header (its title and actions); the Settings search field. */
   --spacing-nav-header: 3.25rem;
   --spacing-nav-search: 2.25rem;
   /* The sidebar's list fades out this far under its header, and this far above its end, while
@@ -202,7 +195,7 @@
   /* A window narrower than this collapses the sidebar panel by itself. */
   --spacing-narrow-window: 60rem;
   /* The page surface (sidebar panel, content, Inspector) keeps this gap to the window's
-     sides; the bottom bar is below it. */
+     sides and bottom. */
   --spacing-surface-inset: 0.25rem;
   /* An on/off switch: its track and thumb. */
   --spacing-switch-width: 2rem;
@@ -505,7 +498,7 @@
   --glyph-6: oklch(0.7 0.15 250);
   --glyph-7: oklch(0.72 0.16 30);
   --glyph-8: oklch(0.82 0.15 115);
-  /* The window around the page surface (top bar, bottom bar), and the sidebar panel: the page
+  /* The window around the page surface (the titlebar strip and the edges), and the sidebar panel: the page
      colour laid over it at 65%. */
   --chrome: color-mix(in oklab, var(--foreground) 7%, var(--background));
   /* The page surface's hairline edge over the chrome (as its shadow-page ring draws it). */
@@ -601,12 +594,10 @@
   --spacing-attachment-card: 12.5rem;
   --spacing-rail-inset: 0.625rem;
   --spacing-rail-tuck: 0.1875rem;
-  --spacing-bottom-bar: 1.75rem;
   --spacing-sidebar: 16rem;
   --spacing-sidebar-min: 10.5rem;
   --spacing-sidebar-max: 26rem;
   --spacing-nav-row: 1.625rem;
-  --spacing-bar-button: 1.25rem;
   --spacing-nav-header: 2.75rem;
   --spacing-nav-search: 1.875rem;
   --spacing-switch-width: 1.75rem;

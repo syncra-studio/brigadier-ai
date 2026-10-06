@@ -2,7 +2,9 @@ import { ChevronDown } from "@openai/apps-sdk-ui/components/Icon";
 import { useId, type ComponentProps, type ReactNode } from "react";
 
 import { Kbd } from "@/components/ui/kbd";
+import { useSidebar } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 
 /*
@@ -115,39 +117,84 @@ export function NavEmpty({ children, className }: { children: ReactNode; classNa
 }
 
 /**
- * A button on the bottom bar: a muted icon that brightens on hover, its name (and shortcut) in
- * a tooltip above it, a pill behind it while selected or while its menu is open.
+ * How far a menu opened beside the collapsed strip sits from its icon: past the strip's edge
+ * (the strip's inset), then the usual gap.
  */
-export function BarButton({
+export function besideStrip(): number {
+  return tokenPx("--spacing") * 3;
+}
+
+/** Where a foot row's menu opens: above it, or beside the strip while collapsed. */
+export function footMenuPlacement(expanded: boolean) {
+  return expanded
+    ? ({ side: "top", align: "start" } as const)
+    : ({ side: "right", align: "end", sideOffset: besideStrip() } as const);
+}
+
+/**
+ * A row at the sidebar's foot (Keep awake, Usage, Updates, Settings): its icon where the strip's
+ * icons sit, then its label and anything at its end, which fade while the sidebar is collapsed to
+ * the strip. Collapsed, its name (`tip`, and shortcut) shows in a tooltip to its right; expanded,
+ * only when `tip` says more than the label. `dot` marks the icon (a background colour class).
+ */
+export function FootRow({
   label,
+  tip = label,
   shortcut,
+  icon,
+  dot,
+  end,
   selected = false,
-  children,
   className,
   ...props
-}: ComponentProps<"button"> & { label: string; shortcut?: string; selected?: boolean }) {
+}: ComponentProps<"button"> & {
+  label: string;
+  tip?: string;
+  shortcut?: string | undefined;
+  icon: ReactNode;
+  dot?: string | null | undefined;
+  end?: ReactNode;
+  selected?: boolean;
+}) {
+  const { open } = useSidebar();
+  const fade = cn(
+    "transition-opacity duration-150 motion-reduce:transition-none",
+    !open && "opacity-0",
+  );
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <button
           type="button"
-          aria-label={label}
+          aria-label={tip}
           aria-pressed={selected || undefined}
           className={cn(
-            "size-bar-button rounded-toolbar-button focus-visible:ring-ring/50 relative flex shrink-0 items-center justify-center outline-none transition-colors duration-150 focus-visible:ring-2 [&_svg]:relative [&_svg]:size-icon-md",
-            "before:rounded-toolbar-button before:bg-foreground/8 before:absolute before:inset-0 before:opacity-0 before:transition-opacity before:duration-150 hover:before:opacity-100 data-[state=open]:before:opacity-100",
-            selected ? "text-foreground before:opacity-100" : "text-muted-foreground hover:text-foreground data-[state=open]:text-foreground",
+            navRow,
+            "overflow-hidden transition-colors duration-150 data-[state=open]:bg-foreground/8",
+            selected && "bg-foreground/8 text-foreground",
             className,
           )}
           {...props}
         >
-          {children}
+          <span className="relative flex shrink-0">
+            {icon}
+            {dot && (
+              <span
+                aria-hidden
+                className={cn("absolute -end-0.5 -top-0.5 size-1.5 rounded-full", dot)}
+              />
+            )}
+          </span>
+          <span className={cn("min-w-0 flex-1 truncate whitespace-nowrap", fade)}>{label}</span>
+          {end && <span className={cn("flex shrink-0 items-center", fade)}>{end}</span>}
         </button>
       </TooltipTrigger>
-      <TooltipContent side="top">
-        {label}
-        {shortcut && <Kbd>{shortcut}</Kbd>}
-      </TooltipContent>
+      {(!open || tip !== label) && (
+        <TooltipContent side={open ? "top" : "right"}>
+          {tip}
+          {shortcut && <Kbd>{shortcut}</Kbd>}
+        </TooltipContent>
+      )}
     </Tooltip>
   );
 }

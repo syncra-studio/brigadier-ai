@@ -36,6 +36,7 @@ import {
   NavSection,
   rowAction,
   StripButton,
+  besideStrip,
 } from "@/app/sidebar/nav";
 import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
 import { Spinner } from "@/components/glyphs/spinner";
@@ -536,6 +537,7 @@ function Flyout({
       <PopoverContent
         side="right"
         align="start"
+        sideOffset={besideStrip()}
         aria-label={label}
         onOpenAutoFocus={(event) => event.preventDefault()}
         className="flex max-h-(--radix-popover-content-available-height) w-72 flex-col overflow-y-auto p-1.5"

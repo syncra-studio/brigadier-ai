@@ -11,9 +11,9 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
-import { AppSidebar, TitlebarNav } from "@/app/AppSidebar";
-import { BottomBar } from "@/app/BottomBar";
+import { AppSidebar, AppStrip, TitlebarNav } from "@/app/AppSidebar";
 import { ConversationView } from "@/app/ConversationView";
+import { SidebarFoot } from "@/app/SidebarFoot";
 import { revealPlan, useSummary } from "@/app/conversation/summaryState";
 import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -441,10 +441,10 @@ function FlowPage() {
           <div
             aria-hidden
             data-slot="page-surface"
-            className="bg-background rounded-page shadow-page top-titlebar start-surface-inset end-surface-inset bottom-bottom-bar pointer-events-none absolute"
+            className="bg-background rounded-page shadow-page top-titlebar start-surface-inset end-surface-inset bottom-surface-inset pointer-events-none absolute"
           />
-          <div className="relative flex min-h-0 min-w-0 flex-1 ps-surface-inset pe-surface-inset">
-            <SidebarPanel>
+          <div className="relative flex min-h-0 min-w-0 flex-1 ps-surface-inset pe-surface-inset pb-surface-inset">
+            <SidebarPanel strip={<AppStrip />} foot={<SidebarFoot />}>
               <AppSidebar />
             </SidebarPanel>
             <main className="body-divider relative flex h-full min-w-0 flex-1">
@@ -453,7 +453,6 @@ function FlowPage() {
               </div>
             </main>
           </div>
-          <BottomBar />
           <TitlebarNav />
         </SidebarProvider>
       </div>

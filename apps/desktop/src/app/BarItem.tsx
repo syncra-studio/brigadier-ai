@@ -9,8 +9,9 @@ function prefersReducedMotion(): boolean {
 }
 
 /**
- * Something on the bar that is only sometimes there: it grows from nothing and fades in, and
- * shrinks and fades out, over 200ms, so its neighbours glide. Leaving, it can't be focused or
+ * Something on a bar or in a list that is only sometimes there: it grows from nothing and fades
+ * in, and shrinks and fades out, over 200ms, so its neighbours glide (along `axis`: across a
+ * bar, or down a list). Leaving, it can't be focused or
  * clicked at once; it is gone when the motion ends (at once with reduced motion). Shown again
  * while leaving, it turns back.
  *
@@ -18,7 +19,15 @@ function prefersReducedMotion(): boolean {
  * window hidden, such a copy was lost and the item never came back. The timers only open it
  * and keep it while it leaves, so a late one can't hide it while it should show.
  */
-export function BarItem({ show, children }: { show: boolean; children: ReactNode }) {
+export function BarItem({
+  show,
+  axis = "x",
+  children,
+}: {
+  show: boolean;
+  axis?: "x" | "y";
+  children: ReactNode;
+}) {
   // Kept while leaving, until the motion ends.
   const [kept, setKept] = useState(show);
   // Has had the closed frame it opens from.
@@ -54,11 +63,28 @@ export function BarItem({ show, children }: { show: boolean; children: ReactNode
       inert={!show}
       aria-hidden={!show || undefined}
       className={cn(
-        "ease-standard grid shrink-0 transition-[grid-template-columns,opacity] duration-200 motion-reduce:transition-none",
-        open ? "grid-cols-[1fr] opacity-100" : "grid-cols-[0fr] opacity-0",
+        "ease-standard grid shrink-0 duration-200 motion-reduce:transition-none",
+        axis === "x"
+          ? "transition-[grid-template-columns,opacity]"
+          : "transition-[grid-template-rows,opacity]",
+        axis === "x"
+          ? open
+            ? "grid-cols-[1fr]"
+            : "grid-cols-[0fr]"
+          : open
+            ? "grid-rows-[1fr]"
+            : "grid-rows-[0fr]",
+        open ? "opacity-100" : "opacity-0",
       )}
     >
-      <div className="flex min-w-0 items-center overflow-hidden">{children}</div>
+      <div
+        className={cn(
+          "overflow-hidden",
+          axis === "x" ? "flex min-w-0 items-center" : "flex min-h-0 flex-col",
+        )}
+      >
+        {children}
+      </div>
     </div>
   );
 }

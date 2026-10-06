@@ -1,14 +1,16 @@
 import { Check, Copy, DownloadSimple, X } from "@openai/apps-sdk-ui/components/Icon";
-import { type ReactNode, useState } from "react";
+import { useState } from "react";
 
 import { BarItem } from "@/app/BarItem";
 import { errorText } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
+import { FootRow, footMenuPlacement } from "@/app/sidebar/nav";
 import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useSidebar } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import type { UpdateItem, UpdateTarget } from "@/ipc/generated";
@@ -23,98 +25,83 @@ const UPDATE_NAMES: Record<UpdateTarget, string> = {
 const CLIS = ["claude", "codex"] as const;
 
 /**
- * The bottom bar's updates, there only while something has a newer version: "⬇ Brigadier" for
- * the app and "⬇" with the agents' marks for their CLIs. Each opens its versions, to update or
- * skip.
+ * Updates at the sidebar's foot, there only while something has a newer version: "Updates
+ * available" with the outdated app's and agents' marks, or a download icon with a dot on the
+ * collapsed strip. It opens their versions, to update or skip.
  */
-export function UpdatePills() {
+export function UpdatesRow() {
   const view = useUpdates((s) => s.view);
   const skipped = useUpdates((s) => s.skipped);
   const seen = useUpdates((s) => s.seen);
-  const shown = shownUpdates(view, skipped, seen);
-  const app = shown.filter((item) => item.target === "app");
-  const clis = shown.filter((item) => item.target !== "app");
-  const outdated = new Set(clis.map((item) => item.target));
-  return (
-    <>
-      <BarItem show={app.length > 0}>
-        <UpdatePill items={app}>
-          <span>Brigadier</span>
-        </UpdatePill>
-      </BarItem>
-      <BarItem show={clis.length > 0}>
-        <UpdatePill items={clis}>
-          {CLIS.map((cli) => (
-            <BarItem key={cli} show={outdated.has(cli)}>
-              <ProviderGlyph provider={cli} className="size-icon-sm mx-0.5 shrink-0" />
-            </BarItem>
-          ))}
-        </UpdatePill>
-      </BarItem>
-    </>
-  );
-}
-
-/** "Codex update available", "Claude Code and Codex updates available", "Updating Codex". */
-function pillLabel(items: readonly UpdateItem[]): string {
-  const names = items.map((item) => UPDATE_NAMES[item.target]).join(" and ");
-  if (items.some((item) => item.progress.type === "updating")) return `Updating ${names}`;
-  return `${names} ${items.length > 1 ? "updates" : "update"} available`;
-}
-
-function UpdatePill({ items, children }: { items: UpdateItem[]; children: ReactNode }) {
-  // Kept while the pill leaves, so it doesn't empty as it shrinks.
+  const items = shownUpdates(view, skipped, seen);
+  const { open: expanded } = useSidebar();
+  // Kept while the row leaves, so it doesn't empty as it shrinks.
   const [last, setLast] = useState(items);
   if (items.length > 0 && JSON.stringify(items) !== JSON.stringify(last)) setLast(items);
   const rows = items.length > 0 ? items : last;
+  const outdated = new Set(rows.map((item) => item.target));
   const busy = rows.some((item) => item.progress.type === "updating");
-  const label = pillLabel(rows);
   return (
-    <Popover
-      onOpenChange={(open) => {
-        if (!open) noteUpdatesSeen();
-      }}
-    >
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              aria-label={label}
-              className="border-border text-muted-foreground hover:text-foreground hover:bg-foreground/8 data-[state=open]:text-foreground data-[state=open]:bg-foreground/8 focus-visible:ring-ring/50 mx-0.5 flex h-bar-button shrink-0 items-center gap-1 rounded-full border ps-1.5 pe-2 text-xs outline-none transition-colors duration-150 focus-visible:ring-2"
-            >
-              {busy ? (
-                <Spinner aria-hidden className="size-icon-sm animate-spin" />
-              ) : (
-                <DownloadSimple aria-hidden className="size-icon-sm" />
-              )}
-              {children}
-            </button>
-          </PopoverTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="top">{label}</TooltipContent>
-      </Tooltip>
-      <PopoverContent
-        side="top"
-        align="end"
-        // Focus the list itself, not its first button (whose tip would open with it).
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
+    <BarItem show={items.length > 0} axis="y">
+      <Popover
+        onOpenChange={(opened) => {
+          if (!opened) noteUpdatesSeen();
         }}
-        className="flex w-sm flex-col gap-1 p-1.5"
       >
-        {rows.map((item) => (
-          <UpdateRow key={item.target} item={item} />
-        ))}
-        {rows.some((item) => item.target !== "app" && item.progress.type !== "available") && (
-          <p className="text-muted-foreground px-1.5 pb-1 text-xs">
-            Sessions already running keep the version they started with.
-          </p>
-        )}
-      </PopoverContent>
-    </Popover>
+        <PopoverTrigger asChild>
+          <FootRow
+            label={busy ? "Updating…" : "Updates available"}
+            tip={rowLabel(rows)}
+            icon={
+              busy ? (
+                <Spinner aria-hidden className="animate-spin" />
+              ) : (
+                <DownloadSimple aria-hidden />
+              )
+            }
+            dot={expanded || busy ? null : "bg-foreground"}
+            end={
+              <>
+                <BarItem show={outdated.has("app")}>
+                  <BrigadierGlyph aria-hidden className="size-icon-sm mx-0.5 shrink-0" />
+                </BarItem>
+                {CLIS.map((cli) => (
+                  <BarItem key={cli} show={outdated.has(cli)}>
+                    <ProviderGlyph provider={cli} className="size-icon-sm mx-0.5 shrink-0" />
+                  </BarItem>
+                ))}
+              </>
+            }
+          />
+        </PopoverTrigger>
+        <PopoverContent
+          {...footMenuPlacement(expanded)}
+          // Focus the list itself, not its first button (whose tip would open with it).
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
+          }}
+          className="flex w-sm flex-col gap-1 p-1.5"
+        >
+          {rows.map((item) => (
+            <UpdateRow key={item.target} item={item} />
+          ))}
+          {rows.some((item) => item.target !== "app" && item.progress.type !== "available") && (
+            <p className="text-muted-foreground px-1.5 pb-1 text-xs">
+              Sessions already running keep the version they started with.
+            </p>
+          )}
+        </PopoverContent>
+      </Popover>
+    </BarItem>
   );
+}
+
+/** "Codex update available", "Brigadier and Codex updates available", "Updating Codex". */
+function rowLabel(items: readonly UpdateItem[]): string {
+  const names = items.map((item) => UPDATE_NAMES[item.target]).join(" and ");
+  if (items.some((item) => item.progress.type === "updating")) return `Updating ${names}`;
+  return `${names} ${items.length > 1 ? "updates" : "update"} available`;
 }
 
 function UpdateRow({ item }: { item: UpdateItem }) {

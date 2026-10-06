@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 
 import { AppSidebar, AppStrip, TitlebarNav } from "@/app/AppSidebar";
-import { BottomBar } from "@/app/BottomBar";
 import { DeleteDialog } from "@/app/dialogs/DeleteDialog";
 import { useLifecycleShortcuts } from "@/app/lifecycleShortcuts";
 import { AddProjectDialog } from "@/app/dialogs/AddProjectDialog";
@@ -18,6 +17,7 @@ import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { useNavigationShortcuts } from "@/app/navigationShortcuts";
 import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { runSmoke } from "@/app/smoke";
+import { SidebarFoot } from "@/app/SidebarFoot";
 import { TitlebarTips } from "@/components/titlebar-button";
 import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/toast";
@@ -52,7 +52,7 @@ function PageCorners() {
   return (
     <div
       aria-hidden
-      className="top-titlebar start-surface-inset end-surface-inset bottom-bottom-bar pointer-events-none absolute z-20"
+      className="top-titlebar start-surface-inset end-surface-inset bottom-surface-inset pointer-events-none absolute z-20"
     >
       <span className="page-corner page-corner-top-start" />
       <span className="page-corner page-corner-top-end" />
@@ -141,15 +141,18 @@ export function App() {
     <div className="bg-chrome flex h-full flex-col">
       <SidebarProvider className="relative min-h-0 flex-1 flex-col">
         {/* The page surface the sidebar panel and the content sit on; their headers stay
-            above it, in the titlebar strip, and the bottom bar below it. */}
+            above it, in the titlebar strip. */}
         <div
           aria-hidden
           data-slot="page-surface"
-          className="bg-background rounded-page shadow-page top-titlebar start-surface-inset end-surface-inset bottom-bottom-bar pointer-events-none absolute"
+          className="bg-background rounded-page shadow-page top-titlebar start-surface-inset end-surface-inset bottom-surface-inset pointer-events-none absolute"
         />
         <PageCorners />
-        <div className="relative flex min-h-0 min-w-0 flex-1 ps-surface-inset pe-surface-inset">
-          <SidebarPanel strip={selection.type === "settings" ? <SettingsStrip /> : <AppStrip />}>
+        <div className="relative flex min-h-0 min-w-0 flex-1 ps-surface-inset pe-surface-inset pb-surface-inset">
+          <SidebarPanel
+            strip={selection.type === "settings" ? <SettingsStrip /> : <AppStrip />}
+            foot={<SidebarFoot />}
+          >
             {selection.type === "settings" ? <SettingsNav /> : <AppSidebar />}
           </SidebarPanel>
           <main className="body-divider relative flex h-full min-w-0 flex-1">
@@ -178,7 +181,6 @@ export function App() {
             </div>
           </main>
         </div>
-        <BottomBar />
         <TitlebarNav />
         <GlobalSearch />
         <OnboardingDialog />

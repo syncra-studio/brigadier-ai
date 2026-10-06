@@ -4,7 +4,7 @@ import { useEffect, useId, useState } from "react";
 import { errorText } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { Segmented } from "@/app/settings/parts";
-import { BarButton } from "@/app/sidebar/nav";
+import { FootRow, footMenuPlacement } from "@/app/sidebar/nav";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import {
   DropdownMenu,
@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useSidebar } from "@/components/ui/sidebar";
 import { Switch } from "@/components/ui/switch";
 import type {
   ProviderOverview,
@@ -51,8 +52,8 @@ function refreshUsage(): void {
 }
 
 /*
- * The bottom bar's status buttons, after Settings: each agent's usage windows, and keeping the
- * computer awake. Their menus open upwards.
+ * The status rows at the sidebar's foot: keeping the computer awake, and each agent's usage
+ * windows. Their menus open upwards, or beside the strip while the sidebar is collapsed.
  */
 
 // ----- usage ---------------------------------------------------------------------------
@@ -150,7 +151,7 @@ function heatTone(overview: ProviderOverview, tightest: number): { text: string;
   return tone(tightest);
 }
 
-/** How the tightest agent stands, for the bar button: what is left, and whether to warn. */
+/** How the tightest agent stands, for the Usage row: what is left, and whether to warn. */
 function barStatus(shown: (ProviderOverview & { quota: QuotaSnapshot })[]): {
   label: string;
   alert: "text-destructive" | "text-warning" | null;
@@ -172,8 +173,8 @@ function barStatus(shown: (ProviderOverview & { quota: QuotaSnapshot })[]): {
 }
 
 /**
- * Usage on the bar: its icon (tinted, with a dot, while an agent runs hot), and on click
- * each agent's windows, with the way to the Usage page.
+ * Usage at the sidebar's foot: its icon (tinted, with a dot, while an agent runs hot), and on
+ * click each agent's windows, with the way to the Usage page.
  */
 export function UsageMenu() {
   useUsageRefresh();
@@ -184,23 +185,22 @@ export function UsageMenu() {
   const now = useNow();
   const shown = (providers ?? []).filter(withQuota);
   const { label, alert } = barStatus(shown);
+  const { open: expanded } = useSidebar();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <BarButton label={label} selected={onPage}>
-          <Usage className={alert ?? undefined} />
-          {alert && (
-            <span
-              aria-hidden
-              className={cn(
-                "absolute end-1 top-1 size-1.5 rounded-full",
-                alert === "text-destructive" ? "bg-destructive" : "bg-warning",
-              )}
-            />
-          )}
-        </BarButton>
+        <FootRow
+          label="Usage"
+          tip={label}
+          selected={onPage}
+          icon={<Usage className={alert ?? undefined} />}
+          dot={alert && (alert === "text-destructive" ? "bg-destructive" : "bg-warning")}
+        />
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="start" className="w-xs">
+      <DropdownMenuContent
+        {...footMenuPlacement(expanded)}
+        className="w-xs"
+      >
         <DropdownMenuLabel>Usage</DropdownMenuLabel>
         {shown.length === 0 ? (
           <p className="text-muted-foreground px-2 pb-1.5 text-sm">No agent has reported usage yet.</p>
@@ -293,7 +293,8 @@ function useKeepAwakeStatus(): void {
 }
 
 /**
- * Keeping awake on the bar: a light bulb, lit (with a dot) while the computer is kept awake.
+ * Keeping awake at the sidebar's foot: a light bulb, lit (with a dot) while the computer is kept
+ * awake.
  * On click, a small panel: how it stands now, when to stay awake (off, while agents work,
  * always), and whether that holds with the lid closed.
  */
@@ -309,6 +310,7 @@ export function KeepAwakeMenu() {
   const state = keepAwakeState(keepAwake, status);
   const shownError = error ?? status?.error ?? null;
   const lidId = useId();
+  const { open: expanded } = useSidebar();
 
   const run = (action: () => Promise<void>) => {
     setError(null);
@@ -322,22 +324,21 @@ export function KeepAwakeMenu() {
       }}
     >
       <PopoverTrigger asChild>
-        <BarButton label={`Keep awake: ${option?.label ?? ""} · ${state.text}`}>
-          <Lightbulb
-            className={cn(state.awake && "text-foreground", shownError && "text-warning")}
-          />
-          {(state.awake || shownError) && (
-            <span
-              aria-hidden
-              className={cn(
-                "absolute end-1 top-1 size-1.5 rounded-full",
-                shownError ? "bg-warning" : "bg-foreground",
-              )}
+        <FootRow
+          label="Keep awake"
+          tip={`Keep awake: ${option?.label ?? ""} · ${state.text}`}
+          icon={
+            <Lightbulb
+              className={cn(state.awake && "text-foreground", shownError && "text-warning")}
             />
-          )}
-        </BarButton>
+          }
+          dot={shownError ? "bg-warning" : state.awake ? "bg-foreground" : null}
+        />
       </PopoverTrigger>
-      <PopoverContent side="top" align="start" className="flex w-xs flex-col gap-3 p-3">
+      <PopoverContent
+        {...footMenuPlacement(expanded)}
+        className="flex w-xs flex-col gap-3 p-3"
+      >
         <div className="flex items-start gap-2.5">
           <Lightbulb
             aria-hidden
