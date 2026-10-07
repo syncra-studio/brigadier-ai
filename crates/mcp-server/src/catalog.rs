@@ -9,8 +9,7 @@ use brigadier_core::tools::{
     OrchestratorCall, PlanPhases, PreviewLog, ProposeOvernight, QueryBrain, ReadArtifact,
     RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCheck,
     RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, StartPreview,
-    StopPreview,
-    SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
+    StopPreview, SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
