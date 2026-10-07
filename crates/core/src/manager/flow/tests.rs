@@ -2089,6 +2089,87 @@ async fn a_phase_with_only_litter_ends_its_lead_with_its_verifier() {
 }
 
 #[tokio::test]
+async fn a_codex_thread_s_own_commands_and_edits_are_tool_steps() {
+    use crate::work::OrchestratorStepKind;
+    use brigadier_providers::{
+        FileChange, FileChangeKind, ItemStatus, ProviderEvent, ProviderKind,
+    };
+    let mut flow = Flow::start(
+        "codex-shell-steps",
+        Options {
+            thread: ProviderKind::Codex,
+            ..Options::default()
+        },
+        script(|turn| async move {
+            for status in [ItemStatus::InProgress, ItemStatus::Completed] {
+                turn.events
+                    .send(ProviderEvent::Command {
+                        item_id: "cmd-1".into(),
+                        command: "/bin/zsh -lc 'cargo test -p core'".into(),
+                        cwd: None,
+                        status,
+                        exit_code: (status == ItemStatus::Completed).then_some(0),
+                        output: None,
+                        duration_ms: None,
+                    })
+                    .await
+                    .unwrap();
+            }
+            turn.events
+                .send(ProviderEvent::FileChanges {
+                    item_id: "patch-1".into(),
+                    changes: vec![
+                        FileChange {
+                            path: "src/a.rs".into(),
+                            kind: FileChangeKind::Update,
+                        },
+                        FileChange {
+                            path: "src/b.rs".into(),
+                            kind: FileChangeKind::Add,
+                        },
+                    ],
+                    status: ItemStatus::Completed,
+                })
+                .await
+                .unwrap();
+            Reply::text("Tests pass.")
+        }),
+    )
+    .await;
+    flow.say("Run the tests").await;
+    let board = flow.settled().await;
+    let tools: Vec<(String, Option<String>, ItemStatus)> = board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            OrchestratorStepKind::Tool {
+                name,
+                detail,
+                status,
+                ..
+            } => Some((name.clone(), detail.clone(), *status)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        tools,
+        vec![
+            (
+                "shell".to_owned(),
+                Some("cargo test -p core".to_owned()),
+                ItemStatus::Completed
+            ),
+            (
+                "apply_patch".to_owned(),
+                Some("src/a.rs and 1 more".to_owned()),
+                ItemStatus::Completed
+            ),
+        ]
+    );
+    flow.stop().await;
+}
+
+#[tokio::test]
 async fn orchestrator_tools_are_visible_while_running_and_keep_their_first_position() {
     use crate::work::OrchestratorStepKind;
     use brigadier_providers::{ItemStatus, ProviderEvent};
