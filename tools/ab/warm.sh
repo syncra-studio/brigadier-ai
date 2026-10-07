@@ -10,6 +10,9 @@ cd "$r"
 if [ -n "$from" ]; then rm -rf target; cp -c -R "$from/target" target; fi
 echo "== $r $(date +%T)"
 pnpm install --frozen-lockfile >/dev/null
+# The desktop crate bundles the daemon as a sidecar: stage it first, as tools/full-checks.sh does.
+cargo build -q -p brigadier-daemon --bin brigadierd
+pnpm --filter @brigadier/desktop stage-sidecar --debug >/dev/null
 cargo build --workspace --all-targets 2>&1 | tail -1
 cargo clippy --workspace --all-targets 2>&1 | tail -1
 echo "== done $r $(date +%T)"
