@@ -600,6 +600,11 @@ impl SessionManager {
     }
 
     async fn landed(&self, task: &Task, target: &str, from: &Oid, new_tip: &Oid, commits: u32) {
+        // The thread's own commits below the landing get their review; the landing has its own.
+        if let Ok(repo) = self.task_repo(task) {
+            self.thread_branch_landed(&task.conversation_id, &repo, target, from, new_tip)
+                .await;
+        }
         let tasks = self.landed_with(task).await;
         // Its one review, by the other vendor, starts now and runs on its own.
         {
@@ -976,6 +981,14 @@ impl SessionManager {
         let Some(Setup::Session { repo, .. }) = self.core.conversation(&id)?.setup else {
             return Err(Error::Invalid("This run has no repository.".into()));
         };
+        // What the thread committed itself on the run branch gets its review before it merges.
+        self.scan_thread_branch(
+            &id,
+            Path::new(&repo),
+            &workspace.branch,
+            self.thread_turn_running(&id).await,
+        )
+        .await;
         let git = self.git.clone();
         let approved = verified_commit.clone();
         let into = workspace.base.clone();
@@ -1056,6 +1069,9 @@ impl SessionManager {
                 "this session works on a local checkout: its commits are already on the picked branch".into(),
             ));
         };
+        // What the thread committed itself gets its review before the branch is merged.
+        self.scan_thread_commits(id, self.thread_turn_running(id).await)
+            .await;
         let open: Vec<String> = self
             .core
             .tasks(id)

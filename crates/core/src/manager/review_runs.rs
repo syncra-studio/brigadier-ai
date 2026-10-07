@@ -143,6 +143,41 @@ impl SessionManager {
         }
     }
 
+    /// The review of commits the thread made itself, `base..tip`, by the vendor other than
+    /// the thread's. None when that range has one already.
+    pub(crate) async fn review_thread_commits(
+        &self,
+        conversation_id: &ConversationId,
+        base: Oid,
+        tip: Oid,
+        repo: PathBuf,
+    ) {
+        let author = self.thread_author(conversation_id).await;
+        let started = self
+            .start_review(NewReview {
+                conversation_id: conversation_id.clone(),
+                request_id: self.request_for(conversation_id, None).await,
+                task_id: None,
+                kind: ReviewKind::Code,
+                base,
+                tip,
+                author,
+                notify: ReviewFor::Orchestrator,
+                repo,
+                plan: None,
+            })
+            .await;
+        match started {
+            Ok((review, true)) if matches!(review.state, ReviewState::Failed { .. }) => {
+                self.tell_review(&review, None).await;
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(conversation = %conversation_id, error = %err, "the thread's commits could not be reviewed");
+            }
+        }
+    }
+
     /// The plan review of a lead's outline, in the background: the orchestrator gives the
     /// go-ahead meanwhile and hears the findings when they come.
     pub(crate) async fn review_plan(&self, lead: &Task, outline: &str) {

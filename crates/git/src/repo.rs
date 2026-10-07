@@ -1484,13 +1484,15 @@ mod tests {
     use crate::{Git, Oid};
     use std::{ffi::OsString, fs, path::PathBuf};
 
-    #[test]
-    fn commits_holding_the_same_files_have_the_same_tree() {
+    /// Git in a fresh temp folder, kept from the user's own config; the folder too.
+    fn test_git(name: &str) -> (PathBuf, Git) {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| since.as_nanos());
-        let dir =
-            std::env::temp_dir().join(format!("brigadier-git-tree-{}-{nanos}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "brigadier-git-{name}-{}-{nanos}",
+            std::process::id()
+        ));
         fs::create_dir_all(&dir).expect("a temp folder");
         // The user's own git config (signing, hooks, identity) stays out of it.
         let config = dir.join("gitconfig");
@@ -1508,7 +1510,12 @@ mod tests {
         ] {
             env.push((key.into(), value.into()));
         }
-        let git = Git::new(PathBuf::from("git"), env);
+        (dir, Git::new(PathBuf::from("git"), env))
+    }
+
+    #[test]
+    fn commits_holding_the_same_files_have_the_same_tree() {
+        let (dir, git) = test_git("tree");
         let root = dir.join("repo");
         assert!(git.init(&root).expect("git init").is_none());
         let repo = git.open(&root).expect("the repository");
@@ -1528,6 +1535,46 @@ mod tests {
         assert_ne!(tree(&first), tree(&changed));
         // A tree is not a commit.
         assert!(repo.tree_of(&tree(&first).0).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_trailer_is_found_only_in_its_range() {
+        let (dir, git) = test_git("trailer");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        fs::write(root.join("a.txt"), "a\n").expect("a file");
+        let start = repo.commit_changes("Add a", true).expect("a commit");
+        fs::write(root.join("a.txt"), "b\n").expect("a change");
+        let plain = repo
+            .commit_changes(
+                "Change a\n\nSays Brigadier-Author: thread in its body.",
+                true,
+            )
+            .expect("a commit");
+        assert!(
+            !repo
+                .has_trailer(&start, &plain, "Brigadier-Author", "thread")
+                .unwrap()
+        );
+        fs::write(root.join("a.txt"), "c\n").expect("a change");
+        let marked = repo
+            .commit_changes("Change a again\n\nBrigadier-Author: thread", true)
+            .expect("a commit");
+        assert!(
+            repo.has_trailer(&start, &marked, "Brigadier-Author", "thread")
+                .unwrap()
+        );
+        assert!(
+            repo.has_trailer(&plain, &marked, "brigadier-author", "Thread")
+                .unwrap()
+        );
+        assert!(
+            !repo
+                .has_trailer(&marked, &marked, "Brigadier-Author", "thread")
+                .unwrap()
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

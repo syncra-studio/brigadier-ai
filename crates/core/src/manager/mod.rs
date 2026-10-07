@@ -120,6 +120,9 @@ pub struct SessionManager {
     plans: tokio::sync::Mutex<()>,
     /// Held while a one-shot review is looked for and recorded, so a range is reviewed once.
     reviews: tokio::sync::Mutex<()>,
+    /// Held while the thread's new commits are looked for and their tip recorded
+    /// ([`thread`]), so a range is taken once.
+    thread_scans: tokio::sync::Mutex<()>,
     /// The one-shot reviews running now, by id: their conversation, and what ends one when
     /// its conversation closes.
     running_reviews: Mutex<HashMap<String, (ConversationId, tokio_util::sync::CancellationToken)>>,
@@ -198,6 +201,7 @@ impl SessionManager {
             session_worktrees: tokio::sync::Mutex::new(()),
             plans: tokio::sync::Mutex::new(()),
             reviews: tokio::sync::Mutex::new(()),
+            thread_scans: tokio::sync::Mutex::new(()),
             running_reviews: Mutex::default(),
             task_writes: tokio::sync::Mutex::new(()),
             waiting: tokio::sync::Mutex::new(()),

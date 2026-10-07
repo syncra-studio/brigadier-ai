@@ -11,16 +11,26 @@
 //! What its CLI was started with is remembered on it ([`ThreadLaunch`]): when the workspace or
 //! the level changes, the CLI is closed between turns and the next turn resumes the same
 //! native session with the new ones, told by a `[workspace]` or `[settings]` note.
+//!
+//! Commits the thread makes itself get their one review like any landing (THREAD-PLAN.md Q4,
+//! Q12). They are the commits that appear on the workspace's branch during a thread turn and
+//! are not a landing's, or carry the [`super::prompts::THREAD_TRAILER`]. The branch is looked
+//! at when a turn starts and ends, as a landing moves it, and before a merge; what was looked
+//! at is recorded per branch ([`DomainEvent::ThreadCommitsSeen`]), so a restart neither
+//! reviews a range again nor misses one.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use brigadier_git::Oid;
 use brigadier_providers::policy::Route as PolicyRoute;
 use brigadier_providers::{Access, ApprovalDecision, ApprovalRequest, ProviderEvent, ProviderKind};
 
-use super::SessionManager;
 use super::conversation::{Cli, ConvLive};
-use crate::model::{ConversationId, ConversationKind, Environment, PermissionLevel, Setup};
+use super::{SessionManager, blocking, git_error};
+use crate::model::{
+    ConversationId, ConversationKind, DomainEvent, Environment, PermissionLevel, Setup,
+};
 use crate::work::{ApprovalSubject, TaskKind};
 use crate::{Error, Result};
 
@@ -356,5 +366,134 @@ impl SessionManager {
             },
         )
         .await;
+    }
+}
+
+impl SessionManager {
+    /// Whether the conversation's thread runs a turn now.
+    pub(crate) async fn thread_turn_running(&self, id: &ConversationId) -> bool {
+        match self.conv(id) {
+            Ok(conv) => conv.turn_running().await,
+            Err(_) => false,
+        }
+    }
+
+    /// Looks for the thread's new commits on its workspace's branch, and starts their review.
+    /// `in_turn`: a turn runs (or just ended), so every new commit is the thread's; otherwise
+    /// only a range with a commit marked as the thread's is (the user's own commits between
+    /// turns are not).
+    pub(crate) async fn scan_thread_commits(&self, id: &ConversationId, in_turn: bool) {
+        let Some(workspace) = self.recorded_workspace(id) else {
+            return;
+        };
+        let _scan = self.thread_scans.lock().await;
+        self.scan_branch(id, &workspace.repo, &workspace.branch, None, in_turn)
+            .await;
+    }
+
+    /// The same for `branch` of `repo` (an overnight run's, before its merge).
+    pub(crate) async fn scan_thread_branch(
+        &self,
+        id: &ConversationId,
+        repo: &Path,
+        branch: &str,
+        in_turn: bool,
+    ) {
+        let _scan = self.thread_scans.lock().await;
+        self.scan_branch(id, repo, branch, None, in_turn).await;
+    }
+
+    /// A landing moved `branch` from `from` to `tip`. What the thread committed before it, up
+    /// to `from`, is looked at first (a turn that commits and then lands a worker); then the
+    /// record moves past the landing, which has its own review.
+    pub(crate) async fn thread_branch_landed(
+        &self,
+        id: &ConversationId,
+        repo: &Path,
+        branch: &str,
+        from: &Oid,
+        tip: &Oid,
+    ) {
+        let _scan = self.thread_scans.lock().await;
+        let in_turn = self.thread_turn_running(id).await;
+        self.scan_branch(id, repo, branch, Some(from.clone()), in_turn)
+            .await;
+        self.record_thread_tip(id, branch, tip).await;
+    }
+
+    /// Looks at `branch` from its recorded tip to `upto` (its tip now by default), with
+    /// [`Self::thread_scans`] held. The first look only records where it stands; a branch
+    /// whose history was rewritten starts over from where it stands now.
+    async fn scan_branch(
+        &self,
+        id: &ConversationId,
+        repo: &Path,
+        branch: &str,
+        upto: Option<Oid>,
+        in_turn: bool,
+    ) {
+        let seen = match self.core.board(id).await {
+            Ok(board) => board.thread_tips.get(branch).cloned(),
+            Err(_) => return,
+        };
+        let (key, value) = super::prompts::THREAD_TRAILER
+            .split_once(": ")
+            .unwrap_or_default();
+        let (git, repo_path, name) = (self.git.clone(), repo.to_owned(), branch.to_owned());
+        let found = blocking(move || {
+            let repo = git.open(&repo_path).map_err(git_error)?;
+            let tip = match upto {
+                Some(tip) => tip,
+                None => match repo.branch_tip(&name).map_err(git_error)? {
+                    Some(tip) => tip,
+                    None => return Ok(None),
+                },
+            };
+            let Some(seen) = seen.map(Oid) else {
+                return Ok(Some((tip, None)));
+            };
+            if seen == tip {
+                return Ok(None);
+            }
+            if !repo.ancestor(&seen, &tip).unwrap_or(false) {
+                return Ok(Some((tip, None)));
+            }
+            let theirs = in_turn
+                || repo
+                    .has_trailer(&seen, &tip, key, value)
+                    .map_err(git_error)?;
+            Ok(Some((tip, theirs.then_some(seen))))
+        })
+        .await;
+        match found {
+            Ok(Some((tip, base))) => {
+                if let Some(base) = base {
+                    self.review_thread_commits(id, base, tip.clone(), repo.to_owned())
+                        .await;
+                }
+                self.record_thread_tip(id, branch, &tip).await;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(conversation = %id, branch, error = %err, "could not look for the thread's commits");
+            }
+        }
+    }
+
+    async fn record_thread_tip(&self, id: &ConversationId, branch: &str, tip: &Oid) {
+        if let Err(err) = self
+            .core
+            .record_conversation(
+                id,
+                vec![DomainEvent::ThreadCommitsSeen {
+                    conversation_id: id.clone(),
+                    branch: branch.to_owned(),
+                    tip: tip.0.clone(),
+                }],
+            )
+            .await
+        {
+            tracing::warn!(conversation = %id, error = %err, "could not record the thread's commits as seen");
+        }
     }
 }

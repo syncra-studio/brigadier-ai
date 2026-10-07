@@ -1333,6 +1333,11 @@ impl SessionManager {
             }
         };
         self.brains.jobs.user_work(cli.provider);
+        if session {
+            // Where the branch stands before the turn: what came since the last turn is the
+            // thread's only if marked so.
+            self.scan_thread_commits(&conv.id, false).await;
+        }
         let (reseed, briefing) = {
             let mut state = conv.state.lock().await;
             let reseed = std::mem::take(&mut state.reseed);
@@ -2647,9 +2652,12 @@ impl SessionManager {
                 .unwrap_or_else(|| "The model did not finish compacting".into()),
         };
         self.end_compaction(conv, unfinished).await;
-        // Before the next turn may start: a turn admitted in between would still run on this
-        // CLI, past the swap threshold.
         if conv.kind == ConversationKind::Session {
+            // What the thread committed in this turn gets its review, before a next turn can
+            // take its commits for the user's.
+            self.scan_thread_commits(&conv.id, true).await;
+            // Before the next turn may start: a turn admitted in between would still run on
+            // this CLI, past the swap threshold.
             self.consider_rebirth(conv, cli).await;
         }
         let (limit_hit, carried, asked, served) = {

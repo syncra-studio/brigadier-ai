@@ -401,3 +401,200 @@ async fn the_threads_plan_review_runs_in_the_background() {
     assert!(findings.contains("never checks the links"), "{findings}");
     flow.stop().await;
 }
+
+/// Commits a file in the thread's workspace, as the thread's own tiny edit would.
+fn commit_in_workspace(turn: &Turn, file: &str, text: &str, message: &str) -> String {
+    let workspace = &turn.add_dirs[0];
+    std::fs::write(workspace.join(file), text).unwrap();
+    git(workspace, &["add", file]);
+    git(workspace, &["commit", "-q", "-m", message]);
+    git(workspace, &["rev-parse", "HEAD"])
+}
+
+/// The code reviews of the session, oldest first, once all have ended.
+async fn code_reviews(flow: &Flow, count: usize) -> Vec<crate::work::ReviewRun> {
+    let board = flow
+        .until("the reviews to end", |board| {
+            board.reviews.len() >= count
+                && board
+                    .reviews
+                    .values()
+                    .all(|review| review.state != crate::work::ReviewState::Running)
+        })
+        .await;
+    let mut reviews: Vec<_> = board.reviews.values().cloned().collect();
+    reviews.sort_by_key(|review| review.started_at_ms);
+    reviews
+}
+
+/// A commit the thread makes in a turn gets one review by the other vendor, whose findings
+/// reach the thread; a restart neither reviews it again nor misses it.
+#[tokio::test]
+async fn a_thread_commit_is_reviewed_once() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = inputs.clone();
+    let commits: Arc<Mutex<Vec<String>>> = Arc::default();
+    let made = commits.clone();
+    let mut flow = Flow::start(
+        "thread-commit",
+        Options {
+            reviews: Some(script(|turn| async move {
+                assert!(turn.input.contains("git diff"), "{}", turn.input);
+                Reply::text("- [P2] NOTES.md has no title — NOTES.md:1\n  Add one.")
+            })),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let (log, made) = (log.clone(), made.clone());
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("Add notes.") {
+                    let start = git(&turn.add_dirs[0], &["rev-parse", "HEAD"]);
+                    let tip = commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                    made.lock().unwrap().extend([start, tip]);
+                    return Reply::text("Added NOTES.md.");
+                }
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    let reviews = code_reviews(&flow, 1).await;
+    assert_eq!(reviews.len(), 1, "{reviews:#?}");
+    let review = &reviews[0];
+    let (start, tip) = {
+        let commits = commits.lock().unwrap();
+        (commits[0].clone(), commits[1].clone())
+    };
+    assert_eq!(review.kind, crate::work::ReviewKind::Code);
+    assert!(review.task_id.is_none());
+    assert_eq!(
+        (review.base.as_str(), review.tip.as_str()),
+        (start.as_str(), tip.as_str())
+    );
+    assert_eq!(review.author, ProviderKind::Claude);
+    assert_eq!(review.reviewer, ProviderKind::Codex);
+    flow.until("the findings to reach the thread", |_| {
+        inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|input| input.contains("[review of your commits · Codex found 1"))
+    })
+    .await;
+    flow.settled().await;
+    // After a restart, more turns find nothing new.
+    flow.restart().await;
+    flow.say("Anything else?").await;
+    flow.settled().await;
+    let board = flow.board().await;
+    assert_eq!(board.reviews.len(), 1, "{:#?}", board.reviews);
+    let branch = git(
+        &session_worktree(&flow),
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    );
+    assert_eq!(board.thread_tips.get(&branch), Some(&tip));
+    flow.stop().await;
+}
+
+/// A turn commits on the session branch and then lands a worker on top, within the same turn:
+/// the thread's commit is reviewed from where the turn found the branch, and the landing on
+/// its own, on top of it; nothing is reviewed twice.
+#[tokio::test]
+async fn a_thread_commit_before_a_landing_in_the_same_turn_is_reviewed_on_its_own() {
+    let commits: Arc<Mutex<Vec<String>>> = Arc::default();
+    let made = commits.clone();
+    let flow = Flow::start(
+        "thread-commit-land",
+        Options::default(),
+        script(move |turn| {
+            let made = made.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    if turn.input.contains("[report task-1") {
+                        let start = git(&turn.add_dirs[0], &["rev-parse", "HEAD"]);
+                        let tip = commit_in_workspace(
+                            &turn,
+                            "NOTES.md",
+                            "notes\n",
+                            "Add notes\n\nBrigadier-Author: thread",
+                        );
+                        made.lock().unwrap().extend([start, tip]);
+                        // The branch moved under the worker: it is rebased, checks itself and
+                        // lands on its own, while this turn still runs.
+                        let landed = turn.call("land_phase", json!({"task": "task-1"})).await;
+                        assert!(!landed.is_error, "{}", landed.text);
+                        assert!(landed.text.contains("rebased"), "{}", landed.text);
+                        let deadline =
+                            std::time::Instant::now() + std::time::Duration::from_secs(30);
+                        loop {
+                            let tasks = turn.call("list_tasks", json!({})).await;
+                            if tasks.text.contains("Landed") {
+                                break;
+                            }
+                            assert!(std::time::Instant::now() < deadline, "{}", tasks.text);
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        }
+                        return Reply::text("Added the greeting and notes.");
+                    }
+                    if turn.input.contains("Add a greeting") {
+                        let reply = turn
+                            .call(
+                                "delegate_task",
+                                json!({"title": "Add a greeting", "kind": "implement",
+                                       "spec": "Create hello.txt.", "provider": "codex"}),
+                            )
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        return Reply::text("[quiet]");
+                    }
+                    return Reply::text("Noted.");
+                }
+                turn.write("hello.txt", "hello\n");
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "Added hello.txt.", "changes": ["hello.txt"]}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("Reported.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add a greeting.").await;
+    flow.settled().await;
+    let reviews = code_reviews(&flow, 2).await;
+    let (start, thread_tip) = {
+        let commits = commits.lock().unwrap();
+        (commits[0].clone(), commits[1].clone())
+    };
+    let board = flow.board().await;
+    let lead = Flow::task(&board, 1);
+    let landed = lead.landed.clone().expect("the worker landed");
+    let ranges: Vec<(Option<&crate::work::TaskId>, &str, &str)> = reviews
+        .iter()
+        .map(|review| {
+            (
+                review.task_id.as_ref(),
+                review.base.as_str(),
+                review.tip.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(reviews.len(), 2, "{ranges:#?}");
+    assert!(
+        ranges.contains(&(None, start.as_str(), thread_tip.as_str())),
+        "the thread's commit, from where the turn found the branch: {ranges:#?}"
+    );
+    assert!(
+        ranges.contains(&(Some(&lead.id), thread_tip.as_str(), landed.as_str())),
+        "the landing, on top of the thread's commit: {ranges:#?}"
+    );
+    let branch = lead.workspace.as_ref().unwrap().target.clone().unwrap();
+    assert_eq!(board.thread_tips.get(&branch), Some(&landed));
+    flow.stop().await;
+}

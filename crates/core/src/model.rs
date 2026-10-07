@@ -1427,6 +1427,13 @@ pub enum DomainEvent {
     ReviewUpdated {
         review: crate::work::ReviewRun,
     },
+    /// The thread's commits on `branch` were looked at up to `tip`: what follows it is new
+    /// (THREAD-PLAN.md Q4, Q12).
+    ThreadCommitsSeen {
+        conversation_id: ConversationId,
+        branch: String,
+        tip: String,
+    },
     QueueChanged {
         conversation_id: ConversationId,
         queue: MessageQueue,
@@ -1528,6 +1535,7 @@ impl DomainEvent {
             Self::QuestionUpdated { .. } => "question.updated",
             Self::PlanUpdated { .. } => "plan.updated",
             Self::ReviewUpdated { .. } => "review.updated",
+            Self::ThreadCommitsSeen { .. } => "thread.seen",
             Self::QueueChanged { .. } => "queue.changed",
             Self::WorkerEvent { .. } => "worker.event",
             Self::OrchestratorLogged { .. } => "orchestrator.logged",

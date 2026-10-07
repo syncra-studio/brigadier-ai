@@ -102,6 +102,8 @@ function summary(event: DomainEvent): string {
       return `“${event.plan.title}” ${event.plan.state.type}`;
     case "reviewUpdated":
       return `${event.review.kind} review ${event.review.state.type}`;
+    case "threadCommitsSeen":
+      return `${event.branch} seen at ${event.tip.slice(0, 10)}`;
     case "overnightUpdated":
       return `“${event.run.name}” ${event.run.state} r${event.run.revision}`;
     case "queueChanged":

@@ -26,6 +26,7 @@ pub(crate) const KINDS: &[&str] = &[
     "question.updated",
     "plan.updated",
     "review.updated",
+    "thread.seen",
     "queue.changed",
     "request.updated",
     "worker.step",
@@ -77,6 +78,8 @@ pub(crate) struct Board {
     pub(crate) runs: HashMap<OvernightRunId, OvernightRun>,
     /// Its one-shot reviews, by id.
     pub(crate) reviews: HashMap<String, ReviewRun>,
+    /// Per branch: the tip up to which the thread's commits were looked at.
+    pub(crate) thread_tips: HashMap<String, String>,
 }
 
 impl Board {
@@ -160,6 +163,9 @@ impl Board {
             }
             DomainEvent::ReviewUpdated { review } => {
                 self.reviews.insert(review.id.clone(), review.clone());
+            }
+            DomainEvent::ThreadCommitsSeen { branch, tip, .. } => {
+                self.thread_tips.insert(branch.clone(), tip.clone());
             }
             DomainEvent::QueueChanged { queue, .. } => self.queue = queue.clone(),
             DomainEvent::RunStateChanged {

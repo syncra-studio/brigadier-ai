@@ -136,6 +136,20 @@ fn ai_coauthor(line: &str) -> bool {
 }
 
 impl Repo {
+    /// Whether a commit from `base` (excluded) to `tip` carries the trailer `key: value`, as
+    /// git parses a message's trailers (`%(trailers:key=…,valueonly)`; the value compared
+    /// without case).
+    pub fn has_trailer(&self, base: &Oid, tip: &Oid, key: &str, value: &str) -> Result<bool> {
+        valid_oid(base)?;
+        valid_oid(tip)?;
+        let format = format!("--format=%(trailers:key={key},valueonly)");
+        let range = format!("{}..{}", base.0, tip.0);
+        let out = self.cmd(&["log", &format, &range, "--"], true)?;
+        Ok(parse::text(&out)?
+            .lines()
+            .any(|line| line.trim().eq_ignore_ascii_case(value)))
+    }
+
     /// The commits from `base` (excluded) to `tip`, with the Co-authored-by trailers that name
     /// an AI left out of their messages: `None`, with nothing written, when no message has one.
     /// Otherwise every commit from the first such message on is written again with the same
