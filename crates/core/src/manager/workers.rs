@@ -1452,7 +1452,7 @@ impl SessionManager {
             && let Some(worktree) = &workspace.worktree
             && let Ok(repo) = self.git.open(worktree)
         {
-            writable_roots.extend(commit_roots(&repo));
+            writable_roots.extend(commit_roots(&repo, task.route.choice.provider));
         }
         // Builds and installs write the toolchains' shared caches.
         for root in toolchain_roots(self.runtime.cli_env()) {
@@ -3607,8 +3607,11 @@ pub(crate) fn category(kind: TaskKind) -> brigadier_router::TaskCategory {
 /// and the shared objects, refs and logs, never the shared folder whole: Codex keeps a `.git`
 /// folder read-only even inside a writable root (so `index.lock` was denied), and the hooks
 /// and config there stay out of reach without a rule of their own. The main checkout's git
-/// folder holds its index at the top, so it stays one root.
-pub(crate) fn commit_roots(repo: &brigadier_git::Repo) -> Vec<PathBuf> {
+/// folder holds its index at the top, so it stays one root. A commit also takes (and gives
+/// back) the shared `packed-refs.lock`: Codex gets that one file, or git prints "Unable to
+/// create '…/packed-refs.lock': Operation not permitted" on every commit. Claude's sandbox
+/// already lets a linked worktree write the shared git folder (but its hooks and config).
+pub(crate) fn commit_roots(repo: &brigadier_git::Repo, provider: ProviderKind) -> Vec<PathBuf> {
     let common = repo.common_dir().to_owned();
     let own = repo.git_dir().unwrap_or_else(|_| common.clone());
     if own == common {
@@ -3616,12 +3619,16 @@ pub(crate) fn commit_roots(repo: &brigadier_git::Repo) -> Vec<PathBuf> {
     }
     // A clone always has `logs`; a missing one would leave git unable to write its reflog.
     let _ = std::fs::create_dir_all(common.join("logs"));
-    vec![
+    let mut roots = vec![
         own,
         common.join("objects"),
         common.join("refs"),
         common.join("logs"),
-    ]
+    ];
+    if provider == ProviderKind::Codex {
+        roots.push(common.join("packed-refs.lock"));
+    }
+    roots
 }
 
 /// Where a task's tests and smoke runs keep their data: under the system's temporary folder,
@@ -3931,6 +3938,61 @@ fn is_late_findings(summary: &str, message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_linked_worktree_commits_into_its_own_git_folder_and_the_shared_store() {
+        let dir = std::env::temp_dir().join(format!("brigadier-roots-{}", uuid::Uuid::new_v4()));
+        let main = dir.join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        let git = |cwd: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&main, &["init", "-q", "-b", "main"]);
+        git(&main, &["commit", "-q", "--allow-empty", "-m", "Start"]);
+        git(&main, &["worktree", "add", "-q", "-b", "task", "../task"]);
+        let tool = brigadier_git::Git::new("git".into(), Vec::new());
+        let common = main.join(".git").canonicalize().unwrap();
+        let roots = |path: &Path, provider| {
+            commit_roots(&tool.open(path).unwrap(), provider)
+                .iter()
+                .map(|root| {
+                    root.strip_prefix(&common)
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|_| root.clone())
+                })
+                .collect::<Vec<_>>()
+        };
+        let linked = roots(&dir.join("task"), ProviderKind::Codex);
+        assert_eq!(
+            linked,
+            [
+                "worktrees/task",
+                "objects",
+                "refs",
+                "logs",
+                "packed-refs.lock"
+            ]
+            .map(PathBuf::from)
+            .to_vec(),
+            "never the shared folder whole, so its hooks and config stay out of reach"
+        );
+        assert!(
+            !roots(&dir.join("task"), ProviderKind::Claude)
+                .contains(&PathBuf::from("packed-refs.lock"))
+        );
+        assert_eq!(roots(&main, ProviderKind::Codex), vec![PathBuf::new()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_message_the_report_points_at_is_kept_however_short() {
