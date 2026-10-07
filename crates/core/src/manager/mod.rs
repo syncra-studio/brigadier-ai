@@ -46,6 +46,7 @@ mod project_removal;
 mod prompts;
 mod pull_request;
 mod quiet;
+pub(crate) mod reads;
 mod rebirth;
 mod requests;
 mod research;

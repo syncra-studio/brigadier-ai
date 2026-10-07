@@ -1028,22 +1028,22 @@ impl SessionManager {
             .ok_or_else(|| Error::Invalid("this project has no repository to index".into()))
     }
 
-    /// `code_search`.
+    /// `code_search`: its answer, and the files it names (repository-relative).
     pub(crate) async fn code_search_tool(
         &self,
         id: &ConversationId,
         args: CodeSearch,
-    ) -> Result<String> {
-        code_search(self.task_index(id).await?, args).await
+    ) -> Result<(String, Vec<String>)> {
+        code_search_found(self.task_index(id).await?, args).await
     }
 
-    /// `code_refs`.
+    /// `code_refs`: its answer, and the files it names (repository-relative).
     pub(crate) async fn code_refs_tool(
         &self,
         id: &ConversationId,
         args: CodeRefs,
-    ) -> Result<String> {
-        code_refs(self.task_index(id).await?, args).await
+    ) -> Result<(String, Vec<String>)> {
+        code_refs_found(self.task_index(id).await?, args).await
     }
 
     /// `project_map`.
@@ -2193,6 +2193,11 @@ pub(crate) fn index_error(err: brigadier_index::Error) -> Error {
 
 /// `code_search`, answered from `index`.
 pub(crate) async fn code_search(index: CodeIndex, args: CodeSearch) -> Result<String> {
+    Ok(code_search_found(index, args).await?.0)
+}
+
+/// [`code_search`], with the files its answer names, each once.
+async fn code_search_found(index: CodeIndex, args: CodeSearch) -> Result<(String, Vec<String>)> {
     let kind = match args.kind.as_deref() {
         Some("symbol") => SearchKind::Symbol,
         Some("file") => SearchKind::File,
@@ -2212,33 +2217,60 @@ pub(crate) async fn code_search(index: CodeIndex, args: CodeSearch) -> Result<St
     };
     let hits = blocking(move || index.search(&query).map_err(index_error)).await?;
     if hits.is_empty() {
-        return Ok("No symbol or file matches.".into());
+        return Ok(("No symbol or file matches.".into(), Vec::new()));
     }
     let mut text = String::new();
+    let mut files: Vec<String> = Vec::new();
     for hit in hits {
-        match hit {
+        let path = match hit {
             CodeHit::Symbol { symbol } => {
                 text.push_str(&format!(
                     "{} {} — {}:{}\n  {}\n",
                     symbol.kind, symbol.name, symbol.path, symbol.line, symbol.signature
                 ));
+                symbol.path
             }
             CodeHit::File {
                 path,
                 language,
                 bytes,
-            } => text.push_str(&format!("file {path} ({language}, {bytes} bytes)\n")),
+            } => {
+                text.push_str(&format!("file {path} ({language}, {bytes} bytes)\n"));
+                path
+            }
+        };
+        if !files.contains(&path) {
+            files.push(path);
         }
     }
-    Ok(text.trim_end().to_owned())
+    Ok((text.trim_end().to_owned(), files))
 }
 
 /// `code_refs`, answered from `index`.
 pub(crate) async fn code_refs(index: CodeIndex, args: CodeRefs) -> Result<String> {
+    Ok(code_refs_found(index, args).await?.0)
+}
+
+/// [`code_refs`], with the files its answer names, each once.
+async fn code_refs_found(index: CodeIndex, args: CodeRefs) -> Result<(String, Vec<String>)> {
     let limit = args.limit.unwrap_or(50).clamp(1, 500);
     let refs = blocking(move || index.refs(&args.symbol, limit).map_err(index_error)).await?;
     if refs.definitions.is_empty() && refs.references.is_empty() {
-        return Ok(format!("Nothing named `{}` is indexed.", refs.name));
+        return Ok((
+            format!("Nothing named `{}` is indexed.", refs.name),
+            Vec::new(),
+        ));
+    }
+    let mut files: Vec<String> = Vec::new();
+    for path in refs
+        .definitions
+        .iter()
+        .map(|def| &def.path)
+        .chain(refs.references.iter().map(|reference| &reference.path))
+    {
+        if !files.contains(path) {
+            files.push(path.clone());
+        }
     }
     let mut text = format!(
         "`{}` (references are matched by name, without type information)\nDefinitions:\n",
@@ -2260,7 +2292,7 @@ pub(crate) async fn code_refs(index: CodeIndex, args: CodeRefs) -> Result<String
     if refs.truncated {
         text.push_str("[more references exist; raise `limit` to see them]\n");
     }
-    Ok(text.trim_end().to_owned())
+    Ok((text.trim_end().to_owned(), files))
 }
 
 /// `project_map`, answered from `index`.

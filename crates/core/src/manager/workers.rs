@@ -1928,6 +1928,9 @@ impl SessionManager {
                     Some(event @ ProviderEvent::Progress { .. }) => {
                         live.note_event(&cli, &event).await;
                     }
+                    // Only the thread's reads are kept (`super::reads`); the call that made it
+                    // is stored as itself.
+                    Some(ProviderEvent::Looked { .. }) => {}
                     Some(event) if is_delta(&event) => {
                         live.note_event(&cli, &event).await;
                         merge_delta(&mut deltas, event);

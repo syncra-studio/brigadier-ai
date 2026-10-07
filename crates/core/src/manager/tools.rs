@@ -2,7 +2,7 @@
 //! arrive later as envelopes. Every reply the orchestrator reads is logged as a context
 //! injection.
 
-use brigadier_providers::ProviderKind;
+use brigadier_providers::{FileSearch, ProviderKind, SearchKind};
 
 use super::SessionManager;
 use super::prompts;
@@ -352,8 +352,39 @@ impl SessionManager {
             OrchestratorCall::PhaseDone(args) => self.phase_done(id, args).await,
             OrchestratorCall::ProposePhases(args) => self.propose_phases(id, args).await,
             OrchestratorCall::ProposeOvernight(args) => self.interpret_overnight(id, args).await,
-            OrchestratorCall::CodeSearch(args) => self.code_search_tool(id, args).await,
-            OrchestratorCall::CodeRefs(args) => self.code_refs_tool(id, args).await,
+            // What the thread finds in the index counts as its own search (`super::reads`).
+            OrchestratorCall::CodeSearch(args) => {
+                let search = FileSearch {
+                    kind: match args.kind.as_deref() {
+                        Some("file") => SearchKind::Files,
+                        _ => SearchKind::Content,
+                    },
+                    pattern: Some(args.query.clone()),
+                    scope: args.path.clone(),
+                    glob: args
+                        .language
+                        .as_ref()
+                        .map(|language| format!("language:{language}")),
+                    hits: Vec::new(),
+                };
+                let (text, hits) = self.code_search_tool(id, args).await?;
+                self.looked_in_index(id, FileSearch { hits, ..search })
+                    .await;
+                Ok(text)
+            }
+            OrchestratorCall::CodeRefs(args) => {
+                let symbol = args.symbol.clone();
+                let (text, hits) = self.code_refs_tool(id, args).await?;
+                let search = FileSearch {
+                    kind: SearchKind::Content,
+                    pattern: Some(symbol),
+                    scope: None,
+                    glob: None,
+                    hits,
+                };
+                self.looked_in_index(id, search).await;
+                Ok(text)
+            }
             OrchestratorCall::ProjectMap => self.project_map_tool(id).await,
             OrchestratorCall::ReviewPlan(args) => self.review_thread_plan(id, args).await,
             OrchestratorCall::Run(args) => {
@@ -531,8 +562,14 @@ impl SessionManager {
             WorkerCall::SubmitReport(args) => {
                 self.worker_report(&conversation_id, &task_id, args).await
             }
-            WorkerCall::CodeSearch(args) => self.code_search_tool(&conversation_id, args).await,
-            WorkerCall::CodeRefs(args) => self.code_refs_tool(&conversation_id, args).await,
+            WorkerCall::CodeSearch(args) => self
+                .code_search_tool(&conversation_id, args)
+                .await
+                .map(|(text, _)| text),
+            WorkerCall::CodeRefs(args) => self
+                .code_refs_tool(&conversation_id, args)
+                .await
+                .map(|(text, _)| text),
             WorkerCall::ProjectMap => self.project_map_tool(&conversation_id).await,
         };
         match result {

@@ -569,6 +569,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "reviewUpdated":
     case "threadCommitsSeen":
     case "outputStored":
+    case "threadLooked":
     case "overnightUpdated":
     case "queueChanged":
     case "workerEvent":

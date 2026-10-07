@@ -28,6 +28,7 @@ pub(crate) const KINDS: &[&str] = &[
     "review.updated",
     "thread.seen",
     "output.stored",
+    "thread.looked",
     "queue.changed",
     "request.updated",
     "worker.step",
@@ -83,6 +84,9 @@ pub(crate) struct Board {
     pub(crate) thread_tips: HashMap<String, String>,
     /// The thread's command outputs stored whole, by alias (`out-<id>`).
     pub(crate) outputs: HashMap<String, crate::work::StoredOutput>,
+    /// What the thread read and searched, bounded ([`crate::manager::reads::ReadLog`]);
+    /// shared, so copying a board doesn't copy it.
+    pub(crate) thread_reads: std::sync::Arc<crate::manager::reads::ReadLog>,
 }
 
 impl Board {
@@ -173,6 +177,9 @@ impl Board {
             DomainEvent::OutputStored { output, .. } => {
                 self.outputs.insert(output.alias.clone(), output.clone());
             }
+            DomainEvent::ThreadLooked {
+                reads, searches, ..
+            } => std::sync::Arc::make_mut(&mut self.thread_reads).apply(reads, searches),
             DomainEvent::QueueChanged { queue, .. } => self.queue = queue.clone(),
             DomainEvent::RunStateChanged {
                 state, request_id, ..

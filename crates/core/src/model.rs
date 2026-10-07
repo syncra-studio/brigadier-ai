@@ -1440,6 +1440,13 @@ pub enum DomainEvent {
         conversation_id: ConversationId,
         output: crate::work::StoredOutput,
     },
+    /// What the session's thread read and searched in one turn, its tool calls' in order
+    /// (THREAD-PLAN.md Q8 lever 1; [`crate::manager::reads`]).
+    ThreadLooked {
+        conversation_id: ConversationId,
+        reads: Vec<crate::work::ThreadRead>,
+        searches: Vec<crate::work::ThreadSearch>,
+    },
     QueueChanged {
         conversation_id: ConversationId,
         queue: MessageQueue,
@@ -1543,6 +1550,7 @@ impl DomainEvent {
             Self::ReviewUpdated { .. } => "review.updated",
             Self::ThreadCommitsSeen { .. } => "thread.seen",
             Self::OutputStored { .. } => "output.stored",
+            Self::ThreadLooked { .. } => "thread.looked",
             Self::QueueChanged { .. } => "queue.changed",
             Self::WorkerEvent { .. } => "worker.event",
             Self::OrchestratorLogged { .. } => "orchestrator.logged",

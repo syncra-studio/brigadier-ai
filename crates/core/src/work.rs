@@ -400,6 +400,40 @@ pub struct StoredOutput {
     pub at_ms: i64,
 }
 
+/// A file the session's thread read with its own tools (THREAD-PLAN.md Q8 lever 1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadRead {
+    /// Absolute, symlinks resolved (as written when the file is gone).
+    pub path: String,
+    /// The lines it got; `None` for the whole file, or a part the tool didn't tell.
+    pub lines: Option<brigadier_providers::LineRange>,
+    /// Outside the thread's workspace when it read it.
+    pub outside: bool,
+}
+
+/// A search the session's thread made with its own tools.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSearch {
+    pub kind: brigadier_providers::SearchKind,
+    /// The text or file name pattern; `None` for a listing.
+    pub pattern: Option<String>,
+    /// The folder or file searched, absolute (the CLI's working directory when the tool
+    /// didn't say).
+    pub scope: String,
+    /// The file filter (`Grep`'s `glob` or `type:<name>`).
+    pub glob: Option<String>,
+    /// The files it found that exist, absolute, at most
+    /// [`crate::manager::reads::HITS_STORED`].
+    pub hits: Vec<String>,
+    /// Files found beyond those.
+    #[serde(default)]
+    pub more_hits: u32,
+    /// Its scope is outside the thread's workspace.
+    pub outside: bool,
+}
+
 /// Where a [`StoredOutput`] came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

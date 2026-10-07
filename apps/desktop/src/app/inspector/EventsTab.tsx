@@ -106,6 +106,8 @@ function summary(event: DomainEvent): string {
       return `${event.branch} seen at ${event.tip.slice(0, 10)}`;
     case "outputStored":
       return `${event.output.alias} ${event.output.source} ${event.output.bytes} B`;
+    case "threadLooked":
+      return `${event.reads.length} read${event.reads.length === 1 ? "" : "s"}, ${event.searches.length} search${event.searches.length === 1 ? "" : "es"}`;
     case "overnightUpdated":
       return `“${event.run.name}” ${event.run.state} r${event.run.revision}`;
     case "queueChanged":

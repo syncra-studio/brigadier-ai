@@ -39,6 +39,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::cold::CacheMark;
 use super::prompts;
+use super::reads;
 use super::rebirth::{self, BriefingPlan, RebirthPrep};
 use super::usage::TokenOwner;
 use super::{EventSource, SessionManager};
@@ -124,6 +125,9 @@ pub(crate) struct Cli {
 #[derive(Default)]
 struct ConvState {
     cli: Option<Arc<Cli>>,
+    /// What the thread read and searched in the running turn, recorded when it ends
+    /// ([`super::reads`]).
+    looked: Vec<ProviderEvent>,
     /// What the CLI session was last told of the parts of its instructions that can change
     /// (its role instructions and later notes); unknown until a turn reads it from the log.
     told: Option<crate::work::Told>,
@@ -256,6 +260,19 @@ impl ConvLive {
             }),
             retry: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// Holds what a tool call of the thread read or searched for the turn; the batch to record
+    /// now once [`reads::BATCH_MAX`] are held.
+    pub(super) async fn hold_looked(&self, event: ProviderEvent) -> Option<Vec<ProviderEvent>> {
+        let mut state = self.state.lock().await;
+        state.looked.push(event);
+        (state.looked.len() >= reads::BATCH_MAX).then(|| std::mem::take(&mut state.looked))
+    }
+
+    /// What the thread read and searched since it was last recorded.
+    pub(super) async fn take_looked(&self) -> Vec<ProviderEvent> {
+        std::mem::take(&mut self.state.lock().await.looked)
     }
 
     /// The conversation's CLI session, while one runs.
@@ -2108,6 +2125,12 @@ impl SessionManager {
                 event = events.recv() => match event {
                     // Never stored.
                     Some(ProviderEvent::Progress { .. }) => {}
+                    // Only a session's thread keeps what it read (a Chat only searches the web).
+                    Some(event @ ProviderEvent::Looked { .. }) => {
+                        if conv.kind == ConversationKind::Session {
+                            self.hold_looked(&conv, event).await;
+                        }
+                    }
                     Some(event) if is_delta(&event) => {
                         merge_delta(&mut deltas, event);
                         deadline.get_or_insert_with(|| tokio::time::Instant::now() + DELTA_WINDOW);
@@ -2115,6 +2138,12 @@ impl SessionManager {
                     Some(event) => {
                         deadline = None;
                         self.store_deltas(&conv, quiet.pass(std::mem::take(&mut deltas))).await;
+                        if matches!(
+                            event,
+                            ProviderEvent::TurnCompleted { .. } | ProviderEvent::Exited { .. }
+                        ) {
+                            self.record_held_looked(&conv).await;
+                        }
                         let mut exited = false;
                         for event in
                             self.session_events(EventSource::Conversation(&conv.id), &cli, event)
@@ -2158,6 +2187,7 @@ impl SessionManager {
             }
         }
         self.store_deltas(&conv, quiet.pass(deltas)).await;
+        self.record_held_looked(&conv).await;
         if let Some(reply) = held.take() {
             self.on_conversation_event(&conv, &cli, reply).await;
         }

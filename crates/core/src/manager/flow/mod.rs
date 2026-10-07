@@ -159,6 +159,11 @@ impl Turn {
             .await;
     }
 
+    /// Reports `event` as the session's CLI would, mid-turn.
+    pub async fn emit(&self, event: ProviderEvent) {
+        let _ = self.events.send(event).await;
+    }
+
     /// Runs git in the session's folder.
     pub fn git(&self, args: &[&str]) -> String {
         git(&self.cwd, args)
@@ -900,6 +905,8 @@ impl Flow {
 
 #[cfg(test)]
 mod overnight_tests;
+#[cfg(test)]
+mod reads_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
