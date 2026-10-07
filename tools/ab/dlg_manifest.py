@@ -29,6 +29,22 @@ def norm(text):
     return re.sub(r"\s+", " ", text or "").strip()[:400]
 
 
+def renderings(last):
+    """A review's final message as `dlg review` may save it: verbatim, or (for `codex exec
+    review`'s JSON verdict) its explanation or a finding's title/body."""
+    out = [norm(last)]
+    try:
+        v = json.loads(last)
+    except (TypeError, ValueError):
+        return out
+    if isinstance(v, dict):
+        out.append(norm(v.get("overall_explanation")))
+        for f in v.get("findings") or []:
+            if isinstance(f, dict):
+                out += [norm(f.get("title")), norm(f.get("body"))]
+    return [t for t in out if t]
+
+
 checkouts = set(spellings(repo))
 for line in subprocess.run(["git", "-C", repo, "worktree", "list", "--porcelain"], capture_output=True, text=True).stdout.splitlines():
     if line.startswith("worktree "):
@@ -95,7 +111,7 @@ for f in glob.glob(f"{H}/.codex/sessions/*/*/*/rollout-*.jsonl"):
         r = json.loads(line); q = r.get("payload") or {}
         if q.get("type") == "task_complete" and q.get("last_agent_message"):
             last = q["last_agent_message"]
-    finals[p["id"]] = (norm(last), p.get("cwd") or "")
+    finals[p["id"]] = (renderings(last) if last else [], p.get("cwd") or "")
     if p["id"] in listed:
         continue
     if inside(p.get("cwd") or ""):
@@ -109,7 +125,8 @@ counted = {s["id"] for s in out}
 unmatched = []
 for r in reviews:
     text = norm(open(r).read())
-    hits = [sid for sid, (last, _) in finals.items() if last and (last[:200] == text[:200])]
+    hits = [sid for sid, (lasts, _) in finals.items()
+            if any(t[:200] == text[:200] or (len(t) >= 40 and t[:200] in text) for t in lasts)]
     if not hits:
         unmatched.append(os.path.basename(r))
     for sid in hits:
