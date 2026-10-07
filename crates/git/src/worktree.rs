@@ -66,6 +66,14 @@ impl Worktree {
         Ok(())
     }
 
+    /// The tree of the checkout's files as they stand: the index copied to a private file,
+    /// every change and untracked, not ignored file added, the real index untouched. The same
+    /// files give the same tree, committed or not.
+    pub fn checkout_tree(&self) -> Result<Oid> {
+        let (_, tree) = self.repo.capture()?;
+        Ok(tree)
+    }
+
     fn untracked(&self) -> Result<BTreeSet<String>> {
         let mut untracked = self.repo.status(false)?.untracked();
         if let Some(prepared) = &*self.prepared.lock().unwrap_or_else(|e| e.into_inner())
@@ -939,6 +947,26 @@ mod tests {
         );
         let status = text(repo, &["status", "--porcelain", "--untracked-files=all"]);
         assert_eq!(status, " M a.rs\n?? debug.log\n");
+    }
+
+    #[test]
+    fn the_checkout_tree_counts_edits_and_new_files_but_not_ignored_ones() {
+        let f = fixture("checkout-tree");
+        let repo = &f.wt.repo;
+        commit(repo, "Ignore logs", &[(".gitignore", "*.log\n")]);
+        let clean = f.wt.checkout_tree().expect("a tree");
+        assert_eq!(clean, f.wt.checkout_tree().expect("a tree"), "stable");
+        let index = text(repo, &["write-tree"]);
+        fs::write(repo.root().join("debug.log"), "ignored\n").expect("an ignored file");
+        assert_eq!(f.wt.checkout_tree().expect("a tree"), clean);
+        fs::write(repo.root().join("shared.txt"), "edited\n").expect("an edit");
+        let edited = f.wt.checkout_tree().expect("a tree");
+        assert_ne!(edited, clean);
+        fs::write(repo.root().join("new.rs"), "new\n").expect("a new file");
+        let added = f.wt.checkout_tree().expect("a tree");
+        assert_ne!(added, edited);
+        // The real index is untouched.
+        assert_eq!(text(repo, &["write-tree"]), index);
     }
 
     #[test]
