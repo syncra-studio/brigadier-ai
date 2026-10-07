@@ -57,8 +57,19 @@ fn phase_of_lead(turn: &Turn) -> Option<u32> {
 struct Thread {
     /// The phases it delegates, in order.
     order: Vec<u32>,
+    /// For a bare goal, the phases it plans with `plan_phases` at the start.
+    plans: u32,
     /// Phases it tries to delegate at the start, which Brigadier must refuse.
     refused: Vec<u32>,
+    /// Phases it delegates at the start alongside the first of `order`, once that one's lead
+    /// sets this (when given).
+    alongside: Vec<u32>,
+    first_working: Option<Arc<AtomicBool>>,
+    /// Phases it tries to delegate before each next phase, which Brigadier must refuse.
+    refused_later: Vec<u32>,
+    /// Phases the user leaves out mid-run: their leads' handoffs land what they finished, and
+    /// aren't settled.
+    dropped: Vec<u32>,
     /// It commits a tiny edit of its own in its workspace at the start.
     tiny_edit: bool,
     /// It tries to settle each phase before landing its lead's work (Brigadier refuses).
@@ -67,6 +78,9 @@ struct Thread {
     outcomes: HashMap<u32, StepOutcome>,
     /// Each lead's phase, by task number.
     led: Mutex<HashMap<u32, u32>>,
+    /// Leads whose work was rebased onto a moved run branch and lands on its own: settled
+    /// once it has.
+    rebased: Mutex<HashMap<u32, u32>>,
     /// Each turn's input and workspace.
     turns: Mutex<Vec<(String, Vec<PathBuf>)>>,
 }
@@ -99,6 +113,15 @@ impl Thread {
             .unwrap()
             .push((turn.input.clone(), turn.add_dirs.clone()));
         if turn.input.contains("[overnight] The run") && turn.input.contains("has started") {
+            if self.plans > 0 {
+                let phases: Vec<_> = (1..=self.plans)
+                    .map(|n| json!({"title": format!("File {n}"), "detail": format!("Create p{n}.txt.")}))
+                    .collect();
+                let reply = turn
+                    .call("plan_phases", json!({"title": "Files", "phases": phases}))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+            }
             for phase in &self.refused {
                 let reply = turn
                     .call(
@@ -133,6 +156,14 @@ impl Thread {
             if let Some(first) = self.order.first() {
                 self.delegate(turn, *first).await;
             }
+            if let Some(working) = &self.first_working {
+                while !working.load(Ordering::SeqCst) {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            }
+            for phase in &self.alongside {
+                self.delegate(turn, *phase).await;
+            }
             return Reply::text(QUIET);
         }
         let mut ending = turn.input.contains("The overnight run is ending now");
@@ -140,8 +171,47 @@ impl Thread {
             .into_iter()
             .filter_map(|task| Some((task, *self.led.lock().unwrap().get(&task)?)))
             .collect();
-        for (task, phase) in led {
-            if self.early {
+        let landed_since: Vec<(u32, u32)> = {
+            let mut rebased = self.rebased.lock().unwrap();
+            let landed: Vec<_> = rebased
+                .iter()
+                .filter(|(task, _)| turn.input.contains(&format!("[landed task-{task}")))
+                .map(|(task, phase)| (*task, *phase))
+                .collect();
+            for (task, _) in &landed {
+                rebased.remove(task);
+            }
+            landed
+        };
+        for (task, phase, reported) in led
+            .into_iter()
+            .map(|(task, phase)| (task, phase, true))
+            .chain(
+                landed_since
+                    .into_iter()
+                    .map(|(task, phase)| (task, phase, false)),
+            )
+        {
+            if self.dropped.contains(&phase) {
+                let landed = turn
+                    .call("land_phase", json!({"task": format!("task-{task}")}))
+                    .await;
+                assert!(!landed.is_error, "{}", landed.text);
+                let settled = turn
+                    .call(
+                        "settle_step",
+                        json!({"phase": phase, "outcome": "partial", "summary": "Handed off.",
+                               "left": "the rest"}),
+                    )
+                    .await;
+                assert!(
+                    settled.is_error && settled.text.contains("left out"),
+                    "{}",
+                    settled.text
+                );
+                continue;
+            }
+            if reported && self.early {
                 // Not settled while its lead's work isn't landed.
                 let early = turn
                     .call(
@@ -155,15 +225,24 @@ impl Thread {
                     early.text
                 );
             }
-            let landed = turn
-                .call("land_phase", json!({"task": format!("task-{task}")}))
-                .await;
+            let unlanded = if reported {
+                let landed = turn
+                    .call("land_phase", json!({"task": format!("task-{task}")}))
+                    .await;
+                if !landed.is_error && landed.text.contains("lands on its own") {
+                    self.rebased.lock().unwrap().insert(task, phase);
+                    continue;
+                }
+                landed.is_error
+            } else {
+                false
+            };
             let outcome = match self.outcomes.get(&phase) {
                 Some(outcome) => *outcome,
-                None if landed.is_error => StepOutcome::Partial,
+                None if unlanded => StepOutcome::Partial,
                 None => StepOutcome::Done,
             };
-            if landed.is_error {
+            if unlanded {
                 // Nothing of it landed (a handoff): what is left is said.
                 let _ = turn
                     .call("stop_worker", json!({"task": format!("task-{task}")}))
@@ -196,6 +275,16 @@ impl Thread {
                 .skip_while(|n| **n != phase)
                 .nth(1)
                 .copied();
+            for phase in &self.refused_later {
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"title": "No", "kind": "implement",
+                               "spec": format!("Build phase {phase}."), "phase": phase}),
+                    )
+                    .await;
+                assert!(reply.is_error, "phase {phase} is refused: {}", reply.text);
+            }
             match next {
                 Some(next) => self.delegate(turn, next).await,
                 None => {
@@ -218,6 +307,9 @@ impl Thread {
 async fn build(turn: &Turn) -> Reply {
     let n = phase_of_lead(turn).expect("a phase lead");
     let file = format!("p{n}.txt");
+    if turn.input.contains("Run a quick self-check") {
+        return checked(turn, &file).await;
+    }
     turn.write(&file, &format!("{n}\n"));
     turn.git(&["add", &file]);
     turn.git(&["commit", "-q", "-m", &format!("Add {file}")]);
@@ -230,6 +322,18 @@ async fn build(turn: &Turn) -> Reply {
         .await;
     assert!(!reply.is_error, "{}", reply.text);
     Reply::text("Reported.")
+}
+
+/// A lead's report after its work was rebased onto a moved run branch.
+async fn checked(turn: &Turn, file: &str) -> Reply {
+    let reply = turn
+        .call(
+            "submit_report",
+            json!({"summary": "Still right after the rebase.", "changes": [file]}),
+        )
+        .await;
+    assert!(!reply.is_error, "{}", reply.text);
+    Reply::text("Checked.")
 }
 
 /// A flow whose thread works as `thread` says and whose leads build their phase.
@@ -819,6 +923,251 @@ async fn a_skipped_phase_starts_nothing_and_a_partial_one_holds_the_merge_back()
     ] {
         assert!(report.contains(line), "{line}\n{report}");
     }
+    flow.stop().await;
+}
+
+/// Mid-run, "skip phase 2", "skip phase 4" and "stop after phase 3" bind in code. Of the
+/// leads of phases 2 and 4, under "max 2 workers" one works and one waits for a slot: the one
+/// working is told to hand off (what it finished lands, and its phase stays left out), the one
+/// waiting never starts. No new work starts for a phase left out or past phase 3, and the run
+/// winds down once phase 3 is settled, without the thread ending it.
+#[tokio::test]
+async fn a_mid_run_skip_and_stop_after_bind_in_code() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let told: Arc<Mutex<Vec<u32>>> = Arc::default();
+    let first = Arc::new(AtomicBool::new(false));
+    let thread = Arc::new(Thread {
+        order: vec![1, 3],
+        alongside: vec![2, 4],
+        first_working: Some(first.clone()),
+        refused_later: vec![2, 4, 5],
+        dropped: vec![2, 4],
+        ..Default::default()
+    });
+    let (held, heard, inner) = (gate.clone(), told.clone(), thread.clone());
+    let flow = Flow::start(
+        "overnight-steer",
+        Options::default(),
+        script(move |turn| {
+            let (held, heard, inner, first) =
+                (held.clone(), heard.clone(), inner.clone(), first.clone());
+            async move {
+                if turn.is_orchestrator() {
+                    return inner.turn(&turn).await;
+                }
+                match phase_of_lead(&turn) {
+                    // Works until the user has steered the run.
+                    Some(1) if !turn.input.contains("Run a quick self-check") => {
+                        first.store(true, Ordering::SeqCst);
+                        held.notified().await;
+                        build(&turn).await
+                    }
+                    // Mid-work when the user leaves its phase out: it commits what it
+                    // finished and hands off.
+                    Some(n @ (2 | 4)) => {
+                        let file = format!("p{n}.txt");
+                        if turn.input.contains("Run a quick self-check") {
+                            return checked(&turn, &file).await;
+                        }
+                        if !heard.lock().unwrap().is_empty() {
+                            // Its report is in: a later word (the run ending) needs nothing.
+                            return Reply::text("Handed off already.");
+                        }
+                        turn.write(&file, &format!("{n}\n"));
+                        turn.git(&["add", &file]);
+                        turn.git(&["commit", "-q", "-m", &format!("Start {file}")]);
+                        loop {
+                            let words = turn.steered().await.expect("told its phase is left out");
+                            if words.contains("left this phase out") {
+                                break;
+                            }
+                        }
+                        heard.lock().unwrap().push(n);
+                        let reply = turn
+                            .call(
+                                "submit_report",
+                                json!({"summary": format!("Goal and where it stands: {file} started. Next steps: finish it."),
+                                       "changes": [file]}),
+                            )
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        Reply::text("Handed off.")
+                    }
+                    _ => build(&turn).await,
+                }
+            }
+        }),
+    )
+    .await;
+    let run = start_run(&flow, "/overnight Make files. Max 2 workers.", 5).await;
+    assert_eq!(run.directives.max_workers, Some(2));
+    let states = |board: &Board, phase: u32| -> Vec<TaskState> {
+        board
+            .tasks
+            .values()
+            .filter(|task| task.phase == Some(phase))
+            .map(|task| task.state)
+            .collect()
+    };
+    let waits = |board: &Board, phase: u32| {
+        board.tasks.values().any(|task| {
+            task.phase == Some(phase)
+                && task
+                    .blocked_reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("Waiting for a free worker"))
+        })
+    };
+    let board = flow
+        .until(
+            "phase 1's lead and one more to work, the third to wait",
+            |board| {
+                states(board, 1) == [TaskState::Running]
+                    && ((states(board, 2) == [TaskState::Running] && waits(board, 4))
+                        || (states(board, 4) == [TaskState::Running] && waits(board, 2)))
+            },
+        )
+        .await;
+    let working = if states(&board, 2) == [TaskState::Running] {
+        2
+    } else {
+        4
+    };
+    for (command, words) in [
+        ("steer-1", "skip phase 2"),
+        ("steer-2", "skip phase 4"),
+        ("steer-3", "stop after phase 3"),
+    ] {
+        let steered = flow
+            .manager
+            .steer_overnight(
+                flow.conversation.clone(),
+                run.id.clone(),
+                command.into(),
+                words.into(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            steered.problems.is_empty(),
+            "{words}: {:?}",
+            steered.problems
+        );
+    }
+    gate.notify_one();
+    let board = finished(&flow, &run.id).await;
+    let run = run_of(&board, &run.id);
+    assert_eq!(run.stop, Some(StopReason::StopDirective), "{run:#?}");
+    assert_eq!(run.directives.skip, vec![2, 4]);
+    assert_eq!(
+        *told.lock().unwrap(),
+        vec![working],
+        "only the working lead is told"
+    );
+    let waiting = 6 - working;
+    assert_eq!(states(&board, working), [TaskState::Landed]);
+    let waited = board
+        .tasks
+        .values()
+        .find(|task| task.phase == Some(waiting))
+        .expect("the lead that waited");
+    assert_eq!(
+        waited.state,
+        TaskState::Stopped,
+        "the lead that waited for a slot never starts: {:?}",
+        waited.error
+    );
+    assert_eq!(
+        (states(&board, 3).len(), states(&board, 5).len()),
+        (1, 0),
+        "nothing starts past phase 3"
+    );
+    let plan = plan_of(&board, &run);
+    let stages: Vec<_> = plan.steps.iter().map(|step| step.stage).collect();
+    assert_eq!(
+        stages,
+        [
+            PhaseStage::Done,
+            PhaseStage::Skipped,
+            PhaseStage::Done,
+            PhaseStage::Skipped,
+            PhaseStage::Pending
+        ],
+        "a phase left out stays so when its lead's work lands"
+    );
+    assert_eq!(
+        run.verified_commit,
+        plan.steps[2].settled.as_ref().and_then(|s| s.tip.clone()),
+        "Merge takes phase 3: the skipped phase 2 doesn't hold it back"
+    );
+    let ended = thread
+        .turns
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(input, _)| input.contains("The overnight run is ending now"))
+        .count();
+    assert_eq!(ended, 0, "the settle reply itself says the run is ending");
+    let report = report_text(&flow, &run).await;
+    for line in [
+        "– Phase 2 · File 2: skipped.",
+        "– Phase 4 · File 4: skipped.",
+        "✓ Phase 3 · File 3: done.",
+    ] {
+        assert!(report.contains(line), "{line}\n{report}");
+    }
+    let branch = &run.workspace.as_ref().unwrap().branch;
+    let files = super::git(&flow.repo, &["ls-tree", "-r", "--name-only", branch]);
+    assert!(
+        files.contains(&format!("p{working}.txt")),
+        "the handoff's work landed: {files}"
+    );
+    assert!(!files.contains(&format!("p{waiting}.txt")), "{files}");
+    assert!(!files.contains("p5.txt"), "{files}");
+    flow.stop().await;
+}
+
+/// A run started with a bare goal and "skip phase 2": the plan the thread records binds as one
+/// given at Start, so phase 2 starts nothing.
+#[tokio::test]
+async fn a_bare_goals_plan_keeps_the_users_restrictions() {
+    let thread = Arc::new(Thread {
+        plans: 3,
+        order: vec![1, 3],
+        refused: vec![2],
+        ..Default::default()
+    });
+    let flow = flow_with("overnight-bare-goal", thread.clone()).await;
+    let run = flow
+        .manager
+        .propose_overnight(
+            flow.conversation.clone(),
+            "propose-1".into(),
+            "/overnight Make three files. Skip phase 2.".into(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(run.problems.is_empty(), "{:?}", run.problems);
+    let run = flow
+        .manager
+        .start_overnight(
+            flow.conversation.clone(),
+            run.id.clone(),
+            "start-1".into(),
+            run.revision,
+        )
+        .await
+        .unwrap();
+    let board = finished(&flow, &run.id).await;
+    let run = run_of(&board, &run.id);
+    assert_eq!(run.stop, Some(StopReason::Done), "{run:#?}");
+    let plan = super::super::overnight::run::run_plan(&board, &run).expect("the thread's plan");
+    let stages: Vec<_> = plan.steps.iter().map(|step| step.stage).collect();
+    assert_eq!(
+        stages,
+        [PhaseStage::Done, PhaseStage::Skipped, PhaseStage::Done]
+    );
     flow.stop().await;
 }
 

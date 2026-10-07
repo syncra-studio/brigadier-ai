@@ -220,6 +220,17 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Whether `task` waits for a slot of its run now.
+    pub(crate) fn waits_for_slot(&self, task: &Task) -> bool {
+        task.run.as_ref().is_some_and(|context| {
+            self.overnight
+                .admission
+                .waiting()
+                .get(&context.run_id)
+                .is_some_and(|waiting| waiting.contains_key(&task.id))
+        })
+    }
+
     /// Gives back what `task_id` held: its run's slot.
     pub(crate) fn release_run_task(&self, task_id: &TaskId) {
         let admission = &self.overnight.admission;

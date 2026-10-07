@@ -780,24 +780,37 @@ impl SessionManager {
                 plan
             }
         };
-        // Work of a step left out (or past the new stopping point) hands off cleanly.
+        // Work of a step left out (or past the new stopping point) hands off cleanly; work that
+        // waits to start (for the task it builds on, or a worker slot) never starts, its
+        // unfinished changes kept on its branch.
         for task in board.tasks.values().filter(|task| {
             task.run
                 .as_ref()
                 .is_some_and(|context| context.run_id == run.id)
-                && task.kind.writes()
-                && matches!(
-                    task.state,
-                    TaskState::Running | TaskState::Starting | TaskState::Blocked
-                )
                 && task
                     .phase
                     .is_some_and(|n| dropped.contains(&n) || past_stop(run, &plan, n))
         }) {
-            let words = LEFT_OUT.to_owned();
-            let _ = self
-                .message_worker(&run.conversation_id, task, words, "Brigadier")
-                .await;
+            match task.state {
+                _ if task.state.is_final() => {}
+                state if state == TaskState::Queued || self.waits_for_slot(task) => {
+                    if let Err(err) = self.stop_task(task.id.clone()).await {
+                        tracing::warn!(task = %task.id, error = %err, "could not stop a task of a phase the user left out");
+                    }
+                }
+                TaskState::Running
+                | TaskState::Starting
+                | TaskState::Blocked
+                | TaskState::Paused
+                    if task.kind.writes() =>
+                {
+                    let words = LEFT_OUT.to_owned();
+                    let _ = self
+                        .message_worker(&run.conversation_id, task, words, "Brigadier")
+                        .await;
+                }
+                _ => {}
+            }
         }
         if stop_reached(run, Some(&plan))
             && let Some(now) = self

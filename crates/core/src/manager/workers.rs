@@ -3347,6 +3347,15 @@ impl SessionManager {
 
     /// A worker failed: the task ends and the orchestrator hears why.
     pub(crate) async fn worker_failed(&self, task: &Task, reason: &str) {
+        // Stopped while it waited to start (for the machine, or a run's worker slot): it stays
+        // stopped.
+        if self
+            .task_by_id(&task.conversation_id, &task.id)
+            .await
+            .is_ok_and(|now| now.state.is_final())
+        {
+            return;
+        }
         let reviewing = task.gate_link.is_some();
         let mut kept = None;
         if let Some(live) = self.existing_task_live(&task.id) {

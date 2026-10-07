@@ -80,11 +80,16 @@ impl SessionManager {
             .record_plan_for(id, Some(request), title, steps)
             .await?;
         let recorded = plan.id.clone();
-        self.change_run_if(&run, |now| {
-            now.plan_id = Some(recorded);
-            Some(())
-        })
-        .await;
+        // The user's restrictions bind the new plan as they bind one given at Start.
+        if let Some(now) = self
+            .change_run_if(&run, |now| {
+                now.plan_id = Some(recorded);
+                Some(())
+            })
+            .await
+        {
+            self.apply_run_selection(&now).await;
+        }
         Ok(format!(
             "Recorded the run's plan: {} phases. Work through it now: delegate each phase's lead (delegate_task, kind implement, `phase: <its number>`), land its work, then settle it with settle_step.",
             plan.steps.len()
@@ -199,7 +204,8 @@ impl SessionManager {
         let result = self
             .change_plan(&task.conversation_id, &plan.id, |plan| {
                 let step = &mut plan.steps[index];
-                if step.settled.is_some() {
+                // A step the user left out stays so while its earlier work lands or ends.
+                if step.settled.is_some() || step.stage == PhaseStage::Skipped {
                     return Ok(());
                 }
                 // A run's step is done once the thread settles it: landing is progress.
