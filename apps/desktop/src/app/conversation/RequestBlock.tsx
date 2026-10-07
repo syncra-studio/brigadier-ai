@@ -37,6 +37,7 @@ import {
 } from "@/app/conversation/blocks";
 import { type PhaseView, phaseViewOf, splitReport } from "@/app/conversation/phaseView";
 import { TaskRow } from "@/app/conversation/TaskRow";
+import { ThreadStatus } from "@/app/conversation/ThreadStatus";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
 import { useViewConversation } from "@/app/conversation/viewContext";
@@ -347,34 +348,6 @@ const SteerBubble: FC<{ text: string; atMs: number; attachments: readonly Attach
 };
 
 /**
- * The last line of a working block while the orchestrator itself works: what happens right now
- * ("Thinking", "Delegating…"). Workers show on their own rows.
- */
-const ActivityRow: FC<{ requestIds: string[]; thinking: boolean }> = ({ requestIds, thinking }) => {
-
-  const label = useBoard((s) => {
-    const board = s.board;
-    if (!board) return null;
-    const turn =
-      board.runRequest !== null &&
-      requestIds.includes(board.runRequest) &&
-      (board.run === "running" || board.run === "starting");
-    // The running call already has its own action row.
-    if (turn && board.orchestratorSteps.some((step) => step.requestId === board.runRequest
-      && step.kind.type === "tool" && step.kind.status === "inProgress")) return null;
-    // Streaming text shows itself.
-    return turn ? board.doing || (board.streaming?.text ? null : "Thinking") : null;
-  });
-  if (!label || thinking) return null;
-  return (
-    // As wide as its words, so the sweep crosses them rather than the whole row.
-    <div data-slot="request-activity" className="shimmer w-fit max-w-full truncate text-sm">
-      {label}
-    </div>
-  );
-};
-
-/**
  * What only the user can do for this request, as a short list at the end of its answer. Each is
  * marked done from the side panel's "Waiting on you".
  */
@@ -633,7 +606,16 @@ export const RequestBlock: FC = () => {
               }
             />
           ))}
-          {(meta.state === "working" || (phase !== null && live)) && <ActivityRow requestIds={meta.requestIds} thinking={sequence.some((entry) => entry.kind === "thinking" && entry.live)} />}
+          {live && (
+            <ThreadStatus
+              requestIds={meta.requestIds}
+              // A live phase works on, whatever its lead's last turn came to.
+              state={isLive(meta.state) ? meta.state : "working"}
+              thinkingLive={sequence.some((entry) => entry.kind === "thinking" && entry.live)}
+              compacting={meta.compactions.some((compaction) => compaction.inTurn && compaction.state === "running")}
+              quotaWait={quotaWait}
+            />
+          )}
         </div>
       )}
       {/* A run's work is merged from its card, never undone behind the run's back. */}

@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 import { createStore, type StoreApi, useStore } from "zustand";
 
+import { liveActivity } from "@/components/transcript/activity";
 import { showConversationNotice } from "@/state/notices";
 
 import type {
@@ -361,9 +362,9 @@ function activityOf(event: ProviderEvent): string | null | undefined {
     case "message":
       return event.role === "assistant" ? firstLine(event.text) : undefined;
     case "command":
-      return event.command ? `$ ${firstLine(event.command)}` : undefined;
+      return event.command ? firstLine(liveActivity({ command: event.command })) : undefined;
     case "toolCall":
-      return event.name;
+      return liveActivity(event);
     case "fileChanges":
       return `Editing ${event.changes.length} file${event.changes.length === 1 ? "" : "s"}`;
     case "approvalRequested":
@@ -599,9 +600,17 @@ const TOOL_DOING: Readonly<Record<string, string>> = {
   WebFetch: "Reading a web page",
 };
 
+/** What the orchestrator shows while its CLI retries a failed request on its own. */
+const RETRYING: ReadonlySet<string | null> = new Set(["Reconnecting", "The model is busy, retrying"]);
+
 /** The orchestrator's current activity after one of its provider events. */
-function doingOf(event: ProviderEvent, current: string | null): string | null {
+export function doingOf(event: ProviderEvent, current: string | null): string | null {
   switch (event.type) {
+    case "error":
+      if (!event.error.willRetry) return current;
+      return ["rateLimit", "overloaded", "usageLimit"].includes(event.error.kind)
+        ? "The model is busy, retrying"
+        : "Reconnecting";
     case "toolCall": {
       if (event.status !== "inProgress") return null;
       // MCP tools arrive namespaced (`mcp__brigadier__delegate_task`, `brigadier.delegate_task`).
@@ -614,7 +623,8 @@ function doingOf(event: ProviderEvent, current: string | null): string | null {
     case "exited":
       return null;
     default:
-      return current;
+      // Anything after a retry shows it went through.
+      return RETRYING.has(current) ? null : current;
   }
 }
 

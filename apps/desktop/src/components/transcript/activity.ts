@@ -180,6 +180,11 @@ function classifyTool(name: string, input: string | null): Activity {
   return { kind, done: activity.done, doing: activity.doing, ...(activity.kind === "web" && { web: true }) };
 }
 
+/** What a worker's live command or tool call is doing, in the thread's words ("Reading notes.py"). */
+export function liveActivity(call: { command: string } | { name: string; input: string | null }): string {
+  return ("command" in call ? classifyCommand(call.command) : classifyTool(call.name, call.input)).doing;
+}
+
 export function activityOf(item: ActionItem): Activity {
   switch (item.kind) {
     case "command":

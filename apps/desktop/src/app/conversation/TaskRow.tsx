@@ -11,7 +11,7 @@ export function lifecycleWords(task: Task) {
     tone: "quiet" as const };
 }
 
-function WorkerLink({ taskId }: { taskId: string }) {
+export function WorkerLink({ taskId }: { taskId: string }) {
   const name = useWorkerName(taskId);
   const { setPanel } = useContext(AgentsPanelContext);
   return <button type="button" onClick={() => setPanel(taskId)} aria-label={`Open ${name ?? "worker"}`}
