@@ -123,9 +123,9 @@ const CODEX_COMMANDS: &str = "\n- Use run for builds, tests, logs and long listi
 /// What a Claude thread's long command output looks like (its output hook trims it).
 const CLAUDE_COMMANDS: &str = "\n- A command output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it; a failing command's output comes as the CLI's own excerpt.";
 
-/// Step 6 of THREAD-PLAN.md phase 2 puts the thread's preview guidance here (its
-/// `start_preview`, `stop_preview` and `preview_log` tools); until then there is none.
-const PREVIEWS: &str = "";
+/// How the thread shows the user something running (THREAD-PLAN.md Q6): its previews outlive
+/// its CLI, and in Brigadier's own repository they never touch the installed app's data.
+const PREVIEWS: &str = "\n- To show the user something running (the app, a dev server, docs), start it with start_preview, in the foreground with no trailing `&`, and give them its URL; read its output with preview_log and stop it with stop_preview. In Brigadier's own repository a preview sets BRIGADIER_DATA_DIR to a new folder under /tmp and runs under a dev identity, never ai.brigadier.app. Below Full access a preview runs in the session's sandbox, where a multi-process Chromium, Electron or Tauri window can't start: say so, and suggest Full access or a single-process flag.";
 
 /// The trailer that marks a commit the thread made itself (THREAD-PLAN.md Q4): its commits get
 /// their own one-shot review.
@@ -1171,7 +1171,7 @@ mod environment_tests {
         assert!(claude.contains("Your workspace: (none yet)"));
         // Every byte is paid for on every call: it stays under the old orchestrator's 11,371
         // bytes, code rules included.
-        assert!(codex.len() < 10_500, "{}", codex.len());
+        assert!(codex.len() < 11_371, "{}", codex.len());
     }
 
     #[test]
