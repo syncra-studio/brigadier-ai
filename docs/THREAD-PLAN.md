@@ -246,8 +246,7 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
 Both show in the Inspector. Nothing blocks edits.
 
 **Q14: old-engine chats are deleted, with no compat.**
-- On the first start of the new engine, a store marker `engine: thread-1` triggers deletion of every `kind == Session` conversation created before it, through the normal delete path (`M/lifecycle.rs:627, 711-783`). That purges `conversation:`, `orch:`, `task:` and `draft:` streams, blobs, `routing.sqlite` rows and Brigadier's branches.
-- Plain Chats are kept: their engine doesn't change.
+- On the first start of the new engine, a store marker `engine: thread-1` triggers deletion of every conversation created before it (sessions and plain Chats, the user's call), through the normal delete path (`M/lifecycle.rs:627, 711-783`). That purges `conversation:`, `orch:`, `task:` and `draft:` streams, blobs, `routing.sqlite` rows and Brigadier's branches.
 - Then delete the dead types and shims, each only once nothing reads it:
   - in phase 2: `legacy.rs` (`crates/core/src/legacy.rs:8-19`) and `Gate`/`GateMember` (`crates/core/src/work.rs:438`);
   - in phase 1: the `OutlineReview` stage (`work.rs:859-875`);
@@ -300,7 +299,7 @@ Shared work comes first, so parallel streams don't edit the same contracts (corr
 6. Previews (`M/preview.rs`, the tools and the UI chip).
 7. Live-line words for thread tool steps (`OrchestratorSteps.tsx`, `toolWords.ts`, `liveStatus.ts:67`).
 8. Q13 metrics.
-9. Q14 deletion of old sessions, and of `legacy.rs` and `Gate`/`GateMember`. Phase records stay until phase 5 (§2 Q2).
+9. Q14 deletion of all old conversations, and of `legacy.rs` and `Gate`/`GateMember`. Phase records stay until phase 5 (§2 Q2).
 10. End with the "Open in terminal" feasibility spike for both vendors, written to `docs/evidence/`.
 
 **Done when:**
