@@ -1848,6 +1848,17 @@ mod tests {
     }
 
     #[test]
+    fn a_phase_stored_in_outline_review_reads_as_awaiting_its_go_ahead() {
+        let stage: PhaseStage =
+            serde_json::from_value(serde_json::json!("outlineReview")).expect("an old stage");
+        assert_eq!(stage, PhaseStage::AwaitingGoAhead);
+        assert_eq!(
+            serde_json::to_value(stage).unwrap(),
+            serde_json::json!("awaitingGoAhead")
+        );
+    }
+
+    #[test]
     fn a_plan_stored_before_phases_still_reads() {
         let old = |state: serde_json::Value| -> Plan {
             serde_json::from_value(serde_json::json!({
