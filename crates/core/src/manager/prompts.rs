@@ -49,6 +49,7 @@ pub(crate) fn orchestrator(
     project: Option<&Project>,
     preferences: &[String],
     run: Option<&crate::overnight::RunWorkspace>,
+    workspace: Option<&str>,
     short: bool,
 ) -> String {
     let repo = match &conversation.setup {
@@ -57,13 +58,15 @@ pub(crate) fn orchestrator(
     };
     let (environment, permission) = setting_texts(conversation, run);
     let project = project.map_or("(no project)", |p| p.name.as_str());
+    let workspace = workspace.map_or_else(|| "(none yet)".to_owned(), workspace_text);
     format!(
         r#"You are the orchestrator of a Brigadier session. Today is {today}.
 Project: {project}. Repository: {repo}.
 {environment}
 Permission level: {permission}
+Your workspace: {workspace}
 
-You only talk. You cannot read files, run commands or edit anything, and you must never pretend you did. Workers do all the work in their own worktrees and report back. You run them as a lead engineer runs a team: you write the brief, answer their questions, judge their outlines and reports, and land finished work.
+You can read files, search, run commands and look things up in your workspace yourself, and make a tiny edit there (a few lines, in files you have read, with a quick check); commit it with the trailer `{THREAD_TRAILER}` on its own last line. Everything bigger goes to workers, who work in their own worktrees and report back. You run them as a lead engineer runs a team: you write the brief, answer their questions, judge their outlines and reports, and land finished work.
 
 How to work (one loop per request):
 - Understand what the user wants. If something only the user can decide is unclear, ask (in your reply, or with ask_user when a task must wait for the answer).
@@ -103,6 +106,19 @@ How to talk to the user:
         },
         preferences = preference_lines(preferences),
     )
+}
+
+/// The trailer that marks a commit the thread made itself (THREAD-PLAN.md Q4): its commits get
+/// their own one-shot review.
+pub(crate) const THREAD_TRAILER: &str = "Brigadier-Author: thread";
+
+/// How the instructions and the `[workspace]` note name the thread's workspace (`<path> @
+/// <branch>`, as [`Told::workspace`] keeps it).
+fn workspace_text(workspace: &str) -> String {
+    match workspace.split_once(" @ ") {
+        Some((path, branch)) => format!("{path} (on branch `{branch}`)"),
+        None => workspace.to_owned(),
+    }
 }
 
 /// What the orchestrator's instructions say about where accepted work lands and its
@@ -256,7 +272,7 @@ pub(crate) fn short_replies_note(short: bool) -> String {
 pub(crate) const CONTRACT: u32 = 1;
 
 /// What an orchestrator's instructions say about Brigadier's notes (contract 1).
-const AUTHORITY: &str = "Brigadier tells you when something these instructions say changes after they were written, in a note at the start of a message: [today] for today's date, [settings] for the user's settings (Short replies, the permission level, their preferences), [run] for an overnight run starting, changing or ending. Such a note replaces what these instructions say about it, from then on.";
+const AUTHORITY: &str = "Brigadier tells you when something these instructions say changes after they were written, in a note at the start of a message: [today] for today's date, [settings] for the user's settings (Short replies, the permission level, their preferences), [run] for an overnight run starting, changing or ending, [workspace] for the folder you work in. Such a note replaces what these instructions say about it, from then on.";
 
 /// The same for a Chat.
 const CHAT_AUTHORITY: &str = "Brigadier tells you in a note at the start of a message when today's date ([today]) or what you know about the user ([settings]) changed after these instructions were written. Such a note replaces what these instructions say about it, from then on.";
@@ -267,6 +283,7 @@ const PERMISSION_LABEL: &str = "permission level";
 const RUN_LABEL: &str = "overnight run";
 const RUN_OVER_LABEL: &str = "overnight run over";
 const PREFERENCES_LABEL: &str = "preferences";
+const WORKSPACE_LABEL: &str = "workspace";
 
 /// The parts of a session's instructions that can change while its CLI session lives on, as
 /// they are now.
@@ -282,15 +299,19 @@ pub(crate) struct Current {
     /// restrictions Brigadier enforces for it.
     pub run: Option<(String, String, String)>,
     pub preferences: Vec<String>,
+    /// The thread's workspace (`<path> @ <branch>`), once it has one.
+    pub workspace: Option<String>,
 }
 
 impl Current {
-    /// A session's: `run` is the active run's branch and the restrictions it enforces.
+    /// A session's: `run` is the active run's branch and the restrictions it enforces;
+    /// `workspace` the thread's.
     pub(crate) fn session(
         conversation: &Conversation,
         run: Option<(&crate::overnight::RunWorkspace, String)>,
         short_replies: bool,
         preferences: Vec<String>,
+        workspace: Option<String>,
     ) -> Self {
         let permission = match &conversation.setup {
             Some(Setup::Session { permission, .. }) => *permission,
@@ -308,6 +329,7 @@ impl Current {
             plain: setting_texts(conversation, None),
             run,
             preferences,
+            workspace,
         }
     }
 
@@ -321,6 +343,7 @@ impl Current {
             plain: (String::new(), String::new()),
             run: None,
             preferences: memories,
+            workspace: None,
         }
     }
 
@@ -340,6 +363,7 @@ impl Current {
             permission: session.then_some(self.permission),
             run: session.then(|| self.run_fingerprint()),
             preferences: Some(preferences_fingerprint(&self.preferences)),
+            workspace: self.workspace.clone(),
         }
     }
 }
@@ -452,6 +476,21 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             }
             None => {}
         }
+        if let Some(workspace) = &now.workspace
+            && told.workspace.as_ref() != Some(workspace)
+        {
+            notes.push(Note {
+                text: format!(
+                    "[workspace] From now on you work in {}: read, run and edit there, and nowhere else. What you knew of the files elsewhere may be out of date.",
+                    workspace_text(workspace)
+                ),
+                label: WORKSPACE_LABEL,
+                told: Told {
+                    workspace: Some(workspace.clone()),
+                    ..Told::default()
+                },
+            });
+        }
     }
     let preferences = preferences_fingerprint(&now.preferences);
     if told.preferences.as_deref() != Some(preferences.as_str()) {
@@ -499,6 +538,9 @@ pub(crate) fn fill_told(told: &mut Told, older: &Told) {
     }
     if told.preferences.is_none() {
         told.preferences.clone_from(&older.preferences);
+    }
+    if told.workspace.is_none() {
+        told.workspace.clone_from(&older.workspace);
     }
 }
 
@@ -1003,7 +1045,8 @@ mod environment_tests {
         };
         for permission in ["askForApproval", "approveForMe", "fullAccess"] {
             for workspace in [None, Some(&run)] {
-                let prompt = orchestrator(&conversation(permission), None, &[], workspace, true);
+                let prompt =
+                    orchestrator(&conversation(permission), None, &[], workspace, None, true);
                 assert!(prompt.contains(
                     "plan_phases only when they are large and must run one after another"
                 ));
@@ -1020,10 +1063,24 @@ mod environment_tests {
                 assert!(!prompt.contains("delegate the next step right away"));
             }
         }
-        let full = orchestrator(&conversation("fullAccess"), None, &[], Some(&run), true);
+        let full = orchestrator(
+            &conversation("fullAccess"),
+            None,
+            &[],
+            Some(&run),
+            None,
+            true,
+        );
         assert!(full.contains("workers run without the OS sandbox"));
         assert!(!full.contains("stays in its sandbox"));
-        let sandboxed = orchestrator(&conversation("approveForMe"), None, &[], Some(&run), true);
+        let sandboxed = orchestrator(
+            &conversation("approveForMe"),
+            None,
+            &[],
+            Some(&run),
+            None,
+            true,
+        );
         assert!(sandboxed.contains("approves a worker's request to leave its sandbox"));
         assert!(sandboxed.contains("Workers never do what only the user may do"));
         // Short replies reach a run's lead, and its phase-end replies; off, the plain voice
@@ -1031,7 +1088,14 @@ mod environment_tests {
         assert!(
             full.contains("At the end of an overnight phase, your reply is at most three lines")
         );
-        let long = orchestrator(&conversation("fullAccess"), None, &[], Some(&run), false);
+        let long = orchestrator(
+            &conversation("fullAccess"),
+            None,
+            &[],
+            Some(&run),
+            None,
+            false,
+        );
         assert!(!long.contains("Short replies (the user's setting)"));
         assert!(long.contains("How to write:"));
         assert!(long.contains("name a worker by its title"));
@@ -1097,6 +1161,7 @@ mod environment_tests {
             run.map(|restrictions| (&workspace, restrictions.to_owned())),
             true,
             preferences.iter().map(|p| (*p).to_owned()).collect(),
+            Some("/work/session @ brigadier/flow".into()),
         );
         current.today = "2026-10-04".into();
         current
@@ -1171,10 +1236,16 @@ mod environment_tests {
         assert_eq!(told.today.as_deref(), Some("2026-10-04"));
         assert_eq!(told.short_replies, Some(true));
         let sent = notes(&told, &now);
-        // It can't know the permission level or preferences it started with: they go once.
+        // It can't know the permission level, workspace or preferences it started with: they
+        // go once.
         assert_eq!(
             labels(&sent),
-            vec![CONTRACT_LABEL, PERMISSION_LABEL, PREFERENCES_LABEL]
+            vec![
+                CONTRACT_LABEL,
+                PERMISSION_LABEL,
+                WORKSPACE_LABEL,
+                PREFERENCES_LABEL
+            ]
         );
         assert_eq!(sent[0].text, format!("[instructions] {AUTHORITY}"));
         let chat = Current::chat(Vec::new());
@@ -1192,6 +1263,35 @@ mod environment_tests {
         assert!(sent[0].text.starts_with(
             "[settings] The user changed the permission level. From now on: Full access: like Approve for me, but workers run without the OS sandbox."
         ));
+    }
+
+    #[test]
+    fn a_new_workspace_is_told_once_with_its_folder_and_branch() {
+        let before = current("fullAccess", None, &[]);
+        let mut now = current("fullAccess", None, &[]);
+        now.workspace = Some("/data/worktrees/run-1 @ overnight/2026-10-04-textkit-1234".into());
+        let sent = notes(&before.told(), &now);
+        assert_eq!(labels(&sent), vec![WORKSPACE_LABEL]);
+        assert!(sent[0].text.starts_with(
+            "[workspace] From now on you work in /data/worktrees/run-1 (on branch `overnight/2026-10-04-textkit-1234`)"
+        ));
+        let mut told = before.told();
+        took(&mut told, &sent);
+        assert_eq!(told, now.told());
+        assert!(notes(&told, &now).is_empty());
+        // The instructions name it the same way.
+        let prompt = orchestrator(
+            &session("fullAccess"),
+            None,
+            &[],
+            None,
+            now.workspace.as_deref(),
+            true,
+        );
+        assert!(prompt.contains(
+            "Your workspace: /data/worktrees/run-1 (on branch `overnight/2026-10-04-textkit-1234`)"
+        ));
+        assert!(prompt.contains(THREAD_TRAILER));
     }
 
     #[test]

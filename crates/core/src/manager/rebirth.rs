@@ -321,11 +321,16 @@ impl SessionManager {
     ) -> Option<String> {
         let _turn = self.background_turn();
         let conversation = self.core.conversation(id).ok()?;
-        let project = conversation
-            .project_id
-            .as_ref()
-            .and_then(|project| self.core.project(project).ok());
         let preferences = self.memory_lines(super::brain_jobs::MEMORY_BYTES).await;
+        // The thread's own instructions, so the fork shares its cached start.
+        let prompt = self
+            .thread_prompt(
+                &conversation,
+                &preferences,
+                self.recorded_workspace(id).as_ref(),
+                provider,
+            )
+            .await;
         let spec = SessionSpec {
             cwd: self.owned_dir("orch", &id.0),
             model: choice.model.clone(),
@@ -333,19 +338,10 @@ impl SessionManager {
             fast: choice.fast == Some(true),
             origin: Origin::Fork { native_id },
             access: Access::ReadOnly,
-            append_system_prompt: Some(prompts::orchestrator(
-                &conversation,
-                project.as_ref(),
-                &preferences,
-                self.overnight
-                    .active
-                    .get(id)
-                    .and_then(|active| active.workspace)
-                    .as_ref(),
-                self.core.settings().short_replies,
-            )),
+            append_system_prompt: Some(prompt),
             mcp_servers: Vec::new(),
             tools: ToolSet::None,
+            add_dirs: Vec::new(),
             env: Vec::new(),
             unset_env: Vec::new(),
             low_priority: false,
@@ -858,6 +854,9 @@ impl SessionManager {
         {
             items += 1;
             let what = match &approval.subject {
+                ApprovalSubject::Cli { request } if approval.task_id.is_none() => {
+                    format!("your own {} request", request.tool)
+                }
                 ApprovalSubject::Cli { request } => format!("a worker's {} request", request.tool),
                 ApprovalSubject::OutwardCommand { argv, .. } => {
                     format!("running `{}`", argv.join(" "))

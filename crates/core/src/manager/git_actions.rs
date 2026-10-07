@@ -250,6 +250,7 @@ impl SessionManager {
             append_system_prompt: Some(WRITER_PROMPT.to_owned()),
             mcp_servers: Vec::new(),
             tools: ToolSet::None,
+            add_dirs: Vec::new(),
             env: Vec::new(),
             unset_env: Vec::new(),
             low_priority: false,

@@ -803,6 +803,10 @@ pub enum ToolSet {
     /// A one-shot reviewer's: reading files and running the read-only git commands that show
     /// a change, and nothing else (Claude; Codex runs its reviews through `codex exec review`).
     Review,
+    /// A session's thread (THREAD-PLAN.md Q1): reading, searching, running commands, editing
+    /// and the web, with no sub-agents and nothing that runs in the background. Codex: its
+    /// usual tools less sub-agents.
+    Thread,
 }
 
 /// An MCP server a session gets, launched by the CLI over stdio.
@@ -837,6 +841,9 @@ pub struct SessionSpec {
     /// MCP servers for the session. Only these are loaded.
     pub mcp_servers: Vec<McpServer>,
     pub tools: ToolSet,
+    /// Folders besides `cwd` the session works in (a thread's workspace): Claude gets each as
+    /// `--add-dir`. They are writable where the working directory is ([`Self::access_with_dirs`]).
+    pub add_dirs: Vec<PathBuf>,
     /// Extra environment for the CLI and everything it starts (the process tag, TMPDIR).
     pub env: Vec<(String, String)>,
     /// Variables taken out of the CLI's environment, and so out of everything it starts (an
@@ -873,6 +880,30 @@ pub struct SessionSpec {
     /// (the user's setting, for sessions that commit): Claude through its attribution
     /// settings; Codex, which has none, is told in its instructions by the caller.
     pub omit_ai_coauthors: bool,
+}
+
+impl SessionSpec {
+    /// The session's access with [`Self::add_dirs`] writable wherever its working directory
+    /// is: every sandbox that writes its working directory writes them too.
+    #[must_use]
+    pub fn access_with_dirs(&self) -> Access {
+        let mut access = self.access.clone();
+        let roots = match &mut access {
+            Access::Workspace { extra_roots } => extra_roots,
+            Access::Scoped {
+                write_cwd: true,
+                writable_roots,
+                ..
+            } => writable_roots,
+            Access::Scoped { .. } | Access::ReadOnly | Access::Full => return access,
+        };
+        for dir in &self.add_dirs {
+            if !roots.contains(dir) {
+                roots.push(dir.clone());
+            }
+        }
+        access
+    }
 }
 
 /// The models a worker's own sub-agents may run on (PLAN.md §7): the router's eligible set for

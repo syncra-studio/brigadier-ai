@@ -215,14 +215,17 @@ impl SessionManager {
         self.store_approval(&approval).await?;
 
         match &approval.subject {
-            ApprovalSubject::Cli { request } => {
-                let task_id = approval
-                    .task_id
-                    .clone()
-                    .ok_or_else(|| Error::Invalid("the card has no task".into()))?;
-                self.answer_worker_approval(&task_id, request, decision.clone())
-                    .await?;
-            }
+            // A worker's request, or the thread's own (no task).
+            ApprovalSubject::Cli { request } => match &approval.task_id {
+                Some(task_id) => {
+                    self.answer_worker_approval(task_id, request, decision.clone())
+                        .await?;
+                }
+                None => {
+                    self.answer_thread_approval(&conversation_id, request, decision.clone())
+                        .await?;
+                }
+            },
             ApprovalSubject::Action { action, .. } => {
                 let text = match &decision {
                     ApprovalDecision::Allow | ApprovalDecision::AllowSimilar => {

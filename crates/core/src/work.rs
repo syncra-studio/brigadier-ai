@@ -1797,6 +1797,9 @@ pub struct Told {
     /// The user's preferences' fingerprint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preferences: Option<String>,
+    /// The thread's workspace: its folder and branch (`<path> @ <branch>`); empty: none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
 }
 
 /// One entry of the orchestrator log shown in the Inspector.

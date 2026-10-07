@@ -2,8 +2,9 @@
 //!
 //! It turns the conversation log into running CLI sessions and back:
 //!
-//! - one orchestrator CLI session per Brigadier session ([`conversation`]), which only talks
-//!   and calls the Brigadier MCP tools ([`tools`]);
+//! - one thread per Brigadier session ([`conversation`], [`thread`]): a CLI session that
+//!   reads, runs and makes tiny edits in the session's workspace and calls the Brigadier MCP
+//!   tools ([`tools`]);
 //! - workers, one CLI session per task, in their own worktrees ([`workers`]), whose accepted
 //!   work lands as one reviewed commit ([`landing`]);
 //! - one CLI session per Chat, with no orchestrator and no workers;
@@ -53,6 +54,7 @@ mod review_runs;
 mod routing;
 mod secrets;
 mod side_chat;
+mod thread;
 mod tools;
 mod undo;
 mod uninstall;

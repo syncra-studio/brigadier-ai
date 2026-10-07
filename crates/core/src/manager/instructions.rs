@@ -15,6 +15,10 @@
 //!
 //! Precedence, stated in the prompt: the task spec wins over repository instructions, and a
 //! file in a subfolder wins over one higher up for the files under that folder.
+//!
+//! The session's thread works from its own folder outside the repository, so it gets every
+//! instruction file of its workspace in its prompt, the root `AGENTS.md` too, whatever its
+//! vendor (THREAD-PLAN.md Q1).
 
 use std::path::{Path, PathBuf};
 
@@ -34,7 +38,24 @@ pub(crate) async fn for_worker(provider: ProviderKind, worktree: &Path) -> Strin
         .unwrap_or_default()
 }
 
+/// Every instruction file of the workspace, formatted for the thread's prompt: its working
+/// directory is its own folder outside the repository, so neither CLI finds them itself.
+pub(crate) async fn for_thread(workspace: &Path) -> String {
+    let workspace = workspace.to_owned();
+    tokio::task::spawn_blocking(move || {
+        collect_files(&workspace, true, "The user's request wins over them")
+    })
+    .await
+    .unwrap_or_default()
+}
+
 fn collect(worktree: &Path) -> String {
+    collect_files(worktree, false, "The task spec wins over them")
+}
+
+/// The instruction files in `worktree` (`root_agents`: its root `AGENTS.md` too), each once;
+/// `precedence` says what wins over them.
+fn collect_files(worktree: &Path, root_agents: bool, precedence: &str) -> String {
     let mut found = Vec::new();
     find(worktree, 0, &mut found);
     let rules = worktree.join(".claude").join("rules");
@@ -50,11 +71,21 @@ fn collect(worktree: &Path) -> String {
     if dot_claude.is_file() {
         found.push(dot_claude);
     }
-    // The root AGENTS.md is loaded natively.
-    found.retain(|path| path != &worktree.join("AGENTS.md"));
+    let root = worktree.join("AGENTS.md");
+    // A worker's CLI loads the root AGENTS.md natively.
+    found.retain(|path| path != &root);
+    let root_text = std::fs::read_to_string(&root).unwrap_or_default();
+    if root_agents && !root_text.trim().is_empty() {
+        found.insert(0, root);
+    }
     found.sort();
     found.dedup();
-    let root_agents = std::fs::read_to_string(worktree.join("AGENTS.md")).unwrap_or_default();
+    // For a worker: what its CLI loads anyway.
+    let native_root = if root_agents {
+        String::new()
+    } else {
+        root_text
+    };
     let mut text = String::new();
     for path in found {
         let Ok(content) = std::fs::read_to_string(&path) else {
@@ -70,7 +101,7 @@ fn collect(worktree: &Path) -> String {
         {
             continue;
         }
-        if content == root_agents.trim() {
+        if !native_root.is_empty() && content == native_root.trim() {
             continue;
         }
         let relative = path.strip_prefix(worktree).unwrap_or(&path);
@@ -91,7 +122,7 @@ fn collect(worktree: &Path) -> String {
         return text;
     }
     format!(
-        "\n\nRepository instructions (follow them like your own AGENTS.md). The task spec wins over them, and a file in a subfolder wins over one higher up for the files under it:{text}"
+        "\n\nRepository instructions (follow them like your own AGENTS.md). {precedence}, and a file in a subfolder wins over one higher up for the files under it:{text}"
     )
 }
 
@@ -133,5 +164,38 @@ fn find(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
         } else if file_name == "CLAUDE.md" || (file_name == "AGENTS.md" && depth > 0) {
             found.push(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn the_thread_gets_every_instruction_file_once_a_codex_worker_what_codex_misses() {
+        let dir = std::env::temp_dir().join(format!("brigadier-instr-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("app")).unwrap();
+        std::fs::write(dir.join("AGENTS.md"), "Use pnpm.\n").unwrap();
+        // A copy of the root AGENTS.md, and a nested file.
+        std::fs::write(dir.join("CLAUDE.md"), "Use pnpm.\n").unwrap();
+        std::fs::write(
+            dir.join("app").join("CLAUDE.md"),
+            "Keep components small.\n",
+        )
+        .unwrap();
+        let thread = for_thread(&dir).await;
+        assert!(thread.contains("### AGENTS.md\nUse pnpm."), "{thread}");
+        assert_eq!(thread.matches("Use pnpm.").count(), 1, "{thread}");
+        assert!(thread.contains("### app/CLAUDE.md (applies to files under app/)"));
+        assert!(thread.contains("The user's request wins over them"));
+        let worker = for_worker(ProviderKind::Codex, &dir).await;
+        assert!(
+            !worker.contains("Use pnpm."),
+            "Codex loads the root file itself: {worker}"
+        );
+        assert!(worker.contains("Keep components small."));
+        assert!(worker.contains("The task spec wins over them"));
+        assert!(for_worker(ProviderKind::Claude, &dir).await.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

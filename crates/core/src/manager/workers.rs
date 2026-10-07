@@ -1263,6 +1263,7 @@ impl SessionManager {
             append_system_prompt: Some(prompt),
             mcp_servers: vec![self.brigadier_server(worker_grant, WORKER_TOOL_TIMEOUT_SECS, true)],
             tools: ToolSet::Lean,
+            add_dirs: Vec::new(),
             env: worker_env(&workspace.scratch),
             unset_env: Vec::new(),
             low_priority: true,
@@ -1290,6 +1291,7 @@ impl SessionManager {
             session,
             owner,
             ended: CancellationToken::new(),
+            launch: None,
         });
         self.brains.jobs.user_work(provider);
         {
@@ -1451,7 +1453,19 @@ impl SessionManager {
         {
             writable_roots.extend(commit_roots(&repo, task.route.choice.provider));
         }
-        // Builds and installs write the toolchains' shared caches.
+        self.sandboxed(write_cwd, writable_roots, task.access.network)
+    }
+
+    /// The OS sandbox of a worker or thread below Full access: it writes its working
+    /// directory (when `write_cwd`), `writable_roots` and the toolchains' shared caches (builds
+    /// and installs write them), reads everything but Brigadier's private folders, and reaches
+    /// Brigadier's socket.
+    pub(crate) fn sandboxed(
+        &self,
+        write_cwd: bool,
+        mut writable_roots: Vec<PathBuf>,
+        network: bool,
+    ) -> Access {
         for root in toolchain_roots(self.runtime.cli_env()) {
             if !writable_roots.contains(&root) {
                 writable_roots.push(root);
@@ -1460,7 +1474,7 @@ impl SessionManager {
         Access::Scoped {
             write_cwd,
             writable_roots,
-            network: task.access.network,
+            network,
             deny_read: vec![self.runtime.platform().paths().run_dir.clone()],
             unix_sockets: self.socket_path().into_iter().collect(),
         }
@@ -2228,16 +2242,7 @@ impl SessionManager {
             .access
             .clone()
             .unwrap_or(Access::ReadOnly);
-        let mut route = policy::route(&request, &access, ApprovalMode::Delegated);
-        let mut decider = Decider::Policy;
-        if route == PolicyRoute::AskUser
-            && self
-                .waiters
-                .similar_allowed(&live.conversation_id, &request)
-        {
-            route = PolicyRoute::Allow;
-            decider = Decider::User;
-        }
+        let (route, decider) = self.approval_route(&live.conversation_id, &request, &access);
         match route {
             PolicyRoute::Allow | PolicyRoute::Deny => {
                 let decision = if route == PolicyRoute::Allow {
@@ -2278,6 +2283,22 @@ impl SessionManager {
                     .await;
             }
         }
+    }
+
+    /// Who answers a CLI's approval request in a sandbox with `access` (a worker's or the
+    /// thread's): what stays inside its access is allowed, what the user already allowed
+    /// something similar to in the conversation too; the rest asks the user.
+    pub(crate) fn approval_route(
+        &self,
+        conversation_id: &ConversationId,
+        request: &ApprovalRequest,
+        access: &Access,
+    ) -> (PolicyRoute, Decider) {
+        let route = policy::route(request, access, ApprovalMode::Delegated);
+        if route == PolicyRoute::AskUser && self.waiters.similar_allowed(conversation_id, request) {
+            return (PolicyRoute::Allow, Decider::User);
+        }
+        (route, Decider::Policy)
     }
 
     /// Passes the user's answer to the worker's CLI; "Allow similar commands" also allows
@@ -3703,7 +3724,7 @@ fn stopped_state(task: &Task) -> TaskState {
 /// B12: repository access, network and sandbox per task kind and permission level. Under
 /// Ask for approval a worker's sandbox has no network: reaching a host asks the user (research
 /// tasks, which live on the web, keep it).
-fn access_for(kind: TaskKind, permission: PermissionLevel) -> WorkerAccess {
+pub(crate) fn access_for(kind: TaskKind, permission: PermissionLevel) -> WorkerAccess {
     WorkerAccess {
         repo: match kind {
             TaskKind::Research => RepoAccess::None,
@@ -3719,7 +3740,7 @@ fn access_for(kind: TaskKind, permission: PermissionLevel) -> WorkerAccess {
 /// programs' by `TMPDIR`, zsh's here-documents by `TMPPREFIX` (zsh 5.9 makes them under
 /// `/tmp/zsh` by default, and a sandboxed `cat <<EOF` there fails with "can't create temp file
 /// for here document").
-fn worker_env(scratch: &Path) -> Vec<(String, String)> {
+pub(crate) fn worker_env(scratch: &Path) -> Vec<(String, String)> {
     vec![
         ("TMPDIR".into(), scratch.to_string_lossy().into_owned()),
         (

@@ -115,6 +115,8 @@ pub(crate) struct Cli {
     pub ended: CancellationToken,
     /// What each of its turns used, from the CLI's running totals.
     pub meter: TokenMeter,
+    /// A session thread's: the workspace, level and access it was started for.
+    pub launch: Option<super::thread::ThreadLaunch>,
 }
 
 #[derive(Default)]
@@ -252,6 +254,39 @@ impl ConvLive {
             }),
             retry: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// The conversation's CLI session, while one runs.
+    pub(crate) async fn live_cli(&self) -> Option<Arc<Cli>> {
+        self.state.lock().await.cli.clone()
+    }
+
+    /// The CLI session while it runs no turn and isn't being closed.
+    pub(crate) async fn idle_cli(&self) -> Option<Arc<Cli>> {
+        let state = self.state.lock().await;
+        if state.busy || state.closing {
+            return None;
+        }
+        state.cli.clone()
+    }
+
+    /// Closes `cli` between turns, if it is still the conversation's and nothing runs: the
+    /// next turn starts it again (resuming it). Returns once it has ended.
+    pub(crate) async fn retire_cli(&self, cli: &Arc<Cli>) {
+        let taken = {
+            let mut state = self.state.lock().await;
+            let current = state.cli.as_ref().is_some_and(|now| Arc::ptr_eq(now, cli));
+            if !current || state.busy || state.closing {
+                return;
+            }
+            state.closing = true;
+            state.cli.take()
+        };
+        if let Some(cli) = taken {
+            cli.session.close().await;
+            cli.ended.cancelled().await;
+        }
+        self.state.lock().await.closing = false;
     }
 
     /// Ends the CLI session, if any. Its files stay (it can be resumed).
@@ -1195,6 +1230,7 @@ impl SessionManager {
             return;
         }
         self.retire_changed_cli(&conv).await;
+        self.retire_moved_thread(&conv).await;
         self.end_stand_in(&conv).await;
         if conv.kind == ConversationKind::Session {
             self.rebirth_if_ready(&conv).await;
@@ -1452,23 +1488,12 @@ impl SessionManager {
             return;
         };
         let wanted = setup_choice(&conversation);
-        let cli = {
-            let mut state = conv.state.lock().await;
-            let changed = state
-                .cli
-                .as_ref()
-                .is_some_and(|cli| cli.chosen.is_some() && cli.chosen != wanted);
-            if !changed || state.busy || state.closing {
-                return;
-            }
-            state.closing = true;
-            state.cli.take()
-        };
-        if let Some(cli) = cli {
-            cli.session.close().await;
-            cli.ended.cancelled().await;
+        if let Some(cli) = conv.idle_cli().await
+            && cli.chosen.is_some()
+            && cli.chosen != wanted
+        {
+            conv.retire_cli(&cli).await;
         }
-        conv.state.lock().await.closing = false;
     }
 
     /// The conversation's live CLI session, started (or resumed) when there is none.
@@ -1492,31 +1517,34 @@ impl SessionManager {
             .map(|fallback| fallback.choice);
         let mut grant_values = Vec::new();
         let short = self.core.settings().short_replies;
+        let mut launch = None;
+        let mut auto_review = false;
         let (choice, prompt, mcp, current) = match (&conversation.setup, conv.kind) {
             (Some(Setup::Session { orchestrator, .. }), _) => {
-                let choice = match fallback {
-                    Some(fallback) => fallback,
-                    None => self.orchestrator_choice(&conv.id, orchestrator).await,
-                };
-                let project = conversation
-                    .project_id
-                    .as_ref()
-                    .and_then(|id| self.core.project(id).ok());
+                let choice = fallback.unwrap_or_else(|| orchestrator.clone());
+                // Its workspace exists before its CLI starts.
+                let (started_for, reviews) =
+                    self.thread_launch(&conv.id, &dir, choice.provider).await?;
+                auto_review = reviews;
+                let workspace = started_for.workspace.clone();
+                launch = Some(started_for);
                 let preferences = self.memory_lines(super::brain_jobs::MEMORY_BYTES).await;
                 let run = self.run_setting(&conv.id).await;
-                let prompt = prompts::orchestrator(
-                    &conversation,
-                    project.as_ref(),
-                    &preferences,
-                    run.as_ref().map(|(workspace, _)| workspace),
-                    short,
-                );
+                let prompt = self
+                    .thread_prompt(
+                        &conversation,
+                        &preferences,
+                        workspace.as_ref(),
+                        choice.provider,
+                    )
+                    .await;
                 let current = prompts::Current::session(
                     &conversation,
                     run.as_ref()
                         .map(|(workspace, restrictions)| (workspace, restrictions.clone())),
                     short,
                     preferences,
+                    workspace.as_ref().map(super::thread::ThreadWorkspace::told),
                 );
                 let grant = self.grants.issue(
                     &owner,
@@ -1582,14 +1610,27 @@ impl SessionManager {
                 },
                 None => Origin::New,
             },
-            access: Access::ReadOnly,
+            // A Chat only searches the web.
+            access: launch
+                .as_ref()
+                .map_or(Access::ReadOnly, |launch| launch.access.clone()),
             append_system_prompt: Some(prompt.clone()),
             mcp_servers: mcp,
             tools: match conv.kind {
-                ConversationKind::Session => ToolSet::None,
+                ConversationKind::Session => ToolSet::Thread,
                 ConversationKind::Chat => ToolSet::Web,
             },
-            env: Vec::new(),
+            // The workspace is the thread's to work in, never its own to clean up: it is not
+            // recorded under the thread's owner.
+            add_dirs: launch
+                .as_ref()
+                .and_then(|launch| launch.workspace.as_ref())
+                .map(|workspace| vec![workspace.path.clone()])
+                .unwrap_or_default(),
+            env: match conv.kind {
+                ConversationKind::Session => SessionManager::thread_env(&dir, choice.provider),
+                ConversationKind::Chat => Vec::new(),
+            },
             unset_env: Vec::new(),
             low_priority: false,
             record_to: None,
@@ -1598,7 +1639,7 @@ impl SessionManager {
             // An orchestrator is reborn, never compacted.
             auto_compact: conv.kind == ConversationKind::Chat,
             allowed_models: None,
-            auto_review: false,
+            auto_review,
             omit_ai_coauthors: self.core.settings().omit_ai_coauthors,
         };
         let mut resumed = resume.is_some();
@@ -1662,6 +1703,7 @@ impl SessionManager {
             session,
             owner,
             ended: CancellationToken::new(),
+            launch,
         });
         conv.state.lock().await.cli = Some(cli.clone());
         let manager = self.arc();
@@ -1674,33 +1716,6 @@ impl SessionManager {
             return Err(super::closing::closing_error());
         }
         Ok(cli)
-    }
-
-    /// The orchestrator's model: the session's choice, unless it is a Codex orchestrator that
-    /// cannot be locked down (then Claude, with a notice).
-    async fn orchestrator_choice(&self, id: &ConversationId, choice: &ModelChoice) -> ModelChoice {
-        if choice.provider != ProviderKind::Codex {
-            return choice.clone();
-        }
-        match brigadier_providers::codex::orchestrator_lockdown() {
-            Ok(()) => choice.clone(),
-            Err(reason) => {
-                self.notice(
-                    id,
-                    brigadier_providers::NoticeLevel::Warning,
-                    &format!(
-                        "A Codex orchestrator cannot be limited to talking only ({reason}), so this session's orchestrator runs on Claude."
-                    ),
-                )
-                .await;
-                ModelChoice {
-                    provider: ProviderKind::Claude,
-                    model: None,
-                    effort: choice.effort.clone(),
-                    fast: None,
-                }
-            }
-        }
     }
 
     /// The Brigadier MCP server entry a CLI session gets; `always_load` for a session that
@@ -2382,15 +2397,19 @@ impl SessionManager {
                     }
                 }
             }
+            ProviderEvent::ApprovalRequested { request }
+                if conv.kind == ConversationKind::Session =>
+            {
+                // The thread's requests follow the permission level, as a worker's do.
+                self.route_thread_approval(conv, cli, request.clone()).await;
+            }
             ProviderEvent::ApprovalRequested { request } => {
-                // The orchestrator never runs anything, and a Chat only searches the web.
-                let allowed = conv.kind == ConversationKind::Chat
-                    && matches!(request.tool.as_str(), "WebSearch" | "WebFetch");
-                let decision = if allowed {
+                // A Chat only searches the web.
+                let decision = if matches!(request.tool.as_str(), "WebSearch" | "WebFetch") {
                     ApprovalDecision::Allow
                 } else {
                     ApprovalDecision::Deny {
-                        message: "Declined by Brigadier: this session only talks.".into(),
+                        message: "Declined by Brigadier: a Chat only searches the web.".into(),
                     }
                 };
                 if let Err(err) = cli
@@ -2963,8 +2982,7 @@ impl SessionManager {
 
     /// The model a conversation continues on after `cli`'s model hit a usage limit: the
     /// router's choice for its kind of conversation, less that model (its provider too when
-    /// the limit is provider-wide), if one is usable, and, for an orchestrator on Codex, can
-    /// be limited to talking only.
+    /// the limit is provider-wide), if one is usable.
     ///
     /// Without one: the reason to wait, when a reset or the user's rules and rankings could
     /// change that (else nothing: the turn fails as before).
@@ -3010,12 +3028,6 @@ impl SessionManager {
                 return Err(waits.then_some(waiting));
             }
         };
-        if conv.kind == ConversationKind::Session
-            && next.provider == ProviderKind::Codex
-            && brigadier_providers::codex::orchestrator_lockdown().is_err()
-        {
-            return Err(None);
-        }
         Ok(next)
     }
 
@@ -3457,12 +3469,20 @@ impl SessionManager {
                     return Vec::new();
                 };
                 let run = self.run_setting(&conv.id).await;
+                // The workspace its CLI was started for.
+                let workspace = conv.live_cli().await.and_then(|cli| {
+                    cli.launch
+                        .as_ref()
+                        .and_then(|launch| launch.workspace.as_ref())
+                        .map(super::thread::ThreadWorkspace::told)
+                });
                 prompts::Current::session(
                     &conversation,
                     run.as_ref()
                         .map(|(workspace, restrictions)| (workspace, restrictions.clone())),
                     self.core.settings().short_replies,
                     self.memory_lines(super::brain_jobs::MEMORY_BYTES).await,
+                    workspace,
                 )
             }
             ConversationKind::Chat => {
@@ -3742,7 +3762,7 @@ impl SessionManager {
         self.log_orchestrator(id, entry).await;
     }
 
-    async fn log_provider(
+    pub(super) async fn log_provider(
         &self,
         id: &ConversationId,
         provider: ProviderKind,

@@ -252,7 +252,11 @@ pub(crate) fn stuck_cards(board: &Board, now: i64, after: i64) -> Vec<StuckCard>
         let what = match &approval.subject {
             ApprovalSubject::Cli { request } => format!(
                 "Allow or decline what {} asked for: {}",
-                task_name(&approval.task_id),
+                if approval.task_id.is_some() {
+                    task_name(&approval.task_id)
+                } else {
+                    "the session".to_owned()
+                },
                 request.command.as_deref().unwrap_or(&request.tool)
             ),
             ApprovalSubject::OutwardCommand { argv, .. } => {

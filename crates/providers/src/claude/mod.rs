@@ -68,6 +68,9 @@ RemoteTrigger,PushNotification,DesignSync,ReportFindings,EnterWorktree,ExitWorkt
 SendMessage,TaskStop,Monitor,NotebookEdit";
 /// Claude's built-in tool that starts a sub-agent (`Task` is its older name).
 const SUB_AGENT_TOOLS: &str = "Agent,Task";
+/// A thread's built-in tools ([`ToolSet::Thread`]): no sub-agents (`Agent`/`Task`) and nothing
+/// that runs on in the background (`Monitor`, scheduling); its workers are Brigadier's.
+const THREAD_TOOLS: &str = "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch";
 /// A one-shot reviewer's built-in tools ([`ToolSet::Review`]).
 const REVIEW_TOOLS: &str = "Read,Grep,Glob,Bash";
 /// What a one-shot reviewer may run without asking (`--allowedTools`): under `dontAsk`
@@ -203,6 +206,11 @@ impl Claude {
     }
 
     fn session_args(spec: &SessionSpec, cwd: &Path, native_id: &str) -> Result<Vec<String>> {
+        // Its extra folders are writable wherever its working directory is.
+        let spec = &SessionSpec {
+            access: spec.access_with_dirs(),
+            ..spec.clone()
+        };
         let mut args = Self::stream_args();
         args.extend(
             [
@@ -235,6 +243,10 @@ impl Claude {
                 args.push("--tools".into());
                 args.push("WebSearch,WebFetch".into());
             }
+            ToolSet::Thread => {
+                args.push("--tools".into());
+                args.push(THREAD_TOOLS.into());
+            }
             ToolSet::Review => {
                 args.push("--tools".into());
                 args.push(REVIEW_TOOLS.into());
@@ -246,9 +258,17 @@ impl Claude {
         args.push(settings(spec, cwd, &sub_agents).to_string());
         args.push("--permission-mode".into());
         args.push(permission_mode(spec).into());
-        // Both spellings of a root behind a symlink (`/tmp` → `/private/tmp`): Claude matches
-        // the path as a tool was given it.
+        // The session's own folders and the roots it may write. Both spellings of a root behind
+        // a symlink (`/tmp` → `/private/tmp`): Claude matches the path as a tool was given it.
+        // `--add-dir <directories...>` is variadic (claude --help, 2.1.292): only flags follow
+        // it here, and turns go on stdin, so no positional argument is taken for a folder.
+        let mut dirs: Vec<&PathBuf> = spec.add_dirs.iter().collect();
         for root in spec.access.writable_roots() {
+            if !dirs.contains(&root) {
+                dirs.push(root);
+            }
+        }
+        for root in dirs {
             let real = resolved(root);
             args.push("--add-dir".into());
             args.push(root.display().to_string());
@@ -540,7 +560,7 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents) -> Value {
         // Like the user's own terminal: `bypassPermissions` asks for nothing.
         Access::Full => json!({ "enabled": false }),
     };
-    if spec.tools == ToolSet::Web {
+    if matches!(spec.tools, ToolSet::Web | ToolSet::Thread) {
         allow.extend(["WebSearch".to_owned(), "WebFetch".to_owned()]);
     }
     let mut permissions = json!({});
@@ -1563,6 +1583,7 @@ mod tests {
             append_system_prompt: None,
             mcp_servers: Vec::new(),
             tools: ToolSet::Lean,
+            add_dirs: Vec::new(),
             env: Vec::new(),
             unset_env: Vec::new(),
             low_priority: false,
@@ -1600,8 +1621,15 @@ mod tests {
             },
         ] {
             spec.origin = origin;
-            // Orchestrators, workers, reviewers and jobs share this builder.
-            for tools in [ToolSet::None, ToolSet::Lean, ToolSet::Default, ToolSet::Web] {
+            // Threads, workers, reviewers and jobs share this builder.
+            for tools in [
+                ToolSet::None,
+                ToolSet::Lean,
+                ToolSet::Default,
+                ToolSet::Web,
+                ToolSet::Thread,
+                ToolSet::Review,
+            ] {
                 spec.tools = tools;
                 let args = Claude::session_args(&spec, dir.path(), native_id).unwrap();
                 assert_thinking_args(&args);
@@ -1700,6 +1728,88 @@ mod tests {
         let worker = spec(cwd.path(), &["claude-opus-5-5"]);
         let args = Claude::session_args(&worker, cwd.path(), native_id).expect("args");
         assert!(!args.iter().any(|arg| arg == "--allowedTools"));
+    }
+
+    #[test]
+    fn a_thread_gets_its_tools_its_workspace_and_its_levels_mode() {
+        let cwd = Temp::new();
+        let workspace = Temp::new();
+        let ws = workspace.path().to_owned();
+        let native_id = "00000000-0000-4000-8000-000000000000";
+        let thread = |access: Access, auto_review: bool| SessionSpec {
+            access,
+            auto_review,
+            tools: ToolSet::Thread,
+            add_dirs: vec![ws.clone()],
+            allowed_models: None,
+            ..spec(cwd.path(), &[])
+        };
+        let scoped = Access::Scoped {
+            write_cwd: true,
+            writable_roots: Vec::new(),
+            network: true,
+            deny_read: Vec::new(),
+            unix_sockets: Vec::new(),
+        };
+        for (access, auto_review, mode) in [
+            (Access::Full, false, "bypassPermissions"),
+            (scoped.clone(), true, "auto"),
+            (scoped, false, "acceptEdits"),
+        ] {
+            let spec = thread(access.clone(), auto_review);
+            let args = Claude::session_args(&spec, cwd.path(), native_id).expect("args");
+            let after = |flag: &str| {
+                args.windows(2)
+                    .find(|pair| pair[0] == flag)
+                    .map(|pair| pair[1].clone())
+            };
+            assert_eq!(
+                after("--tools").as_deref(),
+                Some("Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch")
+            );
+            assert_eq!(after("--permission-mode").as_deref(), Some(mode));
+            assert_eq!(
+                args.windows(2)
+                    .filter(|pair| pair[0] == "--add-dir" && pair[1] == ws.display().to_string())
+                    .count(),
+                1,
+                "the workspace once: {args:?}"
+            );
+            // Nothing positional follows the variadic `--add-dir`.
+            let last = args.iter().rposition(|arg| arg == "--add-dir").unwrap();
+            assert!(args[last + 2].starts_with("--"), "{args:?}");
+            let settings = settings(
+                &SessionSpec {
+                    access: spec.access_with_dirs(),
+                    ..spec.clone()
+                },
+                cwd.path(),
+                &SubAgents::Any,
+            );
+            let allow = settings["permissions"]["allow"].as_array().expect("allow");
+            assert!(allow.contains(&json!("WebSearch")) && allow.contains(&json!("WebFetch")));
+            if access == Access::Full {
+                assert_eq!(settings["sandbox"]["enabled"], json!(false));
+            } else {
+                assert_eq!(
+                    settings["sandbox"]["filesystem"]["allowWrite"],
+                    json!([resolved(&ws).display().to_string()]),
+                    "the workspace is writable in the sandbox"
+                );
+            }
+        }
+        // A sandbox that keeps its working directory read-only keeps the workspace so too.
+        let read_only = SessionSpec {
+            access: Access::Scoped {
+                write_cwd: false,
+                writable_roots: Vec::new(),
+                network: true,
+                deny_read: Vec::new(),
+                unix_sockets: Vec::new(),
+            },
+            ..thread(Access::Full, false)
+        };
+        assert!(read_only.access_with_dirs().writable_roots().is_empty());
     }
 
     #[test]

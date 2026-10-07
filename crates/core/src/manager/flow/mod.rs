@@ -41,6 +41,8 @@ pub(crate) struct Turn {
     /// What the turn was started with.
     pub input: String,
     pub cwd: PathBuf,
+    /// The session's extra folders (a thread's workspace).
+    pub add_dirs: Vec<PathBuf>,
     /// The session's turns before this one.
     pub earlier: u32,
     grant: String,
@@ -243,9 +245,13 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
 
 // ----- the scripted CLIs ------------------------------------------------------------------
 
+/// Every session the scripted CLIs were started with, in order.
+pub(crate) type Specs = Arc<Mutex<Vec<(ProviderKind, SessionSpec)>>>;
+
 /// A scripted stand-in for one CLI.
 struct FakeCli {
     kind: ProviderKind,
+    specs: Specs,
     script: Script,
     /// What answers its one-shot reviews ([`no_findings`] unless a test scripts them).
     reviews: Script,
@@ -331,6 +337,7 @@ impl Provider for FakeCli {
         _ledger: Arc<dyn Ledger>,
     ) -> BoxFuture<'_, brigadier_providers::Result<Started>> {
         Box::pin(async move {
+            self.specs.lock().unwrap().push((self.kind, spec.clone()));
             let (tx, events) = mpsc::channel(256);
             let grant = spec
                 .mcp_servers
@@ -363,6 +370,7 @@ impl Provider for FakeCli {
                 native_id,
                 prompt,
                 cwd: spec.cwd.clone(),
+                add_dirs: spec.add_dirs.clone(),
                 grant,
                 script,
                 host: self.host.clone(),
@@ -404,6 +412,7 @@ struct FakeSession {
     native_id: String,
     prompt: String,
     cwd: PathBuf,
+    add_dirs: Vec<PathBuf>,
     grant: String,
     script: Script,
     host: Arc<OnceLock<Weak<SessionManager>>>,
@@ -462,6 +471,7 @@ impl ProviderSession for FakeSession {
                 prompt: self.prompt.clone(),
                 input: input_text(&input),
                 cwd: self.cwd.clone(),
+                add_dirs: self.add_dirs.clone(),
                 earlier,
                 grant: self.grant.clone(),
                 host,
@@ -572,6 +582,7 @@ async fn boot(
     store: brigadier_store::Store,
     script: &Script,
     reviews: &Script,
+    specs: &Specs,
 ) -> (Arc<SessionManager>, Arc<Core>) {
     let data = data.to_owned();
     let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
@@ -586,6 +597,7 @@ async fn boot(
     let fake = |kind| -> Arc<dyn Provider> {
         Arc::new(FakeCli {
             kind,
+            specs: specs.clone(),
             script: script.clone(),
             reviews: reviews.clone(),
             host: host.clone(),
@@ -637,6 +649,7 @@ pub(crate) struct Flow {
     dir: PathBuf,
     script: Script,
     reviews: Script,
+    specs: Specs,
 }
 
 /// What a scripted session is set up with.
@@ -650,6 +663,8 @@ pub(crate) struct Options {
     pub store: Option<PathBuf>,
     /// What answers the one-shot reviews (both vendors'); by default they find nothing.
     pub reviews: Option<Script>,
+    /// The thread's vendor (Claude by default).
+    pub thread: ProviderKind,
 }
 
 impl Default for Options {
@@ -660,6 +675,7 @@ impl Default for Options {
             seed: None,
             store: None,
             reviews: None,
+            thread: ProviderKind::Claude,
         }
     }
 }
@@ -690,7 +706,8 @@ impl Flow {
             store.append(seed_events(seed)).await.unwrap();
         }
         let reviews = options.reviews.clone().unwrap_or_else(no_findings);
-        let (manager, core) = boot(&data, store, &script, &reviews).await;
+        let specs = Specs::default();
+        let (manager, core) = boot(&data, store, &script, &reviews, &specs).await;
         let project = core
             .create_project("Flow".into(), Some(repo.display().to_string()))
             .await
@@ -708,8 +725,14 @@ impl Flow {
                     },
                     permission: options.permission,
                     orchestrator: ModelChoice {
-                        provider: ProviderKind::Claude,
-                        model: Some("claude-opus-5-5".into()),
+                        provider: options.thread,
+                        model: Some(
+                            match options.thread {
+                                ProviderKind::Claude => "claude-opus-5-5",
+                                ProviderKind::Codex => "gpt-6-astra",
+                            }
+                            .into(),
+                        ),
                         effort: None,
                         fast: None,
                     },
@@ -726,6 +749,7 @@ impl Flow {
             dir,
             script,
             reviews,
+            specs,
         }
     }
 
@@ -735,7 +759,7 @@ impl Flow {
         self.manager.shutdown().await;
         let data = self.dir.join("data");
         let store = open_store(&data).await;
-        let (manager, core) = boot(&data, store, &self.script, &self.reviews).await;
+        let (manager, core) = boot(&data, store, &self.script, &self.reviews, &self.specs).await;
         self.manager = manager;
         self.core = core;
     }
@@ -753,6 +777,25 @@ impl Flow {
             )
             .await
             .unwrap();
+    }
+
+    /// The sessions the thread's CLIs were started with, in order.
+    pub fn thread_specs(&self) -> Vec<(ProviderKind, SessionSpec)> {
+        self.specs
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, spec)| {
+                spec.append_system_prompt.as_deref().is_some_and(|prompt| {
+                    prompt.contains("You are the orchestrator of a Brigadier session")
+                }) && matches!(
+                    spec.origin,
+                    brigadier_providers::model::Origin::New
+                        | brigadier_providers::model::Origin::Resume { .. }
+                )
+            })
+            .cloned()
+            .collect()
     }
 
     pub async fn board(&self) -> Board {
@@ -843,3 +886,5 @@ impl Flow {
 mod overnight_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod thread_tests;

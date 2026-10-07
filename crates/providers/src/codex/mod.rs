@@ -25,8 +25,6 @@
 //! Should Codex still add an entry for the exact folder of a Brigadier-owned session
 //! ([`SessionSpec::owned_cwd`]), it is recorded and removed with the session through Codex's
 //! config API, only while it is still exactly `trusted`.
-//!
-//! See [`orchestrator_lockdown`] for what an orchestrator session can and cannot do.
 
 pub mod parse;
 #[allow(clippy::all, clippy::pedantic, dead_code, unused_imports)]
@@ -68,9 +66,9 @@ const COMPACT_SINCE: &str = "0.156.1";
 /// The permission profile a session with folders it must not read runs under.
 const PROFILE: &str = "brigadier";
 
-/// Built-ins switched off for sessions that must not act on their own (the orchestrator, a
-/// Chat): viewing local images, generating images, Codex's own sub-agents, goals, the sleep
-/// tool, and every shell tool. Without a shell tool there is no command to approve at all,
+/// Built-ins switched off for sessions that must not act on their own (a Chat, a handoff
+/// note, a one-shot job): viewing local images, generating images, Codex's own sub-agents,
+/// goals, the sleep tool, and every shell tool. Without a shell tool there is no command to approve at all,
 /// so neither an exec-policy rule of the user's nor a sandbox gap can let one run.
 const RESTRICTED_FEATURES: &[&str] = &[
     "view_image",
@@ -83,7 +81,12 @@ const RESTRICTED_FEATURES: &[&str] = &[
     "unified_exec",
 ];
 
-/// Per-process overrides for the same sessions. The sub-agent tools (`collaboration.*`) come
+/// Built-ins switched off for a thread ([`ToolSet::Thread`]), which keeps Codex's usual tools
+/// (its shell, patches, images, web search) but hands work only to Brigadier's workers: no
+/// sub-agents, goals or sleep tool, as Claude's thread has no `Agent` or `Monitor`.
+const THREAD_FEATURES: &[&str] = &["multi_agent", "multi_agent_v2", "goals", "sleep_tool"];
+
+/// Per-process overrides for the same sessions (and a thread). The sub-agent tools (`collaboration.*`) come
 /// with the model, whatever the feature flags say; only `agents.enabled` removes them. The
 /// user's personal skills catalog stays out of their context.
 const RESTRICTED_OVERRIDES: &[&str] = &[NO_SUB_AGENTS, "skills.include_instructions=false"];
@@ -102,32 +105,6 @@ const DISABLED_FEATURES: &[&str] = &[
     "browser_use",
     "memories",
 ];
-
-/// What a Codex orchestrator session (read-only access, `ToolSet::None`, Brigadier's MCP server
-/// trusted, every approval declined) still has, as verified against Codex 0.156.1 by capturing
-/// the model request and by adversarial live turns, and rechecked live on 0.158.0. The shell
-/// tools, sub-agents, image viewing, image generation, web search, goals and the sleep tool are
-/// gone.
-pub const ORCHESTRATOR_RESIDUE: &str = "Codex orchestrators keep these built-ins: `exec` \
-    (JavaScript in an isolate with no file system, network or console, which only calls the \
-    tools below), `apply_patch` (every patch is an approval request, and Brigadier declines it), \
-    the MCP resource tools (list/read resources of Brigadier's server, which serves none), \
-    `clock__curr_time`, and `request_user_input` (Brigadier refuses the request). There is no \
-    shell, sub-agent, image, web search or goal tool.";
-
-/// Whether a Codex orchestrator is locked down: nothing can run, write or reach the network
-/// without an approval that Brigadier declines, and no sub-agent can act for it. `Err` carries
-/// the reason to show before falling back to a Claude orchestrator.
-///
-/// Verified for Codex 0.156.1 and rechecked live on 0.158.0 (the version these bindings come
-/// from at the time; version drift is logged for diagnostics): a read-only thread
-/// with `untrusted` approvals and the restricted feature set exposes no command tool at all, so
-/// no exec-policy rule or sandbox gap can let a command run; `apply_patch` asks and is
-/// declined, leaving no file; the Brigadier MCP tools run without an elicitation. What remains
-/// is [`ORCHESTRATOR_RESIDUE`].
-pub fn orchestrator_lockdown() -> std::result::Result<(), String> {
-    Ok(())
-}
 
 pub struct Codex {
     platform: Arc<dyn Platform>,
@@ -257,6 +234,7 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     let tools = session.map(|session| session.tools).unwrap_or_default();
     let role_features: &[&str] = match tools {
         ToolSet::Default | ToolSet::Lean => &[],
+        ToolSet::Thread => THREAD_FEATURES,
         ToolSet::None | ToolSet::Web | ToolSet::Review => RESTRICTED_FEATURES,
     };
     for feature in DISABLED_FEATURES.iter().chain(role_features) {
@@ -414,8 +392,9 @@ impl Provider for Codex {
             // Codex resolves its working directory (below) and so the paths it writes: its
             // writable roots must be resolved too, in the thread's config and in every turn's
             // sandbox policy alike, or it asks to write inside them.
+            // A thread's workspace (`add_dirs`) is one of them.
             let spec = SessionSpec {
-                access: spec.access.resolved(),
+                access: spec.access_with_dirs().resolved(),
                 ..spec
             };
             if let Access::Scoped {
@@ -927,7 +906,7 @@ async fn thread_config(
         ToolSet::None | ToolSet::Review => {
             config.insert("web_search".into(), json!("disabled"));
         }
-        ToolSet::Web => {
+        ToolSet::Web | ToolSet::Thread => {
             config.insert("web_search".into(), json!("live"));
         }
     }
@@ -1787,6 +1766,7 @@ mod tests {
             append_system_prompt: None,
             mcp_servers: Vec::new(),
             tools,
+            add_dirs: Vec::new(),
             env: Vec::new(),
             unset_env: Vec::new(),
             low_priority: false,
@@ -1813,8 +1793,57 @@ mod tests {
         assert!(!without_sub_agents(&app_server_args(Some(&raw))));
         assert!(!without_sub_agents(&app_server_args(None)));
         // Restricted sessions never had them, and say so once.
-        let orchestrator = spec(ToolSet::None, Some(AllowedModels::default()));
-        let args = app_server_args(Some(&orchestrator));
+        let restricted = spec(ToolSet::None, Some(AllowedModels::default()));
+        let args = app_server_args(Some(&restricted));
         assert_eq!(args.iter().filter(|arg| *arg == NO_SUB_AGENTS).count(), 1);
+    }
+
+    #[test]
+    fn a_thread_keeps_its_tools_but_not_sub_agents_and_writes_its_workspace() {
+        let mut thread = spec(ToolSet::Thread, None);
+        let args = app_server_args(Some(&thread));
+        let disabled: Vec<&str> = args
+            .windows(2)
+            .filter(|pair| pair[0] == "--disable")
+            .map(|pair| pair[1].as_str())
+            .collect();
+        for feature in ["multi_agent", "multi_agent_v2"] {
+            assert!(disabled.contains(&feature), "{args:?}");
+        }
+        for feature in ["shell_tool", "unified_exec", "view_image"] {
+            assert!(!disabled.contains(&feature), "{args:?}");
+        }
+        assert!(without_sub_agents(&args));
+        thread.add_dirs = vec![PathBuf::from("/work/session")];
+        // Full access: no sandbox at all.
+        assert!(matches!(
+            sandbox_policy(&thread.access_with_dirs()),
+            p::SandboxPolicy::DangerFullAccess
+        ));
+        assert!(matches!(
+            approval_policy(&thread.access),
+            p::AskForApproval::Never
+        ));
+        // A sandboxed thread writes its workspace.
+        thread.access = Access::Scoped {
+            write_cwd: true,
+            writable_roots: vec![PathBuf::from("/data/orch/c1")],
+            network: true,
+            deny_read: Vec::new(),
+            unix_sockets: Vec::new(),
+        };
+        let p::SandboxPolicy::WorkspaceWrite { writable_roots, .. } =
+            sandbox_policy(&thread.access_with_dirs())
+        else {
+            panic!("a workspace sandbox");
+        };
+        let roots: Vec<&str> = writable_roots.iter().map(|root| root.0.as_str()).collect();
+        assert_eq!(roots, ["/data/orch/c1", "/work/session"]);
+        assert!(matches!(
+            approval_policy(&thread.access),
+            p::AskForApproval::OnRequest
+        ));
+        assert!(matches!(reviewer(true), p::ApprovalsReviewer::AutoReview));
+        assert!(matches!(reviewer(false), p::ApprovalsReviewer::User));
     }
 }
