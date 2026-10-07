@@ -83,6 +83,9 @@ pub(crate) struct Board {
     pub(crate) reviews: HashMap<String, ReviewRun>,
     /// Per branch: the tip up to which the thread's commits were looked at.
     pub(crate) thread_tips: HashMap<String, String>,
+    /// Per branch: where the thread's commits were first looked for, which its self-edit
+    /// metric counts from (THREAD-PLAN.md Q13).
+    pub(crate) thread_starts: HashMap<String, String>,
     /// The thread's command outputs stored whole, by alias (`out-<id>`).
     pub(crate) outputs: HashMap<String, crate::work::StoredOutput>,
     /// What the thread read and searched, bounded ([`crate::manager::reads::ReadLog`]);
@@ -175,6 +178,9 @@ impl Board {
                 self.reviews.insert(review.id.clone(), review.clone());
             }
             DomainEvent::ThreadCommitsSeen { branch, tip, .. } => {
+                self.thread_starts
+                    .entry(branch.clone())
+                    .or_insert_with(|| tip.clone());
                 self.thread_tips.insert(branch.clone(), tip.clone());
             }
             DomainEvent::OutputStored { output, .. } => {

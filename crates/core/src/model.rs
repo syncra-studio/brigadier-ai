@@ -1049,6 +1049,51 @@ pub struct WindowTokens {
     pub by_conversation: Vec<ConversationTokens>,
 }
 
+/// How a session's thread works, to tune its instructions by (THREAD-PLAN.md Q13; the
+/// Inspector). Nothing is held back by it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadMetrics {
+    pub conversation_id: ConversationId,
+    /// The commits the thread made itself; absent before its branch was first looked at.
+    pub edits: Option<ThreadEdits>,
+    /// Its context per user request, oldest first: only requests it made a model call for.
+    pub requests: Vec<RequestContext>,
+    /// The context its latest model call read, when known.
+    pub context_tokens: Option<i64>,
+}
+
+/// The commits on a session's branch marked `Brigadier-Author: thread`, from where the thread
+/// first looked at the branch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadEdits {
+    pub branch: String,
+    pub commits: u32,
+    pub added: i64,
+    pub removed: i64,
+    /// When they were counted.
+    pub at_ms: i64,
+    /// The branch is gone (merged and removed): these are its last numbers.
+    pub kept: bool,
+}
+
+/// The thread's context over one user request: at its first and last model call for it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestContext {
+    pub request_id: String,
+    /// The start of the user's message, on one line (empty when the request is gone).
+    pub preview: String,
+    pub started_at_ms: i64,
+    /// The thread's model calls (Claude: turns) for it.
+    pub calls: u32,
+    pub first_tokens: i64,
+    pub last_tokens: i64,
+    /// `last_tokens - first_tokens`.
+    pub growth_tokens: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenCount {

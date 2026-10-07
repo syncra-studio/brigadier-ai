@@ -930,6 +930,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 .list_orchestrator_log(&conversation_id, before, limit)
                 .await?,
         },
+        Request::GetThreadMetrics { conversation_id } => Response::GetThreadMetrics {
+            metrics: daemon.sessions.thread_metrics(&conversation_id).await?,
+        },
         Request::ReadArtifact { id, offset, limit } => {
             let (bytes, total_bytes) = core.read_blob_range(id, offset, limit).await?;
             let text = match String::from_utf8(bytes) {

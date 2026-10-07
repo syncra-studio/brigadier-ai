@@ -19,8 +19,8 @@ use brigadier_core::{
     OvernightRunId, ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan,
     ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession,
     RawSessionId, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, Settings, Setup,
-    SetupRequest, SourceScope, SourceState, TaskId, UpdateTarget, UpdatesView, UsageView,
-    WorkerDiff, WorkerPage,
+    SetupRequest, SourceScope, SourceState, TaskId, ThreadMetrics, UpdateTarget, UpdatesView,
+    UsageView, WorkerDiff, WorkerPage,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -31,7 +31,7 @@ use ts_rs::TS;
 use crate::metrics::{DaemonMetrics, Diagnostics};
 
 /// Bumped on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 /// What a development build's injected limit applies to.
 #[cfg(debug_assertions)]
@@ -616,6 +616,10 @@ pub enum Request {
         before: Option<i64>,
         limit: u32,
     },
+    /// A session thread's metrics (Inspector): its own commits and its context per request.
+    GetThreadMetrics {
+        conversation_id: ConversationId,
+    },
     /// Part of an artifact's text.
     ReadArtifact {
         id: String,
@@ -1078,6 +1082,9 @@ pub enum Response {
     },
     ListOrchestratorLog {
         page: OrchestratorPage,
+    },
+    GetThreadMetrics {
+        metrics: ThreadMetrics,
     },
     ReadArtifact {
         text: ArtifactText,

@@ -58,6 +58,7 @@ mod run;
 mod secrets;
 mod side_chat;
 mod thread;
+mod thread_metrics;
 mod tool_output;
 mod tools;
 mod undo;

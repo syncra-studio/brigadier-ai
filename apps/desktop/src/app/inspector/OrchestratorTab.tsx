@@ -16,6 +16,7 @@ import {
   sumOf,
 } from "@/app/inspector/orchestratorLog";
 import { RebirthLog } from "@/app/inspector/RebirthLog";
+import { ThreadMetricsPanel } from "@/app/inspector/ThreadMetricsPanel";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { RebirthThresholds } from "@/ipc/generated";
@@ -117,6 +118,7 @@ function OrchestratorLogView({ sessionId, error }: { sessionId: string; error: s
           thresholds={thresholds}
         />
         <ContextChart log={derived} thresholds={thresholds} />
+        <ThreadMetricsPanel sessionId={sessionId} />
         {log?.hasMore && (
           <p className="text-muted-foreground">
             Totals count from the oldest loaded entry.{" "}

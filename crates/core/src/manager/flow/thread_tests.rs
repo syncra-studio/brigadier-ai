@@ -596,6 +596,34 @@ async fn a_thread_commit_before_a_landing_in_the_same_turn_is_reviewed_on_its_ow
     );
     let branch = lead.workspace.as_ref().unwrap().target.clone().unwrap();
     assert_eq!(board.thread_tips.get(&branch), Some(&landed));
+    // THREAD-PLAN.md Q13: the thread's own commit is its self-edit; the landing is not.
+    let edits = |metrics: crate::model::ThreadMetrics| {
+        let edits = metrics.edits.expect("the thread's edits are counted");
+        (edits.commits, edits.added, edits.removed, edits.kept)
+    };
+    let metrics = flow
+        .manager
+        .thread_metrics(&flow.conversation)
+        .await
+        .unwrap();
+    assert_eq!(edits(metrics), (1, 1, 0, false));
+    // Once the branch is merged and removed, the last count stands.
+    git(
+        &flow.repo,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            &session_worktree(&flow).display().to_string(),
+        ],
+    );
+    git(&flow.repo, &["branch", "-D", &branch]);
+    let metrics = flow
+        .manager
+        .thread_metrics(&flow.conversation)
+        .await
+        .unwrap();
+    assert_eq!(edits(metrics), (1, 1, 0, true));
     flow.stop().await;
 }
 

@@ -513,5 +513,10 @@ impl SessionManager {
         {
             tracing::warn!(conversation = %id, error = %err, "could not record the thread's commits as seen");
         }
+        // The branch moved: its self-edit metric is counted again, and kept past its merge.
+        let (manager, id) = (self.arc(), id.clone());
+        self.spawn(async move {
+            manager.count_thread_edits(&id).await;
+        });
     }
 }
