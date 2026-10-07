@@ -682,6 +682,11 @@ impl CodeIndex {
         })
     }
 
+    /// The definitions in one file (repository-relative), in line order, at most `limit`.
+    pub fn outline(&self, path: &str, limit: u32) -> Result<Vec<SymbolHit>> {
+        self.with_read(|c| reads::outline(c, path, limit))
+    }
+
     /// A compact text overview for a model, at most `max_bytes`.
     pub fn digest(&self, max_bytes: usize) -> Result<String> {
         self.with_read(|c| reads::digest(c, max_bytes))

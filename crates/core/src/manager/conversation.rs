@@ -278,6 +278,11 @@ impl ConvLive {
         std::mem::take(&mut self.state.lock().await.looked)
     }
 
+    /// What the thread read and searched since it was last recorded, left held.
+    pub(super) async fn peek_looked(&self) -> Vec<ProviderEvent> {
+        self.state.lock().await.looked.clone()
+    }
+
     /// The conversation's CLI session, while one runs.
     pub(crate) async fn live_cli(&self) -> Option<Arc<Cli>> {
         self.state.lock().await.cli.clone()
@@ -2161,9 +2166,15 @@ impl SessionManager {
                     Some(event) => {
                         deadline = None;
                         self.store_deltas(&conv, quiet.pass(std::mem::take(&mut deltas))).await;
+                        // A worker it starts gets what the thread read so far in its context
+                        // pack: recorded when the call starts, before it reaches Brigadier.
                         if matches!(
-                            event,
+                            &event,
                             ProviderEvent::TurnCompleted { .. } | ProviderEvent::Exited { .. }
+                        ) || matches!(
+                            &event,
+                            ProviderEvent::ToolCall { name, status: ItemStatus::InProgress, .. }
+                                if name.ends_with("delegate_task")
                         ) {
                             self.record_held_looked(&conv).await;
                         }

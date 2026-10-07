@@ -1027,8 +1027,16 @@ impl SessionManager {
             .await?;
         let files = self.worker_files(&task, &workspace.scratch).await;
         drop(fence);
+        // What the thread already read goes with its first message (THREAD-PLAN.md Q8 lever 1).
+        let pack = match &workspace.worktree {
+            Some(worktree) => self.context_pack(&task, worktree, &workspace.scratch).await,
+            None => None,
+        };
         // Instructions the orchestrator sent while the task waited to start go with it.
-        let mut text = String::from("Start the task.");
+        let mut text = match pack {
+            Some(pack) => format!("{pack}\n\nStart the task."),
+            None => String::from("Start the task."),
+        };
         if !task.messages.is_empty() {
             text.push_str("\n\nLater instructions from the orchestrator, oldest first:\n");
             for message in &task.messages {

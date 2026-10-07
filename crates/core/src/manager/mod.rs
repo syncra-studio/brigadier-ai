@@ -22,6 +22,7 @@ mod branches;
 mod cards;
 mod closing;
 mod cold;
+mod context_pack;
 mod conversation;
 pub(crate) mod decisions;
 pub mod disk;

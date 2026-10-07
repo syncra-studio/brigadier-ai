@@ -1017,7 +1017,7 @@ impl SessionManager {
 
     // ----- the workers' code-index tools ---------------------------------------------------
 
-    async fn task_index(&self, id: &ConversationId) -> Result<CodeIndex> {
+    pub(super) async fn task_index(&self, id: &ConversationId) -> Result<CodeIndex> {
         let project = self
             .project_of(id)
             .ok_or_else(|| Error::Invalid("this task's session has no project".into()))?;

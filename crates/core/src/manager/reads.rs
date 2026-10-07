@@ -57,7 +57,7 @@ pub(crate) struct ReadFile {
     pub lines: Vec<LineRange>,
     /// Outside the thread's workspace when last read.
     pub outside: bool,
-    recency: u64,
+    pub(crate) recency: u64,
 }
 
 /// What [`SessionManager::thread_reads`] returns.
@@ -189,6 +189,26 @@ impl SessionManager {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn thread_reads(&self, id: &ConversationId) -> Result<ThreadReads> {
         Ok(self.core.board(id).await?.thread_reads.snapshot())
+    }
+
+    /// [`Self::thread_reads`] with what the thread's running turn read so far and isn't
+    /// recorded yet, for a worker its turn starts (phase 3's context pack). The pump records
+    /// what is held as soon as the thread starts a `delegate_task` call, before the call
+    /// reaches Brigadier, so a read made just before it is in the board either way.
+    pub(crate) async fn thread_reads_now(&self, id: &ConversationId) -> Result<ThreadReads> {
+        let mut log = (*self.core.board(id).await?.thread_reads).clone();
+        let held = match self.conv(id) {
+            Ok(conv) => conv.peek_looked().await,
+            Err(_) => Vec::new(),
+        };
+        if !held.is_empty() {
+            let workspace = self.recorded_workspace(id).map(|workspace| workspace.path);
+            let scratch = self.owned_dir("orch", &id.0);
+            let (reads, searches) =
+                super::blocking(move || Ok(resolve(held, workspace.as_deref(), &scratch))).await?;
+            log.apply(&reads, &searches);
+        }
+        Ok(log.snapshot())
     }
 
     /// Holds what one of the thread's tool calls read or searched until its turn ends.

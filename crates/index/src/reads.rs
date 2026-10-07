@@ -51,6 +51,20 @@ fn symbol(row: &rusqlite::Row<'_>) -> rusqlite::Result<SymbolHit> {
     })
 }
 
+/// The definitions in the file at `path` (repository-relative), in line order, at most
+/// `limit`.
+pub fn outline(conn: &Connection, path: &str, limit: u32) -> Result<Vec<SymbolHit>> {
+    let err = |e: rusqlite::Error| Error::Db(e.to_string());
+    let mut stmt = conn
+        .prepare(
+            "SELECT name,kind,file,line,end_line,signature,doc FROM symbols \
+             WHERE file=?1 AND is_def=1 ORDER BY line LIMIT ?2",
+        )
+        .map_err(err)?;
+    let rows = stmt.query_map(params![path, limit], symbol).map_err(err)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(err)
+}
+
 fn rank(needle: &str, candidate: &str) -> u32 {
     let n = needle.to_lowercase();
     let c = candidate.to_lowercase();
