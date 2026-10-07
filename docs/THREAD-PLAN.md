@@ -15,6 +15,7 @@ The target is one long-lived CLI session that works like a person running `/dele
 
 **Success test (Q3)** is an A/B against a plain cmux `/delegator` session on two real requests:
 - **T1:** the "Sidebar hide mode" request, from base `59a60afb`.
+  Request text (verbatim): "For our Brigadier, I'll need you to make the sidebar toggle have a chevron with an option (persisted) for users to completely hide the sidebar so that not even the strip is shown, so our sidebar would have 2 modes (strip and fully closed), a chevron like in this screenshot [Image #2]". Image #2 is copied to the 20261007-1057 run's `evidence/sidebar-chevron-reference.png`.
 - **T2:** this run's "thread shows no sign it is working" request, from base `53c5cd32`.
 
 Brigadier must win on all of these:
@@ -407,14 +408,14 @@ If a task is inconclusive, rerun it once with the arm order swapped. Missing evi
 5. **Shared `CARGO_TARGET_DIR`** across worktrees can churn fingerprints. Measure it in phase 3. Fall back to per-worktree CoW-warmed targets.
 6. **Open in terminal on Codex.** `codex resume <id>` on a thread made by app-server is unproven. That's what the spike is for. If it fails for either vendor, phase 4's takeover part stops. A revised takeover design (for example a PTY-hosted worker from the start) is written, Codex-reviewed and approved before it's built. Transcript viewing is not a substitute: that would be a scope change to Q5, and only the user can make it.
 7. **ToS.** Only the user's own unmodified `claude` binary is used. `claude --bg`/agents are API-key-only and not used.
-8. **T1's exact request text** lives in the installed app's data, which the run may not read. The user pastes it, or the Delegator copies it from the app's UI.
+8. **T1's exact request text** is in §1 (copied from the app); its image is in the run's evidence folder.
 
-**The user decides:**
-1. Is "own repos" (Full access default) every project the user adds? The recommendation is yes, remembered per project.
-2. Q14 scope: delete old **sessions** only and keep plain Chats? Recommended.
-3. Is T2 (the thread-indicator request, base `53c5cd32`) the second A/B task? Recommended. It is real, it is UI work, and its verified checks exist in run 20261007-1057.
-4. The message-queue "deciding" follow-up routing (PLAN §9 Q30) is kept as is for now. Revisit it after phase 2?
-5. When to spend quota on the baseline and the A/B runs: about 4 arm-runs, plus a T1 run per phase.
+**The user decided (2026-10-07):**
+1. Full access is the default for every project the user adds, remembered per project. Yes.
+2. Q14: delete everything from the old engine, sessions and plain Chats alike. No migration.
+3. T2 (the thread-indicator request, base `53c5cd32`) is the second A/B task. Yes.
+4. The "deciding" follow-up routing (PLAN §9 Q30) stays as it is; the user likes it. Revisit only if phase 2 shows a reason.
+5. Baselines at the start of phase 1, a T1 run per phase, the full A/B in phase 6. Yes.
 
 ## Checked third-party contracts (2026-10-07)
 
