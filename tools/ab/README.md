@@ -27,6 +27,7 @@ Brigadier (a dev daemon built from the code under test):
     BRIGD=<dev brigadierd> BRIG_SRC=<its source tree> tools/ab/startd.sh $AB/<arm>/data &
     tools/ab/setup.py $AB/<arm>/data $AB/<arm>/repo           # onboarded, Fable hidden, daemon defaults
     tools/ab/recorder.py $AB/<arm>/data $AB/<arm>/rec &       # every event; answers cards like the user
+    tools/ab/brainwait.py $AB/<arm>                           # the project's Brain jobs have ended
     tools/ab/send.py $AB/<arm>/data $AB/<arm>/repo tools/ab/tasks/t1.md $AB/<arm>   # t0
     tools/ab/reqdone.sh $AB/<arm>                             # request over (then wait for settlement)
     tools/ab/times.py brigadier $AB/<arm>
@@ -78,7 +79,7 @@ without cache reads. A figure a source doesn't report is "not reported", never 0
 | File | What |
 |---|---|
 | `bipc.py` | IPC client (protocol version of the daemon under test) |
-| `startd.sh`, `setup.py`, `send.py`, `recorder.py`, `reqdone.sh` | drive a Brigadier arm |
+| `startd.sh`, `setup.py`, `recorder.py`, `brainwait.py`, `send.py`, `reqdone.sh` | drive a Brigadier arm |
 | `dlg_start.sh`, `cmx.sh` | start and watch a /delegator arm's own tab |
 | `clone.sh`, `warm.sh`, `conditions.sh` | arm setup and conditions |
 | `times.py`, `timeline.py` | boundaries; a readable timeline |
