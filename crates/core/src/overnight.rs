@@ -27,13 +27,37 @@ pub struct RunWorkspace {
 }
 
 /// What a task does for a run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum RunRole {
     /// Work the thread delegated for the run.
     Worker,
     /// A reviewer or verifier of a run task's work.
     Check,
+}
+
+/// A run role as stored, older names included: an earlier run's whole-phase checks read as
+/// `check`, so the thread engine's first start can still delete them (THREAD-PLAN.md Q14).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum StoredRunRole {
+    Worker,
+    Check,
+    PhaseVerifier,
+    PhaseReviewer,
+    Judge,
+}
+
+impl<'de> Deserialize<'de> for RunRole {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match StoredRunRole::deserialize(deserializer)? {
+            StoredRunRole::Worker => Self::Worker,
+            StoredRunRole::Check
+            | StoredRunRole::PhaseVerifier
+            | StoredRunRole::PhaseReviewer
+            | StoredRunRole::Judge => Self::Check,
+        })
+    }
 }
 
 /// Which run a task works for, fixed when the task is made: a late event of the task keeps
@@ -51,7 +75,7 @@ pub struct RunTaskContext {
 }
 
 /// Where a run is. `Proposed` waits for the user's Start; everything after it is the run's own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum OvernightState {
     /// Shown on the card with one Start. Nothing runs yet.
@@ -68,6 +92,40 @@ pub enum OvernightState {
     WindingDown,
     Reporting,
     Finished,
+}
+
+/// A run state as stored, older names included: an earlier run's `planning` (Phase 0) and
+/// `phaseGate` read as `running`, so the thread engine's first start can still delete it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum StoredOvernightState {
+    Proposed,
+    Superseded,
+    Preparing,
+    Planning,
+    Running,
+    PhaseGate,
+    WaitingQuota,
+    WindingDown,
+    Reporting,
+    Finished,
+}
+
+impl<'de> Deserialize<'de> for OvernightState {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match StoredOvernightState::deserialize(deserializer)? {
+            StoredOvernightState::Proposed => Self::Proposed,
+            StoredOvernightState::Superseded => Self::Superseded,
+            StoredOvernightState::Preparing => Self::Preparing,
+            StoredOvernightState::Planning
+            | StoredOvernightState::Running
+            | StoredOvernightState::PhaseGate => Self::Running,
+            StoredOvernightState::WaitingQuota => Self::WaitingQuota,
+            StoredOvernightState::WindingDown => Self::WindingDown,
+            StoredOvernightState::Reporting => Self::Reporting,
+            StoredOvernightState::Finished => Self::Finished,
+        })
+    }
 }
 
 impl OvernightState {

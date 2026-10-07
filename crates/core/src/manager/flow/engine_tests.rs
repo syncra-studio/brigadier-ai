@@ -203,6 +203,52 @@ async fn the_first_start_deletes_every_old_conversation() {
     flow.stop().await;
 }
 
+/// Records only the earlier engine wrote (a run in Phase 0, a whole-phase verifier, a
+/// per-phase injection and rebirth) still read: a conversation holding them whose delete
+/// can't finish at once keeps a board, so the next launch can still release its run and tasks.
+#[tokio::test]
+async fn the_earlier_engines_own_records_still_read() {
+    let heard: Heard = Arc::default();
+    let repo = std::env::temp_dir().join(format!(
+        "brigadier-flow-engine-old-records-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&repo).unwrap();
+    let seed = old_store_in(&[], repo.to_str().unwrap())
+        .replace("\"role\":\"worker\"", "\"role\":\"phaseVerifier\"")
+        .replace(
+            "\"state\":\"running\",\"windDownAtMs\"",
+            "\"state\":\"planning\",\"windDownAtMs\"",
+        );
+    let flow = Flow::start(
+        "engine-old-records",
+        Options {
+            seed: Some(Box::leak(seed.into_boxed_str())),
+            ..Options::default()
+        },
+        listening(&heard),
+    )
+    .await;
+    let session = ConversationId(OLD[3].into());
+    let board = flow.core.board(&session).await.expect("its board reads");
+    assert_eq!(board.runs.len(), 1, "its run");
+    let task = &board.tasks[&crate::model::TaskId("01a108f3-9296-70a4-a507-9d369072785a".into())];
+    assert_eq!(
+        task.run.as_ref().map(|context| context.role),
+        Some(crate::overnight::RunRole::Check)
+    );
+    // An injection and a rebirth of an earlier run's phase.
+    let injection = serde_json::from_str::<crate::work::InjectionKind>("\"phase\"");
+    assert_eq!(injection.ok(), Some(crate::work::InjectionKind::Run));
+    let rebirth = serde_json::from_str::<crate::knowledge::RebirthTrigger>("\"phase\"");
+    assert_eq!(
+        rebirth.ok(),
+        Some(crate::knowledge::RebirthTrigger::Recovery)
+    );
+    flow.stop().await;
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
 /// A fresh store only gets the marker; a Chat and a session made after the first start, and
 /// a permission chosen since, stay through later starts.
 #[tokio::test]

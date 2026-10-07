@@ -73,7 +73,7 @@ pub struct MemoryChange {
 }
 
 /// Why an orchestrator was reborn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum RebirthTrigger {
     /// Its context passed the rebirth threshold.
@@ -83,6 +83,27 @@ pub enum RebirthTrigger {
     /// Its prompt cache had expired when the next turn came: resuming would have sent the
     /// whole history again at the cache-write price (PLAN.md §7).
     CacheExpired,
+}
+
+/// A rebirth's trigger as stored, older names included: an earlier run's per-phase restart
+/// (`phase`) reads as `recovery`, so the thread engine's first start can still delete it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum StoredRebirthTrigger {
+    Threshold,
+    Recovery,
+    CacheExpired,
+    Phase,
+}
+
+impl<'de> Deserialize<'de> for RebirthTrigger {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match StoredRebirthTrigger::deserialize(deserializer)? {
+            StoredRebirthTrigger::Threshold => Self::Threshold,
+            StoredRebirthTrigger::Recovery | StoredRebirthTrigger::Phase => Self::Recovery,
+            StoredRebirthTrigger::CacheExpired => Self::CacheExpired,
+        })
+    }
 }
 
 /// One part of a rebirth briefing.

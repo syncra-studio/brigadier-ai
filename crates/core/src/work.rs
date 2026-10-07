@@ -1785,7 +1785,7 @@ pub struct CheckoutFile {
 }
 
 /// Why something entered the orchestrator's context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum InjectionKind {
     /// Brigadier's role instructions, once per CLI session.
@@ -1812,6 +1812,49 @@ pub enum InjectionKind {
     Reminder,
     /// An overnight run starts, restarts or ends.
     Run,
+}
+
+/// An injection's kind as stored, older names included: an earlier run's per-phase `phase`
+/// reads as `run`, so the thread engine's first start can still delete it (THREAD-PLAN.md Q14).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum StoredInjectionKind {
+    Instructions,
+    UserMessage,
+    Report,
+    WorkerQuestion,
+    Decision,
+    TaskFailed,
+    ToolResult,
+    Artifact,
+    Reseed,
+    Resume,
+    FollowUp,
+    Briefing,
+    Reminder,
+    Run,
+    Phase,
+}
+
+impl<'de> Deserialize<'de> for InjectionKind {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match StoredInjectionKind::deserialize(deserializer)? {
+            StoredInjectionKind::Instructions => Self::Instructions,
+            StoredInjectionKind::UserMessage => Self::UserMessage,
+            StoredInjectionKind::Report => Self::Report,
+            StoredInjectionKind::WorkerQuestion => Self::WorkerQuestion,
+            StoredInjectionKind::Decision => Self::Decision,
+            StoredInjectionKind::TaskFailed => Self::TaskFailed,
+            StoredInjectionKind::ToolResult => Self::ToolResult,
+            StoredInjectionKind::Artifact => Self::Artifact,
+            StoredInjectionKind::Reseed => Self::Reseed,
+            StoredInjectionKind::Resume => Self::Resume,
+            StoredInjectionKind::FollowUp => Self::FollowUp,
+            StoredInjectionKind::Briefing => Self::Briefing,
+            StoredInjectionKind::Reminder => Self::Reminder,
+            StoredInjectionKind::Run | StoredInjectionKind::Phase => Self::Run,
+        })
+    }
 }
 
 /// One thing Brigadier put into the orchestrator's context, for the Inspector.
