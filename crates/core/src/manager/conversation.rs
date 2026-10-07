@@ -1619,7 +1619,11 @@ impl SessionManager {
                 } else {
                     self.brigadier_server(grant, RUNNER_TOOL_TIMEOUT_SECS, false)
                 };
-                if commands == RunTools::WithEscalation {
+                // Under Ask for approval the user approves each command that leaves the sandbox;
+                // a Claude thread's at Approve for me goes to Brigadier's reviewer instead.
+                if commands == RunTools::WithEscalation
+                    && permission == crate::model::PermissionLevel::AskForApproval
+                {
                     server.prompt_tools = vec![super::run::RUN_UNSANDBOXED.into()];
                 }
                 if choice.provider == ProviderKind::Claude {

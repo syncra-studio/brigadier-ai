@@ -110,12 +110,15 @@ impl SessionManager {
                 None,
             ),
             TokenOwner::Task(id, task) => {
-                let review = task.0.starts_with("review:");
+                let escalation = task.0.starts_with(super::escalation::ESCALATION_OWNER);
+                let review = task.0.starts_with("review:") || escalation;
                 (
                     Some(id.0.clone()),
                     conversation(id).and_then(|c| c.project_id).map(|p| p.0),
                     Some(task.0.clone()),
-                    if review {
+                    if escalation {
+                        StepKind::Escalation
+                    } else if review {
                         StepKind::Review
                     } else {
                         StepKind::Worker

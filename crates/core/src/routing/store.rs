@@ -134,10 +134,12 @@ pub enum StepKind {
     Brain,
     /// Brigadier's own upkeep (researching a new model).
     Upkeep,
+    /// Brigadier's reviewer of a Claude thread's command that leaves its sandbox.
+    Escalation,
 }
 
 impl StepKind {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Thread,
         Self::Chat,
         Self::Handoff,
@@ -146,6 +148,7 @@ impl StepKind {
         Self::Guardian,
         Self::Brain,
         Self::Upkeep,
+        Self::Escalation,
     ];
 
     /// How it is stored.
@@ -159,6 +162,7 @@ impl StepKind {
             Self::Guardian => "guardian",
             Self::Brain => "brain",
             Self::Upkeep => "upkeep",
+            Self::Escalation => "escalation",
         }
     }
 

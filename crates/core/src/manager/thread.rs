@@ -39,6 +39,9 @@ use crate::{Error, Result};
 /// (docs/evidence/2026-10-07-thread-phase2-contracts.md §3).
 const BASH_MAX_OUTPUT_LENGTH: &str = "150000";
 
+/// `run_unsandboxed` as a Claude thread's CLI names it in its permission prompt.
+const CLAUDE_RUN_UNSANDBOXED: &str = "mcp__brigadier__run_unsandboxed";
+
 /// Where the thread works: a checkout of the session's repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ThreadWorkspace {
@@ -323,6 +326,11 @@ impl SessionManager {
         request: &ApprovalRequest,
         decision: ApprovalDecision,
     ) -> Result<()> {
+        // Brigadier's own question: the `run_unsandboxed` call waiting on the card takes the
+        // answer (`super::escalation`).
+        if request.id.starts_with(super::escalation::OWN_APPROVAL) {
+            return Ok(());
+        }
         let cli = self
             .conv(conversation_id)?
             .live_cli()
@@ -352,17 +360,32 @@ impl SessionManager {
     }
 
     /// An approved `run_unsandboxed` call may run its command, once (see `super::run`).
+    /// Codex names the tool and gives the call's `workdir` as the request's folder; Claude
+    /// names it as an MCP tool, and the `workdir` is in its input.
     fn pass_unsandboxed(
         &self,
         id: &ConversationId,
         request: &ApprovalRequest,
         decision: &ApprovalDecision,
     ) {
-        if request.tool == super::run::RUN_UNSANDBOXED
-            && !matches!(decision, ApprovalDecision::Deny { .. })
-            && let Some(command) = &request.command
-        {
+        if matches!(decision, ApprovalDecision::Deny { .. }) {
+            return;
+        }
+        let Some(command) = &request.command else {
+            return;
+        };
+        if request.tool == super::run::RUN_UNSANDBOXED {
             self.run_passes.grant(id, command, request.cwd.as_deref());
+        } else if request.tool == CLAUDE_RUN_UNSANDBOXED {
+            let input: Option<serde_json::Value> = request
+                .input
+                .as_deref()
+                .and_then(|input| serde_json::from_str(input).ok());
+            let workdir = input
+                .as_ref()
+                .and_then(|input| input.get("workdir"))
+                .and_then(serde_json::Value::as_str);
+            self.run_passes.grant(id, command, workdir);
         }
     }
 

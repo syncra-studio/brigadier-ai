@@ -482,6 +482,13 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents) -> Value {
         .filter(|server| server.trusted)
         .map(|server| format!("mcp__{}", server.name))
         .collect();
+    // A trusted server's tools that still ask (a thread's command leaving its sandbox): an ask
+    // rule wins over the server's allow rule.
+    for server in spec.mcp_servers.iter().filter(|server| server.trusted) {
+        for tool in &server.prompt_tools {
+            ask.push(format!("mcp__{}__{tool}", server.name));
+        }
+    }
     let mut deny: Vec<String> = Vec::new();
     let sandbox = match &spec.access {
         Access::Workspace { extra_roots } => json!({
@@ -1749,6 +1756,30 @@ mod tests {
             permissions(&ask)["ask"],
             json!(["Bash(dangerouslyDisableSandbox:true)"])
         );
+        // A trusted server's tool that leaves the sandbox asks too, though the server is
+        // allowed (an ask rule wins over an allow rule).
+        let server = McpServer {
+            name: "brigadier".into(),
+            command: PathBuf::from("/bin/true"),
+            args: Vec::new(),
+            env: Vec::new(),
+            tool_timeout_secs: None,
+            trusted: true,
+            always_load: true,
+            prompt_tools: vec!["run_unsandboxed".into()],
+        };
+        let thread = SessionSpec {
+            mcp_servers: vec![server],
+            ..ask.clone()
+        };
+        assert_eq!(
+            permissions(&thread)["ask"],
+            json!([
+                "Bash(dangerouslyDisableSandbox:true)",
+                "mcp__brigadier__run_unsandboxed"
+            ])
+        );
+        assert_eq!(permissions(&thread)["allow"], json!(["mcp__brigadier"]));
         // Read-only: nothing asks, whatever the review setting.
         assert_eq!(permission_mode(&with(Access::ReadOnly, true)), "dontAsk");
         assert_eq!(permission_mode(&with(Access::ReadOnly, false)), "dontAsk");

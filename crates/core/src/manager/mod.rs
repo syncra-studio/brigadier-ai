@@ -27,6 +27,7 @@ mod conversation;
 pub(crate) mod decisions;
 pub mod disk;
 mod engine;
+mod escalation;
 mod fallback;
 #[cfg(debug_assertions)]
 pub mod fault;
