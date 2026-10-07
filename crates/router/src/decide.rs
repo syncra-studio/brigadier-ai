@@ -157,13 +157,14 @@ pub struct Preview {
     pub places: Vec<RankedPlace>,
 }
 
-/// The quality floor a task of this category gets unless the orchestrator raises it.
+/// The quality floor a task of this category gets unless the orchestrator sets one: code
+/// writing and review run on a vendor's best, chores on a small model.
 pub fn default_floor(category: TaskCategory) -> QualityTier {
     match category {
-        TaskCategory::Implement
-        | TaskCategory::Review
-        | TaskCategory::Merge
-        | TaskCategory::Orchestrate => QualityTier::Strong,
+        TaskCategory::Implement | TaskCategory::Review | TaskCategory::Merge => {
+            QualityTier::Frontier
+        }
+        TaskCategory::Orchestrate => QualityTier::Strong,
         TaskCategory::Research => QualityTier::Standard,
         TaskCategory::Scout | TaskCategory::Verify | TaskCategory::Chat => QualityTier::Light,
     }
@@ -177,11 +178,14 @@ pub fn allows_trials(category: TaskCategory) -> bool {
     )
 }
 
-/// A category's default effort, raised to its floor: a verifier that runs at low effort
-/// tends to call checks met that it never ran.
+/// A category's default effort, fitted to its floor: a verifier that runs at low effort tends
+/// to call checks met that it never ran, and code is written and reviewed at high effort. A
+/// scout is a chore and runs at low.
 fn at_least(category: TaskCategory, effort: &'static str) -> &'static str {
     let floor = match category {
         TaskCategory::Verify => "medium",
+        TaskCategory::Implement | TaskCategory::Review | TaskCategory::Merge => "high",
+        TaskCategory::Scout => return "low",
         _ => return effort,
     };
     if table::rank(effort) < table::rank(floor) {
@@ -195,11 +199,8 @@ fn at_least(category: TaskCategory, effort: &'static str) -> &'static str {
 fn category_effort(category: TaskCategory) -> Option<&'static str> {
     match category {
         TaskCategory::Scout => Some("low"),
-        TaskCategory::Research
-        | TaskCategory::Verify
-        | TaskCategory::Implement
-        | TaskCategory::Orchestrate => Some("medium"),
-        TaskCategory::Review | TaskCategory::Merge => Some("high"),
+        TaskCategory::Research | TaskCategory::Verify | TaskCategory::Orchestrate => Some("medium"),
+        TaskCategory::Implement | TaskCategory::Review | TaskCategory::Merge => Some("high"),
         TaskCategory::Chat => None,
     }
 }
@@ -1960,6 +1961,23 @@ mod tests {
         assert_eq!(at_least(TaskCategory::Verify, "low"), "medium");
         assert_eq!(at_least(TaskCategory::Verify, "high"), "high");
         assert_eq!(at_least(TaskCategory::Scout, "low"), "low");
+    }
+
+    #[test]
+    fn code_runs_on_the_best_at_high_and_chores_on_light_at_low() {
+        for category in [
+            TaskCategory::Implement,
+            TaskCategory::Review,
+            TaskCategory::Merge,
+        ] {
+            assert_eq!(default_floor(category), QualityTier::Frontier);
+            assert_eq!(category_effort(category), Some("high"));
+            assert_eq!(at_least(category, "medium"), "high");
+            assert_eq!(at_least(category, "xhigh"), "xhigh");
+        }
+        assert_eq!(default_floor(TaskCategory::Scout), QualityTier::Light);
+        assert_eq!(category_effort(TaskCategory::Scout), Some("low"));
+        assert_eq!(at_least(TaskCategory::Scout, "medium"), "low");
     }
 
     fn info(id: &str, name: &str, resolved: Option<&str>) -> brigadier_providers::ModelInfo {
