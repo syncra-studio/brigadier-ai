@@ -949,14 +949,7 @@ async fn thread_config(
     }
     if let Some(profile) = profile {
         // Profiles and the legacy sandbox settings don't compose: set only the profile.
-        config.insert("default_permissions".into(), json!(PROFILE));
-        config.insert("permissions".into(), json!({ PROFILE: profile }));
-        if spec.auto_review {
-            config.insert(
-                "features".into(),
-                json!({ ADDITIONAL_PERMISSIONS_FEATURE: true }),
-            );
-        }
+        profile_config(&mut config, profile, spec.auto_review);
         return Ok(config);
     }
     let network = match &spec.access {
@@ -982,6 +975,24 @@ async fn thread_config(
         );
     }
     Ok(config)
+}
+
+/// A profiled session's thread config: its permission profile, and at Approve for me
+/// ([`SessionSpec::auto_review`]) the feature that lets a command widen it.
+///
+/// The feature is a dotted key: Codex applies a thread's config after the app-server's own
+/// overrides, one key path at a time (codex-cli 0.160.1, `config/src/overrides.rs`), so a
+/// `features` table would replace the one the app-server's `--disable` flags built and turn the
+/// user's hooks, plugins and sub-agents back on (checked with `codex features list`).
+fn profile_config(config: &mut Map<String, Value>, profile: Value, auto_review: bool) {
+    config.insert("default_permissions".into(), json!(PROFILE));
+    config.insert("permissions".into(), json!({ PROFILE: profile }));
+    if auto_review {
+        config.insert(
+            format!("features.{ADDITIONAL_PERMISSIONS_FEATURE}"),
+            json!(true),
+        );
+    }
 }
 
 /// The permission profile of a scoped session with folders it must not read, when Codex can
@@ -2065,6 +2076,23 @@ mod tests {
         ] {
             assert!(table.contains(part), "{part} in {table}");
         }
+    }
+
+    /// A profiled session at Approve for me turns on one more feature, and only that one: the
+    /// features the app-server switched off stay off.
+    #[test]
+    fn a_profiled_session_adds_its_feature_without_replacing_the_disabled_ones() {
+        let mut config = Map::new();
+        profile_config(&mut config, json!({}), true);
+        assert_eq!(
+            config.get("features.exec_permission_approvals"),
+            Some(&json!(true))
+        );
+        assert!(!config.contains_key("features"), "{config:?}");
+        assert_eq!(config.get("default_permissions"), Some(&json!(PROFILE)));
+        let mut config = Map::new();
+        profile_config(&mut config, json!({}), false);
+        assert!(!config.keys().any(|key| key.starts_with("features")));
     }
 
     /// A prompt-mode tool call reaches the client as an elicitation (shape seen live on
