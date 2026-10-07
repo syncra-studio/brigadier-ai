@@ -17,8 +17,9 @@
 //! KERN_PROCARGS2` is allowed in Codex's sandbox, checked live on 0.160.1) and so the grant of
 //! the thread's MCP bridge, and it may reach the daemon's socket. Under Approve for me Codex's
 //! auto-reviewer settles such a call inside Codex, with nothing Brigadier could tie the call to,
-//! so that level has no `run_unsandboxed`: the thread leaves the sandbox with its own shell,
-//! which the auto-reviewer settles (its output untrimmed, as all of that shell's is).
+//! so that level has no `run_unsandboxed`: the thread widens the sandbox from its own shell
+//! (`with_additional_permissions`, never unsandboxed, see the Codex provider), which the
+//! auto-reviewer settles (its output untrimmed, as all of that shell's is).
 //!
 //! Every command leads its own process group, recorded under the thread's cleanup owner while
 //! it runs, and is killed when it times out, when its call is abandoned and when the thread's

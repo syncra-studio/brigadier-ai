@@ -66,6 +66,19 @@ const COMPACT_SINCE: &str = "0.156.1";
 /// The permission profile a session with folders it must not read runs under.
 const PROFILE: &str = "brigadier";
 
+/// Under a permission profile with denied reads, codex-cli 0.160.1 runs an approved
+/// `require_escalated` command inside the sandbox all the same (`core/src/tools/sandboxing.rs`,
+/// `sandbox_permissions_preserving_denied_reads`). This feature ("Allow exec tools to request
+/// additional permissions while staying sandboxed", under development, off by default) lets a
+/// command ask for more folders or the network, approved like an escalation and added to the
+/// profile with its denies kept. On only where Codex's auto-reviewer answers (Approve for me):
+/// the app-server leaves the requested paths out of a client's approval request unless the
+/// client opts into its experimental API, so a user's card couldn't show them.
+const ADDITIONAL_PERMISSIONS_FEATURE: &str = "exec_permission_approvals";
+
+/// What a profiled session at Approve for me is told about leaving its sandbox.
+const ADDITIONAL_PERMISSIONS_HINT: &str = "Leaving the sandbox: here `require_escalated` still runs the command sandboxed. To write outside your writable folders or use the network, run the command with `sandbox_permissions: \"with_additional_permissions\"` and `additional_permissions` naming exactly the paths (file_system read/write) or network it needs; a reviewer approves it.";
+
 /// Built-ins switched off for sessions that must not act on their own (a Chat, a handoff
 /// note, a one-shot job): viewing local images, generating images, Codex's own sub-agents,
 /// goals, the sleep tool, and every shell tool. Without a shell tool there is no command to approve at all,
@@ -643,7 +656,12 @@ async fn open_thread(
     let sandbox = thread_sandbox(&spec.access);
     let approval = Some(approval_policy(&spec.access));
     let reviewer = Some(reviewer(spec.auto_review));
-    let instructions = spec.append_system_prompt.clone();
+    let instructions = match &spec.append_system_prompt {
+        Some(prompt) if profiled && spec.auto_review => {
+            Some(format!("{prompt}\n\n{ADDITIONAL_PERMISSIONS_HINT}"))
+        }
+        other => other.clone(),
+    };
     // Always named: an omitted tier inherits the resumed thread's or the user's config.
     let service_tier = Some(if spec.fast { FAST_TIER } else { STANDARD_TIER }.to_owned());
     let (thread, model) = match &spec.origin {
@@ -933,6 +951,12 @@ async fn thread_config(
         // Profiles and the legacy sandbox settings don't compose: set only the profile.
         config.insert("default_permissions".into(), json!(PROFILE));
         config.insert("permissions".into(), json!({ PROFILE: profile }));
+        if spec.auto_review {
+            config.insert(
+                "features".into(),
+                json!({ ADDITIONAL_PERMISSIONS_FEATURE: true }),
+            );
+        }
         return Ok(config);
     }
     let network = match &spec.access {
@@ -1005,8 +1029,13 @@ fn scoped_profile(access: &Access) -> Option<Value> {
     for root in writable_roots {
         filesystem.insert(real(root), json!("write"));
     }
+    // The folder and everything under it: a path deny alone loses to a narrower grant inside
+    // it (an approved `with_additional_permissions` read of one file), a glob deny doesn't
+    // (codex-cli 0.160.1, `protocol/src/permissions.rs`: the most specific entry wins).
     for path in deny_read {
-        filesystem.insert(real(path), json!("deny"));
+        let path = real(path);
+        filesystem.insert(format!("{path}/**"), json!("deny"));
+        filesystem.insert(path, json!("deny"));
     }
     let sockets: Map<String, Value> = unix_sockets
         .iter()
@@ -2029,6 +2058,8 @@ mod tests {
             "\":workspace_roots\" = \"write\"",
             "\"/work/s\" = \"write\"",
             "\"/data/run\" = \"deny\"",
+            // A narrower grant inside it can't reopen it.
+            "\"/data/run/**\" = \"deny\"",
             "\"enabled\" = false",
             "\"unix_sockets\" = {\"/data/run/brigadierd.sock\" = \"allow\"}",
         ] {
