@@ -189,6 +189,83 @@ impl SessionManager {
         }
     }
 
+    /// `review_plan`: one review of the thread's own plan, against its brief, by the vendor
+    /// other than the thread's, in a checkout of its workspace's tip. Returns at once; the
+    /// findings arrive as a `[plan review …]` message.
+    pub(crate) async fn review_thread_plan(
+        &self,
+        conversation_id: &ConversationId,
+        args: crate::tools::ReviewPlan,
+    ) -> Result<String> {
+        if args.plan.trim().is_empty() {
+            return Err(Error::Invalid("The plan is empty.".into()));
+        }
+        let workspace = self
+            .effective_workspace(conversation_id)
+            .await?
+            .ok_or_else(|| {
+                Error::Invalid("Only a session's thread asks for a plan review.".into())
+            })?;
+        let (git, path) = (self.git.clone(), workspace.path.clone());
+        let tip = blocking(move || {
+            git.open_worktree(&path)
+                .map_err(git_error)?
+                .head()
+                .map_err(git_error)
+        })
+        .await?;
+        let author = self.thread_author(conversation_id).await;
+        let (review, _) = self
+            .start_review(NewReview {
+                conversation_id: conversation_id.clone(),
+                request_id: self.request_for(conversation_id, None).await,
+                task_id: None,
+                kind: ReviewKind::Plan,
+                base: tip.clone(),
+                tip,
+                author,
+                notify: ReviewFor::Orchestrator,
+                repo: workspace.repo,
+                plan: Some((args.brief, args.plan)),
+            })
+            .await?;
+        let reviewer = review.reviewer.label();
+        Ok(match &review.state {
+            ReviewState::Failed { reason } => {
+                format!("The plan review could not start: {reason}. Judge the plan yourself.")
+            }
+            _ => format!(
+                "Started a review of your plan by {reviewer}. It returns now: carry on. Its findings arrive as a [plan review …] message."
+            ),
+        })
+    }
+
+    /// The thread's model, as an author whose work the other vendor reviews: the one its CLI
+    /// runs on, else the session's choice.
+    pub(crate) async fn thread_author(&self, conversation_id: &ConversationId) -> Author {
+        let running = match self.conv(conversation_id) {
+            Ok(conv) => conv.live_cli().await.map(|cli| cli.model.clone()),
+            Err(_) => None,
+        };
+        let choice = running.or_else(|| {
+            self.core
+                .conversation(conversation_id)
+                .ok()
+                .and_then(|conversation| conversation.setup)
+                .map(|setup| setup.choice().clone())
+        });
+        match choice {
+            Some(choice) => Author {
+                provider: choice.provider,
+                model: choice.model,
+            },
+            None => Author {
+                provider: ProviderKind::Claude,
+                model: None,
+            },
+        }
+    }
+
     /// `review_code`: one review of the caller's committed work, from where it started, by
     /// the vendor other than its phase's author. Returns at once; the findings arrive as a
     /// message.
@@ -827,6 +904,33 @@ impl SessionManager {
         let of = number.map_or_else(|| "the session".to_owned(), |n| format!("task-{n}"));
         let range = format!("{}..{}", short(&review.base), short(&review.tip));
         let text = match (review.kind, &review.state, text) {
+            // The thread's own commits and plans.
+            (ReviewKind::Code, ReviewState::Findings { count }, Some(text))
+                if review.task_id.is_none() =>
+            {
+                format!(
+                    "[review of your commits · {reviewer} found {count} in {range}]\n{}\n[/review]\nThis is the one background review of the commits you made yourself. Fix what you agree with (a tiny fix of your own, or delegate one), or tell the user why not. There are no review rounds.",
+                    clipped(text)
+                )
+            }
+            (ReviewKind::Plan, ReviewState::Findings { count }, Some(text))
+                if review.task_id.is_none() =>
+            {
+                format!(
+                    "[plan review of your plan · {reviewer} found {count}]\n{}\n[/plan review]\nWeigh them against the brief (it wins any conflict; never reopen what is settled), and change your plan, or the briefs you send, for the ones you agree with. There are no review rounds.",
+                    clipped(text)
+                )
+            }
+            (ReviewKind::Code, ReviewState::Failed { reason }, _) if review.task_id.is_none() => {
+                format!(
+                    "[review of your commits · could not run] The background review of {range} could not run: {reason}. Nothing waits on it; judge yourself whether your change needs a closer look."
+                )
+            }
+            (ReviewKind::Plan, ReviewState::Failed { reason }, _) if review.task_id.is_none() => {
+                format!(
+                    "[plan review of your plan · could not run] The plan review could not run: {reason}. Judge the plan yourself."
+                )
+            }
             (ReviewKind::Code, ReviewState::Findings { count }, Some(text)) => format!(
                 "[review {of} · {reviewer} found {count} in {range}]\n{}\n[/review]\nThis is the one background review of what landed. Fix what you agree with (delegate a fix, or a tiny fix of your own), or tell the user why not. There are no review rounds.",
                 clipped(text)
@@ -878,9 +982,11 @@ impl SessionManager {
             &review.conversation_id,
             Envelope {
                 kind: InjectionKind::Report,
-                label: match review.kind {
-                    ReviewKind::Code => format!("review {of}"),
-                    ReviewKind::Plan => format!("plan review {of}"),
+                label: match (review.kind, review.task_id.is_some()) {
+                    (ReviewKind::Code, true) => format!("review {of}"),
+                    (ReviewKind::Plan, true) => format!("plan review {of}"),
+                    (ReviewKind::Code, false) => "review of your commits".to_owned(),
+                    (ReviewKind::Plan, false) => "plan review of your plan".to_owned(),
                 },
                 task_id: review.task_id.clone(),
                 text,

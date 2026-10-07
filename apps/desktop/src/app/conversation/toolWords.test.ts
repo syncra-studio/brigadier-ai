@@ -45,6 +45,7 @@ test("every registered action keeps its verb across provider namespaces and outc
     "approve_outline",
     "start_verifier",
     "review_code",
+    "review_plan",
     "request_approval",
     "ask_user",
     "ask_orchestrator",

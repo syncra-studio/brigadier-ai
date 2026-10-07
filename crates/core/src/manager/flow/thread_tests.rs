@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex};
 use brigadier_providers::model::{Access, Origin, ToolSet};
 use brigadier_providers::{ApprovalDecision, Artifact, ProviderKind};
 
+use serde_json::json;
+
 use super::{Flow, Options, Reply, Script, Turn, git};
 use crate::model::{Environment, PermissionLevel, Setup};
 use crate::work::{ApprovalSubject, CardState};
@@ -330,5 +332,72 @@ async fn a_new_workspace_or_level_resumes_the_thread_with_a_note() {
         inputs[2].0
     );
     assert!(!inputs[2].0.contains("[workspace]"), "{}", inputs[2].0);
+    flow.stop().await;
+}
+
+/// The thread asks for a review of its own plan and carries on at once; the other vendor's
+/// findings reach it as a message. Its code index tools answer for the session's project.
+#[tokio::test]
+async fn the_threads_plan_review_runs_in_the_background() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = inputs.clone();
+    let flow = Flow::start(
+        "thread-plan",
+        Options {
+            reviews: Some(script(|turn| async move {
+                assert!(turn.input.contains("Rename the README"), "{}", turn.input);
+                Reply::text("- [P2] The plan never checks the links to README.md.")
+            })),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("[plan review") {
+                    return Reply::text("I'll check the links too.");
+                }
+                let map = turn.call("project_map", json!({})).await;
+                assert!(!map.is_error, "{}", map.text);
+                let started = turn
+                    .call(
+                        "review_plan",
+                        json!({"plan": "1. Rename the README to README.txt.",
+                               "brief": "The user wants a plain-text README."}),
+                    )
+                    .await;
+                assert!(!started.is_error, "{}", started.text);
+                assert!(
+                    started.text.starts_with("Started a review of your plan"),
+                    "{}",
+                    started.text
+                );
+                Reply::text("Planned.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Make the README plain text.").await;
+    flow.until("the plan review's findings", |_| {
+        inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|input| input.contains("[plan review of your plan"))
+    })
+    .await;
+    flow.settled().await;
+    let board = flow.board().await;
+    let review = board.reviews.values().next().expect("a plan review");
+    assert_eq!(review.kind, crate::work::ReviewKind::Plan);
+    assert!(review.task_id.is_none());
+    assert_eq!(review.author, ProviderKind::Claude);
+    assert_eq!(review.reviewer, ProviderKind::Codex);
+    let heard = inputs.lock().unwrap().clone();
+    let findings = heard
+        .iter()
+        .find(|input| input.contains("[plan review of your plan"))
+        .unwrap();
+    assert!(findings.contains("never checks the links"), "{findings}");
     flow.stop().await;
 }

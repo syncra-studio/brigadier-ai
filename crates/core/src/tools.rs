@@ -404,6 +404,18 @@ pub struct LandPhase {
     pub task: String,
 }
 
+/// `review_plan`: one review of the thread's own plan by the other vendor, in the background.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewPlan {
+    /// The plan: the steps in order with the files each touches, how each "done when" will
+    /// be checked, and the risks.
+    pub plan: String,
+    /// What the plan must achieve: the user's request in their words, the constraints and
+    /// the settled decisions. The reviewer judges the plan against it.
+    pub brief: String,
+}
+
 /// `finish_session`: merge the session branch into its base (new-worktree sessions), behind the
 /// user's one-click approval.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -552,6 +564,10 @@ pub enum OrchestratorCall {
     PhaseDone(PhaseDone),
     ProposePhases(ProposePhases),
     ProposeOvernight(ProposeOvernight),
+    CodeSearch(CodeSearch),
+    CodeRefs(CodeRefs),
+    ProjectMap,
+    ReviewPlan(ReviewPlan),
 }
 
 impl OrchestratorCall {
@@ -580,6 +596,10 @@ impl OrchestratorCall {
             Self::PhaseDone(_) => "phase_done",
             Self::ProposePhases(_) => "propose_phases",
             Self::ProposeOvernight(_) => "propose_overnight",
+            Self::CodeSearch(_) => "code_search",
+            Self::CodeRefs(_) => "code_refs",
+            Self::ProjectMap => "project_map",
+            Self::ReviewPlan(_) => "review_plan",
         }
     }
 }

@@ -344,6 +344,10 @@ impl SessionManager {
             OrchestratorCall::PhaseDone(args) => self.phase_done(id, args).await,
             OrchestratorCall::ProposePhases(args) => self.propose_phases(id, args).await,
             OrchestratorCall::ProposeOvernight(args) => self.interpret_overnight(id, args).await,
+            OrchestratorCall::CodeSearch(args) => self.code_search_tool(id, args).await,
+            OrchestratorCall::CodeRefs(args) => self.code_refs_tool(id, args).await,
+            OrchestratorCall::ProjectMap => self.project_map_tool(id).await,
+            OrchestratorCall::ReviewPlan(args) => self.review_thread_plan(id, args).await,
             OrchestratorCall::ListTasks => {
                 let tasks = self.core.tasks(id).await?;
                 if tasks.is_empty() {

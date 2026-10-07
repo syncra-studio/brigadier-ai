@@ -4006,6 +4006,9 @@ const ANNOUNCED_TOOLS: &[&str] = &[
     "query_brain",
     "search_transcript",
     "list_tasks",
+    "code_search",
+    "code_refs",
+    "project_map",
 ];
 
 /// A held reply, kept out of the thread for its request.

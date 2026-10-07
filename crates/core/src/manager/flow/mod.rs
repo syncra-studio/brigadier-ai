@@ -193,6 +193,8 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "submit_outline" => ToolCall::Worker(W::SubmitOutline(arg(name, args))),
         "submit_report" => ToolCall::Worker(W::SubmitReport(arg(name, args))),
         "review_code" => ToolCall::Worker(W::ReviewCode),
+        "review_plan" => ToolCall::Orchestrator(O::ReviewPlan(arg(name, args))),
+        "project_map" if orchestrator => ToolCall::Orchestrator(O::ProjectMap),
         "project_map" => ToolCall::Worker(W::ProjectMap),
         other => panic!("the flow harness doesn't know the tool {other}"),
     }

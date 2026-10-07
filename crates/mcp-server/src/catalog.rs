@@ -7,8 +7,8 @@ use brigadier_core::tools::{
     AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch,
     DelegateTask, FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser, OrchestratorCall,
     PhaseDone, PlanPhases, ProposeOvernight, ProposePhases, QueryBrain, ReadArtifact, RecordNodes,
-    Remember, ReportRef, RequestApproval, Role, RouteFollowUp, SaveMemory, SearchTranscript,
-    SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
+    Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, SaveMemory,
+    SearchTranscript, SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
@@ -116,6 +116,11 @@ you first). Returns at once: keep working, and the findings arrive later as a me
 Brigadier (if you have nothing left to do before them, end your turn; they start your next \
 one). Fix what you agree with and commit; for a finding you don't, say why in your report. It is \
 advisory and there are no rounds: call it once.";
+
+const REVIEW_PLAN: &str = "Your call, for a plan of your own that is big or risky: start one \
+review of it by a model from the other vendor, against the brief you give. Returns at once: \
+carry on (delegate, or wait for nothing), and the findings arrive later as a [plan review …] \
+message. Weigh them against the brief; there are no rounds.";
 
 const LAND_PHASE: &str = "Land a finished `implement` or `merge` task's commits on the \
 session's branch: the lead's task once its report is in, or a verifier you started for big or \
@@ -288,6 +293,10 @@ fn orchestrator_tools() -> Vec<Tool> {
             PROPOSE_PHASES,
             input_schema::<ProposePhases>(),
         ),
+        tool("code_search", CODE_SEARCH, input_schema::<CodeSearch>()),
+        tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
+        tool("project_map", PROJECT_MAP, no_arguments()),
+        tool("review_plan", REVIEW_PLAN, input_schema::<ReviewPlan>()),
     ]
 }
 
@@ -399,6 +408,10 @@ pub fn parse_call(
                 "phase_done" => OrchestratorCall::PhaseDone(args(name, arguments)?),
                 "propose_phases" => OrchestratorCall::ProposePhases(args(name, arguments)?),
                 "propose_overnight" => OrchestratorCall::ProposeOvernight(args(name, arguments)?),
+                "code_search" => OrchestratorCall::CodeSearch(args(name, arguments)?),
+                "code_refs" => OrchestratorCall::CodeRefs(args(name, arguments)?),
+                "project_map" => OrchestratorCall::ProjectMap,
+                "review_plan" => OrchestratorCall::ReviewPlan(args(name, arguments)?),
                 _ => return Err(unknown()),
             };
             Ok(ToolCall::Orchestrator(call))
@@ -474,6 +487,45 @@ mod tests {
         assert!(description.contains("don't wait for its plan review"));
         assert!(description.contains("Start this plan?"));
         assert!(names.contains(&"start_verifier".to_owned()));
+    }
+
+    #[test]
+    fn the_thread_searches_the_code_index_and_asks_for_plan_reviews() {
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+        };
+        let names: Vec<String> = tools_for(&thread)
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+        for name in [
+            "code_search",
+            "code_refs",
+            "project_map",
+            "review_plan",
+            "delegate_task",
+            "land_phase",
+            "finish_session",
+        ] {
+            assert!(names.contains(&name.to_owned()), "{name}");
+        }
+        let mut arguments = JsonObject::new();
+        arguments.insert("query".into(), Value::String("ConvLive".into()));
+        assert!(matches!(
+            parse_call(&thread, "code_search", Some(arguments)),
+            Ok(ToolCall::Orchestrator(OrchestratorCall::CodeSearch(_)))
+        ));
+        assert!(matches!(
+            parse_call(&thread, "project_map", None),
+            Ok(ToolCall::Orchestrator(OrchestratorCall::ProjectMap))
+        ));
+        let mut arguments = JsonObject::new();
+        arguments.insert("plan".into(), Value::String("1. Edit a.rs".into()));
+        arguments.insert("brief".into(), Value::String("Fix the bug".into()));
+        assert!(matches!(
+            parse_call(&thread, "review_plan", Some(arguments)),
+            Ok(ToolCall::Orchestrator(OrchestratorCall::ReviewPlan(_)))
+        ));
     }
 
     #[test]
