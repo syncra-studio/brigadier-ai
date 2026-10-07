@@ -7,7 +7,7 @@ import {
   AgentsPanelContext,
   WorkerGlyph,
 } from "@/app/conversation/WorkerChip";
-import { SummarySection } from "@/components/assistant-ui/elements/summary-section";
+import { SummaryRowButton, SummarySection } from "@/components/assistant-ui/elements/summary-section";
 import type { DiffStat, Task } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { refreshWorkerDiffs } from "@/state/actions";
@@ -90,22 +90,29 @@ export function WorkersSummary({ conversationId }: { conversationId: string }) {
   const tasks = useBoard(useShallow((s) => s.board?.conversationId === conversationId
     ? Object.values(s.board.tasks).toSorted((a, b) => b.createdAtMs - a.createdAtMs)
     : []));
-  const { setPanel } = useContext(AgentsPanelContext);
+  const { panel, setPanel } = useContext(AgentsPanelContext);
   if (!tasks.length) return null;
   const active = tasks.filter((task) => !workerDone(task));
   const done = tasks.length - active.length;
   const avatars = active.length ? active : tasks;
   return (
     <SummarySection foldKey="workers" title={WORKERS_LABEL} aria-label="Session workers">
-      <button type="button" aria-label="Open workers" data-slot="workers-summary"
+      <SummaryRowButton
+        aria-label="Open workers"
+        data-slot="workers-summary"
+        // Washed while the Workers tab shows, as on hover.
+        data-state={panel !== undefined ? "open" : "closed"}
         onClick={() => setPanel(null)}
-        className="hover:bg-foreground/5 rounded-control flex min-h-10 w-full items-center gap-3 py-2 text-start text-worker-count">
-        <span aria-hidden className="flex shrink-0 items-center gap-1.5">
-          {avatars.slice(0, 4).map((task) => <WorkerGlyph key={task.id} taskId={task.id} className="size-4" />)}
-        </span>
-        <span>{active.length ? `${active.length} working` : `${done} done`}</span>
-        {active.length > 0 && done > 0 && <span className="text-muted-foreground ms-auto text-xs">{done} done</span>}
-      </button>
+        className="gap-1.5"
+        icon={
+          <span className="flex items-center gap-1.5">
+            {avatars.slice(0, 4).map((task) => <WorkerGlyph key={task.id} taskId={task.id} className="size-4" />)}
+          </span>
+        }
+        meta={active.length > 0 && done > 0 ? `${done} done` : undefined}
+      >
+        {active.length ? `${active.length} working` : `${done} done`}
+      </SummaryRowButton>
     </SummarySection>
   );
 }

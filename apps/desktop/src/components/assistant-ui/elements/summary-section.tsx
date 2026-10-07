@@ -89,9 +89,12 @@ export function SummarySection({
 const ROW =
   "relative flex min-h-row-sm w-full min-w-0 items-center gap-2 py-1 text-start text-label";
 
-/** An interactive row washes on hover, the wash a step wider than the text it lines up with. */
+/**
+ * An interactive row washes on hover and while what it opens is open, the wash a step wider
+ * than the text it lines up with.
+ */
 const ROW_INTERACTIVE =
-  "rounded-control before:rounded-control hover:before:bg-foreground/5 active:before:bg-foreground/10 focus-visible:before:ring-ring cursor-pointer outline-none before:absolute before:inset-y-0 before:-inset-x-2 before:-z-10 before:transition-colors focus-visible:before:ring-1";
+  "rounded-control before:rounded-control hover:before:bg-foreground/5 data-[state=open]:before:bg-foreground/5 active:before:bg-foreground/10 focus-visible:before:ring-ring cursor-pointer outline-none before:absolute before:inset-y-0 before:-inset-x-2 before:-z-10 before:transition-colors focus-visible:before:ring-1";
 
 type RowContent = {
   /** In the icon slot; a 14px icon or a worker's glyph. */
