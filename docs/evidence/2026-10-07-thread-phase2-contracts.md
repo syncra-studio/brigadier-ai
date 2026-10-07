@@ -193,3 +193,59 @@ words.
 has hooks for 13 events, and none ran. Two `SessionStart` hooks still ran: they come from the
 CLI's built-in plugins (`cc-plugin-agents-md@builtin`, `cc-plugin-telemetry@builtin`, listed in
 the init event's `plugins`).
+
+## 6. Step 3, built and checked live (2026-10-07)
+
+Dev `brigadierd` from `thread-p2`, scratch data folder and repository, Claude Code 2.1.292
+(Sonnet 5, effort low) and codex-cli 0.160.1 (effort low). Raw app-server probes used a
+stand-in MCP server with one tool set to `approval_mode = "prompt"`.
+
+**Claude hook** (`brigadierd hook post-tool-use`, `PostToolUse`/`PostToolUseFailure`, matcher
+`Bash`, from Brigadier's `--settings`):
+
+| Command | Output | The model got | Stored, read back with `read_artifact` |
+|---|---|---|---|
+| `sh gen.sh` (passing log) | 51,298 B | 4,077 B digest: `exit 0`, the 6 warning lines, head and tail | 51,297 B in 4 pages, identical to `stdout` |
+| `seq 1 40000` | 228,894 B | 4,077 B digest | 228,894 B in 15 pages, identical to the command's output |
+| `sh fail.sh` (exit 1) | 51,154 B | the CLI's 10,040 B excerpt, untrimmed, ending with `FAIL: the end marker` | the same 10,040 B, labelled as the CLI's excerpt |
+
+- With `BASH_MAX_OUTPUT_LENGTH=150000` a 51 KB success arrives inline: no
+  `persistedOutputPath`, and `stdout` lacks the command's final newline (the CLI trims it). So the
+  stored copy is byte-identical to what the CLI captured, one trailing newline short of the raw
+  output. Over 150,000 characters the CLI writes its own copy, and that one is exact.
+
+**Codex `run`** (Ask for approval, so through `codex sandbox -P brigadier -C <workdir> -c
+default_permissions="brigadier" -c permissions.brigadier={…} -- /bin/sh -c …` with the thread's
+own profile):
+
+- `sh fail.sh`: a 4,077 B digest, `exit 1` header, then `error[E0308]: …` and `FAIL: the end
+  marker` before the head and tail; the stored output is the command's 51,154 B byte for byte.
+  Codex 0.160.1 calls MCP tools from its code-mode `exec` tool, so the model read the digest
+  inside that tool's JSON result (4,322 B in all).
+- One `run` checked the sandbox: reading the daemon's run folder and writing `/tmp` outside the
+  roots failed with "Operation not permitted", writing the workspace worked, `curl` could not
+  resolve a host, the exit status 7 came back as `exit 7`, and `TMPDIR` was the thread's scratch
+  folder.
+
+**Escalation** (`run_unsandboxed`, per-tool `approval_mode = "prompt"`):
+
+- (a) Under `approvals_reviewer: auto_review`, Codex's auto-reviewer settles a prompt-mode MCP
+  tool call itself (`item/autoApprovalReview/started` and `…/completed`, plus a `guardianWarning`
+  notice); nothing reaches the client. It approved a low-risk call, and a destructive one the
+  user had asked for in so many words.
+- (b) Under `approvals_reviewer: user`, the app-server sends `mcpServer/elicitation/request` with
+  `_meta.codex_approval_kind = "mcp_tool_call"`, the arguments in `_meta.tool_params`, and
+  `message: Allow the <server> MCP server to run tool "<tool>"?`. `{"action": "accept",
+  "content": {}}` lets the call run; `{"action": "decline"}` gives the model "user rejected MCP
+  tool call". Brigadier now turns it into the thread's approval request (tool `run_unsandboxed`,
+  the command, the justification as the reason); the card's Allow ran `curl -sI
+  https://example.com` (`HTTP/2 200`).
+- **A sandboxed command can read the thread's MCP grant.** `ps` is blocked in Codex's sandbox,
+  but `sysctl(KERN_PROCARGS2)` on the `brigadierd mcp` process is not, and it returns that
+  process's environment; the daemon's socket is an allowed unix socket. So the grant alone must
+  not run anything outside the sandbox. `run_unsandboxed` runs only a command whose approval
+  Brigadier itself answered (the user's card, or their "allow similar"), once, within two
+  minutes; a direct call with the grant is refused. Under Approve for me the auto-reviewer's
+  approval happens inside Codex, with nothing to tie the call to, so that level gets no
+  `run_unsandboxed`: the thread leaves the sandbox with its own shell, which the auto-reviewer
+  settles.
