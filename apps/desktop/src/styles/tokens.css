@@ -218,8 +218,9 @@
      traffic lights on macOS, see below), 6px apart; they end at titlebar-nav-end, which the
      top bars beside them keep clear of (ps-clear-*). */
   --spacing-titlebar-start: calc(var(--spacing) * 2);
+  --spacing-titlebar-chevron: var(--spacing-icon-button-xs);
   --spacing-titlebar-nav-end: calc(
-    var(--spacing-titlebar-start) + var(--spacing-icon-button-md) * 3 + var(--spacing) * 3
+    var(--spacing-titlebar-start) + var(--spacing-icon-button-md) * 3 + var(--spacing-titlebar-chevron) + var(--spacing) * 3
   );
   /* The band they centre in: the titlebar, or on macOS the traffic lights'. */
   --spacing-titlebar-toggle: var(--spacing-titlebar);

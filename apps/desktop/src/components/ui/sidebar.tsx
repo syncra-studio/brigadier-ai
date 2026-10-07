@@ -3,10 +3,17 @@ import * as React from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
+import {
+  cachedCollapseMode,
+  cachedOpen,
+  saveCollapseMode,
+  saveOpen,
+  type SidebarCollapseMode,
+} from "@/state/sidebar";
 
 /**
- * The sidebar panel: expanded to its width, or collapsed to a strip of icons. It eases between
- * the two on a spring (the content beside it moves with it) while its contents cross-fade; the
+ * The sidebar panel: expanded to its width, collapsed to a strip of icons, or fully hidden.
+ * It eases between these on a spring (the content beside it moves with it) while its contents cross-fade; the
  * expanded contents keep their full width, so they are revealed rather than squeezed. ⌘B or
  * ⌘⇧S (Ctrl on Windows and Linux) toggle it, and which it is is remembered. Its edge can be
  * dragged to resize it; dragging it below half its smallest width collapses it. The width is
@@ -16,11 +23,13 @@ import { cn } from "@/lib/utils";
  */
 
 const WIDTH_KEY = "brigadier.sidebarWidth";
-const COLLAPSED_KEY = "brigadier.sidebarCollapsed";
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed";
   open: boolean;
+  collapseMode: SidebarCollapseMode;
+  setCollapseMode: (mode: SidebarCollapseMode) => void;
+  hidden: boolean;
   setOpen: (open: boolean) => void;
   toggleSidebar: () => void;
   /** The width the panel was dragged to, in CSS pixels; null for the default. */
@@ -60,23 +69,6 @@ function saveWidth(width: number | null): void {
   }
 }
 
-function cachedOpen(): boolean {
-  try {
-    return localStorage.getItem(COLLAPSED_KEY) !== "1";
-  } catch {
-    return true;
-  }
-}
-
-function saveOpen(open: boolean): void {
-  try {
-    if (open) localStorage.removeItem(COLLAPSED_KEY);
-    else localStorage.setItem(COLLAPSED_KEY, "1");
-  } catch {
-    // Storage can be unavailable; the sidebar then opens expanded on the next launch.
-  }
-}
-
 function subscribeNarrow(onChange: () => void) {
   window.addEventListener("resize", onChange);
   return () => window.removeEventListener("resize", onChange);
@@ -99,6 +91,11 @@ function SidebarProvider({
   // The user's choice while the window has room (remembered), and while it is narrow
   // (collapsed on becoming narrow, so the panel doesn't crowd the content).
   const [wideOpen, setWideOpen] = React.useState(() => defaultOpen ?? cachedOpen());
+  const [collapseMode, setCollapseModeState] = React.useState(cachedCollapseMode);
+  const setCollapseMode = React.useCallback((mode: SidebarCollapseMode) => {
+    setCollapseModeState(mode);
+    saveCollapseMode(mode);
+  }, []);
   const [narrowOpen, setNarrowOpen] = React.useState(false);
   const [seenNarrow, setSeenNarrow] = React.useState(narrow);
   if (seenNarrow !== narrow) {
@@ -141,11 +138,15 @@ function SidebarProvider({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [toggleSidebar]);
 
+  const hidden = !open && collapseMode === "hidden";
   const state = open ? "expanded" : "collapsed";
   const contextValue = React.useMemo<SidebarContextProps>(
     () => ({
       state,
       open,
+      collapseMode,
+      setCollapseMode,
+      hidden,
       setOpen,
       toggleSidebar,
       width,
@@ -154,7 +155,10 @@ function SidebarProvider({
       setResizing,
       canToggle: !keepOpen,
     }),
-    [state, open, setOpen, toggleSidebar, width, setWidth, resizing, keepOpen],
+    [
+      state, open, collapseMode, setCollapseMode, hidden, setOpen, toggleSidebar,
+      width, setWidth, resizing, keepOpen,
+    ],
   );
 
   return (
@@ -163,6 +167,7 @@ function SidebarProvider({
       <div
         data-slot="sidebar-wrapper"
         data-state={state}
+        data-collapse={hidden ? "hidden" : "strip"}
         className={cn("group/sidebar-wrapper flex h-full w-full", className)}
         style={
           width === null ? style : ({ ...style, "--sidebar-width": `${width}px` } as React.CSSProperties)
@@ -189,13 +194,18 @@ function SidebarPanel({
   children,
   ...props
 }: React.ComponentProps<"div"> & { strip?: React.ReactNode; foot?: React.ReactNode }) {
-  const { open, resizing } = useSidebar();
+  const { open, hidden, resizing } = useSidebar();
   return (
-    <div data-slot="sidebar-panel" data-state={open ? "expanded" : "collapsed"} className="relative flex h-full shrink-0">
+    <div
+      inert={hidden}
+      data-slot="sidebar-panel"
+      data-state={open ? "expanded" : "collapsed"}
+      className="relative flex h-full shrink-0"
+    >
       <div
         className={cn(
           "h-full overflow-hidden transition-[width] duration-300 ease-sidebar motion-reduce:transition-none",
-          open ? "sidebar-panel-width" : "w-sidebar-strip",
+          open ? "sidebar-panel-width" : hidden ? "w-0" : "w-sidebar-strip",
           resizing && "transition-none",
         )}
       >
@@ -220,10 +230,10 @@ function SidebarPanel({
                 {children}
               </div>
               <div
-                inert={open}
+                inert={open || hidden}
                 className={cn(
                   "w-sidebar-strip absolute inset-y-0 start-0 flex flex-col transition-opacity duration-150 motion-reduce:transition-none",
-                  open ? "opacity-0" : "opacity-100",
+                  open || hidden ? "opacity-0" : "opacity-100",
                 )}
               >
                 {strip}

@@ -2,6 +2,8 @@ import {
   Archive,
   ArrowLeft,
   Chats,
+  Check,
+  ChevronDown,
   ComposeEditSquare,
   DotsHorizontal,
   Download,
@@ -53,6 +55,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -91,7 +95,7 @@ const NOWHERE = "disabled:opacity-40";
  * are gone) and elsewhere. They stay put while the sidebar collapses and expands.
  */
 export function TitlebarNav() {
-  const { open, toggleSidebar, canToggle } = useSidebar();
+  const { open, toggleSidebar, canToggle, collapseMode, setCollapseMode } = useSidebar();
   const shortcuts = useShortcuts();
   const can = useCanStep();
   return (
@@ -117,15 +121,42 @@ export function TitlebarNav() {
         </TitlebarButton>
         {/* Settings holds the panel open, so it has no toggle; Back and Forward stay put. */}
         {canToggle && (
-          <TitlebarButton
-            tooltip="Toggle sidebar"
-            shortcut={shortcuts.sidebar}
-            aria-label={open ? "Hide sidebar" : "Show sidebar"}
-            aria-expanded={open}
-            onClick={toggleSidebar}
-          >
-            {open ? <Sidebar /> : <SidebarFloatingLeft />}
-          </TitlebarButton>
+          <div className="flex items-center">
+            <TitlebarButton
+              tooltip="Toggle sidebar"
+              shortcut={shortcuts.sidebar}
+              aria-label={open ? "Hide sidebar" : "Show sidebar"}
+              aria-expanded={open}
+              onClick={toggleSidebar}
+            >
+              {open ? <Sidebar /> : <SidebarFloatingLeft />}
+            </TitlebarButton>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <TitlebarButton
+                  tooltip="Sidebar collapse mode"
+                  className="w-titlebar-chevron [&_svg]:size-icon-sm"
+                >
+                  <ChevronDown />
+                </TitlebarButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuRadioGroup
+                  value={collapseMode}
+                  onValueChange={(value) => {
+                    if (value === "strip" || value === "hidden") setCollapseMode(value);
+                  }}
+                >
+                  <DropdownMenuRadioItem value="strip" indicator={<Check />}>
+                    Collapse to strip
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="hidden" indicator={<Check />}>
+                    Hide completely
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         )}
       </TitlebarTips>
     </div>

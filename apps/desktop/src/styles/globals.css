@@ -149,6 +149,13 @@
   );
 }
 
+[data-slot="sidebar-wrapper"][data-collapse="hidden"] {
+  --sidebar-shown: 0px;
+}
+[data-slot="sidebar-wrapper"][data-collapse="hidden"] .body-divider::after {
+  display: none;
+}
+
 /* A top bar's start padding beside the sidebar panel: its own N spacing steps, or more where
    Back, Forward and the sidebar toggle reach past the panel's edge (a narrow panel, or none),
    so its first control starts 8px after them. */
