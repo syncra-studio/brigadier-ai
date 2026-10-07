@@ -81,3 +81,22 @@ test("a merge card speaks for the code reviews since the session's previous merg
     ["old", "new"],
   );
 });
+
+test("a merged card keeps its own reviews and none of the work after it", () => {
+  const card = { ...merge("m1", 10, { type: "allowed", by: "user", similar: false }), resolvedAtMs: 20 };
+  const next = merge("m2", 60, { type: "pending" });
+  const reviews = [
+    // Still running at the merge: it stays the card's.
+    review("landing", 8, { type: "running" }),
+    review("later", 40, { type: "findings", count: 2 }),
+  ];
+  assert.deepEqual(
+    mergeReviews(card, [card, next], reviews).map((found) => found.id),
+    ["landing"],
+  );
+  assert.equal(reviewStatus(mergeReviews(card, [card, next], reviews)), "Review running…");
+  assert.deepEqual(
+    mergeReviews(next, [card, next], reviews).map((found) => found.id),
+    ["later"],
+  );
+});

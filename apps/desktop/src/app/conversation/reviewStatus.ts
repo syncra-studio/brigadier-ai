@@ -3,7 +3,8 @@ import { useBoard } from "@/state/board";
 
 /**
  * The code reviews a merge card speaks for: every landing's (and every worker's own) since the
- * session's previous merge. Each landed change gets one, by the other vendor, in the background.
+ * session's previous merge, up to the card's own answer. Each landed change gets one, by the
+ * other vendor, in the background; one still running at the merge stays the card's until it ends.
  */
 export function mergeReviews(
   card: Approval,
@@ -19,7 +20,10 @@ export function mergeReviews(
         other.createdAtMs < card.createdAtMs,
     )
     .reduce((latest, other) => Math.max(latest, other.resolvedAtMs ?? other.createdAtMs), 0);
-  return reviews.filter((review) => review.kind === "code" && review.startedAtMs >= since);
+  const until = card.resolvedAtMs ?? Number.POSITIVE_INFINITY;
+  return reviews.filter(
+    (review) => review.kind === "code" && review.startedAtMs >= since && review.startedAtMs < until,
+  );
 }
 
 /**
