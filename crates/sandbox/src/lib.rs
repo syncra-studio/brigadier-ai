@@ -155,6 +155,8 @@ pub struct SandboxPolicy {
     pub writable_roots: Vec<PathBuf>,
     /// Whether outbound network access is allowed.
     pub network: bool,
+    /// Paths the process may not read (everything else is readable).
+    pub deny_read: Vec<PathBuf>,
 }
 
 /// Confines a process to a [`SandboxPolicy`] by rewriting its spawn spec.

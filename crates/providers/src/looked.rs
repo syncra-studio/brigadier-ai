@@ -166,10 +166,14 @@ fn content_hit(line: &str) -> Option<&str> {
 
 /// A listing's file name: the line, or the last column of an `ls -l` row.
 fn listed_name(line: &str) -> &str {
+    // Bytes, not a `str` slice: byte 10 may fall inside a multibyte file name.
     let long = line.len() > 10
-        && line[..10]
-            .chars()
-            .all(|c| matches!(c, '-' | 'd' | 'l' | 'r' | 'w' | 'x' | 's' | 't' | '@' | '+'));
+        && line.as_bytes()[..10].iter().all(|c| {
+            matches!(
+                c,
+                b'-' | b'd' | b'l' | b'r' | b'w' | b'x' | b's' | b't' | b'@' | b'+'
+            )
+        });
     if long {
         line.rsplit(' ').next().unwrap_or(line)
     } else {
@@ -180,6 +184,15 @@ fn listed_name(line: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_listed_name_may_be_multibyte() {
+        assert_eq!(listed_name("中文文件.md"), "中文文件.md");
+        assert_eq!(
+            listed_name("-rw-r--r--  1 me  staff  12 Oct  7 21:00 中文文件.md"),
+            "中文文件.md"
+        );
+    }
 
     fn range(start: u64, end: Option<u64>) -> Option<LineRange> {
         Some(LineRange { start, end })

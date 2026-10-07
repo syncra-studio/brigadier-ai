@@ -547,6 +547,28 @@ impl Shell for LoginShell {
 
 struct Seatbelt;
 
+/// `path` as Seatbelt matches it: symlinks such as /tmp resolved, through its deepest existing
+/// ancestor when the path itself doesn't exist yet.
+fn resolved_path(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut existing = path;
+    loop {
+        if let Ok(real) = existing.canonicalize() {
+            return rest
+                .iter()
+                .rev()
+                .fold(real, |acc: PathBuf, part| acc.join(part));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_owned());
+                existing = parent;
+            }
+            _ => return path.to_owned(),
+        }
+    }
+}
+
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
 /// Read-anywhere, write-only-where-allowed profile. Writable roots are passed as `-D`
@@ -590,6 +612,14 @@ impl Seatbelt {
         if policy.network {
             profile.push_str(SEATBELT_NETWORK);
         }
+        // Later rules win, so these take back reads the base profile allowed.
+        if !policy.deny_read.is_empty() {
+            profile.push_str("(deny file-read*");
+            for index in 0..policy.deny_read.len() {
+                profile.push_str(&format!(" (subpath (param \"DENY_READ_{index}\"))"));
+            }
+            profile.push_str(")\n");
+        }
         profile
     }
 }
@@ -602,6 +632,13 @@ impl Sandbox for Seatbelt {
             let root = root.canonicalize()?;
             let mut define = OsString::from(format!("WRITABLE_ROOT_{index}="));
             define.push(root.as_os_str());
+            args.push("-D".into());
+            args.push(define);
+        }
+        for (index, path) in policy.deny_read.iter().enumerate() {
+            let path = resolved_path(path);
+            let mut define = OsString::from(format!("DENY_READ_{index}="));
+            define.push(path.as_os_str());
             args.push("-D".into());
             args.push(define);
         }
@@ -622,6 +659,38 @@ impl Sandbox for Seatbelt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seatbelt_denies_reading_a_denied_folder_and_reads_the_rest() {
+        let dir = std::env::temp_dir().join(format!("brig-deny-read-{}", std::process::id()));
+        let secret = dir.join("run");
+        std::fs::create_dir_all(&secret).unwrap();
+        std::fs::write(secret.join("ipc.token"), "secret").unwrap();
+        std::fs::write(dir.join("open.txt"), "open").unwrap();
+        let read = |name: &str| {
+            let spec = SpawnSpec {
+                program: PathBuf::from("/bin/cat"),
+                args: vec![dir.join(name).into_os_string()],
+                ..SpawnSpec::default()
+            };
+            let policy = SandboxPolicy {
+                deny_read: vec![secret.clone()],
+                ..SandboxPolicy::default()
+            };
+            let spec = Seatbelt.confine(spec, &policy).unwrap();
+            Command::new(&spec.program)
+                .args(&spec.args)
+                .output()
+                .unwrap()
+        };
+        let open = read("open.txt");
+        assert!(open.status.success(), "{open:?}");
+        assert_eq!(open.stdout, b"open");
+        let denied = read("run/ipc.token");
+        assert!(!denied.status.success(), "{denied:?}");
+        assert!(denied.stdout.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn procargs_give_the_arguments_after_the_executable_path() {

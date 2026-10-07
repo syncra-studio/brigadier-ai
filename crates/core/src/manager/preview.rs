@@ -247,9 +247,6 @@ impl SessionManager {
             pid,
             started_at_ms: platform.processes().start_time_ms(pid).ok(),
         };
-        if let Err(err) = ledger.record(&owner, artifact.clone()).await {
-            tracing::warn!(conversation = %id, error = %err, "could not record a preview's process");
-        }
         let preview = Preview {
             id: preview_id.clone(),
             conversation_id: id.clone(),
@@ -277,11 +274,29 @@ impl SessionManager {
         self.previews
             .lock()
             .insert((id.clone(), preview_id.clone()), live.clone());
-        let recorded = self.record_preview(preview).await;
-        self.spawn(self.arc().watch_preview(live.clone(), child, artifact));
+        // From here the preview belongs to a task of its own, so a cancelled call can't leave
+        // it running unwatched: it records the process and the start, then watches it.
+        let (recorded_tx, recorded_rx) = tokio::sync::oneshot::channel();
+        let this = self.arc();
+        let (watched, owner_id) = (live.clone(), id.clone());
+        self.spawn(async move {
+            if let Err(err) = this.runtime.ledger().record(&owner, artifact.clone()).await {
+                tracing::warn!(conversation = %owner_id, error = %err, "could not record a preview's process");
+            }
+            let recorded = this.record_preview(preview).await;
+            if recorded.is_err() {
+                watched.ask_to_stop("it could not be recorded");
+            }
+            let _ = recorded_tx.send(recorded);
+            this.watch_preview(watched, child, artifact).await;
+        });
+        let recorded = recorded_rx.await.unwrap_or_else(|_| {
+            Err(Error::Invalid(
+                "the preview's start was not recorded".into(),
+            ))
+        });
         drop(starting);
         if let Err(err) = recorded {
-            live.ask_to_stop("it could not be recorded");
             live.ended.cancelled().await;
             return Err(err);
         }
@@ -310,7 +325,8 @@ impl SessionManager {
 
     /// What runs a preview's `script` in `workdir` held to `access`: the shell itself at full
     /// access; else the thread's sandbox profile through `codex sandbox`, or Brigadier's own
-    /// Seatbelt profile with the same folders and network where Codex isn't installed.
+    /// Seatbelt profile with the same folders, network and denied reads where Codex isn't
+    /// installed.
     fn preview_spec(
         &self,
         access: &Access,
@@ -329,25 +345,26 @@ impl SessionManager {
         let mut spec = self.runtime.cli_env().spec(Path::new(SHELL));
         spec.args = vec!["-c".into(), script.into()];
         spec.cwd = Some(workdir.to_owned());
-        let (writable_roots, network) = match access {
+        let (writable_roots, network, deny_read) = match access {
             Access::Scoped {
                 write_cwd,
                 writable_roots,
                 network,
+                deny_read,
                 ..
             } => {
                 let mut roots = writable_roots.clone();
                 if *write_cwd {
                     roots.push(workdir.to_owned());
                 }
-                (roots, *network)
+                (roots, *network, deny_read.clone())
             }
             Access::Workspace { extra_roots } => {
                 let mut roots = extra_roots.clone();
                 roots.push(workdir.to_owned());
-                (roots, true)
+                (roots, true, Vec::new())
             }
-            Access::ReadOnly | Access::Full => (Vec::new(), false),
+            Access::ReadOnly | Access::Full => (Vec::new(), false, Vec::new()),
         };
         let writable_roots = writable_roots
             .into_iter()
@@ -361,6 +378,7 @@ impl SessionManager {
                 &brigadier_sandbox::SandboxPolicy {
                     writable_roots,
                     network,
+                    deny_read,
                 },
             )
             .map_err(|err| Error::Invalid(format!("the preview can't be sandboxed here: {err}")))
@@ -774,7 +792,12 @@ fn check_env(env: &BTreeMap<String, String>, workdir: &Path, protected: &[PathBu
                 workdir.join(value)
             };
             let dir = resolved(&dir);
+            // `..` after a symlink names another folder than the text says, so none is taken.
+            let climbs = Path::new(value)
+                .components()
+                .any(|part| part == std::path::Component::ParentDir);
             if value.trim().is_empty()
+                || climbs
                 || protected.iter().any(|own| {
                     let own = resolved(own);
                     dir.starts_with(&own) || own.starts_with(&dir)
@@ -1009,6 +1032,19 @@ mod tests {
         assert!(
             check_env(
                 &env("BRIGADIER_DATA_DIR", via_link.to_str().unwrap()),
+                workdir,
+                std::slice::from_ref(&own)
+            )
+            .is_err()
+        );
+        // A link to a folder inside a protected one, then `..`: the text names `root/data`'s
+        // sibling, the file system names the protected folder itself.
+        std::fs::create_dir_all(own.join("inner")).unwrap();
+        std::os::unix::fs::symlink(own.join("inner"), root.join("inner-link")).unwrap();
+        let climbed = root.join("inner-link/../sub");
+        assert!(
+            check_env(
+                &env("BRIGADIER_DATA_DIR", climbed.to_str().unwrap()),
                 workdir,
                 std::slice::from_ref(&own)
             )

@@ -362,7 +362,7 @@ impl SessionManager {
             && !matches!(decision, ApprovalDecision::Deny { .. })
             && let Some(command) = &request.command
         {
-            self.run_passes.grant(id, command);
+            self.run_passes.grant(id, command, request.cwd.as_deref());
         }
     }
 

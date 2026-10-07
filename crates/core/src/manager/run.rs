@@ -70,32 +70,38 @@ pub(crate) fn run_tools(provider: ProviderKind, permission: PermissionLevel) -> 
 }
 
 /// The `run_unsandboxed` commands approved and not yet run, per conversation: each runs once,
-/// within [`PASS_TTL`] of its approval.
+/// in the working directory it was approved for, within [`PASS_TTL`] of its approval.
 #[derive(Default)]
 pub(crate) struct RunPasses {
-    inner: std::sync::Mutex<
-        std::collections::HashMap<ConversationId, Vec<(String, std::time::Instant)>>,
-    >,
+    inner: std::sync::Mutex<std::collections::HashMap<ConversationId, Vec<Pass>>>,
 }
 
+/// One approved command: the command line, its `workdir` argument as approved, and when.
+type Pass = (String, Option<String>, std::time::Instant);
+
 impl RunPasses {
-    /// `command` was approved for the thread of `id`.
-    pub(crate) fn grant(&self, id: &ConversationId, command: &str) {
+    /// `command` was approved for the thread of `id`, to run in `workdir` (the call's own
+    /// argument, `None` for the default).
+    pub(crate) fn grant(&self, id: &ConversationId, command: &str, workdir: Option<&str>) {
         let mut passes = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        passes
-            .entry(id.clone())
-            .or_default()
-            .push((command.to_owned(), std::time::Instant::now()));
+        passes.entry(id.clone()).or_default().push((
+            command.to_owned(),
+            workdir.map(str::to_owned),
+            std::time::Instant::now(),
+        ));
     }
 
-    /// Takes the approval of `command` for the thread of `id`, if it has a fresh one.
-    pub(crate) fn take(&self, id: &ConversationId, command: &str) -> bool {
+    /// Takes the approval of `command` in `workdir` for the thread of `id`, if it has a fresh
+    /// one: the same command in another directory can run another script.
+    pub(crate) fn take(&self, id: &ConversationId, command: &str, workdir: Option<&str>) -> bool {
         let mut passes = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         let Some(list) = passes.get_mut(id) else {
             return false;
         };
-        list.retain(|(_, at)| at.elapsed() < PASS_TTL);
-        let found = list.iter().position(|(approved, _)| approved == command);
+        list.retain(|(_, _, at)| at.elapsed() < PASS_TTL);
+        let found = list
+            .iter()
+            .position(|(approved, dir, _)| approved == command && dir.as_deref() == workdir);
         if let Some(index) = found {
             list.remove(index);
         }
@@ -133,7 +139,7 @@ impl SessionManager {
         if command.trim().is_empty() {
             return Err(Error::Invalid("`command` is empty".into()));
         }
-        if unsandboxed && !self.run_passes.take(id, command) {
+        if unsandboxed && !self.run_passes.take(id, command, workdir) {
             return Err(Error::Invalid(
                 "run_unsandboxed runs only a command the user approved when it was asked, \
                  once; nothing approved this one"
@@ -464,11 +470,21 @@ mod tests {
     fn an_approved_command_runs_once_and_only_in_its_conversation() {
         let passes = RunPasses::default();
         let (a, b) = (ConversationId("a".into()), ConversationId("b".into()));
-        passes.grant(&a, "curl https://example.com");
-        assert!(!passes.take(&b, "curl https://example.com"));
-        assert!(!passes.take(&a, "curl https://example.org"));
-        assert!(passes.take(&a, "curl https://example.com"));
-        assert!(!passes.take(&a, "curl https://example.com"), "once");
+        passes.grant(&a, "curl https://example.com", None);
+        assert!(!passes.take(&b, "curl https://example.com", None));
+        assert!(!passes.take(&a, "curl https://example.org", None));
+        assert!(passes.take(&a, "curl https://example.com", None));
+        assert!(!passes.take(&a, "curl https://example.com", None), "once");
+    }
+
+    #[test]
+    fn an_approved_command_runs_only_in_the_directory_it_was_approved_for() {
+        let passes = RunPasses::default();
+        let a = ConversationId("a".into());
+        passes.grant(&a, "sh script.sh", Some("app"));
+        assert!(!passes.take(&a, "sh script.sh", None));
+        assert!(!passes.take(&a, "sh script.sh", Some("other")));
+        assert!(passes.take(&a, "sh script.sh", Some("app")));
     }
 
     #[test]
