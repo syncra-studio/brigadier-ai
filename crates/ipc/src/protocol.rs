@@ -390,6 +390,11 @@ pub enum Request {
     Resume {
         conversation_id: ConversationId,
     },
+    /// Stops a session's preview (`preview_id`), or every running one of it.
+    StopPreview {
+        conversation_id: ConversationId,
+        preview_id: Option<String>,
+    },
     /// Compacts a Chat's context now, in a turn of its own (a `/compact` command).
     Compact {
         conversation_id: ConversationId,
@@ -988,6 +993,7 @@ pub enum Response {
     },
     Interrupt,
     Resume,
+    StopPreview,
     Compact,
     GetConversationStatus {
         status: ConversationStatus,

@@ -20,6 +20,7 @@ import type {
   OrchestratorStep,
   OvernightRun,
   Plan,
+  Preview,
   ProviderEvent,
   Question,
   RawEntry,
@@ -64,6 +65,8 @@ export type Board = {
   plans: Record<string, Plan>;
   /** One-shot reviews by the other vendor (a landing's, a worker's own, an outline's), by id. */
   reviews: Record<string, ReviewRun>;
+  /** The thread's previews (a dev server, the app it runs for the user), by id. */
+  previews: Record<string, Preview>;
   /** Overnight runs, a segment each, by id. */
   overnight: Record<string, OvernightRun>;
   /** What each user message set in motion, by request id (the message's id). */
@@ -232,6 +235,7 @@ export function emptyBoard(conversationId: string): Board {
     questions: {},
     plans: {},
     reviews: {},
+    previews: {},
     overnight: {},
     requests: {},
     workerSteps: [],
@@ -274,6 +278,7 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "questionUpdated",
   "planUpdated",
   "reviewUpdated",
+  "previewUpdated",
   "overnightUpdated",
   "queueChanged",
   "runStateChanged",
@@ -327,6 +332,8 @@ export function boardFromView(
     plans: byId(view.plans),
     // A daemon from before one-shot reviews sends none.
     reviews: byId(view.reviews ?? []),
+    // A daemon from before previews sends none.
+    previews: byId(view.previews ?? []),
     overnight: byId(view.overnight),
     requests: byId(view.requests),
     workerSteps: view.workerSteps,
@@ -493,6 +500,8 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return { ...board, plans: placed(board.plans, event.plan, envelope, board) };
     case "reviewUpdated":
       return { ...board, reviews: { ...board.reviews, [event.review.id]: event.review } };
+    case "previewUpdated":
+      return { ...board, previews: { ...board.previews, [event.preview.id]: event.preview } };
     case "overnightUpdated":
       return { ...board, overnight: { ...board.overnight, [event.run.id]: event.run } };
     case "requestUpdated":

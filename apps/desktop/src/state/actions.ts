@@ -627,6 +627,11 @@ export async function interrupt(conversationId: string): Promise<void> {
   if (failed?.status === "rejected") throw failed.reason;
 }
 
+/** Stops a preview the thread started, or every running one of the conversation. */
+export async function stopPreview(conversationId: string, previewId: string | null): Promise<void> {
+  await request({ method: "stopPreview", conversationId, previewId });
+}
+
 /** Continues the latest request after the user stopped it, in the same block. */
 export async function resume(conversationId: string): Promise<void> {
   await request({ method: "resume", conversationId });

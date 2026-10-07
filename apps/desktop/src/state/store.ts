@@ -570,6 +570,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "threadCommitsSeen":
     case "outputStored":
     case "threadLooked":
+    case "previewUpdated":
     case "overnightUpdated":
     case "queueChanged":
     case "workerEvent":

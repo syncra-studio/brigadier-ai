@@ -9,6 +9,7 @@ import {
 } from "react";
 
 import { ChatActions } from "@/app/conversation/ChatActions";
+import { PreviewChip } from "@/app/conversation/PreviewChip";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { Badge } from "@/components/ui/badge";
@@ -161,8 +162,9 @@ function TabMenu({
  * A session's top bar as tabs: Chat first (its title, its ⋯ chat actions; never closed or
  * moved), then the files and the Review tab it opened, which shrink to their least and then
  * scroll. Click to show, drag to reorder, middle-click to close; a preview tab is in italic
- * until double-clicked. `children` sit at the end: the summary toggle and the panel buttons'
- * room.
+ * until double-clicked. While the thread keeps something running for the user, its chip
+ * ("web · Running · Stop") follows. `children` sit at the end: the summary toggle and the panel
+ * buttons' room.
  */
 export function SessionTabBar({
   conversation,
@@ -366,6 +368,7 @@ export function SessionTabBar({
           {connection === "connecting" ? "Connecting to core…" : "Reconnecting to core…"}
         </Badge>
       )}
+      <PreviewChip conversationId={id} />
       {children}
     </header>
   );

@@ -1090,6 +1090,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             sessions.resume(conversation_id).await?;
             Response::Resume
         }
+        Request::StopPreview {
+            conversation_id,
+            preview_id,
+        } => {
+            sessions.stop_preview(conversation_id, preview_id).await?;
+            Response::StopPreview
+        }
         Request::Compact { conversation_id } => {
             sessions.compact(conversation_id).await?;
             Response::Compact

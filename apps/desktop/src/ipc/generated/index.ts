@@ -190,6 +190,8 @@ export type { PlanApprover } from "./PlanApprover";
 export type { PlanState } from "./PlanState";
 export type { PlanStep } from "./PlanStep";
 export type { PlanningPhase } from "./PlanningPhase";
+export type { Preview } from "./Preview";
+export type { PreviewState } from "./PreviewState";
 export type { ProbeBurst } from "./ProbeBurst";
 export type { ProcessInfo } from "./ProcessInfo";
 export type { ProcessRole } from "./ProcessRole";

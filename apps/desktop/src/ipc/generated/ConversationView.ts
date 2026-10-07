@@ -12,6 +12,7 @@ import type { Notice } from "./Notice";
 import type { OrchestratorStep } from "./OrchestratorStep";
 import type { OvernightRun } from "./OvernightRun";
 import type { Plan } from "./Plan";
+import type { Preview } from "./Preview";
 import type { Question } from "./Question";
 import type { Rating } from "./Rating";
 import type { ReviewRun } from "./ReviewRun";
@@ -94,4 +95,8 @@ overnight: Array<OvernightRun>,
 /**
  * Its one-shot reviews, oldest first.
  */
-reviews: Array<ReviewRun>, };
+reviews: Array<ReviewRun>, 
+/**
+ * Its previews, oldest first.
+ */
+previews: Array<Preview>, };
