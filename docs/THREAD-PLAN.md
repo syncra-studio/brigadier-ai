@@ -53,7 +53,11 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
 - **Change** the thread's spec, `M/conversation.rs:1573-1603`:
   - `access: Access::ReadOnly` (`:1585`) → from the session's permission level (Q6).
   - `ToolSet::None` (`:1588`) → new `ToolSet::Thread`.
-  - cwd `data_dir/orch/<id>` (`:1481-1486`) → the session checkout. The path stays stable across merges (Q9).
+  - **Keep** the cwd as `data_dir/orch/<id>` (`:1481-1486`): the thread's own scratch, registered by `prepare_owned_dir` (`:1731-1745`) as `ScratchDir` + `ProcessesIn`.
+  - **Add an "effective workspace"**: the session checkout, or the run worktree during an overnight run (Q10). It reaches the CLI as `--add-dir <workspace>` (Claude) or a writable root plus per-command workdir (Codex), and it is named in the prompt.
+  - The workspace is **never** registered under the thread's owner. So hibernation's `end_processes` (`M/lifecycle.rs:313`) and the scratch sweep can't reach previews or anything else that runs there.
+  - A stable cwd keeps `--resume` working: Claude finds sessions by cwd. When the workspace changes (a merge to a new path, run start or end), the CLI restarts between turns with `--resume` and the new `--add-dir`, and gets a `[workspace]` note.
+  - The repo's CLAUDE.md/AGENTS.md reach the thread through `instructions::` (as for workers, `M/workers.rs:1211`), not through CLI auto-discovery.
 - **Add** `ToolSet::Thread` (`P/model.rs:791-804`):
   - Claude: `--tools "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch"`. No Agent/Task, no Monitor. Add it next to `:224-231`.
   - Codex: default tools, keeping `RESTRICTED_FEATURES` for multi-agent (`P/codex/mod.rs:75-84`).
@@ -80,12 +84,24 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
 - **Add for the thread:**
   - `code_search`, `code_refs`, `project_map` (today worker-only, `catalog.rs:311-313`);
   - `review_plan` (non-blocking, Q8 lever 5);
-  - `start_verifier` (optional, thread decides; it wraps `start_verifier`, `M/phases.rs:752-802`);
+  - `start_verifier` (optional, thread decides). It wraps `start_verifier` (`M/phases.rs:752-802`), whose brief (`:772-775`) is rewritten in phase 1. Instead of the deleted `request_review`, the verifier calls a new non-blocking worker tool `review_code`. That tool starts the Q12 one-shot review of base..HEAD and returns at once; the findings arrive as a message while the verifier checks the done-whens, and it triages them before reporting. A landing whose (base, tip) already has a `ReviewRun` doesn't start a second one;
   - `start_preview` / `stop_preview` / `preview_log` (Q6);
   - `run`, for Codex only (Q4).
-- **Delete:**
-  - `plan_phases` (`catalog.rs:247`) and its phase bookkeeping. A "phase" is just a request the thread splits up.
-  - `approve_outline` (`:249`): the go-ahead is a plain `message_worker`.
+- **Add for workers:** `review_code`, which is non-blocking and replaces the deleted `request_review` (`catalog.rs:297`). Its findings arrive as a message to the worker.
+- **Keep `approve_outline` and the phase records until phase 5.** The thread uses them only when it chooses an outline or phases. They hold state that a plain message doesn't:
+  - `go_ahead` (`M/phases.rs:609-638`) clears the outline block, keeps the corrections with the lead and sets `Building`;
+  - `held_by_plan_mode` (`:641-655`) reads that stage;
+  - under Ask, `approve_outline` opens the user's card (`:498-561`, `outline_decided` `:564`).
+
+  The record consumers that stay are:
+  - `submit_outline` (`:270-367`, which makes a plan if none exists);
+  - `start_verifier` (sets `Verifying`);
+  - `land_phase` (`M/landing.rs:76-125`, sets `Landing`);
+  - the conductor's `propose_phases` → `record_phases` (`M/overnight/conductor.rs:874`, `M/phases.rs:95`);
+  - the rebirth `phase_briefing` (`M/rebirth.rs:637`);
+  - the plan card (`PlanCardView.tsx:163`, `PinnedSummary.tsx`).
+
+  Phase 1 deletes only the `OutlineReview` stage (`crates/core/src/work.rs:859-875`; outlines go straight to `AwaitingGoAhead`) and the "after one review" wording in `go_ahead`. Phase 5 decides what is left, once the conductor is gone.
 - **Keep unchanged** (each on its own grill line):
   - watchable worker cards (`apps/desktop/src/app/conversation/cards/TaskCardView.tsx:90`, `WorkerThread.tsx`);
   - quota vendor fallback (`M/fallback.rs`, `M/conversation.rs:2679-2700`);
@@ -99,13 +115,26 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
 
 **Q4: the thread mostly delegates; tiny edits itself; tool output trimmed losslessly.**
 - The tiny-edit rule lives in `prompts::thread`: a few lines, in files it has already read, with a quick check.
-- Thread commits carry the trailer `Brigadier-Author: thread`, using the git crate's `crates/git/src/trailers.rs`. They land on the session branch, so they get the Q12 review like any landed change.
+- Thread commits carry the trailer `Brigadier-Author: thread`, using the git crate's `crates/git/src/trailers.rs`. They land on the branch of the effective workspace: the session branch, or the run branch overnight. So they get the Q12 review like any landed change.
+- **The digest has a byte budget of 4,096 bytes**, built in this order and cut at line boundaries:
+  1. a header (≤ 200 B) with the exit status and `[full output: read_artifact out-<id>, N lines, M bytes]`;
+  2. lines matching error/warning/FAIL/panic, up to 2,048 B, then `[+K more matching lines in the full output]`;
+  3. the head and tail lines, alternately, until the budget is used, then `[… L lines omitted …]`.
+
+  The full output is always stored in the blob store first.
 - **Claude trimming:** a `PostToolUse` command hook (a new `brigadierd hook post-tool-use` subcommand) is passed through Brigadier's own `--settings`. That flag still applies under `--setting-sources project`.
   - It runs for `Bash` only. File reads are what the model asked for, and §7 found trimming them lossy.
-  - For output over 8 KB it stores the full `stdout`/`stderr` in the blob store. It returns `hookSpecificOutput.updatedToolOutput` with **the same object shape as that tool's `tool_response`**. Only `stdout`/`stderr` are replaced by a digest: first 40 and last 60 lines, every line matching error/warning/FAIL/panic, the exit status, and `[full output: read_artifact out-<id>, N lines]`.
-  - Failing commands fire `PostToolUseFailure` instead. If that event can't replace output, failures stay untrimmed, which is lossless anyway.
-  - Phase 2 step 1 checks the exact Bash `tool_response` fields live on the installed CLI. A malformed replacement is ignored.
-- **Codex trimming:** Codex hooks stay disabled (`P/codex/mod.rs:97-104`). The Codex thread gets a Brigadier `run` MCP tool (command, timeout). It runs under the thread's access level through the sandbox crate and returns the same digest and reference. The prompt asks Codex to use `run` for builds, tests, logs and long listings. Its built-in shell output is not trimmed; that is a known gap (§5).
+  - It applies to **successful** results over 8 KB. It returns `hookSpecificOutput.updatedToolOutput` with **the same object shape as that tool's `tool_response`**, with only `stdout`/`stderr` replaced by the digest.
+  - **Failed tool calls are not trimmed.** They fire `PostToolUseFailure`, which can only add `additionalContext` and can't replace the output (hooks docs). Brigadier still stores their output and adds no context.
+  - Phase 2 step 1 checks live on the installed CLI:
+    - the exact Bash `tool_response` fields;
+    - whether a non-zero exit is a "failure" (memory from 2.1.283 says PostToolUse doesn't fire for failing commands);
+    - that a malformed replacement is ignored, so the hook is tested against the real shape.
+- **Codex trimming:** Codex hooks stay disabled (`P/codex/mod.rs:97-104`). The Codex thread gets a Brigadier `run` MCP tool (command, workdir, timeout).
+  - It runs under the thread's access level through the sandbox crate.
+  - It returns the same digest for **every** result over 8 KB, failures included, because Brigadier owns that call.
+  - The prompt asks Codex to use `run` for builds, tests, logs and long listings.
+  - Exactly these Codex calls are trimmed: `run` results. Its built-in shell and file tools are not; that is a known gap (§5).
 - The orchestrator's MCP timeout of 120 s (`M/conversation.rs:63`) is raised for `run`, to 30 min.
 
 **Q5: workers headless; "Open in terminal" resumes the worker's own session.**
@@ -128,8 +157,11 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
   - Chromium (`MachPortRendezvous` denied) and `git commit` (`index.lock` denied, even though the git common dir is a writable root, `M/workers.rs:1439-1444`) must work for both vendors with no escalation.
   - First find the cause: Codex's own `.git` protection is suspected, and Claude's sandbox needs the needed mach lookups.
   - Remove the "GUI checks can't run" line (`M/prompts.rs:699`).
-- **Add previews** (correction 4). A new `M/preview.rs` holds daemon-owned processes started by `start_preview{command, env}` in the session checkout:
-  - They are spawned in their own process group with ledger owner `preview:<conversation>`. They are not under any CLI's `Tree` (`P/process.rs:83-150`), so CLI teardown, hibernation (`M/lifecycle.rs:284-325`), rebirth and vendor fallback don't touch them.
+- **Add previews** (correction 4). A new `M/preview.rs` holds daemon-owned processes started by `start_preview{command, env}` in the effective workspace:
+  - They are spawned in their own process group with ledger owner `preview:<conversation>`. They are not under any CLI's `Tree` (`P/process.rs:83-150`), so provider teardown (`:116-150`) doesn't reach them.
+  - The workspace is not a `ProcessesIn` dir of the thread's owner (Q1), so hibernation's `end_processes` (`M/lifecycle.rs:313`), the `end_in_dir` sweep (`crates/core/src/ledger.rs:489-521`), rebirth and vendor fallback don't reach them either.
+  - The `session:<id>` owner does record its worktree. Its disposal (merge, archive) stops previews first, by design.
+  - A preview belongs to one workspace. When the workspace changes (run start or end), its previews stop.
   - Logs go to the blob store.
   - They are stopped by `stop_preview`, stop, archive, delete, merge (Q9) and daemon quit.
   - For Brigadier itself, the preview recipe uses a dev identity and a scratch `BRIGADIER_DATA_DIR`. It never uses `ai.brigadier.app`.
@@ -165,7 +197,7 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
 **Q9: after merge, the session worktree and branch are removed; the next message starts fresh.**
 - Today a merge (`M/landing.rs:1122-1145`) leaves both. They only go on archive (`M/lifecycle.rs:496-525`).
 - **Change:** after the merge lands, stop previews, dispose `session:<id>`, and delete the merged `brigadier/…` branch, reusing `lifecycle.rs:496-525`.
-- On the next message, `ensure_target` (`M/workers.rs:1640-1747`) recreates the worktree **at the same path** on a new branch from the base tip. The thread CLI's cwd stays valid. Claude finds sessions by cwd, so resume keeps working.
+- On the next message, `ensure_target` (`M/workers.rs:1640-1747`) recreates the worktree **at the same path** on a new branch from the base tip. The thread's `--add-dir` stays valid with no CLI restart (its cwd is its own scratch, Q1).
 - Reviews still running are not affected (Q12).
 
 **Q10: overnight is the same thread plus a deadline.**
@@ -179,6 +211,11 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
   - `awake.rs` and `overnight_supervisor.rs`;
   - `report.rs`, re-pointed at requests, tasks, reviews and usage instead of phase records.
 - **Change:** a run is a `[run]` note to the same thread (the mechanism at `M/prompts.rs:241-255, 399-406`) carrying the plan, the deadline and the directives. The thread works through it with the normal tools and writes the morning answer. `propose_overnight` stays as the Start card.
+- **Workspace switch at run start and end** (`M/overnight/workspace.rs` makes the run worktree):
+  - The thread's effective workspace (Q1) becomes the run worktree: between turns the CLI restarts with `--resume` and `--add-dir <run worktree>`, so the native session continues, and a `[workspace]` note names the switch.
+  - Thread reads, checks, `run`, previews and tiny-edit commits all use the run worktree and land on the run branch.
+  - The session checkout is out of the writable roots for the run (run isolation, PLAN §10.5).
+  - At run end it switches back the same way. The run's previews stop at each switch.
 
 **Q11: the build path.** This doc → Codex review → the user's approval → a `/delegator` run in a worktree (§4), each phase checked against the A/B. After that, Brigadier builds itself.
 
@@ -190,7 +227,10 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
 - Lower `WORKER_TOOL_TIMEOUT_SECS` (24 h, `M/workers.rs:71`) to `QUESTION_TIMEOUT` (1 h).
 - **Add** a one-shot runner in `crates/review/src/lib.rs` (empty today):
   - **Codex:** `codex exec review --base <base> -o <file> -c model_reasoning_effort="high"`. No custom prompt with `--base`; a focused review names the range in the prompt instead (as `dlg review`, `~/.claude/skills/delegator/scripts/dlg:420-433`).
-  - **Claude:** `claude -p --output-format json --tools "Read,Grep,Glob,Bash" --permission-mode default` with a read-only sandbox and the diff range in the prompt.
+  - **Claude:** started through the existing provider adapter (`P/claude/mod.rs:197-279`, `settings()` `:450-571`) with `Access::ReadOnly`. That gives `-p --output-format stream-json`, `--tools "Read,Grep,Glob,Bash"`, the read-only sandbox (`:520-525`), `--strict-mcp-config` and `--setting-sources project`. The diff range goes in the prompt.
+    - The permission mode is `dontAsk`, plus `--allowedTools "Read Grep Glob Bash(git diff:*) Bash(git log:*) Bash(git show:*)"`. Anything not allowed is denied and never prompts.
+    - Today `permission_mode()` maps ReadOnly to `"default"` (`P/claude/mod.rs:428`). That value is not among 2.1.292's listed choices (`acceptEdits, auto, bypassPermissions, manual, dontAsk, plan`), although `claude -p --permission-mode default --version` parsed without error and `bogus` was rejected.
+    - Phase 1 moves ReadOnly to `dontAsk` for every read-only session and checks a review launch live.
 - **Each `ReviewRun`** records conversation, `base`, `tip`, author vendor and reviewer model. It is triggered after every landing: `landed` (`M/landing.rs:595-666`) and thread commits.
   - It runs in a detached worktree at `tip` (`git worktree add --detach`) owned by `review:<id>`. So landing disposal (`:638`), merge and the next session branch don't remove it.
   - The reviewer is always the other vendor from the author.
@@ -207,11 +247,10 @@ Both show in the Inspector. Nothing blocks edits.
 **Q14: old-engine chats are deleted, with no compat.**
 - On the first start of the new engine, a store marker `engine: thread-1` triggers deletion of every `kind == Session` conversation created before it, through the normal delete path (`M/lifecycle.rs:627, 711-783`). That purges `conversation:`, `orch:`, `task:` and `draft:` streams, blobs, `routing.sqlite` rows and Brigadier's branches.
 - Plain Chats are kept: their engine doesn't change.
-- Then delete the dead types and shims:
-  - `legacy.rs` (`crates/core/src/legacy.rs:8-19`);
-  - `Gate`/`GateMember` (`crates/core/src/work.rs:438`);
-  - `PhaseStage` outline/verify stages (`work.rs:859-875`);
-  - plan-phase records the thread no longer writes.
+- Then delete the dead types and shims, each only once nothing reads it:
+  - in phase 2: `legacy.rs` (`crates/core/src/legacy.rs:8-19`) and `Gate`/`GateMember` (`crates/core/src/work.rs:438`);
+  - in phase 1: the `OutlineReview` stage (`work.rs:859-875`);
+  - in phase 5, after the conductor is gone: whatever phase records and stages no consumer listed under Q2 still needs.
 
 ## 3. Phases
 
@@ -232,6 +271,8 @@ Shared work comes first, so parallel streams don't edit the same contracts (corr
 3. Delete the automatic outline reviewer, the automatic verifier and `request_review`. In the same phase, migrate everything that depends on them (correction 1):
    - orchestrator prompt steps 3, 6 and 7 (`M/prompts.rs:76, 79, 80`);
    - `LEAD_STEPS` (`:545`, which drops `request_review`);
+   - the verifier brief (`M/phases.rs:772-775`): `request_review` → the new non-blocking `review_code`;
+   - the `OutlineReview` stage and `go_ahead`'s "after one review" wording (`M/phases.rs:631-636`). `approve_outline`/`go_ahead`/`held_by_plan_mode` and the Ask card stay;
    - `submit_outline` (`M/phases.rs:270-367`): outside plan mode it now delivers the outline to the orchestrator at once, like the plan-mode branch at `:345-358`, and starts a background `review_plan`. The worker waits only for the go-ahead, which the orchestrator gives right away. No worker can hang on a removed reviewer.
    - the overnight conductor's "land the verifier" texts (`M/overnight/conductor.rs:279, 494, 631-673, 769, 1214-1218`);
    - `land_phase`'s verifier refusal (`M/landing.rs:91-96`) now applies only to a verifier the orchestrator started.
@@ -243,12 +284,14 @@ Shared work comes first, so parallel streams don't edit the same contracts (corr
 - 0 automatically started verifiers or review workers. Every landing has a `ReviewRun` whose findings reach the thread, including one merged before the review finished.
 - Under Approve for me, `pnpm test` (Chromium) and `git commit` succeed for a Claude worker and a Codex worker with 0 escalations.
 - An overnight smoke (2 small phases) still completes on the old conductor with the new texts.
+- An optional verifier, started by the orchestrator, calls `review_code`, gets the findings as a message, triages them and reports. No `request_review` is left (`rg request_review crates apps` is empty).
+- A Claude one-shot review of a Codex-authored landing launches under `dontAsk` and returns findings.
 - `tools/full-checks.sh` passes.
 
 ### Phase 2: The thread gets tools (shared contracts)
 
 **Scope, in this order:**
-1. Live-check the CLI contracts (§5): the Bash `tool_response` shape and `PostToolUseFailure`.
+1. Live-check the CLI contracts (§5): the Bash `tool_response` shape; whether a non-zero exit fires `PostToolUseFailure`; and `--resume` with a changed `--add-dir` (session continues, cache read).
 2. `ToolSet::Thread`, the thread spec under all three levels, and the worker-control tool set (§2 Q2).
 3. Lossless trimming: the Claude hook and the Codex `run` tool.
 4. `prompts::thread`.
@@ -256,7 +299,7 @@ Shared work comes first, so parallel streams don't edit the same contracts (corr
 6. Previews (`M/preview.rs`, the tools and the UI chip).
 7. Live-line words for thread tool steps (`OrchestratorSteps.tsx`, `toolWords.ts`, `liveStatus.ts:67`).
 8. Q13 metrics.
-9. Q14 deletion and type cleanup.
+9. Q14 deletion of old sessions, and of `legacy.rs` and `Gate`/`GateMember`. Phase records stay until phase 5 (§2 Q2).
 10. End with the "Open in terminal" feasibility spike for both vendors, written to `docs/evidence/`.
 
 **Done when:**
@@ -264,8 +307,13 @@ Shared work comes first, so parallel streams don't edit the same contracts (corr
 - "Run the app so I can see it" makes the thread start a preview: 0 "I can't" over 5 scripted asks (run the app, show logs, run tests, check a file, open a port).
 - The thread runs Read/Bash/Edit under Full access, Approve for me (sandboxed, escalation via the auto-reviewer) and Ask (card shown), for both vendors.
 - A preview survives the thread's hibernation, a forced rebirth (`BRIGADIER_REBIRTH_TOKENS`) and a forced vendor fallback, and is gone after stop, archive and merge.
-- A 50 KB failing-test output reaches the model as a digest under 4 KB. The full text is retrievable with `read_artifact`, and the error lines and exit status are kept.
+- **Trimming:**
+  - A successful Claude `Bash` call with 50 KB of output (e.g. a passing `cargo test` log) reaches the model as ≤ 4,096 bytes, with the exit status, the `read_artifact` reference and the matching lines up to their budget (overflow count shown).
+  - `read_artifact` returns the full 50 KB byte-identical.
+  - A **failing** Claude `Bash` call reaches the model untrimmed, and its full output is still stored.
+  - A failing Codex `run` with 50 KB of output reaches it as ≤ 4,096 bytes, error lines first.
 - Old sessions are gone after the first start and plain Chats are kept.
+- The preview checks run with the preview's cwd inside the session worktree, and after a hibernation `ps` still shows it. Both provider teardown and the ledger's `end_processes`/`end_in_dir` were exercised.
 - `tools/full-checks.sh` passes.
 
 ### Phase 3: Workers start warm and lean
@@ -297,11 +345,15 @@ Shared work comes first, so parallel streams don't edit the same contracts (corr
 
 ### Phase 5: Overnight on the same thread
 
-**Scope:** Q10. Delete the conductor loop and re-point the report.
+**Scope:**
+- Q10: delete the conductor loop and re-point the report.
+- The workspace switch at run start and end.
+- Then delete the phase records and types nothing reads any more (`record_phases`, `PhaseStage`, plan-card fields), or keep the ones `approve_outline` still needs.
 
 **Done when:**
 - A 2-phase plan with a 20-min deadline runs on the normal thread. It winds down at the deadline, writes the morning report (commits, reviews, waiting items, usage) and keeps the machine awake during the run.
 - No code from `conductor.rs`'s phase loop remains.
+- During the run, a thread tiny edit lands on the run branch and a thread preview runs from the run worktree. The session branch is unchanged. After the run, the same native thread session continues (same session id) in the session checkout.
 - Stop and restart mid-run recover.
 
 ### Phase 6: A/B against cmux /delegator
@@ -333,7 +385,9 @@ If a task is inconclusive, rerun it once with the arm order swapped. Missing evi
 > `/delegator` goal. Build docs/THREAD-PLAN.md, phase **N**: "<title>". Read docs/THREAD-PLAN.md in full, plus docs/PLAN.md §7 and the sections it supersedes. Scope and done-when: exactly phase N's text in §3. Send an outline first and wait for "Go ahead." Report every done-when with the command you ran and the numbers you saw (`tools/ab` for time and tokens).
 >
 > **Rules**
-> - Work in a git worktree `../brigadier-ai-thread-<phase>` on a branch from current main. Never edit, build or commit in the main checkout.
+> - Integration branch `thread-build`, created once from main at the run's start in worktree `../brigadier-ai-thread`. Each phase works in a worktree `../brigadier-ai-thread-<phase>` on a branch from the **verified tip of `thread-build`**. After its verifier passes, the Delegator fast-forwards `thread-build` to it (rebasing first if needed).
+> - The parallel streams after phase 2 (phase 3 and phase 5) both start from the same verified phase-2 tip of `thread-build`. They are integrated one after another: the second rebases onto the first and is re-verified.
+> - Never edit, build or commit in the main checkout.
 > - No push, no merge into main, no PR, no release, until the user says so.
 > - Follow project memory (`~/.claude/projects/-Users-stephen-Development-brigadier-ai/memory/`). Settled decisions (THREAD-PLAN §2, the grill Q1–Q14) are not reopened. Something that looks impossible goes in the report with a recommended fix.
 > - Never touch `/Applications/Brigadier.app`, its daemon or `~/Library/Application Support/Brigadier`. Test with a dev identity and a scratch `BRIGADIER_DATA_DIR`. Never smoke-test the installed bundle on a temp dir.
@@ -351,7 +405,7 @@ If a task is inconclusive, rerun it once with the arm order swapped. Missing evi
 3. **The thread's context grows faster with tools.** Rebirth fires sooner. Track it with the Q13 metrics. Its briefing must list recently read files.
 4. **Beating `/delegator` on time.** Brigadier adds worktree warm-up and landing, which `/delegator` doesn't have. The pre-warm (lever 6) and the check cache must pay for them.
 5. **Shared `CARGO_TARGET_DIR`** across worktrees can churn fingerprints. Measure it in phase 3. Fall back to per-worktree CoW-warmed targets.
-6. **Open in terminal on Codex.** `codex resume <id>` on a thread made by app-server is unproven. That's what the spike is for. If it fails, ship Claude first and show Codex's transcript read-only.
+6. **Open in terminal on Codex.** `codex resume <id>` on a thread made by app-server is unproven. That's what the spike is for. If it fails for either vendor, phase 4's takeover part stops. A revised takeover design (for example a PTY-hosted worker from the start) is written, Codex-reviewed and approved before it's built. Transcript viewing is not a substitute: that would be a scope change to Q5, and only the user can make it.
 7. **ToS.** Only the user's own unmodified `claude` binary is used. `claude --bg`/agents are API-key-only and not used.
 8. **T1's exact request text** lives in the installed app's data, which the run may not read. The user pastes it, or the Delegator copies it from the app's UI.
 
@@ -370,8 +424,9 @@ If a task is inconclusive, rerun it once with the arm order swapped. Missing evi
   - `--permission-mode` (acceptEdits, auto, bypassPermissions, manual, dontAsk, plan);
   - `--input-format/--output-format stream-json`, `--include-partial-messages`, `--replay-user-messages`;
   - `-r/--resume`, `--fork-session`, `--session-id`, `--system-prompt-snapshot`, `--append-system-prompt`, `--add-dir`, `--effort`;
-  - `--bg` (API key users only).
-- **Hooks docs** (code.claude.com/docs/en/hooks, PostToolUse decision control): `hookSpecificOutput.updatedToolOutput` replaces a tool's result; `updatedMCPToolOutput` does the same for MCP; it fires after success only, and failures fire `PostToolUseFailure`; the input carries `tool_name`, `tool_input`, `tool_use_id`, `tool_response`.
+  - `--bg` (API key users only);
+  - `--permission-mode bogus` is rejected with the list of choices; `-p --permission-mode default --version` parsed without error.
+- **Hooks docs** (code.claude.com/docs/en/hooks, PostToolUse decision control): `hookSpecificOutput.updatedToolOutput` replaces a tool's result; `updatedMCPToolOutput` does the same for MCP; it fires after success only, and failures fire `PostToolUseFailure`, whose only output field is `additionalContext` (it can't replace output); the input carries `tool_name`, `tool_input`, `tool_use_id`, `tool_response`.
 - **`codex --help`, `codex exec --help`, `codex exec review --help`, `codex resume --help`, `codex app-server --help`, codex-cli 0.160.1:**
   - `exec`: `-s read-only|workspace-write|danger-full-access`, `--approve-for-me`, `--dangerously-bypass-approvals-and-sandbox`, `--ephemeral`, `--json`, `-o`, `--output-schema`, `-c key=value`;
   - `exec review`: `--base`, `--commit`, `--uncommitted`, `[PROMPT]`;
