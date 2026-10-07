@@ -37,14 +37,7 @@ impl SessionManager {
             .await
             .ok()
             .and_then(|text| text.trim().parse::<i64>().ok());
-        let tick = super::wind_down::CLOCK.as_millis() as i64;
-        let gap = last
-            .filter(|last| now - last > MISSED_BEATS * tick)
-            .map(|last| (last, now));
-        let cause = match gap {
-            Some((from, to)) => Some(sleep_cause(from, to).await),
-            None => None,
-        };
+        let missed = MISSED_BEATS * super::wind_down::CLOCK.as_millis() as i64;
         for (conversation_id, active) in self.overnight.active.all() {
             let Ok(board) = self.core.board(&conversation_id).await else {
                 continue;
@@ -52,12 +45,18 @@ impl SessionManager {
             let Some(run) = board.runs.get(&active.id).cloned() else {
                 continue;
             };
-            let run = match (gap, &cause) {
-                (Some((from, to)), Some(cause)) if run.started_at_ms.is_some_and(|at| at < to) => {
+            // The run's own part of the time Brigadier was down: a beat from before it started
+            // (an earlier run's) counts from its start.
+            let gap = match (last, run.started_at_ms) {
+                (Some(last), Some(started)) => Some((last.max(started), now)),
+                _ => None,
+            };
+            let run = match gap.filter(|(from, to)| to - from > missed) {
+                Some((from, to)) => {
                     let gap = RunGap {
-                        from_ms: from.max(run.started_at_ms.unwrap_or(from)),
+                        from_ms: from,
                         to_ms: to,
-                        cause: cause.clone(),
+                        cause: sleep_cause(from, to).await,
                     };
                     self.change_run_if(&run, |now| {
                         now.gaps.push(gap.clone());

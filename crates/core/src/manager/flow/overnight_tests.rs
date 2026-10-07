@@ -700,11 +700,20 @@ async fn a_restart_mid_run_resumes_it_on_the_thread() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     restarted.store(true, Ordering::SeqCst);
+    // The last beat on record is an earlier run's, from before this one started: this run was
+    // down only for the restart itself.
+    let started = run.started_at_ms.expect("started");
+    std::fs::write(
+        flow.dir.join("data").join("overnight-heartbeat"),
+        (started - 600_000).to_string(),
+    )
+    .expect("the heartbeat");
     flow.restart().await;
     release.notify_waiters();
     let board = finished(&flow, &run.id).await;
     let run = run_of(&board, &run.id);
     assert_eq!(run.stop, Some(StopReason::Done), "{run:#?}");
+    assert_eq!(run.gaps, Vec::new(), "no gap from before the run started");
     let plan = plan_of(&board, &run);
     assert_eq!(
         plan.steps[0].settled.as_ref().map(|s| s.outcome),
