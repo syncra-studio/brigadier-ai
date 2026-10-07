@@ -5,6 +5,7 @@
 //! every change as a [`DomainEvent`].
 
 mod board;
+pub mod digest;
 pub mod knowledge;
 pub mod ledger;
 mod legacy;
