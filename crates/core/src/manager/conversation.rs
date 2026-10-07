@@ -62,8 +62,11 @@ use crate::{Error, Result, now_ms};
 const DELTA_WINDOW: Duration = Duration::from_millis(30);
 /// How long a blocking MCP call may take for the orchestrator (its tools return at once).
 const ORCHESTRATOR_TOOL_TIMEOUT_SECS: u64 = 120;
-/// The same for a Codex thread, whose `run` waits for its command (THREAD-PLAN.md Q4).
-const RUNNER_TOOL_TIMEOUT_SECS: u64 = super::run::RUN_TIMEOUT_MAX.as_secs();
+/// The same for a Codex thread, whose `run` waits for its command (THREAD-PLAN.md Q4): its
+/// longest timeout plus a minute, so a command that runs out its time is still reaped and its
+/// output stored before the call itself expires (the call's clock starts first).
+const RUNNER_TOOL_TIMEOUT_SECS: u64 = super::run::RUN_TIMEOUT_MAX.as_secs() + 60;
+const _: () = assert!(RUNNER_TOOL_TIMEOUT_SECS > super::run::RUN_TIMEOUT_MAX.as_secs());
 /// A Chat's Brigadier tools (saving a memory) answer within this.
 const CHAT_TOOL_TIMEOUT_SECS: u64 = 60;
 /// Messages carried verbatim when a conversation's CLI session is started over.
@@ -977,15 +980,18 @@ impl SessionManager {
         if waiting {
             self.core.set_queue_paused(&id, true).await?;
         }
-        // The user's Stop stops what the thread runs too: its previews.
-        self.stop_previews(&id, "stopped by the user").await;
-        if let Some(cli) = cli {
-            cli.session
+        // The thread first, so it starts nothing more; then what it runs: its previews, a
+        // start of one still under way included, even if the CLI didn't take the interrupt.
+        let interrupted = match cli {
+            Some(cli) => cli
+                .session
                 .interrupt()
                 .await
-                .map_err(|err| Error::Provider(err.to_string()))?;
-        }
-        Ok(())
+                .map_err(|err| Error::Provider(err.to_string())),
+            None => Ok(()),
+        };
+        self.stop_previews(&id, "stopped by the user").await;
+        interrupted
     }
 
     /// Continues the latest request after the user stopped it: a turn for that request, in its

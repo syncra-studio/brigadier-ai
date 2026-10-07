@@ -421,6 +421,69 @@ async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
     std::fs::remove_dir_all(&tmp).unwrap();
 }
 
+/// A Stop that comes while a preview is starting refuses that start rather than leaving it
+/// running past the Stop; and a log snapshot that lands after a preview ended keeps its end.
+#[tokio::test]
+async fn a_stop_during_a_start_refuses_it_and_a_late_log_snapshot_keeps_the_end() {
+    let replies: Replies = Arc::default();
+    let flow = Flow::start("preview-races", Options::default(), thread(replies.clone())).await;
+    let tmp = scratch("races");
+    let pids = tmp.join("child.pid");
+    let (preview, child) = start(&flow, &pids).await;
+    flow.settled().await;
+
+    // Another start holds the numbering when the thread asks for one more, and the user's
+    // Stop comes before it gets its turn.
+    let held = flow.manager.previews.starting.clone().lock_owned().await;
+    let (manager, id) = (flow.manager.clone(), flow.conversation.clone());
+    let late = tokio::spawn(async move {
+        let args = crate::tools::StartPreview {
+            command: "sleep 600".into(),
+            name: None,
+            env: None,
+            workdir: None,
+        };
+        manager.start_preview(&id, args).await
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (manager, id) = (flow.manager.clone(), flow.conversation.clone());
+    let stop = tokio::spawn(async move { manager.stop_previews(&id, "stopped by the user").await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(held);
+    let refused = late.await.unwrap().expect_err("the late start is refused");
+    assert!(
+        refused
+            .to_string()
+            .contains("stopped while this one was starting"),
+        "{refused}"
+    );
+    stop.await.unwrap();
+    gone(&flow, preview.pid.unwrap()).await;
+    gone(&flow, child).await;
+    let board = flow.board().await;
+    assert!(running(&board).is_empty());
+    assert_eq!(board.previews.len(), 1, "no second preview was started");
+
+    // The thread's next start works again.
+    let (preview, child) = start(&flow, &pids).await;
+    flow.settled().await;
+    let live = flow
+        .manager
+        .previews
+        .get(&flow.conversation, &preview.id)
+        .unwrap();
+    flow.manager
+        .stop_previews(&flow.conversation, "stopped by the user")
+        .await;
+    gone(&flow, child).await;
+    let ended = flow.board().await.previews[&preview.id].clone();
+    assert!(!ended.state.is_running());
+    flow.manager.record_log(&live, "out-stale").await;
+    assert_eq!(flow.board().await.previews[&preview.id], ended);
+    flow.stop().await;
+    std::fs::remove_dir_all(&tmp).unwrap();
+}
+
 /// Archive and delete stop the session's previews before its worktree goes, and remove their
 /// log folder.
 #[tokio::test]

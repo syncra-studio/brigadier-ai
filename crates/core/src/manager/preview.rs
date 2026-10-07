@@ -71,7 +71,7 @@ pub(crate) fn preview_owner(id: &ConversationId) -> String {
 }
 
 /// A running preview.
-struct LivePreview {
+pub(crate) struct LivePreview {
     conversation: ConversationId,
     id: String,
     pid: u32,
@@ -85,6 +85,8 @@ struct LivePreview {
     ended: CancellationToken,
     /// The log's size and alias at its last snapshot, so an unchanged log isn't stored again.
     snapshot: Mutex<Option<(u64, String)>>,
+    /// Held while its record is read and written back, so a log snapshot can't undo its end.
+    updating: tokio::sync::Mutex<()>,
 }
 
 impl LivePreview {
@@ -111,7 +113,10 @@ pub(crate) struct Previews {
     live: Mutex<HashMap<(ConversationId, String), Arc<LivePreview>>>,
     /// Held while a preview is numbered, started and recorded; the recording task holds it
     /// to the end, so a cancelled start can't free its number early.
-    starting: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) starting: Arc<tokio::sync::Mutex<()>>,
+    /// How many times each conversation's previews were all stopped: a start under way when
+    /// that happened is refused ([`SessionManager::stop_previews`]).
+    stops: Mutex<HashMap<ConversationId, u64>>,
 }
 
 impl Previews {
@@ -129,12 +134,22 @@ impl Previews {
             .collect()
     }
 
-    fn get(&self, id: &ConversationId, preview: &str) -> Option<Arc<LivePreview>> {
+    pub(crate) fn get(&self, id: &ConversationId, preview: &str) -> Option<Arc<LivePreview>> {
         self.lock().get(&(id.clone(), preview.to_owned())).cloned()
     }
 
     fn all(&self) -> Vec<Arc<LivePreview>> {
         self.lock().values().cloned().collect()
+    }
+
+    fn stops_of(&self, id: &ConversationId) -> u64 {
+        let stops = self.stops.lock().unwrap_or_else(|p| p.into_inner());
+        stops.get(id).copied().unwrap_or_default()
+    }
+
+    fn count_stop(&self, id: &ConversationId) {
+        let mut stops = self.stops.lock().unwrap_or_else(|p| p.into_inner());
+        *stops.entry(id.clone()).or_default() += 1;
     }
 }
 
@@ -152,6 +167,7 @@ impl SessionManager {
             ));
         }
         self.admit()?;
+        let stops = self.previews.stops_of(id);
         let command = args.command.trim().to_owned();
         if command.is_empty() {
             return Err(Error::Invalid("`command` is empty".into()));
@@ -206,6 +222,13 @@ impl SessionManager {
             .unwrap_or_else(|| short_name(&command));
 
         let starting = self.previews.starting.clone().lock_owned().await;
+        if self.previews.stops_of(id) != stops {
+            return Err(Error::Invalid(
+                "the session's previews were stopped while this one was starting, so it was \
+                 not started"
+                    .into(),
+            ));
+        }
         let number = self.core.board(id).await?.previews.len() + 1;
         let preview_id = format!("preview-{number}");
         let owner = preview_owner(id);
@@ -271,6 +294,7 @@ impl SessionManager {
             stop: CancellationToken::new(),
             ended: CancellationToken::new(),
             snapshot: Mutex::default(),
+            updating: tokio::sync::Mutex::default(),
         });
         self.previews
             .lock()
@@ -434,6 +458,7 @@ impl SessionManager {
             PreviewState::Running => "running".into(),
         };
         let log = self.store_log(live, &status).await;
+        let _updating = live.updating.lock().await;
         let preview = match self.core.board(id).await {
             Ok(board) => board.previews.get(&live.id).cloned(),
             Err(_) => None,
@@ -500,6 +525,27 @@ impl SessionManager {
         }
     }
 
+    /// Records `alias` as a running preview's log, on its record as it stands now: if it has
+    /// ended meanwhile, its end (with its whole log) stays as recorded.
+    pub(crate) async fn record_log(&self, live: &LivePreview, alias: &str) {
+        let id = &live.conversation;
+        let _updating = live.updating.lock().await;
+        let current = match self.core.board(id).await {
+            Ok(board) => board.previews.get(&live.id).cloned(),
+            Err(_) => None,
+        };
+        let Some(mut current) = current else {
+            return;
+        };
+        if !current.state.is_running() || current.log.as_deref() == Some(alias) {
+            return;
+        }
+        current.log = Some(alias.to_owned());
+        if let Err(err) = self.record_preview(current).await {
+            tracing::warn!(conversation = %id, preview = %live.id, error = %err, "could not record a preview's log");
+        }
+    }
+
     async fn record_preview(&self, preview: Preview) -> Result<()> {
         let id = preview.conversation_id.clone();
         self.core
@@ -533,14 +579,8 @@ impl SessionManager {
         let (bytes, alias) = match self.previews.get(id, &found.id) {
             Some(live) => {
                 let alias = self.store_log(&live, "running").await;
-                if let Some(alias) = &alias
-                    && found.log.as_ref() != Some(alias)
-                {
-                    let mut updated = found.clone();
-                    updated.log = Some(alias.clone());
-                    if let Err(err) = self.record_preview(updated).await {
-                        tracing::warn!(conversation = %id, preview = %found.id, error = %err, "could not record a preview's log");
-                    }
+                if let Some(alias) = &alias {
+                    self.record_log(&live, alias).await;
                 }
                 let path = live.log.clone();
                 let (bytes, _) = blocking(move || Ok(read_log(&path))).await?;
@@ -649,6 +689,10 @@ impl SessionManager {
     /// Stops every running preview of conversation `id` (the user's Stop, a merge, the
     /// session closing).
     pub(crate) async fn stop_previews(&self, id: &ConversationId, reason: &str) {
+        // A start already under way is refused, and one that got past that check is waited
+        // for, so this stop sees every preview there will be.
+        self.previews.count_stop(id);
+        drop(self.previews.starting.lock().await);
         stop_all(&self.previews.of(id), reason).await;
     }
 
@@ -695,6 +739,7 @@ impl SessionManager {
                 stop: CancellationToken::new(),
                 ended: CancellationToken::new(),
                 snapshot: Mutex::default(),
+                updating: tokio::sync::Mutex::default(),
             };
             self.end_preview(
                 &live,
