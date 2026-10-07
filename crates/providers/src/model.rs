@@ -429,6 +429,50 @@ pub struct FileChange {
     pub kind: FileChangeKind,
 }
 
+/// Lines `start..=end` of a file, counted from 1. `end: None` runs to the end of the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LineRange {
+    pub start: u64,
+    pub end: Option<u64>,
+}
+
+/// A file a session read: with its own read tool, or a command that prints it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct FileRead {
+    /// As the tool or command named it: absolute, or relative to the event's `cwd`.
+    pub path: String,
+    /// The lines it got. `None`: the whole file, or a part the tool or command doesn't tell.
+    pub lines: Option<LineRange>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum SearchKind {
+    /// Through the files' contents (`Grep`, `rg`, `grep`).
+    Content,
+    /// For files by name, or a listing (`Glob`, `find`, `ls`, `rg --files`).
+    Files,
+}
+
+/// A search a session made, with the files it found when the tool or command tells them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSearch {
+    pub kind: SearchKind,
+    /// What it looked for: the text pattern, or the file name pattern. `None` for a listing.
+    pub pattern: Option<String>,
+    /// Where: a folder or file, absolute or relative to the event's `cwd`; `None` for the
+    /// working directory.
+    pub scope: Option<String>,
+    /// The file filter, when the tool has one apart from the scope (`Grep`'s `glob`/`type`).
+    pub glob: Option<String>,
+    /// The files it found, as reported (absolute, or relative to `cwd` or the scope). Empty
+    /// when it found none or doesn't say.
+    pub hits: Vec<String>,
+}
+
 /// Token usage, as totals for the session so far or for one turn.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -510,6 +554,16 @@ pub enum ProviderEvent {
     CommandOutputDelta {
         item_id: String,
         text: String,
+    },
+    /// What a finished tool call or command (`itemId`) read and searched, in the same words
+    /// for every CLI: Claude's `Read`, `Grep` and `Glob`, Codex's commands as it parsed them
+    /// (`commandActions`). It follows the call's own completed event. `cwd` is what relative
+    /// paths start from, when known.
+    Looked {
+        item_id: String,
+        cwd: Option<String>,
+        reads: Vec<FileRead>,
+        searches: Vec<FileSearch>,
     },
     /// Work under way that the transcript doesn't show (a sub-agent's steps, a long tool's
     /// progress): the session is alive. `itemId` is the tool call or sub-agent it belongs to.

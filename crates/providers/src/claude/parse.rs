@@ -99,6 +99,9 @@ pub struct Parser {
     compacting: Option<bool>,
     /// A compaction failed: Claude says why once more, as a reply of its own, which is dropped.
     compact_failed: bool,
+    /// The session's working directory (`system/init`), which its searches' relative paths
+    /// start from.
+    cwd: Option<String>,
 }
 
 impl Parser {
@@ -462,6 +465,12 @@ impl Parser {
         let Some(blocks) = value.pointer("/message/content").and_then(Value::as_array) else {
             return;
         };
+        // The structured result (`tool_use_result`) is the message's one tool result's.
+        let results = blocks
+            .iter()
+            .filter(|block| str_of(block, "type") == Some("tool_result"))
+            .count();
+        let structured = value.get("tool_use_result").filter(|_| results == 1);
         for block in blocks {
             if str_of(block, "type") != Some("tool_result") {
                 continue;
@@ -505,12 +514,102 @@ impl Parser {
                 },
             };
             out.push(Output::Event(event));
+            if !failed && let Some(looked) = self.looked(id, &tool, structured, block) {
+                out.push(Output::Event(looked));
+            }
         }
+    }
+
+    /// What a finished `Read`, `Grep` or `Glob` call read or searched. Read: the lines the
+    /// result holds (`file.startLine`, `numLines` against `totalLines`), else the ones asked
+    /// for. Grep: its pattern, folder and file filter, and the files it names (`filenames`,
+    /// or the `path:line:` prefixes of its content mode). Glob: its pattern and the files.
+    fn looked(
+        &self,
+        id: &str,
+        tool: &ToolUse,
+        result: Option<&Value>,
+        block: &Value,
+    ) -> Option<ProviderEvent> {
+        let input = &tool.input;
+        let result = result.filter(|result| result.is_object());
+        let filenames = || {
+            result
+                .and_then(|result| result.get("filenames"))
+                .and_then(Value::as_array)
+                .map(|names| {
+                    names
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .take(crate::looked::HITS_KEPT)
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let (reads, searches) = match tool.name.as_str() {
+            "Read" => {
+                let path = str_of(input, "file_path")?.to_owned();
+                (
+                    vec![FileRead {
+                        path,
+                        lines: read_lines(input, result),
+                    }],
+                    Vec::new(),
+                )
+            }
+            "Grep" => {
+                let mut hits = filenames();
+                if hits.is_empty() {
+                    let content = result
+                        .and_then(|result| str_of(result, "content"))
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| content_text(block));
+                    let mode = result.and_then(|result| str_of(result, "mode"));
+                    if matches!(mode, Some("content" | "count")) {
+                        hits = crate::looked::output_hits(&content, SearchKind::Content);
+                    }
+                }
+                let glob = str_of(input, "glob")
+                    .map(str::to_owned)
+                    .or_else(|| str_of(input, "type").map(|kind| format!("type:{kind}")));
+                (
+                    Vec::new(),
+                    vec![FileSearch {
+                        kind: SearchKind::Content,
+                        pattern: str_of(input, "pattern").map(str::to_owned),
+                        scope: str_of(input, "path").map(str::to_owned),
+                        glob,
+                        hits,
+                    }],
+                )
+            }
+            "Glob" => (
+                Vec::new(),
+                vec![FileSearch {
+                    kind: SearchKind::Files,
+                    pattern: str_of(input, "pattern").map(str::to_owned),
+                    scope: str_of(input, "path").map(str::to_owned),
+                    glob: None,
+                    hits: filenames(),
+                }],
+            ),
+            _ => return None,
+        };
+        Some(ProviderEvent::Looked {
+            item_id: id.to_owned(),
+            cwd: self.cwd.clone(),
+            reads,
+            searches,
+        })
     }
 
     fn system(&mut self, value: &Value, out: &mut Vec<Output>) {
         match str_of(value, "subtype") {
             Some("init") => {
+                if let Some(cwd) = str_of(value, "cwd") {
+                    self.cwd = Some(cwd.to_owned());
+                }
                 if !self.started {
                     self.started = true;
                     out.push(Output::Event(ProviderEvent::SessionStarted {
@@ -926,6 +1025,34 @@ fn tool_kind(name: &str) -> ToolKind {
     }
 }
 
+/// The lines a `Read` got: what its result holds (the whole file when it starts at line 1 and
+/// holds all of them), else what it asked for (`offset`, `limit`; neither: the whole file).
+fn read_lines(input: &Value, result: Option<&Value>) -> Option<LineRange> {
+    let number = |value: &Value, key: &str| value.get(key).and_then(Value::as_u64);
+    if let Some(file) = result.and_then(|result| result.get("file"))
+        && let (Some(start), Some(count)) = (number(file, "startLine"), number(file, "numLines"))
+    {
+        let total = number(file, "totalLines");
+        if start <= 1 && total.is_some_and(|total| count >= total) {
+            return None;
+        }
+        return Some(LineRange {
+            start: start.max(1),
+            end: Some(start.max(1) + count.max(1) - 1),
+        });
+    }
+    let offset = number(input, "offset");
+    let limit = number(input, "limit");
+    if offset.is_none() && limit.is_none() {
+        return None;
+    }
+    let start = offset.unwrap_or(1).max(1);
+    Some(LineRange {
+        start,
+        end: limit.map(|limit| start + limit.max(1) - 1),
+    })
+}
+
 fn file_changes(tool: &str, input: &Value) -> Vec<FileChange> {
     let path = str_of(input, "file_path").or_else(|| str_of(input, "notebook_path"));
     let kind = match tool {
@@ -1178,6 +1305,134 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// The `Looked` events a recording's output makes.
+    pub(crate) fn looked_in(recording: &str) -> Vec<ProviderEvent> {
+        let recording = crate::record::Recording::parse(recording).unwrap();
+        let mut parser = Parser::replay();
+        recording
+            .lines
+            .iter()
+            .filter(|line| line.dir == crate::record::Direction::Out)
+            .flat_map(|line| parser.feed(&line.line))
+            .filter_map(|output| match output {
+                Output::Event(event @ ProviderEvent::Looked { .. }) => Some(event),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn read(path: &str, lines: Option<(u64, Option<u64>)>) -> FileRead {
+        FileRead {
+            path: path.into(),
+            lines: lines.map(|(start, end)| LineRange { start, end }),
+        }
+    }
+
+    #[test]
+    fn a_thread_s_reads_and_searches_are_told_from_its_tool_results() {
+        let looked = looked_in(include_str!("../../fixtures/claude-thread-reads.jsonl"));
+        let repo = "/tmp/brg-reads-probe/repo";
+        let file = |name: &str| format!("{repo}/{name}");
+        let mut reads = Vec::new();
+        let mut searches = Vec::new();
+        for event in looked {
+            let ProviderEvent::Looked {
+                cwd,
+                reads: r,
+                searches: s,
+                ..
+            } = event
+            else {
+                unreachable!()
+            };
+            assert_eq!(cwd.as_deref(), Some("/private/tmp/brg-reads-probe/cwd"));
+            reads.extend(r);
+            searches.extend(s);
+        }
+        assert_eq!(
+            reads,
+            [
+                // What the result holds: offset 35, limit 10.
+                read(&file("src.rs"), Some((35, Some(44)))),
+                // From line 110 to the file's end (121 lines).
+                read(&file("src.rs"), Some((110, Some(121)))),
+                read(&file("notes.md"), None),
+                read("/tmp/brg-reads-probe/outside.txt", None),
+            ]
+        );
+        let search = |kind, pattern: &str, glob: Option<&str>, hits: &[&str]| FileSearch {
+            kind,
+            pattern: Some(pattern.into()),
+            scope: Some(repo.into()),
+            glob: glob.map(Into::into),
+            hits: hits.iter().map(|name| file(name)).collect(),
+        };
+        assert_eq!(
+            searches,
+            [
+                search(
+                    SearchKind::Content,
+                    "compute_answer",
+                    None,
+                    &["other.rs", "src.rs"]
+                ),
+                // Content mode names its files in its lines.
+                search(
+                    SearchKind::Content,
+                    "compute_answer",
+                    None,
+                    &["src.rs", "other.rs"]
+                ),
+                search(SearchKind::Content, "Notes", Some("*.md"), &["notes.md"]),
+                search(SearchKind::Files, "**/*.rs", None, &["src.rs", "other.rs"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_read_without_its_structured_result_keeps_what_it_asked_for() {
+        let mut parser = Parser::live();
+        let call = |id: &str, input: Value| {
+            json!({"type":"assistant", "message":{"id":"m", "content":[
+                {"type":"tool_use", "id": id, "name":"Read", "input": input}]}})
+        };
+        let result = |id: &str, failed: bool| {
+            json!({"type":"user", "message":{"content":[
+                {"type":"tool_result", "tool_use_id": id, "content":"1\tx", "is_error": failed}]}})
+        };
+        let mut looked = Vec::new();
+        for (id, input, failed) in [
+            (
+                "a",
+                json!({"file_path":"/r/a.rs", "offset": 5, "limit": 3}),
+                false,
+            ),
+            ("b", json!({"file_path":"/r/b.rs", "offset": 9}), false),
+            ("c", json!({"file_path":"/r/c.rs"}), false),
+            ("d", json!({"file_path":"/r/missing.rs"}), true),
+        ] {
+            parser.feed(&call(id, input).to_string());
+            looked.extend(
+                parser
+                    .feed(&result(id, failed).to_string())
+                    .into_iter()
+                    .filter_map(|output| match output {
+                        Output::Event(ProviderEvent::Looked { reads, .. }) => Some(reads),
+                        _ => None,
+                    })
+                    .flatten(),
+            );
+        }
+        assert_eq!(
+            looked,
+            [
+                read("/r/a.rs", Some((5, Some(7)))),
+                read("/r/b.rs", Some((9, None))),
+                read("/r/c.rs", None),
+            ]
+        );
+    }
 
     #[test]
     fn a_tool_is_visible_before_its_arguments_finish_and_updates_once() {

@@ -316,6 +316,7 @@ impl Parser {
     }
 
     fn item(&mut self, item: ThreadItem, completed: bool, out: &mut Vec<Output>) {
+        let looked = completed.then(|| looked(&item)).flatten();
         let event = match item {
             ThreadItem::UserMessage { id, content, .. } if completed => ProviderEvent::Message {
                 item_id: id,
@@ -514,6 +515,7 @@ impl Parser {
             _ => return,
         };
         out.push(Output::Event(event));
+        out.extend(looked.map(Output::Event));
     }
 
     fn server_request(
@@ -903,6 +905,102 @@ fn window_label(id: &str, minutes: Option<i64>) -> String {
     }
 }
 
+/// What a finished command read and searched, from Codex's own parse of it
+/// (`commandActions`): a read's file (made absolute by Codex) with the lines its command
+/// prints; a search's query, its folder and the files its output names; a listing's files. A
+/// plain `sed -n` read Codex left unknown is read here. A read that failed read nothing; a
+/// search that found nothing still searched (`rg`/`grep` exit 1).
+fn looked(item: &ThreadItem) -> Option<ProviderEvent> {
+    let ThreadItem::CommandExecution {
+        id,
+        cwd,
+        command_actions,
+        status,
+        exit_code,
+        aggregated_output,
+        ..
+    } = item
+    else {
+        return None;
+    };
+    if matches!(
+        status,
+        p::CommandExecutionStatus::Declined | p::CommandExecutionStatus::InProgress
+    ) {
+        return None;
+    }
+    let read_ok = exit_code.is_none_or(|code| code == 0);
+    let searched = exit_code.is_none_or(|code| code == 0 || code == 1);
+    let output = aggregated_output.as_deref().unwrap_or_default();
+    // Which part of the output belongs to which search is not told: the files are named
+    // only for a command that is one search.
+    let searches_in = command_actions
+        .iter()
+        .filter(|action| {
+            matches!(
+                action,
+                p::CommandAction::Search { .. } | p::CommandAction::ListFiles { .. }
+            )
+        })
+        .count();
+    let hits = |kind: SearchKind| {
+        if searches_in == 1 && searched {
+            crate::looked::output_hits(output, kind)
+        } else {
+            Vec::new()
+        }
+    };
+    let mut reads = Vec::new();
+    let mut searches = Vec::new();
+    for action in command_actions {
+        match action {
+            p::CommandAction::Read { command, path, .. } if read_ok => reads.push(FileRead {
+                path: path.to_string(),
+                lines: crate::looked::command_lines(command),
+            }),
+            p::CommandAction::Unknown { command } if read_ok => {
+                reads.extend(crate::looked::sed_read(command));
+            }
+            p::CommandAction::Search {
+                command,
+                path,
+                query,
+            } if searched => {
+                let kind = if command.trim_start().starts_with("find ")
+                    || command.trim_start().starts_with("fd ")
+                {
+                    SearchKind::Files
+                } else {
+                    SearchKind::Content
+                };
+                searches.push(FileSearch {
+                    kind,
+                    pattern: query.clone(),
+                    scope: path.clone(),
+                    glob: None,
+                    hits: hits(kind),
+                });
+            }
+            p::CommandAction::ListFiles { path, .. } if searched => {
+                searches.push(FileSearch {
+                    kind: SearchKind::Files,
+                    pattern: None,
+                    scope: path.clone(),
+                    glob: None,
+                    hits: hits(SearchKind::Files),
+                });
+            }
+            _ => {}
+        }
+    }
+    (!reads.is_empty() || !searches.is_empty()).then(|| ProviderEvent::Looked {
+        item_id: id.clone(),
+        cwd: Some(cwd.to_string()),
+        reads,
+        searches,
+    })
+}
+
 fn token_usage(usage: &p::TokenUsageBreakdown) -> TokenUsage {
     TokenUsage {
         input_tokens: usage.input_tokens - usage.cached_input_tokens,
@@ -950,6 +1048,142 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn commands_that_read_and_search_are_told_in_the_same_words_as_claude_s_tools() {
+        let recording = crate::record::Recording::parse(include_str!(
+            "../../fixtures/codex-thread-reads.jsonl"
+        ))
+        .unwrap();
+        let mut parser = Parser::replay();
+        let looked: Vec<(Vec<FileRead>, Vec<FileSearch>)> = recording
+            .lines
+            .iter()
+            .filter(|line| line.dir == crate::record::Direction::Out)
+            .flat_map(|line| parser.feed(&line.line))
+            .filter_map(|output| match output {
+                Output::Event(ProviderEvent::Looked {
+                    cwd,
+                    reads,
+                    searches,
+                    ..
+                }) => {
+                    assert_eq!(cwd.as_deref(), Some("/private/tmp/brg-reads-probe/repo"));
+                    Some((reads, searches))
+                }
+                _ => None,
+            })
+            .collect();
+        let repo = "/private/tmp/brg-reads-probe/repo";
+        let read = |path: &str, lines: Option<(u64, Option<u64>)>| FileRead {
+            path: path.into(),
+            lines: lines.map(|(start, end)| LineRange { start, end }),
+        };
+        let search = |kind, pattern: Option<&str>, scope: Option<&str>, hits: &[&str]| FileSearch {
+            kind,
+            pattern: pattern.map(Into::into),
+            scope: scope.map(Into::into),
+            glob: None,
+            hits: hits.iter().map(|hit| (*hit).into()).collect(),
+        };
+        let only_reads = |reads: Vec<FileRead>| (reads, Vec::new());
+        let only_search = |search: FileSearch| (Vec::new(), vec![search]);
+        assert_eq!(
+            looked,
+            [
+                // sed -n '35,44p' src.rs
+                only_reads(vec![read(&format!("{repo}/src.rs"), Some((35, Some(44))))]),
+                // cat notes.md
+                only_reads(vec![read(&format!("{repo}/notes.md"), None)]),
+                // rg -n compute_answer
+                only_search(search(
+                    SearchKind::Content,
+                    Some("compute_answer"),
+                    None,
+                    &["src.rs", "other.rs"]
+                )),
+                // rg --files -g '*.rs'
+                only_search(search(
+                    SearchKind::Files,
+                    None,
+                    None,
+                    &["src.rs", "other.rs"]
+                )),
+                // ls
+                only_search(search(
+                    SearchKind::Files,
+                    None,
+                    None,
+                    &["notes.md", "other.rs", "src.rs"]
+                )),
+                // grep -rn compute_answer .
+                only_search(search(
+                    SearchKind::Content,
+                    Some("compute_answer"),
+                    Some("."),
+                    &["./other.rs", "./src.rs"]
+                )),
+                // head -n 20 other.rs
+                only_reads(vec![read(&format!("{repo}/other.rs"), Some((1, Some(20))))]),
+                // nl -ba src.rs | sed -n '1,5p'
+                only_reads(vec![read(&format!("{repo}/src.rs"), Some((1, Some(5))))]),
+                // cat /tmp/brg-reads-probe/outside.txt
+                only_reads(vec![read("/tmp/brg-reads-probe/outside.txt", None)]),
+                // rg -l compute_answer src.rs other.rs: Codex names the first folder only.
+                only_search(search(
+                    SearchKind::Content,
+                    Some("compute_answer"),
+                    Some("src.rs"),
+                    &["other.rs", "src.rs"]
+                )),
+                // find . -name '*.md'
+                only_search(search(
+                    SearchKind::Files,
+                    Some("*.md"),
+                    Some("."),
+                    &["./notes.md"]
+                )),
+                // sed -n '100,$p' src.rs, which Codex left unknown.
+                only_reads(vec![read("src.rs", Some((100, None)))]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_failed_read_read_nothing_and_a_search_without_matches_still_searched() {
+        let mut parser = Parser::live();
+        let item = |id: &str, command: &str, actions: Value, exit: i32| {
+            json!({"method":"item/completed", "params":{"threadId":"t", "turnId":"u",
+                "completedAtMs": 1, "item":{
+                "type":"commandExecution", "id": id, "command": command, "cwd":"/r",
+                "commandActions": actions, "status": if exit == 0 { "completed" } else { "failed" },
+                "exitCode": exit, "aggregatedOutput": "", "durationMs": 3,
+                "source": "unifiedExecStartup"}}})
+        };
+        let missing = item(
+            "a",
+            "cat gone.rs",
+            json!([{"type":"read", "command":"cat gone.rs", "name":"gone.rs", "path":"/r/gone.rs"}]),
+            1,
+        );
+        assert!(
+            !events(&mut parser, &missing)
+                .iter()
+                .any(|event| matches!(event, ProviderEvent::Looked { .. }))
+        );
+        let nothing = item(
+            "b",
+            "rg -n nowhere",
+            json!([{"type":"search", "command":"rg -n nowhere", "query":"nowhere", "path": null}]),
+            1,
+        );
+        let looked = events(&mut parser, &nothing);
+        assert!(matches!(
+            &looked[..],
+            [ProviderEvent::Command { .. }, ProviderEvent::Looked { searches, .. }]
+                if searches.len() == 1 && searches[0].hits.is_empty()
+        ));
+    }
 
     fn events(parser: &mut Parser, line: &Value) -> Vec<ProviderEvent> {
         parser

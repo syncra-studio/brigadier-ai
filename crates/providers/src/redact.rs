@@ -571,6 +571,23 @@ pub fn redact_event(redactor: &Redactor, event: &mut ProviderEvent) {
             opt(path);
             opt(prompt);
         }
+        ProviderEvent::Looked {
+            cwd,
+            reads,
+            searches,
+            ..
+        } => {
+            opt(cwd);
+            for read in reads {
+                r(&mut read.path);
+            }
+            for search in searches {
+                opt(&mut search.pattern);
+                opt(&mut search.scope);
+                opt(&mut search.glob);
+                search.hits.iter_mut().for_each(r);
+            }
+        }
         ProviderEvent::ApprovalRequested { request } => {
             r(&mut request.tool);
             opt(&mut request.command);

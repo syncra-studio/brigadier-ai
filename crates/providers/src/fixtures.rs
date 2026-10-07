@@ -16,4 +16,12 @@ pub const BUILTIN: &[(&str, &str)] = &[
         "codex-steer-interrupt-escalation",
         include_str!("../fixtures/codex-steer-interrupt-escalation.jsonl"),
     ),
+    (
+        "claude-thread-reads",
+        include_str!("../fixtures/claude-thread-reads.jsonl"),
+    ),
+    (
+        "codex-thread-reads",
+        include_str!("../fixtures/codex-thread-reads.jsonl"),
+    ),
 ];

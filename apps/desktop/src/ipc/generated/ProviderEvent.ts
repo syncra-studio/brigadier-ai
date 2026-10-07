@@ -3,6 +3,8 @@ import type { ApprovalDecision } from "./ApprovalDecision";
 import type { ApprovalRequest } from "./ApprovalRequest";
 import type { Decider } from "./Decider";
 import type { FileChange } from "./FileChange";
+import type { FileRead } from "./FileRead";
+import type { FileSearch } from "./FileSearch";
 import type { ItemStatus } from "./ItemStatus";
 import type { NoticeLevel } from "./NoticeLevel";
 import type { ProviderError } from "./ProviderError";
@@ -29,7 +31,7 @@ output: string | null, } | { "type": "command", itemId: string, command: string,
 /**
  * Combined output (truncated), once finished.
  */
-output: string | null, durationMs: number | null, } | { "type": "commandOutputDelta", itemId: string, text: string, } | { "type": "progress", itemId: string, } | { "type": "fileChanges", itemId: string, changes: Array<FileChange>, status: ItemStatus, } | { "type": "image", itemId: string, status: ItemStatus, path: string | null, prompt: string | null, } | { "type": "usage", 
+output: string | null, durationMs: number | null, } | { "type": "commandOutputDelta", itemId: string, text: string, } | { "type": "looked", itemId: string, cwd: string | null, reads: Array<FileRead>, searches: Array<FileSearch>, } | { "type": "progress", itemId: string, } | { "type": "fileChanges", itemId: string, changes: Array<FileChange>, status: ItemStatus, } | { "type": "image", itemId: string, status: ItemStatus, path: string | null, prompt: string | null, } | { "type": "usage", 
 /**
  * Totals for the session so far.
  */
