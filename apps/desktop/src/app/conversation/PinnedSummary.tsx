@@ -16,6 +16,7 @@ import {
 import {
   type ReactNode,
   type UIEvent,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -38,7 +39,8 @@ import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgres
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
 import { useAction } from "@/app/conversation/useAction";
-import { WorkerLine } from "@/app/conversation/WorkerChip";
+import { SidePanelContext } from "@/app/conversation/SidePanel";
+import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
 import { GitActions } from "@/app/conversation/GitActions";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/conversation/WorkerSummary";
@@ -683,6 +685,16 @@ export function PinnedSummary({
  */
 function FloatingSummary({ conversation }: { conversation: Conversation }) {
   const { ref, onScroll } = useKeptScroll(`${conversation.id}/column`, true);
+  // A row that opens the side panel (the workers, a worker) moves on to it: the summary closes
+  // rather than stay where it opened, over the panel.
+  const { visible, state } = useContext(SidePanelContext);
+  const { panel: worker } = useContext(AgentsPanelContext);
+  const panel = visible ? `${state.active}/${worker}` : null;
+  const shownPanel = useRef(panel);
+  useEffect(() => {
+    if (panel !== null && panel !== shownPanel.current) useSummary.setState({ floating: false });
+    shownPanel.current = panel;
+  }, [panel]);
   return (
     <>
       <PopoverAnchor className="pointer-events-none absolute end-0 top-0 size-0" />
