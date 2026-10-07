@@ -60,6 +60,12 @@ test("settled workers freeze elapsed at attempt end and do not subscribe to the 
   }
 });
 
+test("a worker that reported says it finished and hands back", () => {
+  const worker = task({ state: "reported", attempts: [{ route: base.route, startedAtMs: 11000, endedAtMs: 31000, end: null }] });
+  assert.equal(line(worker, "Editing 3 files").first, "Finished, handing back · 20s");
+  assert.equal(line(worker).firstWorking, false);
+});
+
 test("quota waits tick from sinceMs even after the worker's attempt ended", () => {
   const worker = task({ state: "paused", quotaWait: { reason: "Codex quota", sinceMs: 11000, resetsAtMs: null, rule: null, ranking: null },
     attempts: [{ route: base.route, startedAtMs: 1000, endedAtMs: 10000, end: null }] });

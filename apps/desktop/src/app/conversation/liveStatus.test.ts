@@ -81,6 +81,22 @@ test("worker lines shimmer only while that worker works", () => {
   }
 });
 
+test("a worker that just finished reads as handing back, not as one being waited for", () => {
+  const finished = task({ state: "reported" });
+  assert.deepEqual(threadStatus(input({ tasks: byId([finished]) })),
+    { head: { text: "Worker finished, handing back", tone: "busy" }, workers: [finished.id], more: 0 });
+  assert.deepEqual(head(input({ tasks: byId([task({ state: "reported" }), task({ state: "reported" })]) })),
+    { text: "2 workers finished, handing back", tone: "busy" });
+  assert.equal(line(finished).first.split(" · ")[0], "Finished, handing back");
+  assert.equal(line(finished).firstWorking, false);
+  // Others still at it: the line waits only for them, and still lists the finished one.
+  const view = threadStatus(input({ tasks: byId([finished, task()]) }));
+  assert.deepEqual(view.head, { text: "Waiting for a worker", tone: "busy" });
+  assert.equal(view.workers.length, 2);
+  const queued = [task({ state: "reported" }), task({ state: "queued" }), task({ state: "queued" })];
+  assert.deepEqual(head(input({ tasks: byId(queued) })), { text: "Waiting for 2 workers", tone: "still" });
+});
+
 test("more than three workers: three by name, the rest counted", () => {
   const five = Array.from({ length: 5 }, () => task());
   const view = threadStatus(input({ tasks: byId(five) }));

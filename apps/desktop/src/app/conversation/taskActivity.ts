@@ -66,7 +66,7 @@ function semantic(source: ActivitySource): string {
     case "landing":
       return "Landing";
     case "reported":
-      return "Waiting for the report to be processed";
+      return "Finished, handing back";
     default:
       return "Waiting";
   }

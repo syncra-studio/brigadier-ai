@@ -105,7 +105,13 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
       return { head: { text: quotaWords(resets.length ? Math.min(...resets) : null), tone: "still" }, workers, more };
     }
     if (live.every((task) => task.state === "landing")) return { head: { text: "Landing the changes", tone: "busy" }, workers: [], more: 0 };
-    const text = live.length === 1 ? "Waiting for a worker" : `Waiting for ${live.length} workers`;
+    // A worker that reported is done: the thread picks up its report next.
+    const busy = live.filter((task) => task.state !== "reported");
+    if (busy.length === 0) {
+      const text = live.length === 1 ? "Worker finished, handing back" : `${live.length} workers finished, handing back`;
+      return { head: { text, tone: "busy" }, workers, more };
+    }
+    const text = busy.length === 1 ? "Waiting for a worker" : `Waiting for ${busy.length} workers`;
     return { head: { text, tone: working ? "busy" : "still" }, workers, more };
   }
   // Between the lead's turns (a message just sent, a change being landed): it still works.
