@@ -2094,7 +2094,7 @@ async fn a_codex_thread_s_own_commands_and_edits_are_tool_steps() {
     use brigadier_providers::{
         FileChange, FileChangeKind, ItemStatus, ProviderEvent, ProviderKind,
     };
-    let mut flow = Flow::start(
+    let flow = Flow::start(
         "codex-shell-steps",
         Options {
             thread: ProviderKind::Codex,

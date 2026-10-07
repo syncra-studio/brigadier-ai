@@ -109,8 +109,9 @@ impl LivePreview {
 #[derive(Default)]
 pub(crate) struct Previews {
     live: Mutex<HashMap<(ConversationId, String), Arc<LivePreview>>>,
-    /// Held while a preview is numbered, started and recorded.
-    starting: tokio::sync::Mutex<()>,
+    /// Held while a preview is numbered, started and recorded; the recording task holds it
+    /// to the end, so a cancelled start can't free its number early.
+    starting: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Previews {
@@ -204,7 +205,7 @@ impl SessionManager {
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| short_name(&command));
 
-        let starting = self.previews.starting.lock().await;
+        let starting = self.previews.starting.clone().lock_owned().await;
         let number = self.core.board(id).await?.previews.len() + 1;
         let preview_id = format!("preview-{number}");
         let owner = preview_owner(id);
@@ -287,6 +288,7 @@ impl SessionManager {
             if recorded.is_err() {
                 watched.ask_to_stop("it could not be recorded");
             }
+            drop(starting);
             let _ = recorded_tx.send(recorded);
             this.watch_preview(watched, child, artifact).await;
         });
@@ -295,7 +297,6 @@ impl SessionManager {
                 "the preview's start was not recorded".into(),
             ))
         });
-        drop(starting);
         if let Err(err) = recorded {
             live.ended.cancelled().await;
             return Err(err);

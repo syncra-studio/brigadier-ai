@@ -125,7 +125,9 @@ impl Turn {
             kind: brigadier_providers::model::ApprovalKind::Command,
             tool: tool.into(),
             command: Some(command.into()),
-            cwd: Some(self.cwd.display().to_string()),
+            // A prompted MCP tool's request carries the call's own `workdir` argument (none
+            // here); a CLI's Bash, its working directory.
+            cwd: (tool == "Bash").then(|| self.cwd.display().to_string()),
             paths: Vec::new(),
             reason: Some("It needs the network.".into()),
             escalation: true,
