@@ -10,7 +10,7 @@
 //! it when the base it would get now holds the same files, after putting the checkout on the
 //! task's branch. Otherwise it is removed and the worker starts as usual.
 //!
-//! One pre-warm per session at most. It is never made while the machine is strained, during an
+//! One unused pre-warm per session at most: a task that takes it starts the next one. It is never made while the machine is strained, during an
 //! overnight run, or when making it would ask the user about uncommitted changes, and it is
 //! removed after [`PREWARM_TTL`], when the user stops the session, when the session hibernates,
 //! is archived or deleted, and when another one replaces it.
@@ -174,6 +174,9 @@ impl SessionManager {
         }
         let task_id = slot.task_id.clone();
         state.claimed.insert(task_id.clone(), slot);
+        drop(state);
+        // The next worker of a busy session finds one ready too.
+        self.prewarm(id);
         Some(task_id)
     }
 

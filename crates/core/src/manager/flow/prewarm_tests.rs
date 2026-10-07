@@ -103,8 +103,14 @@ async fn a_delegated_task_starts_in_the_pre_warmed_worktree_under_its_reserved_i
         git(&flow.repo, &["log", "--format=%s", &branch]).contains("Start"),
         "{branch}"
     );
-    // The adopted pre-warm is the task's: the session has none until the user writes again.
-    assert!(flow.manager.prewarm_id(&flow.conversation).is_none());
+    // The adopted pre-warm is the task's; taking it started the session's next one.
+    let next = flow
+        .manager
+        .prewarm_made(&flow.conversation)
+        .await
+        .expect("the next pre-warm");
+    assert_ne!(next.0, reserved);
+    assert_ne!(next.1, worktree);
     flow.stop().await;
 }
 
