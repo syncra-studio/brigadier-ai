@@ -1,10 +1,9 @@
 //! Resuming runs after a restart (PLAN.md §10.10). Run ownership is replayed before the
 //! generic recovery (which ends interrupted tasks). Afterwards each active run picks up where
-//! it was: a phase lead hears of the tasks the restart ended and is reminded of its phase (a
-//! run from before phases were verified like any request's, caught checking a phase, resumes
-//! that phase as running), a run past its deadline winds down at once, and an ending that was
-//! cut off finishes. The time Brigadier wasn't running is recorded on the run,
-//! with the Mac's own sleep record when it has one, for the report.
+//! it was: the thread hears that Brigadier restarted (and of the tasks the restart ended, as
+//! usual) and carries on with the run's plan, a run past its deadline winds down at once, and
+//! an ending that was cut off finishes. The time Brigadier wasn't running is recorded on the
+//! run, with the Mac's own sleep record when it has one, for the report.
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -12,7 +11,7 @@ use std::time::Duration;
 
 use super::super::SessionManager;
 use crate::now_ms;
-use crate::overnight::{OvernightRun, OvernightState, PhaseState, RunGap};
+use crate::overnight::{OvernightRun, OvernightState, RunGap};
 
 /// A heartbeat older than this many clock ticks means Brigadier wasn't running in between.
 const MISSED_BEATS: i64 = 3;
@@ -87,45 +86,15 @@ impl SessionManager {
             return;
         }
         match run.state {
-            OvernightState::WindingDown | OvernightState::Reporting => {
-                let manager = self.arc();
-                self.spawn(async move { manager.end_run(run).await });
-            }
-            // An older run caught checking a phase (or Phase 0's plan): its checks are gone with
-            // the old daemon, so the phase runs again and its lead settles it.
-            OvernightState::PhaseGate => {
-                let resumed = self
-                    .change_run_if(&run, |now| {
-                        for phase in &mut now.phases {
-                            if phase.state == PhaseState::Checking {
-                                phase.state = PhaseState::Running;
-                                phase.nudges = 0;
-                            }
-                        }
-                        now.state = OvernightState::Running;
-                        Some(())
-                    })
-                    .await;
-                if resumed.is_some() {
-                    self.lead_turn_ended(&run.conversation_id);
-                }
-            }
-            OvernightState::Planning => {
-                if let Some(planning) = &run.planning
-                    && planning.state == PhaseState::Checking
-                {
-                    self.resume_judged_plan(&run).await;
-                } else {
-                    self.lead_turn_ended(&run.conversation_id);
-                }
-            }
-            OvernightState::Running => {
-                if run.phases.iter().any(|p| p.state == PhaseState::Running) {
-                    // Its lead hears of the tasks the restart ended, and is reminded.
-                    self.lead_turn_ended(&run.conversation_id);
-                } else {
-                    self.advance_soon(&run.conversation_id, &run.id);
-                }
+            OvernightState::WindingDown | OvernightState::Reporting => self.wind_down_soon(&run),
+            // The thread carries on with the plan; what the restart ended reaches it as usual.
+            OvernightState::Running | OvernightState::PhaseGate | OvernightState::Planning => {
+                self.tell_thread(
+                    &run,
+                    "run restarted",
+                    "[run] Brigadier restarted during the overnight run. list_tasks shows what still runs; carry on with the run's plan.".into(),
+                )
+                .await;
             }
             OvernightState::Preparing
             | OvernightState::WaitingQuota

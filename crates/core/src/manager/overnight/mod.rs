@@ -7,12 +7,12 @@
 //! app sends these commands; worker and orchestrator grants can't.
 
 pub(crate) mod admission;
-mod conductor;
 pub mod directives;
 mod messages;
 pub(crate) mod policy;
 mod recovery;
 mod report;
+pub(crate) mod run;
 mod wind_down;
 mod workspace;
 
@@ -52,9 +52,6 @@ pub(crate) struct Runs {
     pub(crate) admission: admission::Admission,
     /// Runs whose clean ending is under way (it runs once).
     winding: std::sync::Mutex<std::collections::HashSet<OvernightRunId>>,
-    /// Finished runs whose older report was tried again in the current shape (once a daemon
-    /// life, so one that can't be rebuilt keeps its report without retrying every tick).
-    rerendered: std::sync::Mutex<std::collections::HashSet<OvernightRunId>>,
     /// The generic recovery is ending the old daemon's tasks: their missing results are not
     /// verdicts on a run's checks (the round starts again afterwards).
     pub(crate) recovering: std::sync::atomic::AtomicBool,
@@ -202,7 +199,7 @@ impl SessionManager {
                     ));
                 }
                 let clock = Clock::system();
-                let verified = verified_numbers(board, run);
+                let verified = run::done_numbers(board, run);
                 let numbered = (!run.phases.is_empty()).then(|| infos(&run.phases));
                 let problems = directives::check(
                     &run.directives,
@@ -312,7 +309,9 @@ impl SessionManager {
         command_id: String,
     ) -> Result<OvernightRun> {
         let stopped = self.stop_run(&conversation_id, &run_id, command_id).await?;
-        self.advance_soon(&conversation_id, &run_id);
+        if stopped.state == OvernightState::WindingDown {
+            self.wind_down_soon(&stopped);
+        }
         Ok(stopped)
     }
 
@@ -361,9 +360,9 @@ impl SessionManager {
         let steered = self
             .steer_run(&conversation_id, &run_id, command_id, words)
             .await?;
-        // A new restriction applies at the next boundary (a stop directive already reached).
-        if steered.state.is_active() {
-            self.advance_soon(&conversation_id, &run_id);
+        // Steps left out hand off; a "stop after" already reached ends the run.
+        if steered.state == OvernightState::Running {
+            self.apply_run_selection(&steered).await;
         }
         Ok(steered)
     }
@@ -382,14 +381,12 @@ impl SessionManager {
                 ));
             }
             let clock = Clock::system();
-            let running = run
-                .phases
-                .iter()
-                .find(|phase| matches!(phase.state, PhaseState::Running | PhaseState::Checking))
-                .map(|phase| phase.id.clone());
+            let running = run::run_plan(board, run)
+                .and_then(run::current_step)
+                .map(run::step_id);
             let (next, mut problems) =
                 directives::steer(&run.directives, &words, &clock, running.as_deref());
-            let verified = verified_numbers(board, run);
+            let verified = run::done_numbers(board, run);
             let numbered = (!run.phases.is_empty()).then(|| infos(&run.phases));
             problems.extend(directives::check(
                 &next,
@@ -502,20 +499,33 @@ impl SessionManager {
                 "This run is already being continued.".into(),
             ));
         }
-        let phases: Vec<OvernightPhase> = previous
-            .phases
-            .iter()
-            .cloned()
-            .map(|phase| {
-                if phase.state == PhaseState::Verified {
-                    return phase;
-                }
-                // Worked again from the start, with the same criteria; what it lacked stays
-                // in view for its next lead.
-                OvernightPhase {
+        // The same plan; its next Start keeps the steps settled done as they are.
+        let done = run::done_numbers(&board, previous);
+        let phases: Vec<OvernightPhase> = if previous.phases.is_empty() {
+            // A bare goal the thread planned: its plan's steps are the phases now.
+            run::run_plan(&board, previous)
+                .map(|plan| {
+                    plan.steps
+                        .iter()
+                        .enumerate()
+                        .map(|(index, step)| {
+                            OvernightPhase::new(
+                                step.number_at(index),
+                                &step.title,
+                                step.detail.as_deref().unwrap_or(&step.title),
+                                &[],
+                                &[],
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            previous
+                .phases
+                .iter()
+                .map(|phase| OvernightPhase {
                     done_when: phase.done_when.clone(),
-                    gaps: phase.gaps.clone(),
-                    summary: phase.summary.clone(),
                     ..OvernightPhase::new(
                         phase.number,
                         &phase.name,
@@ -523,16 +533,12 @@ impl SessionManager {
                         &[],
                         &phase.depends_on,
                     )
-                }
-            })
-            .collect();
-        if !phases.is_empty()
-            && phases
-                .iter()
-                .all(|phase| phase.state == PhaseState::Verified)
-        {
+                })
+                .collect()
+        };
+        if !phases.is_empty() && phases.iter().all(|phase| done.contains(&phase.number)) {
             return Err(Error::Invalid(
-                "Every phase is verified; there is nothing left to continue.".into(),
+                "Every phase is settled done; there is nothing left to continue.".into(),
             ));
         }
         let clock = Clock::system();
@@ -542,7 +548,7 @@ impl SessionManager {
             ..Directives::default()
         };
         let (directives, mut problems) = directives::steer(&carried, &words, &clock, None);
-        let verified = verified_numbers(&board, previous);
+        let verified = run::done_numbers(&board, previous);
         let numbered = (!phases.is_empty()).then(|| infos(&phases));
         problems.extend(directives::check(
             &directives,
@@ -707,7 +713,7 @@ impl SessionManager {
                 now.finished_at_ms = Some(now_ms());
             }
         }
-        let (conversation_id, run_id) = (now.conversation_id.clone(), now.id.clone());
+        let prepared = now.workspace.is_some().then(|| now.clone());
         if let Err(err) = self
             .record_runs(
                 &run.conversation_id,
@@ -718,8 +724,11 @@ impl SessionManager {
             tracing::warn!(run = %run.id, error = %err, "could not record an overnight run");
             return;
         }
-        // Its first phase (or Phase 0) starts once the lock is free.
-        self.advance_soon(&conversation_id, &run_id);
+        drop(_held);
+        // Its plan is recorded and the thread hears of it once the lock is free.
+        if let Some(prepared) = prepared {
+            self.begin_run(prepared).await;
+        }
     }
 
     /// Reads the plan's source files as they are now, into the blob store. A file that can't
@@ -789,31 +798,6 @@ fn infos(phases: &[OvernightPhase]) -> Vec<PhaseInfo> {
             depends_on: phase.depends_on.clone(),
         })
         .collect()
-}
-
-/// Phases this run's earlier segments verified.
-fn verified_numbers(board: &Board, run: &OvernightRun) -> Vec<u32> {
-    let mut numbers: Vec<u32> = run
-        .phases
-        .iter()
-        .filter(|phase| phase.state == PhaseState::Verified)
-        .map(|phase| phase.number)
-        .collect();
-    let mut previous = run.predecessor.as_ref().and_then(|id| board.runs.get(id));
-    while let Some(segment) = previous {
-        numbers.extend(
-            segment
-                .phases
-                .iter()
-                .filter(|phase| phase.state == PhaseState::Verified)
-                .map(|phase| phase.number),
-        );
-        previous = segment
-            .predecessor
-            .as_ref()
-            .and_then(|id| board.runs.get(id));
-    }
-    numbers
 }
 
 fn selects(directives: &Directives, number: u32) -> bool {

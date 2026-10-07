@@ -1,19 +1,22 @@
-//! Overnight runs on the request loop: each phase gets one lead, a fresh verifier the
-//! orchestrator starts (which asks for one review), `land_phase` and `phase_done`; the run
-//! keeps its directives, deadline wind-down, restart recovery and morning report.
+//! Overnight runs on the session's own thread (THREAD-PLAN.md Q10): the run's phases become
+//! the plan of its request and the thread hears of the run; it delegates each phase by its
+//! source number, lands the work, settles each phase with `settle_step` and ends the run with
+//! `end_run`. Code keeps the user's restrictions, the deadline's wind-down, restart recovery,
+//! the switch of the thread's workspace to the run's worktree and back, and the morning report.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
+use brigadier_providers::model::Origin;
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::board::Board;
-use crate::model::OvernightRunId;
-use crate::overnight::{
-    OvernightRun, OvernightState, PhaseState, ProposedPhase, ProposedPlan, StopReason,
-};
-use crate::work::{ReviewKind, ReviewState, TaskState, WorkerRole};
+use crate::model::{Environment, OvernightRunId, Setup};
+use crate::overnight::{OvernightRun, OvernightState, ProposedPhase, ProposedPlan, StopReason};
+use crate::work::{PhaseStage, Plan, ReviewKind, ReviewState, StepOutcome, TaskState, WorkerRole};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -24,28 +27,9 @@ where
 }
 
 const QUIET: &str = "[quiet]";
+const MORNING: &str = "Good morning: the run is over; the report follows.";
 
-/// The phase an orchestrator input starts ("[overnight · phase N] Lead phase N …").
-fn kickoff(input: &str) -> Option<u32> {
-    let rest = input.split("[overnight · phase ").nth(1)?;
-    let number: u32 = rest
-        .split(|c: char| !c.is_ascii_digit())
-        .next()?
-        .parse()
-        .ok()?;
-    rest.contains("Lead phase").then_some(number)
-}
-
-/// The phase a lead's brief names ("Build phase N").
-fn phase_of_lead(turn: &Turn) -> Option<u32> {
-    let rest = turn.prompt.split("Build phase ").nth(1)?;
-    rest.split(|c: char| !c.is_ascii_digit())
-        .next()?
-        .parse()
-        .ok()
-}
-
-/// The task numbers of the reports in an orchestrator's input, in order.
+/// The task numbers of the reports in a thread's input, in order.
 fn reports_in(input: &str) -> Vec<u32> {
     input
         .split("[report task-")
@@ -59,101 +43,175 @@ fn reports_in(input: &str) -> Vec<u32> {
         .collect()
 }
 
-fn is_verifier(turn: &Turn) -> bool {
-    turn.prompt.contains("You verify this phase")
+/// The phase a lead's brief names ("Build phase N").
+fn phase_of_lead(turn: &Turn) -> Option<u32> {
+    let rest = turn.prompt.split("Build phase ").nth(1)?;
+    rest.split(|c: char| !c.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()
 }
 
-/// Settles the phase being led as done.
-async fn settle(turn: &Turn) {
-    let reply = turn
-        .call(
-            "phase_done",
-            json!({"outcome": "done",
-                   "summary": "It made the file; its verifier checked it and one review found nothing."}),
-        )
-        .await;
-    assert!(!reply.is_error, "{}", reply.text);
+/// How the scripted thread works through its run.
+#[derive(Default)]
+struct Thread {
+    /// The phases it delegates, in order.
+    order: Vec<u32>,
+    /// Phases it tries to delegate at the start, which Brigadier must refuse.
+    refused: Vec<u32>,
+    /// It commits a tiny edit of its own in its workspace at the start.
+    tiny_edit: bool,
+    /// It tries to settle each phase before landing its lead's work (Brigadier refuses).
+    early: bool,
+    /// How it settles each phase (done when absent).
+    outcomes: HashMap<u32, StepOutcome>,
+    /// Each lead's phase, by task number.
+    led: Mutex<HashMap<u32, u32>>,
+    /// Each turn's input and workspace.
+    turns: Mutex<Vec<(String, Vec<PathBuf>)>>,
 }
 
-/// An orchestrator that leads each phase as its briefing says: one lead, a verifier it starts
-/// once the lead reports (its call; these runs verify every phase), then land the verifier's
-/// work and settle the phase as done.
-async fn lead_the_phase(turn: &Turn) -> Reply {
-    if let Some(n) = kickoff(&turn.input) {
+impl Thread {
+    async fn delegate(&self, turn: &Turn, phase: u32) {
         let reply = turn
             .call(
                 "delegate_task",
-                json!({"title": format!("Phase {n}"), "kind": "implement",
-                       "spec": format!("Build phase {n}: create p{n}.txt."),
-                       "provider": "claude"}),
+                json!({"title": format!("Phase {phase}"), "kind": "implement",
+                       "spec": format!("Build phase {phase}: create p{phase}.txt."),
+                       "provider": "claude", "phase": phase}),
             )
             .await;
         assert!(!reply.is_error, "{}", reply.text);
-        let note = if n == 1 {
-            json!({"kind": "decided", "what": "Named the files pN.txt.", "why": "The plan says so."})
-        } else {
-            json!({"kind": "waiting", "what": "Add the release key to .env."})
-        };
-        let reply = turn.call("note_for_user", note).await;
-        assert!(!reply.is_error, "{}", reply.text);
-        return Reply::text(QUIET);
+        let task = reply
+            .text
+            .split("task-")
+            .nth(1)
+            .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|number| number.parse().ok())
+            .expect("the task's number");
+        self.led.lock().unwrap().insert(task, phase);
     }
-    if let Some(n) = reports_in(&turn.input).last() {
-        // A lead's report (a verifier's task is "Verify …"): verify it first. A run that is
-        // ending starts no verifier, and a lead that changed nothing has nothing to verify.
-        if !turn.input.contains("\"Verify ") && !turn.input.contains("[nothing to land task-") {
-            let started = turn
-                .call("start_verifier", json!({"task": format!("task-{n}")}))
-                .await;
-            if !started.is_error {
-                // The lead alone doesn't land while its verifier works on top of it.
-                let refused = turn
-                    .call("land_phase", json!({"task": format!("task-{n}")}))
+
+    /// One turn of the thread.
+    async fn turn(&self, turn: &Turn) -> Reply {
+        self.turns
+            .lock()
+            .unwrap()
+            .push((turn.input.clone(), turn.add_dirs.clone()));
+        if turn.input.contains("[overnight] The run") && turn.input.contains("has started") {
+            for phase in &self.refused {
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"title": "No", "kind": "implement",
+                               "spec": format!("Build phase {phase}."), "phase": phase}),
+                    )
                     .await;
-                assert!(refused.is_error, "{}", refused.text);
-                return Reply::text(QUIET);
+                assert!(reply.is_error, "phase {phase} is refused: {}", reply.text);
             }
-        }
-        let landed = turn
-            .call("land_phase", json!({"task": format!("task-{n}")}))
-            .await;
-        if landed.is_error {
+            if self.tiny_edit {
+                let workspace = &turn.add_dirs[0];
+                std::fs::write(workspace.join("notes.txt"), "notes\n").unwrap();
+                super::git(workspace, &["add", "notes.txt"]);
+                super::git(
+                    workspace,
+                    &[
+                        "commit",
+                        "-q",
+                        "-m",
+                        "Add notes\n\nBrigadier-Author: thread",
+                    ],
+                );
+            }
+            for note in [
+                json!({"kind": "decided", "what": "Named the files pN.txt.", "why": "The plan says so."}),
+                json!({"kind": "waiting", "what": "Add the release key to .env."}),
+            ] {
+                let reply = turn.call("note_for_user", note).await;
+                assert!(!reply.is_error, "{}", reply.text);
+            }
+            if let Some(first) = self.order.first() {
+                self.delegate(turn, *first).await;
+            }
             return Reply::text(QUIET);
         }
-        settle(turn).await;
-        return Reply::text(QUIET);
+        let mut ending = turn.input.contains("The overnight run is ending now");
+        let led: Vec<(u32, u32)> = reports_in(&turn.input)
+            .into_iter()
+            .filter_map(|task| Some((task, *self.led.lock().unwrap().get(&task)?)))
+            .collect();
+        for (task, phase) in led {
+            if self.early {
+                // Not settled while its lead's work isn't landed.
+                let early = turn
+                    .call(
+                        "settle_step",
+                        json!({"phase": phase, "outcome": "done", "summary": "Too early."}),
+                    )
+                    .await;
+                assert!(
+                    early.is_error && early.text.contains("still has work going"),
+                    "{}",
+                    early.text
+                );
+            }
+            let landed = turn
+                .call("land_phase", json!({"task": format!("task-{task}")}))
+                .await;
+            let outcome = match self.outcomes.get(&phase) {
+                Some(outcome) => *outcome,
+                None if landed.is_error => StepOutcome::Partial,
+                None => StepOutcome::Done,
+            };
+            if landed.is_error {
+                // Nothing of it landed (a handoff): what is left is said.
+                let _ = turn
+                    .call("stop_worker", json!({"task": format!("task-{task}")}))
+                    .await;
+            }
+            let settled = turn
+                .call(
+                    "settle_step",
+                    json!({"phase": phase,
+                           "outcome": match outcome {
+                               StepOutcome::Done => "done",
+                               StepOutcome::Partial => "partial",
+                               StepOutcome::Blocked => "blocked",
+                           },
+                           "summary": format!("Made p{phase}.txt; `ls` shows it; its review found nothing."),
+                           "left": if outcome == StepOutcome::Done { String::new() } else { format!("write p{phase}.txt") }}),
+                )
+                .await;
+            assert!(!settled.is_error, "{}", settled.text);
+            if settled.text.contains("the run is ending now") {
+                ending = true;
+                continue;
+            }
+            if ending {
+                continue;
+            }
+            let next = self
+                .order
+                .iter()
+                .skip_while(|n| **n != phase)
+                .nth(1)
+                .copied();
+            match next {
+                Some(next) => self.delegate(turn, next).await,
+                None => {
+                    let ended = turn
+                        .call(
+                            "end_run",
+                            json!({"outcome": "done", "why": "Every phase is settled."}),
+                        )
+                        .await;
+                    assert!(!ended.is_error, "{}", ended.text);
+                    ending = true;
+                }
+            }
+        }
+        Reply::text(if ending { MORNING } else { QUIET })
     }
-    // Its lead ended without anything left to land: settle the phase from its report.
-    if turn.input.contains("Nothing of this phase runs now") {
-        settle(turn).await;
-    }
-    Reply::text(QUIET)
-}
-
-/// Asks for a review of the worker's own work and waits for the findings, which steer into
-/// its running turn. What the review found, or why there is none.
-async fn own_review(turn: &Turn) -> String {
-    let started = turn.call("review_code", json!({})).await;
-    assert!(!started.is_error, "{}", started.text);
-    if !started.text.starts_with("Started a review") {
-        return started.text;
-    }
-    turn.steered().await.expect("the review's findings")
-}
-
-/// A verifier that asks for its one review and reports every criterion met.
-async fn verify(turn: &Turn) -> Reply {
-    let review = own_review(turn).await;
-    assert!(review.contains("found nothing"), "{review}");
-    let reply = turn
-        .call(
-            "submit_report",
-            json!({"summary": "Every criterion is met; the review found nothing.",
-                   "done_when": "[met] the file exists: ls shows it"}),
-        )
-        .await;
-    assert!(!reply.is_error, "{}", reply.text);
-    Reply::text("Verified.")
 }
 
 /// A lead that commits its phase's file and reports.
@@ -166,16 +224,35 @@ async fn build(turn: &Turn) -> Reply {
     let reply = turn
         .call(
             "submit_report",
-            json!({"summary": format!("Added {file}."), "changes": [file]}),
+            json!({"summary": format!("Added {file}."), "changes": [file],
+                   "done_when": format!("[met] p{n}.txt exists: ls shows it")}),
         )
         .await;
     assert!(!reply.is_error, "{}", reply.text);
     Reply::text("Reported.")
 }
 
+/// A flow whose thread works as `thread` says and whose leads build their phase.
+async fn flow_with(name: &str, thread: Arc<Thread>) -> Flow {
+    Flow::start(
+        name,
+        Options::default(),
+        script(move |turn| {
+            let thread = thread.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    return thread.turn(&turn).await;
+                }
+                build(&turn).await
+            }
+        }),
+    )
+    .await
+}
+
 fn plan(phases: u32) -> ProposedPlan {
     ProposedPlan {
-        name: "Three files".into(),
+        name: "Files".into(),
         phases: (1..=phases)
             .map(|n| ProposedPhase {
                 number: Some(n),
@@ -217,6 +294,13 @@ fn run_of(board: &Board, id: &OvernightRunId) -> OvernightRun {
     board.runs.get(id).cloned().expect("the run")
 }
 
+fn plan_of<'a>(board: &'a Board, run: &OvernightRun) -> &'a Plan {
+    board
+        .plans
+        .get(run.plan_id.as_ref().expect("the run's plan"))
+        .expect("the plan")
+}
+
 async fn finished(flow: &Flow, id: &OvernightRunId) -> Board {
     flow.until("the run to finish", |board| {
         board
@@ -244,112 +328,154 @@ async fn report_text(flow: &Flow, run: &OvernightRun) -> String {
     flow.manager.full_text(message).await
 }
 
-/// Done when (1) and (4): "stop after phase 2" on a plan of three runs two phases, each with
-/// one lead, one verifier (one review) and land_phase, and stops; phase 3 never starts. The
-/// morning report has the delegator's sections.
+fn session_worktree(flow: &Flow) -> (PathBuf, String) {
+    match flow.core.conversation(&flow.conversation).unwrap().setup {
+        Some(Setup::Session {
+            environment:
+                Environment::NewWorktree {
+                    path: Some(path),
+                    branch,
+                    ..
+                },
+            ..
+        }) => (PathBuf::from(path), branch),
+        other => panic!("no session worktree: {other:?}"),
+    }
+}
+
+fn real(path: &std::path::Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_owned())
+}
+
+/// "stop after phase 2" on a plan of three: the thread works on its own session, its
+/// workspace switched to the run's worktree (its tiny edit lands on the run's branch, the
+/// session's branch stays as it was) and back after; phase 3 never starts; Merge takes the
+/// tip the thread accepted; the morning report lists commits, reviews, decisions, waiting
+/// items and usage.
 #[tokio::test]
-async fn a_run_told_to_stop_after_phase_2_verifies_two_phases_and_stops() {
-    let flow = Flow::start(
-        "overnight-stop",
-        Options::default(),
-        script(|turn| async move {
-            if turn.is_orchestrator() {
-                return lead_the_phase(&turn).await;
-            }
-            if is_verifier(&turn) {
-                return verify(&turn).await;
-            }
-            build(&turn).await
-        }),
-    )
+async fn a_run_told_to_stop_after_phase_2_settles_two_phases_and_stops() {
+    let thread = Arc::new(Thread {
+        order: vec![1, 2, 3],
+        refused: vec![3],
+        tiny_edit: true,
+        early: true,
+        ..Default::default()
+    });
+    let flow = flow_with("overnight-stop", thread.clone()).await;
+    flow.say("Hello.").await;
+    flow.until("the first turn", |_| {
+        !thread.turns.lock().unwrap().is_empty()
+    })
     .await;
+    flow.settled().await;
+    let (session, session_branch) = session_worktree(&flow);
+    let session_tip = super::git(&flow.repo, &["rev-parse", &session_branch]);
+
     let run = start_run(&flow, "/overnight Make three files. Stop after phase 2.", 3).await;
     let board = finished(&flow, &run.id).await;
     let run = run_of(&board, &run.id);
     assert_eq!(run.stop, Some(StopReason::StopDirective), "{run:#?}");
-    let states: Vec<_> = run.phases.iter().map(|phase| phase.state).collect();
+    let workspace = run.workspace.clone().expect("a branch");
+
+    // The plan: phases 1 and 2 settled done, phase 3 never started.
+    let plan = plan_of(&board, &run);
+    let stages: Vec<_> = plan.steps.iter().map(|step| step.stage).collect();
     assert_eq!(
-        states,
-        [
-            PhaseState::Verified,
-            PhaseState::Verified,
-            PhaseState::Pending
-        ],
-        "phase 3 is never reached"
+        stages,
+        [PhaseStage::Done, PhaseStage::Done, PhaseStage::Pending],
+        "{plan:#?}"
     );
-    for phase in &run.phases[..2] {
-        let of = |role| {
-            board
-                .tasks
-                .values()
-                .filter(|task| {
-                    task.role == Some(role)
-                        && task
-                            .run
-                            .as_ref()
-                            .and_then(|context| context.phase_id.as_deref())
-                            == Some(phase.id.as_str())
-                })
-                .count()
-        };
-        assert_eq!(of(WorkerRole::Verifier), 1, "phase {}", phase.number);
-        assert_eq!(of(WorkerRole::Lead), 1, "phase {}", phase.number);
-        assert!(phase.verified_commit.is_some());
-        // The phase had no outline: its verifier's review still comes from the vendor other
-        // than the lead's, not the verifier's.
-        let in_phase = |role| {
-            board.tasks.values().find(|task| {
-                task.role == Some(role)
-                    && task.run.as_ref().and_then(|c| c.phase_id.as_deref())
-                        == Some(phase.id.as_str())
-            })
-        };
-        let lead = in_phase(WorkerRole::Lead).unwrap();
-        let verifier = in_phase(WorkerRole::Verifier).unwrap();
-        let review = board
-            .reviews
-            .values()
-            .find(|review| {
-                review.kind == ReviewKind::Code && review.task_id.as_ref() == Some(&verifier.id)
-            })
-            .expect("the verifier's review");
-        assert_eq!(review.state, ReviewState::Clean);
-        assert_eq!(review.author, lead.route.choice.provider);
-        assert_ne!(
-            review.reviewer, lead.route.choice.provider,
-            "phase {}",
-            phase.number
-        );
-    }
+    assert!(plan.steps[2].settled.is_none());
+    assert_eq!(
+        run.verified_commit,
+        plan.steps[1].settled.as_ref().and_then(|s| s.tip.clone()),
+        "Merge takes the tip the thread accepted"
+    );
     assert!(
         board
             .tasks
             .values()
-            .filter(|task| task.role == Some(WorkerRole::Verifier))
-            .all(|task| task.state == TaskState::Landed)
+            .filter(|task| task.role == Some(WorkerRole::Lead))
+            .all(|task| task.phase != Some(3)),
+        "nothing started for phase 3"
     );
-    assert_eq!(run.verified_commit, run.phases[1].verified_commit);
-    assert!(board.approvals.is_empty(), "no cards");
-    let branch = run.workspace.as_ref().expect("a branch").branch.clone();
-    let files = super::git(&flow.repo, &["ls-tree", "-r", "--name-only", &branch]);
     assert!(
-        files.contains("p1.txt") && files.contains("p2.txt"),
-        "{files}"
+        board
+            .tasks
+            .values()
+            .all(|task| task.role != Some(WorkerRole::Verifier)),
+        "no verifier starts by itself"
     );
-    assert!(!files.contains("p3.txt"), "{files}");
 
+    // The thread's tiny edit and the leads' work are on the run's branch; the session's branch
+    // is unchanged.
+    let files = super::git(
+        &flow.repo,
+        &["ls-tree", "-r", "--name-only", &workspace.branch],
+    );
+    for file in ["notes.txt", "p1.txt", "p2.txt"] {
+        assert!(files.contains(file), "{file}: {files}");
+    }
+    assert!(!files.contains("p3.txt"), "{files}");
+    assert_eq!(
+        super::git(&flow.repo, &["rev-parse", &session_branch]),
+        session_tip,
+        "the session's branch is unchanged"
+    );
+    let notes = super::git(
+        &flow.repo,
+        &[
+            "log",
+            "-1",
+            "--format=%H",
+            &workspace.branch,
+            "--",
+            "notes.txt",
+        ],
+    );
+    assert!(
+        board
+            .reviews
+            .values()
+            .any(|review| review.kind == ReviewKind::Code && review.tip == notes.trim()),
+        "the thread's commit gets its review: {:#?}",
+        board.reviews
+    );
+
+    // The thread worked from the run's worktree during the run.
+    let turns = thread.turns.lock().unwrap().clone();
+    let during: Vec<_> = turns
+        .iter()
+        .filter(|(input, _)| input.contains("[overnight]") || input.contains("[report task-"))
+        .collect();
+    assert!(!during.is_empty());
+    for (_, dirs) in &during {
+        assert_eq!(
+            dirs.iter().map(|dir| real(dir)).collect::<Vec<_>>(),
+            vec![real(std::path::Path::new(&workspace.path))]
+        );
+    }
+
+    // The report.
     let report = report_text(&flow, &run).await;
     for section in [
         "stopped where you asked",
+        "2 of 3 phases done.",
+        "Merge takes phases 1 and 2",
         "### Phases",
-        "Verified by",
+        "✓ Phase 1 · File 1: done. 1 task landed.",
+        "Phase 3 · File 3: not reached.",
         "### Commits",
         "Add p1.txt",
+        "Add notes",
+        "review",
         "### Decided for you",
         "Named the files pN.txt.",
-        "Code review: no findings.",
         "### Waiting on you",
         "Add the release key to .env.",
+        "How each phase was checked:",
+        "Settled: Made p1.txt",
+        "Usage: ",
     ] {
         assert!(report.contains(section), "{section}\n{report}");
     }
@@ -358,31 +484,66 @@ async fn a_run_told_to_stop_after_phase_2_verifies_two_phases_and_stops() {
         !shown.contains("task-"),
         "workers by name, not number:\n{report}"
     );
-    let phases = report.find("### Phases").unwrap();
+
+    // After the run the same native session goes on, in the session's checkout.
+    flow.say("Thanks.").await;
+    flow.until("the turn after the run", |_| {
+        thread
+            .turns
+            .lock()
+            .unwrap()
+            .last()
+            .is_some_and(|(input, _)| input.contains("Thanks."))
+    })
+    .await;
+    let after = thread.turns.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(
+        after.1.iter().map(|dir| real(dir)).collect::<Vec<_>>(),
+        vec![real(&session)]
+    );
+    let specs = flow.thread_specs();
+    assert_eq!(specs[0].1.origin, Origin::New, "{specs:#?}");
+    let resumed: Vec<_> = specs[1..].iter().map(|(_, spec)| &spec.origin).collect();
+    assert!(resumed.len() >= 2, "{specs:#?}");
     assert!(
-        report[..phases].lines().filter(|l| !l.is_empty()).count() == 3,
-        "three outcome lines first:\n{report}"
+        resumed
+            .iter()
+            .all(|origin| matches!(origin, Origin::Resume { .. }) && *origin == resumed[0]),
+        "one native session throughout: {resumed:#?}"
+    );
+    assert_eq!(
+        specs
+            .last()
+            .unwrap()
+            .1
+            .add_dirs
+            .iter()
+            .map(|d| real(d))
+            .collect::<Vec<_>>(),
+        vec![real(&session)]
     );
     flow.stop().await;
 }
 
-/// Done when (2): a run "until" a time winds down 20 minutes early; at the deadline its live
-/// lead is asked for a handoff in the delegator's headings, and the run ends at the deadline.
+/// The deadline: the live lead is asked for a handoff in the delegator's headings, the
+/// thread is told the run is ending and writes its morning answer before the report, and the
+/// run ends at the deadline with the phase unfinished.
 #[tokio::test]
-async fn at_the_deadline_live_workers_are_asked_for_a_handoff() {
-    let handed: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
-    let heard = handed.clone();
+async fn at_the_deadline_the_thread_and_live_workers_end_cleanly() {
+    let handed: Arc<Mutex<Vec<String>>> = Arc::default();
+    let thread = Arc::new(Thread {
+        order: vec![1],
+        ..Default::default()
+    });
+    let (heard, inner) = (handed.clone(), thread.clone());
     let flow = Flow::start(
         "overnight-deadline",
         Options::default(),
         script(move |turn| {
-            let heard = heard.clone();
+            let (heard, inner) = (heard.clone(), inner.clone());
             async move {
                 if turn.is_orchestrator() {
-                    return lead_the_phase(&turn).await;
-                }
-                if is_verifier(&turn) {
-                    return verify(&turn).await;
+                    return inner.turn(&turn).await;
                 }
                 // Mid-work when the run ends: it hears so in its running turn and hands off.
                 let ending = loop {
@@ -416,7 +577,6 @@ async fn at_the_deadline_live_workers_are_asked_for_a_handoff() {
         panic!("a deadline: {:?}", run.directives.deadline);
     };
     assert_eq!(run.wind_down_at_ms, Some(time.at_ms - 20 * 60_000));
-    // The lead is at work.
     flow.until("the lead to work", |board| {
         board
             .tasks
@@ -444,51 +604,78 @@ async fn at_the_deadline_live_workers_are_asked_for_a_handoff() {
     ] {
         assert!(handed[0].contains(heading), "{heading}\n{}", handed[0]);
     }
-    assert!(
-        board
-            .tasks
-            .values()
-            .all(|task| task.role != Some(WorkerRole::Verifier)),
-        "nothing is verified while the run ends"
+    let told = thread
+        .turns
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(input, _)| input.contains("The overnight run is ending now"))
+        .count();
+    assert_eq!(told, 1, "the thread hears once that the run ends");
+    let plan = plan_of(&board, &run);
+    assert_ne!(
+        plan.steps[0].settled.as_ref().map(|s| s.outcome),
+        Some(StepOutcome::Done)
     );
-    assert_ne!(run.phases[0].state, PhaseState::Verified);
+    assert_eq!(run.verified_commit, None);
+    // The thread's morning answer comes before the report.
+    let head = flow.core.head(&flow.conversation).await.unwrap().unwrap();
+    let messages = flow.core.branch(&flow.conversation, &head).await.unwrap();
+    let answer = messages
+        .iter()
+        .position(|message| message.text.contains(MORNING))
+        .expect("the morning answer");
+    let report = messages
+        .iter()
+        .position(|message| Some(&message.id) == run.report_message_id.as_ref())
+        .expect("the report");
+    assert!(answer < report);
+    let text = report_text(&flow, &run).await;
+    assert!(text.contains("stopped at its"), "{text}");
+    assert!(
+        text.contains("Nothing settled done to merge yet."),
+        "{text}"
+    );
     flow.stop().await;
 }
 
-/// Done when (3): Brigadier restarts while phase 1's lead works; afterwards the phase goes
-/// on to its verifier and landing, and the run finishes.
+/// Brigadier restarts while phase 1's lead works: the thread hears so, leads the phase again,
+/// lands and settles it, and ends the run.
 #[tokio::test]
-async fn a_restart_mid_phase_resumes_the_run() {
+async fn a_restart_mid_run_resumes_it_on_the_thread() {
     let restarted = Arc::new(AtomicBool::new(false));
     let first_turns = Arc::new(AtomicU32::new(0));
     let release = Arc::new(tokio::sync::Notify::new());
-    let (after, turns, released) = (restarted.clone(), first_turns.clone(), release.clone());
+    let thread = Arc::new(Thread {
+        order: vec![1],
+        ..Default::default()
+    });
+    let (after, turns, released, inner) = (
+        restarted.clone(),
+        first_turns.clone(),
+        release.clone(),
+        thread.clone(),
+    );
     let mut flow = Flow::start(
         "overnight-restart",
         Options::default(),
         script(move |turn| {
-            let (after, turns, released) = (after.clone(), turns.clone(), released.clone());
+            let (after, turns, released, inner) = (
+                after.clone(),
+                turns.clone(),
+                released.clone(),
+                inner.clone(),
+            );
             async move {
                 if turn.is_orchestrator() {
-                    if after.load(Ordering::SeqCst)
-                        && turn.input.contains("Nothing of this phase runs now")
+                    if turn
+                        .input
+                        .contains("Brigadier restarted during the overnight run")
                     {
-                        // Its lead ended with the restart: lead the phase again.
-                        let reply = turn
-                            .call(
-                                "delegate_task",
-                                json!({"title": "Phase 1 again", "kind": "implement",
-                                       "spec": "Build phase 1: create p1.txt.",
-                                       "provider": "claude"}),
-                            )
-                            .await;
-                        assert!(!reply.is_error, "{}", reply.text);
+                        inner.delegate(&turn, 1).await;
                         return Reply::text(QUIET);
                     }
-                    return lead_the_phase(&turn).await;
-                }
-                if is_verifier(&turn) {
-                    return verify(&turn).await;
+                    return inner.turn(&turn).await;
                 }
                 if !after.load(Ordering::SeqCst) {
                     // Mid-turn when Brigadier quits: this CLI is gone with it.
@@ -518,51 +705,111 @@ async fn a_restart_mid_phase_resumes_the_run() {
     let board = finished(&flow, &run.id).await;
     let run = run_of(&board, &run.id);
     assert_eq!(run.stop, Some(StopReason::Done), "{run:#?}");
-    assert_eq!(run.phases[0].state, PhaseState::Verified);
+    let plan = plan_of(&board, &run);
+    assert_eq!(
+        plan.steps[0].settled.as_ref().map(|s| s.outcome),
+        Some(StepOutcome::Done)
+    );
     let branch = run.workspace.as_ref().expect("a branch").branch.clone();
     let files = super::git(&flow.repo, &["ls-tree", "-r", "--name-only", &branch]);
     assert!(files.contains("p1.txt"), "{files}");
     flow.stop().await;
 }
 
-/// A lead that finds its phase already done changes nothing: there is nothing to land or
-/// verify (no verifier starts on its own), and the orchestrator settles the phase from the
-/// lead's report.
+/// "only phases 3–4" keeps the plan's own numbers: phases 1 and 2 are left out (no work
+/// starts for them), `phase: 3` is the source plan's phase 3, and Merge takes phases 3 and 4.
 #[tokio::test]
-async fn a_phase_whose_lead_changed_nothing_is_settled_from_its_report() {
-    let flow = Flow::start(
-        "overnight-unchanged",
-        Options::default(),
-        script(|turn| async move {
-            if turn.is_orchestrator() {
-                return lead_the_phase(&turn).await;
-            }
-            assert!(!is_verifier(&turn), "no verifier starts on its own");
-            let reply = turn
-                .call(
-                    "submit_report",
-                    json!({"summary": "p1.txt is already there; nothing to change.",
-                           "done_when": "[met] p1.txt exists: it was there already"}),
-                )
-                .await;
-            assert!(!reply.is_error, "{}", reply.text);
-            Reply::text("Reported.")
-        }),
-    )
-    .await;
-    let run = start_run(&flow, "/overnight Make one file.", 1).await;
+async fn only_phases_3_to_4_work_by_their_source_numbers() {
+    let thread = Arc::new(Thread {
+        order: vec![3, 4],
+        refused: vec![1, 2, 5],
+        ..Default::default()
+    });
+    let flow = flow_with("overnight-only", thread.clone()).await;
+    let run = start_run(&flow, "/overnight Make files. Only phases 3-4.", 4).await;
     let board = finished(&flow, &run.id).await;
     let run = run_of(&board, &run.id);
     assert_eq!(run.stop, Some(StopReason::Done), "{run:#?}");
-    assert_eq!(run.phases[0].state, PhaseState::Verified);
-    assert!(
+    let plan = plan_of(&board, &run);
+    let numbers: Vec<_> = plan
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| (step.number_at(index), step.stage))
+        .collect();
+    assert_eq!(
+        numbers,
+        [
+            (1, PhaseStage::Skipped),
+            (2, PhaseStage::Skipped),
+            (3, PhaseStage::Done),
+            (4, PhaseStage::Done)
+        ]
+    );
+    let lead_of = |number: u32| {
         board
             .tasks
             .values()
-            .all(|task| task.role != Some(WorkerRole::Verifier)),
-        "no verifier"
+            .find(|task| task.phase == Some(number))
+            .map(|task| task.id.clone())
+    };
+    assert_eq!(plan.steps[2].task_id, lead_of(3));
+    let files = super::git(
+        &flow.repo,
+        &[
+            "ls-tree",
+            "-r",
+            "--name-only",
+            &run.workspace.as_ref().unwrap().branch,
+        ],
     );
-    assert!(board.reviews.is_empty(), "nothing landed, nothing reviewed");
+    assert!(
+        files.contains("p3.txt") && files.contains("p4.txt"),
+        "{files}"
+    );
+    assert!(!files.contains("p1.txt"), "{files}");
+    let report = report_text(&flow, &run).await;
+    for line in [
+        "– Phase 1 · File 1: skipped.",
+        "✓ Phase 3 · File 3: done.",
+        "Merge takes phases 3 and 4",
+        "2 of 2 phases done.",
+    ] {
+        assert!(report.contains(line), "{line}\n{report}");
+    }
+    flow.stop().await;
+}
+
+/// "skip phase 2": phase 2 starts nothing and doesn't hold back Merge; a phase settled
+/// partial does, so the accepted tip stays at the last phase done in a row.
+#[tokio::test]
+async fn a_skipped_phase_starts_nothing_and_a_partial_one_holds_the_merge_back() {
+    let thread = Arc::new(Thread {
+        order: vec![1, 3, 4],
+        refused: vec![2],
+        outcomes: HashMap::from([(3, StepOutcome::Partial)]),
+        ..Default::default()
+    });
+    let flow = flow_with("overnight-skip", thread.clone()).await;
+    let run = start_run(&flow, "/overnight Make files. Skip phase 2.", 4).await;
+    let board = finished(&flow, &run.id).await;
+    let run = run_of(&board, &run.id);
+    let plan = plan_of(&board, &run);
+    assert_eq!(plan.steps[1].stage, PhaseStage::Skipped);
+    assert_eq!(
+        run.verified_commit,
+        plan.steps[0].settled.as_ref().and_then(|s| s.tip.clone()),
+        "phase 3 is partial: Merge stops at phase 1"
+    );
+    let report = report_text(&flow, &run).await;
+    for line in [
+        "Merge takes phase 1 (",
+        "◐ Phase 3 · File 3: partial, write p3.txt.",
+        "✓ Phase 4 · File 4: done.",
+        "aren't in the merge",
+    ] {
+        assert!(report.contains(line), "{line}\n{report}");
+    }
     flow.stop().await;
 }
 
@@ -570,20 +817,11 @@ async fn a_phase_whose_lead_changed_nothing_is_settled_from_its_report() {
 /// user reads them in the thread.
 #[tokio::test]
 async fn findings_after_the_runs_report_reach_the_thread() {
-    let flow = Flow::start(
-        "overnight-late-review",
-        Options::default(),
-        script(|turn| async move {
-            if turn.is_orchestrator() {
-                return lead_the_phase(&turn).await;
-            }
-            if is_verifier(&turn) {
-                return verify(&turn).await;
-            }
-            build(&turn).await
-        }),
-    )
-    .await;
+    let thread = Arc::new(Thread {
+        order: vec![1],
+        ..Default::default()
+    });
+    let flow = flow_with("overnight-late-review", thread).await;
     let run = start_run(&flow, "/overnight Make one file.", 1).await;
     let board = finished(&flow, &run.id).await;
     let lead = board

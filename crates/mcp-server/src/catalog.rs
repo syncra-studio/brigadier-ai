@@ -5,10 +5,10 @@ use std::sync::{Arc, OnceLock};
 
 use brigadier_core::tools::{
     AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch,
-    DelegateTask, FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser, OrchestratorCall,
-    PhaseDone, PlanPhases, PreviewLog, ProposeOvernight, ProposePhases, QueryBrain, ReadArtifact,
+    DelegateTask, EndRun, FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser,
+    OrchestratorCall, PlanPhases, PreviewLog, ProposeOvernight, QueryBrain, ReadArtifact,
     RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCommand,
-    RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, StartPreview, StopPreview,
+    RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, StartPreview, StopPreview,
     SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
 };
 use rmcp::model::{JsonObject, Tool};
@@ -94,17 +94,15 @@ other vendor, checks every \"done when\" for real, fixes and commits what fails,
 review's findings and reports. Land the verifier's task then (its commits hold the lead's), not \
 the lead's. Small work needs none: land the lead. Returns at once.";
 
-const PHASE_DONE: &str = "Only while you lead a phase of an overnight run: settle the phase \
-once every task of it has landed or ended (nothing of it may still run or wait to be landed). \
-Judge the report of its lead (or of a verifier you started): done when every \"done when\" is \
-met and its work landed; \
-partial when some is left for a later run; blocked when what is left needs the user. Brigadier \
-then starts the next phase or ends the run.";
+const SETTLE_STEP: &str = "Only during an overnight run: settle a step of the run's plan, by \
+its number, once you have judged its whole scope and every \"done when\" (your own edits \
+too) and nothing of it still runs or waits to land. Done: all of it is met and landed; partial: \
+some is left for a later run; blocked: what is left needs the user. A step settled done moves \
+the tip the user's Merge takes, once every step before it is done too.";
 
-const PROPOSE_PHASES: &str = "Only in Phase 0 of an overnight run (the user gave a goal \
-without a plan): propose the plan's phases, each with its exact scope, \"done when\" criteria \
-anyone can check, and the phases it builds on. The run follows them from phase 1 on; nothing \
-beyond the goal belongs in it.";
+const END_RUN: &str = "Only during an overnight run: end it now, because every selected step \
+is settled (done) or all that is left needs the user (needsUser). Brigadier then ends the run \
+cleanly and writes its report; you write the user's morning answer.";
 
 const REQUEST_APPROVAL: &str = "Ask the user to approve what only they may decide: spending \
 money, using credentials or the keychain, or destroying something outside this session's own \
@@ -315,7 +313,7 @@ fn orchestrator_tools() -> Vec<Tool> {
         tool("start_verifier", START_VERIFIER, input_schema::<TaskRef>()),
         tool(
             "propose_overnight",
-            "Fill the user's unstarted overnight proposal from their brief or source files. Keep source phase numbers, dependencies, done-when and Rules verbatim; no invented scope. Include every phase the user's words select, also those after a \"stop after\" or a skip: Brigadier enforces those itself and keeps the rest for Continue. A bare goal keeps empty phases for Phase 0. Does not start, review or implement anything: only the user's Start does that. Use the run_id and revision from the proposal briefing.",
+            "Fill the user's unstarted overnight proposal from their brief or source files. Keep source phase numbers, dependencies, done-when and Rules verbatim; no invented scope. Include every phase the user's words select, also those after a \"stop after\" or a skip: Brigadier enforces those itself and keeps the rest for Continue. A bare goal keeps empty phases: the thread plans it once the run starts. Does not start, review or implement anything: only the user's Start does that. Use the run_id and revision from the proposal briefing.",
             input_schema::<ProposeOvernight>(),
         ),
         tool(
@@ -335,12 +333,8 @@ fn orchestrator_tools() -> Vec<Tool> {
             input_schema::<NoteForUser>(),
         ),
         tool("list_tasks", LIST_TASKS, no_arguments()),
-        tool("phase_done", PHASE_DONE, input_schema::<PhaseDone>()),
-        tool(
-            "propose_phases",
-            PROPOSE_PHASES,
-            input_schema::<ProposePhases>(),
-        ),
+        tool("settle_step", SETTLE_STEP, input_schema::<SettleStep>()),
+        tool("end_run", END_RUN, input_schema::<EndRun>()),
         tool("code_search", CODE_SEARCH, input_schema::<CodeSearch>()),
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
@@ -460,8 +454,8 @@ pub fn parse_call(
                 "finish_session" => OrchestratorCall::FinishSession(args(name, arguments)?),
                 "note_for_user" => OrchestratorCall::NoteForUser(args(name, arguments)?),
                 "list_tasks" => OrchestratorCall::ListTasks,
-                "phase_done" => OrchestratorCall::PhaseDone(args(name, arguments)?),
-                "propose_phases" => OrchestratorCall::ProposePhases(args(name, arguments)?),
+                "settle_step" => OrchestratorCall::SettleStep(args(name, arguments)?),
+                "end_run" => OrchestratorCall::EndRun(args(name, arguments)?),
                 "propose_overnight" => OrchestratorCall::ProposeOvernight(args(name, arguments)?),
                 "code_search" => OrchestratorCall::CodeSearch(args(name, arguments)?),
                 "code_refs" => OrchestratorCall::CodeRefs(args(name, arguments)?),

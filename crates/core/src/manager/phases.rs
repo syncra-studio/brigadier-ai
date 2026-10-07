@@ -45,9 +45,48 @@ impl SessionManager {
                 ..Default::default()
             })
             .collect();
+        if let Some(active) = self.overnight.active.get(id) {
+            return self.plan_run(id, &active.id, args.title, steps).await;
+        }
         let plan = self.record_phases(id, args.title, steps).await?;
         Ok(format!(
             "Recorded {} phases. Start phase 1 now: delegate its lead (delegate_task, kind implement, phase 1) with the brief. Start each next phase once the one before it has landed.",
+            plan.steps.len()
+        ))
+    }
+
+    /// `plan_phases` during an overnight run: a run started with a bare goal gets its plan
+    /// once; a run that has one keeps it.
+    async fn plan_run(
+        &self,
+        id: &ConversationId,
+        run_id: &crate::model::OvernightRunId,
+        title: String,
+        steps: Vec<PlanStep>,
+    ) -> Result<String> {
+        let board = self.core.board(id).await?;
+        let run = board
+            .runs
+            .get(run_id)
+            .cloned()
+            .ok_or_else(|| Error::NotFound(format!("overnight run {run_id}")))?;
+        if super::overnight::run::run_plan(&board, &run).is_some() {
+            return Err(Error::Invalid(
+                "The overnight run already has its plan (in the [run] note); work through it. A plan can't change during the run.".into(),
+            ));
+        }
+        let request = super::overnight::run::run_request(&run);
+        let plan = self
+            .record_plan_for(id, Some(request), title, steps)
+            .await?;
+        let recorded = plan.id.clone();
+        self.change_run_if(&run, |now| {
+            now.plan_id = Some(recorded);
+            Some(())
+        })
+        .await;
+        Ok(format!(
+            "Recorded the run's plan: {} phases. Work through it now: delegate each phase's lead (delegate_task, kind implement, `phase: <its number>`), land its work, then settle it with settle_step.",
             plan.steps.len()
         ))
     }
@@ -64,7 +103,7 @@ impl SessionManager {
         self.record_plan_for(id, request_id, title, steps).await
     }
 
-    async fn record_plan_for(
+    pub(crate) async fn record_plan_for(
         &self,
         id: &ConversationId,
         request_id: Option<String>,
@@ -121,25 +160,33 @@ impl SessionManager {
         Ok(plan)
     }
 
-    /// The current plan of `task`'s request and the index of the phase `task` leads (or works
-    /// on, by its `phase`).
+    /// The current plan of `task`'s request (its overnight run's plan, for a task of a run)
+    /// and the index of the phase `task` leads (or works on, by its `phase`: the step's own
+    /// number).
     pub(crate) async fn phase_of(&self, task: &Task) -> Option<(Plan, usize)> {
         let board = self.core.board(&task.conversation_id).await.ok()?;
-        let plan = board
-            .plans
-            .values()
-            .filter(|plan| {
-                plan.request_id == task.request_id
-                    && matches!(plan.state, PlanState::Approved { .. })
-            })
-            .max_by_key(|plan| plan.created_at_ms)?;
+        let run_plan = task
+            .run
+            .as_ref()
+            .and_then(|context| board.runs.get(&context.run_id))
+            .and_then(|run| super::overnight::run::run_plan(&board, run));
+        let plan = match run_plan {
+            Some(plan) => plan,
+            None => board
+                .plans
+                .values()
+                .filter(|plan| {
+                    plan.request_id == task.request_id
+                        && matches!(plan.state, PlanState::Approved { .. })
+                })
+                .max_by_key(|plan| plan.created_at_ms)?,
+        };
         let index = plan
             .steps
             .iter()
             .position(|step| step.task_id.as_ref() == Some(&task.id))
             .or_else(|| {
-                let index = (task.phase? as usize).checked_sub(1)?;
-                (index < plan.steps.len()).then_some(index)
+                super::overnight::run::step_numbered(plan, task.phase?).map(|(index, _)| index)
             })?;
         Some((plan.clone(), index))
     }
@@ -152,6 +199,15 @@ impl SessionManager {
         let result = self
             .change_plan(&task.conversation_id, &plan.id, |plan| {
                 let step = &mut plan.steps[index];
+                if step.settled.is_some() {
+                    return Ok(());
+                }
+                // A run's step is done once the thread settles it: landing is progress.
+                let stage = if task.run.is_some() && stage == PhaseStage::Done {
+                    PhaseStage::Building
+                } else {
+                    stage
+                };
                 step.stage = stage;
                 let now = now_ms();
                 if step.started_at_ms.is_none() && stage != PhaseStage::Pending {
@@ -193,7 +249,9 @@ impl SessionManager {
         Ok(())
     }
 
-    /// The plan of `request` and the index of its phase `number` (from 1).
+    /// The plan of `request` (the overnight run's plan while one is going) and the index of
+    /// its phase `number`: the step's own number, from 1 for a request's plan. A run's step the
+    /// user left out, settled, or past "stop after" starts no work.
     pub(crate) async fn phase_step(
         &self,
         id: &ConversationId,
@@ -201,6 +259,51 @@ impl SessionManager {
         number: u32,
     ) -> Result<(Plan, usize)> {
         let board = self.core.board(id).await?;
+        let run = self
+            .overnight
+            .active
+            .get(id)
+            .and_then(|active| board.runs.get(&active.id));
+        if let Some(run) = run
+            && let Some(plan) = super::overnight::run::run_plan(&board, run)
+        {
+            let numbers = || {
+                plan.steps
+                    .iter()
+                    .enumerate()
+                    .map(|(index, step)| step.number_at(index).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let (index, step) =
+                super::overnight::run::step_numbered(plan, number).ok_or_else(|| {
+                    Error::Invalid(format!(
+                        "the run's plan has phases {}; there is no phase {number}",
+                        numbers()
+                    ))
+                })?;
+            if step.stage == PhaseStage::Skipped {
+                return Err(Error::Invalid(format!(
+                    "The user left phase {number} out of the overnight run: start nothing for it."
+                )));
+            }
+            if let Some(settled) = &step.settled {
+                return Err(Error::Invalid(format!(
+                    "Phase {number} is already settled ({}). Nothing more starts for it in this run.",
+                    match settled.outcome {
+                        crate::work::StepOutcome::Done => "done",
+                        crate::work::StepOutcome::Partial => "partial",
+                        crate::work::StepOutcome::Blocked => "blocked",
+                    }
+                )));
+            }
+            if super::overnight::run::past_stop(run, plan, number) {
+                return Err(Error::Invalid(format!(
+                    "The user asked the run to stop before phase {number}: start nothing for it."
+                )));
+            }
+            return Ok((plan.clone(), index));
+        }
         let plan = board
             .plans
             .values()
@@ -214,9 +317,8 @@ impl SessionManager {
                     "`phase` needs the request's phases (plan_phases); there are none. Leave `phase` out for a request of one phase.".into(),
                 )
             })?;
-        let index = (number as usize)
-            .checked_sub(1)
-            .filter(|index| *index < plan.steps.len())
+        let index = super::overnight::run::step_numbered(&plan, number)
+            .map(|(index, _)| index)
             .ok_or_else(|| {
                 Error::Invalid(format!(
                     "the plan \"{}\" has phases 1 to {}; there is no phase {number}",

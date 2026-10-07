@@ -231,7 +231,7 @@ const SHORT_REPLIES: &str = "
 Short replies (the user's setting):
 - What you write for the user: the outcome in the first line, then at most about five short lines or bullets, unless they ask for more. No headings or bold labels.
 - Never quote a reviewer's or verifier's text to the user: name what it found in a few words.
-- At the end of an overnight phase, your reply is at most three lines: what changed, the outcome, and what waits on the user.
+- An overnight run's morning answer is at most three lines: what got done, what is left, and what waits on the user.
 - This doesn't shorten plans, handoff notes, task specs, exact commands and error text, evidence the user needs to decide, or instructions about security and order: those stay complete.";
 
 /// The Short replies setting, off.
@@ -1071,9 +1071,7 @@ mod environment_tests {
         assert!(sandboxed.contains("You and the workers never do what only the user may do"));
         // Short replies reach a run's thread, and its phase-end replies; off, the plain voice
         // stays.
-        assert!(
-            full.contains("At the end of an overnight phase, your reply is at most three lines")
-        );
+        assert!(full.contains("An overnight run's morning answer is at most three lines"));
         let long = prompt("fullAccess", false);
         assert!(!long.contains("Short replies (the user's setting)"));
         assert!(long.contains("How to write:"));

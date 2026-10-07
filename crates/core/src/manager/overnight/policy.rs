@@ -66,8 +66,8 @@ impl ActiveRuns {
                     rules_hash: rules_hash(&run.rules),
                     workspace: run.workspace.clone(),
                     max_workers: run.directives.max_workers,
-                    phase_id: current_phase(run),
-                    planning: run.state == crate::overnight::OvernightState::Planning,
+                    phase_id: None,
+                    planning: false,
                     winding_down: matches!(
                         run.state,
                         crate::overnight::OvernightState::WindingDown
@@ -84,25 +84,6 @@ impl ActiveRuns {
         }
     }
 }
-
-/// The phase a run works on now: Phase 0 while it plans, else the one running.
-fn current_phase(run: &OvernightRun) -> Option<String> {
-    if run.state == crate::overnight::OvernightState::Planning {
-        return Some(PLANNING_PHASE.into());
-    }
-    run.phases
-        .iter()
-        .find(|phase| {
-            matches!(
-                phase.state,
-                crate::overnight::PhaseState::Running | crate::overnight::PhaseState::Checking
-            )
-        })
-        .map(|phase| phase.id.clone())
-}
-
-/// Phase 0's id.
-pub(crate) const PLANNING_PHASE: &str = "phase-0";
 
 impl ActiveRun {
     /// The context a task made now gets: a check of another task's change inherits that

@@ -186,7 +186,6 @@ impl SessionManager {
         }
         tracing::info!(conversation = %conv.id, context = mark.context, idle_ms = now - mark.at_ms, "the cache has expired: rebirth from the checkpoint");
         Some(BriefingPlan {
-            phase: None,
             trigger: RebirthTrigger::CacheExpired,
             at_tokens: mark.context,
             window: mark.window,

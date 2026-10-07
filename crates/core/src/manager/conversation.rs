@@ -453,6 +453,16 @@ impl ConvLive {
         state.busy.then(|| state.request.clone()).flatten()
     }
 
+    /// A turn runs, or a message of `request` waits for one.
+    pub(super) async fn works_for(&self, request: &str) -> bool {
+        let state = self.state.lock().await;
+        state.busy
+            || state
+                .inbox
+                .iter()
+                .any(|(_, of)| of.as_deref() == Some(request))
+    }
+
     /// The orchestrator sent a worker of `request` back to work: what the user saw of the
     /// request so far is not its answer.
     pub async fn sent_back(&self, request: &str) {
@@ -1378,7 +1388,6 @@ impl SessionManager {
             // A session that cannot resume its CLI starts from a Recovery briefing.
             let briefing = briefing.or_else(|| {
                 (reseed && session).then(|| BriefingPlan {
-                    phase: None,
                     swap_started_at_ms: now_ms(),
                     trigger: RebirthTrigger::Recovery,
                     prep: None,
@@ -2882,10 +2891,6 @@ impl SessionManager {
         {
             self.remind_undecided(conv, request).await;
         }
-        // A phase lead whose turn left its phase open is reminded (PLAN.md §10.6).
-        if conv.kind == ConversationKind::Session {
-            self.lead_turn_ended(&conv.id);
-        }
         self.kick(conv);
     }
 
@@ -3010,94 +3015,12 @@ impl SessionManager {
         state.fresh = true;
         state.reseed = false;
         state.briefing = Some(BriefingPlan {
-            phase: None,
             trigger: RebirthTrigger::Threshold,
             at_tokens: prep.at_tokens,
             window: prep.window,
             prep: Some(prep),
             swap_started_at_ms,
         });
-    }
-
-    /// An overnight run ended: once no turn runs, the orchestrator's CLI closes, so its next
-    /// turn resumes the conversation without the run's instructions.
-    pub(crate) async fn retire_orchestrator(&self, id: &ConversationId) {
-        let Ok(conv) = self.conv(id) else {
-            return;
-        };
-        conv.wait_idle(Duration::from_secs(600)).await;
-        let cli = {
-            let mut state = conv.state.lock().await;
-            if state.busy || state.closing {
-                return;
-            }
-            state.closing = true;
-            state.cli.take()
-        };
-        if let Some(cli) = cli {
-            cli.session.close().await;
-            cli.ended.cancelled().await;
-        }
-        conv.state.lock().await.closing = false;
-    }
-
-    /// An overnight phase starts (PLAN.md §10.6): once no turn runs (waiting at most `wait`),
-    /// the orchestrator's CLI closes, and its next turn starts a fresh session from the
-    /// phase's briefing, carrying `envelope` for `request`. Returns false when a turn was
-    /// still running after `wait`: nothing changed then.
-    pub(crate) async fn lead_phase(
-        &self,
-        id: &ConversationId,
-        briefing: String,
-        envelope: Envelope,
-        request: String,
-        wait: Duration,
-    ) -> Result<bool> {
-        let conv = self.conv(id)?;
-        let deadline = tokio::time::Instant::now() + wait;
-        let cli = loop {
-            {
-                let mut state = conv.state.lock().await;
-                if !state.busy && !state.closing {
-                    // Nothing else starts a turn meanwhile.
-                    state.closing = true;
-                    break state.cli.take();
-                }
-            }
-            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if left.is_zero() {
-                return Ok(false);
-            }
-            conv.wait_idle(left.min(Duration::from_secs(5))).await;
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        };
-        let swap_started_at_ms = now_ms();
-        if let Some(cli) = cli {
-            cli.session.close().await;
-            cli.ended.cancelled().await;
-        }
-        {
-            let mut state = conv.state.lock().await;
-            let context = state.context;
-            state.closing = false;
-            state.rebirth = None;
-            state.checkpoint = None;
-            state.context = None;
-            state.fresh = true;
-            state.reseed = false;
-            state.briefing = Some(BriefingPlan {
-                trigger: RebirthTrigger::Phase,
-                prep: None,
-                at_tokens: context.map_or(0, |(used, _)| used),
-                window: context.and_then(|(_, window)| window),
-                swap_started_at_ms,
-                phase: Some(briefing),
-            });
-            state.inbox.push((envelope, Some(request)));
-        }
-        self.settle_requests(id).await;
-        self.kick(&conv);
-        Ok(true)
     }
 
     /// Between turns: an orchestrator whose prompt cache has expired, with a checkpoint that

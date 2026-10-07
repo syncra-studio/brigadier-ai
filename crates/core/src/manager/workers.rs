@@ -798,15 +798,6 @@ impl SessionManager {
                 "The overnight run is ending: no new work starts now. Finish the current step; what is left goes into the morning report.".into(),
             ));
         }
-        // Phase 0 only writes the plan: nothing changes the code before its phases are set.
-        if kind.writes()
-            && extra.run.is_none()
-            && active_run.as_ref().is_some_and(|active| active.planning)
-        {
-            return Err(Error::Invalid(
-                "Phase 0 of this overnight run only writes the plan: propose its phases with propose_phases. Scouts and research may look around; nothing is changed before the phases are set.".into(),
-            ));
-        }
         let run = match extra.run {
             Some(run) => Some(run),
             None => super::overnight::policy::ActiveRun::context_for(

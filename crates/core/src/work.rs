@@ -864,6 +864,49 @@ pub struct PlanStep {
     /// The lead's outline, once it wrote one.
     #[serde(default)]
     pub outline: Option<String>,
+    /// Its number in the source plan (an overnight run's phase keeps the plan's own number,
+    /// whatever the user selected); its place in the list, from 1, when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub number: Option<u32>,
+    /// How the thread judged it, once it settled it (an overnight run's steps).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub settled: Option<StepSettlement>,
+}
+
+impl PlanStep {
+    /// Its number in the source plan: [`Self::number`], else `index + 1`.
+    pub fn number_at(&self, index: usize) -> u32 {
+        self.number.unwrap_or(index as u32 + 1)
+    }
+}
+
+/// The thread's judgement of a plan step (`settle_step`): its outcome, what it found, what is
+/// left, and the run branch's tip when it settled.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StepSettlement {
+    pub outcome: StepOutcome,
+    /// What it changed, how each "done when" was checked and what the review found.
+    pub summary: String,
+    /// What is left of it, one line each (a blocked step: what only the user can do).
+    pub left: Vec<String>,
+    /// The run branch's tip when it settled.
+    pub tip: Option<String>,
+    pub at_ms: i64,
+}
+
+/// How a settled step ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum StepOutcome {
+    /// Its whole scope is done and every "done when" is met, its work landed.
+    Done,
+    /// Some of it is done; the rest is left.
+    Partial,
+    /// What is left needs the user.
+    Blocked,
 }
 
 /// Where a phase of a request stands, for the "Phase n / m" pill and the side panel's plan.
@@ -887,6 +930,8 @@ pub enum PhaseStage {
     Landing,
     Done,
     Failed,
+    /// Left out by the user's restrictions (an overnight run's "skip" or "only").
+    Skipped,
 }
 
 /// Who approved a plan.
@@ -1765,8 +1810,8 @@ pub enum InjectionKind {
     Briefing,
     /// Brigadier asks for an answer the orchestrator left out.
     Reminder,
-    /// An overnight run hands the orchestrator a phase to lead, or its checks' outcome.
-    Phase,
+    /// An overnight run starts, restarts or ends.
+    Run,
 }
 
 /// One thing Brigadier put into the orchestrator's context, for the Inspector.

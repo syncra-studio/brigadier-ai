@@ -303,6 +303,8 @@ export type { SourceScope } from "./SourceScope";
 export type { SourceSnapshot } from "./SourceSnapshot";
 export type { SourceState } from "./SourceState";
 export type { SourceStatus } from "./SourceStatus";
+export type { StepOutcome } from "./StepOutcome";
+export type { StepSettlement } from "./StepSettlement";
 export type { StopAfter } from "./StopAfter";
 export type { StopReason } from "./StopReason";
 export type { StorageReport } from "./StorageReport";

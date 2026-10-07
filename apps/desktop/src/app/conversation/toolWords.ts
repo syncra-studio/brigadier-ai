@@ -81,7 +81,6 @@ const WORDS: Record<string, Words> = {
   remember: words("memory", "Saving project memory", "Saved project memory"),
   note_for_user: words("memory", "Recording a decision", "Recorded a decision"),
   plan_phases: words("plan", "Planning the work", "Planned the work"),
-  propose_phases: words("plan", "Planning the work", "Planned the work"),
   propose_overnight: words("plan", "Planning the work", "Planned the work"),
   approve_outline: words("plan", "Reviewing an outline", "Reviewed an outline"),
   start_verifier: words("worker", "Starting a verifier", "Started a verifier"),
@@ -97,7 +96,8 @@ const WORDS: Record<string, Words> = {
   submit_outline: words("report", "Sending an outline", "Sent an outline"),
   submit_report: words("report", "Sending a report", "Sent a report"),
   land_phase: words("land", "Landing changes", "Landed changes"),
-  phase_done: words("plan", "Checking a phase", "Checked a phase"),
+  settle_step: words("plan", "Settling a phase", "Settled a phase"),
+  end_run: words("plan", "Ending the run", "Ended the run"),
   finish_session: words(
     "plan",
     "Finishing the session",

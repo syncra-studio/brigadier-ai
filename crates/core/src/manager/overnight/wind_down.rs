@@ -15,6 +15,7 @@
 use std::time::Duration;
 
 use super::super::SessionManager;
+use super::run::run_request;
 use crate::model::{ConversationId, DomainEvent, OvernightRunId};
 use crate::overnight::{Deadline, OvernightRun, OvernightState, PhaseState, StopReason};
 use crate::work::TaskState;
@@ -26,8 +27,13 @@ const STOP_ALLOWANCE_MS: i64 = 10 * 60_000;
 const REPORT_RESERVE_MAX_MS: i64 = 2 * 60_000;
 /// How often a winding-down run looks whether its work settled.
 const POLL: Duration = Duration::from_secs(5);
+/// How long the thread's interrupted turn gets to stop at the run's end.
+const QUIESCE_WAIT: Duration = Duration::from_secs(30);
 /// How often the deadline clock looks at the wall clock.
 pub(crate) const CLOCK: Duration = Duration::from_secs(30);
+
+/// What the thread is told when its run ends at the deadline or a Stop.
+pub(super) const ENDING: &str = "[run] The overnight run is ending now ({reason}). Start nothing new. Land the workers' finished work with land_phase and settle the phases you can judge with settle_step; Brigadier stops what still runs shortly. Then write the user's morning answer: what got done, what is left and what waits on them, briefly. Brigadier adds the run's report (commits, reviews, waiting items, usage) after it.";
 
 /// What a live worker is told when its run ends.
 const HAND_OFF: &str = "[Brigadier] The overnight run is ending now ({reason}). Start nothing new. Finish only the step you are in the middle of, leave the worktree coherent and commit the finished steps (not broken work). Then call submit_report at once with a handoff a fresh worker with no memory of this session can carry on from, under these headings in the summary: Goal and where it stands; Done (with commit hashes); In progress (exact files and state, and anything uncommitted); Next steps (ordered and concrete); Decisions and approvals already given; Gotchas learned; How to verify (the exact commands and what passing looks like).";
@@ -54,9 +60,7 @@ impl SessionManager {
                     && let Some(run) = board.runs.get(&active.id)
                     && run.state == OvernightState::Reporting
                 {
-                    let manager = self.arc();
-                    let run = run.clone();
-                    self.spawn(async move { manager.end_run(run).await });
+                    self.wind_down_soon(run);
                 }
                 continue;
             }
@@ -90,13 +94,22 @@ impl SessionManager {
             }
             Ok(())
         })
-        .await?;
-        self.advance_soon(conversation_id, run_id);
-        Ok(())
+        .await
+        .map(|run| {
+            if run.state == OvernightState::WindingDown {
+                self.wind_down_soon(&run);
+            }
+        })
+    }
+
+    /// Starts the run's clean ending in the background.
+    pub(crate) fn wind_down_soon(&self, run: &OvernightRun) {
+        let (manager, run) = (self.arc(), run.clone());
+        self.spawn(async move { manager.wind_down_run(run).await });
     }
 
     /// The run's clean ending. Runs once per run, whoever asks.
-    pub(crate) async fn end_run(&self, run: OvernightRun) {
+    pub(crate) async fn wind_down_run(&self, run: OvernightRun) {
         {
             let mut winding = self
                 .overnight
@@ -125,24 +138,38 @@ impl SessionManager {
                 }
             }
         }
-        // Until everything of the run settled, or the cutoff.
+        // The thread lands what passed and writes the morning answer. It heard of an ending it
+        // caused itself (`end_run`, settling the step "stop after" names) in that tool's reply.
+        if run.state == OvernightState::WindingDown
+            && matches!(run.stop, Some(StopReason::Deadline | StopReason::Stopped))
+        {
+            self.tell_thread(
+                &run,
+                "run ending",
+                ENDING.replace("{reason}", &stop_words(run.stop.as_ref())),
+            )
+            .await;
+        }
+        // Until everything of the run settled and the thread said its last, or the cutoff.
         loop {
             let Ok(board) = self.core.board(&run.conversation_id).await else {
                 break;
             };
-            let live = board
-                .tasks
-                .values()
-                .filter(|task| owned(task, &run))
-                .any(|task| {
-                    matches!(
-                        task.state,
-                        TaskState::Queued
-                            | TaskState::Starting
-                            | TaskState::Running
-                            | TaskState::Landing
-                    )
-                });
+            let thread = self.thread_has_run_work(&run).await;
+            let live = thread
+                || board
+                    .tasks
+                    .values()
+                    .filter(|task| owned(task, &run))
+                    .any(|task| {
+                        matches!(
+                            task.state,
+                            TaskState::Queued
+                                | TaskState::Starting
+                                | TaskState::Running
+                                | TaskState::Landing
+                        )
+                    });
             if !live || now_ms() >= cutoff {
                 break;
             }
@@ -165,6 +192,10 @@ impl SessionManager {
                 self.release_run_task(&task.id);
             }
         }
+        // The thread stops too: its turn and what it runs end, its own session stays to resume.
+        // Then what it committed on the run's branch gets its review before the report.
+        self.quiesce_thread(&run).await;
+        self.scan_run_branch(&run).await;
         // Phases that weren't checked settle as what they are. A run already settled (its report
         // was cut off by a restart or failed once) goes straight on to the report.
         let reason = stop_words(run.stop.as_ref());
@@ -211,6 +242,56 @@ impl SessionManager {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(&run.id);
+    }
+}
+
+impl SessionManager {
+    /// Whether the thread still works for the run: a turn runs, or a message of the run's
+    /// request waits for one.
+    async fn thread_has_run_work(&self, run: &OvernightRun) -> bool {
+        let Ok(conv) = self.conv(&run.conversation_id) else {
+            return false;
+        };
+        conv.works_for(&run_request(run)).await
+    }
+
+    /// Ends the thread's work for the run: its running turn is interrupted, and once it has
+    /// stopped its CLI closes, which ends what its shell and `run` still ran. The native
+    /// session stays: the next turn resumes it, in the session's checkout.
+    pub(crate) async fn quiesce_thread(&self, run: &OvernightRun) {
+        let Ok(conv) = self.conv(&run.conversation_id) else {
+            return;
+        };
+        if conv.turn_running().await {
+            tracing::info!(run = %run.id, "the run's end interrupts the thread's turn");
+            conv.interrupt_turn().await;
+            conv.wait_idle(QUIESCE_WAIT).await;
+        }
+        if let Some(cli) = conv.idle_cli().await {
+            conv.retire_cli(&cli).await;
+        }
+    }
+
+    /// Looks for the thread's own commits on the run's branch once more, so each gets its
+    /// review before the report (and before the worktree may go).
+    pub(crate) async fn scan_run_branch(&self, run: &OvernightRun) {
+        let (Some(workspace), Ok(conversation)) = (
+            run.workspace.as_ref(),
+            self.core.conversation(&run.conversation_id),
+        ) else {
+            return;
+        };
+        let Some(crate::model::Setup::Session { repo, .. }) = &conversation.setup else {
+            return;
+        };
+        // Landings move the recorded tip past their own commits: what is new is the thread's.
+        self.scan_thread_branch(
+            &run.conversation_id,
+            std::path::Path::new(repo),
+            &workspace.branch,
+            true,
+        )
+        .await;
     }
 }
 
@@ -282,6 +363,9 @@ impl SessionManager {
                 })
                 .await;
             if report && let Some(reporting) = settled {
+                // The thread's last commits on the run's branch get their review before the
+                // report lists them and the worktree goes.
+                self.scan_run_branch(&reporting).await;
                 self.write_run_report(&reporting, false).await;
                 self.change_run_if(&reporting, |now| {
                     now.state = OvernightState::Finished;
@@ -396,8 +480,6 @@ pub(super) fn to_you(text: &str) -> String {
 
 /// How the gap of a phase the run's end cut off begins; why the run ended follows.
 pub(super) const CUT_OFF: &str = "It wasn't finished: ";
-/// How such a gap began in runs from before phases were verified like any request's.
-pub(super) const OLD_CUT_OFF: &str = "Its whole-phase checks never passed: ";
 
 /// Why the run ended, as a phase's gap says it.
 fn stop_words(stop: Option<&StopReason>) -> String {

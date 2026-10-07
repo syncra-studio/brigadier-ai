@@ -59,7 +59,6 @@ const TRIGGERS: Record<RebirthRecord["trigger"], string> = {
   threshold: "threshold",
   recovery: "recovery",
   cacheExpired: "cache expired",
-  phase: "overnight phase",
 };
 
 /** A wait shorter than this is not worth a mention. */

@@ -83,8 +83,6 @@ pub enum RebirthTrigger {
     /// Its prompt cache had expired when the next turn came: resuming would have sent the
     /// whole history again at the cache-write price (PLAN.md §7).
     CacheExpired,
-    /// An overnight run starts a phase: its lead begins from the phase's briefing alone.
-    Phase,
 }
 
 /// One part of a rebirth briefing.

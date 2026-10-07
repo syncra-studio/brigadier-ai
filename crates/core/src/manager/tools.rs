@@ -349,8 +349,8 @@ impl SessionManager {
                 self.finish_session(id, args.message).await
             }
             OrchestratorCall::NoteForUser(args) => self.note_for_user(id, args).await,
-            OrchestratorCall::PhaseDone(args) => self.phase_done(id, args).await,
-            OrchestratorCall::ProposePhases(args) => self.propose_phases(id, args).await,
+            OrchestratorCall::SettleStep(args) => self.settle_step(id, args).await,
+            OrchestratorCall::EndRun(args) => self.end_run_now(id, args).await,
             OrchestratorCall::ProposeOvernight(args) => self.interpret_overnight(id, args).await,
             // What the thread finds in the index counts as its own search (`super::reads`).
             OrchestratorCall::CodeSearch(args) => {

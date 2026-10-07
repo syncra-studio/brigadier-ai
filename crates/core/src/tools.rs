@@ -543,59 +543,42 @@ pub struct NoteForUser {
     pub why: Option<String>,
 }
 
-/// `phase_done`: the lead of an overnight phase settles it once its work has landed (or as
-/// much of it as can without the user), judging its verifier's report.
+/// `settle_step`: during an overnight run, the thread settles a step of the run's plan once it
+/// has judged the step's whole scope and every "done when" (its own edits too).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct PhaseDone {
-    pub outcome: PhaseOutcome,
-    /// What the phase changed, how its "done when" were checked (by its lead, or a verifier you
-    /// started) and what the review found and what was done about it, in a few sentences.
+pub struct SettleStep {
+    /// The step's number in the run's plan (the source plan's phase number).
+    pub phase: u32,
+    pub outcome: crate::work::StepOutcome,
+    /// What the step changed, how each "done when" was checked and what the review found and
+    /// what was done about it, in a few sentences.
     pub summary: String,
-    /// For a partial or blocked phase: what is left, one line each (for blocked, exactly what
+    /// For a partial or blocked step: what is left, one line each (for blocked, exactly what
     /// only the user can do).
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "String", extend("default" = ""))]
     pub left: Vec<String>,
 }
 
-/// How an overnight phase ended.
+/// `end_run`: the thread ends its overnight run early: the plan is done, or all that is left
+/// needs the user.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EndRun {
+    pub outcome: EndRunOutcome,
+    /// Why, in a sentence.
+    pub why: String,
+}
+
+/// Why the thread ends its run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub enum PhaseOutcome {
-    /// Every "done when" is met and its work has landed.
+pub enum EndRunOutcome {
+    /// Every selected step is settled.
     Done,
-    /// Some of it is done; the rest is left for a later run.
-    Partial,
     /// What is left needs the user.
-    Blocked,
-}
-
-/// One phase of a plan Phase 0 writes.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PhaseInput {
-    /// The phase, in a few words.
-    pub name: String,
-    /// Exactly what it covers.
-    pub scope: String,
-    /// Its "done when" criteria, one per line, each checkable by running something or reading
-    /// the code.
-    #[serde(deserialize_with = "lines")]
-    #[schemars(with = "String")]
-    pub done_when: Vec<String>,
-    /// Numbers (1-based, in this list) of the phases it builds on.
-    #[serde(default)]
-    pub depends_on: Vec<u32>,
-}
-
-/// `propose_phases`: Phase 0 of an overnight run with a bare goal writes the plan's phases.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ProposePhases {
-    /// The plan's name, a few words ("Windows support").
-    pub name: String,
-    pub phases: Vec<PhaseInput>,
+    NeedsUser,
 }
 
 /// `propose_overnight`: interpret a user's unstarted proposal; it cannot Start a run.
@@ -654,8 +637,8 @@ pub enum OrchestratorCall {
     FinishSession(FinishSession),
     NoteForUser(NoteForUser),
     ListTasks,
-    PhaseDone(PhaseDone),
-    ProposePhases(ProposePhases),
+    SettleStep(SettleStep),
+    EndRun(EndRun),
     ProposeOvernight(ProposeOvernight),
     CodeSearch(CodeSearch),
     CodeRefs(CodeRefs),
@@ -691,8 +674,8 @@ impl OrchestratorCall {
             Self::FinishSession(_) => "finish_session",
             Self::NoteForUser(_) => "note_for_user",
             Self::ListTasks => "list_tasks",
-            Self::PhaseDone(_) => "phase_done",
-            Self::ProposePhases(_) => "propose_phases",
+            Self::SettleStep(_) => "settle_step",
+            Self::EndRun(_) => "end_run",
             Self::ProposeOvernight(_) => "propose_overnight",
             Self::CodeSearch(_) => "code_search",
             Self::CodeRefs(_) => "code_refs",
