@@ -439,6 +439,11 @@ impl ConvLive {
             .map(|cli| cli.provider)
     }
 
+    /// The context the CLI last said it holds.
+    pub(super) async fn context_used(&self) -> Option<i64> {
+        self.state.lock().await.context.map(|(used, _)| used)
+    }
+
     /// The request the running turn serves.
     pub(super) async fn running_request(&self) -> Option<String> {
         let state = self.state.lock().await;
@@ -2629,14 +2634,18 @@ impl SessionManager {
             ProviderEvent::RateLimits { quota } => {
                 self.runtime.note_quota_snapshot(quota.clone()).await;
             }
+            ProviderEvent::TurnStarted { .. } => cli.meter.turn_started(now_ms()),
             ProviderEvent::Usage { total, last } => {
-                self.note_tokens(
+                // Claude sums a turn's calls; the context its last call read came apart.
+                let context = conv.context_used().await;
+                self.note_use(
                     &cli.meter,
                     cli.provider,
                     cli.model.model.as_deref(),
                     TokenOwner::Conversation(&conv.id),
                     total,
                     last.as_ref(),
+                    context,
                 )
                 .await;
             }
@@ -2782,6 +2791,9 @@ impl SessionManager {
             // What the thread committed in this turn gets its review, before a next turn can
             // take its commits for the user's.
             self.scan_thread_commits(&conv.id, true).await;
+            // What its Codex auto-reviews used, which its own totals leave out.
+            self.meter_child_threads(cli, TokenOwner::Conversation(&conv.id))
+                .await;
             // Before the next turn may start: a turn admitted in between would still run on
             // this CLI, past the swap threshold.
             self.consider_rebirth(conv, cli).await;

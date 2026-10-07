@@ -400,34 +400,62 @@ fn codex_home(env: &CliEnv) -> Option<PathBuf> {
     }
 }
 
+/// Where Codex keeps its rollouts for `env`: `$CODEX_HOME/sessions`.
+pub fn codex_sessions(env: &CliEnv) -> Option<PathBuf> {
+    codex_home(env).map(|home| home.join("sessions"))
+}
+
 /// A thread a review's thread started, and what it used.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChildThread {
     pub id: String,
     pub usage: Option<TokenUsage>,
+    /// What started it, as its `session_meta` says (`thread_source`: `guardian_review` for an
+    /// auto-review, `subagent` for a range review).
+    pub source: Option<String>,
 }
 
 /// The child threads of `thread`, from their rollouts: Codex keeps one per thread in
 /// `<sessions>/YYYY/MM/DD/rollout-<time>-<thread>.jsonl`, its first line the `session_meta`
 /// (a child's names its `parent_thread_id`) and each `token_count` line the thread's total so
-/// far. A child starts with its parent, so it is looked for in the parent's folder.
+/// far.
 pub fn child_threads(sessions: &Path, thread: &str) -> Vec<ChildThread> {
+    child_threads_since(sessions, thread, None)
+}
+
+/// The same, among the rollouts written since `since` (all when absent). A child starts with
+/// its parent or later, so it is looked for in the parent's day folder and the ones after it: a
+/// long-lived thread (a worker resumed the next day, a session's thread) starts children on
+/// later days, and one auto-review child serves its parent's whole life.
+pub fn child_threads_since(
+    sessions: &Path,
+    thread: &str,
+    since: Option<std::time::SystemTime>,
+) -> Vec<ChildThread> {
     let suffix = format!("-{thread}.jsonl");
-    let Some(parent) = rollouts(sessions)
-        .into_iter()
+    let all = rollouts(sessions);
+    let Some(parent) = all
+        .iter()
         .find(|path| path.to_string_lossy().ends_with(&suffix))
     else {
         return Vec::new();
     };
-    let Some(Ok(entries)) = parent.parent().map(fs::read_dir) else {
+    let Some(first_day) = parent.parent() else {
         return Vec::new();
     };
     let mut children = Vec::new();
-    for path in entries.flatten().map(|entry| entry.path()) {
-        if path == parent || !is_rollout(&path) {
+    for path in &all {
+        if path == parent || path.parent().is_none_or(|day| day < first_day) {
             continue;
         }
-        let Ok(file) = File::open(&path) else {
+        if let Some(since) = since
+            && fs::metadata(path)
+                .and_then(|meta| meta.modified())
+                .is_ok_and(|modified| modified < since)
+        {
+            continue;
+        }
+        let Ok(file) = File::open(path) else {
             continue;
         };
         let mut lines = BufReader::new(file).lines().map_while(Result::ok);
@@ -447,6 +475,10 @@ pub fn child_threads(sessions: &Path, thread: &str) -> Vec<ChildThread> {
         let Some(id) = meta.pointer("/payload/id").and_then(Value::as_str) else {
             continue;
         };
+        let source = meta
+            .pointer("/payload/thread_source")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         let usage = lines
             .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
             .filter_map(|line| {
@@ -460,6 +492,7 @@ pub fn child_threads(sessions: &Path, thread: &str) -> Vec<ChildThread> {
         children.push(ChildThread {
             id: id.to_owned(),
             usage,
+            source,
         });
     }
     children
@@ -767,6 +800,68 @@ exit 1"#
             child_threads(Path::new("/nonexistent/sessions"), parent),
             []
         );
+    }
+
+    #[test]
+    fn a_long_lived_threads_auto_review_is_found_on_a_later_day() {
+        let sessions =
+            std::env::temp_dir().join(format!("brigadier-review-later-{}", std::process::id()));
+        let (first, next, before) = (
+            sessions.join("2026/10/07"),
+            sessions.join("2026/10/08"),
+            sessions.join("2026/10/06"),
+        );
+        for day in [&first, &next, &before] {
+            fs::create_dir_all(day).unwrap();
+        }
+        let parent = "01a11559-1d2a";
+        fs::write(
+            first.join(format!("rollout-2026-10-07T10-00-00-{parent}.jsonl")),
+            format!(r#"{{"type":"session_meta","payload":{{"id":"{parent}"}}}}"#),
+        )
+        .unwrap();
+        let child = |id: &str| {
+            [
+                format!(
+                    r#"{{"type":"session_meta","payload":{{"id":"{id}","parent_thread_id":"{parent}","source":{{"subagent":{{"other":"guardian"}}}},"thread_source":"guardian_review"}}}}"#
+                ),
+                r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":60,"output_tokens":5}}}}"#.to_owned(),
+            ]
+            .join("\n")
+        };
+        fs::write(
+            next.join("rollout-2026-10-08T09-00-00-guardian.jsonl"),
+            child("guardian"),
+        )
+        .unwrap();
+        // A folder before the parent's can't hold its child.
+        fs::write(
+            before.join("rollout-2026-10-06T09-00-00-older.jsonl"),
+            child("older"),
+        )
+        .unwrap();
+        let children = child_threads(&sessions, parent);
+        let later = child_threads_since(
+            &sessions,
+            parent,
+            Some(std::time::SystemTime::now() + Duration::from_secs(60)),
+        );
+        fs::remove_dir_all(&sessions).unwrap();
+        assert_eq!(
+            children,
+            [ChildThread {
+                id: "guardian".into(),
+                usage: Some(TokenUsage {
+                    input_tokens: 40,
+                    cached_input_tokens: 60,
+                    output_tokens: 5,
+                    ..TokenUsage::default()
+                }),
+                source: Some("guardian_review".into()),
+            }]
+        );
+        // Nothing written since then.
+        assert_eq!(later, []);
     }
 
     #[test]

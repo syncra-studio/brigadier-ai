@@ -68,7 +68,10 @@ Per provider: uncached input, cache reads, cache writes and output, kept apart, 
 without cache reads. A figure a source doesn't report is "not reported", never 0.
 - Brigadier: `brig_tokens.py`, the arm's `routing.sqlite` `turn_usage` rows for its conversation;
   `armtokens.sh` cross-checks them with the transcripts (`brig_manifest.py`, `tokens.py`) and the
-  daemon's usage events (`evtokens.py`).
+  daemon's usage events (`evtokens.py`). The arm's number is `turn_usage` plus the Codex child
+  threads the daemon didn't meter, which `armtokens.sh` adds from their rollouts. A daemon from
+  phase 2 on meters a worker's or thread's auto-review threads itself (step `guardian`, the child
+  named in `child_thread`), so those are never added twice.
 - /delegator: `dlg_manifest.py` lists the coordinator, every worker and successor, every Codex
   session started in one of the run's checkouts, and matches every saved review file to a counted
   session; `tokens.py` counts them (Claude: final usage per message; Codex: last cumulative total,

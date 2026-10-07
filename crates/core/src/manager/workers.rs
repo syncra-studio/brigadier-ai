@@ -2019,6 +2019,7 @@ impl SessionManager {
                     .await;
             }
             ProviderEvent::TurnStarted { .. } => {
+                cli.meter.turn_started(now_ms());
                 live.state.lock().await.last_message = None;
             }
             ProviderEvent::SessionStarted { native_id, .. } => {
@@ -2084,6 +2085,9 @@ impl SessionManager {
             .ok();
         }
         if let Some(status) = completed {
+            // What its Codex auto-reviews used, which its own totals leave out.
+            self.meter_child_threads(cli, TokenOwner::Task(&live.conversation_id, &live.id))
+                .await;
             self.worker_turn_completed(live, cli, status).await;
             // No turn followed (a nudge or retry would have started one): an overnight run's
             // worker slot is free for another task.

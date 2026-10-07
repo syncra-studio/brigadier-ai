@@ -11,9 +11,21 @@ echo "--- transcripts (KEEP=$A/transcripts):"
 KEEP="$A/transcripts" python3 "$HERE/tokens.py" "$A/manifest.json" "$T0" "$END" --json "$A/tokens-transcripts.json"
 echo "--- the daemon's worker usage events:"
 python3 "$HERE/evtokens.py" "$A" "$END"
-echo "--- turn_usage against the transcripts (Codex child threads the daemon didn't meter show here):"
+echo "--- turn_usage against the transcripts:"
+# The arm's number is turn_usage plus the Codex child threads the daemon didn't meter. A range
+# review's child is in its review's row already; a daemon from phase 2 on meters a worker's or
+# thread's auto-review threads itself (listed in metered_child_threads). Only the others are
+# added from their rollouts, so none counts twice.
 python3 - "$A/tokens.json" "$A/tokens-transcripts.json" <<'PY'
 import json, sys
-metered = json.load(open(sys.argv[1]))["total"]["raw"]; seen = json.load(open(sys.argv[2]))["total"]["total_raw"]
-print(f"turn_usage {metered:,} raw, transcripts {seen:,} raw, difference {seen - metered:+,}")
+brig = json.load(open(sys.argv[1])); seen = json.load(open(sys.argv[2]))
+metered = brig["total"]["raw"]; known = set(brig.get("metered_child_threads", []))
+extra = [r for r in seen["rows"] if r["session"].get("parent") and r["session"].get("role") != "review child"
+         and r["session"]["id"] not in known and r["usage"]]
+added = sum(r["usage"]["raw"] for r in extra)
+for r in extra:
+    print(f"  not metered by the daemon: {r['session']['label']} {r['session']['id']} {r['usage']['raw']:,} raw")
+total = metered + added; transcripts = seen["total"]["total_raw"]
+print(f"turn_usage {metered:,} raw ({len(known)} child threads metered by the daemon) + {added:,} raw from "
+      f"{len(extra)} child threads it didn't = {total:,} raw; transcripts {transcripts:,} raw, difference {transcripts - total:+,}")
 PY

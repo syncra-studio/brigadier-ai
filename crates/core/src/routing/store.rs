@@ -20,8 +20,9 @@ use crate::{Error, Result};
 pub const HISTORY_MS: i64 = 8 * 24 * 60 * 60 * 1000;
 
 fn migrations() -> Migrations<'static> {
-    Migrations::from_iter([M::up(
-        "CREATE TABLE quota_samples (
+    Migrations::from_iter([
+        M::up(
+            "CREATE TABLE quota_samples (
             provider      TEXT    NOT NULL,
             window        TEXT    NOT NULL,
             used_percent  REAL    NOT NULL,
@@ -68,7 +69,40 @@ fn migrations() -> Migrations<'static> {
             key    TEXT PRIMARY KEY,
             value  TEXT NOT NULL
         ) STRICT, WITHOUT ROWID;",
-    )])
+        ),
+        // THREAD-PLAN.md Q8 lever 8 and Q13: each turn's step, time, request and context; the
+        // Codex child threads metered from their rollouts; the thread's own edits per session.
+        // Rows stored before keep NULL.
+        M::up(
+            "ALTER TABLE turn_usage ADD COLUMN step TEXT;
+            ALTER TABLE turn_usage ADD COLUMN duration_ms INTEGER;
+            ALTER TABLE turn_usage ADD COLUMN request_id TEXT;
+            ALTER TABLE turn_usage ADD COLUMN context INTEGER;
+            ALTER TABLE turn_usage ADD COLUMN child_thread TEXT;
+            CREATE INDEX turn_usage_conversation ON turn_usage (conversation_id, at_ms);
+
+            CREATE TABLE child_threads (
+                thread_id        TEXT    PRIMARY KEY,
+                conversation_id  TEXT,
+                input            INTEGER NOT NULL,
+                cached_input     INTEGER NOT NULL,
+                cache_write      INTEGER NOT NULL,
+                output           INTEGER NOT NULL,
+                at_ms            INTEGER NOT NULL
+            ) STRICT, WITHOUT ROWID;
+
+            CREATE TABLE thread_edits (
+                conversation_id  TEXT    PRIMARY KEY,
+                branch           TEXT    NOT NULL,
+                base             TEXT    NOT NULL,
+                tip              TEXT    NOT NULL,
+                commits          INTEGER NOT NULL,
+                added            INTEGER NOT NULL,
+                removed          INTEGER NOT NULL,
+                at_ms            INTEGER NOT NULL
+            ) STRICT, WITHOUT ROWID;",
+        ),
+    ])
 }
 
 /// One sample of a window, as stored.
@@ -78,6 +112,59 @@ pub struct StoredSample {
     pub window: String,
     pub sample: QuotaSample,
     pub resets_at_ms: Option<i64>,
+}
+
+/// The kind of step a turn's use belongs to (THREAD-PLAN.md Q8 lever 8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepKind {
+    /// A session thread's turn.
+    Thread,
+    /// A Chat's turn.
+    Chat,
+    /// The fork of a thread that writes its rebirth handoff.
+    Handoff,
+    /// A task's worker.
+    Worker,
+    /// A one-shot review.
+    Review,
+    /// A Codex child thread of a worker's or a thread's, whose use only its rollout holds: the
+    /// auto-review ("guardian") under Approve for me, the only kind seen so far.
+    Guardian,
+    /// A project's Brain job.
+    Brain,
+    /// Brigadier's own upkeep (researching a new model).
+    Upkeep,
+}
+
+impl StepKind {
+    const ALL: [Self; 8] = [
+        Self::Thread,
+        Self::Chat,
+        Self::Handoff,
+        Self::Worker,
+        Self::Review,
+        Self::Guardian,
+        Self::Brain,
+        Self::Upkeep,
+    ];
+
+    /// How it is stored.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Thread => "thread",
+            Self::Chat => "chat",
+            Self::Handoff => "handoff",
+            Self::Worker => "worker",
+            Self::Review => "review",
+            Self::Guardian => "guardian",
+            Self::Brain => "brain",
+            Self::Upkeep => "upkeep",
+        }
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == text)
+    }
 }
 
 /// Tokens one turn used, as its CLI reported them.
@@ -93,6 +180,94 @@ pub struct TurnUsage {
     pub cached_input: i64,
     pub cache_write: i64,
     pub output: i64,
+    /// The step it belongs to. Absent on rows stored before it was kept, as are the rest.
+    pub step: Option<StepKind>,
+    /// The wall time this use took: since its turn started, or since the turn's previous
+    /// report (a Codex turn reports after each model call).
+    pub duration_ms: Option<i64>,
+    /// The user request it served, when known.
+    pub request_id: Option<String>,
+    /// The context its latest model call read (input, cached input and cache writes).
+    pub context: Option<i64>,
+    /// For use read from a Codex child thread's rollout ([`StepKind::Guardian`]): that thread.
+    /// The A/B tools, which add Codex child threads from rollouts, leave these out.
+    pub child_thread: Option<String>,
+}
+
+impl TurnUsage {
+    /// Everything the turn's calls read and wrote.
+    pub fn total(&self) -> i64 {
+        self.input + self.cached_input + self.cache_write + self.output
+    }
+}
+
+/// The thread's own commits on a session's branch, as last counted (THREAD-PLAN.md Q13). Kept
+/// so a merged and deleted branch still shows them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredEdits {
+    pub branch: String,
+    /// Where the thread's commits were first looked for on it.
+    pub base: String,
+    /// The branch's tip they were counted at.
+    pub tip: String,
+    pub commits: u32,
+    pub added: i64,
+    pub removed: i64,
+    pub at_ms: i64,
+}
+
+/// The columns [`turn_of`] reads, after `provider`.
+const TURN_COLUMNS: &str = "at_ms, model, conversation_id, project_id, task_id, input, \
+     cached_input, cache_write, output, step, duration_ms, request_id, context, child_thread";
+
+fn turn_of(provider: ProviderKind, row: &rusqlite::Row<'_>) -> rusqlite::Result<TurnUsage> {
+    Ok(TurnUsage {
+        at_ms: row.get(1)?,
+        provider,
+        model: row.get(2)?,
+        conversation_id: row.get(3)?,
+        project_id: row.get(4)?,
+        task_id: row.get(5)?,
+        input: row.get(6)?,
+        cached_input: row.get(7)?,
+        cache_write: row.get(8)?,
+        output: row.get(9)?,
+        step: row
+            .get::<_, Option<String>>(10)?
+            .as_deref()
+            .and_then(StepKind::parse),
+        duration_ms: row.get(11)?,
+        request_id: row.get(12)?,
+        context: row.get(13)?,
+        child_thread: row.get(14)?,
+    })
+}
+
+fn insert_turn(conn: &Connection, turn: &TurnUsage) -> rusqlite::Result<()> {
+    conn.prepare_cached(
+        "INSERT INTO turn_usage (at_ms, provider, model, conversation_id, project_id, task_id,
+             input, cached_input, cache_write, output, step, duration_ms, request_id, context,
+             child_thread)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+    )?
+    .execute(params![
+        turn.at_ms,
+        turn.provider.to_string(),
+        turn.model,
+        turn.conversation_id,
+        turn.project_id,
+        turn.task_id,
+        turn.input,
+        turn.cached_input,
+        turn.cache_write,
+        turn.output,
+        turn.step.map(StepKind::as_str),
+        turn.duration_ms,
+        turn.request_id,
+        turn.context,
+        turn.child_thread,
+    ])?;
+    Ok(())
 }
 
 pub struct RoutingStore {
@@ -201,27 +376,7 @@ impl RoutingStore {
     }
 
     pub async fn add_turn(self: &Arc<Self>, turn: TurnUsage) -> Result<()> {
-        self.run(move |conn| {
-            conn.prepare_cached(
-                "INSERT INTO turn_usage (at_ms, provider, model, conversation_id, project_id,
-                     task_id, input, cached_input, cache_write, output)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            )?
-            .execute(params![
-                turn.at_ms,
-                turn.provider.to_string(),
-                turn.model,
-                turn.conversation_id,
-                turn.project_id,
-                turn.task_id,
-                turn.input,
-                turn.cached_input,
-                turn.cache_write,
-                turn.output,
-            ])?;
-            Ok(())
-        })
-        .await
+        self.run(move |conn| insert_turn(conn, &turn)).await
     }
 
     /// A provider's turns since `since_ms`.
@@ -231,26 +386,137 @@ impl RoutingStore {
         since_ms: i64,
     ) -> Result<Vec<TurnUsage>> {
         self.run(move |conn| {
-            let mut query = conn.prepare_cached(
-                "SELECT at_ms, model, conversation_id, project_id, task_id, input, cached_input,
-                     cache_write, output
-                 FROM turn_usage WHERE provider = ?1 AND at_ms >= ?2",
-            )?;
+            let mut query = conn.prepare_cached(&format!(
+                "SELECT provider, {TURN_COLUMNS} FROM turn_usage WHERE provider = ?1 AND at_ms >= ?2"
+            ))?;
             let rows = query.query_map(params![provider.to_string(), since_ms], |row| {
-                Ok(TurnUsage {
-                    at_ms: row.get(0)?,
-                    provider,
-                    model: row.get(1)?,
-                    conversation_id: row.get(2)?,
-                    project_id: row.get(3)?,
-                    task_id: row.get(4)?,
-                    input: row.get(5)?,
-                    cached_input: row.get(6)?,
-                    cache_write: row.get(7)?,
-                    output: row.get(8)?,
-                })
+                turn_of(provider, row)
             })?;
             rows.collect()
+        })
+        .await
+    }
+
+    /// A conversation's turns of `step`, oldest first.
+    pub async fn step_turns(
+        self: &Arc<Self>,
+        conversation_id: String,
+        step: StepKind,
+    ) -> Result<Vec<TurnUsage>> {
+        self.run(move |conn| {
+            let mut query = conn.prepare_cached(&format!(
+                "SELECT provider, {TURN_COLUMNS} FROM turn_usage
+                 WHERE conversation_id = ?1 AND step = ?2 ORDER BY at_ms, rowid"
+            ))?;
+            let rows = query.query_map(params![conversation_id, step.as_str()], |row| {
+                let provider: String = row.get(0)?;
+                provider_of(&provider)
+                    .map(|provider| turn_of(provider, row))
+                    .transpose()
+            })?;
+            rows.filter_map(|row| row.transpose()).collect()
+        })
+        .await
+    }
+
+    /// Records what a Codex child thread used since it was last metered: `turn` carries its
+    /// total so far, and becomes a row of what is new (none when nothing is). Once per use,
+    /// however often the thread is looked at, and whatever turn rows were pruned since.
+    pub async fn meter_child_thread(
+        self: &Arc<Self>,
+        thread_id: String,
+        mut turn: TurnUsage,
+    ) -> Result<Option<TurnUsage>> {
+        self.run(move |conn| {
+            let tx = conn.unchecked_transaction()?;
+            let metered: (i64, i64, i64, i64) = tx
+                .query_row(
+                    "SELECT input, cached_input, cache_write, output FROM child_threads
+                     WHERE thread_id = ?1",
+                    [&thread_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()?
+                .unwrap_or_default();
+            let total = (turn.input, turn.cached_input, turn.cache_write, turn.output);
+            turn.input = (total.0 - metered.0).max(0);
+            turn.cached_input = (total.1 - metered.1).max(0);
+            turn.cache_write = (total.2 - metered.2).max(0);
+            turn.output = (total.3 - metered.3).max(0);
+            if turn.total() == 0 {
+                return Ok(None);
+            }
+            turn.child_thread = Some(thread_id.clone());
+            insert_turn(&tx, &turn)?;
+            tx.execute(
+                "INSERT OR REPLACE INTO child_threads
+                     (thread_id, conversation_id, input, cached_input, cache_write, output, at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    thread_id,
+                    turn.conversation_id,
+                    total.0.max(metered.0),
+                    total.1.max(metered.1),
+                    total.2.max(metered.2),
+                    total.3.max(metered.3),
+                    turn.at_ms,
+                ],
+            )?;
+            tx.commit()?;
+            Ok(Some(turn))
+        })
+        .await
+    }
+
+    /// The thread's edits as last counted for a session.
+    pub async fn thread_edits(
+        self: &Arc<Self>,
+        conversation_id: String,
+    ) -> Result<Option<StoredEdits>> {
+        self.run(move |conn| {
+            conn.query_row(
+                "SELECT branch, base, tip, commits, added, removed, at_ms FROM thread_edits
+                 WHERE conversation_id = ?1",
+                [conversation_id],
+                |row| {
+                    Ok(StoredEdits {
+                        branch: row.get(0)?,
+                        base: row.get(1)?,
+                        tip: row.get(2)?,
+                        commits: row.get(3)?,
+                        added: row.get(4)?,
+                        removed: row.get(5)?,
+                        at_ms: row.get(6)?,
+                    })
+                },
+            )
+            .optional()
+        })
+        .await
+    }
+
+    pub async fn put_thread_edits(
+        self: &Arc<Self>,
+        conversation_id: String,
+        edits: StoredEdits,
+    ) -> Result<()> {
+        self.run(move |conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO thread_edits
+                     (conversation_id, branch, base, tip, commits, added, removed, at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    conversation_id,
+                    edits.branch,
+                    edits.base,
+                    edits.tip,
+                    edits.commits,
+                    edits.added,
+                    edits.removed,
+                    edits.at_ms,
+                ],
+            )?;
+            Ok(())
         })
         .await
     }
@@ -365,6 +631,14 @@ impl RoutingStore {
                 "DELETE FROM turn_usage WHERE conversation_id = ?1",
                 [&conversation_id],
             )?;
+            tx.execute(
+                "DELETE FROM child_threads WHERE conversation_id = ?1",
+                [&conversation_id],
+            )?;
+            tx.execute(
+                "DELETE FROM thread_edits WHERE conversation_id = ?1",
+                [&conversation_id],
+            )?;
             let mut outcomes = 0;
             {
                 let mut task_turns = tx.prepare("DELETE FROM turn_usage WHERE task_id = ?1")?;
@@ -408,6 +682,11 @@ mod tests {
             cached_input: 0,
             cache_write: 0,
             output: 1,
+            step: None,
+            duration_ms: None,
+            request_id: None,
+            context: None,
+            child_thread: None,
         }
     }
 
@@ -430,6 +709,35 @@ mod tests {
             "atMs": 1
         }))
         .expect("an outcome")
+    }
+
+    #[test]
+    fn turns_stored_before_the_steps_were_kept_read_back_without_them() {
+        let dir = std::env::temp_dir().join(format!("brigadier-routing-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("routing.sqlite");
+        {
+            // The store as its first version left it, with a turn in it.
+            let mut conn = Connection::open(&path).unwrap();
+            migrations().to_version(&mut conn, 1).unwrap();
+            conn.execute(
+                "INSERT INTO turn_usage VALUES (1, 'claude', 'opus', 'c1', 'p', NULL, 1, 2, 3, 4)",
+                [],
+            )
+            .unwrap();
+        }
+        let store = RoutingStore::open(&path).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let turns = runtime
+            .block_on(store.turns_since(ProviderKind::Claude, 0))
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut old = turn(Some("c1"), None);
+        (old.input, old.cached_input, old.cache_write, old.output) = (1, 2, 3, 4);
+        assert_eq!(turns, [old]);
     }
 
     #[tokio::test]

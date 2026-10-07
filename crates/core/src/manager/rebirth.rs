@@ -392,7 +392,7 @@ impl SessionManager {
                             &meter,
                             provider,
                             choice.model.as_deref(),
-                            TokenOwner::Conversation(id),
+                            TokenOwner::Handoff(id),
                             &total,
                             last.as_ref(),
                         )

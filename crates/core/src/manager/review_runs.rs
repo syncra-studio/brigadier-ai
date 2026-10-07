@@ -657,6 +657,8 @@ impl SessionManager {
                 () = stop.cancelled() => Err(brigadier_review::STOPPED.to_owned()),
             };
         }
+        let meter = TokenMeter::default();
+        meter.turn_started(now_ms());
         let ran = brigadier_review::run_codex(CodexRun {
             platform: self.runtime.platform().clone(),
             env: self.runtime.cli_env(),
@@ -673,7 +675,7 @@ impl SessionManager {
         // goes).
         if let Some(usage) = &ran.usage {
             self.note_tokens(
-                &TokenMeter::default(),
+                &meter,
                 review.reviewer,
                 review.reviewer_model.as_deref(),
                 TokenOwner::Task(&review.conversation_id, &TaskId(review_owner(&review.id))),
@@ -731,6 +733,7 @@ impl SessionManager {
         };
         let counted_as = TaskId(review_owner(&review.id));
         let meter = TokenMeter::default();
+        meter.turn_started(now_ms());
         let Started {
             session,
             mut events,

@@ -10,6 +10,10 @@ use brigadier_providers::TokenUsage;
 #[derive(Debug, Default)]
 pub struct TokenMeter {
     last: Mutex<Baseline>,
+    /// When the running turn started, or last reported: what the next report's use took.
+    mark: Mutex<Option<i64>>,
+    /// When the session's Codex child threads were last looked for.
+    children: Mutex<Option<i64>>,
 }
 
 #[derive(Debug, Default)]
@@ -34,7 +38,31 @@ impl TokenMeter {
             } else {
                 Baseline::Fresh
             }),
+            mark: Mutex::new(None),
+            children: Mutex::new(None),
         }
+    }
+
+    /// A turn started at `at_ms`: its first report's use took from here.
+    pub fn turn_started(&self, at_ms: i64) {
+        *self.mark.lock().unwrap_or_else(PoisonError::into_inner) = Some(at_ms);
+    }
+
+    /// When the session's child threads were last looked for (never: `None`); now is
+    /// remembered as the last time.
+    pub fn children_looked(&self, now_ms: i64) -> Option<i64> {
+        self.children
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .replace(now_ms)
+    }
+
+    /// How long the use reported at `at_ms` took, since the turn started or last reported;
+    /// unknown when no turn start was seen.
+    pub fn took(&self, at_ms: i64) -> Option<i64> {
+        let mut mark = self.mark.lock().unwrap_or_else(PoisonError::into_inner);
+        let since = mark.replace(at_ms)?;
+        Some((at_ms - since).max(0))
     }
 
     /// What was used since the last report, if anything. `latest` is what the report's latest
