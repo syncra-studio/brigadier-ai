@@ -2,8 +2,6 @@ import {
   Archive,
   ArrowLeft,
   Chats,
-  Check,
-  ChevronDown,
   ComposeEditSquare,
   DotsHorizontal,
   Download,
@@ -16,7 +14,6 @@ import {
   Plus,
   SettingsCog,
   Sidebar,
-  SidebarFloatingLeft,
   Trash,
   Unpin,
   X,
@@ -29,6 +26,7 @@ import { RemoveProjectDialog } from "@/app/dialogs/RemoveProjectDialog";
 import { NameDialog } from "@/app/NameDialog";
 import { useShortcuts } from "@/app/shortcuts";
 import { openSearch } from "@/app/SearchDialog";
+import { SidebarToggle } from "@/app/SidebarToggle";
 import {
   navRow,
   NavEmpty,
@@ -55,8 +53,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -121,42 +117,12 @@ export function TitlebarNav() {
         </TitlebarButton>
         {/* Settings holds the panel open, so it has no toggle; Back and Forward stay put. */}
         {canToggle && (
-          <div className="flex items-center">
-            <TitlebarButton
-              tooltip="Toggle sidebar"
-              shortcut={shortcuts.sidebar}
-              aria-label={open ? "Hide sidebar" : "Show sidebar"}
-              aria-expanded={open}
-              onClick={toggleSidebar}
-            >
-              {open ? <Sidebar /> : <SidebarFloatingLeft />}
-            </TitlebarButton>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <TitlebarButton
-                  tooltip="Sidebar collapse mode"
-                  className="w-titlebar-chevron [&_svg]:size-icon-sm"
-                >
-                  <ChevronDown />
-                </TitlebarButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                <DropdownMenuRadioGroup
-                  value={collapseMode}
-                  onValueChange={(value) => {
-                    if (value === "strip" || value === "hidden") setCollapseMode(value);
-                  }}
-                >
-                  <DropdownMenuRadioItem value="strip" indicator={<Check />}>
-                    Collapse to strip
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="hidden" indicator={<Check />}>
-                    Hide completely
-                  </DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+          <SidebarToggle
+            open={open}
+            onToggle={toggleSidebar}
+            mode={collapseMode}
+            onModeChange={setCollapseMode}
+          />
         )}
       </TitlebarTips>
     </div>
