@@ -8,10 +8,14 @@
 - every review file the run saved (msgs/*review*.md) must match the final message of a counted
   Codex session; one that matches none is listed under unmatched_reviews (its usage is unknown).
 Codex sessions started in the window elsewhere are listed apart, not counted, for a manual look.
-usage: dlg_manifest.py <arm-dir> <end_ms> > manifest.json"""
+--also DIR (repeatable): a folder the run's workers used for model turns of their own, such as a
+dev Brigadier's data dir they ran the app on: every Claude session under it (by project slug) and
+every Codex session started in it during the window counts too.
+usage: dlg_manifest.py <arm-dir> <end_ms> [--also DIR ...] > manifest.json"""
 import datetime, glob, json, os, re, subprocess, sys
 
 arm = os.path.realpath(sys.argv[1]); end = int(sys.argv[2]); H = os.path.expanduser("~")
+also = [sys.argv[i + 1] for i, v in enumerate(sys.argv) if v == "--also"]
 st = json.load(open(arm + "/start.json")); t0 = st["t0_ms"]
 repo = arm + "/repo"
 
@@ -97,6 +101,15 @@ for w in workers:
             add(f"{wid} {title}", "worker", "codex", sid)
     else:
         add(f"{wid} {title}", "worker", agent, "UNKNOWN-" + wid)
+
+for d in also:
+    for c in spellings(d) | {d.rstrip("/")}:
+        checkouts.add(c)
+        slug = re.sub(r"[^A-Za-z0-9]", "-", c)
+        for f in sorted(glob.glob(f"{H}/.claude/projects/{slug}*/*.jsonl")):
+            if os.path.getmtime(f) * 1000 >= t0 and os.path.basename(f)[:-6] not in {s["id"] for s in out}:
+                add(f"dev app {os.path.basename(os.path.dirname(f))[:60]}", "worker-dev-app", "claude",
+                    os.path.basename(f)[:-6], {"dir": os.path.dirname(f)})
 
 listed = {s["id"] for s in out}
 finals = {}; elsewhere = []
