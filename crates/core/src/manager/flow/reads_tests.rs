@@ -135,7 +135,9 @@ fn parsed(provider: ProviderKind, lines: Vec<Value>) -> Vec<ProviderEvent> {
 async fn the_thread_s_reads_and_searches_fill_thread_reads_and_a_worker_s_do_not() {
     for vendor in [ProviderKind::Claude, ProviderKind::Codex] {
         let worker_file: Arc<std::sync::Mutex<Option<PathBuf>>> = Arc::default();
+        let worker_input: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
         let seen = worker_file.clone();
+        let first_input = worker_input.clone();
         let mut flow = Flow::start(
             &format!("thread-reads-{vendor}"),
             Options {
@@ -144,6 +146,7 @@ async fn the_thread_s_reads_and_searches_fill_thread_reads_and_a_worker_s_do_not
             },
             script(move |turn| {
                 let seen = seen.clone();
+                let first_input = first_input.clone();
                 async move {
                     if turn.is_orchestrator() {
                         if turn.input.contains("Look around") {
@@ -175,6 +178,10 @@ async fn the_thread_s_reads_and_searches_fill_thread_reads_and_a_worker_s_do_not
                         }
                         return Reply::text("Added the greeting.");
                     }
+                    first_input
+                        .lock()
+                        .unwrap()
+                        .get_or_insert_with(|| turn.input.clone());
                     // The worker reads in its own worktree: none of it is the thread's.
                     turn.write("worker-only.txt", "mine\n");
                     let path = turn.cwd.join("worker-only.txt");
@@ -260,6 +267,19 @@ async fn the_thread_s_reads_and_searches_fill_thread_reads_and_a_worker_s_do_not
             "{}",
             worker_file.display()
         );
+        // The thread read and delegated in one turn: the reads it made before the call, still
+        // held until the turn ends, are in the worker's pack.
+        let input = worker_input
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the worker ran");
+        assert!(
+            input.contains("## Files the orchestrator read")
+                && input.contains("### README.md (lines 1–1 of 1)"),
+            "{vendor}: {input}"
+        );
+        assert!(input.contains("context.md"), "{vendor}: {input}");
         // The turn's calls are recorded once, when it ends.
         let recorded = flow
             .events()

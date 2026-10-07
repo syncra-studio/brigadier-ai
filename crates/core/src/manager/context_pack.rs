@@ -93,8 +93,14 @@ fn build(
     worktree: &Path,
     outlines: &[(String, Vec<SymbolHit>)],
 ) -> String {
+    // Reads are recorded by their real path; the recorded workspace may go through a link.
+    let real = workspace.and_then(|workspace| brigadier_providers::policy::real_path(workspace));
     let relative = |path: &str| -> Option<String> {
-        let rel = Path::new(path).strip_prefix(workspace?).ok()?;
+        let path = Path::new(path);
+        let rel = [workspace, real.as_deref()]
+            .into_iter()
+            .flatten()
+            .find_map(|root| path.strip_prefix(root).ok())?;
         let rel = rel.to_string_lossy().into_owned();
         (!rel.is_empty()).then_some(rel)
     };
