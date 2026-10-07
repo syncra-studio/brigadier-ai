@@ -42,6 +42,14 @@ const BASH_MAX_OUTPUT_LENGTH: &str = "150000";
 /// `run_unsandboxed` as a Claude thread's CLI names it in its permission prompt.
 const CLAUDE_RUN_UNSANDBOXED: &str = "mcp__brigadier__run_unsandboxed";
 
+/// A Claude thread's `run_unsandboxed` leaves the sandbox, though its CLI asks about it as an
+/// ordinary tool call (Ask for approval's `ask` rule): only the user answers it.
+fn mark_unsandboxed(request: &mut ApprovalRequest) {
+    if request.tool == CLAUDE_RUN_UNSANDBOXED {
+        request.escalation = true;
+    }
+}
+
 /// Where the thread works: a checkout of the session's repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ThreadWorkspace {
@@ -283,8 +291,9 @@ impl SessionManager {
         &self,
         conv: &Arc<ConvLive>,
         cli: &Arc<Cli>,
-        request: ApprovalRequest,
+        mut request: ApprovalRequest,
     ) {
+        mark_unsandboxed(&mut request);
         let access = cli
             .launch
             .as_ref()
@@ -541,5 +550,46 @@ impl SessionManager {
         self.spawn(async move {
             manager.count_thread_edits(&id).await;
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use brigadier_providers::model::ApprovalKind;
+    use brigadier_providers::policy::{self, ApprovalMode};
+
+    use super::*;
+
+    #[test]
+    fn a_claude_thread_s_run_unsandboxed_at_ask_for_approval_goes_to_the_user() {
+        let ask = Access::Scoped {
+            write_cwd: true,
+            writable_roots: Vec::new(),
+            network: false,
+            deny_read: Vec::new(),
+            unix_sockets: Vec::new(),
+        };
+        let mut request = ApprovalRequest {
+            id: "1".into(),
+            kind: ApprovalKind::Tool,
+            tool: CLAUDE_RUN_UNSANDBOXED.into(),
+            command: Some("curl -sS https://example.com".into()),
+            cwd: None,
+            paths: Vec::new(),
+            reason: None,
+            escalation: false,
+            input: None,
+            grant: None,
+        };
+        // As the CLI asks it, any tool call inside the sandbox's access would be allowed.
+        assert_eq!(
+            policy::route(&request, &ask, ApprovalMode::Delegated),
+            PolicyRoute::Allow
+        );
+        mark_unsandboxed(&mut request);
+        assert_eq!(
+            policy::route(&request, &ask, ApprovalMode::Delegated),
+            PolicyRoute::AskUser
+        );
     }
 }
