@@ -557,80 +557,7 @@ pub struct ExcludedFile {
     pub reason: String,
 }
 
-/// One round of independent checks of a change before it lands (reviewers and a verifier, on
-/// one candidate commit) or of a plan before it is approved (reviewers). A new candidate or
-/// a revised plan opens a new round; results of an older round are ignored.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct Gate {
-    /// This candidate was rebased during landing; verify retries must keep full checks.
-    #[serde(default)]
-    pub rebased: bool,
-    /// From 1, counted per task or plan.
-    pub round: u32,
-    /// The candidate commit the round checks; none for a plan.
-    #[serde(default)]
-    pub commit: Option<String>,
-    pub members: Vec<GateMember>,
-    /// Set once every member has a result; the round is closed then.
-    #[serde(default)]
-    pub outcome: Option<GateOutcome>,
-    /// The user already approved the change it checks (a clean replay onto a target that
-    /// moved): it lands as soon as the round passes.
-    #[serde(default)]
-    pub relanding: bool,
-    /// A second verification after a verifier could not check the change.
-    #[serde(default)]
-    pub retry: bool,
-    /// The user had the change land despite the round's findings (an override, in versions
-    /// before phases landed with `land_phase`): it lands as it is, without another round.
-    #[serde(default)]
-    pub overridden: bool,
-    /// A plan's round: its reviewers' issues as each result arrives, numbered F1, F2, … for
-    /// the revision to answer one by one.
-    #[serde(default)]
-    pub findings: Vec<Finding>,
-}
-
-/// A problem a plan's reviewer found, by the id the revision answers it with.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct Finding {
-    /// "F1", "F2", … within its round.
-    pub id: String,
-    pub text: String,
-    /// The reviewer that found it.
-    pub by: TaskId,
-}
-
-/// How a revised plan answers a finding of the plan it revises.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct FindingResponse {
-    /// The finding's id ("F1").
-    pub id: String,
-    /// The finding, as the reviewer wrote it.
-    pub finding: String,
-    pub accepted: bool,
-    /// What changed for it, or why it was declined.
-    pub note: String,
-}
-
-/// A task checking a change or plan in a gate round.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct GateMember {
-    pub task_id: TaskId,
-    pub role: GateRole,
-    #[serde(default)]
-    pub result: Option<GateResult>,
-    /// Models it must not be besides the author and the round's other members, kept for a
-    /// hand-off: a second verifier avoids the one that could not check the change.
-    #[serde(default)]
-    pub avoid: Vec<ModelChoice>,
-}
-
-/// What a gate member does, as stores from before the phase flow keep it.
+/// What a checking task did in its gate round, as stores from before the phase flow keep it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum GateRole {
@@ -640,47 +567,6 @@ pub enum GateRole {
     Verify,
     /// Judges a whole overnight phase from its verification and review, in a fresh context.
     Judge,
-}
-
-/// A gate member's result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum GateResult {
-    Passed,
-    /// The change or plan needs fixing; the findings say what.
-    Failed {
-        findings: Vec<String>,
-    },
-    /// It could not check the change (checks that couldn't run, criteria left unchecked);
-    /// nothing lands unverified.
-    Unverified {
-        reason: String,
-    },
-    /// It gave no usable result: it failed or was stopped, or (a verifier) changed what it
-    /// checked.
-    NoResult {
-        reason: String,
-    },
-}
-
-/// How a gate round ended.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum GateOutcome {
-    Passed,
-    Failed,
-    Unverified,
-    NoResult,
-    /// A newer candidate or plan replaced what it checked.
-    Superseded,
 }
 
 /// The gate round a checking task belongs to.
@@ -2023,12 +1909,6 @@ mod tests {
                 }
             );
         }
-        let gate: Gate = serde_json::from_value(serde_json::json!({
-            "round": 1,
-            "members": [{ "taskId": "t2", "role": "review" }],
-        }))
-        .expect("an old gate");
-        assert!(gate.findings.is_empty());
     }
 }
 
