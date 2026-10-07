@@ -1,6 +1,6 @@
 //! Overnight runs (PLAN.md §10): a plan the user hands over with an optional deadline, worked
 //! through phase by phase while they are away. These records are the run's durable truth and
-//! the wire contract the plan card shows; the conductor (`manager::overnight`) changes them.
+//! the wire contract the plan card shows; `manager::overnight` changes them.
 //!
 //! A run is stored as full snapshots (`DomainEvent::OvernightUpdated`) on its conversation's
 //! stream, like plans and tasks. Its phases, criteria and the user's words are fixed once
@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::model::{CardId, ConversationId, OvernightRunId, TaskId};
+use crate::model::{CardId, ConversationId, OvernightRunId};
 
 /// The run's own branch and worktree, made at Start from the base's committed tip. Its work
 /// lands there; only the user's Merge brings verified work into the base.
@@ -30,16 +30,10 @@ pub struct RunWorkspace {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum RunRole {
-    /// Work the phase lead delegated.
+    /// Work the thread delegated for the run.
     Worker,
-    /// A reviewer or verifier of a run task's work (a phase's verifier too).
+    /// A reviewer or verifier of a run task's work.
     Check,
-    /// A whole-phase verifier of a run from before phases were verified like any request's.
-    PhaseVerifier,
-    /// A whole-phase reviewer of such a run.
-    PhaseReviewer,
-    /// A judge of such a run's phase or plan.
-    Judge,
 }
 
 /// Which run a task works for, fixed when the task is made: a late event of the task keeps
@@ -49,9 +43,6 @@ pub enum RunRole {
 pub struct RunTaskContext {
     pub run_id: OvernightRunId,
     pub segment: u32,
-    /// The phase it works on; absent before the conductor admits phases (Phase 0, setup).
-    #[serde(default)]
-    pub phase_id: Option<String>,
     /// The run's generation when the task was made; a result from an older one is history.
     pub generation: u32,
     pub role: RunRole,
@@ -69,12 +60,8 @@ pub enum OvernightState {
     Superseded,
     /// Started: its branch and worktree are being made, earlier work is settling.
     Preparing,
-    /// Phase 0: writing and reviewing the plan for a bare goal.
-    Planning,
+    /// The thread works through the run's plan.
     Running,
-    /// A phase's whole result was being checked, in a run from before phases were verified
-    /// like any request's; it resumes as `Running`.
-    PhaseGate,
     /// No eligible model until a usage window resets.
     WaitingQuota,
     /// Stop, the deadline or a block: no new work, live work hands off.
@@ -93,23 +80,6 @@ impl OvernightState {
     pub fn is_final(self) -> bool {
         matches!(self, Self::Superseded | Self::Finished)
     }
-}
-
-/// How a phase ended up, or where it is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum PhaseState {
-    Pending,
-    Running,
-    /// Its whole result was being checked, in a run from before phases were verified like any
-    /// request's; it resumes as `Running`.
-    Checking,
-    Verified,
-    /// Unfinished: some criteria may be met, the rest wait on the user, or the run ended first.
-    Partial,
-    Blocked,
-    /// Not selected by the user's restrictions, or left out by a stop.
-    Skipped,
 }
 
 /// One "done when" criterion. Its id never changes, so evidence and verdicts name it exactly.
@@ -135,47 +105,8 @@ pub struct OvernightPhase {
     pub done_when: Vec<Criterion>,
     /// Numbers of the phases it builds on.
     pub depends_on: Vec<u32>,
-    pub state: PhaseState,
-    /// The request its lead's turns, tasks and reports belong to; set when it starts.
-    #[serde(default)]
-    pub request_id: Option<String>,
-    /// The run branch's tip when the phase started: its work is everything after it.
-    #[serde(default)]
-    pub start_commit: Option<String>,
-    /// The run branch's tip when the phase was settled as done, its verifier's work landed.
-    #[serde(default)]
-    pub verified_commit: Option<String>,
-    /// What each criterion came to. Only runs from before phases were verified like any
-    /// request's have these, and phases the run's end cut off.
-    #[serde(default)]
-    pub criteria: Vec<CriterionResult>,
-    /// What the phase still lacks, each in one line.
-    #[serde(default)]
-    pub gaps: Vec<String>,
-    /// The lead's own summary when it settled the phase.
-    #[serde(default)]
-    pub summary: Option<String>,
-    /// The lead's model, the vendor whose work its reviewers must not be.
-    #[serde(default)]
-    pub lead: Option<crate::model::ModelChoice>,
-    /// Times the lead was reminded to say whether the phase's work is done.
-    #[serde(default)]
-    pub nudges: u32,
-    #[serde(default)]
-    pub started_at_ms: Option<i64>,
-    #[serde(default)]
-    pub settled_at_ms: Option<i64>,
 }
-
 impl OvernightPhase {
-    /// Settled: verified, partial, blocked or skipped.
-    pub fn is_settled(&self) -> bool {
-        matches!(
-            self.state,
-            PhaseState::Verified | PhaseState::Partial | PhaseState::Blocked | PhaseState::Skipped
-        )
-    }
-
     /// A new phase from a plan, with stable ids: `phase-<number>`, criteria `p<number>-c<n>`.
     pub fn new(
         number: u32,
@@ -198,45 +129,8 @@ impl OvernightPhase {
                 })
                 .collect(),
             depends_on: depends_on.to_vec(),
-            state: PhaseState::Pending,
-            request_id: None,
-            start_commit: None,
-            verified_commit: None,
-            criteria: Vec::new(),
-            gaps: Vec::new(),
-            summary: None,
-            lead: None,
-            nudges: 0,
-            started_at_ms: None,
-            settled_at_ms: None,
         }
     }
-}
-
-/// What a criterion came to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum CriterionStatus {
-    Met,
-    NotMet,
-    /// Its check couldn't run, or nobody checked it before the run ended.
-    NotRun,
-    /// It needs something only the user can give.
-    Blocked,
-}
-
-/// One criterion's result, checked on one candidate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct CriterionResult {
-    pub id: String,
-    pub status: CriterionStatus,
-    /// The evidence, or what is missing, in the checker's words.
-    pub evidence: String,
-    /// The commit it was checked on.
-    pub candidate: Option<String>,
-    /// The task whose report gave the evidence.
-    pub by: Option<TaskId>,
 }
 
 /// The delivery error recorded while notifications are off for Brigadier. The notification
@@ -338,25 +232,6 @@ impl OvernightRun {
     }
 }
 
-/// Phase 0 of a bare goal: the lead reads the code and writes the plan's phases, which the run
-/// then follows.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct PlanningPhase {
-    pub request_id: String,
-    pub state: PhaseState,
-    /// The plan the phases were proposed on.
-    pub plan_id: Option<CardId>,
-    /// The phases as proposed.
-    pub proposed: Vec<ProposedPhase>,
-    /// Why Phase 0 couldn't write a plan the run may follow.
-    pub gaps: Vec<String>,
-    pub lead: Option<crate::model::ModelChoice>,
-    pub nudges: u32,
-    pub started_at_ms: i64,
-    pub settled_at_ms: Option<i64>,
-}
-
 /// A file the plan was read from, as it was when proposed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -444,7 +319,7 @@ pub struct DirectiveSpan {
 }
 
 /// The restrictions Brigadier enforces in code. Everything else the user wrote is Rules,
-/// passed word for word to every phase lead, verifier and judge.
+/// passed word for word to the thread in the run's note.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Directives {
@@ -523,10 +398,6 @@ pub struct AppliedCommand {
     pub at_ms: i64,
 }
 
-/// The morning report's current shape. A finished run whose report is older is rendered again
-/// from its records once (`report_text`).
-pub const REPORT_VERSION: u32 = 2;
-
 /// One segment of an overnight run: Start to its report. Continue proposes the next segment
 /// on the same branch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -546,10 +417,10 @@ pub struct OvernightRun {
     pub words: String,
     /// The goal: the plan's own statement of it, or the user's words.
     pub goal: String,
-    /// Rules and settled decisions every lead, verifier and judge gets verbatim.
+    /// Rules and settled decisions the thread gets verbatim in the run's note.
     pub rules: String,
     pub sources: Vec<SourceSnapshot>,
-    /// Empty for a bare goal until Phase 0 writes the plan.
+    /// Empty for a bare goal: the thread writes its plan (`plan_phases`).
     pub phases: Vec<OvernightPhase>,
     pub directives: Directives,
     /// What stops Start until the user words it differently.
@@ -565,11 +436,8 @@ pub struct OvernightRun {
     /// Its branch and worktree, once Start made them.
     #[serde(default)]
     pub workspace: Option<RunWorkspace>,
-    /// Phase 0, for a bare goal.
-    #[serde(default)]
-    pub planning: Option<PlanningPhase>,
-    /// The newest commit of the run branch whose every phase up to it is verified: the
-    /// card's Merge takes this, never the branch's head.
+    /// The accepted tip: the run branch when the thread settled the last of the phases done
+    /// in a row (`settle_step`). The card's Merge takes this, never the branch's head.
     #[serde(default)]
     pub verified_commit: Option<String>,
     /// Times Brigadier wasn't running during the run (the Mac slept, the daemon was down).
@@ -584,13 +452,6 @@ pub struct OvernightRun {
     /// The report's three opening paragraphs, for a restored card whose message is off-page.
     #[serde(default)]
     pub report_outcome: Option<[String; 3]>,
-    /// The report's shape it was written in ([`REPORT_VERSION`]); 0 before versions existed.
-    #[serde(default)]
-    pub report_version: u32,
-    /// The report rendered again from the run's records in the current shape, shown in place
-    /// of its message's text (which stays as it was written).
-    #[serde(default)]
-    pub report_text: Option<String>,
     /// The run branch's tip when the report was written: the commits it lists end here, even
     /// after Continue adds more to the branch or the branch is gone.
     #[serde(default)]
@@ -647,14 +508,11 @@ impl OvernightRun {
             state: OvernightState::Running,
             wind_down_at_ms: None,
             workspace: None,
-            planning: None,
             verified_commit: None,
             gaps: Vec::new(),
             obstacles: Vec::new(),
             report_message_id: None,
             report_outcome: None,
-            report_version: 0,
-            report_text: None,
             end_commit: None,
             merged: None,
             notification: None,

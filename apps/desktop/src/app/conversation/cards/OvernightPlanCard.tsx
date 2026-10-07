@@ -2,8 +2,16 @@ import { Moon } from "@openai/apps-sdk-ui/components/Icon";
 import { useContext, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { phaseOutcome, phaseWord, runOver } from "@/app/conversation/phaseView";
-import { plainLine, taskState } from "@/app/conversation/rowWords";
+import {
+  phaseOutcome,
+  phasesDone,
+  phaseTitle,
+  phaseWord,
+  type RunStep,
+  runOver,
+  type StepMark,
+} from "@/app/conversation/phaseView";
+import { taskState } from "@/app/conversation/rowWords";
 import { useAction } from "@/app/conversation/useAction";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import {
@@ -24,134 +32,77 @@ import { disclosureRow } from "@/components/assistant-ui/elements/surfaces";
 import { Timeline, type TimelineEvent } from "@/components/assistant-ui/elements/timeline";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { OvernightPhase, OvernightRun, PhaseState, Plan } from "@/ipc/generated";
+import type { OvernightPhase, OvernightRun } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 
-const MARK: Record<PhaseState, AgentPlanStepStatus> = {
+const MARK: Record<StepMark, AgentPlanStepStatus> = {
   pending: "pending",
-  running: "active",
-  checking: "active",
-  verified: "done",
+  working: "active",
+  done: "done",
   partial: "partial",
   blocked: "failed",
   skipped: "skipped",
 };
 
-/** The newest plan a phase's lead wrote (or Phase 0's), which the run card shows inside the phase. */
-function usePhasePlan(requestId: string | null, planId: string | null): Plan | undefined {
-  return useBoard((s) => {
-    const plans = Object.values(s.board?.plans ?? {});
-    const own = planId ? s.board?.plans[planId] : undefined;
-    if (own) return own;
-    return plans
-      .filter((plan) => requestId !== null && plan.requestId === requestId && plan.state.type !== "superseded")
-      .toSorted((a, b) => b.createdAtMs - a.createdAtMs)[0];
-  });
-}
-
 const NUL = "\u0000";
 
-/**
- * A phase's work inside the run card: one line per step of its plan (or per worker, without a
- * plan), each opening its worker, then the plan's step details behind a disclosure.
- */
-function PhaseWork({
-  runId,
-  phaseId,
-  requestId,
-  planId = null,
-}: {
-  runId: string;
-  phaseId: string;
-  requestId: string | null;
-  planId?: string | null;
-}) {
+/** A phase's workers inside the run card, one line each, each opening its worker. */
+function PhaseWork({ taskIds }: { taskIds: readonly string[] }) {
   const { setPanel } = useContext(AgentsPanelContext);
-  const plan = usePhasePlan(requestId, planId);
   // Each line as "task id NUL state NUL title", so the card re-renders only when one changes.
   const lines = useBoard(
-    useShallow((s) => {
-      const tasks = s.board?.tasks ?? {};
-      if (plan && plan.steps.length > 0) {
-        return plan.steps.map((step) => {
-          const task = step.taskId ? tasks[step.taskId] : undefined;
-          return [task?.id ?? "", task ? taskState(task).word : "planned", step.title].join(NUL);
-        });
-      }
-      return Object.values(tasks)
-        // An older run's whole-phase checks list here too; its other checks open from what they checked.
-        .filter((task) => (task.gateLink === null || task.gateLink.owner.type === "phase") && task.run?.runId === runId && task.run.phaseId === phaseId)
-        .toSorted((a, b) => a.number - b.number)
-        .map((task) => [task.id, taskState(task).word, task.title].join(NUL));
-    }),
+    useShallow((s) =>
+      taskIds.flatMap((id) => {
+        const task = s.board?.tasks[id];
+        // A check opens from what it checked; a phase's own checks list here.
+        if (!task || (task.gateLink !== null && task.gateLink.owner.type !== "phase")) return [];
+        return [[task.id, taskState(task).word, task.title].join(NUL)];
+      }),
+    ),
   );
-  const details = plan?.steps.filter((step) => step.detail) ?? [];
+  if (lines.length === 0) return null;
   return (
-    <div className="flex flex-col gap-1.5 whitespace-normal">
-      {lines.length > 0 && (
-        <ul className="flex flex-col">
-          {lines.map((line, index) => {
-            const [taskId = "", word = "", title = ""] = line.split(NUL);
-            const text = (
-              <>
-                <span className="text-foreground/80 min-w-0 truncate">{title}</span>
-                <span className="shrink-0">· {word}</span>
-              </>
-            );
-            return (
-              <li key={`${index}:${taskId}`} className="flex min-w-0">
-                {taskId ? (
-                  <button
-                    type="button"
-                    title={title}
-                    onClick={() => setPanel(taskId)}
-                    className="hover:text-foreground rounded-control flex min-w-0 items-center gap-1 text-start"
-                  >
-                    {text}
-                  </button>
-                ) : (
-                  <span className="flex min-w-0 items-center gap-1" title={title}>
-                    {text}
-                  </span>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {details.length > 0 && (
-        <details>
-          <summary className={disclosureRow}>
-            Step details
-          </summary>
-          <div className="flex flex-col gap-1.5 pt-1 wrap-anywhere">
-            {details.map((step) => (
-              <p key={step.title}>
-                <span className="text-foreground/80">{step.title}:</span> {plainLine(step.detail ?? "")}
-              </p>
-            ))}
-          </div>
-        </details>
-      )}
-    </div>
+    <ul className="flex flex-col whitespace-normal">
+      {lines.map((line) => {
+        const [taskId = "", word = "", title = ""] = line.split(NUL);
+        return (
+          <li key={taskId} className="flex min-w-0">
+            <button
+              type="button"
+              title={title}
+              onClick={() => setPanel(taskId)}
+              className="hover:text-foreground rounded-control flex min-w-0 items-center gap-1 text-start"
+            >
+              <span className="text-foreground/80 min-w-0 truncate">{title}</span>
+              <span className="shrink-0">· {word}</span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
-/** Which verified phases Merge takes: "phase 1", "phases 1 and 2". */
-function mergedPhases(run: OvernightRun): string | null {
-  const numbers = run.phases.filter((phase) => phase.state === "verified").map((phase) => phase.number);
+/** Which phases Merge takes (the done ones in a row from the first): "phase 1", "phases 1 and 2". */
+function mergedPhases(steps: readonly RunStep[]): string | null {
+  const numbers: number[] = [];
+  for (const step of steps) {
+    if (step.mark === "skipped") continue;
+    if (step.mark !== "done") break;
+    numbers.push(step.number);
+  }
   if (numbers.length === 0) return null;
   if (numbers.length === 1) return `phase ${numbers[0]}`;
   return `phases ${numbers.slice(0, -1).join(", ")} and ${numbers.at(-1)}`;
 }
 
 /** The finished card's second line: what Merge takes, and where the work is. */
-function whereLine(run: OvernightRun, verifiedSha: string | undefined): string {
+function whereLine(run: OvernightRun, steps: readonly RunStep[], verifiedSha: string | undefined): string {
   const branch = run.workspace ? `on ${run.workspace.branch}` : "";
-  const phases = mergedPhases(run);
+  const phases = mergedPhases(steps);
   if (run.merged) return `Merged into ${run.workspace?.base ?? "the base branch"} · ${branch}`;
-  if (!verifiedSha || !phases) return `Nothing verified to merge yet · ${branch}`;
+  if (!verifiedSha || !phases) return `Nothing to merge yet · ${branch}`;
   return `Merge takes ${phases} (${verifiedSha.slice(0, 7)}) · ${branch}`;
 }
 
@@ -195,68 +146,36 @@ export function OvernightPlanCard({
     });
   };
   // A started run reads as its progress over a timeline of its phases; a proposal lists them.
-  const started = !proposed && run.phases.length > 0;
-  const quotaWord = (phase: OvernightPhase) => {
-    const quota = details.phaseProgress[phase.id]?.quota;
-    return quota && `Waiting for ${quota.provider} limits · resets ${clockTime(quota.resetsAtMs)}`;
+  const started = !proposed && details.steps.length > 0;
+  const quotaWord = (step: RunStep) => {
+    const quota = details.phaseProgress[step.number]?.quota;
+    return quota && `Waiting for ${quota.provider ? `${quota.provider} ` : ""}limits · resets ${clockTime(quota.resetsAtMs)}`;
   };
-  const steps: AgentPlanStep[] = (started ? [] : run.phases).map((phase) => {
-    const progress = details.phaseProgress[phase.id];
-    const workerTaskIds = progress?.workerTaskIds;
-    const status = quotaWord(phase) || phaseWord(phase.state, over);
-    return {
-      key: phase.id,
-      title: `Phase ${phase.number} · ${phase.name}`,
-      // A phase the run's end cut off is unfinished, not still at work.
-      status: over && MARK[phase.state] === "active" ? "partial" : MARK[phase.state],
-      statusLabel: proposed ? "" : status,
-      live: running,
-      folded: proposed || (phase.state !== "running" && phase.state !== "checking"),
-      detail: proposed ? (
-        <div className="flex flex-col gap-1.5">
-          {phase.scope && <p>{phase.scope}</p>}
-          <DoneWhen criteria={phase.doneWhen} />
-        </div>
-      ) : (
-        <div className="flex flex-col gap-1.5">
-          {Boolean(workerTaskIds?.length) && (
-            <PhaseWork runId={run.id} phaseId={phase.id} requestId={phase.requestId} />
-          )}
-          {(phase.scope || phase.doneWhen.length > 0) && (
-            <details>
-              <summary className={disclosureRow}>
-                What it covers
-              </summary>
-              <div className="flex flex-col gap-1.5 pt-1">
-                {phase.scope && <p>{phase.scope}</p>}
-                <DoneWhen
-                  criteria={phase.doneWhen}
-                  results={progress?.criteria}
-                />
-              </div>
-            </details>
-          )}
-        </div>
-      ),
-    };
-  });
+  const steps: AgentPlanStep[] = started
+    ? []
+    : details.steps.map((step) => {
+        const phase = sourcePhase(run, step);
+        return {
+          key: `phase-${step.number}`,
+          title: `Phase ${step.number} · ${step.name}`,
+          status: MARK[step.mark],
+          statusLabel: proposed ? "" : quotaWord(step) || phaseWord(step.mark, over),
+          live: running,
+          folded: true,
+          detail: (
+            <div className="flex flex-col gap-1.5">
+              {phase?.scope && <p>{phase.scope}</p>}
+              <DoneWhen lines={phase?.doneWhen ?? []} />
+            </div>
+          ),
+        };
+      });
+  // A bare goal: the run's thread writes the plan first.
   if (!started && steps.length === 0)
     steps.push({
-      key: "phase-0",
-      title: "Phase 0 · Write the plan",
-      detail: run.planning ? (
-        <div className="flex flex-col gap-1.5">
-          <PhaseWork
-            runId={run.id}
-            phaseId="phase-0"
-            requestId={run.planning.requestId}
-            planId={run.planning.planId}
-          />
-          <p>{run.goal}</p>
-        </div>
-      ) : (
-        run.goal
-      ),
+      key: "plan",
+      title: "Write the plan",
+      detail: run.goal,
       status: running ? "active" : "pending",
       statusLabel: running ? "Writing the plan" : "Ready to plan",
       folded: !running,
@@ -340,7 +259,7 @@ export function OvernightPlanCard({
                   >
                     {run.merged?.verifiedCommit === details.verifiedSha ? "Merged" : "Merge"}
                   </Button>
-                  {details.remainingPhaseIds.length > 0 && (
+                  {details.remaining > 0 && (
                     <Button
                       type="button"
                       size="sm"
@@ -375,8 +294,8 @@ export function OvernightPlanCard({
           <RunProgress model={model} over={over} ending={ending} />
           <Timeline
             aria-label="Phases"
-            events={run.phases.map((phase) =>
-              phaseEvent(run, phase, over, quotaWord(phase), details.phaseProgress[phase.id]?.criteria),
+            events={details.steps.map((step) =>
+              phaseEvent(run, step, over, quotaWord(step), details.phaseProgress[step.number]?.workerTaskIds ?? []),
             )}
           />
         </>
@@ -387,7 +306,7 @@ export function OvernightPlanCard({
           {details.outcome?.[0] && <p className="text-sm">{details.outcome[0]}</p>}
           <p className="text-muted-foreground truncate text-xs" title={run.workspace?.branch}>
             {/* The report's own second line, until the work is merged. */}
-            {run.merged || !details.outcome?.[1] ? whereLine(run, details.verifiedSha) : details.outcome[1]}
+            {run.merged || !details.outcome?.[1] ? whereLine(run, details.steps, details.verifiedSha) : details.outcome[1]}
           </p>
           {/* The report's third line, counted now. */}
           <p className="text-muted-foreground text-xs">
@@ -475,9 +394,7 @@ export function OvernightPlanCard({
               ? "Waiting for limits"
               : run.state === "preparing"
                 ? "Preparing the worktree"
-                : run.state === "planning"
-                  ? "Writing the plan"
-                  : "Working through the plan"}
+                : "Writing the plan"}
         </p>
       )}
     </AgentPlan>
@@ -500,44 +417,39 @@ function spanWords(ms: number): string {
   return hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
 }
 
+/** The plan's own phase a step carries out: its scope and "done when". */
+function sourcePhase(run: OvernightRun, step: RunStep): OvernightPhase | undefined {
+  return run.phases.find((phase) => phase.number === step.number);
+}
+
 /**
- * A started run's progress: the phase at work and how many are verified, settling into how the
- * run came out.
+ * A started run's progress: the phase at work and how many are done, settling into how the run
+ * came out.
  */
 function RunProgress({ model, over, ending }: { model: OvernightCardModel; over: boolean; ending: boolean }) {
-  const { run } = model;
-  const selected = run.phases.filter((phase) => phase.state !== "skipped");
-  const verified = selected.filter((phase) => phase.state === "verified").length;
-  const counted = `${verified} of ${selected.length} verified`;
+  const { run, details } = model;
+  const { done, worked } = phasesDone(details.steps);
+  const counted = `${done} of ${worked} done`;
   if (over) {
     const status: JobOutcomeStatus =
-      verified === selected.length ? "success" : verified > 0 ? "partial" : run.stop?.type === "stopped" ? "cancelled" : "failed";
+      done === worked ? "success" : done > 0 ? "partial" : run.stop?.type === "stopped" ? "cancelled" : "failed";
     const took =
       run.startedAtMs !== null && run.finishedAtMs !== null ? spanWords(run.finishedAtMs - run.startedAtMs) : undefined;
-    return (
-      <JobProgress
-        title={`${counted}`}
-        done={verified}
-        total={selected.length}
-        meta={took}
-        outcome={{ status }}
-      />
-    );
+    return <JobProgress title={counted} done={done} total={worked} meta={took} outcome={{ status }} />;
   }
-  const index = selected.findIndex((phase) => phase.state === "running" || phase.state === "checking");
-  const current = index >= 0 ? selected[index] : undefined;
+  const current = details.steps.find((step) => step.mark === "working");
   const title = ending
     ? "Ending the run"
     : run.state === "preparing"
       ? "Preparing the worktree"
       : current
-        ? `Phase ${index + 1} of ${selected.length} · ${current.name}`
+        ? phaseTitle(current, details.steps.length)
         : "Starting the next phase";
   return (
     <JobProgress
       title={title}
-      done={verified}
-      total={selected.length}
+      done={done}
+      total={worked}
       meta={counted}
       description={run.state === "waitingQuota" ? "Waiting for limits" : undefined}
     />
@@ -547,48 +459,45 @@ function RunProgress({ model, over, ending }: { model: OvernightCardModel; over:
 /** A phase on the run's timeline: when it ran, how it came out, and its work behind a disclosure. */
 function phaseEvent(
   run: OvernightRun,
-  phase: OvernightPhase,
+  step: RunStep,
   over: boolean,
   quota: string | undefined,
-  results: Readonly<Record<string, string>> | undefined,
+  taskIds: readonly string[],
 ): TimelineEvent {
-  const now = !over && (phase.state === "running" || phase.state === "checking");
-  const future = phase.state === "pending" || (phase.state === "skipped" && !over);
-  const at = now ? phase.startedAtMs : (phase.settledAtMs ?? phase.startedAtMs);
+  const now = !over && step.mark === "working";
+  const future = step.mark === "pending" || (step.mark === "skipped" && !over);
+  const at = now ? step.startedAtMs : (step.endedAtMs ?? step.startedAtMs);
   return {
-    id: phase.id,
+    id: `phase-${step.number}`,
     when: now ? "now" : future ? "future" : "past",
     time: at !== null && !future ? clockTime(at) : "",
-    title: `Phase ${phase.number} · ${phase.name}`,
-    detail: quota || phaseOutcome(run, phase, over) || sentenceCase(phaseWord(phase.state, over)),
-    more: <PhaseMore run={run} phase={phase} open={now} results={results} />,
+    title: `Phase ${step.number} · ${step.name}`,
+    detail: quota || phaseOutcome(run, step, over) || sentenceCase(phaseWord(step.mark, over)),
+    more: <PhaseMore phase={sourcePhase(run, step)} open={now} taskIds={taskIds} />,
   };
 }
 
 /** A phase's workers and what it covers; open while the phase is at work. */
 function PhaseMore({
-  run,
   phase,
   open,
-  results,
+  taskIds,
 }: {
-  run: OvernightRun;
-  phase: OvernightPhase;
+  phase: OvernightPhase | undefined;
   open: boolean;
-  /** An older run's checks of each criterion. */
-  results: Readonly<Record<string, string>> | undefined;
+  taskIds: readonly string[];
 }) {
-  const covers = (phase.scope || phase.doneWhen.length > 0) && (
+  const covers = phase && (phase.scope || phase.doneWhen.length > 0) && (
     <details>
       <summary className={cn(disclosureRow, "text-xs")}>What it covers</summary>
       <div className="text-muted-foreground flex flex-col gap-1.5 pt-1 text-xs">
         {phase.scope && <p>{phase.scope}</p>}
-        <DoneWhen criteria={phase.doneWhen} results={results} />
+        <DoneWhen lines={phase.doneWhen} />
       </div>
     </details>
   );
-  if (phase.requestId === null) return covers || null;
-  const work = <PhaseWork runId={run.id} phaseId={phase.id} requestId={phase.requestId} />;
+  if (taskIds.length === 0) return covers || null;
+  const work = <PhaseWork taskIds={taskIds} />;
   return (
     <div className="text-muted-foreground flex flex-col gap-1 pt-1 text-xs">
       {open ? (
@@ -604,24 +513,15 @@ function PhaseMore({
   );
 }
 
-/** A phase's done-when criteria, each with what its checks found once they ran. */
-function DoneWhen({
-  criteria,
-  results,
-}: {
-  criteria: readonly { id: string; text: string }[];
-  results?: Readonly<Record<string, string>> | undefined;
-}) {
-  if (criteria.length === 0) return null;
+/** A phase's "done when" lines. */
+function DoneWhen({ lines }: { lines: readonly { id: string; text: string }[] }) {
+  if (lines.length === 0) return null;
   return (
     <div>
       <p className="font-medium">Done when</p>
       <ul className="list-inside list-disc space-y-1">
-        {criteria.map((criterion) => (
-          <li key={criterion.id}>
-            {criterion.text}
-            {results?.[criterion.id] && ` · ${results[criterion.id]}`}
-          </li>
+        {lines.map((line) => (
+          <li key={line.id}>{line.text}</li>
         ))}
       </ul>
     </div>

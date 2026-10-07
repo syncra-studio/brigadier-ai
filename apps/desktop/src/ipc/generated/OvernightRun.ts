@@ -7,7 +7,6 @@ import type { Directives } from "./Directives";
 import type { OvernightPhase } from "./OvernightPhase";
 import type { OvernightRunId } from "./OvernightRunId";
 import type { OvernightState } from "./OvernightState";
-import type { PlanningPhase } from "./PlanningPhase";
 import type { RunGap } from "./RunGap";
 import type { RunMerge } from "./RunMerge";
 import type { RunNotification } from "./RunNotification";
@@ -46,11 +45,11 @@ words: string,
  */
 goal: string, 
 /**
- * Rules and settled decisions every lead, verifier and judge gets verbatim.
+ * Rules and settled decisions the thread gets verbatim in the run's note.
  */
 rules: string, sources: Array<SourceSnapshot>, 
 /**
- * Empty for a bare goal until Phase 0 writes the plan.
+ * Empty for a bare goal: the thread writes its plan (`plan_phases`).
  */
 phases: Array<OvernightPhase>, directives: Directives, 
 /**
@@ -75,12 +74,8 @@ windDownAtMs: number | null,
  */
 workspace: RunWorkspace | null, 
 /**
- * Phase 0, for a bare goal.
- */
-planning: PlanningPhase | null, 
-/**
- * The newest commit of the run branch whose every phase up to it is verified: the
- * card's Merge takes this, never the branch's head.
+ * The accepted tip: the run branch when the thread settled the last of the phases done
+ * in a row (`settle_step`). The card's Merge takes this, never the branch's head.
  */
 verifiedCommit: string | null, 
 /**
@@ -99,15 +94,6 @@ reportMessageId: string | null,
  * The report's three opening paragraphs, for a restored card whose message is off-page.
  */
 reportOutcome: [string, string, string] | null, 
-/**
- * The report's shape it was written in ([`REPORT_VERSION`]); 0 before versions existed.
- */
-reportVersion: number, 
-/**
- * The report rendered again from the run's records in the current shape, shown in place
- * of its message's text (which stays as it was written).
- */
-reportText: string | null, 
 /**
  * The run branch's tip when the report was written: the commits it lists end here, even
  * after Continue adds more to the branch or the branch is gone.

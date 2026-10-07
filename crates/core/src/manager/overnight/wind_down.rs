@@ -17,7 +17,7 @@ use std::time::Duration;
 use super::super::SessionManager;
 use super::run::run_request;
 use crate::model::{ConversationId, DomainEvent, OvernightRunId};
-use crate::overnight::{Deadline, OvernightRun, OvernightState, PhaseState, StopReason};
+use crate::overnight::{Deadline, OvernightRun, OvernightState, StopReason};
 use crate::work::TaskState;
 use crate::{Result, now_ms};
 
@@ -83,11 +83,7 @@ impl SessionManager {
         self.change_run(conversation_id, run_id, command, |run, _| {
             if matches!(
                 run.state,
-                OvernightState::Preparing
-                    | OvernightState::Planning
-                    | OvernightState::Running
-                    | OvernightState::PhaseGate
-                    | OvernightState::WaitingQuota
+                OvernightState::Preparing | OvernightState::Running | OvernightState::WaitingQuota
             ) {
                 run.state = OvernightState::WindingDown;
                 run.stop = Some(StopReason::Deadline);
@@ -196,9 +192,8 @@ impl SessionManager {
         // Then what it committed on the run's branch gets its review before the report.
         self.quiesce_thread(&run).await;
         self.scan_run_branch(&run).await;
-        // Phases that weren't checked settle as what they are. A run already settled (its report
-        // was cut off by a restart or failed once) goes straight on to the report.
-        let reason = stop_words(run.stop.as_ref());
+        // Then the report. A run already reporting (its report was cut off by a restart or
+        // failed once) goes straight on to it.
         let reporting = self
             .core
             .board(&run.conversation_id)
@@ -215,7 +210,7 @@ impl SessionManager {
                     if now.state != OvernightState::WindingDown {
                         return None;
                     }
-                    settle_cut_off(now, &reason);
+                    now.state = OvernightState::Reporting;
                     Some(())
                 })
                 .await
@@ -345,15 +340,10 @@ impl SessionManager {
         for run in runs {
             self.release_run(&run.id);
             drop(self.overnight.reporting.lock().await);
-            let reason = if report {
-                "the session was archived"
-            } else {
-                "the session was deleted"
-            };
             let settled = self
                 .change_run_if(&run, |now| {
                     if now.state == OvernightState::WindingDown {
-                        settle_cut_off(now, reason);
+                        now.state = OvernightState::Reporting;
                     }
                     if !report {
                         now.state = OvernightState::Finished;
@@ -397,11 +387,7 @@ fn fence(run: &mut OvernightRun) -> bool {
             run.revision += 1;
             true
         }
-        OvernightState::Preparing
-        | OvernightState::Planning
-        | OvernightState::Running
-        | OvernightState::PhaseGate
-        | OvernightState::WaitingQuota => {
+        OvernightState::Preparing | OvernightState::Running | OvernightState::WaitingQuota => {
             run.state = OvernightState::WindingDown;
             run.stop.get_or_insert(StopReason::Stopped);
             true
@@ -411,30 +397,6 @@ fn fence(run: &mut OvernightRun) -> bool {
         | OvernightState::Finished
         | OvernightState::Superseded => false,
     }
-}
-
-/// Phases (and Phase 0) that were running when the run ended settle as partial, `reason`
-/// saying why; the run goes on to its report.
-fn settle_cut_off(run: &mut OvernightRun, reason: &str) {
-    for phase in &mut run.phases {
-        if !matches!(phase.state, PhaseState::Running | PhaseState::Checking) {
-            continue;
-        }
-        // Cut off by the run's end, it is unfinished, not blocked: it needs nothing.
-        phase.state = PhaseState::Partial;
-        phase.gaps.push(format!("{CUT_OFF}{reason}."));
-        phase.settled_at_ms = Some(now_ms());
-    }
-    if let Some(planning) = run.planning.as_mut()
-        && matches!(planning.state, PhaseState::Running | PhaseState::Checking)
-    {
-        planning.state = PhaseState::Blocked;
-        planning
-            .gaps
-            .push(format!("The plan wasn't finished: {reason}."));
-        planning.settled_at_ms = Some(now_ms());
-    }
-    run.state = OvernightState::Reporting;
 }
 
 /// A task that works for this run's current generation.
@@ -478,10 +440,7 @@ pub(super) fn to_you(text: &str) -> String {
         })
 }
 
-/// How the gap of a phase the run's end cut off begins; why the run ended follows.
-pub(super) const CUT_OFF: &str = "It wasn't finished: ";
-
-/// Why the run ended, as a phase's gap says it.
+/// Why the run ended, as the thread and its workers are told.
 fn stop_words(stop: Option<&StopReason>) -> String {
     match stop {
         Some(StopReason::Stopped) => "the user stopped the run".into(),
@@ -499,44 +458,22 @@ fn stop_words(stop: Option<&StopReason>) -> String {
 mod tests {
     use super::*;
 
-    /// The night of 2026-10-03 (the app's fixture of it), as it was mid-run.
     fn running() -> OvernightRun {
-        let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../../apps/desktop/src/fixtures/boards/overnight-2026-10-03.json"
-        ))
-        .expect("the fixture");
-        let mut run: OvernightRun = serde_json::from_value(
-            fixture["overnight"]
-                .as_object()
-                .and_then(|runs| runs.values().next())
-                .cloned()
-                .expect("the run"),
+        OvernightRun::for_test(
+            crate::model::ConversationId("c".into()),
+            "Speed",
+            Vec::new(),
         )
-        .expect("a run");
-        run.state = OvernightState::Running;
-        run.stop = None;
-        run.phases[0].state = PhaseState::Running;
-        run.phases[0].criteria.clear();
-        run
     }
 
     #[test]
-    fn a_closing_session_fences_its_run_and_settles_what_it_cut_off() {
+    fn a_closing_session_fences_its_run() {
         let mut run = running();
         assert!(fence(&mut run));
         assert_eq!(run.state, OvernightState::WindingDown);
         assert_eq!(run.stop, Some(StopReason::Stopped));
         // Fencing again, or a run already ending, changes nothing.
         assert!(!fence(&mut run));
-        settle_cut_off(&mut run, "the session was deleted");
-        assert_eq!(run.state, OvernightState::Reporting);
-        assert_eq!(run.phases[0].state, PhaseState::Partial);
-        assert!(
-            run.phases[0]
-                .gaps
-                .last()
-                .is_some_and(|gap| gap.ends_with("the session was deleted."))
-        );
         // A proposal nobody started is dropped; a finished run stays as it is.
         let mut proposed = running();
         proposed.state = OvernightState::Proposed;

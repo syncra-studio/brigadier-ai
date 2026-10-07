@@ -361,8 +361,7 @@ fn relanding_in(board: &Board, request: &str) -> bool {
         .any(|task| task.request_id.as_deref() == Some(request) && relanding_pending(task))
 }
 
-/// The overnight run a request belongs to: its phases', its Phase 0's and its report's
-/// requests are named `run-<short run id>-…`.
+/// The overnight run a request belongs to: its requests are named `run-<short run id>-…`.
 pub(crate) fn run_of_request<'a>(board: &'a Board, request: &str) -> Option<&'a OvernightRun> {
     board
         .runs

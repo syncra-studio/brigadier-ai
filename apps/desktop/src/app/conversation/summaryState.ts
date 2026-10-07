@@ -18,7 +18,7 @@ export const keptScroll = new Map<string, number>();
 export function revealPlan(cardId: string): void {
   reveal(() => {
     const run = Object.values(useBoard.getState().board?.overnight ?? {}).find(
-      (candidate) => candidate.state !== "superseded" && (candidate.planId === cardId || candidate.planning?.planId === cardId),
+      (candidate) => candidate.state !== "superseded" && candidate.planId === cardId,
     );
     if (run) return `overnight-${run.id}`;
     // The Plan section shows one plan: an earlier one takes its place until another takes over.

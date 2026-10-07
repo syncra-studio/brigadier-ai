@@ -20,9 +20,8 @@ use super::wind_down::to_you;
 use crate::board::Board;
 use crate::model::{DomainEvent, OvernightRunId, Setup};
 use crate::now_ms;
-use crate::overnight::{
-    Deadline, OvernightRun, REPORT_VERSION, RunNotification, RunRole, StopReason,
-};
+use crate::overnight::{Deadline, OvernightRun, RunNotification, RunRole, StopReason};
+use crate::routing::TurnUsage;
 use crate::sessions::one_line;
 use crate::work::{
     Decision, DecisionKind, DecisionSource, PhaseStage, RequestState, ReviewKind, ReviewRun,
@@ -185,7 +184,6 @@ impl SessionManager {
         }
         now.report_message_id = Some(message_id);
         now.report_outcome = outcome;
-        now.report_version = REPORT_VERSION;
         now.end_commit = tip;
         if now.notification.is_none() {
             now.notification = Some(notification);
@@ -195,8 +193,8 @@ impl SessionManager {
         }
     }
 
-    /// Recorded tokens per provider for this segment's tasks and lead. Only turns belonging to
-    /// them, between its start and `end`, are counted.
+    /// Recorded tokens per provider for this segment's tasks, its thread and the reviews of its
+    /// commits. Only their turns between its start and `end` are counted.
     async fn run_usage(&self, run: &OvernightRun, board: &Board, end: i64) -> Usage {
         let start = run.started_at_ms.unwrap_or(run.created_at_ms);
         let end = run.finished_at_ms.unwrap_or(end);
@@ -209,19 +207,7 @@ impl SessionManager {
             let tokens = turns.map(|turns| {
                 turns
                     .into_iter()
-                    .filter(|turn| turn.at_ms <= end)
-                    .filter(|turn| match turn.task_id.as_ref() {
-                        Some(task_id) => board.tasks.values().any(|task| {
-                            &task.id.0 == task_id
-                                && task
-                                    .run
-                                    .as_ref()
-                                    .is_some_and(|context| context.run_id == run.id)
-                        }),
-                        None => {
-                            turn.conversation_id.as_deref() == Some(run.conversation_id.0.as_str())
-                        }
-                    })
+                    .filter(|turn| turn.at_ms <= end && counts_for(turn, run, board))
                     .map(|turn| turn.input + turn.cached_input + turn.cache_write + turn.output)
                     .sum::<i64>()
             });
@@ -378,6 +364,23 @@ impl SessionManager {
             Some(Setup::Session { repo, .. }) => Some(repo),
             _ => None,
         }
+    }
+}
+
+/// Whether a turn is the run's: one of its tasks', or its session's own (the thread's, and a
+/// review of a commit, counted under `review:<id>`).
+fn counts_for(turn: &TurnUsage, run: &OvernightRun, board: &Board) -> bool {
+    let session = turn.conversation_id.as_deref() == Some(run.conversation_id.0.as_str());
+    match turn.task_id.as_deref() {
+        Some(task_id) if task_id.starts_with("review:") => session,
+        Some(task_id) => board.tasks.values().any(|task| {
+            task.id.0 == task_id
+                && task
+                    .run
+                    .as_ref()
+                    .is_some_and(|context| context.run_id == run.id)
+        }),
+        None => session,
     }
 }
 
@@ -1350,9 +1353,8 @@ fn worker_lines(run: &OvernightRun, board: &Board) -> Vec<String> {
             continue;
         }
         let role = |task: &Task| match (task.role, task.run.as_ref().map(|c| c.role)) {
-            (Some(WorkerRole::Verifier), _) | (_, Some(RunRole::PhaseVerifier)) => "verifier",
-            (Some(WorkerRole::Reviewer), _) | (_, Some(RunRole::PhaseReviewer)) => "review",
-            (_, Some(RunRole::Judge)) => "judge",
+            (Some(WorkerRole::Verifier), _) => "verifier",
+            (Some(WorkerRole::Reviewer), _) | (_, Some(RunRole::Check)) => "review",
             _ => match task.kind {
                 TaskKind::Implement | TaskKind::Merge => "lead",
                 TaskKind::Scout | TaskKind::Research => "scout",
@@ -1541,6 +1543,33 @@ mod tests {
     use super::*;
     use crate::model::ConversationId;
     use crate::overnight::{ObstacleKind, OvernightPhase, OvernightState};
+
+    #[test]
+    fn usage_counts_the_session_s_reviews_with_its_thread() {
+        let run = OvernightRun::for_test(ConversationId("c".into()), "Speed", Vec::new());
+        let turn = |conversation: &str, task: Option<&str>| TurnUsage {
+            at_ms: 1,
+            provider: ProviderKind::Codex,
+            model: "m".into(),
+            conversation_id: Some(conversation.into()),
+            project_id: None,
+            task_id: task.map(str::to_owned),
+            input: 1,
+            cached_input: 0,
+            cache_write: 0,
+            output: 1,
+            step: None,
+            duration_ms: None,
+            request_id: None,
+            context: None,
+            child_thread: None,
+        };
+        let board = Board::default();
+        assert!(counts_for(&turn("c", None), &run, &board));
+        assert!(counts_for(&turn("c", Some("review:01a1")), &run, &board));
+        assert!(!counts_for(&turn("d", Some("review:01a1")), &run, &board));
+        assert!(!counts_for(&turn("c", Some("task-9")), &run, &board));
+    }
 
     fn usage() -> Usage {
         vec![

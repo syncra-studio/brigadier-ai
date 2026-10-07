@@ -6,7 +6,7 @@ import type { StopAfter } from "./StopAfter";
 
 /**
  * The restrictions Brigadier enforces in code. Everything else the user wrote is Rules,
- * passed word for word to every phase lead, verifier and judge.
+ * passed word for word to the thread in the run's note.
  */
 export type Directives = { deadline: Deadline, stopAfter: StopAfter | null, 
 /**

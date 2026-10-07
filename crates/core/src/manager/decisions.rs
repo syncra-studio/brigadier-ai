@@ -443,22 +443,15 @@ impl SessionManager {
     }
 }
 
-/// Whether the lead has nothing left to do with an item the user marked done: its overnight
-/// run ended (or is writing its report), or the phase it was asked for settled.
+/// Whether the thread has nothing left to do with an item the user marked done: its overnight
+/// run ended (or is writing its report).
 fn over_for_the_lead(board: &Board, item: &WaitingItem) -> bool {
     let run = waiting_run(&item.source, item.request_id.as_deref(), board)
         .and_then(|run| board.runs.get(&run));
     let Some(run) = run else {
         return false;
     };
-    if run.state == crate::overnight::OvernightState::Reporting || !run.state.is_active() {
-        return true;
-    }
-    item.request_id.as_deref().is_some_and(|request| {
-        run.phases
-            .iter()
-            .any(|phase| phase.request_id.as_deref() == Some(request) && phase.is_settled())
-    })
+    run.state == crate::overnight::OvernightState::Reporting || !run.state.is_active()
 }
 
 /// Whether a card still waits for the user.
@@ -1526,14 +1519,10 @@ mod tests {
     }
 
     #[test]
-    fn clearing_an_item_of_a_settled_phase_or_an_ended_run_wakes_nobody() {
-        use crate::overnight::{OvernightPhase, OvernightRun, OvernightState, PhaseState};
-        let mut phase = OvernightPhase::new(1, "Measure", "", &["It is measured.".into()], &[]);
+    fn clearing_an_item_of_an_ended_run_wakes_nobody() {
+        use crate::overnight::{OvernightRun, OvernightState};
         let mut run = OvernightRun::for_test(ConversationId("c".into()), "Speed", Vec::new());
-        let request = format!("run-{}-phase-1", run.id.short());
-        phase.request_id = Some(request.clone());
-        phase.state = PhaseState::Running;
-        run.phases = vec![phase];
+        let request = format!("run-{}-g1", run.id.short());
         let mut board = Board::default();
         board.runs.insert(run.id.clone(), run.clone());
         let mut ask = item(
@@ -1545,14 +1534,9 @@ mod tests {
             "Set account_id.",
         );
         ask.request_id = Some(request);
-        // Its phase still works: the lead hears it.
+        // The run still works: the thread hears it.
         assert!(!over_for_the_lead(&board, &ask));
-        // The phase settled: nobody.
-        run.phases[0].state = PhaseState::Partial;
-        board.runs.insert(run.id.clone(), run.clone());
-        assert!(over_for_the_lead(&board, &ask));
-        // The run writes its report, or finished: nobody either.
-        run.phases[0].state = PhaseState::Running;
+        // The run writes its report, or finished: nobody.
         for state in [OvernightState::Reporting, OvernightState::Finished] {
             run.state = state;
             board.runs.insert(run.id.clone(), run.clone());

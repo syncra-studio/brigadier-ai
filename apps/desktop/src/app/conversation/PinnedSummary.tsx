@@ -783,8 +783,7 @@ function SummaryContent({
       ? (s.projects[conversation.projectId]?.name ?? null)
       : null,
   );
-  // The session's own plans, oldest first. A run's own plans (Phase 0's, each phase lead's) show
-  // inside its card instead.
+  // The session's own plans, oldest first. A run's own plan shows as its card instead.
   const planIds = useBoard(
     useShallow((s) =>
       s.board?.conversationId === conversation.id
@@ -795,9 +794,7 @@ function SummaryContent({
         : [],
     ),
   );
-  const plans = planIds.filter(
-    (id) => !overnight.some((card) => card.run.planId === id || card.run.planning?.planId === id),
-  );
+  const plans = planIds.filter((id) => !overnight.some((card) => card.run.planId === id));
   const currentPlanId = useBoard((s) => {
     if (s.board?.conversationId !== conversation.id) return null;
     return contextPlanId(s.board.plans, plans, activePlanRequest(s.board.requests));

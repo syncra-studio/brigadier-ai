@@ -10,6 +10,7 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { OvernightPlanCard } from "@/app/conversation/cards/OvernightPlanCard";
+import { type RunStep, runSteps, type StepMark } from "@/app/conversation/phaseView";
 import { PlanSection } from "@/app/conversation/cards/PlanSection";
 import { PlanCardLink } from "@/app/conversation/cards/PlanCardLink";
 import { PendingActionCard } from "@/app/conversation/ActionCards";
@@ -233,17 +234,6 @@ const proposed: OvernightRun = {
       },
     ],
     dependsOn: index ? [index] : [],
-    state: "pending",
-    requestId: null,
-    startCommit: null,
-    verifiedCommit: null,
-    criteria: [],
-    gaps: [],
-    summary: null,
-    lead: null,
-    nudges: 0,
-    startedAtMs: null,
-    settledAtMs: null,
   })),
   directives: {
     deadline: {
@@ -270,14 +260,11 @@ const proposed: OvernightRun = {
   state: "proposed",
   windDownAtMs: null,
   workspace: null,
-  planning: null,
   verifiedCommit: null,
   gaps: [],
   obstacles: [],
   reportMessageId: null,
   reportOutcome: null,
-  reportVersion: 0,
-  reportText: null,
   endCommit: null,
   merged: null,
   notification: null,
@@ -289,24 +276,45 @@ const proposed: OvernightRun = {
 };
 const baseline: OvernightCardModel = {
   run: proposed,
-  details: { waiting: 1, decided: 3, phaseProgress: {}, remainingPhaseIds: [] },
+  details: { waiting: 1, decided: 3, steps: runSteps(proposed, {}), phaseProgress: {}, remaining: 0 },
 };
+/** The proposal's phases as its plan would record them, marked `marks`. */
+function marked(marks: readonly StepMark[]): RunStep[] {
+  return proposed.phases.map((phase, index) => {
+    const mark = marks[index] ?? "pending";
+    const settled =
+      mark === "done" || mark === "partial" || mark === "blocked"
+        ? {
+            outcome: mark,
+            summary: mark === "done" ? `${phase.name}: every check passed.` : "",
+            left: mark === "done" ? [] : [mark === "blocked" ? "The installer needs your signing account ID." : "The Windows terminal check is left."],
+            tip: mark === "done" ? "abc1234" : null,
+            atMs: now + index * 3600000,
+          }
+        : null;
+    return {
+      number: phase.number,
+      position: index + 1,
+      name: phase.name,
+      mark,
+      settled,
+      startedAtMs: mark === "pending" || mark === "skipped" ? null : now + index * 3000000,
+      endedAtMs: settled?.atMs ?? null,
+    };
+  });
+}
 function variant(
   id: string,
   state: OvernightRun["state"],
   progress: OvernightCardModel["details"]["phaseProgress"] = {},
 ): OvernightCardModel {
   return {
-    run: {
-      ...proposed,
-      id,
-      state,
-      phases: proposed.phases.map((phase, index) => ({
-        ...phase,
-        state: index < 4 ? "verified" : index === 4 ? "running" : "pending",
-      })),
+    run: { ...proposed, id, state },
+    details: {
+      ...baseline.details,
+      steps: marked(["done", "done", "skipped", "done", "working", "pending"]),
+      phaseProgress: progress,
     },
-    details: { ...baseline.details, phaseProgress: progress },
   };
 }
 const overnight: { label: string; model: OvernightCardModel }[] = [
@@ -360,18 +368,18 @@ const overnight: { label: string; model: OvernightCardModel }[] = [
   {
     label: "Writing the plan",
     model: {
-      ...variant("planning", "planning"),
-      run: { ...proposed, id: "planning", state: "planning", phases: [] },
+      run: { ...proposed, id: "writing-plan", state: "running", phases: [] },
+      details: { ...baseline.details, steps: [] },
     },
   },
   {
     label: "Running · lead working",
-    model: variant("running", "running", { "phase-5": { workerTaskIds: ["worker-phase-5"] } }),
+    model: variant("running", "running", { 5: { workerTaskIds: ["worker-phase-5"] } }),
   },
   {
     label: "Waiting for limits",
     model: variant("quota", "waitingQuota", {
-      "phase-5": {
+      5: {
         quota: { provider: "Claude", resetsAtMs: new Date("2026-10-03T03:40:00+03:00").getTime() },
       },
     }),
@@ -381,44 +389,31 @@ const overnight: { label: string; model: OvernightCardModel }[] = [
   {
     label: "Finished · partial",
     model: {
-      run: {
-        ...proposed,
-        id: "partial",
-        state: "finished",
-        phases: proposed.phases.map((phase, index) => ({
-          ...phase,
-          state: (["verified", "partial", "blocked", "skipped", "verified", "pending"] as const)[
-            index
-          ]!,
-        })),
-      },
+      run: { ...proposed, id: "partial", state: "finished", stop: { type: "deadline" } },
       details: {
         ...baseline.details,
+        steps: marked(["done", "partial", "skipped", "blocked", "working", "pending"]),
         outcome: [
-          "2 of 6 phases verified",
+          "1 of 5 phases done",
           "Windows paths are ready; the installer needs your account ID.",
           "1 waiting on you · work saved on its own branch",
         ],
         reportMessageId: "report-partial",
         verifiedSha: "abc1234",
-        remainingPhaseIds: ["phase-2", "phase-3", "phase-6"],
+        remaining: 5,
       },
     },
   },
   {
     label: "Finished · all verified",
     model: {
-      run: {
-        ...proposed,
-        id: "complete",
-        state: "finished",
-        phases: proposed.phases.map((phase) => ({ ...phase, state: "verified" })),
-      },
+      run: { ...proposed, id: "complete", state: "finished", stop: { type: "done" } },
       details: {
         ...baseline.details,
+        steps: marked(["done", "done", "done", "done", "done", "done"]),
         waiting: 0,
         outcome: [
-          "6 of 6 phases verified",
+          "6 of 6 phases done",
           "Windows support is ready to merge.",
           "All checks passed · work saved on its own branch",
         ],
@@ -445,13 +440,10 @@ function OvernightFixture({ initial }: { initial: OvernightCardModel }) {
       await record("startOvernight", command);
       setModel({
         ...model,
-        run: {
-          ...model.run,
-          state: model.run.phases.length ? "running" : "planning",
-          phases: model.run.phases.map((phase, index) => ({
-            ...phase,
-            state: index ? "pending" : "running",
-          })),
+        run: { ...model.run, state: "running" },
+        details: {
+          ...model.details,
+          steps: model.details.steps.map((step, index) => (index === 0 ? { ...step, mark: "working" } : step)),
         },
       });
     },
@@ -463,10 +455,13 @@ function OvernightFixture({ initial }: { initial: OvernightCardModel }) {
         run: {
           ...model.run,
           state: "proposed",
-          phases: model.run.phases.filter((phase) =>
-            model.details.remainingPhaseIds.includes(phase.id),
-          ),
           directives: { ...model.run.directives, deadline: { type: "untilDone" } },
+        },
+        details: {
+          ...model.details,
+          steps: model.details.steps
+            .filter((step) => step.mark !== "done")
+            .map((step) => ({ ...step, mark: "pending", settled: null, startedAtMs: null, endedAtMs: null })),
         },
       });
     },

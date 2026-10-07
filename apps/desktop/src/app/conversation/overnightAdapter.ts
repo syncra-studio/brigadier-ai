@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { openNotificationSettings, request } from "@/ipc/client";
 import type { DiffStat, OvernightRun, TaskId } from "@/ipc/generated";
 import { loadConversation, loadFullText, openConversation, switchBranch } from "@/state/actions";
-import { reportTexts, shownTexts } from "@/app/conversation/phaseView";
+import { currentStep, type RunStep, runSteps } from "@/app/conversation/phaseView";
 import { type Board, updateBoard, useBoard } from "@/state/board";
 import { setUpLidClosed, useKeepAwake } from "@/state/keepAwake";
 import { loadNotificationPermission, useNotifications } from "@/state/notifications";
@@ -19,13 +19,15 @@ export type OvernightDetails = {
    */
   waiting: number;
   decided: number;
+  /** The run's phases as its plan records them (`runSteps`). */
+  steps: readonly RunStep[];
+  /** Each phase's workers and quota wait, by the phase's source number. */
   phaseProgress: Readonly<
     Record<
-      string,
+      number,
       {
-        quota?: { provider: string; resetsAtMs: number };
+        quota?: { provider?: string; resetsAtMs: number };
         workerTaskIds?: readonly TaskId[];
-        criteria?: Readonly<Record<string, "verified" | "partial" | "blocked">>;
       }
     >
   >;
@@ -35,8 +37,8 @@ export type OvernightDetails = {
   outcome?: readonly [string, string, string];
   reportMessageId?: string;
   verifiedSha?: string;
-  /** Use the conductor's remaining work, including intentionally skipped/deferred phases. */
-  remainingPhaseIds: readonly string[];
+  /** Phases not done, skipped ones included: what Continue would take on. */
+  remaining: number;
   /** What Start can't hold, from the daemon's keep-awake status: a run keeps the computer
    * awake, screen on, and going with the lid closed whenever the lid can be held. */
   power?: { onBattery?: boolean; lidWillPause: boolean; offerLidSetup: boolean; lowBattery?: boolean };
@@ -81,37 +83,44 @@ export function currentRuns(runs: Readonly<Record<string, OvernightRun>>): Overn
 export function projectOvernight(run: OvernightRun, board: Board, report?: string): OvernightCardModel {
   const waiting = Object.keys(board.waiting).length;
   const decided = board.decisions.length;
-  const phaseProgress: OvernightDetails["phaseProgress"] = Object.fromEntries(run.phases.map((phase) => {
-    // Verified phases retained by Continue keep their original request and task ownership.
+  const steps = runSteps(run, board.plans);
+  const segments = chain(run, board.overnight);
+  const phaseProgress: OvernightDetails["phaseProgress"] = Object.fromEntries(steps.map((step) => {
+    // A phase's tasks in this run and the segments it continues (the daemon's `phase_tasks`).
     const tasks = Object.values(board.tasks).filter((task) =>
-      task.run?.phaseId === phase.id &&
-      ((task.run.runId === run.id && task.run.generation === run.generation) ||
-        (phase.state === "verified" && phase.requestId !== null && task.requestId === phase.requestId)),
+      task.phase === step.number && task.run !== null && segments.has(task.run.runId),
     ).toSorted((a, b) => a.number - b.number);
     const quotaTask = tasks.filter((task) => task.quotaWait?.resetsAtMs != null)
       .toSorted((a, b) => a.quotaWait!.resetsAtMs! - b.quotaWait!.resetsAtMs!)[0];
-    return [phase.id, {
+    return [step.number, {
       ...(quotaTask ? { quota: {
         provider: quotaTask.route.choice.provider === "claude" ? "Claude" : "Codex",
         resetsAtMs: quotaTask.quotaWait!.resetsAtMs!,
       } } : {}),
       workerTaskIds: tasks.map((task) => task.id),
-      criteria: Object.fromEntries(phase.criteria.map((criterion) => [criterion.id,
-        criterion.status === "met" ? "verified" : criterion.status === "blocked" ? "blocked" : "partial",
-      ])),
     }];
   }));
   // The report renderer owns these three paragraphs; never infer success in the frontend.
   const lines = (run.reportOutcome ?? report?.split(/\n\s*\n/).slice(0, 3))
     ?.map((line) => line.replace(/[*`]/g, "").trim());
   return { run, details: {
-    waiting, decided, phaseProgress,
+    waiting, decided, steps, phaseProgress,
     ...(lines?.length === 3 ? { outcome: lines as [string, string, string] } : {}),
     ...(run.reportMessageId ? { reportMessageId: run.reportMessageId } : {}),
     ...(run.verifiedCommit && run.verifiedCommit !== run.workspace?.baseCommit ? { verifiedSha: run.verifiedCommit } : {}),
-    remainingPhaseIds: run.phases.length === 0 ? ["phase-0"] :
-      run.phases.filter((phase) => phase.state !== "verified").map((phase) => phase.id),
+    remaining: steps.length === 0 ? 1 : steps.filter((step) => step.mark !== "done").length,
   } };
+}
+
+/** The run and the segments it continues, which all work on its branch. */
+function chain(run: OvernightRun, runs: Readonly<Record<string, OvernightRun>>): Set<string> {
+  const ids = new Set([run.id]);
+  let at = run.predecessor ? runs[run.predecessor] : undefined;
+  while (at && !ids.has(at.id)) {
+    ids.add(at.id);
+    at = at.predecessor ? runs[at.predecessor] : undefined;
+  }
+  return ids;
 }
 
 /**
@@ -181,8 +190,7 @@ export function useOvernightCards(conversationId: string): readonly OvernightCar
   const reports = useApp(useShallow((s) => runs.map((run) => {
     const message = s.threads[conversationId]?.items.find((item) => item.id === run.reportMessageId);
     if (!message) return undefined;
-    const texts = shownTexts(s.threads[conversationId]?.fullText ?? {}, reportTexts({ [run.id]: run }));
-    return texts[message.id] ?? message.text;
+    return s.threads[conversationId]?.fullText[message.id] ?? message.text;
   })));
   useEffect(() => {
     for (const run of runs) {
@@ -203,12 +211,11 @@ export function useOvernightCards(conversationId: string): readonly OvernightCar
       offerLidSetup: status.lidClosed === "needsSetup",
       lowBattery: status.lidClosed === "lowBattery",
     };
-    const active = run.phases.find((phase) => phase.state === "running" || phase.state === "checking");
+    // The thread itself waits for quota: the phase it works on waits with it.
+    const active = currentStep(model.details.steps);
     if (run.state === "waitingQuota" && active && leadQuota?.resetsAtMs) {
-      model.details.phaseProgress = { ...model.details.phaseProgress, [active.id]: {
-        ...model.details.phaseProgress[active.id], quota: {
-          provider: active.lead?.provider === "claude" ? "Claude" : "Codex", resetsAtMs: leadQuota.resetsAtMs,
-        },
+      model.details.phaseProgress = { ...model.details.phaseProgress, [active.number]: {
+        ...model.details.phaseProgress[active.number], quota: { resetsAtMs: leadQuota.resetsAtMs },
       } };
     }
     return model;

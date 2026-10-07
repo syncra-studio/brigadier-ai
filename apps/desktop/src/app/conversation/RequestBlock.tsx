@@ -135,7 +135,10 @@ function headerLabel(state: BlockState, elapsed: number, quota = false): string 
   }
 }
 
-/** A phase's header: "Phase 1 · Measure — ✓ verified · 2h 31m", ticking only while it works. */
+/**
+ * An overnight run's header: "Overnight · Windows support — Phase 2 of 3 · Fix · 1h 4m" while it
+ * works, "— ◐ 1 of 3 phases done · 6h 12m" once over; ticking only while it works.
+ */
 function phaseLabel(phase: PhaseView, elapsed: number): string {
   const state = phase.mark ? `${phase.mark} ${phase.word}` : phase.word;
   return phase.startedAtMs === null ? `${phase.title} — ${state}` : `${phase.title} — ${state} · ${formatDuration(elapsed)}`;
@@ -151,7 +154,7 @@ const HEADER_AFTER_MS = 2000;
  */
 const WorkHeader: FC<{
   meta: BlockMeta;
-  /** An overnight phase's block: its header comes from the phase's record. */
+  /** An overnight run's block: its header comes from the run and its plan. */
   phase: PhaseView | null;
   open: boolean;
   foldable: boolean;
@@ -486,7 +489,7 @@ export const RequestBlock: FC = () => {
   const quotaWait = useViewConversation()?.quotaWait ?? null;
   const requestIds = meta?.requestIds;
   const phase = useBoard(
-    useShallow((s) => (meta && s.board && isRunRequest(meta.requestId) ? phaseViewOf(s.board.overnight, meta.requestId) : null)),
+    useShallow((s) => (meta && s.board && isRunRequest(meta.requestId) ? phaseViewOf(s.board.overnight, s.board.plans, meta.requestId) : null)),
   );
   const workersActive = useBoard((s) =>
     Object.values(s.board?.tasks ?? {}).some(
@@ -500,7 +503,7 @@ export const RequestBlock: FC = () => {
   });
   if (!meta) return null;
 
-  // A phase is live until it settles, whatever still waits on the user: that waits in the panel.
+  // A run's block is live until the run is over, whatever still waits on the user: that waits in the panel.
   const live = phase ? !phase.settled : isLive(meta.state);
   const last = meta.texts.length - 1;
   // The final answer is streaming: the workers it waited for are all over. The work folds now,
@@ -511,7 +514,7 @@ export const RequestBlock: FC = () => {
     !workersActive &&
     meta.texts[last]?.position === Number.POSITIVE_INFINITY;
   const done = phase ? phase.settled : meta.state === "done" || answering;
-  // A settled phase folds to its outcome; its lead's replies go into the fold.
+  // A run over folds to its outcome; the thread's replies during it go into the fold.
   const answer = done && last >= 0 && !phase ? last : null;
   const sequence = blockSequence(meta);
   const folded = sequence.filter((entry) =>
@@ -543,7 +546,7 @@ export const RequestBlock: FC = () => {
       data-turn-steers={String(meta.steers.length)}
       className="group/answer relative flex flex-col gap-2 px-2"
     >
-      {/* A run picks each phase lead's model itself: not a change the user made. */}
+      {/* A run picks its models itself: not a change the user made. */}
       {!phase && <ModelChanged model={meta.texts[last]?.model ?? null} picked={meta.picked} />}
       {header && (
         <WorkHeader
@@ -618,7 +621,7 @@ export const RequestBlock: FC = () => {
           {live && (
             <ThreadStatus
               requestIds={meta.requestIds}
-              // A live phase works on, whatever its lead's last turn came to.
+              // A live run works on, whatever the thread's last turn came to.
               state={isLive(meta.state) ? meta.state : "working"}
               thinkingLive={sequence.some((entry) => entry.kind === "thinking" && entry.live)}
               compacting={meta.compactions.some((compaction) => compaction.inTurn && compaction.state === "running")}

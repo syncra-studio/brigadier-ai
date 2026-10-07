@@ -8,10 +8,6 @@ import type { RunRole } from "./RunRole";
  */
 export type RunTaskContext = { runId: OvernightRunId, segment: number, 
 /**
- * The phase it works on; absent before the conductor admits phases (Phase 0, setup).
- */
-phaseId: string | null, 
-/**
  * The run's generation when the task was made; a result from an older one is history.
  */
 generation: number, role: RunRole, 

@@ -88,7 +88,7 @@ impl SessionManager {
         match run.state {
             OvernightState::WindingDown | OvernightState::Reporting => self.wind_down_soon(&run),
             // The thread carries on with the plan; what the restart ended reaches it as usual.
-            OvernightState::Running | OvernightState::PhaseGate | OvernightState::Planning => {
+            OvernightState::Running => {
                 self.tell_thread(
                     &run,
                     "run restarted",

@@ -24,7 +24,7 @@ use super::{SessionManager, blocking};
 use crate::board::Board;
 use crate::model::{ConversationId, DomainEvent, OvernightRunId, Setup};
 use crate::overnight::{
-    AppliedCommand, Deadline, Directives, OvernightPhase, OvernightRun, OvernightState, PhaseState,
+    AppliedCommand, Deadline, Directives, OvernightPhase, OvernightRun, OvernightState,
     ProposedPlan, SourceSnapshot, StopReason,
 };
 use crate::{Error, Result, now_ms};
@@ -59,7 +59,7 @@ pub(crate) struct Runs {
 
 impl SessionManager {
     /// Proposes a run from the user's `words` and the plan read from them (`None`: a bare
-    /// goal, whose plan Phase 0 writes). Replaces an earlier proposal of the session that
+    /// goal, whose plan the thread writes). Replaces an earlier proposal of the session that
     /// wasn't started. Nothing runs until Start.
     pub async fn propose_overnight(
         &self,
@@ -129,14 +129,11 @@ impl SessionManager {
             state: OvernightState::Proposed,
             wind_down_at_ms: None,
             workspace: None,
-            planning: None,
             verified_commit: None,
             gaps: Vec::new(),
             obstacles: Vec::new(),
             report_message_id: None,
             report_outcome: None,
-            report_version: 0,
-            report_text: None,
             end_commit: None,
             merged: None,
             notification: None,
@@ -221,12 +218,6 @@ impl SessionManager {
                     Deadline::At { time } => Some(wind_down_at(now, time.at_ms)),
                     Deadline::UntilDone | Deadline::For { .. } => None,
                 };
-                let chosen = run.directives.clone();
-                for phase in &mut run.phases {
-                    if phase.state == PhaseState::Pending && !selects(&chosen, phase.number) {
-                        phase.state = PhaseState::Skipped;
-                    }
-                }
                 run.state = OvernightState::Preparing;
                 run.generation += 1;
                 run.started_at_ms = Some(now);
@@ -328,9 +319,7 @@ impl SessionManager {
                     run.revision += 1;
                 }
                 OvernightState::Preparing
-                | OvernightState::Planning
                 | OvernightState::Running
-                | OvernightState::PhaseGate
                 | OvernightState::WaitingQuota => {
                     run.state = OvernightState::WindingDown;
                     run.stop = Some(StopReason::Stopped);
@@ -429,21 +418,6 @@ impl SessionManager {
                 // "until done instead" drops the earlier cutoff.
                 if run.directives.deadline == Deadline::UntilDone {
                     run.wind_down_at_ms = None;
-                }
-                // A changed selection: phases not started yet follow it, both ways.
-                let chosen = run.directives.clone();
-                for phase in &mut run.phases {
-                    match phase.state {
-                        PhaseState::Pending if !selects(&chosen, phase.number) => {
-                            phase.state = PhaseState::Skipped;
-                        }
-                        PhaseState::Skipped
-                            if phase.start_commit.is_none() && selects(&chosen, phase.number) =>
-                        {
-                            phase.state = PhaseState::Pending;
-                        }
-                        _ => {}
-                    }
                 }
                 run.problems.clear();
                 if changed {
@@ -574,13 +548,10 @@ impl SessionManager {
             generation: 0,
             state: OvernightState::Proposed,
             wind_down_at_ms: None,
-            planning: None,
             gaps: Vec::new(),
             obstacles: Vec::new(),
             report_message_id: None,
             report_outcome: None,
-            report_version: 0,
-            report_text: None,
             end_commit: None,
             notification: None,
             stop: None,
@@ -798,13 +769,6 @@ fn infos(phases: &[OvernightPhase]) -> Vec<PhaseInfo> {
             depends_on: phase.depends_on.clone(),
         })
         .collect()
-}
-
-fn selects(directives: &Directives, number: u32) -> bool {
-    directives
-        .only
-        .is_none_or(|range| (range.from..=range.to).contains(&number))
-        && !directives.skip.contains(&number)
 }
 
 /// When wind-down starts for a run started at `started` with its report due at `due`: a

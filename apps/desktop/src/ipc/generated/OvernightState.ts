@@ -3,4 +3,4 @@
 /**
  * Where a run is. `Proposed` waits for the user's Start; everything after it is the run's own.
  */
-export type OvernightState = "proposed" | "superseded" | "preparing" | "planning" | "running" | "phaseGate" | "waitingQuota" | "windingDown" | "reporting" | "finished";
+export type OvernightState = "proposed" | "superseded" | "preparing" | "running" | "waitingQuota" | "windingDown" | "reporting" | "finished";

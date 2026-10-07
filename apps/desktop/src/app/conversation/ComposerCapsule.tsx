@@ -70,8 +70,7 @@ function anyPending(board: Board | null, conversationId: string): boolean {
 function useRunPill(conversationId: string): RunPill | null {
   const runs = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.overnight : null));
   const plans = useBoard((s) => s.board?.plans);
-  const tasks = useBoard((s) => s.board?.tasks);
-  return useMemo(() => (runs && plans && tasks ? runPill(runs, plans, tasks) : null), [runs, plans, tasks]);
+  return useMemo(() => (runs && plans ? runPill(runs, plans) : null), [runs, plans]);
 }
 
 /** The newest revision belongs to this request, regardless of its lifecycle. */

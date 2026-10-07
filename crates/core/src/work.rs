@@ -1321,7 +1321,7 @@ pub enum DecisionSource {
     Plan { plan_id: CardId },
     /// A judgement call the orchestrator noted (`note_for_user`).
     Orchestrator,
-    /// An overnight run's conductor: a phase verified, judged partial or moved past.
+    /// An overnight run: a phase the thread settled, or the run it ended.
     Run {
         run_id: crate::model::OvernightRunId,
         phase_id: Option<String>,

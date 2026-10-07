@@ -48,11 +48,11 @@ while time.time() - t0 < a.timeout_min * 60:
         if e["type"] == "overnightUpdated" and e["run"]["id"] == run["id"]:
             now = e["run"]
     if now:
-        line = (now["state"], [(p["name"], p["state"]) for p in now["phases"]])
+        line = (now["state"], now.get("stop"), now.get("verifiedCommit"))
         if line != last:
             print(time.strftime("%T"), json.dumps(line), flush=True); last = line
         if now["state"] == "finished":
-            print("finished", int(time.time() * 1000), "verified", now.get("verifiedCommit"))
+            print("finished", int(time.time() * 1000), "accepted tip", now.get("verifiedCommit"))
             sys.exit(0)
     time.sleep(10)
 sys.exit("timed out")

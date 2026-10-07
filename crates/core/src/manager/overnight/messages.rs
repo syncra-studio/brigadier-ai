@@ -49,7 +49,7 @@ impl SessionManager {
                 )
                 .await?;
             if run.state.is_active() {
-                // User words go straight to the phase lead; no follow-up classification wait.
+                // User words go straight to the thread; no follow-up classification wait.
                 let working = self.working_request(id).await;
                 self.join_working(&conv, message.clone(), working).await;
             } else {
@@ -79,7 +79,7 @@ impl SessionManager {
             )
             .await?;
         // A source/phase brief needs interpretation before the final preview. A bare goal
-        // needs no pre-Start model call: Phase 0 plans it once the user commits to the run.
+        // needs no pre-Start model call: the thread plans it once the user commits to the run.
         let interpret = !continuing
             && (text.to_lowercase().contains("phase")
                 || text.contains(".md")

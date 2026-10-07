@@ -20,10 +20,6 @@ pub(crate) struct ActiveRun {
     pub workspace: Option<RunWorkspace>,
     /// "max N workers": its tasks executing at once.
     pub max_workers: Option<u32>,
-    /// The phase being worked on now (`phase-0` while Phase 0 writes the plan).
-    pub phase_id: Option<String>,
-    /// Phase 0: only the plan is written, nothing changes yet.
-    pub planning: bool,
     /// Ending (Stop, the deadline, a block): no new work starts.
     pub winding_down: bool,
     /// When wind-down starts, for a deadline run (wall clock, ms).
@@ -66,8 +62,6 @@ impl ActiveRuns {
                     rules_hash: rules_hash(&run.rules),
                     workspace: run.workspace.clone(),
                     max_workers: run.directives.max_workers,
-                    phase_id: None,
-                    planning: false,
                     winding_down: matches!(
                         run.state,
                         crate::overnight::OvernightState::WindingDown
@@ -104,7 +98,6 @@ impl ActiveRun {
         RunTaskContext {
             run_id: self.id.clone(),
             segment: self.segment,
-            phase_id: self.phase_id.clone(),
             generation: self.generation,
             role,
             rules_hash: self.rules_hash.clone(),

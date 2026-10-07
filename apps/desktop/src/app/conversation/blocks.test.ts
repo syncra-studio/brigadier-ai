@@ -3,13 +3,13 @@ import { test } from "node:test";
 
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
 import { type Block, type BoardDigest, blockSequence, buildBlocks, judgementCall } from "@/app/conversation/blocks";
-import { reportTexts, shownTexts } from "@/app/conversation/phaseView";
 import { checkersOf, checkResult, checksCount, machineWords, taskRowDetail, taskState } from "@/app/conversation/rowWords";
 import type { Decision, MachineStep, Message, OrchestratorStep, OvernightRun, Plan, Task, UserRequest } from "@/ipc/generated";
 
 // The board of the first real overnight run (2026-10-03), from its stored events
-// (scripts/extract-board-fixture.mjs). Before one row per task, its Phase 1 showed 41 rows and
-// its Phase 2 53, most of them "started working" and "finished" lines of checkers.
+// (scripts/extract-board-fixture.mjs), in the shape a run has now: one request for the whole run,
+// its phases the steps of its plan. Before one row per task, its Phase 1 showed 41 rows and its
+// Phase 2 53, most of them "started working" and "finished" lines of checkers.
 const tasks = night.tasks as unknown as Record<string, Task>;
 const board: BoardDigest = {
   tasks,
@@ -49,14 +49,15 @@ function sequence(block: Block) {
   });
 }
 
-test("all workers in stored phases remain visible, including reviews and verifiers", () => {
-  for (const request of ["run-09cc7d53-phase-2-g1", "run-09cc7d53-phase-1-g1"]) {
-    const block = blockOf(request);
-    const ids = sequence(block).flatMap((entry) => entry.kind === "row" ? entry.row.taskIds ?? [entry.row.taskId] : []);
-    const expected = Object.values(tasks).filter((task) => task.requestId === request).map((task) => task.id);
-    assert.deepEqual(new Set(ids), new Set(expected));
-    assert.equal(block.cards.filter((card) => card.type === "task").length, 0);
-  }
+const RUN_REQUEST = "run-09cc7d53-g1";
+
+test("all workers of the run's phases remain visible in its one block, including reviews and verifiers", () => {
+  const block = blockOf(RUN_REQUEST);
+  const ids = sequence(block).flatMap((entry) => entry.kind === "row" ? entry.row.taskIds ?? [entry.row.taskId] : []);
+  const expected = Object.values(tasks).filter((task) => task.requestId === RUN_REQUEST).map((task) => task.id);
+  assert.equal(expected.length, 44);
+  assert.deepEqual(new Set(ids), new Set(expected));
+  assert.equal(block.cards.filter((card) => card.type === "task").length, 0);
 });
 
 test("an older task's or plan's checker has its own openable lifecycle row", () => {
@@ -74,7 +75,7 @@ test("a decision never folds into a summary of reads", () => {
 });
 
 test("a revised plan shows once, as its newest revision", () => {
-  const plans = blockOf("run-09cc7d53-phase-2-g1").cards.filter((card) => card.type === "plan");
+  const plans = blockOf(RUN_REQUEST).cards.filter((card) => card.type === "plan");
   assert.deepEqual(
     plans.map((card) => card.id),
     ["01a0ff89-d905-7753-bb7f-b310c324a8f6"],
@@ -126,25 +127,33 @@ test("the whole-phase checks of phase 1 open from one row, with the verifier, re
  * with no run, one task held for the user, and a second, separate plan.
  */
 function normalSession() {
-  const phase = "run-09cc7d53-phase-2-g1";
+  const run = Object.values(night.overnight)[0] as unknown as OvernightRun;
+  // Phase 2's records: its tasks, and what the run's request did from when it began.
+  const began = board.plans[run.planId ?? ""]?.steps[1]?.startedAtMs ?? 0;
+  assert.ok(began > 0);
   const request = "normal-1";
-  const move = (requestId: string | null) => (requestId === phase ? request : requestId);
+  const ofPhase = (requestId: string | null, atMs: number) => requestId === RUN_REQUEST && atMs >= began;
   const held = byNumber(26).id;
   const normalTasks = Object.fromEntries(
     Object.values(tasks).map((task) => [
       task.id,
       {
         ...task,
-        requestId: move(task.requestId),
+        requestId: task.phase === 2 ? request : task.requestId,
         run: null,
         ...(task.id === held ? { state: "readyToLand" as const, landed: null } : {}),
       },
     ]),
   );
-  const approved = Object.values(board.plans).find((plan) => plan.requestId === phase && plan.state.type === "approved");
+  const approved = Object.values(board.plans).find(
+    (plan) => ofPhase(plan.requestId, plan.createdAtMs) && plan.state.type === "approved",
+  );
   assert.ok(approved);
   const normalPlans: Record<string, Plan> = Object.fromEntries(
-    Object.values(board.plans).map((plan) => [plan.id, { ...plan, requestId: move(plan.requestId) ?? "" }]),
+    Object.values(board.plans).map((plan) => [
+      plan.id,
+      { ...plan, requestId: ofPhase(plan.requestId, plan.createdAtMs) ? request : plan.requestId },
+    ]),
   );
   normalPlans.separate = {
     ...approved,
@@ -159,12 +168,12 @@ function normalSession() {
     ...board,
     tasks: normalTasks,
     plans: normalPlans,
-    requests: { [request]: { ...board.requests[phase]!, id: request, state: { type: "done" } } },
+    requests: { [request]: { ...board.requests[RUN_REQUEST]!, id: request, startedAtMs: began, state: { type: "done" } } },
     orchestratorSteps: board.orchestratorSteps
-      .filter((step) => step.requestId === phase)
+      .filter((step) => ofPhase(step.requestId, step.atMs))
       .map((step) => ({ ...step, requestId: request })),
     decisions: board.decisions
-      .filter((decision) => decision.requestId === phase)
+      .filter((decision) => ofPhase(decision.requestId, decision.atMs))
       .map((decision) => ({ ...decision, requestId: request })),
   };
   const block = buildBlocks([user], {}, false, normal, []).find((candidate) => candidate.key === request);
@@ -241,24 +250,15 @@ test("a run's decision shows in the thread unless its kind says it is a phase's 
   assert.equal(judgementCall(routine), false);
 });
 
-test("a report rendered again shows, and copies, in place of the text it was written with", () => {
+test("a run's report shows, and copies, as its message was written", () => {
   const run = Object.values(night.overnight)[0] as unknown as OvernightRun;
   const id = run.reportMessageId ?? "";
   const stored = messages.find((message) => message.id === id)?.text ?? "";
-  assert.ok(stored.includes("### Phase 1 · Measure — ✓ verified"), "the stored report is the old one");
-  // Nothing rendered again: the message's own text.
-  const fullText = {};
-  assert.equal(shownTexts(fullText, reportTexts({ [run.id]: { ...run, reportText: null } })), fullText);
-  // The fixture's run holds its report as the daemon renders it again.
-  const again = run.reportText ?? "";
-  assert.ok(again.startsWith("**Faster, leaner overnight runs**: stopped by you at 07:04. 1 of 3 phases verified."));
-  const texts = shownTexts({}, reportTexts({ [run.id]: run }));
-  const shown = buildBlocks(messages, texts, false, board, [])
+  assert.ok(stored.startsWith("**Faster, leaner overnight runs**"));
+  const shown = buildBlocks(messages, {}, false, board, [])
     .flatMap((block) => block.texts)
     .find((text) => text.messageId === id);
-  assert.equal(shown?.text, again);
-  // The stored message is untouched.
-  assert.equal(messages.find((message) => message.id === id)?.text, stored);
+  assert.equal(shown?.text, stored);
 });
 
 test("stored lifecycle events append completions and group adjacent starts on replay", () => {

@@ -238,7 +238,7 @@ export function judgementCall(decision: Decision): boolean {
   return decision.source.type === "run" && decision.kind !== "phaseOutcome";
 }
 
-/** An overnight phase's own request: its lead's turns, tasks and reports. */
+/** An overnight run's own request (or its report's): the thread's turns, tasks and reports during the run. */
 export function isRunRequest(requestId: string | null): boolean {
   return requestId?.startsWith("run-") ?? false;
 }
@@ -403,8 +403,8 @@ export function buildBlocks(
   }
   for (const plan of Object.values(board.plans)) {
     // A session's plan at work lives in the side panel and the composer's phase pill; only one
-    // that waits on a decision shows in the thread. A superseded plan no longer shows; an
-    // overnight phase keeps its plan's row.
+    // that waits on a decision shows in the thread. A superseded plan no longer shows; a
+    // plan of an overnight run's request keeps its row.
     if (plan.state.type === "superseded" || (!isRunRequest(plan.requestId) && !keepPlan(plan))) continue;
     placed.push({
       kind: "card",
