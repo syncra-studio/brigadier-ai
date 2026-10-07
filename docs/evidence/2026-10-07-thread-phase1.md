@@ -238,3 +238,37 @@ passed"):
 
 The phase-1 runs above used daemons built before these review fixes. The fixes change no path
 those runs measured.
+
+## Verification (2026-10-07, after the lead's report)
+
+An independent verifier re-derived the T1 numbers from the raw arm files, re-ran the checks,
+ran a second Codex review of `257bccd8..thread-p1` and two live runs on a dev daemon.
+
+- **T1 numbers:** run 2's times and its corrected 4,091,353 raw hold (Claude 3,370,018 from
+  both the transcripts and `turn_usage`; Codex 721,335 from the three review rollouts). The
+  baseline was under-counted by its verifier's auto-review thread (above), so the ratios are
+  0.80× (run 2) and 0.99× (run 1).
+- **Second Codex review** (`dlg review code --base 257bccd8`, codex-cli 0.160.1): 4 P2s, all
+  real, all fixed with tests (`00202b66`):
+
+| Finding | Fix |
+|---|---|
+| A running review reused for a second asker never tells it | A running review whose worker no longer works passes to the next asker of the range (test `a_verifier_takes_over_its_leads_review_still_running`, which fails without the fix) |
+| A Codex review's thread is recorded only when it ends | Recorded on `thread.started`; a stopped review still records its child (test `a_stopped_review_leaves_its_thread_recorded_for_cleanup`) |
+| A stop during checkout setup leaves an untracked checkout | The checkout is made to the end before the stopped review is disposed |
+| A failed Codex review's tokens are dropped | Counted whatever the outcome (test `a_failed_reviews_use_still_counts`) |
+
+- **Also fixed:** a review that could not run blocked its range from ever being reviewed
+  again; the merge card counted a worker's own pre-fix review; a worker could stay parked on a
+  review that had ended (`00202b66`, `d131602a`).
+- **Live, dev daemon on a scratch data dir, Approve for me** (`ffc3c66e` clone): a Codex
+  worker ran `pnpm test` (95/95) and `git commit` with 0 escalations and landed; the Claude
+  review of its commit ran with `permissionMode: dontAsk` and returned 4 findings. A fresh
+  daemon's default is Full access, and the project remembered Approve for me after the session.
+  That run also found zsh here-documents blocked in a Codex worker ("can't create temp file for
+  here document"): a worker's `TMPPREFIX` is now its scratch (`d131602a`), and a second live
+  run's `cat > f <<EOF` exited 0. Its Claude worker's landing got a Codex review through the
+  reworked runner: clean, 39,565 raw metered, both review threads recorded and removed.
+- **Still open:** the daemon doesn't meter a Codex worker's auto-review threads under Approve
+  for me (the A/B tools now do). The behaviour probes (P1.x) are still pending: Computer Use was
+  still down.
