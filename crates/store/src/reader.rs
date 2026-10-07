@@ -203,6 +203,17 @@ pub(crate) fn unreferenced(conn: &Connection, hashes: &[String]) -> Result<Vec<S
     Ok(free)
 }
 
+/// The check result stored under `key`, with when it was stored.
+pub(crate) fn check_result(conn: &Connection, key: &str) -> Result<Option<(String, i64)>> {
+    let mut statement =
+        conn.prepare_cached("SELECT body, at_ms FROM check_results WHERE key = ?1")?;
+    let mut rows = statement.query(params![key])?;
+    Ok(match rows.next()? {
+        Some(row) => Some((row.get(0)?, row.get(1)?)),
+        None => None,
+    })
+}
+
 /// The database's page size, page count and free pages.
 pub(crate) fn pages(conn: &Connection) -> Result<(u64, u64, u64)> {
     let get = |pragma: &str| -> Result<u64> {

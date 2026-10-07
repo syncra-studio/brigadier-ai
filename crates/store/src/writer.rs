@@ -34,6 +34,13 @@ pub(crate) enum WriteOp {
         prefixes: Vec<String>,
         reply: oneshot::Sender<Result<u64>>,
     },
+    /// Stores (or replaces) a check result.
+    PutCheck {
+        key: String,
+        body: String,
+        at_ms: i64,
+        reply: oneshot::Sender<Result<()>>,
+    },
     /// Each blob with its own cutoff.
     CollectBlobs {
         hashes: Vec<(BlobHash, SystemTime)>,
@@ -67,6 +74,12 @@ enum Mutation {
         streams: Vec<String>,
         prefixes: Vec<String>,
         reply: oneshot::Sender<Result<u64>>,
+    },
+    PutCheck {
+        key: String,
+        body: String,
+        at_ms: i64,
+        reply: oneshot::Sender<Result<()>>,
     },
 }
 
@@ -115,6 +128,17 @@ impl Sorted {
             } => self.mutations.push(Mutation::Delete {
                 streams,
                 prefixes,
+                reply,
+            }),
+            WriteOp::PutCheck {
+                key,
+                body,
+                at_ms,
+                reply,
+            } => self.mutations.push(Mutation::PutCheck {
+                key,
+                body,
+                at_ms,
                 reply,
             }),
             WriteOp::CollectBlobs { hashes, reply } => {
@@ -332,6 +356,12 @@ impl Writer {
                     reply,
                     delete(&savepoint, &mut self.heads, &streams, &prefixes),
                 ),
+                Mutation::PutCheck {
+                    key,
+                    body,
+                    at_ms,
+                    reply,
+                } => Outcome::Put(reply, put_check(&savepoint, &key, &body, at_ms)),
             };
             if outcome.is_ok() {
                 savepoint.commit()?;
@@ -366,6 +396,9 @@ impl Writer {
                     let _ = reply.send(outcome);
                 }
                 Outcome::Delete(reply, outcome) => {
+                    let _ = reply.send(outcome);
+                }
+                Outcome::Put(reply, outcome) => {
                     let _ = reply.send(outcome);
                 }
             }
@@ -490,6 +523,7 @@ impl Writer {
 enum Outcome {
     Append(AppendReply, Result<Vec<Arc<StoredEvent>>>),
     Delete(oneshot::Sender<Result<u64>>, Result<u64>),
+    Put(oneshot::Sender<Result<()>>, Result<()>),
 }
 
 impl Outcome {
@@ -497,6 +531,7 @@ impl Outcome {
         match self {
             Self::Append(_, outcome) => outcome.is_ok(),
             Self::Delete(_, outcome) => outcome.is_ok(),
+            Self::Put(_, outcome) => outcome.is_ok(),
         }
     }
 
@@ -510,8 +545,21 @@ impl Outcome {
             Self::Delete(reply, _) => {
                 let _ = reply.send(Err(err()));
             }
+            Self::Put(reply, _) => {
+                let _ = reply.send(Err(err()));
+            }
         }
     }
+}
+
+/// Stores the check result `body` under `key`, replacing an earlier one.
+fn put_check(conn: &Connection, key: &str, body: &str, at_ms: i64) -> Result<()> {
+    conn.prepare_cached(
+        "INSERT INTO check_results (key, body, at_ms) VALUES (?1, ?2, ?3) \
+         ON CONFLICT (key) DO UPDATE SET body = excluded.body, at_ms = excluded.at_ms",
+    )?
+    .execute(rusqlite::params![key, body, at_ms])?;
+    Ok(())
 }
 
 /// Removes every event of the exact `streams` and of every stream starting with one of

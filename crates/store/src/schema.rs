@@ -30,6 +30,17 @@ fn migrations() -> Migrations<'static> {
             backfill_blob_refs,
         )
         .comment("blob references per event"),
+        // THREAD-PLAN.md Q8 lever 3: a check command's result per (tree, command, inputs) key,
+        // its body opaque to the store. Its log blob is kept alive by the event that stored it;
+        // a result whose blob is gone counts as missing.
+        M::up(
+            "CREATE TABLE check_results (
+                key    TEXT    PRIMARY KEY,
+                body   TEXT    NOT NULL,
+                at_ms  INTEGER NOT NULL
+            ) STRICT, WITHOUT ROWID;",
+        )
+        .comment("check result cache"),
     ])
 }
 

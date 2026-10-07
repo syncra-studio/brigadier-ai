@@ -644,6 +644,31 @@ impl Store {
             .await
     }
 
+    /// The check result stored under `key` (THREAD-PLAN.md Q8 lever 3), with when it was
+    /// stored, in ms since the Unix epoch. The body is the caller's own.
+    pub async fn check_result(&self, key: String) -> Result<Option<(String, i64)>> {
+        self.reads
+            .run(move |conn| reader::check_result(conn, &key))
+            .await
+    }
+
+    /// Stores the check result `body` under `key`, replacing an earlier one.
+    pub async fn put_check_result(&self, key: String, body: String) -> Result<()> {
+        if !self.admitting.load(Ordering::Acquire) {
+            return Err(Error::ShuttingDown);
+        }
+        let at_ms = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |since| since.as_millis() as i64);
+        self.write(|reply| WriteOp::PutCheck {
+            key,
+            body,
+            at_ms,
+            reply,
+        })
+        .await?
+    }
+
     /// Subscribes to committed events. A receiver that falls more than [`FEED_CAPACITY`] events
     /// behind gets `Lagged` and must resync with [`Store::read_since`].
     pub fn subscribe(&self) -> broadcast::Receiver<Arc<StoredEvent>> {
@@ -709,6 +734,32 @@ mod tests {
         SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map_or(0, |since| since.as_millis() as i64)
+    }
+
+    #[tokio::test]
+    async fn a_check_result_is_stored_and_replaced_under_its_key() {
+        let dir = std::env::temp_dir().join(format!("brigadier-store-{}", uuid::Uuid::new_v4()));
+        let store = Store::open(StoreConfig {
+            db_path: dir.join("db.sqlite"),
+            blobs_dir: dir.join("blobs"),
+            readers: 1,
+        })
+        .expect("a store");
+        assert!(store.check_result("k".into()).await.unwrap().is_none());
+        store
+            .put_check_result("k".into(), "first".into())
+            .await
+            .unwrap();
+        store
+            .put_check_result("k".into(), "second".into())
+            .await
+            .unwrap();
+        let (body, at_ms) = store.check_result("k".into()).await.unwrap().unwrap();
+        assert_eq!(body, "second");
+        assert!(at_ms > 0);
+        assert!(store.check_result("other".into()).await.unwrap().is_none());
+        store.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
