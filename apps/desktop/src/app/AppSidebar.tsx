@@ -91,7 +91,7 @@ const NOWHERE = "disabled:opacity-40";
  * are gone) and elsewhere. They stay put while the sidebar collapses and expands.
  */
 export function TitlebarNav() {
-  const { open, toggleSidebar, canToggle, collapseMode, setCollapseMode } = useSidebar();
+  const { open, toggleSidebar, canToggle } = useSidebar();
   const shortcuts = useShortcuts();
   const can = useCanStep();
   return (
@@ -117,12 +117,7 @@ export function TitlebarNav() {
         </TitlebarButton>
         {/* Settings holds the panel open, so it has no toggle; Back and Forward stay put. */}
         {canToggle && (
-          <SidebarToggle
-            open={open}
-            onToggle={toggleSidebar}
-            mode={collapseMode}
-            onModeChange={setCollapseMode}
-          />
+          <SidebarToggle open={open} onToggle={toggleSidebar} />
         )}
       </TitlebarTips>
     </div>

@@ -11,7 +11,9 @@ import {
   SettingsSelect,
   SettingsSwitch,
 } from "@/app/settings/parts";
+import { SidebarClosedChoice } from "@/app/settings/SidebarClosedChoice";
 import { Input } from "@/components/ui/input";
+import { useSidebar } from "@/components/ui/sidebar";
 import type { Density } from "@/ipc/generated";
 import { setDensity } from "@/state/actions";
 import {
@@ -30,6 +32,10 @@ export const GENERAL_ROWS = {
   density: {
     label: "Density",
     description: "Compact makes controls smaller and spacing tighter across the app.",
+  },
+  sidebarClosed: {
+    label: "When the sidebar is closed",
+    description: "Keep a strip of icons at the edge, or hide the sidebar completely.",
   },
   keepAwake: {
     label: "Keep the computer awake",
@@ -57,6 +63,7 @@ const DENSITIES = [
 
 export function GeneralPage() {
   const density = useApp((s) => s.settings.density);
+  const { collapseMode, setCollapseMode } = useSidebar();
   const keepAwake = useApp((s) => s.settings.keepAwake);
   const lidClosed = useApp((s) => s.settings.keepAwakeLidClosed);
   const status = useKeepAwake((s) => s.status);
@@ -81,6 +88,16 @@ export function GeneralPage() {
               value={density}
               options={DENSITIES}
               onChange={(value) => densityAction.run(() => setDensity(value))}
+            />
+          </SettingsRow>
+          <SettingsRow
+            label={GENERAL_ROWS.sidebarClosed.label}
+            description={GENERAL_ROWS.sidebarClosed.description}
+          >
+            <SidebarClosedChoice
+              label={GENERAL_ROWS.sidebarClosed.label}
+              value={collapseMode}
+              onChange={setCollapseMode}
             />
           </SettingsRow>
         </SettingsCard>
