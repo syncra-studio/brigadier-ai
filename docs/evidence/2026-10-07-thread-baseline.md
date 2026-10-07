@@ -47,9 +47,15 @@ outside the repo, under the A/B root `/tmp/brig-ab-1007/<arm>/`, and the run dir
 - **Settled:** the last activity of anything the request started. That includes reviews that end
   after the answer. Tokens are counted from t0 to here.
 - **Tokens:**
-  - Brigadier: the arm's `routing.sqlite` `turn_usage` (`brig_tokens.py`). It was cross-checked
-    against the session transcripts and the daemon's usage events (`armtokens.sh`), and all three
-    agreed in both Brigadier arms.
+  - Brigadier: the arm's `routing.sqlite` `turn_usage` (`brig_tokens.py`), plus the Codex
+    threads it doesn't meter. It is cross-checked against the session transcripts and the daemon's
+    usage events (`armtokens.sh`).
+  - **Corrected on 2026-10-07 by phase 1's verifier.** Under Approve for me, a Codex worker's
+    auto-review (the "guardian") runs in a child thread of its own. Its use is in the child's
+    rollout only: neither the parent thread nor `turn_usage` reports it. Both Brigadier arms' Codex
+    verifiers had one: T1 118,244 raw (rollout `01a11631-3bbe…`), T2 97,814 raw (`01a11673-b17a…`).
+    The first count missed them; the tables below include them. `brig_manifest.py` now lists every
+    Codex child thread, so `armtokens.sh` shows such a gap as a difference.
   - /delegator: `dlg_manifest.py` → `tokens.py`. That covers the coordinator, every worker and
     every Codex session started in one of the run's checkouts. Every saved review file was matched
     to a counted session. For T2 it also covers the sessions of the workers' own dev-app daemons
@@ -77,14 +83,14 @@ limit wait is the same, and no arm is quota-affected.
 | | Codex | 40,405 | 113,536 | not reported | 1,365 | 155,306 | 41,770 |
 | | **Total** | | | | | **7,058,215** | 315,064 |
 | T1 Brigadier | Claude | 112 | 3,011,483 | 115,722 | 30,975 | 3,158,292 | 146,809 |
-| | Codex | 221,451 | 1,591,808 | not reported | 13,472 | 1,826,731 | 234,923 |
-| | **Total** | | | | | **4,985,023** | 381,732 |
+| | Codex | 248,174 | 1,682,688 | not reported | 14,113 | 1,944,975 | 262,287 |
+| | **Total** | | | | | **5,103,267** | 409,096 |
 | T2 /delegator | Claude | 728 | 46,426,365 | 507,754 | 153,239 | 47,088,086 | 661,721 |
 | | Codex | 140,392 | 1,069,824 | not reported | 6,082 | 1,216,298 | 146,474 |
 | | **Total** | | | | | **48,304,384** | 808,195 |
 | T2 Brigadier | Claude | 108 | 3,241,864 | 109,967 | 26,361 | 3,378,300 | 136,436 |
-| | Codex | 215,266 | 2,213,760 | not reported | 17,307 | 2,446,333 | 232,573 |
-| | **Total** | | | | | **5,824,633** | 369,009 |
+| | Codex | 241,938 | 2,284,416 | not reported | 17,793 | 2,544,147 | 259,731 |
+| | **Total** | | | | | **5,922,447** | 396,167 |
 
 Codex's input includes its cached input. Here "uncached input" is input minus cached.
 
@@ -93,13 +99,14 @@ Who used it in the Brigadier arms (`by_model_role` in `tokens.json`):
   - orchestrator Claude Opus high: 210,043;
   - lead Claude Opus at **medium**: 2,948,249;
   - Codex `gpt-6-astra` (the two automatic reviews): 674,953;
-  - Codex `gpt-6.1-sol` medium (the automatic verifier): 1,151,778.
+  - Codex `gpt-6.1-sol` medium (the automatic verifier): 1,151,778, plus its auto-review child
+    thread 118,244.
 - **T2:**
   - orchestrator: 242,941;
   - lead Claude Opus medium: 3,135,359;
   - `gpt-6-astra` (the automatic outline review, which held the lead about 2 min, and the code
     review): 900,103;
-  - `gpt-6.1-sol` (the verifier): 1,546,230.
+  - `gpt-6.1-sol` (the verifier): 1,546,230, plus its auto-review child thread 97,814.
 
 ### "Only Thinking" (Brigadier, replayed through the app's row code at `257bccd8`)
 

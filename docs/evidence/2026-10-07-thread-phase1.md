@@ -8,7 +8,7 @@ artifacts are outside the repo under `/tmp/brig-ab-1007/<arm>/`.
 
 | Done-when | Result |
 |---|---|
-| T1 lands verified in ≤ 480 s, tokens ≤ 0.6× baseline (≤ 2,991,014 raw) | **Missed.** Run 2 landed in **357.2 s** (met), but used **4,091,353 raw = 0.82×** (missed). Run 1 missed both (834.7 s, 5,052,925 raw = 1.01×) |
+| T1 lands verified in ≤ 480 s, tokens ≤ 0.6× baseline (≤ 3,061,960 raw) | **Missed; accepted by the user.** Run 2 landed in **357.2 s** (met), but used **4,091,353 raw = 0.80×** (missed). Run 1 missed both (834.7 s, 5,052,925 raw = 0.99×) |
 | 0 automatic verifiers or reviewers; every landing has a `ReviewRun` whose findings reach the thread, one merged before its review ended | Met: live in both runs, plus a flow test |
 | Approve for me: `pnpm test` (Chromium) and `git commit` succeed for a Claude and a Codex worker, 0 escalations | Met, after two fixes found on the way (`90f1f2c8`, `3278280c`) |
 | Overnight smoke (2 small phases) completes on the old conductor with the new texts | Met: both phases verified in 130 s, 0 cards |
@@ -34,8 +34,8 @@ includes reviews and any fix the orchestrator chose after the answer.
 | Verified landing | **834.7 s** (first landing); 1573.7 s with the post-answer fix | **357.2 s** | 885.9 s |
 | Final answer | 850.8 s; 1638.2 s with the fix | 371.5 s | 899.6 s |
 | Settled | 1638.2 s | 434.6 s | — |
-| Tokens raw, to settled | **5,052,925 (1.01×)** | **4,091,353 (0.82×)** | 4,985,023 |
-| Tokens raw, to the first answer | 2,504,923 (0.50×) | 3,812,891 (0.76×): everything but the landing review | — |
+| Tokens raw, to settled | **5,052,925 (0.99×)** | **4,091,353 (0.80×)** | 5,103,267 |
+| Tokens raw, to the first answer | 2,504,923 (0.49×) | 3,812,891 (0.75×): everything but the landing review | — |
 | Checks on the result tip | `6333d009`: install, typecheck, lint, test all 0 | `e03df2d9`: all 0 | all 0 |
 | Longest "only Thinking" (replay) | 3 s | 2 s | 4 s |
 | Claude five-hour quota, start → end | 77 % → 88 % | 7 % → 16 % (the second account) | 14 % → 38 % |
@@ -91,20 +91,27 @@ rollouts:
 - review `01a116c4…`: rollout `01a116c4-fe36…`, 278,462 raw.
 
 The fixed code reads the same two numbers from the real rollouts. The corrected split is in
-`t1-p1b/tokens-corrected.json`. No other arm is affected:
-- run 1's reviews were all Claude and fully metered;
-- the baseline arms have no unmatched Codex child threads (checked against every rollout of the
-  day).
+`t1-p1b/tokens-corrected.json`. Run 1's reviews were all Claude and fully metered.
+
+**The baseline was under-counted too (found by the verifier).** Under Approve for me, a Codex
+worker's auto-review (the "guardian") runs in a child thread whose use only its rollout holds.
+The baseline T1 verifier had one (118,244 raw), so the T1 baseline is **5,103,267** raw, not
+4,985,023, and every ratio here uses the corrected figure (0.6× = 3,061,960). The T2 baseline
+gains 97,814 the same way. Runs 1 and 2 ran at Full access, which has no guardian. The daemon
+still doesn't meter guardian threads; `brig_manifest.py` now lists every Codex child thread, so
+`armtokens.sh` reproduces both corrections (run 2: transcripts 4,091,353 against `turn_usage`
+3,659,467; baseline: 5,103,267 against 4,985,023).
 
 ### Why the token number is missed
 
 Phase 1 removed the automatic verifier (1,151,778 raw in the baseline) and gave every landing one
 review. But the lead's own session is about 3.1 M raw, and 96 % of that is cache reads over its 48
-calls. That is already more than the 2,991,014 target on its own. The Q7 floor also lifts the lead
+calls. That is already more than the 3,061,960 target on its own. The Q7 floor also lifts the lead
 from medium to high, and it isn't any cheaper. Phase 1 doesn't change how a lead works, so the
 token target can't be met by phase 1's cuts alone. Getting it down means reducing the lead's own
 context or turns, for example a leaner brief, fewer self-checks, or a smaller reading footprint.
-That is for the user to rule on: keep the 0.6× target for a later phase, or change it.
+**The user's ruling (2026-10-07):** the miss is accepted. 0.80× stands as phase 1's result, and
+0.6× is carried as a goal for phase 3 (workers start warm and lean).
 
 ## Done-when 2: no automatic checkers, and every landing reviewed
 

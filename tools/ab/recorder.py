@@ -78,6 +78,15 @@ def backfill():
 import glob
 H = os.path.expanduser("~"); keep = os.path.join(out, "..", "transcripts")
 sessions = set()
+parent_of = {}
+def codex_children(sid):
+    """Rollouts of the Codex threads `sid` started (a review's, an auto-review's), which name it
+    as `parent_thread_id` in their first line."""
+    for f in glob.glob(f"{H}/.codex/sessions/*/*/*/rollout-*.jsonl"):
+        if f not in parent_of:
+            try: parent_of[f] = json.loads(open(f).readline())["payload"].get("parent_thread_id")
+            except Exception: continue
+        if parent_of[f] == sid: yield f
 def keeper():
     """Hard-links every session transcript/rollout as soon as it exists: Brigadier deletes
     them when a task is cleaned up, and a hard link keeps the file (appends included)."""
@@ -88,6 +97,7 @@ def keeper():
                 files += [(f, f"claude/{sid}/subagents/{os.path.basename(f)}") for f in glob.glob(f"{H}/.claude/projects/*/{sid}/subagents/*.jsonl")]
             else:
                 files = [(f, f"codex/{os.path.basename(f)}") for f in glob.glob(f"{H}/.codex/sessions/*/*/*/rollout-*{sid}.jsonl")]
+                files += [(f, f"codex/{os.path.basename(f)}") for f in codex_children(sid)]
             for src, rel in files:
                 dst = os.path.join(keep, rel)
                 if not os.path.exists(dst):
