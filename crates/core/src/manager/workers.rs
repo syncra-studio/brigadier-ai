@@ -1263,10 +1263,7 @@ impl SessionManager {
             append_system_prompt: Some(prompt),
             mcp_servers: vec![self.brigadier_server(worker_grant, WORKER_TOOL_TIMEOUT_SECS, true)],
             tools: ToolSet::Lean,
-            env: vec![(
-                "TMPDIR".into(),
-                workspace.scratch.to_string_lossy().into_owned(),
-            )],
+            env: worker_env(&workspace.scratch),
             unset_env: Vec::new(),
             low_priority: true,
             record_to: None,
@@ -2176,6 +2173,19 @@ impl SessionManager {
                 Some(super::review_runs::WAITING_FOR_REVIEW.into()),
             )
             .await;
+            // A review that ended in between found the worker not blocked yet: its message
+            // started the next turn, so nothing is waited for.
+            if !self.review_pending(&task).await
+                && self
+                    .task_by_id(&task.conversation_id, &task.id)
+                    .await
+                    .is_ok_and(|now| {
+                        now.blocked_reason.as_deref()
+                            == Some(super::review_runs::WAITING_FOR_REVIEW)
+                    })
+            {
+                self.set_task_blocked(&task.id, None).await;
+            }
             return;
         }
         if nudge {
@@ -3705,6 +3715,20 @@ fn access_for(kind: TaskKind, permission: PermissionLevel) -> WorkerAccess {
     }
 }
 
+/// A worker's temporary files go to its scratch folder, which its sandbox lets it write: other
+/// programs' by `TMPDIR`, zsh's here-documents by `TMPPREFIX` (zsh 5.9 makes them under
+/// `/tmp/zsh` by default, and a sandboxed `cat <<EOF` there fails with "can't create temp file
+/// for here document").
+fn worker_env(scratch: &Path) -> Vec<(String, String)> {
+    vec![
+        ("TMPDIR".into(), scratch.to_string_lossy().into_owned()),
+        (
+            "TMPPREFIX".into(),
+            scratch.join("zsh").to_string_lossy().into_owned(),
+        ),
+    ]
+}
+
 /// Folders a sandboxed worker's builds, tests and installs write besides its own: the
 /// toolchains' homes and caches (Rust, Node package managers, the system's caches) and the
 /// system temporary folder, those that exist, and pnpm's store lock folder.
@@ -3964,6 +3988,41 @@ fn is_late_findings(summary: &str, message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_workers_temporary_files_and_here_documents_go_to_its_scratch() {
+        let scratch =
+            std::env::temp_dir().join(format!("brigadier-worker-env-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let env = worker_env(&scratch);
+        for (name, value) in &env {
+            assert!(Path::new(value).starts_with(&scratch), "{name}={value}");
+        }
+        assert!(env.iter().any(|(name, _)| name == "TMPPREFIX"));
+        // zsh, the shell Codex runs commands in, writes a here-document under TMPPREFIX.
+        if Path::new("/bin/zsh").exists() {
+            let out = std::process::Command::new("/bin/zsh")
+                .args(["-fc", "cat <<EOF\nhere\nEOF"])
+                .env_clear()
+                .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+            assert_eq!(String::from_utf8_lossy(&out.stdout), "here\n");
+        }
+        let unwritable = worker_env(Path::new("/nonexistent/scratch"));
+        if Path::new("/bin/zsh").exists() {
+            // The same here-document fails where TMPPREFIX can't be written: the sandboxed case.
+            let out = std::process::Command::new("/bin/zsh")
+                .args(["-fc", "cat <<EOF\nhere\nEOF"])
+                .env_clear()
+                .envs(unwritable.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+                .output()
+                .unwrap();
+            assert!(!out.status.success());
+        }
+        std::fs::remove_dir_all(&scratch).unwrap();
+    }
 
     #[test]
     fn a_linked_worktree_commits_into_its_own_git_folder_and_the_shared_store() {
