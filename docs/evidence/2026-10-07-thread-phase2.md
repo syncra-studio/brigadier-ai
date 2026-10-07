@@ -147,3 +147,38 @@ Arm `/tmp/brig-ab-1007/t1-p2`: a clone warmed with `warm.sh` from `t1-p1b`, daem
 `turn_usage` and the transcripts agree exactly (difference +0), and no Codex child thread went
 unmetered. Against the corrected baseline (5,103,267 raw) this run is 0.56×, against the phase-3
 goal of 0.6×; it is one run, and most of the saving is the single review in place of three.
+
+## Independent verification (after `fa756631`)
+
+**T1, re-derived from the arm files.** `routing.sqlite` `turn_usage` for t0 → settled
+(`1791399743604`–`1791400083326`): Claude 2,723,037 raw, 142,306 without cache reads (thread
+379,852 / 30,867; worker 2,343,185 / 111,439); Codex 139,688 / 26,664 (the one review). Total
+2,862,725 / 168,970, as reported. The Claude transcripts (deduplicated per message) and the
+review's Codex rollout give the same numbers; the brain's 291,009 ended before t0. The landed
+step (`orchestratorStepped` `landed`, head `b2786ff7`) is at 328.9 s, and the frozen checks
+re-run on `b2786ff7` in a fresh worktree all exit 0.
+
+**A Codex thread at Approve for me ran with the user's connectors, plugins and goals.** A
+thread's config reaches Codex after the app-server's own overrides, one key path at a time
+(codex-cli 0.160.1, `config/src/overrides.rs`), so the `features` table `eaa22e90` set replaced
+the table the `--disable` flags built. Live on a dev daemon at `fa756631`, that thread listed
+`create_goal`, `request_plugin_install` and about 300 connector tools; Full access and Ask
+threads on the same daemon listed none. `codex -c features.goals=false … -c
+'features={exec_permission_approvals=true}' features list` turns them back on, and a dotted key
+doesn't. Fixed in `bf1ac901` (a dotted key, tested). Re-checked live: the thread widened its
+sandbox (`with_additional_permissions`, guardian `allow`, file written) with the same tool list
+as the other levels.
+
+**Denied folders under a grant.** `codex sandbox` with Brigadier's profile shape (the denied
+folder as a path and as `/**`) refused, besides the earlier rows: a read through a symlink into
+it, a hard link out of it, a grant of the symlink's path, a write grant on its parent (listing,
+writing and renaming it), a rename of its parent folder after a write grant above that, and a
+write grant on the token itself. Codex adds an approved grant to the profile's entries (deny
+wins a tie, and a grant can't be a glob: `sandboxing/src/policy_transforms.rs`). Nothing runs
+unsandboxed except at Full access and through `run_unsandboxed`, which only Ask offers and only
+for a command the user approved on its card, once, in the same folder, within 120 s.
+
+**Codex review of the phase** (`codex exec review --base 3fbe9e90`): four findings, all fixed
+with tests in `f7f28319` and `dead7fcc`. A Stop no longer misses a preview started while it
+stops the others. A late log snapshot no longer undoes a preview's end. `run`'s call outlives
+its longest command. A read through a symlink and `..` is recorded as the file it is.
