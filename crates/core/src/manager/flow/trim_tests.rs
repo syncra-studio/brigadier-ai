@@ -303,7 +303,11 @@ async fn a_codex_thread_runs_commands_through_brigadier() {
             hook.is_none() && spec.output_hook.is_none(),
             "{permission:?}"
         );
-        assert_eq!(spec.mcp_servers[0].tool_timeout_secs, Some(1800));
+        // Longer than run's longest command, so the call returns its status and output.
+        assert_eq!(
+            spec.mcp_servers[0].tool_timeout_secs,
+            Some(super::super::run::RUN_TIMEOUT_MAX.as_secs() + 60)
+        );
         assert_eq!(spec.mcp_servers[0].prompt_tools, prompted, "{permission:?}");
         assert_eq!(
             flow.manager.grants.resolve(&grant),
