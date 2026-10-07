@@ -972,6 +972,8 @@ impl SessionManager {
         if waiting {
             self.core.set_queue_paused(&id, true).await?;
         }
+        // The user's Stop stops what the thread runs too: its previews.
+        self.stop_previews(&id, "stopped by the user").await;
         if let Some(cli) = cli {
             cli.session
                 .interrupt()
@@ -1250,6 +1252,7 @@ impl SessionManager {
         }
         self.retire_changed_cli(&conv).await;
         self.retire_moved_thread(&conv).await;
+        self.stop_moved_previews(&conv.id).await;
         self.end_stand_in(&conv).await;
         if conv.kind == ConversationKind::Session {
             self.rebirth_if_ready(&conv).await;

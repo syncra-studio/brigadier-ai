@@ -29,6 +29,7 @@ pub(crate) const KINDS: &[&str] = &[
     "thread.seen",
     "output.stored",
     "thread.looked",
+    "preview.updated",
     "queue.changed",
     "request.updated",
     "worker.step",
@@ -87,6 +88,8 @@ pub(crate) struct Board {
     /// What the thread read and searched, bounded ([`crate::manager::reads::ReadLog`]);
     /// shared, so copying a board doesn't copy it.
     pub(crate) thread_reads: std::sync::Arc<crate::manager::reads::ReadLog>,
+    /// Its previews, by id.
+    pub(crate) previews: HashMap<String, crate::work::Preview>,
 }
 
 impl Board {
@@ -180,6 +183,9 @@ impl Board {
             DomainEvent::ThreadLooked {
                 reads, searches, ..
             } => std::sync::Arc::make_mut(&mut self.thread_reads).apply(reads, searches),
+            DomainEvent::PreviewUpdated { preview } => {
+                self.previews.insert(preview.id.clone(), preview.clone());
+            }
             DomainEvent::QueueChanged { queue, .. } => self.queue = queue.clone(),
             DomainEvent::RunStateChanged {
                 state, request_id, ..
@@ -411,6 +417,13 @@ impl Board {
         let mut reviews: Vec<ReviewRun> = self.reviews.values().cloned().collect();
         reviews.sort_by(|a, b| a.started_at_ms.cmp(&b.started_at_ms).then(a.id.cmp(&b.id)));
         reviews
+    }
+
+    /// Its previews, oldest first.
+    pub(crate) fn sorted_previews(&self) -> Vec<crate::work::Preview> {
+        let mut previews: Vec<_> = self.previews.values().cloned().collect();
+        previews.sort_by(|a, b| a.started_at_ms.cmp(&b.started_at_ms).then(a.id.cmp(&b.id)));
+        previews
     }
 
     /// Its overnight runs, oldest first.

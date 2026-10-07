@@ -152,6 +152,8 @@ impl SessionManager {
             self.expire_stale_cards(&conversation.id).await;
             // A one-shot review the restart cut off is over; the orchestrator hears it.
             self.recover_reviews(&conversation.id).await;
+            // So are its previews (the sweep above ended any a crash left running).
+            self.recover_previews(&conversation.id).await;
             // What waits for the user matches the tasks and reports as they are now.
             self.reconcile_waiting(&conversation.id).await;
             // Nothing runs any more: what was working is over or waits for the user.
@@ -433,6 +435,8 @@ impl SessionManager {
     /// Stops everything a conversation runs and removes what it created.
     pub(super) async fn wind_down(&self, conversation: &Conversation) {
         let id = &conversation.id;
+        // Its previews run in the workspace that goes next: they stop first.
+        self.stop_previews(id, "the session closed").await;
         let conv = self.convs_lock().remove(id);
         if let Some(conv) = conv {
             // Messages waiting for quota never go.
@@ -464,6 +468,11 @@ impl SessionManager {
         let (owner, _) = conversation_owner(conversation);
         self.grants.revoke_owner(&owner);
         let mut owners = vec![owner];
+        // Its previews' log folder.
+        let previews = super::preview::preview_owner(id);
+        if !self.runtime.ledger().artifacts(&previews).is_empty() {
+            owners.push(previews);
+        }
         self.stop_reviews(id);
         let session_worktree_goes = self.keep_session_changes(conversation).await;
         if session_worktree_goes {

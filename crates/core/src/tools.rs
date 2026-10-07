@@ -278,6 +278,46 @@ pub struct RunUnsandboxed {
     pub justification: String,
 }
 
+/// `start_preview`: a long-running process (a dev server, the app) the user can look at.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StartPreview {
+    /// The command, as you would type it in a shell (`/bin/sh -c`), run in the foreground
+    /// (no trailing `&`): it runs until it is stopped.
+    pub command: String,
+    /// A short name the user sees ("web app", "docs server"); the command by default.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Environment variables to set for it.
+    #[serde(default)]
+    pub env: Option<std::collections::BTreeMap<String, String>>,
+    /// The folder it runs in, relative to the workspace (the workspace by default); it must be
+    /// inside the workspace.
+    #[serde(default)]
+    pub workdir: Option<String>,
+}
+
+/// `stop_preview`: stop one preview, or every running one.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StopPreview {
+    /// The preview's id ("preview-1"); every running preview when left out.
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+/// `preview_log`: the end of a preview's output.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PreviewLog {
+    /// The preview's id ("preview-1"); the latest one when left out.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// How many of its last lines to show (default 40, at most 400).
+    #[serde(default)]
+    pub tail_lines: Option<u32>,
+}
+
 /// `query_brain`: ask the Project Brain.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -623,6 +663,9 @@ pub enum OrchestratorCall {
     ReviewPlan(ReviewPlan),
     Run(RunCommand),
     RunUnsandboxed(RunUnsandboxed),
+    StartPreview(StartPreview),
+    StopPreview(StopPreview),
+    PreviewLog(PreviewLog),
 }
 
 impl OrchestratorCall {
@@ -657,6 +700,9 @@ impl OrchestratorCall {
             Self::ReviewPlan(_) => "review_plan",
             Self::Run(_) => "run",
             Self::RunUnsandboxed(_) => "run_unsandboxed",
+            Self::StartPreview(_) => "start_preview",
+            Self::StopPreview(_) => "stop_preview",
+            Self::PreviewLog(_) => "preview_log",
         }
     }
 }

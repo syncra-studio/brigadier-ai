@@ -774,6 +774,9 @@ pub struct ConversationView {
     /// Its one-shot reviews, oldest first.
     #[serde(default)]
     pub reviews: Vec<crate::work::ReviewRun>,
+    /// Its previews, oldest first.
+    #[serde(default)]
+    pub previews: Vec<crate::work::Preview>,
 }
 
 /// A branch, for the composer's branch picker.
@@ -1447,6 +1450,10 @@ pub enum DomainEvent {
         reads: Vec<crate::work::ThreadRead>,
         searches: Vec<crate::work::ThreadSearch>,
     },
+    /// A preview started, ended or got a new log snapshot (full snapshot).
+    PreviewUpdated {
+        preview: crate::work::Preview,
+    },
     QueueChanged {
         conversation_id: ConversationId,
         queue: MessageQueue,
@@ -1551,6 +1558,7 @@ impl DomainEvent {
             Self::ThreadCommitsSeen { .. } => "thread.seen",
             Self::OutputStored { .. } => "output.stored",
             Self::ThreadLooked { .. } => "thread.looked",
+            Self::PreviewUpdated { .. } => "preview.updated",
             Self::QueueChanged { .. } => "queue.changed",
             Self::WorkerEvent { .. } => "worker.event",
             Self::OrchestratorLogged { .. } => "orchestrator.logged",

@@ -1091,6 +1091,7 @@ impl Core {
             memories: board.memories.clone(),
             overnight: board.sorted_runs(),
             reviews: board.sorted_reviews(),
+            previews: board.sorted_previews(),
         })
     }
 

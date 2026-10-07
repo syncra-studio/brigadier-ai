@@ -193,7 +193,7 @@ impl SessionManager {
 
     /// What runs `command` in `workdir` held to `access`: the shell itself at full access,
     /// else `codex sandbox` with the session's profile around it.
-    fn run_spec(
+    pub(super) fn run_spec(
         &self,
         access: &Access,
         workdir: &Path,
@@ -388,7 +388,7 @@ async fn drain(reader: Option<(Kept, tokio::task::JoinHandle<()>)>) -> Vec<u8> {
     bytes
 }
 
-fn exit_status(status: std::process::ExitStatus) -> String {
+pub(super) fn exit_status(status: std::process::ExitStatus) -> String {
     if let Some(code) = status.code() {
         return format!("exit {code}");
     }

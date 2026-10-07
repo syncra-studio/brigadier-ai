@@ -212,6 +212,9 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "read_artifact" => ToolCall::Orchestrator(O::ReadArtifact(arg(name, args))),
         "run" => ToolCall::Orchestrator(O::Run(arg(name, args))),
         "run_unsandboxed" => ToolCall::Orchestrator(O::RunUnsandboxed(arg(name, args))),
+        "start_preview" => ToolCall::Orchestrator(O::StartPreview(arg(name, args))),
+        "stop_preview" => ToolCall::Orchestrator(O::StopPreview(arg(name, args))),
+        "preview_log" => ToolCall::Orchestrator(O::PreviewLog(arg(name, args))),
         "project_map" if orchestrator => ToolCall::Orchestrator(O::ProjectMap),
         "project_map" => ToolCall::Worker(W::ProjectMap),
         other => panic!("the flow harness doesn't know the tool {other}"),
@@ -907,6 +910,7 @@ impl Flow {
 mod overnight_tests;
 #[cfg(test)]
 mod reads_tests;
+mod preview_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

@@ -158,6 +158,7 @@ impl SessionManager {
         let name = match output.source {
             OutputSource::BashExcerpt => "the stored excerpt of a command's output",
             OutputSource::Bash | OutputSource::Run => "a command's full output",
+            OutputSource::Preview => "a preview's log",
         };
         Ok(Some((output.blob.clone(), name.into())))
     }

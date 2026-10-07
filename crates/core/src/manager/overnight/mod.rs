@@ -651,6 +651,8 @@ impl SessionManager {
                 self.overnight.active.note(run);
             }
         }
+        // A run that started or ended moved the thread's workspace: previews of the other stop.
+        self.stop_moved_previews(conversation_id).await;
         Ok(())
     }
 

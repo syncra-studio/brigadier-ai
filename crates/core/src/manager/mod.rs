@@ -42,6 +42,7 @@ mod outputs;
 pub mod overnight;
 mod past_projects;
 mod phases;
+mod preview;
 mod project_removal;
 mod prompts;
 mod pull_request;
@@ -130,6 +131,8 @@ pub struct SessionManager {
     /// Commands a Codex thread's `run_unsandboxed` may run, each once: what the user (or their
     /// "allow similar") approved when Codex asked ([`run`]).
     run_passes: run::RunPasses,
+    /// The previews running now ([`preview`]).
+    previews: preview::Previews,
     /// The one-shot reviews running now, by id: their conversation, and what ends one when
     /// its conversation closes.
     running_reviews: Mutex<HashMap<String, (ConversationId, tokio_util::sync::CancellationToken)>>,
@@ -210,6 +213,7 @@ impl SessionManager {
             reviews: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
             run_passes: run::RunPasses::default(),
+            previews: preview::Previews::default(),
             running_reviews: Mutex::default(),
             task_writes: tokio::sync::Mutex::new(()),
             waiting: tokio::sync::Mutex::new(()),
@@ -254,6 +258,8 @@ impl SessionManager {
     /// Ends every live CLI session (their work stays in the log, ready to continue).
     pub async fn shutdown(&self) {
         self.admitting.store(false, Ordering::Release);
+        // Previews end with Brigadier (their ends recorded while the store is up).
+        self.stop_all_previews().await;
         // Archives under way finish first (bounded) while the providers and the store are up.
         self.finish_cleanups_for_quit().await;
         self.runtime.registry().cancel_refresh();

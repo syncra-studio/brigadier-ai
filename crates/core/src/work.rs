@@ -445,6 +445,65 @@ pub enum OutputSource {
     BashExcerpt,
     /// A Codex thread's `run`: its whole output, stdout and stderr together.
     Run,
+    /// A preview's log (stdout and stderr together) as it stood when it was read or ended.
+    Preview,
+}
+
+// ----- previews -----------------------------------------------------------------------------
+
+/// A process the thread started to show its work (a dev server, the app), owned by the daemon
+/// and kept across the thread's turns, hibernation, rebirth and fallback (THREAD-PLAN.md Q6).
+/// It runs in the session's workspace and stops with the session, its merge, a workspace
+/// change, `stop_preview`, the user's Stop and Brigadier's quit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Preview {
+    /// `preview-<n>`, unique in the conversation.
+    pub id: String,
+    pub conversation_id: ConversationId,
+    /// What the thread called it (its command when it gave no name).
+    pub name: String,
+    pub command: String,
+    /// The folder it runs in, inside `workspace`.
+    pub workdir: String,
+    /// The workspace it belongs to: it stops when the thread's workspace changes.
+    pub workspace: String,
+    /// Its process, which leads its own process group.
+    #[serde(default)]
+    pub pid: Option<u32>,
+    pub state: PreviewState,
+    pub started_at_ms: i64,
+    #[serde(default)]
+    pub ended_at_ms: Option<i64>,
+    /// The latest snapshot of its log (`out-<id>`, read with `read_artifact`).
+    #[serde(default)]
+    pub log: Option<String>,
+}
+
+/// Where a preview stands.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum PreviewState {
+    Running,
+    /// It ended on its own: `status` as "exit 1" or "killed by signal 9".
+    Exited {
+        code: Option<i32>,
+        status: String,
+    },
+    /// Brigadier stopped it, for `reason` ("stopped by the thread", "the session closed").
+    Stopped {
+        reason: String,
+    },
+}
+
+impl PreviewState {
+    pub fn is_running(&self) -> bool {
+        matches!(self, Self::Running)
+    }
 }
 
 /// Lines added and removed, per file and in total.

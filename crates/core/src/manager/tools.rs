@@ -409,6 +409,14 @@ impl SessionManager {
                 )
                 .await
             }
+            OrchestratorCall::StartPreview(args) => self.start_preview(id, args).await,
+            OrchestratorCall::StopPreview(args) => {
+                self.stop_preview_tool(id, args.id.as_deref()).await
+            }
+            OrchestratorCall::PreviewLog(args) => {
+                self.preview_log(id, args.id.as_deref(), args.tail_lines)
+                    .await
+            }
             OrchestratorCall::ListTasks => {
                 let tasks = self.core.tasks(id).await?;
                 if tasks.is_empty() {

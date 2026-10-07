@@ -108,7 +108,8 @@ fn absolute(path: PathBuf) -> Result<PathBuf> {
     }
 }
 
-pub(crate) fn default_data_dir() -> Result<PathBuf> {
+/// Where the installed app keeps its data when `BRIGADIER_DATA_DIR` names no other folder.
+pub fn default_data_dir() -> Result<PathBuf> {
     #[cfg(target_os = "macos")]
     let dir = dirs::data_dir().map(|dir| dir.join("Brigadier"));
     #[cfg(target_os = "linux")]
