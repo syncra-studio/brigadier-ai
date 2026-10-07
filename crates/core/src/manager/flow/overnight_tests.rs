@@ -565,3 +565,68 @@ async fn a_phase_whose_lead_changed_nothing_is_settled_from_its_report() {
     assert!(board.reviews.is_empty(), "nothing landed, nothing reviewed");
     flow.stop().await;
 }
+
+/// A review that ends after its run's report wakes nobody, yet its findings aren't lost: the
+/// user reads them in the thread.
+#[tokio::test]
+async fn findings_after_the_runs_report_reach_the_thread() {
+    let flow = Flow::start(
+        "overnight-late-review",
+        Options::default(),
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                return lead_the_phase(&turn).await;
+            }
+            if is_verifier(&turn) {
+                return verify(&turn).await;
+            }
+            build(&turn).await
+        }),
+    )
+    .await;
+    let run = start_run(&flow, "/overnight Make one file.", 1).await;
+    let board = finished(&flow, &run.id).await;
+    let lead = board
+        .tasks
+        .values()
+        .find(|task| task.role == Some(WorkerRole::Lead))
+        .expect("the lead")
+        .clone();
+    let late = crate::work::ReviewRun {
+        id: "late-review".into(),
+        conversation_id: flow.conversation.clone(),
+        request_id: lead.request_id.clone(),
+        task_id: Some(lead.id.clone()),
+        kind: ReviewKind::Code,
+        base: "a1b2c3d4".into(),
+        tip: lead.landed.clone().expect("landed"),
+        author: lead.route.choice.provider,
+        reviewer: brigadier_providers::ProviderKind::Codex,
+        reviewer_model: None,
+        notify: crate::work::ReviewFor::Orchestrator,
+        state: ReviewState::Findings { count: 1 },
+        started_at_ms: 0,
+        ended_at_ms: Some(1),
+        findings: None,
+    };
+    flow.manager
+        .tell_review(&late, Some("- [P1] p1.txt is empty — p1.txt:1"))
+        .await;
+    let notices: Vec<String> = flow
+        .events()
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            crate::model::DomainEvent::ConversationNotice { notice, .. } => Some(notice.text),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        notices
+            .iter()
+            .any(|text| text.contains("ended after the run's report")
+                && text.contains("p1.txt is empty")),
+        "{notices:?}"
+    );
+    flow.stop().await;
+}

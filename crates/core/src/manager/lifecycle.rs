@@ -464,6 +464,7 @@ impl SessionManager {
         let (owner, _) = conversation_owner(conversation);
         self.grants.revoke_owner(&owner);
         let mut owners = vec![owner];
+        self.stop_reviews(id);
         let session_worktree_goes = self.keep_session_changes(conversation).await;
         if session_worktree_goes {
             owners.push(format!("session:{id}"));

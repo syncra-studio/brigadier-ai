@@ -1274,6 +1274,161 @@ async fn the_orchestrator_answers_a_workers_questions_and_logs_each_answer() {
     flow.stop().await;
 }
 
+/// Archiving a session ends a review still running: its checkout goes with the rest, and
+/// nothing more of it reaches anyone.
+#[tokio::test]
+async fn archiving_a_session_ends_its_running_review() {
+    let checkout: Arc<std::sync::Mutex<Option<std::path::PathBuf>>> = Arc::default();
+    let seen = checkout.clone();
+    let flow = Flow::start(
+        "archived-mid-review",
+        Options {
+            reviews: Some(script(move |turn| {
+                let seen = seen.clone();
+                async move {
+                    *seen.lock().unwrap() = Some(turn.cwd.clone());
+                    // Never ends on its own.
+                    std::future::pending::<()>().await;
+                    Reply::text("No findings.")
+                }
+            })),
+            ..Options::default()
+        },
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if let Some(n) = reports_in(&turn.input).first() {
+                    let reply = turn
+                        .call("land_phase", json!({"task": format!("task-{n}")}))
+                        .await;
+                    assert!(reply.text.contains("Landed"), "{}", reply.text);
+                    return Reply::text("Landed the greeting.");
+                }
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"title": "Add a greeting", "kind": "implement",
+                               "spec": "Create hello.txt.", "provider": "codex"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            turn.write("hello.txt", "hello");
+            let reply = turn
+                .call(
+                    "submit_report",
+                    json!({"summary": "Added hello.txt.", "changes": ["hello.txt"]}),
+                )
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        }),
+    )
+    .await;
+    flow.say("Add a greeting file.").await;
+    flow.until("the landing's review to run", |board| {
+        board
+            .reviews
+            .values()
+            .any(|review| review.state == crate::work::ReviewState::Running)
+    })
+    .await;
+    flow.until("its checkout", |_| checkout.lock().unwrap().is_some())
+        .await;
+    let dir = checkout.lock().unwrap().clone().unwrap();
+    assert!(dir.exists());
+    flow.manager
+        .archive(flow.conversation.clone())
+        .await
+        .unwrap();
+    let board = reviews_ended(&flow, 1).await;
+    let review = board.reviews.values().next().unwrap();
+    assert!(
+        matches!(review.state, crate::work::ReviewState::Failed { .. }),
+        "{:?}",
+        review.state
+    );
+    flow.until("the review's checkout to go", |_| !dir.exists())
+        .await;
+    flow.stop().await;
+}
+
+/// A review's outcome reaching a worker that waits on a question answers nothing: the
+/// question stays open until the orchestrator answers it.
+#[tokio::test]
+async fn a_reviews_news_leaves_a_workers_question_open() {
+    let answered: Heard = Arc::default();
+    let got = answered.clone();
+    let flow = Flow::start(
+        "review-news-question",
+        Options::default(),
+        script(move |turn| {
+            let got = got.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    if !reports_in(&turn.input).is_empty() {
+                        return Reply::text("It says Hello.");
+                    }
+                    if turn.input.contains("Which greeting?") {
+                        return Reply::text("[quiet]");
+                    }
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"title": "Pick a greeting", "kind": "scout",
+                                   "spec": "Pick the greeting."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                let answer = turn
+                    .call("ask_orchestrator", json!({"question": "Which greeting?"}))
+                    .await;
+                got.lock().unwrap().push(answer.text);
+                let reply = turn
+                    .call("submit_report", json!({"summary": "Hello."}))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("Reported.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Which greeting should we use?").await;
+    let board = flow
+        .until("the worker's question", |board| {
+            board.tasks.values().any(|task| {
+                task.blocked_reason
+                    .as_deref()
+                    .is_some_and(|why| why.starts_with("Asked the orchestrator"))
+            })
+        })
+        .await;
+    let task = Flow::task(&board, 1);
+    let (_, answered_it) = flow
+        .manager
+        .tell_worker(
+            &flow.conversation,
+            task,
+            "[review of your work] Codex found nothing.".into(),
+            "Brigadier",
+        )
+        .await
+        .unwrap();
+    assert!(!answered_it, "a review's news is no answer");
+    let (_, answered_it) = flow
+        .manager
+        .message_worker(&flow.conversation, task, "Hello.".into(), "orchestrator")
+        .await
+        .unwrap();
+    assert!(answered_it, "the question was still open");
+    let board = flow.settled().await;
+    assert_eq!(Flow::task(&board, 1).state, TaskState::Done);
+    assert_eq!(*answered.lock().unwrap(), ["Hello."]);
+    flow.stop().await;
+}
+
 /// Done when (3): a worker whose context passes the hand-off size ends its turn with a handoff
 /// note, and a fresh session of the same model carries on from it: with the note, the
 /// orchestrator's earlier answer and the user's "Allow similar commands" grant, so nothing is

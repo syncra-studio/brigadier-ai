@@ -293,6 +293,8 @@ impl SessionManager {
     /// Records a review and starts it, or finds the one its range already has (a code review;
     /// then `false`). One whose reviewer can't be routed is recorded failed, not started.
     async fn start_review(&self, new: NewReview) -> Result<(ReviewRun, bool)> {
+        // A closing conversation starts nothing more.
+        drop(self.enter(&new.conversation_id)?);
         let _held = self.reviews.lock().await;
         if new.kind == ReviewKind::Code {
             let board = self.core.board(&new.conversation_id).await?;
@@ -333,10 +335,36 @@ impl SessionManager {
         self.store_review(&review).await?;
         let manager = self.arc();
         let started = review.clone();
+        let stop = tokio_util::sync::CancellationToken::new();
+        self.running_reviews
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(
+                review.id.clone(),
+                (review.conversation_id.clone(), stop.clone()),
+            );
         self.spawn(async move {
-            let outcome = manager
-                .run_review(&started, &new.repo, new.plan.as_ref(), effort)
-                .await;
+            let closed = || Err("its conversation closed".to_owned());
+            let outcome = if manager.is_closing(&started.conversation_id) {
+                closed()
+            } else {
+                tokio::select! {
+                    outcome = manager.run_review(&started, &new.repo, new.plan.as_ref(), effort) => outcome,
+                    () = stop.cancelled() => {
+                        // Cut off before its own cleanup: what it made goes now.
+                        let leftovers = manager.runtime.ledger().dispose(&review_owner(&started.id)).await;
+                        if !leftovers.is_clean() {
+                            tracing::warn!(review = %started.id, failures = ?leftovers.failures, "a stopped review's checkout is not removed yet");
+                        }
+                        closed()
+                    }
+                }
+            };
+            manager
+                .running_reviews
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&started.id);
             manager.finish_review(started, outcome).await;
         });
         Ok((review, true))
@@ -683,7 +711,8 @@ impl SessionManager {
     /// Hands a review's outcome to whoever asked: the worker while it still works, else the
     /// orchestrator. A clean review of a landing or an outline is no news for the orchestrator:
     /// the merge card shows it.
-    async fn tell_review(&self, review: &ReviewRun, text: Option<&str>) {
+    pub(super) async fn tell_review(&self, review: &ReviewRun, text: Option<&str>) {
+        let review_text = text;
         let reviewer = review.reviewer.label();
         if let ReviewFor::Worker { task_id } = &review.notify
             && let Ok(task) = self.task_by_id(&review.conversation_id, task_id).await
@@ -713,7 +742,7 @@ impl SessionManager {
                 .unwrap_or(task);
             let rounds = now.rework_rounds;
             match self
-                .message_worker(&review.conversation_id, &now, message, "Brigadier")
+                .tell_worker(&review.conversation_id, &now, message, "Brigadier")
                 .await
             {
                 Ok(_) => {
@@ -758,7 +787,37 @@ impl SessionManager {
             // Clean, or still running: nothing to say.
             _ => return,
         };
-        self.deliver(
+        let request = self
+            .request_for(&review.conversation_id, review.task_id.as_ref())
+            .await;
+        // An overnight run that has ended wakes nobody: its report was written before this
+        // review ended, so the user reads the outcome in the thread instead.
+        if let Some(request) = &request
+            && self
+                .core
+                .board(&review.conversation_id)
+                .await
+                .is_ok_and(|board| super::requests::ended_run_request(&board, request))
+        {
+            let note = match &review.state {
+                ReviewState::Findings { count } => format!(
+                    "The background review of {of} ({range}) ended after the run's report: {reviewer} found {count}.\n{}",
+                    clipped(review_text.unwrap_or_default())
+                ),
+                ReviewState::Failed { reason } => format!(
+                    "The background review of {of} ({range}) ended after the run's report: it could not run ({reason})."
+                ),
+                _ => return,
+            };
+            self.notice(
+                &review.conversation_id,
+                brigadier_providers::NoticeLevel::Warning,
+                &note,
+            )
+            .await;
+            return;
+        }
+        self.deliver_for(
             &review.conversation_id,
             Envelope {
                 kind: InjectionKind::Report,
@@ -769,8 +828,23 @@ impl SessionManager {
                 task_id: review.task_id.clone(),
                 text,
             },
+            request,
         )
         .await;
+    }
+
+    /// Ends `conversation_id`'s running reviews: it is closing.
+    pub(super) fn stop_reviews(&self, conversation_id: &ConversationId) {
+        for (owner, stop) in self
+            .running_reviews
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+        {
+            if owner == conversation_id {
+                stop.cancel();
+            }
+        }
     }
 
     /// Whether `task` asked for a review of its own work that still runs.

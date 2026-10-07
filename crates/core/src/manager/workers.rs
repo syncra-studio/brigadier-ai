@@ -2842,6 +2842,31 @@ impl SessionManager {
         text: String,
         from: &str,
     ) -> Result<(String, bool)> {
+        self.send_worker(conversation_id, task, text, from, true)
+            .await
+    }
+
+    /// [`Self::message_worker`] for news that answers nothing (a review's outcome): a question
+    /// the worker is waiting on stays open for the orchestrator.
+    pub(crate) async fn tell_worker(
+        &self,
+        conversation_id: &ConversationId,
+        task: &Task,
+        text: String,
+        from: &str,
+    ) -> Result<(String, bool)> {
+        self.send_worker(conversation_id, task, text, from, false)
+            .await
+    }
+
+    async fn send_worker(
+        &self,
+        conversation_id: &ConversationId,
+        task: &Task,
+        text: String,
+        from: &str,
+        answers: bool,
+    ) -> Result<(String, bool)> {
         drop(self.enter(conversation_id)?);
         // An idle worker of an overnight run starts a turn only with a free worker slot: when
         // its run has none, the message waits for one rather than holding up the caller.
@@ -2863,7 +2888,7 @@ impl SessionManager {
                     return;
                 };
                 if let Err(err) = manager
-                    .message_worker_admitted(&conversation_id, &now, text, &from)
+                    .message_worker_admitted(&conversation_id, &now, text, &from, answers)
                     .await
                 {
                     tracing::warn!(task = %now.id, error = %err, "could not deliver a message that waited for a worker");
@@ -2879,7 +2904,7 @@ impl SessionManager {
             ));
         }
         let sent = self
-            .message_worker_admitted(conversation_id, task, text, from)
+            .message_worker_admitted(conversation_id, task, text, from, answers)
             .await;
         self.release_if_idle(task).await;
         sent
@@ -2892,6 +2917,7 @@ impl SessionManager {
         task: &Task,
         text: String,
         from: &str,
+        answers: bool,
     ) -> Result<(String, bool)> {
         let live = self.task_live(task);
         // What the task may use now, for a worker between turns (routing reads the board, so
@@ -2906,7 +2932,7 @@ impl SessionManager {
             None
         };
         let mut state = live.state.lock().await;
-        if let Some((question, waiter)) = state.question.take() {
+        if answers && let Some((question, waiter)) = state.question.take() {
             drop(state);
             let _ = waiter.send(text.clone());
             // An answer, however it was sent: the thread shows it as one.
