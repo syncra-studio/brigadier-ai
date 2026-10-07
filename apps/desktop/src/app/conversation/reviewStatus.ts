@@ -2,11 +2,13 @@ import type { Approval, ReviewRun } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
 
 /**
- * The code reviews a merge card speaks for: every landing's since the session's previous merge,
- * up to the card's own answer. Each landed change gets one, by the other vendor, in the
- * background; one still running at the merge stays the card's until it ends. A worker's review of
- * its own work in progress is not one: the worker answered it before it reported. (When a landing
- * reuses a worker's review of the same commits, the daemon hands that review to the orchestrator.)
+ * The code reviews a merge card speaks for: those the orchestrator hears, since the session's
+ * previous merge, up to the card's own answer. Each landed change gets one, by the other vendor,
+ * in the background, and so does each range of commits the thread made itself (a review with no
+ * task, started before the merge card opens); one still running at the merge stays the card's
+ * until it ends. A worker's review of its own work in progress is not one: the worker answered it
+ * before it reported. (When a landing reuses a worker's review of the same commits, the daemon
+ * hands that review to the orchestrator.)
  */
 export function mergeReviews(
   card: Approval,

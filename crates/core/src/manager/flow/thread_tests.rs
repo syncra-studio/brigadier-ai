@@ -599,6 +599,71 @@ async fn a_thread_commit_before_a_landing_in_the_same_turn_is_reviewed_on_its_ow
     flow.stop().await;
 }
 
+/// The thread commits and asks for the merge in the same turn: the review of its commit has
+/// started (for the thread, with no task) before the merge card opens, so the card's review
+/// line counts it, "Review running…" until it ends and its findings after.
+#[tokio::test]
+async fn the_merge_card_counts_the_review_of_the_threads_own_commit() {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let held = release.clone();
+    let flow = Flow::start(
+        "thread-commit-merge",
+        Options {
+            reviews: Some(script(move |_| {
+                let held = held.clone();
+                async move {
+                    held.notified().await;
+                    Reply::text("- [P2] NOTES.md has no title — NOTES.md:1\n  Add one.")
+                }
+            })),
+            ..Options::default()
+        },
+        script(|turn| async move {
+            if turn.input.contains("Add notes and merge.") {
+                commit_in_workspace(
+                    &turn,
+                    "NOTES.md",
+                    "notes\n",
+                    "Add notes\n\nBrigadier-Author: thread",
+                );
+                let reply = turn.call("finish_session", json!({})).await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            Reply::text("Noted.")
+        }),
+    )
+    .await;
+    flow.say("Add notes and merge.").await;
+    let board = flow
+        .until("the merge card", |board| {
+            board
+                .approvals
+                .values()
+                .any(|card| matches!(card.subject, ApprovalSubject::FinishSession { .. }))
+        })
+        .await;
+    let card = board.approvals.values().next().unwrap().clone();
+    let reviews: Vec<_> = board.reviews.values().cloned().collect();
+    assert_eq!(reviews.len(), 1, "{reviews:#?}");
+    let review = &reviews[0];
+    assert!(review.task_id.is_none(), "the thread's own commit");
+    assert_eq!(review.kind, crate::work::ReviewKind::Code);
+    assert_eq!(review.notify, crate::work::ReviewFor::Orchestrator);
+    assert_eq!(review.state, crate::work::ReviewState::Running);
+    assert!(
+        review.started_at_ms <= card.created_at_ms,
+        "started before the card, so the card speaks for it"
+    );
+    release.notify_one();
+    let reviews = code_reviews(&flow, 1).await;
+    assert_eq!(
+        reviews[0].state,
+        crate::work::ReviewState::Findings { count: 1 }
+    );
+    flow.stop().await;
+}
+
 /// A thread whose CLI started on the instructions from before the thread's (an older contract
 /// in its log) isn't resumed, since it would keep its old role: it starts over from the
 /// transcript with the thread's instructions.

@@ -111,3 +111,19 @@ test("a merge card counts the reviews of what landed, not a worker's own review 
   );
   assert.equal(reviewStatus(mergeReviews(card, [card], [own, landing])), "Review: clean");
 });
+
+test("a merge card counts the review of the thread's own commits with the landings'", () => {
+  const card = merge("m1", 40, { type: "pending" });
+  const landing = { ...review("landing", 20, { type: "clean" }), taskId: "t1" };
+  const own = review("thread", 30, { type: "running" });
+  assert.equal(own.taskId, null);
+  assert.deepEqual(
+    mergeReviews(card, [card], [landing, own]).map((found) => found.id),
+    ["landing", "thread"],
+  );
+  assert.equal(reviewStatus(mergeReviews(card, [card], [landing, own])), "Review running…");
+  const found = { ...own, state: { type: "findings", count: 2 } as const };
+  assert.equal(reviewStatus(mergeReviews(card, [card], [landing, found])), "Review: 2 findings");
+  const clean = { ...own, state: { type: "clean" } as const };
+  assert.equal(reviewStatus(mergeReviews(card, [card], [landing, clean])), "Review: clean");
+});
