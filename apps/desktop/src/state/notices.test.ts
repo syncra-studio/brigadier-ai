@@ -41,6 +41,7 @@ test("stored version drift disappears when a conversation is reopened; actual wa
     approvals: [],
     questions: [],
     plans: [],
+    reviews: [],
     overnight: [],
     requests: [],
     waiting: [],

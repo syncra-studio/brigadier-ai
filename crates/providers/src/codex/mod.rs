@@ -257,7 +257,7 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     let tools = session.map(|session| session.tools).unwrap_or_default();
     let role_features: &[&str] = match tools {
         ToolSet::Default | ToolSet::Lean => &[],
-        ToolSet::None | ToolSet::Web => RESTRICTED_FEATURES,
+        ToolSet::None | ToolSet::Web | ToolSet::Review => RESTRICTED_FEATURES,
     };
     for feature in DISABLED_FEATURES.iter().chain(role_features) {
         args.push("--disable".into());
@@ -924,7 +924,7 @@ async fn thread_config(
     }
     match spec.tools {
         ToolSet::Default | ToolSet::Lean => {}
-        ToolSet::None => {
+        ToolSet::None | ToolSet::Review => {
             config.insert("web_search".into(), json!("disabled"));
         }
         ToolSet::Web => {

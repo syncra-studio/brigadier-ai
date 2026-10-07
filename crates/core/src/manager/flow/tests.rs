@@ -193,25 +193,54 @@ async fn a_real_store_loads_and_recovers() {
 /// What every scripted CLI was asked, in order.
 type Heard = Arc<std::sync::Mutex<Vec<String>>>;
 
-fn is_reviewer(turn: &Turn) -> bool {
-    turn.prompt.contains("Kind: review")
+/// Asks for a review of the worker's own work and waits for the findings, which steer into
+/// its running turn. What the review found, or why there is none.
+async fn own_review(turn: &Turn) -> String {
+    let started = turn.call("review_code", json!({})).await;
+    assert!(!started.is_error, "{}", started.text);
+    if !started.text.starts_with("Started a review") {
+        return started.text;
+    }
+    turn.steered().await.expect("the review's findings")
 }
 
-/// A lead outlines big work and waits; one reviewer from the other vendor reads the outline;
-/// the orchestrator sends the go-ahead with its corrections, and the lead builds.
+/// Waits until the session has at least `count` one-shot reviews and all have ended.
+async fn reviews_ended(flow: &Flow, count: usize) -> crate::board::Board {
+    flow.until("the reviews to end", |board| {
+        board.reviews.len() >= count
+            && board
+                .reviews
+                .values()
+                .all(|review| review.state != crate::work::ReviewState::Running)
+    })
+    .await
+}
+
+/// A lead outlines big work and waits; the orchestrator gets the outline at once and sends
+/// the go-ahead with its corrections, and the lead builds. A plan review by the other vendor
+/// runs in the background meanwhile; its findings reach the orchestrator when they come.
 #[tokio::test]
-async fn an_outline_gets_one_review_from_the_other_vendor_and_a_go_ahead() {
+async fn an_outline_gets_its_go_ahead_at_once_and_a_plan_review_in_the_background() {
     let heard: Heard = Arc::default();
     let log = heard.clone();
     let flow = Flow::start(
         "outline",
-        Options::default(),
+        Options {
+            reviews: Some(script(|turn| async move {
+                assert!(
+                    turn.input.contains("1. Read a.rs"),
+                    "the reviewer reads the outline"
+                );
+                assert!(turn.input.contains("Rework the parser."), "and the brief");
+                Reply::text("- [P1] Step 2 misses the caller in b.rs — b.rs:1\n  Update it too.")
+            })),
+            ..Options::default()
+        },
         script(move |turn| {
             log.lock().unwrap().push(turn.input.clone());
             async move {
                 if turn.is_orchestrator() {
-                    if turn.input.contains("[outline review]") {
-                        assert!(turn.input.contains("Step 2 misses the caller in b.rs"));
+                    if turn.input.contains("[outline task-1") {
                         let reply = turn
                             .call(
                                 "approve_outline",
@@ -220,6 +249,10 @@ async fn an_outline_gets_one_review_from_the_other_vendor_and_a_go_ahead() {
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                         return Reply::text("[quiet]");
+                    }
+                    if turn.input.contains("[plan review task-1") {
+                        assert!(turn.input.contains("Step 2 misses the caller in b.rs"));
+                        return Reply::text("The plan review agrees with the change.");
                     }
                     if turn.input.contains("[report task-1") {
                         return Reply::text("Done: nothing needed changing.");
@@ -236,21 +269,6 @@ async fn an_outline_gets_one_review_from_the_other_vendor_and_a_go_ahead() {
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                     return Reply::text("[quiet]");
-                }
-                if is_reviewer(&turn) {
-                    assert!(
-                        turn.prompt.contains("1. Read a.rs"),
-                        "the reviewer reads the outline"
-                    );
-                    let reply = turn
-                        .call(
-                            "submit_report",
-                            json!({"summary": "One finding.",
-                                   "open_questions": "Step 2 misses the caller in b.rs"}),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("Reviewed.");
                 }
                 if turn.earlier == 0 {
                     let reply = turn
@@ -277,6 +295,20 @@ async fn an_outline_gets_one_review_from_the_other_vendor_and_a_go_ahead() {
     )
     .await;
     flow.say("Rework the parser.").await;
+    reviews_ended(&flow, 1).await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !heard
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|input| input.contains("[plan review task-1"))
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the orchestrator hears the plan review"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     flow.settled().await;
     // The lead, which changed nothing, ends once its turn is over: that may come after the
     // orchestrator's final answer.
@@ -286,15 +318,20 @@ async fn an_outline_gets_one_review_from_the_other_vendor_and_a_go_ahead() {
         })
         .await;
     let lead = Flow::task(&board, 1);
-    let reviewer = Flow::task(&board, 2);
-    assert_eq!(board.tasks.len(), 2, "one lead and one reviewer");
+    assert_eq!(board.tasks.len(), 1, "one lead and no reviewer task");
     assert_eq!(lead.role, Some(crate::work::WorkerRole::Lead));
-    assert_eq!(reviewer.role, Some(crate::work::WorkerRole::Reviewer));
-    assert_ne!(
-        reviewer.route.choice.provider, lead.route.choice.provider,
-        "the review comes from the other vendor"
-    );
     assert_eq!(lead.state, TaskState::Done);
+    // Its one plan review came from the other vendor.
+    assert_eq!(board.reviews.len(), 1);
+    let review = board.reviews.values().next().unwrap();
+    assert_eq!(review.kind, crate::work::ReviewKind::Plan);
+    assert_eq!(review.task_id.as_ref(), Some(&lead.id));
+    assert_eq!(review.author, lead.route.choice.provider);
+    assert_ne!(review.reviewer, lead.route.choice.provider);
+    assert_eq!(
+        review.state,
+        crate::work::ReviewState::Findings { count: 1 }
+    );
     // The request has its one phase: the outline and its stage live there.
     assert_eq!(board.plans.len(), 1);
     let plan = board.plans.values().next().unwrap();
@@ -308,16 +345,13 @@ async fn an_outline_gets_one_review_from_the_other_vendor_and_a_go_ahead() {
             .contains("Change parse()")
     );
     assert!(board.approvals.is_empty(), "no cards under Full access");
-    let reviews = heard
+    let outlines = heard
         .lock()
         .unwrap()
         .iter()
-        .filter(|input| input.contains("[outline review]"))
+        .filter(|input| input.contains("[outline task-1"))
         .count();
-    assert_eq!(
-        reviews, 1,
-        "the orchestrator gets the outline once, with its one review"
-    );
+    assert_eq!(outlines, 1, "the orchestrator gets the outline once");
     let events = flow.events().await;
     assert!(events.iter().any(|event| matches!(
         event,
@@ -477,14 +511,30 @@ fn reports_in(input: &str) -> Vec<u32> {
 }
 
 /// Done when (1): a small request goes straight to a lead, with no outline. The lead (Codex,
-/// which can't commit from its sandbox, so Brigadier commits for it) asks for its own review,
-/// which comes from the other vendor and reads its work; then the orchestrator lands it. No
-/// verifier, no cards.
+/// which can't commit from its sandbox, so Brigadier commits for it) asks for its own review
+/// (review_code), which returns at once; the review comes from the other vendor, reads its
+/// work in a checkout of its own, and its findings reach the lead as a message. Then the
+/// orchestrator lands it, and the landing gets its own background review. No verifier, no
+/// reviewer task, no cards.
 #[tokio::test]
 async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() {
     let flow = Flow::start(
         "small",
-        Options::default(),
+        Options {
+            reviews: Some(script(|turn| async move {
+                assert!(turn.input.contains("git diff"), "{}", turn.input);
+                let greeting = std::fs::read_to_string(turn.cwd.join("hello.txt"))
+                    .expect("the reviewer's checkout holds the work");
+                if greeting.ends_with('\n') {
+                    Reply::text("No findings.")
+                } else {
+                    Reply::text(
+                        "- [P2] hello.txt lacks a trailing newline — hello.txt:1\n  Add one.",
+                    )
+                }
+            })),
+            ..Options::default()
+        },
         script(|turn| async move {
             if turn.is_orchestrator() {
                 if let Some(n) = reports_in(&turn.input).first() {
@@ -494,6 +544,9 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
                     assert!(!reply.is_error, "{}", reply.text);
                     assert!(reply.text.contains("Landed"), "{}", reply.text);
                     return Reply::text("Added the greeting.");
+                }
+                if turn.input.contains("[review ") {
+                    return Reply::text("The review of the landing found nothing to fix.");
                 }
                 let reply = turn
                     .call(
@@ -505,26 +558,10 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
                 assert!(!reply.is_error, "{}", reply.text);
                 return Reply::text("[quiet]");
             }
-            if is_reviewer(&turn) {
-                assert!(
-                    turn.cwd.join("hello.txt").exists(),
-                    "the reviewer's checkout holds the work"
-                );
-                let reply = turn
-                    .call(
-                        "submit_report",
-                        json!({"summary": "One finding.",
-                               "open_questions": "hello.txt lacks a trailing newline"}),
-                    )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("Reviewed.");
-            }
             // The lead never commits: its sandbox can't.
             turn.write("hello.txt", "hello");
-            let review = turn.call("request_review", json!({})).await;
-            assert!(!review.is_error, "{}", review.text);
-            assert!(review.text.contains("trailing newline"), "{}", review.text);
+            let review = own_review(&turn).await;
+            assert!(review.contains("trailing newline"), "{review}");
             turn.write("hello.txt", "hello\n");
             let reply = turn
                 .call(
@@ -539,17 +576,35 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
     )
     .await;
     flow.say("Add a greeting file.").await;
-    let board = flow.settled().await;
+    flow.settled().await;
+    // The lead's own review and the landing's.
+    let board = reviews_ended(&flow, 2).await;
     let lead = Flow::task(&board, 1);
-    let reviewer = Flow::task(&board, 2);
     assert_eq!(
         board.tasks.len(),
-        2,
-        "a lead and its one reviewer, no verifier"
+        1,
+        "a lead only: no verifier, no reviewer task"
     );
     assert_eq!(lead.state, TaskState::Landed);
-    assert_eq!(reviewer.role, Some(crate::work::WorkerRole::Reviewer));
-    assert_ne!(reviewer.route.choice.provider, lead.route.choice.provider);
+    let mut reviews: Vec<_> = board.reviews.values().collect();
+    reviews.sort_by_key(|review| review.started_at_ms);
+    assert_eq!(reviews.len(), 2, "{reviews:#?}");
+    for review in &reviews {
+        assert_eq!(review.kind, crate::work::ReviewKind::Code);
+        assert_eq!(review.author, lead.route.choice.provider);
+        assert_ne!(review.reviewer, lead.route.choice.provider);
+        assert_eq!(review.task_id.as_ref(), Some(&lead.id));
+    }
+    assert_eq!(
+        reviews[0].state,
+        crate::work::ReviewState::Findings { count: 1 }
+    );
+    assert_eq!(reviews[1].state, crate::work::ReviewState::Clean);
+    assert_eq!(
+        lead.landed.as_deref(),
+        Some(reviews[1].tip.as_str()),
+        "the landing's review reads what landed"
+    );
     assert!(board.plans.is_empty(), "a small request has no phases");
     assert!(board.approvals.is_empty(), "no cards");
     let target = lead.workspace.as_ref().unwrap().target.clone().unwrap();
@@ -565,25 +620,25 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
     flow.stop().await;
 }
 
-/// Done when (2): a request of two phases. Phase 1's lead outlines, gets one review of its
-/// outline from the other vendor and the go-ahead, builds and reports; a fresh verifier asks
-/// for one review of the phase (from the vendor other than the lead's), fixes, commits and
-/// reports; the orchestrator lands the phase and starts phase 2, whose lead reviews its own
-/// small change; then the final answer. No plan rounds, no per-change checks, no cards.
+/// Done when (2): a request of two phases. Phase 1's lead outlines and gets the go-ahead at
+/// once (its plan review runs in the background), builds, asks for its own review and reports;
+/// the orchestrator judges the phase big enough for a verifier and starts one, which asks for
+/// the review of the phase (already done: the same range is reviewed once), fixes, commits and
+/// reports; the orchestrator lands the verifier and starts phase 2, whose lead reviews its own
+/// small change; then the final answer. Every landing has its review; no reviewer tasks, no
+/// plan rounds, no cards.
 #[tokio::test]
 async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
     let heard: Heard = Arc::default();
     let log = heard.clone();
-    let landed = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let flow = Flow::start(
         "phases",
         Options::default(),
         script(move |turn| {
             log.lock().unwrap().push(turn.input.clone());
-            let landed = landed.clone();
             async move {
                 if turn.is_orchestrator() {
-                    if turn.input.contains("[outline review]") {
+                    if turn.input.contains("[outline task-1") {
                         let reply = turn
                             .call(
                                 "approve_outline",
@@ -593,31 +648,39 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                         assert!(!reply.is_error, "{}", reply.text);
                         return Reply::text("[quiet]");
                     }
-                    if turn.input.contains("[phase verifier]") {
-                        // The lead's report: the verifier lands the phase.
-                        let refused = turn.call("land_phase", json!({"task": "task-1"})).await;
-                        assert!(refused.is_error, "the lead alone doesn't land");
-                        return Reply::text("[quiet]");
-                    }
-                    if let Some(n) = reports_in(&turn.input).last() {
-                        let reply = turn
-                            .call("land_phase", json!({"task": format!("task-{n}")}))
-                            .await;
-                        assert!(!reply.is_error, "{}", reply.text);
-                        assert!(reply.text.contains("Landed"), "{}", reply.text);
-                        if landed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                            let reply = turn
-                                .call(
-                                    "delegate_task",
-                                    json!({"title": "Phase two", "kind": "implement",
-                                           "spec": "Build phase two: create p2.txt.",
-                                           "phase": 2, "provider": "codex"}),
-                                )
-                                .await;
+                    match reports_in(&turn.input).last().copied() {
+                        // Phase one's lead: big work, so the orchestrator starts a verifier.
+                        Some(1) => {
+                            let reply =
+                                turn.call("start_verifier", json!({"task": "task-1"})).await;
                             assert!(!reply.is_error, "{}", reply.text);
+                            let refused = turn.call("land_phase", json!({"task": "task-1"})).await;
+                            assert!(refused.is_error, "the lead alone doesn't land");
                             return Reply::text("[quiet]");
                         }
-                        return Reply::text("Both phases are done.\n\nWaiting on you: nothing.");
+                        Some(n) => {
+                            let reply = turn
+                                .call("land_phase", json!({"task": format!("task-{n}")}))
+                                .await;
+                            assert!(!reply.is_error, "{}", reply.text);
+                            assert!(reply.text.contains("Landed"), "{}", reply.text);
+                            if n == 2 {
+                                let reply = turn
+                                    .call(
+                                        "delegate_task",
+                                        json!({"title": "Phase two", "kind": "implement",
+                                               "spec": "Build phase two: create p2.txt.",
+                                               "phase": 2, "provider": "codex"}),
+                                    )
+                                    .await;
+                                assert!(!reply.is_error, "{}", reply.text);
+                                return Reply::text("[quiet]");
+                            }
+                            return Reply::text(
+                                "Both phases are done.\n\nWaiting on you: nothing.",
+                            );
+                        }
+                        None => {}
                     }
                     let reply = turn
                         .call(
@@ -638,13 +701,6 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                     assert!(!reply.is_error, "{}", reply.text);
                     return Reply::text("[quiet]");
                 }
-                if is_reviewer(&turn) {
-                    let reply = turn
-                        .call("submit_report", json!({"summary": "No findings."}))
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("Reviewed.");
-                }
                 if turn.prompt.contains("You verify this phase") {
                     assert!(
                         turn.cwd.join("p1.txt").exists(),
@@ -654,11 +710,15 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                         turn.prompt.contains("Name the file p1.txt."),
                         "it checks against the outline's corrections"
                     );
-                    let review = turn.call("request_review", json!({})).await;
-                    assert!(!review.is_error, "{}", review.text);
+                    assert!(turn.prompt.contains("review_code"));
+                    let review = own_review(&turn).await;
+                    assert!(
+                        review.contains("reviewed already"),
+                        "the lead's review covered the same range: {review}"
+                    );
                     turn.write("p1-fix.txt", "fixed\n");
                     turn.git(&["add", "p1-fix.txt"]);
-                    turn.git(&["commit", "-q", "-m", "Fix what the review found"]);
+                    turn.git(&["commit", "-q", "-m", "Fix what the checks found"]);
                     let reply = turn
                         .call(
                             "submit_report",
@@ -674,8 +734,8 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                     turn.write("p2.txt", "two\n");
                     turn.git(&["add", "p2.txt"]);
                     turn.git(&["commit", "-q", "-m", "Add p2.txt"]);
-                    let review = turn.call("request_review", json!({})).await;
-                    assert!(!review.is_error, "{}", review.text);
+                    let review = own_review(&turn).await;
+                    assert!(review.contains("found nothing"), "{review}");
                     let reply = turn
                         .call(
                             "submit_report",
@@ -700,6 +760,8 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                 turn.write("p1.txt", "one\n");
                 turn.git(&["add", "p1.txt"]);
                 turn.git(&["commit", "-q", "-m", "Add p1.txt"]);
+                let review = own_review(&turn).await;
+                assert!(review.contains("found nothing"), "{review}");
                 let reply = turn
                     .call(
                         "submit_report",
@@ -728,49 +790,73 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                     .all(|request| request.state == RequestState::Done)
         })
         .await;
-    use crate::work::WorkerRole as R;
+    use crate::work::{ReviewKind, ReviewState, WorkerRole as R};
     let roles: Vec<_> = {
         let mut tasks: Vec<_> = board.tasks.values().collect();
         tasks.sort_by_key(|task| task.number);
         tasks.iter().map(|task| (task.number, task.role)).collect()
     };
     let lead = Flow::task(&board, 1);
-    let verifier = board
-        .tasks
-        .values()
-        .find(|task| task.role == Some(R::Verifier))
-        .expect("a verifier");
+    let verifier = Flow::task(&board, 2);
+    assert_eq!(verifier.role, Some(R::Verifier), "{roles:?}");
     assert_eq!(verifier.subject.as_ref(), Some(&lead.id));
     assert_eq!(lead.state, TaskState::Landed, "{roles:?}");
     assert_eq!(verifier.state, TaskState::Landed);
-    // Three reviews in all: the outline's, the verifier's and phase two's lead's.
-    let reviewers: Vec<_> = board
-        .tasks
+    assert!(
+        board
+            .tasks
+            .values()
+            .all(|task| task.role != Some(R::Reviewer)),
+        "no reviewer tasks: {roles:?}"
+    );
+    // Every landing has its review, and no range is reviewed twice.
+    let board = reviews_ended(&flow, 4).await;
+    let code: Vec<_> = board
+        .reviews
         .values()
-        .filter(|task| task.role == Some(R::Reviewer))
+        .filter(|review| review.kind == ReviewKind::Code)
         .collect();
-    assert_eq!(reviewers.len(), 3, "{roles:?}");
-    let of_phase_one: Vec<_> = reviewers
-        .iter()
-        .filter(|task| task.phase == Some(1))
-        .collect();
-    assert_eq!(of_phase_one.len(), 2);
-    for reviewer in of_phase_one {
-        assert_ne!(
-            reviewer.route.choice.provider, lead.route.choice.provider,
-            "phase one is reviewed by the vendor other than its lead's"
+    for task in board.tasks.values() {
+        let Some(landed) = &task.landed else { continue };
+        assert!(
+            code.iter().any(|review| &review.tip == landed),
+            "task-{} landed {landed} unreviewed",
+            task.number
         );
     }
-    // A Claude lead and a Codex verifier: the verifier's review still comes from the vendor
-    // other than the lead's (the phase's author), here the verifier's own.
+    for (i, review) in code.iter().enumerate() {
+        assert!(
+            code[i + 1..]
+                .iter()
+                .all(|other| (&other.base, &other.tip) != (&review.base, &review.tip)),
+            "a range is reviewed once"
+        );
+        assert_ne!(review.reviewer, review.author, "the other vendor reviews");
+    }
+    let plan_reviews: Vec<_> = board
+        .reviews
+        .values()
+        .filter(|review| review.kind == ReviewKind::Plan)
+        .collect();
+    assert_eq!(plan_reviews.len(), 1, "phase one's outline");
+    assert_eq!(plan_reviews[0].task_id.as_ref(), Some(&lead.id));
+    assert!(
+        board
+            .reviews
+            .values()
+            .all(|review| review.state == ReviewState::Clean)
+    );
+    // A Claude lead and a Codex verifier: the phase's reviews come from the vendor other than
+    // the lead's (the phase's author).
     use brigadier_providers::ProviderKind;
     assert_eq!(lead.route.choice.provider, ProviderKind::Claude);
-    assert_eq!(verifier.route.choice.provider, ProviderKind::Codex);
-    let of_verifier = reviewers
-        .iter()
-        .find(|task| task.subject.as_ref() == Some(&verifier.id))
-        .expect("the verifier's review");
-    assert_eq!(of_verifier.route.choice.provider, ProviderKind::Codex);
+    assert!(
+        board
+            .reviews
+            .values()
+            .filter(|review| review.task_id.as_ref() == Some(&verifier.id))
+            .all(|review| review.reviewer == ProviderKind::Codex)
+    );
     assert!(board.tasks.values().all(|task| task.gate_link.is_none()));
     assert!(board.approvals.is_empty(), "no cards");
     assert_eq!(board.plans.len(), 1, "one plan, no rounds");
@@ -788,7 +874,8 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
         assert!(files.contains(file), "{file}: {files}");
     }
     let said = heard.lock().unwrap().join("\n");
-    assert_eq!(said.matches("[outline review]").count(), 1);
+    assert_eq!(said.matches("[outline task-1").count(), 1);
+    assert!(!said.contains("[review task-"), "clean reviews wake nobody");
     flow.stop().await;
 }
 
@@ -1080,8 +1167,8 @@ async fn a_worker_past_the_handoff_size_continues_in_a_fresh_session_that_keeps_
 }
 
 /// A request of one phase whose lead outlines it keeps a plan of its own: one phase with its
-/// outline and stage (the app's "Phase 1 / 1" pill), verified and landed like any phase. Only
-/// a small request without an outline has no plan and no pill.
+/// outline and stage (the app's "Phase 1 / 1" pill), landed like any phase. Only a small
+/// request without an outline has no plan and no pill.
 #[tokio::test]
 async fn an_outlined_request_of_one_phase_keeps_its_phase_and_pill() {
     let flow = Flow::start(
@@ -1089,14 +1176,11 @@ async fn an_outlined_request_of_one_phase_keeps_its_phase_and_pill() {
         Options::default(),
         script(|turn| async move {
             if turn.is_orchestrator() {
-                if turn.input.contains("[outline review]") {
+                if turn.input.contains("[outline task-1") {
                     let reply = turn
                         .call("approve_outline", json!({"task": "task-1"}))
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
-                }
-                if turn.input.contains("[phase verifier]") {
                     return Reply::text("[quiet]");
                 }
                 if let Some(n) = reports_in(&turn.input).last() {
@@ -1116,26 +1200,10 @@ async fn an_outlined_request_of_one_phase_keeps_its_phase_and_pill() {
                 assert!(!reply.is_error, "{}", reply.text);
                 return Reply::text("[quiet]");
             }
-            if is_reviewer(&turn) {
-                let reply = turn
-                    .call("submit_report", json!({"summary": "No findings."}))
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("Reviewed.");
-            }
-            if turn.prompt.contains("You verify this phase") {
-                let review = turn.call("request_review", json!({})).await;
-                assert!(!review.is_error, "{}", review.text);
-                let reply = turn
-                    .call(
-                        "submit_report",
-                        json!({"summary": "It passes.",
-                               "done_when": "[met] one.txt exists: ls shows it"}),
-                    )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("Verified.");
-            }
+            assert!(
+                !turn.prompt.contains("You verify this phase"),
+                "no verifier starts on its own"
+            );
             if turn.earlier == 0 {
                 let reply = turn
                     .call("submit_outline", json!({"outline": "1. Create one.txt"}))
@@ -1159,6 +1227,7 @@ async fn an_outlined_request_of_one_phase_keeps_its_phase_and_pill() {
     .await;
     flow.say("Add one.txt.").await;
     let board = flow.settled().await;
+    assert_eq!(board.tasks.len(), 1, "its lead only");
     assert_eq!(Flow::task(&board, 1).state, TaskState::Landed);
     assert_eq!(board.plans.len(), 1, "the outlined request has its plan");
     let plan = board.plans.values().next().unwrap();
@@ -1196,7 +1265,7 @@ async fn in_plan_mode_a_lead_outlines_and_builds_nothing() {
             }
             assert!(turn.prompt.contains("Plan mode is on: change nothing yet"));
             for (tool, args) in [
-                ("request_review", json!({})),
+                ("review_code", json!({})),
                 ("submit_report", json!({"summary": "Added one.txt."})),
             ] {
                 let refused = turn.call(tool, args).await;
@@ -1417,7 +1486,7 @@ async fn in_plan_mode_a_phase_lead_outlines_and_builds_nothing() {
             }
             assert!(turn.prompt.contains("Plan mode is on: change nothing yet"));
             for (tool, args) in [
-                ("request_review", json!({})),
+                ("review_code", json!({})),
                 ("submit_report", json!({"summary": "Built phase one."})),
             ] {
                 let refused = turn.call(tool, args).await;
@@ -1446,8 +1515,9 @@ async fn in_plan_mode_a_phase_lead_outlines_and_builds_nothing() {
     flow.stop().await;
 }
 
-/// A phase whose only commit is litter has nothing to land: its verifier and its lead both
-/// end, and the phase is done, so nothing is left open for the session.
+/// A phase whose only commit is litter has nothing to land: the verifier the orchestrator
+/// started and its lead both end, and the phase is done, so nothing is left open for the
+/// session.
 #[tokio::test]
 async fn a_phase_with_only_litter_ends_its_lead_with_its_verifier() {
     let flow = Flow::start(
@@ -1455,14 +1525,16 @@ async fn a_phase_with_only_litter_ends_its_lead_with_its_verifier() {
         Options::default(),
         script(|turn| async move {
             if turn.is_orchestrator() {
-                if turn.input.contains("[outline review]") {
+                if turn.input.contains("[outline task-1") {
                     let reply = turn
                         .call("approve_outline", json!({"task": "task-1"}))
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                     return Reply::text("[quiet]");
                 }
-                if turn.input.contains("[phase verifier]") {
+                if reports_in(&turn.input).last() == Some(&1) {
+                    let reply = turn.call("start_verifier", json!({"task": "task-1"})).await;
+                    assert!(!reply.is_error, "{}", reply.text);
                     return Reply::text("[quiet]");
                 }
                 if let Some(n) = reports_in(&turn.input).last() {
@@ -1482,13 +1554,6 @@ async fn a_phase_with_only_litter_ends_its_lead_with_its_verifier() {
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
                 return Reply::text("[quiet]");
-            }
-            if is_reviewer(&turn) {
-                let reply = turn
-                    .call("submit_report", json!({"summary": "No findings."}))
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("Reviewed.");
             }
             if turn.prompt.contains("You verify this phase") {
                 let reply = turn

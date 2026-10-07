@@ -30,8 +30,8 @@ use crate::overnight::{
 };
 use crate::sessions::one_line;
 use crate::work::{
-    Decision, DecisionKind, DecisionSource, RequestState, Task, TaskKind, TaskState, UserRequest,
-    WorkerRole,
+    Decision, DecisionKind, DecisionSource, RequestState, ReviewKind, ReviewRun, ReviewState, Task,
+    TaskKind, TaskState, UserRequest, WorkerRole,
 };
 use brigadier_providers::ProviderKind;
 
@@ -982,17 +982,50 @@ fn phase_evidence(
             None => format!("{what} gave no result."),
         });
     }
+    // The phase's one-shot reviews: an outline's, a worker's own and each landing's.
+    let mut reviews: Vec<&ReviewRun> = board
+        .reviews
+        .values()
+        .filter(|review| {
+            review
+                .task_id
+                .as_ref()
+                .is_some_and(|id| tasks.iter().any(|task| &task.id == id))
+        })
+        .collect();
+    reviews.sort_by_key(|review| review.started_at_ms);
+    for review in &reviews {
+        let what = match review.kind {
+            ReviewKind::Plan => "Outline review",
+            ReviewKind::Code => "Code review",
+        };
+        lines.push(match &review.state {
+            ReviewState::Running => format!("{what}: still running."),
+            ReviewState::Clean => format!("{what}: no findings."),
+            ReviewState::Findings { count } => sentence(&format!(
+                "{what}: {}",
+                plural(*count as usize, "finding", "findings")
+            )),
+            ReviewState::Failed { reason } => sentence(&format!(
+                "{what} could not run: {}",
+                one_line(reason, DECIDED).trim_end_matches('.')
+            )),
+        });
+    }
     // What was done about the review: whoever asked for it fixed what it agreed with and said
     // so in its report.
     if let Some(task) = verifier.or(lead)
         && let Some(report) = &task.report
-        && tasks.iter().any(|t| {
+        && (tasks.iter().any(|t| {
             t.role == Some(WorkerRole::Reviewer)
                 && t.subject.as_ref() == Some(&task.id)
                 && t.report
                     .as_ref()
                     .is_some_and(|r| !r.open_questions.is_empty())
-        })
+        }) || reviews.iter().any(|review| {
+            review.task_id.as_ref() == Some(&task.id)
+                && matches!(review.state, ReviewState::Findings { .. })
+        }))
     {
         let answers: Vec<String> = report
             .decisions

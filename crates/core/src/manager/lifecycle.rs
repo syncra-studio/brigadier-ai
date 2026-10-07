@@ -150,6 +150,8 @@ impl SessionManager {
                 self.dispose_task(&task, TaskState::Stopped).await;
             }
             self.expire_stale_cards(&conversation.id).await;
+            // A one-shot review the restart cut off is over; the orchestrator hears it.
+            self.recover_reviews(&conversation.id).await;
             // What waits for the user matches the tasks and reports as they are now.
             self.reconcile_waiting(&conversation.id).await;
             // Nothing runs any more: what was working is over or waits for the user.

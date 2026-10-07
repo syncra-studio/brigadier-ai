@@ -1,6 +1,6 @@
-//! Overnight runs on the request loop: each phase gets one lead, a fresh verifier with one
-//! review, `land_phase` and `phase_done`; the run keeps its directives, deadline wind-down,
-//! restart recovery and morning report.
+//! Overnight runs on the request loop: each phase gets one lead, a fresh verifier the
+//! orchestrator starts (which asks for one review), `land_phase` and `phase_done`; the run
+//! keeps its directives, deadline wind-down, restart recovery and morning report.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -13,7 +13,7 @@ use crate::model::OvernightRunId;
 use crate::overnight::{
     OvernightRun, OvernightState, PhaseState, ProposedPhase, ProposedPlan, StopReason,
 };
-use crate::work::{TaskState, WorkerRole};
+use crate::work::{ReviewKind, ReviewState, TaskState, WorkerRole};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -59,16 +59,25 @@ fn reports_in(input: &str) -> Vec<u32> {
         .collect()
 }
 
-fn is_reviewer(turn: &Turn) -> bool {
-    turn.prompt.contains("Kind: review")
-}
-
 fn is_verifier(turn: &Turn) -> bool {
     turn.prompt.contains("You verify this phase")
 }
 
-/// An orchestrator that leads each phase as its briefing says: one lead, then land the
-/// verifier's work and settle the phase as done.
+/// Settles the phase being led as done.
+async fn settle(turn: &Turn) {
+    let reply = turn
+        .call(
+            "phase_done",
+            json!({"outcome": "done",
+                   "summary": "It made the file; its verifier checked it and one review found nothing."}),
+        )
+        .await;
+    assert!(!reply.is_error, "{}", reply.text);
+}
+
+/// An orchestrator that leads each phase as its briefing says: one lead, a verifier it starts
+/// once the lead reports (its call; these runs verify every phase), then land the verifier's
+/// work and settle the phase as done.
 async fn lead_the_phase(turn: &Turn) -> Reply {
     if let Some(n) = kickoff(&turn.input) {
         let reply = turn
@@ -89,32 +98,53 @@ async fn lead_the_phase(turn: &Turn) -> Reply {
         assert!(!reply.is_error, "{}", reply.text);
         return Reply::text(QUIET);
     }
-    if turn.input.contains("[phase verifier]") {
-        return Reply::text(QUIET);
-    }
     if let Some(n) = reports_in(&turn.input).last() {
+        // A lead's report (a verifier's task is "Verify …"): verify it first. A run that is
+        // ending starts no verifier, and a lead that changed nothing has nothing to verify.
+        if !turn.input.contains("\"Verify ") && !turn.input.contains("[nothing to land task-") {
+            let started = turn
+                .call("start_verifier", json!({"task": format!("task-{n}")}))
+                .await;
+            if !started.is_error {
+                // The lead alone doesn't land while its verifier works on top of it.
+                let refused = turn
+                    .call("land_phase", json!({"task": format!("task-{n}")}))
+                    .await;
+                assert!(refused.is_error, "{}", refused.text);
+                return Reply::text(QUIET);
+            }
+        }
         let landed = turn
             .call("land_phase", json!({"task": format!("task-{n}")}))
             .await;
         if landed.is_error {
             return Reply::text(QUIET);
         }
-        let reply = turn
-            .call(
-                "phase_done",
-                json!({"outcome": "done",
-                       "summary": "It made the file; its verifier checked it and one review found nothing."}),
-            )
-            .await;
-        assert!(!reply.is_error, "{}", reply.text);
+        settle(turn).await;
+        return Reply::text(QUIET);
+    }
+    // Its lead ended without anything left to land: settle the phase from its report.
+    if turn.input.contains("Nothing of this phase runs now") {
+        settle(turn).await;
     }
     Reply::text(QUIET)
 }
 
+/// Asks for a review of the worker's own work and waits for the findings, which steer into
+/// its running turn. What the review found, or why there is none.
+async fn own_review(turn: &Turn) -> String {
+    let started = turn.call("review_code", json!({})).await;
+    assert!(!started.is_error, "{}", started.text);
+    if !started.text.starts_with("Started a review") {
+        return started.text;
+    }
+    turn.steered().await.expect("the review's findings")
+}
+
 /// A verifier that asks for its one review and reports every criterion met.
 async fn verify(turn: &Turn) -> Reply {
-    let review = turn.call("request_review", json!({})).await;
-    assert!(!review.is_error, "{}", review.text);
+    let review = own_review(turn).await;
+    assert!(review.contains("found nothing"), "{review}");
     let reply = turn
         .call(
             "submit_report",
@@ -124,14 +154,6 @@ async fn verify(turn: &Turn) -> Reply {
         .await;
     assert!(!reply.is_error, "{}", reply.text);
     Reply::text("Verified.")
-}
-
-async fn review(turn: &Turn) -> Reply {
-    let reply = turn
-        .call("submit_report", json!({"summary": "No findings."}))
-        .await;
-    assert!(!reply.is_error, "{}", reply.text);
-    Reply::text("Reviewed.")
 }
 
 /// A lead that commits its phase's file and reports.
@@ -234,9 +256,6 @@ async fn a_run_told_to_stop_after_phase_2_verifies_two_phases_and_stops() {
             if turn.is_orchestrator() {
                 return lead_the_phase(&turn).await;
             }
-            if is_reviewer(&turn) {
-                return review(&turn).await;
-            }
             if is_verifier(&turn) {
                 return verify(&turn).await;
             }
@@ -288,12 +307,16 @@ async fn a_run_told_to_stop_after_phase_2_verifies_two_phases_and_stops() {
         let lead = in_phase(WorkerRole::Lead).unwrap();
         let verifier = in_phase(WorkerRole::Verifier).unwrap();
         let review = board
-            .tasks
+            .reviews
             .values()
-            .find(|task| task.subject.as_ref() == Some(&verifier.id))
+            .find(|review| {
+                review.kind == ReviewKind::Code && review.task_id.as_ref() == Some(&verifier.id)
+            })
             .expect("the verifier's review");
+        assert_eq!(review.state, ReviewState::Clean);
+        assert_eq!(review.author, lead.route.choice.provider);
         assert_ne!(
-            review.route.choice.provider, lead.route.choice.provider,
+            review.reviewer, lead.route.choice.provider,
             "phase {}",
             phase.number
         );
@@ -357,9 +380,6 @@ async fn at_the_deadline_live_workers_are_asked_for_a_handoff() {
             async move {
                 if turn.is_orchestrator() {
                     return lead_the_phase(&turn).await;
-                }
-                if is_reviewer(&turn) {
-                    return review(&turn).await;
                 }
                 if is_verifier(&turn) {
                     return verify(&turn).await;
@@ -467,9 +487,6 @@ async fn a_restart_mid_phase_resumes_the_run() {
                     }
                     return lead_the_phase(&turn).await;
                 }
-                if is_reviewer(&turn) {
-                    return review(&turn).await;
-                }
                 if is_verifier(&turn) {
                     return verify(&turn).await;
                 }
@@ -508,10 +525,11 @@ async fn a_restart_mid_phase_resumes_the_run() {
     flow.stop().await;
 }
 
-/// A lead that finds its phase already done changes nothing; the phase still gets its fresh
-/// verifier, whose work lands, before it counts as verified.
+/// A lead that finds its phase already done changes nothing: there is nothing to land or
+/// verify (no verifier starts on its own), and the orchestrator settles the phase from the
+/// lead's report.
 #[tokio::test]
-async fn a_phase_whose_lead_changed_nothing_is_still_verified() {
+async fn a_phase_whose_lead_changed_nothing_is_settled_from_its_report() {
     let flow = Flow::start(
         "overnight-unchanged",
         Options::default(),
@@ -519,30 +537,12 @@ async fn a_phase_whose_lead_changed_nothing_is_still_verified() {
             if turn.is_orchestrator() {
                 return lead_the_phase(&turn).await;
             }
-            if is_reviewer(&turn) {
-                return review(&turn).await;
-            }
-            if is_verifier(&turn) {
-                // The lead was wrong: the verifier finds the file missing and adds it.
-                turn.write("p1.txt", "1\n");
-                turn.git(&["add", "p1.txt"]);
-                turn.git(&["commit", "-q", "-m", "Add p1.txt"]);
-                let review = turn.call("request_review", json!({})).await;
-                assert!(!review.is_error, "{}", review.text);
-                let reply = turn
-                    .call(
-                        "submit_report",
-                        json!({"summary": "p1.txt was missing; added it.", "changes": ["p1.txt"],
-                               "done_when": "[met] p1.txt exists: ls shows it"}),
-                    )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("Verified.");
-            }
+            assert!(!is_verifier(&turn), "no verifier starts on its own");
             let reply = turn
                 .call(
                     "submit_report",
-                    json!({"summary": "p1.txt is already there; nothing to change."}),
+                    json!({"summary": "p1.txt is already there; nothing to change.",
+                           "done_when": "[met] p1.txt exists: it was there already"}),
                 )
                 .await;
             assert!(!reply.is_error, "{}", reply.text);
@@ -555,15 +555,13 @@ async fn a_phase_whose_lead_changed_nothing_is_still_verified() {
     let run = run_of(&board, &run.id);
     assert_eq!(run.stop, Some(StopReason::Done), "{run:#?}");
     assert_eq!(run.phases[0].state, PhaseState::Verified);
-    let verifiers: Vec<_> = board
-        .tasks
-        .values()
-        .filter(|task| task.role == Some(WorkerRole::Verifier))
-        .collect();
-    assert_eq!(verifiers.len(), 1, "a fresh verifier checked the phase");
-    let branch = run.workspace.as_ref().expect("a branch").branch.clone();
-    let files = super::git(&flow.repo, &["ls-tree", "-r", "--name-only", &branch]);
-    assert!(files.contains("p1.txt"), "{files}");
-    assert_eq!(verifiers[0].state, TaskState::Landed);
+    assert!(
+        board
+            .tasks
+            .values()
+            .all(|task| task.role != Some(WorkerRole::Verifier)),
+        "no verifier"
+    );
+    assert!(board.reviews.is_empty(), "nothing landed, nothing reviewed");
     flow.stop().await;
 }

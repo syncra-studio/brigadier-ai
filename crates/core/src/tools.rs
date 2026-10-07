@@ -444,8 +444,8 @@ pub struct NoteForUser {
 #[serde(deny_unknown_fields)]
 pub struct PhaseDone {
     pub outcome: PhaseOutcome,
-    /// What the phase changed, how its verifier checked it and what the review found and what
-    /// was done about it, in a few sentences.
+    /// What the phase changed, how its "done when" were checked (by its lead, or a verifier you
+    /// started) and what the review found and what was done about it, in a few sentences.
     pub summary: String,
     /// For a partial or blocked phase: what is left, one line each (for blocked, exactly what
     /// only the user can do).
@@ -543,6 +543,7 @@ pub enum OrchestratorCall {
     SearchTranscript(SearchTranscript),
     PlanPhases(PlanPhases),
     ApproveOutline(ApproveOutline),
+    StartVerifier(TaskRef),
     RequestApproval(RequestApproval),
     LandPhase(LandPhase),
     FinishSession(FinishSession),
@@ -570,6 +571,7 @@ impl OrchestratorCall {
             Self::SearchTranscript(_) => "search_transcript",
             Self::PlanPhases(_) => "plan_phases",
             Self::ApproveOutline(_) => "approve_outline",
+            Self::StartVerifier(_) => "start_verifier",
             Self::RequestApproval(_) => "request_approval",
             Self::LandPhase(_) => "land_phase",
             Self::FinishSession(_) => "finish_session",
@@ -601,16 +603,6 @@ pub struct SubmitOutline {
     /// will be checked, risks, and any question for the orchestrator with your
     /// recommendation.
     pub outline: String,
-}
-
-/// `request_review`: one review of the worker's committed work by the other vendor; blocks
-/// until the findings are in.
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RequestReview {
-    /// What the reviewer should look at hardest, if anything.
-    #[serde(default)]
-    pub focus: Option<String>,
 }
 
 /// A file the worker saved in its scratch folder, attached to its report.
@@ -744,7 +736,9 @@ fn empty_item(item: &str) -> bool {
 pub enum WorkerCall {
     AskOrchestrator(AskOrchestrator),
     SubmitOutline(SubmitOutline),
-    RequestReview(RequestReview),
+    /// `review_code`: one review of the worker's committed work by the other vendor; returns
+    /// at once, and the findings arrive as a message.
+    ReviewCode,
     SubmitReport(SubmitReport),
     QueryBrain(QueryBrain),
     CodeSearch(CodeSearch),
@@ -758,7 +752,7 @@ impl WorkerCall {
         match self {
             Self::AskOrchestrator(_) => "ask_orchestrator",
             Self::SubmitOutline(_) => "submit_outline",
-            Self::RequestReview(_) => "request_review",
+            Self::ReviewCode => "review_code",
             Self::SubmitReport(_) => "submit_report",
             Self::QueryBrain(_) => "query_brain",
             Self::CodeSearch(_) => "code_search",

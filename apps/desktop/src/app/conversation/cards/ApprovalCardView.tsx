@@ -11,6 +11,7 @@ import { memo, type ReactNode } from "react";
 
 import { DiffStatView } from "@/app/conversation/cards/common";
 import { WaitingRow } from "@/app/conversation/cards/common";
+import { useMergeReviewStatus } from "@/app/conversation/reviewStatus";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
 import {
   ApprovalCard,
@@ -71,6 +72,7 @@ function describe(
   approval: Approval,
   actorId: string | null,
   landingId: string | null,
+  review: string | null,
 ): Shown {
   // The worker that asks, and the one to land, as their chips.
   const by = actorId === null ? null : <WorkerChip taskId={actorId} />;
@@ -127,13 +129,16 @@ function describe(
         subtitle: "One commit",
         body: <DiffStatView stat={subject.diffStat} />,
       };
-    case "finishSession":
+    case "finishSession": {
+      // Merging never waits for the review: its line follows it, also after the merge.
+      const commits = `${subject.commits} commit${subject.commits === 1 ? "" : "s"}`;
       return {
         icon: <Branch />,
         title: `Merge ${subject.branch} into ${subject.base}?`,
-        subtitle: `${subject.commits} commit${subject.commits === 1 ? "" : "s"}`,
+        subtitle: review ? `${commits} · ${review}` : commits,
         body: <DiffStatView stat={subject.diffStat} />,
       };
+    }
     case "action":
       return {
         icon: <Sparkle />,
@@ -162,9 +167,10 @@ export const ApprovalCardView = memo(function ApprovalCardView({ cardId }: { car
       ? approval.subject.taskId
       : null,
   );
+  const review = useMergeReviewStatus(approval);
   if (!approval) return null;
 
-  const shown = describe(approval, actorId, landingId);
+  const shown = describe(approval, actorId, landingId, review);
   if (approval.state.type === "pending") {
     return <WaitingRow icon={shown.icon}>Waiting for your approval</WaitingRow>;
   }

@@ -3,4 +3,4 @@
 /**
  * Where a phase of a request stands, for the "Phase n / m" pill and the side panel's plan.
  */
-export type PhaseStage = "pending" | "outlining" | "outlineReview" | "awaitingGoAhead" | "building" | "verifying" | "landing" | "done" | "failed";
+export type PhaseStage = "pending" | "outlining" | "awaitingGoAhead" | "building" | "verifying" | "landing" | "done" | "failed";

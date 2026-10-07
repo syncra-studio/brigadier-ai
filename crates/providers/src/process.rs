@@ -296,6 +296,12 @@ impl CliProcess {
         Ok(())
     }
 
+    /// Closes the CLI's stdin: a one-shot command that reads its input from stdin starts once
+    /// it sees the end.
+    pub async fn close_stdin(&self) {
+        self.stdin.lock().await.take();
+    }
+
     /// Resolves once the process has exited and been reaped.
     pub async fn exited(&self) -> Exit {
         let mut exit = self.exit.clone();

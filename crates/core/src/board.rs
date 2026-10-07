@@ -9,8 +9,8 @@ use crate::model::{DomainEvent, MessageRole, Notice, OvernightRunId, Rating, Str
 use crate::overnight::OvernightRun;
 use crate::work::{
     Approval, CardId, CardState, Compaction, ConversationActivity, Decision, MessageQueue,
-    OrchestratorStep, Plan, PlanState, Question, RunState, Task, TaskId, UserRequest, WaitingItem,
-    WorkerStep,
+    OrchestratorStep, Plan, PlanState, Question, ReviewRun, RunState, Task, TaskId, UserRequest,
+    WaitingItem, WorkerStep,
 };
 
 /// Notices kept per conversation.
@@ -25,6 +25,7 @@ pub(crate) const KINDS: &[&str] = &[
     "approval.updated",
     "question.updated",
     "plan.updated",
+    "review.updated",
     "queue.changed",
     "request.updated",
     "worker.step",
@@ -74,6 +75,8 @@ pub(crate) struct Board {
     pub(crate) waits_listed: HashSet<String>,
     /// Its overnight runs, a segment each.
     pub(crate) runs: HashMap<OvernightRunId, OvernightRun>,
+    /// Its one-shot reviews, by id.
+    pub(crate) reviews: HashMap<String, ReviewRun>,
 }
 
 impl Board {
@@ -154,6 +157,9 @@ impl Board {
                 let mut plan = plan.clone();
                 plan.position = position;
                 self.plans.insert(plan.id.clone(), plan);
+            }
+            DomainEvent::ReviewUpdated { review } => {
+                self.reviews.insert(review.id.clone(), review.clone());
             }
             DomainEvent::QueueChanged { queue, .. } => self.queue = queue.clone(),
             DomainEvent::RunStateChanged {
@@ -379,6 +385,13 @@ impl Board {
         let mut plans: Vec<Plan> = self.plans.values().cloned().collect();
         plans.sort_by_key(|plan| plan.position);
         plans
+    }
+
+    /// Its one-shot reviews, oldest first.
+    pub(crate) fn sorted_reviews(&self) -> Vec<ReviewRun> {
+        let mut reviews: Vec<ReviewRun> = self.reviews.values().cloned().collect();
+        reviews.sort_by(|a, b| a.started_at_ms.cmp(&b.started_at_ms).then(a.id.cmp(&b.id)));
+        reviews
     }
 
     /// Its overnight runs, oldest first.

@@ -7,8 +7,8 @@ use brigadier_core::tools::{
     AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch,
     DelegateTask, FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser, OrchestratorCall,
     PhaseDone, PlanPhases, ProposeOvernight, ProposePhases, QueryBrain, ReadArtifact, RecordNodes,
-    Remember, ReportRef, RequestApproval, RequestReview, Role, RouteFollowUp, SaveMemory,
-    SearchTranscript, SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
+    Remember, ReportRef, RequestApproval, Role, RouteFollowUp, SaveMemory, SearchTranscript,
+    SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
@@ -80,15 +80,23 @@ lead. Records the phases for the user's progress pill; nothing is reviewed or ap
 Then delegate phase 1's lead (delegate_task, kind implement, phase 1), and each next phase once \
 the one before it has landed.";
 
-const APPROVE_OUTLINE: &str = "Give a lead the go-ahead on its outline, after its one advisory \
-review from the other vendor arrived. Put the review findings you agree with, and anything the \
-brief implies, in `corrections`; the brief wins any conflict. Under \"Ask for approval\" this \
-shows the user a \"Start this plan?\" card and the go-ahead goes once they start it. Returns at \
-once.";
+const APPROVE_OUTLINE: &str = "Give a lead the go-ahead on its outline as soon as you have \
+judged it: don't wait for its plan review, which runs in the background and may arrive after the \
+go-ahead (then send the lead the findings you agree with by message_worker). Put what the \
+outline gets wrong, and anything the brief implies, in `corrections`; the brief wins any \
+conflict. Under \"Ask for approval\" this shows the user a \"Start this plan?\" card and the \
+go-ahead goes once they start it. Returns at once.";
+
+const START_VERIFIER: &str = "Your call, for big or risky work only: start a fresh verifier \
+on top of a reported implement task's commits. It asks for a review of the whole work by the \
+other vendor, checks every \"done when\" for real, fixes and commits what fails, triages the \
+review's findings and reports. Land the verifier's task then (its commits hold the lead's), not \
+the lead's. Small work needs none: land the lead. Returns at once.";
 
 const PHASE_DONE: &str = "Only while you lead a phase of an overnight run: settle the phase \
 once every task of it has landed or ended (nothing of it may still run or wait to be landed). \
-Judge its verifier's report: done when every \"done when\" is met and its work landed; \
+Judge the report of its lead (or of a verifier you started): done when every \"done when\" is \
+met and its work landed; \
 partial when some is left for a later run; blocked when what is left needs the user. Brigadier \
 then starts the next phase or ends the run.";
 
@@ -102,18 +110,19 @@ money, using credentials or the keychain, or destroying something outside this s
 work. Not for pushes, pull requests or deploys the user asked for (just do those) nor for work \
 inside the session. Returns at once; the decision arrives later as a message.";
 
-const REQUEST_REVIEW: &str = "Have your committed work reviewed once by a model from the other \
+const REVIEW_CODE: &str = "Start one review of your committed work by a model from the other \
 vendor, from where your work started to your last commit (uncommitted changes are committed for \
-you first). Blocks until the findings are in, then returns them. Fix what you agree with and \
-commit; for a finding you don't, say why in your report. It is advisory: nothing waits on it and \
-there are no rounds. The lead of a small change calls it once before its report; a phase's \
-verifier calls it once.";
+you first). Returns at once: keep working, and the findings arrive later as a message from \
+Brigadier (if you have nothing left to do before them, end your turn; they start your next \
+one). Fix what you agree with and commit; for a finding you don't, say why in your report. It is \
+advisory and there are no rounds: call it once.";
 
 const LAND_PHASE: &str = "Land a finished `implement` or `merge` task's commits on the \
-session's branch: a phase's verifier once its report is in (its commits hold the lead's), or the \
-lead of a small request after its own review. Call it after reading the report. Brigadier \
-commits what was left uncommitted, leaves litter out, and fast-forwards the branch; no card, \
-no further checks. If the branch moved meanwhile, the commits are rebased and the worker runs a \
+session's branch: the lead's task once its report is in, or a verifier you started for big or \
+risky work (its commits hold the lead's). Call it after reading the report. Brigadier commits \
+what was left uncommitted, leaves litter out, and fast-forwards the branch; no card, no further \
+checks. Each landing gets one background review by the other vendor; its findings arrive later \
+as a [review …] message. If the branch moved meanwhile, the commits are rebased and the worker runs a \
 quick self-check first; then they land on their own and you hear when. Conflicts come back to \
 you: delegate a merge task.";
 
@@ -197,7 +206,7 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
                 .filter(|tool| {
                     !matches!(
                         tool.name.as_ref(),
-                        "ask_orchestrator" | "submit_outline" | "request_review"
+                        "ask_orchestrator" | "submit_outline" | "review_code"
                     )
                 })
                 .collect()
@@ -250,6 +259,7 @@ fn orchestrator_tools() -> Vec<Tool> {
             APPROVE_OUTLINE,
             input_schema::<ApproveOutline>(),
         ),
+        tool("start_verifier", START_VERIFIER, input_schema::<TaskRef>()),
         tool(
             "propose_overnight",
             "Fill the user's unstarted overnight proposal from their brief or source files. Keep source phase numbers, dependencies, done-when and Rules verbatim; no invented scope. Include every phase the user's words select, also those after a \"stop after\" or a skip: Brigadier enforces those itself and keeps the rest for Continue. A bare goal keeps empty phases for Phase 0. Does not start, review or implement anything: only the user's Start does that. Use the run_id and revision from the proposal briefing.",
@@ -293,11 +303,7 @@ fn worker_tools() -> Vec<Tool> {
             SUBMIT_OUTLINE,
             input_schema::<SubmitOutline>(),
         ),
-        tool(
-            "request_review",
-            REQUEST_REVIEW,
-            input_schema::<RequestReview>(),
-        ),
+        tool("review_code", REVIEW_CODE, no_arguments()),
         tool(
             "submit_report",
             SUBMIT_REPORT,
@@ -384,6 +390,7 @@ pub fn parse_call(
                 }
                 "plan_phases" => OrchestratorCall::PlanPhases(args(name, arguments)?),
                 "approve_outline" => OrchestratorCall::ApproveOutline(args(name, arguments)?),
+                "start_verifier" => OrchestratorCall::StartVerifier(args(name, arguments)?),
                 "request_approval" => OrchestratorCall::RequestApproval(args(name, arguments)?),
                 "land_phase" => OrchestratorCall::LandPhase(args(name, arguments)?),
                 "finish_session" => OrchestratorCall::FinishSession(args(name, arguments)?),
@@ -404,9 +411,7 @@ pub fn parse_call(
                 "submit_outline" if !checks => {
                     WorkerCall::SubmitOutline(args::<SubmitOutline>(name, arguments)?)
                 }
-                "request_review" if !checks => {
-                    WorkerCall::RequestReview(args::<RequestReview>(name, arguments)?)
-                }
+                "review_code" if !checks => WorkerCall::ReviewCode,
                 "submit_report" => WorkerCall::SubmitReport(args::<SubmitReport>(name, arguments)?),
                 "query_brain" => WorkerCall::QueryBrain(args::<QueryBrain>(name, arguments)?),
                 "code_search" => WorkerCall::CodeSearch(args::<CodeSearch>(name, arguments)?),
@@ -466,8 +471,9 @@ mod tests {
             .find(|tool| tool.name == "approve_outline")
             .unwrap();
         let description = approve.description.as_deref().unwrap();
-        assert!(description.contains("one advisory"));
+        assert!(description.contains("don't wait for its plan review"));
         assert!(description.contains("Start this plan?"));
+        assert!(names.contains(&"start_verifier".to_owned()));
     }
 
     #[test]
@@ -479,8 +485,10 @@ mod tests {
                 .collect()
         };
         assert!(names(&worker(false)).contains(&"ask_orchestrator".to_owned()));
+        assert!(names(&worker(false)).contains(&"review_code".to_owned()));
         let checker = names(&worker(true));
         assert!(!checker.contains(&"ask_orchestrator".to_owned()));
+        assert!(!checker.contains(&"review_code".to_owned()));
         assert!(checker.contains(&"submit_report".to_owned()));
         let question = || {
             let mut arguments = JsonObject::new();

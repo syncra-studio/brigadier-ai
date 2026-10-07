@@ -27,6 +27,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { pendingActionKeys, type PendingAction } from "@/app/conversation/pendingActions";
 import { PlanCardLink } from "@/app/conversation/cards/PlanCardLink";
+import { useMergeReviewStatus } from "@/app/conversation/reviewStatus";
 import { revealOvernight } from "@/app/conversation/summaryState";
 import { useAction } from "@/app/conversation/useAction";
 import { ViewContext } from "@/app/conversation/viewContext";
@@ -293,8 +294,14 @@ function CardProse({ children }: { children: ReactNode }) {
  * What a card asks, compactly: its kind ("Terminal", "Edit files", "Internet access", "Ask
  * permission", "Merge", "Plan"), the asker's one-line reason as the title, and the exact thing
  * asked about. `cwd` shows only when the command runs outside the session's own folders.
+ * `review`: a merge card's review line ("Review running…", "Review: clean").
  */
-function describe(approval: Approval, landingId: string | null, inSession: (path: string) => boolean): Shown {
+function describe(
+  approval: Approval,
+  landingId: string | null,
+  inSession: (path: string) => boolean,
+  review: string | null,
+): Shown {
   const { subject } = approval;
   switch (subject.type) {
     case "cli": {
@@ -361,7 +368,12 @@ function describe(approval: Approval, landingId: string | null, inSession: (path
         icon: <Branch />,
         kind: "Merge",
         title: `Merge ${subject.branch} into ${subject.base}? ${subject.commits} commit${subject.commits === 1 ? "" : "s"}.`,
-        body: <ActionFileList files={fileStats(subject.diffStat)} />,
+        body: (
+          <>
+            {review && <p className="text-foreground/55 px-4 text-xs">{review}</p>}
+            <ActionFileList files={fileStats(subject.diffStat)} />
+          </>
+        ),
         allow: "Merge",
       };
     case "action":
@@ -431,6 +443,7 @@ export function ApprovalAction({
       : null,
   );
   const inSession = useInSession(approval?.conversationId);
+  const review = useMergeReviewStatus(approval);
   const action = useAction();
   const allow = useRef<HTMLButtonElement>(null);
   // Unless the user is typing somewhere, Allow takes focus.
@@ -452,7 +465,7 @@ export function ApprovalAction({
   });
   if (!approval) return null;
 
-  const shown = describe(approval, landingId, inSession);
+  const shown = describe(approval, landingId, inSession, review);
   const request =
     approval.subject.type === "cli" ? approval.subject.request : null;
   const grant = request?.grant ?? null;

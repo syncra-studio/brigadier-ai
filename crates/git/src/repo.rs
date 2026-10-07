@@ -38,6 +38,14 @@ impl Repo {
         &self.common_dir
     }
 
+    /// This checkout's own git folder: the common one for the main checkout,
+    /// `<common>/worktrees/<name>` (its index and HEAD) for a linked worktree.
+    pub fn git_dir(&self) -> Result<PathBuf> {
+        let args = ["rev-parse", "--path-format=absolute", "--git-dir"];
+        let out = check(&args, self.run(&args, true)?)?;
+        Ok(fs::canonicalize(parse::path_line(&out)?)?)
+    }
+
     pub(crate) fn run<S: AsRef<OsStr>>(&self, args: &[S], read_only: bool) -> Result<Output> {
         self.git.run(Some(&self.root), args, read_only, &[], None)
     }

@@ -84,11 +84,8 @@ const WORDS: Record<string, Words> = {
   propose_phases: words("plan", "Planning the work", "Planned the work"),
   propose_overnight: words("plan", "Planning the work", "Planned the work"),
   approve_outline: words("plan", "Reviewing an outline", "Reviewed an outline"),
-  request_review: words(
-    "approval",
-    "Requesting a review",
-    "Requested a review",
-  ),
+  start_verifier: words("worker", "Starting a verifier", "Started a verifier"),
+  review_code: words("approval", "Asking for a review", "Asked for a review"),
   request_approval: words(
     "approval",
     "Asking for approval",
@@ -137,6 +134,7 @@ export function toolActivity(name: string): Words {
 /** Only suppress a raw call when its authored result actually exists in this turn. */
 const OWN_RESULT: Record<string, string> = {
   delegate_task: "created",
+  start_verifier: "created",
   message_worker: "messaged",
   answer_worker: "answered",
   read_report: "readReport",

@@ -71,7 +71,7 @@ impl SessionManager {
                     (_, None) => None,
                     (kind, Some(role)) => {
                         return Err(Error::Invalid(format!(
-                            "a {kind:?} task can't be a {role:?}: leads, parallel workers and fixes are implement tasks; Brigadier starts verifiers and reviewers itself"
+                            "a {kind:?} task can't be a {role:?}: leads, parallel workers and fixes are implement tasks; start a verifier with start_verifier, and every landing gets its review by itself"
                         )));
                     }
                 };
@@ -314,6 +314,11 @@ impl SessionManager {
             OrchestratorCall::SearchTranscript(args) => self.search_transcript_tool(id, args).await,
             OrchestratorCall::PlanPhases(args) => self.plan_phases(id, args).await,
             OrchestratorCall::ApproveOutline(args) => self.approve_outline(id, args).await,
+            OrchestratorCall::StartVerifier(args) => {
+                // A verifier changes code: in plan mode nothing does.
+                self.check_plan_mode(id).await?;
+                self.verify_task(id, args).await
+            }
             OrchestratorCall::RequestApproval(args) => {
                 self.open_approval(
                     id,
@@ -478,10 +483,7 @@ impl SessionManager {
                 self.submit_outline(&conversation_id, &task_id, args.outline)
                     .await
             }
-            WorkerCall::RequestReview(args) => {
-                self.request_review(&conversation_id, &task_id, args.focus)
-                    .await
-            }
+            WorkerCall::ReviewCode => self.review_code(&conversation_id, &task_id).await,
             WorkerCall::QueryBrain(args) => {
                 self.query_brain_tool(
                     &conversation_id,

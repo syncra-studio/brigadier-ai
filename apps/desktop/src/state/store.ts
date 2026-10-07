@@ -186,7 +186,7 @@ export const useApp = create<AppState>()(() => ({
   conversations: {},
   settings: {
     density: cachedDensity(),
-    defaultPermission: "approveForMe",
+    defaultPermission: "fullAccess",
     defaultOrchestrator: null,
     defaultChatModel: null,
     hibernateAfterMinutes: 30,
@@ -566,6 +566,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "approvalUpdated":
     case "questionUpdated":
     case "planUpdated":
+    case "reviewUpdated":
     case "overnightUpdated":
     case "queueChanged":
     case "workerEvent":

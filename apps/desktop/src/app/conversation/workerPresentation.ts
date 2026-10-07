@@ -25,6 +25,7 @@ export function workerPreview(task: Task): string | null {
   }
   if (task.quotaWait) return "Waiting for model quota";
   const reason = task.blockedReason ?? "";
+  if (/code review/i.test(reason)) return "Waiting for its code review";
   if (/outline|plan|review/i.test(reason)) return "Waiting for its plan to be reviewed";
   if (/approval|permission|readyToLand/i.test(reason) || task.state === "readyToLand") return "Waiting for your approval";
   if (task.state === "queued" || /slot|capacity|worker|step/i.test(reason)) return "Waiting for a free slot";

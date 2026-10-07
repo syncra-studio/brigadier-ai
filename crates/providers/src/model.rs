@@ -800,6 +800,9 @@ pub enum ToolSet {
     None,
     /// Web search and fetch only (Chats).
     Web,
+    /// A one-shot reviewer's: reading files and running the read-only git commands that show
+    /// a change, and nothing else (Claude; Codex runs its reviews through `codex exec review`).
+    Review,
 }
 
 /// An MCP server a session gets, launched by the CLI over stdio.

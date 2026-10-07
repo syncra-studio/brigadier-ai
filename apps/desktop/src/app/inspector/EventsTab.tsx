@@ -100,6 +100,8 @@ function summary(event: DomainEvent): string {
       return event.question.answer === null ? "asked" : "answered";
     case "planUpdated":
       return `“${event.plan.title}” ${event.plan.state.type}`;
+    case "reviewUpdated":
+      return `${event.review.kind} review ${event.review.state.type}`;
     case "overnightUpdated":
       return `“${event.run.name}” ${event.run.state} r${event.run.revision}`;
     case "queueChanged":

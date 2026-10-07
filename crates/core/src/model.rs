@@ -594,7 +594,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             density: Density::default(),
-            default_permission: PermissionLevel::default(),
+            default_permission: PermissionLevel::FullAccess,
             default_orchestrator: None,
             default_chat_model: None,
             hibernate_after_minutes: 30,
@@ -771,6 +771,9 @@ pub struct ConversationView {
     pub memories: Vec<crate::knowledge::MemoryChange>,
     /// Its overnight runs, a segment each, oldest first.
     pub overnight: Vec<crate::overnight::OvernightRun>,
+    /// Its one-shot reviews, oldest first.
+    #[serde(default)]
+    pub reviews: Vec<crate::work::ReviewRun>,
 }
 
 /// A branch, for the composer's branch picker.
@@ -1420,6 +1423,10 @@ pub enum DomainEvent {
     PlanUpdated {
         plan: Plan,
     },
+    /// A one-shot review started or ended (full snapshot).
+    ReviewUpdated {
+        review: crate::work::ReviewRun,
+    },
     QueueChanged {
         conversation_id: ConversationId,
         queue: MessageQueue,
@@ -1520,6 +1527,7 @@ impl DomainEvent {
             Self::ApprovalUpdated { .. } => "approval.updated",
             Self::QuestionUpdated { .. } => "question.updated",
             Self::PlanUpdated { .. } => "plan.updated",
+            Self::ReviewUpdated { .. } => "review.updated",
             Self::QueueChanged { .. } => "queue.changed",
             Self::WorkerEvent { .. } => "worker.event",
             Self::OrchestratorLogged { .. } => "orchestrator.logged",

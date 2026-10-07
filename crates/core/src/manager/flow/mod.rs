@@ -82,6 +82,11 @@ impl Turn {
             .contains("You are the orchestrator of a Brigadier session")
     }
 
+    /// A one-shot review's session ([`Options::reviews`] answers it).
+    pub fn is_review(&self) -> bool {
+        self.prompt == brigadier_review::REVIEW_ROLE
+    }
+
     /// The number of the task a worker works on (`task-N`).
     pub fn task_number(&self) -> Option<u32> {
         let rest = self.prompt.split("Task task-").nth(1)?;
@@ -174,6 +179,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "query_brain" => ToolCall::Worker(W::QueryBrain(arg(name, args))),
         "plan_phases" => ToolCall::Orchestrator(O::PlanPhases(arg(name, args))),
         "approve_outline" => ToolCall::Orchestrator(O::ApproveOutline(arg(name, args))),
+        "start_verifier" => ToolCall::Orchestrator(O::StartVerifier(arg(name, args))),
         "request_approval" => ToolCall::Orchestrator(O::RequestApproval(arg(name, args))),
         "land_phase" => ToolCall::Orchestrator(O::LandPhase(arg(name, args))),
         "finish_session" => ToolCall::Orchestrator(O::FinishSession(arg(name, args))),
@@ -184,7 +190,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "ask_orchestrator" => ToolCall::Worker(W::AskOrchestrator(arg(name, args))),
         "submit_outline" => ToolCall::Worker(W::SubmitOutline(arg(name, args))),
         "submit_report" => ToolCall::Worker(W::SubmitReport(arg(name, args))),
-        "request_review" => ToolCall::Worker(W::RequestReview(arg(name, args))),
+        "review_code" => ToolCall::Worker(W::ReviewCode),
         "project_map" => ToolCall::Worker(W::ProjectMap),
         other => panic!("the flow harness doesn't know the tool {other}"),
     }
@@ -241,14 +247,23 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
 struct FakeCli {
     kind: ProviderKind,
     script: Script,
+    /// What answers its one-shot reviews ([`no_findings`] unless a test scripts them).
+    reviews: Script,
     host: Arc<OnceLock<Weak<SessionManager>>>,
+}
+
+/// A one-shot reviewer that finds nothing.
+fn no_findings() -> Script {
+    Arc::new(|_| Box::pin(async { Reply::text("No findings.") }))
 }
 
 impl FakeCli {
     fn models(&self) -> Vec<ModelInfo> {
         let ids: &[(&str, &str)] = match self.kind {
             ProviderKind::Claude => &[("claude-opus-5-5", "Opus 5.5")],
-            ProviderKind::Codex => &[("gpt-6.1-sol", "GPT-6.1-Sol")],
+            // Each vendor's frontier model, as the registry rates them: the roles that write,
+            // check or merge code run on a vendor's best.
+            ProviderKind::Codex => &[("gpt-6-astra", "GPT-6-Astra")],
         };
         ids.iter()
             .map(|(id, name)| ModelInfo {
@@ -337,13 +352,19 @@ impl Provider for FakeCli {
                 })
                 .await;
             let (steer_tx, steers) = mpsc::unbounded_channel();
+            let prompt = spec.append_system_prompt.clone().unwrap_or_default();
+            let script = if prompt == brigadier_review::REVIEW_ROLE {
+                self.reviews.clone()
+            } else {
+                self.script.clone()
+            };
             let session = Arc::new(FakeSession {
                 kind: self.kind,
                 native_id,
-                prompt: spec.append_system_prompt.clone().unwrap_or_default(),
+                prompt,
                 cwd: spec.cwd.clone(),
                 grant,
-                script: self.script.clone(),
+                script,
                 host: self.host.clone(),
                 events: Mutex::new(Some(tx)),
                 turns: std::sync::atomic::AtomicU32::new(0),
@@ -544,11 +565,13 @@ async fn open_store(data: &Path) -> brigadier_store::Store {
     .unwrap()
 }
 
-/// The manager on `store`, its CLIs running `script`, once it has seen both CLIs' models.
+/// The manager on `store`, its CLIs running `script` (and `reviews` for one-shot reviews),
+/// once it has seen both CLIs' models.
 async fn boot(
     data: &Path,
     store: brigadier_store::Store,
     script: &Script,
+    reviews: &Script,
 ) -> (Arc<SessionManager>, Arc<Core>) {
     let data = data.to_owned();
     let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
@@ -564,6 +587,7 @@ async fn boot(
         Arc::new(FakeCli {
             kind,
             script: script.clone(),
+            reviews: reviews.clone(),
             host: host.clone(),
         })
     };
@@ -612,6 +636,7 @@ pub(crate) struct Flow {
     pub conversation: ConversationId,
     dir: PathBuf,
     script: Script,
+    reviews: Script,
 }
 
 /// What a scripted session is set up with.
@@ -623,6 +648,8 @@ pub(crate) struct Options {
     pub seed: Option<&'static str>,
     /// A copy of a real store's database the data folder starts with.
     pub store: Option<PathBuf>,
+    /// What answers the one-shot reviews (both vendors'); by default they find nothing.
+    pub reviews: Option<Script>,
 }
 
 impl Default for Options {
@@ -632,6 +659,7 @@ impl Default for Options {
             plan_mode: false,
             seed: None,
             store: None,
+            reviews: None,
         }
     }
 }
@@ -661,7 +689,8 @@ impl Flow {
         if let Some(seed) = options.seed {
             store.append(seed_events(seed)).await.unwrap();
         }
-        let (manager, core) = boot(&data, store, &script).await;
+        let reviews = options.reviews.clone().unwrap_or_else(no_findings);
+        let (manager, core) = boot(&data, store, &script, &reviews).await;
         let project = core
             .create_project("Flow".into(), Some(repo.display().to_string()))
             .await
@@ -696,6 +725,7 @@ impl Flow {
             conversation: conversation.id,
             dir,
             script,
+            reviews,
         }
     }
 
@@ -705,7 +735,7 @@ impl Flow {
         self.manager.shutdown().await;
         let data = self.dir.join("data");
         let store = open_store(&data).await;
-        let (manager, core) = boot(&data, store, &self.script).await;
+        let (manager, core) = boot(&data, store, &self.script, &self.reviews).await;
         self.manager = manager;
         self.core = core;
     }

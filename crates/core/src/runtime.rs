@@ -418,6 +418,13 @@ impl Runtime {
             .map_err(provider_error)
     }
 
+    /// Tests: whether the CLIs are scripted stand-ins (one-shot work that would run a real CLI
+    /// directly goes through them instead).
+    #[cfg(test)]
+    pub(crate) fn faked(&self) -> bool {
+        self.fakes.is_some()
+    }
+
     fn provider(&self, kind: ProviderKind) -> Arc<dyn Provider> {
         #[cfg(test)]
         if let Some([claude, codex]) = &self.fakes {

@@ -400,6 +400,7 @@ dependencies = [
  "brigadier-git",
  "brigadier-index",
  "brigadier-providers",
+ "brigadier-review",
  "brigadier-router",
  "brigadier-sandbox",
  "brigadier-store",
@@ -584,6 +585,13 @@ version = "0.1.0"
 [[package]]
 name = "brigadier-review"
 version = "0.1.0"
+dependencies = [
+ "brigadier-providers",
+ "brigadier-sandbox",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "brigadier-router"

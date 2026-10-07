@@ -861,9 +861,10 @@ pub enum PhaseStage {
     Pending,
     /// Its lead reads the code and writes the outline.
     Outlining,
-    /// Another vendor's model reads the outline (advisory).
-    OutlineReview,
-    /// The outline waits for the go-ahead (the user's, under Ask for approval).
+    /// The outline waits for the go-ahead (the user's, under Ask for approval). Its plan
+    /// review runs in the background meanwhile; stores from before that read their outline
+    /// review stage as this.
+    #[serde(alias = "outlineReview")]
     AwaitingGoAhead,
     /// Its lead builds it.
     Building,
@@ -960,6 +961,87 @@ pub struct Plan {
     pub state: PlanState,
     pub created_at_ms: i64,
     pub decided_at_ms: Option<i64>,
+}
+
+// ----- one-shot reviews ---------------------------------------------------------------------
+
+/// What a one-shot review reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ReviewKind {
+    /// The commits `base..tip`: a landing's, or a worker's own (`review_code`).
+    Code,
+    /// A lead's outline, with the code it starts from (`tip`) checked out.
+    Plan,
+}
+
+/// Where a one-shot review stands.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ReviewState {
+    Running,
+    /// It found nothing.
+    Clean,
+    Findings {
+        count: u32,
+    },
+    /// It could not run, or was cut off.
+    Failed {
+        reason: String,
+    },
+}
+
+/// Who hears what a one-shot review found.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ReviewFor {
+    /// The orchestrator: a landing's review, an outline's.
+    Orchestrator,
+    /// The worker that asked for it (`review_code`); the orchestrator once it has reported or
+    /// ended.
+    Worker { task_id: TaskId },
+}
+
+/// One read-only review by the vendor other than the work's author's (THREAD-PLAN.md §2 Q12),
+/// in a detached checkout of its own. Nothing waits for it: its findings reach whoever asked
+/// as a message, also after the session was merged. A range (`base`, `tip`) is reviewed once.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewRun {
+    pub id: String,
+    pub conversation_id: ConversationId,
+    /// The user request it belongs to.
+    #[serde(default)]
+    pub request_id: Option<String>,
+    /// The task whose work it reads: the task that landed, the worker that asked, the lead
+    /// whose outline it is.
+    #[serde(default)]
+    pub task_id: Option<TaskId>,
+    pub kind: ReviewKind,
+    /// Where the change starts (a plan review: the commit its lead starts from).
+    pub base: String,
+    /// The commit reviewed.
+    pub tip: String,
+    /// The vendor that wrote the work.
+    pub author: ProviderKind,
+    pub reviewer: ProviderKind,
+    /// The reviewer's model; none when no model of its vendor could take it.
+    pub reviewer_model: Option<String>,
+    pub notify: ReviewFor,
+    pub state: ReviewState,
+    pub started_at_ms: i64,
+    pub ended_at_ms: Option<i64>,
+    /// The reviewer's full text, in the blob store.
+    #[serde(default)]
+    pub findings: Option<String>,
 }
 
 // ----- the message queue --------------------------------------------------------------------

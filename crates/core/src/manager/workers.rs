@@ -66,9 +66,9 @@ use crate::{Error, Result, now_ms};
 
 /// Text deltas arriving within this window are stored as one event.
 const DELTA_WINDOW: Duration = Duration::from_millis(30);
-/// The CLIs' own limit on a worker's MCP calls: effectively none, since Codex does not cancel
-/// a call it timed out; Brigadier bounds `ask_orchestrator` itself.
-const WORKER_TOOL_TIMEOUT_SECS: u64 = 24 * 60 * 60;
+/// The CLIs' own limit on a worker's MCP calls: as long as `ask_orchestrator` waits for its
+/// answer ([`QUESTION_TIMEOUT`]); no other worker tool waits that long.
+const WORKER_TOOL_TIMEOUT_SECS: u64 = QUESTION_TIMEOUT.as_secs();
 /// How long the watchdog's nudge may take to reach a silent worker's CLI.
 const NUDGE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a fix Brigadier lands waits for the worker's turn that reported it to end.
@@ -817,6 +817,18 @@ impl SessionManager {
         let category = extra.category.unwrap_or_else(|| category(kind));
         let areas = areas.unwrap_or_else(|| brigadier_router::infer_areas(&spec));
         let floor = floor.unwrap_or_else(|| brigadier_router::default_floor(category));
+        // The roles that write, check or merge the request's code run on a vendor's best,
+        // whatever floor the orchestrator asked for.
+        let floor = match extra.role {
+            Some(
+                WorkerRole::Lead
+                | WorkerRole::Fix
+                | WorkerRole::Verifier
+                | WorkerRole::Merge
+                | WorkerRole::Reviewer,
+            ) => floor.max(QualityTier::Frontier),
+            _ => floor,
+        };
         let (preview, trial_slot) = self
             .preview(&super::routing::Ask {
                 category,
@@ -1434,13 +1446,13 @@ impl SessionManager {
             // Checks write build output inside the checkout; nothing from it lands.
             writable_roots.push(worktree.clone());
         }
-        // A writer commits: its worktree's git folder (the repository's own, which a linked
-        // worktree shares) takes the objects and refs.
+        // A writer commits: into its worktree's own git folder (index, HEAD) and the
+        // repository's objects, refs and logs, which a linked worktree shares.
         if task.kind.writes()
             && let Some(worktree) = &workspace.worktree
             && let Ok(repo) = self.git.open(worktree)
         {
-            writable_roots.push(repo.common_dir().to_owned());
+            writable_roots.extend(commit_roots(&repo));
         }
         // Builds and installs write the toolchains' shared caches.
         for root in toolchain_roots(self.runtime.cli_env()) {
@@ -2156,6 +2168,16 @@ impl SessionManager {
         if Self::waits_for_go_ahead(&task) {
             return;
         }
+        // A worker whose own review still runs (`review_code`) waits for its findings: they
+        // start its next turn.
+        if self.review_pending(&task).await {
+            self.set_task_blocked(
+                &task.id,
+                Some(super::review_runs::WAITING_FOR_REVIEW.into()),
+            )
+            .await;
+            return;
+        }
         if nudge {
             let text = match self.keep_last_message(live, task.number).await {
                 Some(_) => {
@@ -2515,16 +2537,6 @@ impl SessionManager {
                 )));
             }
         }
-        // A phase with an outline ends with a fresh verifier, which the orchestrator lands. An
-        // overnight phase is verified even when its lead changed nothing: its "done when"
-        // still gets checked by someone fresh.
-        let run_phase = task.run.as_ref().is_some_and(|run| {
-            run.phase_id.is_some() && run.role == crate::overnight::RunRole::Worker
-        });
-        let verify = !relanding
-            && !reviewing
-            && (!unchanged || run_phase)
-            && self.needs_verifier(&task).await;
         let report = Report {
             summary: self.redact_for(&live, &input.summary).await,
             changes: input.changes.clone(),
@@ -2538,12 +2550,6 @@ impl SessionManager {
             checks: input.checks.filter(|_| task.kind == TaskKind::Verify),
             artifacts,
             submitted_at_ms: now_ms(),
-        };
-        // Started before the orchestrator reads the report, so it never lands the lead alone.
-        let verifier = if verify {
-            Some(self.start_verifier(&task, &report).await)
-        } else {
-            None
         };
         let reported = |task: &mut Task| {
             task.report = Some(report.clone());
@@ -2562,13 +2568,6 @@ impl SessionManager {
         if task.state.is_final() {
             return Err(Error::Invalid("the task has already ended".into()));
         }
-        // A review someone waits for goes to them (a worker's request_review, an outline's
-        // review for the orchestrator), not to the orchestrator as a report of its own.
-        let reviewing = reviewing
-            || (task.role == Some(WorkerRole::Reviewer)
-                && self
-                    .reviews
-                    .settle(&task.id, Ok(super::phases::review_text(&report))));
         // The report is in the orchestrator's inbox before the task counts as reported, so
         // its request never looks over in between.
         let queued = if reviewing || relanding {
@@ -2577,23 +2576,11 @@ impl SessionManager {
             let mut shown = task.clone();
             reported(&mut shown);
             let mut text = prompts::report_envelope(&shown, &report, &route_label(&shown));
-            if unchanged && verifier.is_none() {
+            if unchanged {
                 text.push_str(&format!(
                     "\n[nothing to land task-{}] It changed no files, so it is done; there is nothing to land.",
                     task.number
                 ));
-            }
-            match &verifier {
-                Some(Ok(verifier)) => text.push_str(&format!(
-                    "\n[phase verifier] Brigadier started task-{v}, a fresh verifier of this phase, on top of task-{n}'s commits. Land the phase with land_phase on task-{v} once it reports, not on task-{n}.",
-                    v = verifier.number,
-                    n = task.number
-                )),
-                Some(Err(err)) => text.push_str(&format!(
-                    "\n[phase verifier] The phase's verifier could not start: {err}. Delegate one, or land task-{} with land_phase yourself.",
-                    task.number
-                )),
-                None => {}
             }
             let envelope = Envelope {
                 kind: InjectionKind::Report,
@@ -3064,9 +3051,6 @@ impl SessionManager {
         }
         self.dispose_task(&task, stopped_state(&task)).await;
         drop(settled);
-        // Whoever waits for its review hears it gave none.
-        self.reviews
-            .settle(&task.id, Err("the reviewer was stopped".into()));
         Ok(())
     }
 
@@ -3305,8 +3289,7 @@ impl SessionManager {
         Err(Error::NotFound(format!("task {task_id}")))
     }
 
-    /// A worker failed: the task ends and the orchestrator hears why (or whoever waits for its
-    /// review).
+    /// A worker failed: the task ends and the orchestrator hears why.
     pub(crate) async fn worker_failed(&self, task: &Task, reason: &str) {
         let reviewing = task.gate_link.is_some();
         let mut kept = None;
@@ -3335,10 +3318,6 @@ impl SessionManager {
         }
         // A check from an earlier version's gate had nobody to tell.
         if reviewing {
-            return;
-        }
-        // Whoever waits for its review hears why there is none.
-        if self.reviews.settle(&task.id, Err(reason.to_owned())) {
             return;
         }
         self.deliver(
@@ -3622,6 +3601,27 @@ pub(crate) fn category(kind: TaskKind) -> brigadier_router::TaskCategory {
         TaskKind::Merge => TaskCategory::Merge,
         TaskKind::Verify => TaskCategory::Verify,
     }
+}
+
+/// The folders a commit in `repo`'s checkout writes. For a linked worktree, its own git folder
+/// and the shared objects, refs and logs, never the shared folder whole: Codex keeps a `.git`
+/// folder read-only even inside a writable root (so `index.lock` was denied), and the hooks
+/// and config there stay out of reach without a rule of their own. The main checkout's git
+/// folder holds its index at the top, so it stays one root.
+pub(crate) fn commit_roots(repo: &brigadier_git::Repo) -> Vec<PathBuf> {
+    let common = repo.common_dir().to_owned();
+    let own = repo.git_dir().unwrap_or_else(|_| common.clone());
+    if own == common {
+        return vec![common];
+    }
+    // A clone always has `logs`; a missing one would leave git unable to write its reflog.
+    let _ = std::fs::create_dir_all(common.join("logs"));
+    vec![
+        own,
+        common.join("objects"),
+        common.join("refs"),
+        common.join("logs"),
+    ]
 }
 
 /// Where a task's tests and smoke runs keep their data: under the system's temporary folder,

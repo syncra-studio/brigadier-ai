@@ -49,6 +49,7 @@ mod rebirth;
 mod requests;
 mod research;
 mod review;
+mod review_runs;
 mod routing;
 mod secrets;
 mod side_chat;
@@ -115,8 +116,8 @@ pub struct SessionManager {
     /// and the open ones replaced) and while a review result decides a plan, so the two
     /// can't interleave.
     plans: tokio::sync::Mutex<()>,
-    /// Reviews someone waits for: a worker's `request_review`, an outline's review.
-    reviews: phases::Reviews,
+    /// Held while a one-shot review is looked for and recorded, so a range is reviewed once.
+    reviews: tokio::sync::Mutex<()>,
     /// Held while a task is read, changed and recorded (`update_task`), so two writers can't
     /// each write back a copy that lacks the other's change.
     task_writes: tokio::sync::Mutex<()>,
@@ -191,7 +192,7 @@ impl SessionManager {
             tasks: Mutex::new(HashMap::new()),
             session_worktrees: tokio::sync::Mutex::new(()),
             plans: tokio::sync::Mutex::new(()),
-            reviews: phases::Reviews::default(),
+            reviews: tokio::sync::Mutex::new(()),
             task_writes: tokio::sync::Mutex::new(()),
             waiting: tokio::sync::Mutex::new(()),
             stopping: Mutex::new(HashSet::new()),

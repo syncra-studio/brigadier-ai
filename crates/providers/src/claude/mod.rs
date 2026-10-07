@@ -14,7 +14,8 @@
 //! `bypassPermissions` with no sandbox and never asks; with [`SessionSpec::auto_review`]
 //! (Approve for me) Claude's `auto` mode lets its classifier decide what leaves the sandbox,
 //! and declines what it judges unsafe to the model instead of asking; otherwise
-//! (`acceptEdits`) leaving the sandbox asks Brigadier.
+//! (`acceptEdits`) leaving the sandbox asks Brigadier. A read-only session (`dontAsk`) never
+//! asks: what its allow rules don't cover is denied.
 //!
 //! Sessions load only the project's settings plus Brigadier's own (`--setting-sources
 //! project`, `--settings`), so the user's personal hooks, plugins and allow rules never apply,
@@ -67,6 +68,11 @@ RemoteTrigger,PushNotification,DesignSync,ReportFindings,EnterWorktree,ExitWorkt
 SendMessage,TaskStop,Monitor,NotebookEdit";
 /// Claude's built-in tool that starts a sub-agent (`Task` is its older name).
 const SUB_AGENT_TOOLS: &str = "Agent,Task";
+/// A one-shot reviewer's built-in tools ([`ToolSet::Review`]).
+const REVIEW_TOOLS: &str = "Read,Grep,Glob,Bash";
+/// What a one-shot reviewer may run without asking (`--allowedTools`): under `dontAsk`
+/// everything else is denied, and nothing prompts.
+const REVIEW_ALLOWED: &str = "Read Grep Glob Bash(git diff:*) Bash(git log:*) Bash(git show:*)";
 
 pub struct Claude {
     platform: Arc<dyn Platform>,
@@ -228,6 +234,12 @@ impl Claude {
             ToolSet::Web => {
                 args.push("--tools".into());
                 args.push("WebSearch,WebFetch".into());
+            }
+            ToolSet::Review => {
+                args.push("--tools".into());
+                args.push(REVIEW_TOOLS.into());
+                args.push("--allowedTools".into());
+                args.push(REVIEW_ALLOWED.into());
             }
         }
         args.push("--settings".into());
@@ -421,7 +433,8 @@ fn main_checkout(git_file: &Path) -> Option<PathBuf> {
 fn permission_mode(spec: &SessionSpec) -> &'static str {
     match spec.access {
         Access::Full => "bypassPermissions",
-        Access::ReadOnly => "default",
+        // A read-only session never asks: what its allow rules don't cover is denied.
+        Access::ReadOnly => "dontAsk",
         Access::Workspace { .. } | Access::Scoped { .. } if spec.auto_review => "auto",
         Access::Scoped {
             write_cwd: false, ..
@@ -456,7 +469,7 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents) -> Value {
             "failIfUnavailable": true,
             "autoAllowBashIfSandboxed": true,
             "allowUnsandboxedCommands": true,
-            "network": { "allowedDomains": ["*"] },
+            "network": { "allowedDomains": ["*"], "allowLocalBinding": true },
             "filesystem": {
                 "allowWrite": paths(extra_roots),
             },
@@ -508,9 +521,12 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents) -> Value {
                 "failIfUnavailable": true,
                 "autoAllowBashIfSandboxed": true,
                 "allowUnsandboxedCommands": true,
+                // A check's own dev server (a test's Vite) listens on localhost; Codex's
+                // sandbox allows that already.
                 "network": {
                     "allowedDomains": if *network { json!(["*"]) } else { json!([]) },
                     "allowUnixSockets": paths(unix_sockets),
+                    "allowLocalBinding": true,
                 },
                 "filesystem": filesystem,
             })
@@ -1653,7 +1669,37 @@ mod tests {
             permissions(&ask)["ask"],
             json!(["Bash(dangerouslyDisableSandbox:true)"])
         );
-        assert_eq!(permission_mode(&with(Access::ReadOnly, true)), "default");
+        // Read-only: nothing asks, whatever the review setting.
+        assert_eq!(permission_mode(&with(Access::ReadOnly, true)), "dontAsk");
+        assert_eq!(permission_mode(&with(Access::ReadOnly, false)), "dontAsk");
+    }
+
+    #[test]
+    fn a_one_shot_reviewer_reads_and_runs_only_git_diff_log_and_show() {
+        let cwd = Temp::new();
+        let review = SessionSpec {
+            access: Access::ReadOnly,
+            tools: ToolSet::Review,
+            allowed_models: Some(AllowedModels::default()),
+            ..spec(cwd.path(), &["claude-opus-5-5"])
+        };
+        let native_id = "00000000-0000-4000-8000-000000000000";
+        let args = Claude::session_args(&review, cwd.path(), native_id).expect("args");
+        let after = |flag: &str| {
+            args.windows(2)
+                .find(|pair| pair[0] == flag)
+                .map(|pair| pair[1].clone())
+        };
+        assert_eq!(after("--tools").as_deref(), Some("Read,Grep,Glob,Bash"));
+        assert_eq!(
+            after("--allowedTools").as_deref(),
+            Some("Read Grep Glob Bash(git diff:*) Bash(git log:*) Bash(git show:*)")
+        );
+        assert_eq!(after("--permission-mode").as_deref(), Some("dontAsk"));
+        // Other sessions get no allow list on the command line.
+        let worker = spec(cwd.path(), &["claude-opus-5-5"]);
+        let args = Claude::session_args(&worker, cwd.path(), native_id).expect("args");
+        assert!(!args.iter().any(|arg| arg == "--allowedTools"));
     }
 
     #[test]

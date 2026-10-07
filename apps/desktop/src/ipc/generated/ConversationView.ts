@@ -14,6 +14,7 @@ import type { OvernightRun } from "./OvernightRun";
 import type { Plan } from "./Plan";
 import type { Question } from "./Question";
 import type { Rating } from "./Rating";
+import type { ReviewRun } from "./ReviewRun";
 import type { RunState } from "./RunState";
 import type { StreamingMessage } from "./StreamingMessage";
 import type { Task } from "./Task";
@@ -89,4 +90,8 @@ memories: Array<MemoryChange>,
 /**
  * Its overnight runs, a segment each, oldest first.
  */
-overnight: Array<OvernightRun>, };
+overnight: Array<OvernightRun>, 
+/**
+ * Its one-shot reviews, oldest first.
+ */
+reviews: Array<ReviewRun>, };

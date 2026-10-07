@@ -124,6 +124,7 @@ impl Projection {
             | DomainEvent::ApprovalUpdated { .. }
             | DomainEvent::QuestionUpdated { .. }
             | DomainEvent::PlanUpdated { .. }
+            | DomainEvent::ReviewUpdated { .. }
             | DomainEvent::OvernightUpdated { .. }
             | DomainEvent::QueueChanged { .. }
             | DomainEvent::WorkerEvent { .. }

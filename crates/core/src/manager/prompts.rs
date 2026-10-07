@@ -73,11 +73,11 @@ How to work (one loop per request):
 - Name every worker with a short plain 2–4 word job name in delegate_task.title (for example "Fix file uploads" or "Check search results"). Names must be unique in this chat. Never use internal ids, role labels or phase numbers as names.
 - 1. Brief. Give the work to one lead with delegate_task (kind implement). Its spec is the brief: the worker sees nothing of this conversation, so state the request in the user's words, the constraints and settled decisions, what "done" means and how to verify each part (typecheck, lint, build, tests, a runtime check), and code pointers (the files and symbols the Brain or a scout named) so it reads precisely instead of searching. A small request (one file, a copy change, a quick fix) goes straight to a lead with no phases. Use scout tasks to look around the repository and research tasks to check current docs; don't guess about code nobody has read.
 - 2. Phases. Split a request into phases with plan_phases only when they are large and must run one after another; otherwise it is one phase. Each phase has one lead (delegate_task with phase N). Add a parallel worker (role parallel) only for a stream whose files no other running worker touches.
-- 3. Outline. A lead whose work is multi-step or risky writes an outline first and waits: you get it with one advisory review from the other vendor. Check it against the brief, merge the findings you agree with into corrections, and call approve_outline. The brief wins any conflict. There are no review rounds and nothing is rejected.
+- 3. Outline. A lead whose work is multi-step or risky writes an outline first and waits: you get it at once. Check it against the brief and call approve_outline right away, with corrections for what it gets wrong; the brief wins any conflict. A plan review by the other vendor runs in the background meanwhile; its findings may arrive after the go-ahead ([plan review …]): send the lead the ones you agree with. There are no review rounds and nothing is rejected.
 - 4. Questions. A worker that asks ([question from task-N]) waits for you: answer at once with answer_worker, yourself. Take its recommendation when it fits the brief, else what the brief, the outline, the user's words or the Brain imply; never reopen a settled decision. Ask the user only what truly only they can decide. What only the user can do (a credential, an account, a paid signup, a push) the worker stubs and lists; it never waits on it. message_worker steers a running worker, or sends a reported one back with the specific gaps.
 - 5. Reports. Read each report against the brief's "done when". Nothing checks it for you, and nothing blocks it: you judge it. Send it back with message_worker if something is missing.
-- 6. Verify. When the lead of an outlined phase reports, Brigadier starts a fresh verifier on its work by itself: it gets one review of the whole phase from the other vendor, checks every "done when" for real, fixes and commits defects, and reports. A small request has no verifier: its lead asked for its own review before reporting.
-- 7. Land with land_phase: the verifier's task once it reports (its commits hold the lead's), or the lead of a small request. Brigadier moves the commits onto the session's branch with no card and no further checks, and tells you if the branch moved (the worker runs a quick self-check and its work lands on its own) or if they conflict (delegate a merge task). What the verifier couldn't fix goes to a fix task (role fix, subject the verifier's task: it continues from that work, and landing the fix lands it) or, when only the user can settle it, to note_for_user (kind waiting).
+- 6. Verify. A verifier is your call, for big or risky work only: when its lead reports, start_verifier starts a fresh one on top of its commits. It asks for a review of the whole work by the other vendor, checks every "done when" for real, fixes and commits defects, triages the review's findings, and reports. Most work needs none.
+- 7. Land with land_phase: the lead's task once it reports, or the verifier you started (its commits hold the lead's). Brigadier moves the commits onto the session's branch with no card and no further checks, and tells you if the branch moved (the worker runs a quick self-check and its work lands on its own) or if they conflict (delegate a merge task). What the work left unfixed goes to a fix task (role fix, subject that task: it continues from that work, and landing the fix lands it) or, when only the user can settle it, to note_for_user (kind waiting). Every landing gets one review by the other vendor in the background; nothing waits for it. Its findings arrive as a [review …] message, maybe after your answer or a merge: fix what you agree with (delegate a fix) or tell the user why not.
 - 8. Then start the next phase, or write the final answer.
 - Tools return at once; never wait or poll. Reports, worker questions and outcomes arrive later as messages from Brigadier, in blocks like [report task-3 …] … [/report]. Only these and the user's messages reach you.
 - The user's session summary lists what Brigadier decided on their behalf and what only they can do (each worker's needs_user). Add your own with note_for_user: a judgement call you made for them that they would want to know (kind decided, with why), or something only they can do (kind waiting), which stays listed until they mark it done; you hear when they do. Work that doesn't depend on it carries on meanwhile.
@@ -88,7 +88,7 @@ How to work (one loop per request):
 How to talk to the user:
 - The user sees quiet worker lifecycle lines next to your replies and can open each worker's own thread. Its full report and model rationale are available in Details. Don't announce what you delegated, don't repeat a task's spec, and don't restate reports.
 - Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show (progress lines like "task-1 finished, waiting on task-2" are noise). This holds right after you delegate, too. Never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
-- When the request's work is done, or the user must decide something, write one final answer: what was found or done, what was verified and how (as the workers and the verifier reported it), and what's next or the decision you need. What waits on the user shows as a short list under your answer by itself (from note_for_user and the workers' needs_user): don't repeat it. Don't repeat what you already told them.
+- When the request's work is done, or the user must decide something, write one final answer: what was found or done, what was verified and how (as the workers reported it), and what's next or the decision you need. What waits on the user shows as a short list under your answer by itself (from note_for_user and the workers' needs_user): don't repeat it. Don't repeat what you already told them.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.
 - A [follow-up …] block is a message the user sent while you work on their request; it waits in their queue until you sort it with route_follow_up, silently (the user sees where it goes). If it belongs to this work (a question about the same thing, a detail or a change for it), it joins it: it reaches you at once as the user's message, and your one final answer covers it too. If it is a request of its own, it waits and reaches you on its own once this work is done; don't act on it before.{voice}{orchestrator_voice}
 - {AUTHORITY}{short}{preferences}"#,
@@ -540,9 +540,8 @@ const WORKER_VOICE: &str = "
 - Your report is for the orchestrator. Summary: the outcome first (done, partly done or blocked), then the findings that answer the task. Changes: one line per file. Verification: what you ran or read and what you saw. Done when: each criterion of \"done\" in the task, with [met], [not met] or [not checked] and its evidence; a check you didn't run is [not checked], never [met]. Open questions: decisions you need. Risks: assumptions, risks, and what you skipped and why. Needs user: what only the user can do. Report failures and unknowns plainly, and never leave out a failed check.
 - Code, comments, docs and files in your outputs folder follow the project's style, not these rules.";
 
-/// What a lead does besides building: its outline when the work is big, its own review when
-/// it isn't.
-const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- If you sent no outline, call request_review once when your work is committed, before you report: a reviewer from the other vendor reads your change. Fix each finding you agree with and say why for those you don't. With an outline, a verifier checks your phase after you report instead.";
+/// What a lead does besides building: its outline when the work is big, and its own review.
+const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. Once your work is committed, call review_code once: a reviewer from the other vendor reads your change while you run your checks, and its findings arrive as a message. Fix each finding you agree with and say why for those you don't, then report.";
 
 /// A worker's pointer to the code index tools (PLAN.md §7).
 const WORKER_CODE_TOOLS: &str = "
@@ -696,7 +695,7 @@ pub(crate) fn environment(env: &WorkerEnvironment<'_>) -> String {
     match env.access {
         Access::Full => lines.push("You run without a sandbox, with the session's full access: nothing asks for approval.".into()),
         Access::Scoped { .. } | Access::Workspace { .. } | Access::ReadOnly => lines.push(
-            "You run in a sandbox: you can write to the folders named above as yours, your worktree's git folder and the toolchains' caches. A command that needs more (another folder, the network when it is off) may run outside the sandbox: run it so, and it is approved or declined; if declined, work around it or list it in the report. A program that opens windows (a desktop app, a GUI smoke run) can't run in the sandbox: give such a check as `[excluded] <the check>: the sandbox can't open windows` and go on.".into(),
+            "You run in a sandbox: you can write to the folders named above as yours, your worktree's git folder and the toolchains' caches. A command that needs more (another folder, the network when it is off) may run outside the sandbox: run it so, and it is approved or declined; if declined, work around it or list it in the report. Commands may listen on localhost ports (a dev server for a test). A headless Chromium runs in the sandbox only with `--single-process`: the sandbox blocks the Mach service its multi-process mode registers. A program that opens windows (a desktop app) runs outside the sandbox: run it so, and it is approved or declined.".into(),
         ),
     }
     if let Some(repo) = env.run_repo {
@@ -907,7 +906,7 @@ mod tests {
     fn a_lead_outlines_big_work_reviews_small_work_and_commits_its_steps() {
         let lead = worker(&task("claude", Some("lead")), "", "", "");
         assert!(lead.contains("submit_outline"));
-        assert!(lead.contains("call request_review once"));
+        assert!(lead.contains("call review_code once"));
         assert!(lead.contains("Commit each finished step"));
         assert!(!lead.contains("when your sandbox can't write git's files"));
         assert!(lead.contains(
@@ -958,12 +957,13 @@ mod environment_tests {
         assert!(sandboxed.contains("`node_modules`, `apps/desktop/node_modules` were copied in"));
         assert!(sandboxed.contains("Don't reinstall them"));
         assert!(sandboxed.contains("/tmp/brigadier-test-12345678"));
-        assert!(sandboxed.contains("can't open windows"));
+        assert!(sandboxed.contains("only with `--single-process`"));
+        assert!(sandboxed.contains("listen on localhost ports"));
         assert!(!sandboxed.contains("overnight"));
         assert!(!sandboxed.contains("nice"));
         let run = note(&brigadier_providers::Access::Full, true);
         assert!(run.contains("without a sandbox"));
-        assert!(!run.contains("can't open windows"));
+        assert!(!run.contains("--single-process"));
         assert!(run.contains("nothing asks for approval"));
         assert!(run.contains("nobody is there to answer"));
         assert!(!run.contains("declined"));
@@ -1007,7 +1007,10 @@ mod environment_tests {
                 assert!(prompt.contains(
                     "plan_phases only when they are large and must run one after another"
                 ));
-                assert!(prompt.contains("one advisory review from the other vendor"));
+                assert!(
+                    prompt.contains("A plan review by the other vendor runs in the background")
+                );
+                assert!(prompt.contains("A verifier is your call, for big or risky work only"));
                 assert!(prompt.contains("There are no review rounds"));
                 assert!(prompt.contains("answer at once with answer_worker"));
                 assert!(prompt.contains("Land with land_phase"));

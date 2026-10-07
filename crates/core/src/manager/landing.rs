@@ -1,6 +1,6 @@
 //! Landing a phase's work (the delegator flow, §2.4 of the flow spec): the worker that ends a
-//! phase (its verifier, or a lead that reviewed its own small change) committed its work in
-//! small steps in its own worktree, branched from the session's tip. `land_phase` moves those
+//! phase (its lead, or a verifier the orchestrator started on top of the lead's work)
+//! committed its work in small steps in its own worktree, branched from the session's tip. `land_phase` moves those
 //! commits onto the target branch, with no card and no checks of its own:
 //!
 //! 1. **Leftovers**: anything the worker left uncommitted is committed, litter left out.
@@ -13,6 +13,9 @@
 //! 4. **Fast-forward** the target, never over uncommitted, untracked or ignored files, and
 //!    only if the target is still where it was (the git engine checks it right before
 //!    mutating). Anything unsafe leaves the task "ready to land" with nothing changed.
+//!
+//! Every landing then gets one read-only review by the other vendor in the background
+//! ([`super::review_runs`]); nothing waits for it.
 //!
 //! Finishing a new-worktree session merges the session branch into its base the same way,
 //! after the user's one click.
@@ -43,8 +46,9 @@ const LAND_TRIES: usize = 3;
 
 /// What moving a task's commits onto its target came to.
 enum Moved {
-    /// The target's new tip holds them.
+    /// The target's new tip holds them, on top of `from`, its tip before.
     Landed {
+        from: Oid,
         tip: Oid,
         commits: u32,
         excluded: Vec<ExcludedFile>,
@@ -87,9 +91,10 @@ impl SessionManager {
                 task.number, task.state
             )));
         }
+        // A verifier the orchestrator started on this work lands it with its own.
         if let Some(verifier) = self.verifier_of(&task).await {
             return Err(Error::Invalid(format!(
-                "task-{}'s phase is verified by task-{}, which works on top of its commits: land task-{} once it reports.",
+                "task-{}'s work is verified by task-{}, which you started on top of its commits: land task-{} once it reports.",
                 task.number, verifier.number, verifier.number
             )));
         }
@@ -356,12 +361,13 @@ impl SessionManager {
                 // 4. Fast-forward.
                 let request = LandRequest {
                     branch: target.clone(),
-                    expected_tip: onto,
+                    expected_tip: onto.clone(),
                     commit: tip,
                 };
                 match repo.land(&request).map_err(git_error)? {
                     LandOutcome::Landed { new_tip } => {
                         return Ok(Moved::Landed {
+                            from: onto,
                             tip: new_tip,
                             commits,
                             excluded,
@@ -396,11 +402,12 @@ impl SessionManager {
         };
         let text = match moved {
             Moved::Landed {
+                from,
                 tip,
                 commits,
                 excluded,
             } => {
-                self.landed(task, &target, &tip, commits).await;
+                self.landed(task, &target, &from, &tip, commits).await;
                 return (
                     true,
                     format!(
@@ -592,8 +599,14 @@ impl SessionManager {
         tasks
     }
 
-    async fn landed(&self, task: &Task, target: &str, new_tip: &Oid, commits: u32) {
+    async fn landed(&self, task: &Task, target: &str, from: &Oid, new_tip: &Oid, commits: u32) {
         let tasks = self.landed_with(task).await;
+        // Its one review, by the other vendor, starts now and runs on its own.
+        {
+            let manager = self.arc();
+            let (task, from, tip) = (task.clone(), from.clone(), new_tip.clone());
+            self.spawn(async move { manager.review_landing(&task, from, tip).await });
+        }
         for landed in &tasks {
             let updated = self
                 .update_task(&landed.conversation_id, &landed.id, |t| {

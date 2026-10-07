@@ -34,6 +34,7 @@ brigadier-providers = { path = "crates/providers" }
 brigadier-sandbox = { path = "crates/sandbox" }
 brigadier-git = { path = "crates/git" }
 brigadier-router = { path = "crates/router" }
+brigadier-review = { path = "crates/review" }
 brigadier-mcp-server = { path = "crates/mcp-server" }
 brigadier-brain = { path = "crates/brain" }
 brigadier-index = { path = "crates/index" }

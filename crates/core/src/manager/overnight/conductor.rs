@@ -2,10 +2,11 @@
 //! request's phase goes. Each phase gets a fresh lead, the session's orchestrator started over
 //! from the phase's own briefing (its scope, criteria, the user's Rules and words, what earlier
 //! phases settled) without the conversation's recent messages. It briefs one worker lead, which
-//! may outline first (one advisory review); the lead builds and reports, a fresh verifier
-//! checks every "done when" with one review from the other vendor and fixes what fails, and
-//! `land_phase` lands the work on the run branch. The orchestrator then settles the phase
-//! (`phase_done`): done, partial or blocked, judged from the verifier's report.
+//! may outline first (its plan review runs in the background); the lead builds, checks every
+//! "done when" with a review from the other vendor (`review_code`) and reports, and
+//! `land_phase` lands the work on the run branch: the lead's, or a verifier's the orchestrator
+//! started for big or risky work. The orchestrator then settles the phase (`phase_done`):
+//! done, partial or blocked, judged from that report.
 //!
 //! The conductor decides in code what comes next: the next selected phase whose dependencies
 //! are verified, a clean ending when the plan is done, a stop directive was reached or a later
@@ -276,7 +277,7 @@ impl SessionManager {
         };
         let briefing = self.phase_brief(&run, &phase).await;
         let kickoff = format!(
-            "[overnight · phase {n}] Lead phase {n} (\u{201c}{name}\u{201d}) now, as your briefing describes. Give it one lead (delegate_task, kind implement) with a complete brief: the scope, every \"done when\" with its id, and code pointers. A lead of big work sends an outline for your go-ahead (approve_outline). When the lead reports, Brigadier starts the phase's verifier; land the phase with land_phase on the verifier once it reports. Then settle the phase with phase_done (done, partial or blocked), judging the verifier's report. Don't write to the user: reply with exactly {quiet}.",
+            "[overnight · phase {n}] Lead phase {n} (\u{201c}{name}\u{201d}) now, as your briefing describes. Give it one lead (delegate_task, kind implement) with a complete brief: the scope, every \"done when\" with its id, and code pointers. A lead of big work sends an outline for your go-ahead (approve_outline). The lead checks every \"done when\" itself. When it reports, land the lead's task with land_phase, or, for big or risky work, start a verifier (start_verifier) and land the verifier once it reports. Then settle the phase with phase_done (done, partial or blocked), judging that report. Don't write to the user: reply with exactly {quiet}.",
             n = phase.number,
             name = phase.name,
             quiet = super::super::prompts::QUIET,
@@ -491,7 +492,9 @@ impl SessionManager {
             "This phase's scope, exactly as the plan says:\n{}\n\n",
             phase.scope
         ));
-        text.push_str("Done when (the phase's verifier checks each, by its id, for real):\n");
+        text.push_str(
+            "Done when (its lead, or a verifier you start, checks each, by its id, for real):\n",
+        );
         for criterion in &phase.done_when {
             text.push_str(&format!("- {}: {}\n", criterion.id, criterion.text));
         }
@@ -628,8 +631,9 @@ impl SessionManager {
         lines.join("\n")
     }
 
-    /// `phase_done`: the lead settles its phase, judging the verifier's report. Refused while
-    /// any of the phase's work still runs or waits to land.
+    /// `phase_done`: the lead settles its phase, judging the report of its lead (or of the
+    /// verifier it started). Refused while any of the phase's work still runs or waits to
+    /// land.
     pub(crate) async fn phase_done(&self, id: &ConversationId, args: PhaseDone) -> Result<String> {
         let active = self.overnight.active.get(id).ok_or_else(|| {
             Error::Invalid(
@@ -662,7 +666,7 @@ impl SessionManager {
         let open = unsettled(&board, &run, &phase);
         if !open.is_empty() {
             return Err(Error::Invalid(format!(
-                "Phase {} still has work going: {}. Wait for it, land the verifier's work (land_phase) or stop what is no longer needed, then call phase_done again.",
+                "Phase {} still has work going: {}. Wait for it, land the lead's task (or the verifier you started) with land_phase, or stop what is no longer needed, then call phase_done again.",
                 phase.number,
                 open.join(", ")
             )));
@@ -670,7 +674,7 @@ impl SessionManager {
         let summary = args.summary.trim().to_owned();
         if summary.is_empty() {
             return Err(Error::Invalid(
-                "Say in `summary` what the phase changed, how its verifier checked it and what the review found.".into(),
+                "Say in `summary` what the phase changed, how its \"done when\" was checked and what the review found.".into(),
             ));
         }
         let left: Vec<String> = args
@@ -766,7 +770,7 @@ impl SessionManager {
                     "Verified phase {} \u{201c}{}\u{201d}",
                     phase.number, phase.name
                 ),
-                "Its verifier checked every \"done when\" and its work landed.".to_owned(),
+                "Every \"done when\" was checked and its work landed.".to_owned(),
             ),
             _ => (
                 format!(
@@ -1211,11 +1215,11 @@ impl SessionManager {
             "[overnight · phase 0] The plan isn't proposed yet. Propose the phases with propose_phases now (nobody can answer questions before the morning: decide what the goal and Rules settle, note what only the user can decide with note_for_user, and plan around it).".to_owned()
         } else if open.is_empty() {
             format!(
-                "[overnight · {label}] Nothing of this phase runs now. Delegate what remains of it, or settle it with phase_done (done, partial or blocked) from its verifier's report. Nobody can answer questions before the morning: note what only the user can do with note_for_user (kind waiting) and finish the rest."
+                "[overnight · {label}] Nothing of this phase runs now. Delegate what remains of it, or settle it with phase_done (done, partial or blocked) from the report of its lead (or of the verifier you started). Nobody can answer questions before the morning: note what only the user can do with note_for_user (kind waiting) and finish the rest."
             )
         } else {
             format!(
-                "[overnight · {label}] This phase waits on you: {}. Land the verifier's work (land_phase), send back or stop the rest, then go on; settle the phase with phase_done once all of it has landed or ended.",
+                "[overnight · {label}] This phase waits on you: {}. Land the lead's task (or the verifier you started) with land_phase, send back or stop the rest, then go on; settle the phase with phase_done once all of it has landed or ended.",
                 open.join(", ")
             )
         };

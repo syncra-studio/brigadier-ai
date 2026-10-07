@@ -12,6 +12,7 @@ brigadier-brain.workspace = true
 brigadier-git.workspace = true
 brigadier-index.workspace = true
 brigadier-providers.workspace = true
+brigadier-review.workspace = true
 brigadier-router.workspace = true
 brigadier-sandbox.workspace = true
 brigadier-store.workspace = true
