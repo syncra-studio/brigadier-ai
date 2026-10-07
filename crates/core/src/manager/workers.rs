@@ -914,8 +914,21 @@ impl SessionManager {
             subject.as_ref().map(|task| task.title.as_str()),
             &names,
         );
+        // A new writing task of the session's own takes its pre-warmed worktree's id, and with
+        // it the worktree (THREAD-PLAN.md Q8 lever 6).
+        let prewarmed = (extra.id.is_none()
+            && subject.is_none()
+            && run.is_none()
+            && gate_link.is_none()
+            && !waits)
+            .then(|| self.claim_prewarm(conversation_id, kind))
+            .flatten();
         let task = Task {
-            id: extra.id.clone().unwrap_or_else(TaskId::generate),
+            id: extra
+                .id
+                .clone()
+                .or(prewarmed.clone())
+                .unwrap_or_else(TaskId::generate),
             conversation_id: conversation_id.clone(),
             number,
             position: 0,
@@ -975,9 +988,12 @@ impl SessionManager {
             task: Box::new(task.clone()),
         }];
         events.extend(worker_step(&task, None, false));
-        self.core
-            .record_conversation(conversation_id, events)
-            .await?;
+        if let Err(err) = self.core.record_conversation(conversation_id, events).await {
+            if prewarmed.is_some() {
+                self.release_prewarm(&task.id);
+            }
+            return Err(err);
+        }
         if waits {
             // Its timer is set as for any task waiting for quota.
             self.keep_waiting(&task).await;
@@ -1551,6 +1567,10 @@ impl SessionManager {
         else {
             return Err(Error::Invalid("tasks belong to a session".into()));
         };
+        // A task that took the session's pre-warm starts from its worktree when it can.
+        if let Some(workspace) = self.adopt_prewarm(task).await {
+            return Ok(workspace);
+        }
         let scratch = self.owned_dir("scratch", &task.id.0);
         self.prepare_owned_dir(owner, &scratch).await?;
         let repo = PathBuf::from(repo);
@@ -1619,7 +1639,7 @@ impl SessionManager {
             }
             _ => {
                 let (base, on_snapshot) = self
-                    .worker_base(&task.conversation_id, &repo, &target)
+                    .worker_base(&task.conversation_id, &repo, &target, true)
                     .await?;
                 (base.clone(), base, on_snapshot)
             }
@@ -1638,13 +1658,50 @@ impl SessionManager {
             .kind
             .writes()
             .then(|| task_branch(&task.conversation_id, task.number, &task.title));
+        let spec = match &branch {
+            Some(name) => WorktreeSpec::NewBranch {
+                name: name.clone(),
+                start: start.clone(),
+            },
+            None => WorktreeSpec::Detached { at: start.clone() },
+        };
+        // Workers that build or test start from copies of the checkout's dependency installs
+        // and build caches (best effort; see `warm`).
+        let warm = task.kind.writes() || matches!(task.kind, TaskKind::Review | TaskKind::Verify);
+        let warmed = self
+            .make_worktree(owner, &repo, &worktree, spec, warm, &task.id)
+            .await?;
+        Ok(Workspace {
+            repo,
+            worktree: Some(worktree),
+            branch,
+            base: Some(base),
+            on_snapshot,
+            target: Some(target),
+            scratch,
+            warmed,
+        })
+    }
+
+    /// Makes the worktree `path` of `repo` as `spec` says, recorded under `owner` first, and
+    /// with `warm` copies the checkout's dependency installs and build caches into it (best
+    /// effort; see `warm`). Returns the folders copied.
+    pub(super) async fn make_worktree(
+        &self,
+        owner: &str,
+        repo: &Path,
+        path: &Path,
+        spec: WorktreeSpec,
+        warm: bool,
+        task_id: &TaskId,
+    ) -> Result<Vec<String>> {
         let ledger = self.runtime.ledger();
         ledger
             .record(
                 owner,
                 Artifact::Worktree {
                     repo: repo.to_string_lossy().into_owned(),
-                    path: worktree.to_string_lossy().into_owned(),
+                    path: path.to_string_lossy().into_owned(),
                 },
             )
             .await?;
@@ -1652,27 +1709,13 @@ impl SessionManager {
             .record(
                 owner,
                 Artifact::ProcessesIn {
-                    dir: worktree.to_string_lossy().into_owned(),
+                    dir: path.to_string_lossy().into_owned(),
                 },
             )
             .await?;
-        let (git, repo_path, path, spec) = (
-            self.git.clone(),
-            repo.clone(),
-            worktree.clone(),
-            match &branch {
-                Some(name) => WorktreeSpec::NewBranch {
-                    name: name.clone(),
-                    start: start.clone(),
-                },
-                None => WorktreeSpec::Detached { at: start.clone() },
-            },
-        );
-        // Workers that build or test start from copies of the checkout's dependency installs
-        // and build caches (best effort; see `warm`).
-        let warm = task.kind.writes() || matches!(task.kind, TaskKind::Review | TaskKind::Verify);
-        let (platform, task_id) = (self.runtime.platform().clone(), task.id.clone());
-        let warmed = blocking(move || {
+        let (git, repo_path, path) = (self.git.clone(), repo.to_owned(), path.to_owned());
+        let (platform, task_id) = (self.runtime.platform().clone(), task_id.clone());
+        blocking(move || {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(|err| Error::Invalid(err.to_string()))?;
             }
@@ -1702,17 +1745,7 @@ impl SessionManager {
             }
             Ok(copied)
         })
-        .await?;
-        Ok(Workspace {
-            repo,
-            worktree: Some(worktree),
-            branch,
-            base: Some(base),
-            on_snapshot,
-            target: Some(target),
-            scratch,
-            warmed,
-        })
+        .await
     }
 
     /// The branch accepted work lands on, created for a new-worktree session on first use
@@ -1828,11 +1861,13 @@ impl SessionManager {
 
     /// Where workers start: the target's tip, or a snapshot of the user's uncommitted changes
     /// on top of it when the user chose to show them (local checkout only; then `true`).
-    async fn worker_base(
+    /// Without `may_ask`, a choice the user hasn't made yet is an error instead of a question.
+    pub(super) async fn worker_base(
         &self,
         conversation_id: &ConversationId,
         repo: &Path,
         target: &str,
+        may_ask: bool,
     ) -> Result<(Oid, bool)> {
         let (git, repo_path, branch) = (self.git.clone(), repo.to_owned(), target.to_owned());
         let (tip, dirty, current) = blocking(move || {
@@ -1860,7 +1895,12 @@ impl SessionManager {
         }
         let see = match workers_see_uncommitted {
             Some(see) => see,
-            None => self.ask_about_uncommitted(conversation_id, dirty).await?,
+            None if may_ask => self.ask_about_uncommitted(conversation_id, dirty).await?,
+            None => {
+                return Err(Error::Invalid(
+                    "the user hasn't said whether workers see uncommitted changes".into(),
+                ));
+            }
         };
         if !see {
             return Ok((tip, false));
@@ -3963,7 +4003,7 @@ fn job_name(title: &str, kind: TaskKind, subject: Option<&str>, used: &[String])
 }
 
 /// `brigadier/<session>/task-<n>-<slug>`.
-fn task_branch(conversation_id: &ConversationId, number: u32, title: &str) -> String {
+pub(super) fn task_branch(conversation_id: &ConversationId, number: u32, title: &str) -> String {
     let session = conversation_id.short();
     let slug: String = title
         .to_lowercase()

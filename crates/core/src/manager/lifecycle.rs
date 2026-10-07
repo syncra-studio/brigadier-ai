@@ -314,6 +314,7 @@ impl SessionManager {
                 live.allow_revival().await;
             }
         }
+        self.drop_prewarm(&id, "the session hibernated");
         let (owner, area) = conversation_owner(&conversation);
         self.runtime.ledger().end_processes(&owner).await;
         let attachments = self.owned_dir(area, &id.0).join("attachments");
@@ -437,6 +438,7 @@ impl SessionManager {
         let id = &conversation.id;
         // Its previews run in the workspace that goes next: they stop first.
         self.stop_previews(id, "the session closed").await;
+        self.drop_prewarm(id, "the session closed");
         let conv = self.convs_lock().remove(id);
         if let Some(conv) = conv {
             // Messages waiting for quota never go.

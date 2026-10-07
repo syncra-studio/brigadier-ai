@@ -935,6 +935,8 @@ mod engine_tests;
 mod overnight_tests;
 mod preview_tests;
 #[cfg(test)]
+mod prewarm_tests;
+#[cfg(test)]
 mod reads_tests;
 #[cfg(test)]
 mod tests;

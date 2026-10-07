@@ -586,6 +586,8 @@ impl SessionManager {
         let paused = queue_index.is_some() && self.core.board(&id).await?.queue.paused;
         let conv = self.conv(&id)?;
         if conversation.kind == ConversationKind::Session {
+            // The next worker's worktree is made while the thread reads the message.
+            self.prewarm(&id);
             return self
                 .send_to_session(
                     &conv,
@@ -1006,6 +1008,7 @@ impl SessionManager {
             None => Ok(()),
         };
         self.stop_previews(&id, "stopped by the user").await;
+        self.drop_prewarm(&id, "stopped by the user");
         interrupted
     }
 

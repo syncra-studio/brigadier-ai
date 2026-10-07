@@ -45,6 +45,7 @@ pub mod overnight;
 mod past_projects;
 mod phases;
 mod preview;
+mod prewarm;
 mod project_removal;
 mod prompts;
 mod pull_request;
@@ -134,6 +135,8 @@ pub struct SessionManager {
     /// Commands a Codex thread's `run_unsandboxed` may run, each once: what the user (or their
     /// "allow similar") approved when Codex asked ([`run`]).
     run_passes: run::RunPasses,
+    /// Each session's pre-warmed next worktree (THREAD-PLAN.md Q8 lever 6).
+    prewarms: prewarm::Prewarms,
     /// The previews running now ([`preview`]).
     previews: preview::Previews,
     /// The one-shot reviews running now, by id: their conversation, and what ends one when
@@ -216,6 +219,7 @@ impl SessionManager {
             reviews: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
             run_passes: run::RunPasses::default(),
+            prewarms: prewarm::Prewarms::default(),
             previews: preview::Previews::default(),
             running_reviews: Mutex::default(),
             task_writes: tokio::sync::Mutex::new(()),

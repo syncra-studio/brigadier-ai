@@ -48,6 +48,24 @@ impl Worktree {
         self.repo.resolve("HEAD")
     }
 
+    /// Puts a detached checkout still at `at` on a new branch `name` there (a worktree made
+    /// before its task had a branch). Refused when HEAD moved or a branch is already checked
+    /// out; never replaces an existing branch.
+    pub fn start_branch(&self, name: &str, at: &Oid) -> Result<()> {
+        self.repo.validate_branch(name)?;
+        if self.repo.symbolic_head()?.is_some() {
+            return Err(Error::Invalid("the checkout is already on a branch".into()));
+        }
+        if self.head()? != *at {
+            return Err(Error::Invalid(
+                "the checkout moved from where it was made".into(),
+            ));
+        }
+        self.repo
+            .cmd(&["switch", "--no-track", "-c", name], false)?;
+        Ok(())
+    }
+
     fn untracked(&self) -> Result<BTreeSet<String>> {
         let mut untracked = self.repo.status(false)?.untracked();
         if let Some(prepared) = &*self.prepared.lock().unwrap_or_else(|e| e.into_inner())
@@ -775,6 +793,34 @@ mod tests {
             } => (tip, commits, rewritten),
             SeriesOutcome::Conflicts { paths } => panic!("unexpected conflicts: {paths:?}"),
         }
+    }
+
+    #[test]
+    fn a_detached_checkout_starts_its_branch_where_it_was_made() {
+        let f = fixture("start-branch");
+        let wt = f
+            .repo
+            .add_worktree(
+                &f.dir.join("warm"),
+                WorktreeSpec::Detached { at: f.base.clone() },
+            )
+            .expect("a detached worktree");
+        // A branch checked out, or a checkout that moved, is refused.
+        assert!(f.wt.start_branch("other", &f.base).is_err());
+        let moved = commit(&wt.repo, "Move", &[("m.rs", "m\n")]);
+        assert!(wt.start_branch("late", &f.base).is_err());
+        assert_eq!(f.repo.branch_tip("late").expect("a lookup"), None);
+        // An existing branch is never replaced.
+        assert!(wt.start_branch("task", &moved).is_err());
+        wt.start_branch("fresh", &moved).expect("the branch");
+        assert_eq!(
+            f.repo.branch_tip("fresh").expect("a lookup"),
+            Some(moved.clone())
+        );
+        assert_eq!(
+            wt.repo.symbolic_head().expect("HEAD").as_deref(),
+            Some("fresh")
+        );
     }
 
     #[test]

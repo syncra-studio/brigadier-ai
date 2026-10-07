@@ -94,7 +94,7 @@ fn build(
     outlines: &[(String, Vec<SymbolHit>)],
 ) -> String {
     // Reads are recorded by their real path; the recorded workspace may go through a link.
-    let real = workspace.and_then(|workspace| brigadier_providers::policy::real_path(workspace));
+    let real = workspace.and_then(brigadier_providers::policy::real_path);
     let relative = |path: &str| -> Option<String> {
         let path = Path::new(path);
         let rel = [workspace, real.as_deref()]

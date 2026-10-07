@@ -321,7 +321,8 @@ impl SessionManager {
                         Some(("orch" | "chat" | "session" | "workers", id)) => {
                             records.conversation(id).is_some()
                         }
-                        Some(("task", id)) => records.task(id).is_some(),
+                        // A pre-warm's reserved task id has no task yet.
+                        Some(("task", id)) => records.task(id).is_some() || self.prewarms.owns(id),
                         // A run's worktree serves Continue and Merge while its session exists.
                         Some(("overnight", id)) => records.run(id).is_some(),
                         // Commit-message writers, Brain jobs, raw sessions: alive while one of
