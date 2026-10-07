@@ -444,16 +444,17 @@ const NO_SESSIONS: Conversation[] = [];
 
 /**
  * The Brigadier mark atop the collapsed strip, where it sits in the expanded header. Hovered
- * or focused it turns into the button that expands the sidebar.
+ * or focused it turns into the button that expands the sidebar. Resting the pointer on its row
+ * peeks the sidebar beside the strip (the peek stands in for a tooltip); it stays lit meanwhile.
  */
 export function StripMark() {
-  const { setOpen } = useSidebar();
-  const { sidebar } = useShortcuts();
+  const { setOpen, peek } = useSidebar();
   return (
-    <div className="h-nav-header flex shrink-0 items-center px-2">
+    <div data-sidebar-peek-trigger className="h-nav-header flex shrink-0 items-center px-2">
       <StripButton
         label="Show sidebar"
-        shortcut={sidebar}
+        tip={false}
+        data-state={peek === "open" ? "open" : undefined}
         className="group/mark"
         onClick={() => setOpen(true)}
       >

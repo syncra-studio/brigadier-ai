@@ -46,6 +46,8 @@
  *                                             width and how far it resizes
  *               w-sidebar-strip               the sidebar panel collapsed to its icons
  *               min-w-strip-button            an icon button on the strip or at the sidebar's foot
+ *               start-sidebar-peek, w-sidebar-peek-edge  the collapsed sidebar peeking: its card
+ *                                             beside the strip; the window edge peeking it
  *               p-surface-inset               the page surface's gap to the window's sides and bottom
  *               page-corner page-corner-{top,bottom}-{start,end}  a page surface corner kept
  *                                             round over the columns
@@ -194,6 +196,10 @@
      there is more to scroll that way. */
   --spacing-scroll-fade-top: 0.5rem;
   --spacing-scroll-fade-bottom: 2.5rem;
+  /* The collapsed sidebar peeking: the card's start beside the strip, and the window's start
+     edge that peeks it while hidden. */
+  --spacing-sidebar-peek: calc(var(--spacing-sidebar-strip) + var(--spacing));
+  --spacing-sidebar-peek-edge: 0.5rem;
   /* The grab area straddling the sidebar panel's edge. */
   --spacing-resize-handle: 1rem;
   /* A window narrower than this collapses the sidebar panel by itself. */

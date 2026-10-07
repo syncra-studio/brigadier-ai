@@ -201,29 +201,37 @@ export function FootButton({
 
 /**
  * An icon on the collapsed sidebar's strip, where its expanded row's icon sits, its name (and
- * shortcut) in a tooltip to its right.
+ * shortcut) in a tooltip to its right, unless `tip` is false.
  */
 export function StripButton({
   label,
   shortcut,
   selected = false,
+  tip = true,
   children,
   className,
   ...props
-}: ComponentProps<"button"> & { label: string; shortcut?: string | undefined; selected?: boolean }) {
+}: ComponentProps<"button"> & {
+  label: string;
+  shortcut?: string | undefined;
+  selected?: boolean;
+  tip?: boolean;
+}) {
+  const button = (
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={selected || undefined}
+      className={cn(stripItem(selected), "w-full", className)}
+      {...props}
+    >
+      {children}
+    </button>
+  );
+  if (!tip) return button;
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label={label}
-          aria-pressed={selected || undefined}
-          className={cn(stripItem(selected), "w-full", className)}
-          {...props}
-        >
-          {children}
-        </button>
-      </TooltipTrigger>
+      <TooltipTrigger asChild>{button}</TooltipTrigger>
       <TooltipContent side="right">
         {label}
         {shortcut && <Kbd>{shortcut}</Kbd>}

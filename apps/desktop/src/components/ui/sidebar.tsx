@@ -10,6 +10,7 @@ import {
   saveOpen,
   type SidebarCollapseMode,
 } from "@/state/sidebar";
+import { createPeek, PEEK_EXIT_MS, type Peek, type PeekPhase, type PeekZone } from "@/state/sidebarPeek";
 
 /**
  * The sidebar panel: expanded to its width, collapsed to a strip of icons, or fully hidden.
@@ -21,6 +22,12 @@ import {
  * remembered too. In a narrow window it collapses by itself, and expands again once there is
  * room if it was expanded before. While `keepOpen` (Settings) it is expanded whatever the choice,
  * and can't be toggled; the choice comes back with it.
+ *
+ * Collapsed, it peeks: resting the pointer on the strip's mark, or (hidden) on the window's start
+ * edge, floats the expanded panel over the content until the pointer leaves it (state/sidebarPeek.ts
+ * has the timing). Anything marked `data-sidebar-peek-trigger` peeks it. It never takes focus;
+ * Escape, a click outside, resizing the window or navigating (`navigationKey` changing) put it
+ * away, and it doesn't open while a menu or dialog is open.
  */
 
 const WIDTH_KEY = "brigadier.sidebarWidth";
@@ -40,6 +47,8 @@ type SidebarContextProps = {
   setResizing: (resizing: boolean) => void;
   /** Whether it can collapse here (not while held open). */
   canToggle: boolean;
+  /** The collapsed panel floating over the content: up, playing its exit, or not shown. */
+  peek: PeekPhase;
 };
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null);
@@ -80,14 +89,120 @@ function isNarrow() {
   return window.innerWidth < tokenPx("--spacing-narrow-window");
 }
 
+/** A menu, popover or dialog is open: the peek neither opens nor closes under it. */
+function overlayOpen() {
+  return document.querySelector('[role="menu"], [role="dialog"], [role="alertdialog"], [role="listbox"]') !== null;
+}
+
+/** After the window is resized, the peek waits this long before it can open again. */
+const RESIZE_SETTLE_MS = 300;
+
+/** What a pointer event is over, for the peek. */
+function peekZone(event: PointerEvent): PeekZone {
+  const target = event.target instanceof Element ? event.target : null;
+  if (target?.closest("[data-sidebar-peek-panel]")) return "panel";
+  // Only a resting mouse: not a touch, not a drag (selecting text, resizing) passing by. A
+  // trigger out of use (the strip's mark while hidden) doesn't count.
+  const trigger = target?.closest("[data-sidebar-peek-trigger]");
+  if (event.pointerType === "mouse" && event.buttons === 0 && trigger && !trigger.closest("[inert]")) {
+    return "trigger";
+  }
+  return "outside";
+}
+
+/**
+ * The peek's pointer and keyboard wiring. `blocked` says whether it may open now (it is open for
+ * real, or being resized).
+ */
+function usePeek(blocked: () => boolean, open: boolean, navigationKey: string | undefined): PeekPhase {
+  const [phase, setPhase] = React.useState<PeekPhase>("closed");
+  const peek = React.useRef<Peek | null>(null);
+  const isBlocked = React.useRef(blocked);
+  React.useEffect(() => {
+    isBlocked.current = blocked;
+  }, [blocked]);
+
+  React.useEffect(() => {
+    const fine = window.matchMedia("(hover: hover) and (pointer: fine)");
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let resizedAt = -Infinity;
+    const controller = createPeek({
+      onChange: (next) => {
+        // Put away while focus is inside, it hands focus to the sidebar toggle, not to nowhere.
+        const card = document.querySelector("[data-sidebar-peek-panel]");
+        if (next !== "open" && card?.contains(document.activeElement)) {
+          document.querySelector<HTMLElement>("[data-slot=sidebar-toggle]")?.focus({ preventScroll: true });
+        }
+        setPhase(next);
+      },
+      canOpen: () =>
+        fine.matches &&
+        !isBlocked.current() &&
+        performance.now() - resizedAt > RESIZE_SETTLE_MS &&
+        !overlayOpen(),
+      holdOpen: overlayOpen,
+      exitMs: () => (still.matches ? 0 : PEEK_EXIT_MS),
+    });
+    peek.current = controller;
+    const onPointer = (event: PointerEvent) => controller.point(peekZone(event));
+    const onLeave = () => controller.point("outside");
+    const onPointerDown = (event: PointerEvent) => {
+      if (controller.phase() !== "open" || overlayOpen()) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("[data-sidebar-peek-panel], [data-sidebar-peek-trigger]")) return;
+      controller.dismiss();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      // A menu or dialog takes its own Escape first.
+      if (event.key !== "Escape" || event.defaultPrevented || overlayOpen()) return;
+      if (controller.phase() === "open") controller.dismiss();
+    };
+    const onResize = () => {
+      resizedAt = performance.now();
+      controller.dismiss();
+    };
+    document.addEventListener("pointermove", onPointer, { passive: true });
+    document.addEventListener("pointerover", onPointer, { passive: true });
+    document.documentElement.addEventListener("pointerleave", onLeave);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", onResize);
+    return () => {
+      controller.dispose();
+      peek.current = null;
+      document.removeEventListener("pointermove", onPointer);
+      document.removeEventListener("pointerover", onPointer);
+      document.documentElement.removeEventListener("pointerleave", onLeave);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", onResize);
+    };
+  }, []);
+
+  // Opened for real, it is the panel itself again.
+  React.useEffect(() => {
+    if (open) peek.current?.reset();
+  }, [open]);
+  // Picking something in it (or going anywhere else) puts it away.
+  const seenKey = React.useRef(navigationKey);
+  React.useEffect(() => {
+    if (seenKey.current === navigationKey) return;
+    seenKey.current = navigationKey;
+    peek.current?.dismiss();
+  }, [navigationKey]);
+
+  return open ? "closed" : phase;
+}
+
 function SidebarProvider({
   defaultOpen,
   keepOpen = false,
+  navigationKey,
   className,
   style,
   children,
   ...props
-}: React.ComponentProps<"div"> & { defaultOpen?: boolean; keepOpen?: boolean }) {
+}: React.ComponentProps<"div"> & { defaultOpen?: boolean; keepOpen?: boolean; navigationKey?: string }) {
   const narrow = React.useSyncExternalStore(subscribeNarrow, isNarrow);
   // The user's choice while the window has room (remembered), and while it is narrow
   // (collapsed on becoming narrow, so the panel doesn't crowd the content).
@@ -125,6 +240,8 @@ function SidebarProvider({
     saveWidth(next);
   }, []);
   const [resizing, setResizing] = React.useState(false);
+  const peekBlocked = React.useCallback(() => open || resizing, [open, resizing]);
+  const peek = usePeek(peekBlocked, open, navigationKey);
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -155,10 +272,11 @@ function SidebarProvider({
       resizing,
       setResizing,
       canToggle: !keepOpen,
+      peek,
     }),
     [
       state, open, collapseMode, setCollapseMode, hidden, setOpen, toggleSidebar,
-      width, setWidth, resizing, keepOpen,
+      width, setWidth, resizing, keepOpen, peek,
     ],
   );
 
@@ -187,6 +305,8 @@ function SidebarProvider({
  * the rest is the panel's own surface. Only the column's width animates, between the panel's
  * width and the strip's. The expanded contents (`children`) and the strip's (`strip`) cross-fade
  * in the same place, their icons at the same spots; `foot` is shared by both, below them.
+ * Collapsed, it can peek (see SidebarProvider): the expanded contents float beside the strip,
+ * or at the window's start while hidden, with the foot too since no strip shows it.
  */
 function SidebarPanel({
   strip,
@@ -195,15 +315,15 @@ function SidebarPanel({
   children,
   ...props
 }: React.ComponentProps<"div"> & { strip?: React.ReactNode; foot?: React.ReactNode }) {
-  const { open, hidden, resizing } = useSidebar();
+  const { open, hidden, resizing, peek } = useSidebar();
   return (
     <div
-      inert={hidden}
       data-slot="sidebar-panel"
       data-state={open ? "expanded" : "collapsed"}
       className="relative flex h-full shrink-0"
     >
       <div
+        inert={hidden}
         className={cn(
           "h-full overflow-hidden transition-[width] duration-300 ease-sidebar motion-reduce:transition-none",
           open ? "sidebar-panel-width" : hidden ? "w-0" : "w-sidebar-strip",
@@ -245,7 +365,62 @@ function SidebarPanel({
         </div>
       </div>
       {open && <SidebarResizeHandle />}
+      {peek !== "closed" && (
+        <SidebarPeek closing={peek === "closing"} hidden={hidden} foot={hidden ? foot : null}>
+          {children}
+        </SidebarPeek>
+      )}
+      {/* Hidden, the window's start edge peeks it. */}
+      {hidden && (
+        <div
+          aria-hidden
+          data-sidebar-peek-trigger
+          className="w-sidebar-peek-edge top-titlebar fixed start-0 bottom-0 z-20"
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * The collapsed panel peeking: its expanded contents on a card over the content, which never
+ * moves for it. It floats in from the start over 300ms and fades back out over 200ms (at once
+ * with reduced motion). Inside it, the contents lay out as in the expanded panel.
+ */
+function SidebarPeek({
+  closing,
+  hidden,
+  foot,
+  children,
+}: {
+  closing: boolean;
+  hidden: boolean;
+  foot: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const context = useSidebar();
+  const expanded = React.useMemo<SidebarContextProps>(
+    () => ({ ...context, open: true, state: "expanded" }),
+    [context],
+  );
+  return (
+    <SidebarContext.Provider value={expanded}>
+      <div
+        inert={closing}
+        data-slot="sidebar-peek"
+        data-sidebar-peek-panel
+        className={cn(
+          "sidebar-panel-width text-sidebar-foreground bg-sidebar rounded-page ring-foreground/10 shadow-menu top-titlebar absolute bottom-0 z-40 flex flex-col overflow-hidden ring-1 motion-reduce:animate-none",
+          hidden ? "start-0" : "start-sidebar-peek",
+          closing
+            ? "pointer-events-none animate-[sidebar-peek-out_200ms_var(--ease-sidebar)_forwards]"
+            : "animate-[sidebar-peek-in_300ms_var(--ease-sidebar)]",
+        )}
+      >
+        <div className="relative flex min-h-0 flex-1 flex-col">{children}</div>
+        {foot}
+      </div>
+    </SidebarContext.Provider>
   );
 }
 

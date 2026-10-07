@@ -141,6 +141,7 @@ export function App() {
     <div className="bg-chrome flex h-full flex-col">
       <SidebarProvider
         keepOpen={selection.type === "settings"}
+        navigationKey={JSON.stringify(selection)}
         className="relative min-h-0 flex-1 flex-col"
       >
         {/* The page surface the sidebar panel and the content sit on; their headers stay

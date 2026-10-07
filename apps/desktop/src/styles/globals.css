@@ -471,6 +471,21 @@
   mask-image: linear-gradient(to bottom, transparent, black 25%);
 }
 
+/* The collapsed sidebar peeking: its card floats in from the start, and fades back out
+   drifting half as far. */
+@keyframes sidebar-peek-in {
+  from {
+    opacity: 0;
+    translate: calc(var(--spacing) * -1.5) 0;
+  }
+}
+@keyframes sidebar-peek-out {
+  to {
+    opacity: 0;
+    translate: calc(var(--spacing) * -0.75) 0;
+  }
+}
+
 /* A sidebar foot icon landing where the foot has just turned (a row while the sidebar is
    expanded, a stack in the strip while collapsed): it fades in there. */
 @keyframes foot-row {
