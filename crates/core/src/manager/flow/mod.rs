@@ -217,6 +217,8 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "read_artifact" => ToolCall::Orchestrator(O::ReadArtifact(arg(name, args))),
         "run" => ToolCall::Orchestrator(O::Run(arg(name, args))),
         "run_unsandboxed" => ToolCall::Orchestrator(O::RunUnsandboxed(arg(name, args))),
+        "run_check" if orchestrator => ToolCall::Orchestrator(O::RunCheck(arg(name, args))),
+        "run_check" => ToolCall::Worker(W::RunCheck(arg(name, args))),
         "start_preview" => ToolCall::Orchestrator(O::StartPreview(arg(name, args))),
         "stop_preview" => ToolCall::Orchestrator(O::StopPreview(arg(name, args))),
         "preview_log" => ToolCall::Orchestrator(O::PreviewLog(arg(name, args))),
@@ -929,6 +931,8 @@ impl Flow {
     }
 }
 
+#[cfg(test)]
+mod checks_tests;
 #[cfg(test)]
 mod engine_tests;
 #[cfg(test)]

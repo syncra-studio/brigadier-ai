@@ -139,6 +139,7 @@ impl Projection {
             | DomainEvent::ReviewUpdated { .. }
             | DomainEvent::ThreadCommitsSeen { .. }
             | DomainEvent::OutputStored { .. }
+            | DomainEvent::CheckRan { .. }
             | DomainEvent::ThreadLooked { .. }
             | DomainEvent::PreviewUpdated { .. }
             | DomainEvent::OvernightUpdated { .. }

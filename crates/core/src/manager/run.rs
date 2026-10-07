@@ -231,11 +231,63 @@ impl SessionManager {
         spec.cwd = Some(workdir.to_owned());
         Ok(spec)
     }
+
+    /// What runs the shell with `shell_args` in `workdir` held to `access` under Brigadier's
+    /// own Seatbelt profile (where Codex's sandbox isn't the one to keep): the access's
+    /// writable folders (`workdir` among them when the access writes its working directory),
+    /// network and denied reads. Full access needs no sandbox: [`Self::run_spec`] runs it.
+    pub(super) fn seatbelt_spec(
+        &self,
+        access: &Access,
+        workdir: &Path,
+        shell_args: &[String],
+    ) -> Result<brigadier_sandbox::SpawnSpec> {
+        let mut spec = self.runtime.cli_env().spec(Path::new(SHELL));
+        spec.args = shell_args.iter().map(Into::into).collect();
+        spec.cwd = Some(workdir.to_owned());
+        let (writable_roots, network, deny_read) = match access {
+            Access::Scoped {
+                write_cwd,
+                writable_roots,
+                network,
+                deny_read,
+                ..
+            } => {
+                let mut roots = writable_roots.clone();
+                if *write_cwd {
+                    roots.push(workdir.to_owned());
+                }
+                (roots, *network, deny_read.clone())
+            }
+            Access::Workspace { extra_roots } => {
+                let mut roots = extra_roots.clone();
+                roots.push(workdir.to_owned());
+                (roots, true, Vec::new())
+            }
+            Access::ReadOnly | Access::Full => (Vec::new(), false, Vec::new()),
+        };
+        let writable_roots = writable_roots
+            .into_iter()
+            .filter(|root| root.exists())
+            .collect();
+        self.runtime
+            .platform()
+            .sandbox()
+            .confine(
+                spec,
+                &brigadier_sandbox::SandboxPolicy {
+                    writable_roots,
+                    network,
+                    deny_read,
+                },
+            )
+            .map_err(|err| Error::Invalid(err.to_string()))
+    }
 }
 
 /// The shell command line for `command`, its stderr joined into its stdout so the output
 /// keeps its order.
-fn shell_command(command: &str) -> Vec<String> {
+pub(super) fn shell_command(command: &str) -> Vec<String> {
     vec![
         SHELL.to_owned(),
         "-c".to_owned(),
@@ -245,7 +297,7 @@ fn shell_command(command: &str) -> Vec<String> {
 
 /// The folder a command runs in: the workspace by default, else `requested` (relative to the
 /// workspace), which must be inside the workspace or the thread's scratch folder.
-fn run_workdir(
+pub(super) fn run_workdir(
     requested: Option<&str>,
     workspace: Option<&Path>,
     scratch: &Path,

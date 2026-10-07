@@ -436,6 +436,12 @@ impl TaskLive {
         self.state.lock().await.stalls = 0;
     }
 
+    /// The worker's CLI session and the access it runs with, while one runs.
+    pub(crate) async fn session_access(&self) -> Option<(Arc<Cli>, Access)> {
+        let state = self.state.lock().await;
+        Some((state.cli.clone()?, state.access.clone()?))
+    }
+
     /// The worker's CLI session, while one runs.
     #[cfg(debug_assertions)]
     pub(crate) async fn cli(&self) -> Option<Arc<Cli>> {

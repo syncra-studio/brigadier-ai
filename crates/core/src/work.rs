@@ -447,6 +447,9 @@ pub enum OutputSource {
     Run,
     /// A preview's log (stdout and stderr together) as it stood when it was read or ended.
     Preview,
+    /// A `run_check` command's whole output, stdout and stderr together (THREAD-PLAN.md Q8
+    /// lever 3).
+    Check,
 }
 
 // ----- previews -----------------------------------------------------------------------------

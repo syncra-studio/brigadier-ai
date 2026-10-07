@@ -56,4 +56,38 @@ requestId: string | null, } | { "type": "requestUpdated", request: UserRequest, 
 /**
  * The answer: a message id, or `task:<id>` for a worker's report.
  */
-subject: string, rating: Rating, } | { "type": "branchSwitched", conversationId: ConversationId, head: string, } | { "type": "conversationNotice", conversationId: ConversationId, notice: Notice, } | { "type": "taskUpdated", task: Task, } | { "type": "approvalUpdated", approval: Approval, } | { "type": "questionUpdated", question: Question, } | { "type": "planUpdated", plan: Plan, } | { "type": "reviewUpdated", review: ReviewRun, } | { "type": "threadCommitsSeen", conversationId: ConversationId, branch: string, tip: string, } | { "type": "outputStored", conversationId: ConversationId, output: StoredOutput, } | { "type": "threadLooked", conversationId: ConversationId, reads: Array<ThreadRead>, searches: Array<ThreadSearch>, } | { "type": "previewUpdated", preview: Preview, } | { "type": "queueChanged", conversationId: ConversationId, queue: MessageQueue, } | { "type": "workerEvent", taskId: TaskId, event: ProviderEvent, } | { "type": "orchestratorLogged", conversationId: ConversationId, entry: OrchestratorEntry, } | { "type": "draftPinned", scope: string, attachments: Array<AttachmentRef>, } | { "type": "brainJobUpdated", job: BrainJob, } | { "type": "memoryUpdated", conversationId: ConversationId, memory: MemoryChange, } | { "type": "decidedForYou", decision: Decision, } | { "type": "waitingOnYou", item: WaitingItem, } | { "type": "overnightUpdated", run: OvernightRun, } | { "type": "waitingResolved", id: string, by: ResolvedBy, } | { "type": "probe", burstId: string, index: number, count: number, };
+subject: string, rating: Rating, } | { "type": "branchSwitched", conversationId: ConversationId, head: string, } | { "type": "conversationNotice", conversationId: ConversationId, notice: Notice, } | { "type": "taskUpdated", task: Task, } | { "type": "approvalUpdated", approval: Approval, } | { "type": "questionUpdated", question: Question, } | { "type": "planUpdated", plan: Plan, } | { "type": "reviewUpdated", review: ReviewRun, } | { "type": "threadCommitsSeen", conversationId: ConversationId, branch: string, tip: string, } | { "type": "outputStored", conversationId: ConversationId, output: StoredOutput, } | { "type": "checkRan", conversationId: ConversationId, 
+/**
+ * The worker's task; none for the thread.
+ */
+taskId: TaskId | null, 
+/**
+ * The git tree of the checkout the command ran on, uncommitted changes included;
+ * none when the cache was bypassed before it was known.
+ */
+tree: string | null, command: string, 
+/**
+ * Where it ran, relative to the repository's root ("" for the root itself).
+ */
+workdir: string, 
+/**
+ * Answered from the cache: nothing ran.
+ */
+cached: boolean, 
+/**
+ * Why the cache was left out (the tree or an input couldn't be identified): it ran,
+ * and its result was not kept.
+ */
+bypassed: string | null, 
+/**
+ * "exit 0", "exit 1", "timed out after 600 s".
+ */
+status: string, 
+/**
+ * How long it ran (for a cached result, how long it ran then).
+ */
+durationMs: number, 
+/**
+ * The `out-…` alias of its stored output, which `read_artifact` reads.
+ */
+artifact: string | null, } | { "type": "threadLooked", conversationId: ConversationId, reads: Array<ThreadRead>, searches: Array<ThreadSearch>, } | { "type": "previewUpdated", preview: Preview, } | { "type": "queueChanged", conversationId: ConversationId, queue: MessageQueue, } | { "type": "workerEvent", taskId: TaskId, event: ProviderEvent, } | { "type": "orchestratorLogged", conversationId: ConversationId, entry: OrchestratorEntry, } | { "type": "draftPinned", scope: string, attachments: Array<AttachmentRef>, } | { "type": "brainJobUpdated", job: BrainJob, } | { "type": "memoryUpdated", conversationId: ConversationId, memory: MemoryChange, } | { "type": "decidedForYou", decision: Decision, } | { "type": "waitingOnYou", item: WaitingItem, } | { "type": "overnightUpdated", run: OvernightRun, } | { "type": "waitingResolved", id: string, by: ResolvedBy, } | { "type": "probe", burstId: string, index: number, count: number, };

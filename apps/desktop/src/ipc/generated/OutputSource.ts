@@ -3,4 +3,4 @@
 /**
  * Where a [`StoredOutput`] came from.
  */
-export type OutputSource = "bash" | "bashExcerpt" | "run" | "preview";
+export type OutputSource = "bash" | "bashExcerpt" | "run" | "preview" | "check";

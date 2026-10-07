@@ -55,6 +55,23 @@ impl SessionManager {
         output: Vec<u8>,
         trimmed: bool,
     ) -> Result<(StoredOutput, String)> {
+        // A Codex thread reads `run`'s result JSON-escaped inside its code-mode tool's output.
+        let wrapped = source == OutputSource::Run;
+        self.store_output_as(id, source, status, output, trimmed, wrapped)
+            .await
+    }
+
+    /// [`Self::store_output`], its digest sized for a model that reads it JSON-escaped when
+    /// `wrapped`.
+    pub(crate) async fn store_output_as(
+        &self,
+        id: &ConversationId,
+        source: OutputSource,
+        status: &str,
+        output: Vec<u8>,
+        trimmed: bool,
+        wrapped: bool,
+    ) -> Result<(StoredOutput, String)> {
         let board = self.core.board(id).await?;
         let alias = loop {
             let alias = format!(
@@ -73,8 +90,7 @@ impl SessionManager {
             (Some(redactor), Ok(text)) => redactor.redact(text).into_owned().into_bytes(),
             _ => output,
         };
-        // A Codex thread reads `run`'s result JSON-escaped inside its code-mode tool's output.
-        let digest = if source == OutputSource::Run {
+        let digest = if wrapped {
             wrapped_digest(status, &output, &alias)
         } else {
             digest(status, &output, &alias)
@@ -157,7 +173,9 @@ impl SessionManager {
         })?;
         let name = match output.source {
             OutputSource::BashExcerpt => "the stored excerpt of a command's output",
-            OutputSource::Bash | OutputSource::Run => "a command's full output",
+            OutputSource::Bash | OutputSource::Run | OutputSource::Check => {
+                "a command's full output"
+            }
             OutputSource::Preview => "a preview's log",
         };
         Ok(Some((output.blob.clone(), name.into())))

@@ -7,8 +7,9 @@ use brigadier_core::tools::{
     AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch,
     DelegateTask, EndRun, FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser,
     OrchestratorCall, PlanPhases, PreviewLog, ProposeOvernight, QueryBrain, ReadArtifact,
-    RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCommand,
-    RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, StartPreview, StopPreview,
+    RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCheck,
+    RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, StartPreview,
+    StopPreview,
     SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
 };
 use rmcp::model::{JsonObject, Tool};
@@ -147,6 +148,16 @@ sandbox as your own shell, in `workdir` (the workspace by default; it must be in
 workspace or your scratch folder). The whole output is kept: up to 8 KB comes back as it is, \
 longer output as a digest (the exit status, the error and warning lines, the first and last \
 lines) with an out-… id; page through the rest with read_artifact. `timeout_secs` defaults to \
+600 (at most 1800); the command is stopped then.";
+
+const RUN_CHECK: &str = "Run a check (tests, lint, typecheck, build, formatting) in your \
+checkout and get its result: use it for every check rather than your shell. A check that \
+already ran on the same files (committed or not) answers at once from the cache, and says so; \
+`rerun: true` runs it again. Call it first with no `command`: it answers with the checks your \
+changes call for (the changed packages and those that depend on them) and runs nothing. It runs \
+with your access in `workdir` (relative to your checkout's root, the root by default). Up to 8 KB \
+of output comes back as it is, longer output as a digest (the exit status, the error and warning \
+lines, the first and last lines) with where to read the whole of it. `timeout_secs` defaults to \
 600 (at most 1800); the command is stopped then.";
 
 const RUN_UNSANDBOXED: &str = "Like run, but outside the sandbox, for a command the sandbox \
@@ -346,6 +357,7 @@ fn orchestrator_tools() -> Vec<Tool> {
         ),
         tool("stop_preview", STOP_PREVIEW, input_schema::<StopPreview>()),
         tool("preview_log", PREVIEW_LOG, input_schema::<PreviewLog>()),
+        tool("run_check", RUN_CHECK, input_schema::<RunCheck>()),
     ]
 }
 
@@ -375,6 +387,7 @@ fn worker_tools() -> Vec<Tool> {
         tool("code_search", CODE_SEARCH, input_schema::<CodeSearch>()),
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
+        tool("run_check", RUN_CHECK, input_schema::<RunCheck>()),
     ]
 }
 
@@ -464,6 +477,7 @@ pub fn parse_call(
                 "start_preview" => OrchestratorCall::StartPreview(args(name, arguments)?),
                 "stop_preview" => OrchestratorCall::StopPreview(args(name, arguments)?),
                 "preview_log" => OrchestratorCall::PreviewLog(args(name, arguments)?),
+                "run_check" => OrchestratorCall::RunCheck(args(name, arguments)?),
                 "run" if *run != RunTools::None => OrchestratorCall::Run(args(name, arguments)?),
                 "run_unsandboxed" if *run == RunTools::WithEscalation => {
                     OrchestratorCall::RunUnsandboxed(args(name, arguments)?)
@@ -486,6 +500,7 @@ pub fn parse_call(
                 "code_search" => WorkerCall::CodeSearch(args::<CodeSearch>(name, arguments)?),
                 "code_refs" => WorkerCall::CodeRefs(args::<CodeRefs>(name, arguments)?),
                 "project_map" => WorkerCall::ProjectMap,
+                "run_check" => WorkerCall::RunCheck(args::<RunCheck>(name, arguments)?),
                 _ => return Err(unknown()),
             };
             Ok(ToolCall::Worker(call))
@@ -607,7 +622,11 @@ mod tests {
             Some(arguments)
         };
         let claude = names(&thread(RunTools::None));
-        assert!(!claude.iter().any(|name| name.starts_with("run")));
+        assert!(
+            !claude
+                .iter()
+                .any(|name| name == "run" || name == "run_unsandboxed")
+        );
         assert!(matches!(
             parse_call(&thread(RunTools::None), "run", command()),
             Err(ParseError::UnknownTool(_))
@@ -692,6 +711,49 @@ mod tests {
             .map(|tool| tool.name.to_string())
             .collect();
         assert!(!names.iter().any(|name| name.contains("preview")));
+    }
+
+    #[test]
+    fn every_thread_and_worker_runs_checks() {
+        let check = serde_json::json!({
+            "command": "cargo test -p core",
+            "workdir": "crates/core",
+            "timeout": 120,
+            "rerun": true,
+        });
+        for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {
+            let thread = Role::Orchestrator {
+                conversation_id: brigadier_core::model::ConversationId("c1".into()),
+                run,
+            };
+            assert!(
+                tools_for(&thread)
+                    .iter()
+                    .any(|tool| tool.name == "run_check")
+            );
+            let Ok(ToolCall::Orchestrator(OrchestratorCall::RunCheck(args))) =
+                parse_call(&thread, "run_check", check.as_object().cloned())
+            else {
+                panic!("run_check parses for {run:?}");
+            };
+            assert_eq!(args.timeout_secs, Some(120));
+            assert!(args.rerun);
+        }
+        for checks in [false, true] {
+            assert!(
+                tools_for(&worker(checks))
+                    .iter()
+                    .any(|tool| tool.name == "run_check")
+            );
+            assert!(matches!(
+                parse_call(&worker(checks), "run_check", None),
+                Ok(ToolCall::Worker(WorkerCall::RunCheck(RunCheck {
+                    command: None,
+                    rerun: false,
+                    ..
+                })))
+            ));
+        }
     }
 
     #[test]

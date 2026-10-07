@@ -60,10 +60,9 @@ use crate::{Error, Result, now_ms};
 
 /// Text deltas arriving within this window are stored as one event.
 const DELTA_WINDOW: Duration = Duration::from_millis(30);
-/// How long a blocking MCP call may take for the orchestrator (its tools return at once).
-const ORCHESTRATOR_TOOL_TIMEOUT_SECS: u64 = 120;
-/// The same for a Codex thread, whose `run` waits for its command (THREAD-PLAN.md Q4): its
-/// longest timeout plus a minute, so a command that runs out its time is still reaped and its
+/// How long a blocking MCP call may take for the thread: its `run_check` (and a Codex
+/// thread's `run`) waits for its command (THREAD-PLAN.md Q4, Q8 lever 3), so the longest
+/// command timeout plus a minute, so a command that runs out its time is still reaped and its
 /// output stored before the call itself expires (the call's clock starts first).
 const RUNNER_TOOL_TIMEOUT_SECS: u64 = super::run::RUN_TIMEOUT_MAX.as_secs() + 60;
 const _: () = assert!(RUNNER_TOOL_TIMEOUT_SECS > super::run::RUN_TIMEOUT_MAX.as_secs());
@@ -1614,11 +1613,7 @@ impl SessionManager {
                     },
                 );
                 grant_values.push(grant.clone());
-                let mut server = if commands == RunTools::None {
-                    self.brigadier_server(grant, ORCHESTRATOR_TOOL_TIMEOUT_SECS, false)
-                } else {
-                    self.brigadier_server(grant, RUNNER_TOOL_TIMEOUT_SECS, false)
-                };
+                let mut server = self.brigadier_server(grant, RUNNER_TOOL_TIMEOUT_SECS, false);
                 // Under Ask for approval the user approves each command that leaves the sandbox;
                 // a Claude thread's at Approve for me goes to Brigadier's reviewer instead.
                 if commands == RunTools::WithEscalation

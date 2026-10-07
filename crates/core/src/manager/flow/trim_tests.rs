@@ -140,7 +140,11 @@ async fn a_trimmed_output_is_read_back_whole_by_its_own_session_only() {
             run: RunTools::None,
         })
     );
-    assert_eq!(spec.mcp_servers[0].tool_timeout_secs, Some(120));
+    // Its run_check waits for its command as a Codex thread's run does.
+    assert_eq!(
+        spec.mcp_servers[0].tool_timeout_secs,
+        Some(super::super::run::RUN_TIMEOUT_MAX.as_secs() + 60)
+    );
 
     // Only its hook's grant stores output; a short output is left alone.
     let log = fifty_kb();

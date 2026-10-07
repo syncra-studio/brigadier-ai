@@ -409,6 +409,7 @@ impl SessionManager {
                 )
                 .await
             }
+            OrchestratorCall::RunCheck(args) => self.run_check_tool(id, None, args).await,
             OrchestratorCall::StartPreview(args) => self.start_preview(id, args).await,
             OrchestratorCall::StopPreview(args) => {
                 self.stop_preview_tool(id, args.id.as_deref()).await
@@ -579,6 +580,10 @@ impl SessionManager {
                 .await
                 .map(|(text, _)| text),
             WorkerCall::ProjectMap => self.project_map_tool(&conversation_id).await,
+            WorkerCall::RunCheck(args) => {
+                self.run_check_tool(&conversation_id, Some(&task_id), args)
+                    .await
+            }
         };
         match result {
             Ok(text) => ToolReply::ok(text),

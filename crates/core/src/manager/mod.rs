@@ -20,6 +20,7 @@ mod brain_jobs;
 mod brains;
 mod branches;
 mod cards;
+mod checks;
 mod closing;
 mod cold;
 mod context_pack;

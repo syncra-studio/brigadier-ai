@@ -1498,6 +1498,30 @@ pub enum DomainEvent {
         conversation_id: ConversationId,
         output: crate::work::StoredOutput,
     },
+    /// A `run_check` call ran its command, or answered from the check cache (THREAD-PLAN.md
+    /// Q8 lever 3, [`crate::manager::checks`]).
+    CheckRan {
+        conversation_id: ConversationId,
+        /// The worker's task; none for the thread.
+        task_id: Option<TaskId>,
+        /// The git tree of the checkout the command ran on, uncommitted changes included;
+        /// none when the cache was bypassed before it was known.
+        tree: Option<String>,
+        command: String,
+        /// Where it ran, relative to the repository's root ("" for the root itself).
+        workdir: String,
+        /// Answered from the cache: nothing ran.
+        cached: bool,
+        /// Why the cache was left out (the tree or an input couldn't be identified): it ran,
+        /// and its result was not kept.
+        bypassed: Option<String>,
+        /// "exit 0", "exit 1", "timed out after 600 s".
+        status: String,
+        /// How long it ran (for a cached result, how long it ran then).
+        duration_ms: u64,
+        /// The `out-…` alias of its stored output, which `read_artifact` reads.
+        artifact: Option<String>,
+    },
     /// What the session's thread read and searched in one turn, its tool calls' in order
     /// (THREAD-PLAN.md Q8 lever 1; [`crate::manager::reads`]).
     ThreadLooked {
@@ -1614,6 +1638,7 @@ impl DomainEvent {
             Self::ReviewUpdated { .. } => "review.updated",
             Self::ThreadCommitsSeen { .. } => "thread.seen",
             Self::OutputStored { .. } => "output.stored",
+            Self::CheckRan { .. } => "check.ran",
             Self::ThreadLooked { .. } => "thread.looked",
             Self::PreviewUpdated { .. } => "preview.updated",
             Self::QueueChanged { .. } => "queue.changed",

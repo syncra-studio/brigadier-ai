@@ -260,6 +260,27 @@ pub struct RunCommand {
     pub timeout_secs: Option<u64>,
 }
 
+/// `run_check`: a check (tests, lint, typecheck, build) run in the caller's tree, its result
+/// kept per tree; without a command, the checks the tree's changes affect (THREAD-PLAN.md Q8
+/// lever 3). For workers and the thread alike.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunCheck {
+    /// The check, as you would type it in a shell (`/bin/sh -c`). Leave it out to get the
+    /// checks your changes affect (nothing runs then).
+    #[serde(default)]
+    pub command: Option<String>,
+    /// The folder it runs in, relative to your checkout's root (the root by default).
+    #[serde(default)]
+    pub workdir: Option<String>,
+    /// How long it may run, in seconds (default 600, at most 1800); it is stopped then.
+    #[serde(default, alias = "timeout")]
+    pub timeout_secs: Option<u64>,
+    /// Run it even when it already ran on the same files, and keep the new result.
+    #[serde(default)]
+    pub rerun: bool,
+}
+
 /// `run_unsandboxed`: the same, outside the sandbox, once approved.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -646,6 +667,7 @@ pub enum OrchestratorCall {
     ReviewPlan(ReviewPlan),
     Run(RunCommand),
     RunUnsandboxed(RunUnsandboxed),
+    RunCheck(RunCheck),
     StartPreview(StartPreview),
     StopPreview(StopPreview),
     PreviewLog(PreviewLog),
@@ -683,6 +705,7 @@ impl OrchestratorCall {
             Self::ReviewPlan(_) => "review_plan",
             Self::Run(_) => "run",
             Self::RunUnsandboxed(_) => "run_unsandboxed",
+            Self::RunCheck(_) => "run_check",
             Self::StartPreview(_) => "start_preview",
             Self::StopPreview(_) => "stop_preview",
             Self::PreviewLog(_) => "preview_log",
@@ -850,6 +873,7 @@ pub enum WorkerCall {
     CodeSearch(CodeSearch),
     CodeRefs(CodeRefs),
     ProjectMap,
+    RunCheck(RunCheck),
 }
 
 impl WorkerCall {
@@ -864,6 +888,7 @@ impl WorkerCall {
             Self::CodeSearch(_) => "code_search",
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",
+            Self::RunCheck(_) => "run_check",
         }
     }
 }

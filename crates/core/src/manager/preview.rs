@@ -62,8 +62,6 @@ const START_TAIL: u32 = 20;
 const TAIL_BYTES_MAX: usize = 8 * 1024;
 /// The data-folder area of the previews' logs.
 const LOG_AREA: &str = "previews";
-/// The shell commands run in.
-const SHELL: &str = "/bin/sh";
 
 /// The cleanup-ledger owner of a conversation's previews.
 pub(crate) fn preview_owner(id: &ConversationId) -> String {
@@ -367,45 +365,7 @@ impl SessionManager {
         {
             return self.run_spec(access, workdir, script);
         }
-        let mut spec = self.runtime.cli_env().spec(Path::new(SHELL));
-        spec.args = vec!["-c".into(), script.into()];
-        spec.cwd = Some(workdir.to_owned());
-        let (writable_roots, network, deny_read) = match access {
-            Access::Scoped {
-                write_cwd,
-                writable_roots,
-                network,
-                deny_read,
-                ..
-            } => {
-                let mut roots = writable_roots.clone();
-                if *write_cwd {
-                    roots.push(workdir.to_owned());
-                }
-                (roots, *network, deny_read.clone())
-            }
-            Access::Workspace { extra_roots } => {
-                let mut roots = extra_roots.clone();
-                roots.push(workdir.to_owned());
-                (roots, true, Vec::new())
-            }
-            Access::ReadOnly | Access::Full => (Vec::new(), false, Vec::new()),
-        };
-        let writable_roots = writable_roots
-            .into_iter()
-            .filter(|root| root.exists())
-            .collect();
-        self.runtime
-            .platform()
-            .sandbox()
-            .confine(
-                spec,
-                &brigadier_sandbox::SandboxPolicy {
-                    writable_roots,
-                    network,
-                    deny_read,
-                },
-            )
+        self.seatbelt_spec(access, workdir, &["-c".into(), script.into()])
             .map_err(|err| Error::Invalid(format!("the preview can't be sandboxed here: {err}")))
     }
 
