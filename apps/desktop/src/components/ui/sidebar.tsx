@@ -13,9 +13,10 @@ import {
 
 /**
  * The sidebar panel: expanded to its width, collapsed to a strip of icons, or fully hidden.
- * It eases between these on a spring (the content beside it moves with it) while its contents cross-fade; the
- * expanded contents keep their full width, so they are revealed rather than squeezed. ⌘B or
- * ⌘⇧S (Ctrl on Windows and Linux) toggle it, and which it is is remembered. Its edge can be
+ * It eases between these on a spring (the content beside it moves with it) while its contents
+ * cross-fade. The expanded contents keep their full width, revealed rather than squeezed.
+ * ⌘B or ⌘⇧S (Ctrl on Windows and Linux) toggle it, and its open state is remembered. The
+ * strip/hidden choice is remembered too, under brigadier.sidebarCollapseMode. Its edge can be
  * dragged to resize it; dragging it below half its smallest width collapses it. The width is
  * remembered too. In a narrow window it collapses by itself, and expands again once there is
  * room if it was expanded before. While `keepOpen` (Settings) it is expanded whatever the choice,

@@ -53,6 +53,7 @@
  *               start-titlebar-start          where Back, Forward and the sidebar toggle sit
  *                                             in the titlebar
  *               h-titlebar-toggle             the band they centre in (level with the lights)
+ *               w-titlebar-chevron            the collapse-mode chevron beside the sidebar toggle
  *               ps-clear-N                    a top bar's start padding, N spacing steps or
  *                                             more to clear them (globals.css)
  *               w-agents                      a session's agents panel
@@ -215,8 +216,8 @@
   --spacing-titlebar: 2.75rem;
   --spacing-traffic-lights: 4.75rem;
   /* Back, Forward and the sidebar toggle stay in the titlebar where they start (just after the
-     traffic lights on macOS, see below), 6px apart; they end at titlebar-nav-end, which the
-     top bars beside them keep clear of (ps-clear-*). */
+     traffic lights on macOS, see below), 6px apart, with a chevron flush against the toggle.
+     They end at titlebar-nav-end, which the top bars beside them keep clear of (ps-clear-*). */
   --spacing-titlebar-start: calc(var(--spacing) * 2);
   --spacing-titlebar-chevron: var(--spacing-icon-button-xs);
   --spacing-titlebar-nav-end: calc(

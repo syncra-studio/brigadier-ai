@@ -136,8 +136,8 @@
   );
 }
 
-/* How wide the sidebar panel shows beside the content: its width, or the strip's while
-   collapsed. */
+/* How wide the sidebar panel shows beside the content: its width, the strip's while
+   collapsed, or nothing while hidden. */
 [data-slot="sidebar-wrapper"] {
   --sidebar-shown: var(--spacing-sidebar-strip);
 }
@@ -149,6 +149,7 @@
   );
 }
 
+/* A hidden sidebar reserves no width and leaves no divider on the main content. */
 [data-slot="sidebar-wrapper"][data-collapse="hidden"] {
   --sidebar-shown: 0px;
 }
