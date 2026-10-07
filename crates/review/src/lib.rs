@@ -6,7 +6,7 @@
 //!   asked for on stdin), read-only, at effort high. `--json` prints its events, which carry the
 //!   turn's token use; `-o` keeps its final message, the review ([`run_codex`]). A range review
 //!   runs in a child thread whose use `--json` reports as zero (codex-cli 0.160.1), so it is read
-//!   from that thread's rollout instead ([`child_usage`]). A review of a
+//!   from that thread's rollout instead ([`child_threads`]). A review of a
 //!   range takes no prompt of its own: Codex's own review instructions apply.
 //! - **Claude** runs through Brigadier's adapter with read-only access and only the tools that
 //!   read a change; the range is named in the prompt ([`claude_prompt`]).
@@ -151,6 +151,9 @@ pub struct CodexEvents {
     pub last_message: Option<String>,
     /// Why its turn failed, if it did.
     pub error: Option<String>,
+    /// A turn completed and none failed: only then is its last message a review.
+    pub completed: bool,
+    turn_failed: bool,
 }
 
 impl CodexEvents {
@@ -171,6 +174,7 @@ impl CodexEvents {
                 if let Some(usage) = event.get("usage") {
                     self.usage = Some(codex_usage(usage));
                 }
+                self.completed = !self.turn_failed;
             }
             Some("item.completed") => {
                 let item = event.get("item");
@@ -186,6 +190,8 @@ impl CodexEvents {
                 }
             }
             Some("turn.failed") => {
+                self.turn_failed = true;
+                self.completed = false;
                 self.error = event
                     .get("error")
                     .and_then(|error| error.get("message"))
@@ -286,13 +292,48 @@ pub async fn run_codex(run: CodexRun<'_>) -> Result<Review, String> {
         process.exited().await
     })
     .await;
-    let Ok(exit) = ran else {
+    if ran.is_err() {
         process.shutdown(EXIT_GRACE).await;
+    }
+    // Its threads go with the review's other leftovers: its own, and the child a range review
+    // runs in, whose rollout also holds what it used.
+    let children = match (events.thread_id.clone(), codex_home(run.env)) {
+        (Some(thread), Some(home)) => {
+            tokio::task::spawn_blocking(move || child_threads(&home.join("sessions"), &thread))
+                .await
+                .unwrap_or_default()
+        }
+        _ => Vec::new(),
+    };
+    for thread_id in events
+        .thread_id
+        .iter()
+        .chain(children.iter().map(|child| &child.id))
+    {
+        let artifact = Artifact::CodexThread {
+            thread_id: thread_id.clone(),
+        };
+        if let Err(err) = run.ledger.record(artifact).await {
+            tracing::warn!(thread = %thread_id, error = %err, "could not record a review's thread");
+        }
+    }
+    let Ok(exit) = ran else {
         return Err(format!(
             "it ran out of its {}-minute time box",
             run.time.as_secs() / 60
         ));
     };
+    // A turn that failed (a usage limit, say) may have written progress first: that is no
+    // review.
+    if !events.completed {
+        return Err(events
+            .error
+            .or_else(|| process.stderr_tail())
+            .unwrap_or_else(|| match exit.code {
+                Some(code) => format!("Codex exited with code {code}"),
+                None => "Codex ended without a review".to_owned(),
+            }));
+    }
     let written = tokio::fs::read_to_string(run.output)
         .await
         .unwrap_or_default();
@@ -316,17 +357,9 @@ pub async fn run_codex(run: CodexRun<'_>) -> Result<Review, String> {
             });
         return Err(why);
     };
-    let usage = match (events.usage, events.thread_id) {
-        (Some(usage), _) if usage != TokenUsage::default() => Some(usage),
-        (reported, Some(thread)) => {
-            let sessions = codex_home(run.env).map(|home| home.join("sessions"));
-            tokio::task::spawn_blocking(move || child_usage(&sessions?, &thread))
-                .await
-                .ok()
-                .flatten()
-                .or(reported)
-        }
-        (reported, None) => reported,
+    let usage = match events.usage {
+        Some(usage) if usage != TokenUsage::default() => Some(usage),
+        reported => children_usage(&children).or(reported),
     };
     Ok(Review {
         findings: count_findings(&text),
@@ -343,18 +376,30 @@ fn codex_home(env: &CliEnv) -> Option<PathBuf> {
     }
 }
 
-/// What the child threads of `thread` used, from their rollouts: Codex keeps one per thread in
+/// A thread a review's thread started, and what it used.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChildThread {
+    pub id: String,
+    pub usage: Option<TokenUsage>,
+}
+
+/// The child threads of `thread`, from their rollouts: Codex keeps one per thread in
 /// `<sessions>/YYYY/MM/DD/rollout-<time>-<thread>.jsonl`, its first line the `session_meta`
 /// (a child's names its `parent_thread_id`) and each `token_count` line the thread's total so
 /// far. A child starts with its parent, so it is looked for in the parent's folder.
-pub fn child_usage(sessions: &Path, thread: &str) -> Option<TokenUsage> {
+pub fn child_threads(sessions: &Path, thread: &str) -> Vec<ChildThread> {
     let suffix = format!("-{thread}.jsonl");
-    let parent = rollouts(sessions)
+    let Some(parent) = rollouts(sessions)
         .into_iter()
-        .find(|path| path.to_string_lossy().ends_with(&suffix))?;
-    let mut total: Option<TokenUsage> = None;
-    for path in fs::read_dir(parent.parent()?).ok()?.flatten() {
-        let path = path.path();
+        .find(|path| path.to_string_lossy().ends_with(&suffix))
+    else {
+        return Vec::new();
+    };
+    let Some(Ok(entries)) = parent.parent().map(fs::read_dir) else {
+        return Vec::new();
+    };
+    let mut children = Vec::new();
+    for path in entries.flatten().map(|entry| entry.path()) {
         if path == parent || !is_rollout(&path) {
             continue;
         }
@@ -362,35 +407,54 @@ pub fn child_usage(sessions: &Path, thread: &str) -> Option<TokenUsage> {
             continue;
         };
         let mut lines = BufReader::new(file).lines().map_while(Result::ok);
-        let is_child = lines
+        let Some(meta) = lines
             .next()
             .and_then(|line| serde_json::from_str::<Value>(&line).ok())
-            .is_some_and(|meta| {
-                meta.pointer("/payload/parent_thread_id")
-                    .and_then(Value::as_str)
-                    == Some(thread)
-            });
-        if !is_child {
+        else {
+            continue;
+        };
+        if meta
+            .pointer("/payload/parent_thread_id")
+            .and_then(Value::as_str)
+            != Some(thread)
+        {
             continue;
         }
-        let last = lines
+        let Some(id) = meta.pointer("/payload/id").and_then(Value::as_str) else {
+            continue;
+        };
+        let usage = lines
             .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
             .filter_map(|line| {
                 (line.pointer("/payload/type").and_then(Value::as_str) == Some("token_count"))
                     .then(|| line.pointer("/payload/info/total_token_usage").cloned())
                     .flatten()
             })
-            .last();
-        if let Some(usage) = last.as_ref().map(codex_usage) {
-            let sum = total.get_or_insert_with(TokenUsage::default);
+            .last()
+            .as_ref()
+            .map(codex_usage);
+        children.push(ChildThread {
+            id: id.to_owned(),
+            usage,
+        });
+    }
+    children
+}
+
+/// What `children` used together, if any of them said.
+fn children_usage(children: &[ChildThread]) -> Option<TokenUsage> {
+    children
+        .iter()
+        .filter_map(|child| child.usage.as_ref())
+        .fold(None, |total: Option<TokenUsage>, usage| {
+            let mut sum = total.unwrap_or_default();
             sum.input_tokens += usage.input_tokens;
             sum.cached_input_tokens += usage.cached_input_tokens;
             sum.cache_write_tokens += usage.cache_write_tokens;
             sum.output_tokens += usage.output_tokens;
             sum.reasoning_tokens += usage.reasoning_tokens;
-        }
-    }
-    total
+            Some(sum)
+        })
 }
 
 /// Every rollout under `sessions` (its year, month and day folders).
@@ -455,8 +519,23 @@ mod tests {
         );
         // A warning item is no failure.
         assert_eq!(events.error, None);
+        assert!(events.completed);
         events.read(r#"{"type":"turn.failed","error":{"message":"usage limit reached"}}"#);
         assert_eq!(events.error.as_deref(), Some("usage limit reached"));
+        assert!(!events.completed);
+    }
+
+    #[test]
+    fn progress_written_before_a_failed_turn_is_no_review() {
+        let mut events = CodexEvents::default();
+        events.read(r#"{"type":"turn.started"}"#);
+        events.read(r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Looking."}}"#);
+        events.read(r#"{"type":"turn.failed","error":{"message":"usage limit reached"}}"#);
+        assert_eq!(events.last_message.as_deref(), Some("Looking."));
+        assert!(!events.completed);
+        // A later completed turn doesn't undo the failure.
+        events.read(r#"{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}"#);
+        assert!(!events.completed);
     }
 
     #[test]
@@ -500,17 +579,24 @@ mod tests {
         fs::write(
             day.join("rollout-2026-10-07T17-26-44-01a116c2-9999.jsonl"),
             [
-                r#"{"type":"session_meta","payload":{"parent_thread_id":"someone-else"}}"#
+                r#"{"type":"session_meta","payload":{"id":"01a116c2-9999","parent_thread_id":"someone-else"}}"#
                     .to_owned(),
                 token_count(9, 0, 9),
             ]
             .join("\n"),
         )
         .unwrap();
-        let usage = child_usage(&sessions, parent);
+        let children = child_threads(&sessions, parent);
         fs::remove_dir_all(&sessions).unwrap();
         assert_eq!(
-            usage,
+            children
+                .iter()
+                .map(|child| child.id.as_str())
+                .collect::<Vec<_>>(),
+            ["01a116c2-71f5"]
+        );
+        assert_eq!(
+            children_usage(&children),
             Some(TokenUsage {
                 input_tokens: 152401 - 117504,
                 cached_input_tokens: 117504,
@@ -521,8 +607,8 @@ mod tests {
             })
         );
         assert_eq!(
-            child_usage(Path::new("/nonexistent/sessions"), parent),
-            None
+            child_threads(Path::new("/nonexistent/sessions"), parent),
+            []
         );
     }
 
