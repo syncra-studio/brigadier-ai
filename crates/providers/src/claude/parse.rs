@@ -520,7 +520,8 @@ impl Parser {
         }
     }
 
-    /// What a finished `Read`, `Grep` or `Glob` call read or searched. Read: the lines the
+    /// What a finished `Read`, `Grep`, `Glob` or `Bash` call read or searched (a command line's
+    /// simple reads and searches, see [`crate::looked::shell_looked`]). Read: the lines the
     /// result holds (`file.startLine`, `numLines` against `totalLines`), else the ones asked
     /// for. Grep: its pattern, folder and file filter, and the files it names (`filenames`,
     /// or the `path:line:` prefixes of its content mode). Glob: its pattern and the files.
@@ -594,8 +595,18 @@ impl Parser {
                     hits: filenames(),
                 }],
             ),
+            "Bash" => {
+                let output = result
+                    .and_then(|result| str_of(result, "stdout"))
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| content_text(block));
+                crate::looked::shell_looked(str_of(input, "command")?, &output)
+            }
             _ => return None,
         };
+        if reads.is_empty() && searches.is_empty() {
+            return None;
+        }
         Some(ProviderEvent::Looked {
             item_id: id.to_owned(),
             cwd: self.cwd.clone(),

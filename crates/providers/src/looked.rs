@@ -2,7 +2,7 @@
 //! ([`ProviderEvent::Looked`](crate::ProviderEvent::Looked)): the line range a shell read
 //! printed, and the files a search's output names.
 
-use crate::model::{FileRead, LineRange, SearchKind};
+use crate::model::{FileRead, FileSearch, LineRange, SearchKind};
 
 /// Files kept per search: a listing of a large folder names more than anyone reads.
 pub(crate) const HITS_KEPT: usize = 200;
@@ -181,6 +181,244 @@ fn listed_name(line: &str) -> &str {
     }
 }
 
+/// What a shell command line read and searched, for a CLI that tells nothing of it (Claude's
+/// `Bash`): `cd <dir>` steps, then `cat`, `sed -n '<a>,<b>p'`, `head` and `nl` reads and
+/// `grep`/`rg` searches, in a list joined by `&&`, `||`, `;` or new lines. A pipeline counts by
+/// its first command (a read's lines by its last `sed` or `head`). Paths after a `cd` are
+/// joined to its folder. A search's hits come from `output` only when the line holds nothing
+/// but `cd` steps and one search, since another command's output would mix in. A step with a substitution or a
+/// variable is skipped.
+pub(crate) fn shell_looked(command: &str, output: &str) -> (Vec<FileRead>, Vec<FileSearch>) {
+    let mut reads = Vec::new();
+    let mut searches = Vec::new();
+    let mut dir: Option<String> = None;
+    let mut only_searches = true;
+    let place = |dir: &Option<String>, path: &str| match dir {
+        Some(dir) if !path.starts_with('/') => format!("{}/{path}", dir.trim_end_matches('/')),
+        _ => path.to_owned(),
+    };
+    for step in split_top(command, true) {
+        let stages = split_top(&step, false);
+        let Some(first) = stages.first().and_then(|stage| loose_words(stage)) else {
+            only_searches = false;
+            continue;
+        };
+        let name = first[0].rsplit('/').next().unwrap_or(&first[0]).to_owned();
+        let args = &first[1..];
+        match name.as_str() {
+            "cd" => match args.first() {
+                Some(to) if to.starts_with('/') => dir = Some(to.clone()),
+                Some(to) => dir = Some(place(&dir, to)),
+                None => dir = None,
+            },
+            "cat" | "nl" | "sed" | "head" => {
+                only_searches = false;
+                let lines = command_lines(&stages.join(" | "));
+                let files: Vec<&String> = match name.as_str() {
+                    "sed" => {
+                        if args.first().map(String::as_str) != Some("-n") || args.len() != 3 {
+                            continue;
+                        }
+                        vec![&args[2]]
+                    }
+                    "head" => {
+                        let mut files = Vec::new();
+                        let mut args = args.iter();
+                        while let Some(arg) = args.next() {
+                            if arg == "-n" || arg == "-c" {
+                                args.next();
+                            } else if !arg.starts_with('-') {
+                                files.push(arg);
+                            }
+                        }
+                        files
+                    }
+                    _ => args.iter().filter(|arg| !arg.starts_with('-')).collect(),
+                };
+                // A read through a later `sed`/`head` of one file only tells that file's lines.
+                let lines = if files.len() == 1 { lines } else { None };
+                reads.extend(files.into_iter().filter(|file| !is_glob(file)).map(|file| {
+                    FileRead {
+                        path: place(&dir, file),
+                        lines,
+                    }
+                }));
+            }
+            "grep" | "rg" => searches.push(search_of(args, &dir, &place)),
+            _ => only_searches = false,
+        }
+    }
+    if only_searches && searches.len() == 1 {
+        let search = &mut searches[0];
+        search.hits = output_hits(output, search.kind)
+            .into_iter()
+            .map(|hit| place(&dir, &hit))
+            .collect();
+    }
+    (reads, searches)
+}
+
+/// A `grep` or `rg` call's pattern, scope and file filter.
+fn search_of(
+    args: &[String],
+    dir: &Option<String>,
+    place: &impl Fn(&Option<String>, &str) -> String,
+) -> FileSearch {
+    let mut pattern = None;
+    let mut operands = Vec::new();
+    let mut glob = None;
+    let mut files = false;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if let Some(value) = arg
+            .strip_prefix("--include=")
+            .or_else(|| arg.strip_prefix("--glob="))
+        {
+            glob = Some(value.to_owned());
+        } else if arg == "--files" {
+            files = true;
+        } else if matches!(arg.as_str(), "-e" | "--regexp") {
+            pattern = args.next().cloned();
+        } else if matches!(
+            arg.as_str(),
+            "-g" | "--glob" | "--include" | "-t" | "--type"
+        ) {
+            glob = args.next().cloned();
+        } else if matches!(
+            arg.as_str(),
+            "-A" | "-B" | "-C" | "-m" | "--max-count" | "-f" | "--context"
+        ) {
+            args.next();
+        } else if !arg.starts_with('-') || arg == "-" {
+            operands.push(arg.clone());
+        }
+    }
+    if pattern.is_none() && !files && !operands.is_empty() {
+        pattern = Some(operands.remove(0));
+    }
+    FileSearch {
+        kind: if files {
+            SearchKind::Files
+        } else {
+            SearchKind::Content
+        },
+        pattern,
+        scope: operands
+            .first()
+            .map(|scope| place(dir, scope))
+            .or(dir.clone()),
+        glob,
+        hits: Vec::new(),
+    }
+}
+
+fn is_glob(word: &str) -> bool {
+    word.contains(['*', '?', '['])
+}
+
+/// `command` split at its top-level list separators (`lists`: `&&`, `||`, `;`, new lines) or
+/// its pipes (else), quotes kept.
+fn split_top(command: &str, lists: bool) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut part = String::new();
+    let mut chars = command.chars().peekable();
+    let mut quote: Option<char> = None;
+    while let Some(c) = chars.next() {
+        if let Some(q) = quote {
+            part.push(c);
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        let pair = matches!(c, '&' | '|') && chars.peek() == Some(&c);
+        let split = if lists {
+            matches!(c, ';' | '\n') || pair
+        } else {
+            c == '|' && !pair
+        };
+        if pair {
+            chars.next();
+        }
+        if split {
+            let done = std::mem::take(&mut part);
+            if !done.trim().is_empty() {
+                parts.push(done.trim().to_owned());
+            }
+            continue;
+        }
+        if matches!(c, '\'' | '"') {
+            quote = Some(c);
+        }
+        part.push(c);
+        if pair {
+            part.push(c);
+        }
+    }
+    if !part.trim().is_empty() {
+        parts.push(part.trim().to_owned());
+    }
+    parts
+}
+
+/// The words of one simple command, quotes removed and glob characters kept as text (a
+/// pattern may hold them); `None` with a substitution, a variable or a redirection of input.
+fn loose_words(command: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut word: Option<String> = None;
+    let mut chars = command.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                let word = word.get_or_insert_with(String::new);
+                loop {
+                    match chars.next()? {
+                        '\'' => break,
+                        c => word.push(c),
+                    }
+                }
+            }
+            '"' => {
+                let word = word.get_or_insert_with(String::new);
+                loop {
+                    match chars.next()? {
+                        '"' => break,
+                        '$' | '`' => return None,
+                        '\\' => {
+                            let next = chars.next()?;
+                            if !matches!(next, '"' | '\\') {
+                                word.push('\\');
+                            }
+                            word.push(next);
+                        }
+                        c => word.push(c),
+                    }
+                }
+            }
+            '\\' => word.get_or_insert_with(String::new).push(chars.next()?),
+            c if c.is_whitespace() => {
+                if let Some(word) = word.take() {
+                    words.push(word);
+                }
+            }
+            // `2>/dev/null` and the like: the rest of the command is a redirection.
+            '>' => {
+                if word
+                    .as_deref()
+                    .is_some_and(|w| w.chars().all(|c| c.is_ascii_digit()))
+                {
+                    word = None;
+                }
+                break;
+            }
+            '<' | '$' | '`' | '(' | ')' => return None,
+            c => word.get_or_insert_with(String::new).push(c),
+        }
+    }
+    words.extend(word);
+    (!words.is_empty()).then_some(words)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,5 +486,73 @@ mod tests {
             output_hits(listing, SearchKind::Files),
             ["notes.md", "src.rs"]
         );
+    }
+    #[test]
+    fn a_shell_line_tells_its_reads_and_searches() {
+        let (reads, searches) = shell_looked(
+            "cd /w/session && cat apps/ui/sidebar.tsx && grep -rn \"toggleSidebar\\|SidebarTrigger\" apps/desktop/src --include=*.tsx | head -30",
+            "apps/ui/x.tsx:3:toggleSidebar()\n",
+        );
+        assert_eq!(
+            reads,
+            [FileRead {
+                path: "/w/session/apps/ui/sidebar.tsx".into(),
+                lines: None
+            }]
+        );
+        assert_eq!(searches.len(), 1);
+        assert_eq!(
+            searches[0].pattern.as_deref(),
+            Some("toggleSidebar\\|SidebarTrigger")
+        );
+        assert_eq!(
+            searches[0].scope.as_deref(),
+            Some("/w/session/apps/desktop/src")
+        );
+        assert_eq!(searches[0].glob.as_deref(), Some("*.tsx"));
+        // Another command's output is mixed in: no hits are taken from it.
+        assert!(searches[0].hits.is_empty());
+
+        let (reads, _) = shell_looked(
+            "cd /w && sed -n 80,150p src/a.tsx; sed -n '120,170p' src/b.tsx; ls src/ui/",
+            "",
+        );
+        assert_eq!(
+            reads,
+            [
+                FileRead {
+                    path: "/w/src/a.tsx".into(),
+                    lines: range(80, Some(150))
+                },
+                FileRead {
+                    path: "/w/src/b.tsx".into(),
+                    lines: range(120, Some(170))
+                }
+            ]
+        );
+
+        let (reads, searches) = shell_looked(
+            "cd /w && rg -n 'fn main' crates 2>/dev/null",
+            "crates/a.rs:3:fn main() {}\n",
+        );
+        assert!(reads.is_empty());
+        assert_eq!(searches[0].hits, ["/w/crates/a.rs"]);
+        assert_eq!(searches[0].scope.as_deref(), Some("/w/crates"));
+
+        let (reads, _) = shell_looked("head -n 20 a.rs b.rs && cat $(ls)", "");
+        assert_eq!(
+            reads,
+            [
+                FileRead {
+                    path: "a.rs".into(),
+                    lines: None
+                },
+                FileRead {
+                    path: "b.rs".into(),
+                    lines: None
+                }
+            ]
+        );
+        assert_eq!(shell_looked("cargo test && echo ok", "").0, []);
     }
 }

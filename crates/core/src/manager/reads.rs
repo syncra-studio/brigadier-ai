@@ -2,7 +2,8 @@
 //! for the context pack phase 3 writes for each worker.
 //!
 //! The thread's CLI tells it as [`ProviderEvent::Looked`], in the same words for both vendors
-//! (Claude's `Read`, `Grep` and `Glob`; Codex's commands as it parsed them). A worker's never
+//! (Claude's `Read`, `Grep` and `Glob`, and the simple reads and searches of its `Bash`
+//! command lines; Codex's commands as it parsed them). A worker's never
 //! counts: only the thread's own conversation pump collects them. Its searches in the code
 //! index (`code_search`, `code_refs`) count too. They are held for the turn and recorded once
 //! when it ends (or when the CLI goes, or every [`BATCH_MAX`] calls in a long turn) as one
