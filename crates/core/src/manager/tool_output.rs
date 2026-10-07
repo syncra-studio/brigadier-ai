@@ -12,10 +12,11 @@
 //!   is stored as such, and the model gets it untrimmed
 //!   (docs/evidence/2026-10-07-thread-phase2-contracts.md §3).
 //! - A Codex thread's `run` tool owns its command, so every long result is trimmed, failures
-//!   included (`super::run`).
+//!   included (`super::run`). Its model reads the digest JSON-escaped inside its code-mode
+//!   tool's output, so that digest is sized for it ([`crate::digest::wrapped_digest`]).
 
 use super::SessionManager;
-use crate::digest::{TRIM_ABOVE, digest};
+use crate::digest::{TRIM_ABOVE, digest, wrapped_digest};
 use crate::model::{ConversationId, DomainEvent};
 use crate::tools::Role;
 use crate::work::{OutputSource, StoredOutput};
@@ -72,7 +73,12 @@ impl SessionManager {
             (Some(redactor), Ok(text)) => redactor.redact(text).into_owned().into_bytes(),
             _ => output,
         };
-        let digest = digest(status, &output, &alias);
+        // A Codex thread reads `run`'s result JSON-escaped inside its code-mode tool's output.
+        let digest = if source == OutputSource::Run {
+            wrapped_digest(status, &output, &alias)
+        } else {
+            digest(status, &output, &alias)
+        };
         let lines = output.split(|byte| *byte == b'\n').count() as u64
             - u64::from(output.ends_with(b"\n") || output.is_empty());
         let bytes = output.len() as u64;

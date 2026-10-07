@@ -249,3 +249,26 @@ own profile):
   approval happens inside Codex, with nothing to tie the call to, so that level gets no
   `run_unsandboxed`: the thread leaves the sandbox with its own shell, which the auto-reviewer
   settles.
+
+## 7. Step 4: a Codex `run` digest as the model reads it (2026-10-07)
+
+Dev `brigadierd` from `thread-p2` (step 4), scratch data folder and repository, a Codex thread
+(codex-cli 0.160.1, effort low) under Full access. `sh fail.sh` printed 52,252 B in 1,101 lines
+(error lines spread through, tabs, quotes and backslashes in every line) and exited 1.
+
+- The thread called `run` from a code-mode script, `text(await tools.mcp__brigadier__run({command:"sh fail.sh"}))`.
+  The tool's output in the rollout was two text items:
+  - `Script completed\nWall time 0.1 seconds\nOutput:\n`: 47 B;
+  - the tool result as the script printed it, JSON:
+    `{"content":[{"type":"text","text":"<digest, escaped>"}],"isError":false}`: 55 B around
+    the text.
+- The digest was 3,552 B raw and 3,891 B escaped, so the model read **3,993 B** in all (≤ 4,096):
+  the header with `exit 1` and `read_artifact out-…`, the error lines first, and `FAIL: the end
+  marker` last. The step-3 digest (4,077 B raw) would have come to about 4,560 B with this
+  output's escapes.
+- `run`'s digest is now sized for that (`crate::digest::wrapped_digest`): its JSON-escaped length
+  plus a 160 B wrapper allowance (the measured 102 B, plus room for a longer wall time or a
+  labelled print) is at most 4,096 B. The Claude hook's digest stays ≤ 4,096 B raw, since Claude
+  gets it unwrapped.
+- The rollout's instructions were the new thread prompt; asked whether anything listened on a
+  port, the thread ran `lsof` through `run` itself and answered.

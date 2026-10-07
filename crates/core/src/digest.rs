@@ -11,6 +11,11 @@
 //!    between them were left out.
 //!
 //! A line too long for its room is cut at a character boundary and ends with `…`.
+//!
+//! A Claude thread's model gets the digest as it is (its hook replaces the command's output).
+//! A Codex thread's model reads a `run` result inside its code-mode tool's JSON output, so that
+//! digest is sized for what the model reads there: its JSON-escaped text plus the wrapper
+//! ([`wrapped_digest`]).
 
 /// Most bytes a digest takes.
 pub const DIGEST_MAX: usize = 4096;
@@ -31,12 +36,56 @@ const CUT: &str = "…";
 const MATCHES_LABEL: &str = "[lines with error, warning, FAIL or panic]";
 const OUTPUT_LABEL: &str = "[start and end of the output]";
 
+/// The most a Codex thread's model reads around a `run` result's text, besides the escaping
+/// of the text itself. It calls `run` from a script in its code-mode tool, whose output is a
+/// "Script completed\nWall time 0.1 seconds\nOutput:\n" line (47 bytes) and then what the
+/// script prints: the tool result as JSON, `{"content":[{"type":"text","text":"…"}],
+/// "isError":false}` (55 bytes around the escaped text). Measured live on codex-cli 0.160.1
+/// (docs/evidence/2026-10-07-thread-phase2-contracts.md §7); the rest is room for a longer wall
+/// time and a script that labels what it prints.
+pub const JSON_WRAPPER: usize = 160;
+
 /// The digest of `output`, a command's full output stored as `artifact` (`out-<id>`), which
-/// ended with `status` ("exit 0", "exit 101", "No matches found", "timed out after 600 s").
+/// ended with `status` ("exit 0", "exit 101", "No matches found", "timed out after 600 s"):
+/// at most [`DIGEST_MAX`] bytes.
 pub fn digest(status: &str, output: &[u8], artifact: &str) -> String {
+    digest_within(status, output, artifact, DIGEST_MAX)
+}
+
+/// The same digest for a reader that gets it JSON-escaped inside a wrapper (a Codex thread's
+/// `run`): its escaped length plus [`JSON_WRAPPER`] is at most [`DIGEST_MAX`] bytes.
+pub fn wrapped_digest(status: &str, output: &[u8], artifact: &str) -> String {
+    let mut max = DIGEST_MAX - JSON_WRAPPER;
+    loop {
+        let digest = digest_within(status, output, artifact, max);
+        let over = (json_len(&digest) + JSON_WRAPPER).saturating_sub(DIGEST_MAX);
+        if over == 0 {
+            return digest;
+        }
+        // Escapes are a few bytes each: a smaller budget by the overshoot fits in a step or
+        // two; at worst the budget reaches nothing, which fits.
+        max = max.saturating_sub(over.max(16));
+    }
+}
+
+/// How many bytes `text` takes inside a JSON string: quotes, backslashes and control
+/// characters are escaped; everything else stays as it is.
+pub fn json_len(text: &str) -> usize {
+    text.chars()
+        .map(|c| match c {
+            '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+            c if (c as u32) < 0x20 => 6,
+            c => c.len_utf8(),
+        })
+        .sum()
+}
+
+/// The digest in at most `max` bytes.
+fn digest_within(status: &str, output: &[u8], artifact: &str, max: usize) -> String {
     let text = String::from_utf8_lossy(output);
     let lines = split_lines(&text);
     let mut out = header(status, artifact, lines.len(), output.len());
+    let matches_max = MATCHES_MAX.min(max / 2);
 
     // The lines that look like trouble, in order, as many as fit.
     let matching: Vec<&str> = lines.iter().copied().filter(|line| matches(line)).collect();
@@ -45,7 +94,7 @@ pub fn digest(status: &str, output: &[u8], artifact: &str) -> String {
         let mut shown = 0;
         for line in &matching {
             let line = clip(line, LINE_MAX);
-            if section.len() + 1 + line.len() > MATCHES_MAX {
+            if section.len() + 1 + line.len() > matches_max {
                 break;
             }
             section.push('\n');
@@ -65,7 +114,7 @@ pub fn digest(status: &str, output: &[u8], artifact: &str) -> String {
     }
 
     // The first and last lines, alternately.
-    let budget = DIGEST_MAX.saturating_sub(out.len() + 1 + OUTPUT_LABEL.len() + OMITTED_ROOM);
+    let budget = max.saturating_sub(out.len() + 1 + OUTPUT_LABEL.len() + OMITTED_ROOM);
     let mut used = 0;
     let (mut head, mut tail) = (Vec::new(), Vec::new());
     let (mut next_head, mut next_tail) = (0usize, lines.len());
@@ -110,8 +159,8 @@ pub fn digest(status: &str, output: &[u8], artifact: &str) -> String {
         }
     }
     // Never more than the budget, whatever the arithmetic above missed.
-    if out.len() > DIGEST_MAX {
-        let end = floor_char_boundary(&out, DIGEST_MAX);
+    if out.len() > max {
+        let end = floor_char_boundary(&out, max);
         out.truncate(end);
     }
     out
@@ -346,5 +395,75 @@ mod tests {
         assert!(digest.len() <= DIGEST_MAX);
         assert!(digest.contains("more matching lines in the full output]"));
         assert!(digest.contains("lines omitted …]"));
+    }
+
+    /// What a Codex thread's model reads: the tool result as its script prints it, after the
+    /// code-mode tool's own line.
+    fn as_the_model_reads_it(text: &str) -> String {
+        let result = serde_json::json!({
+            "content": [{ "type": "text", "text": text }],
+            "isError": false,
+        });
+        format!("Script completed\nWall time 1234.5 seconds\nOutput:\n{result}")
+    }
+
+    #[test]
+    fn a_failing_runs_digest_reaches_a_codex_model_within_the_budget_escaped_and_wrapped() {
+        // 50 KB of a failing build: quotes, tabs and backslashes escape to two bytes each.
+        let mut lines: Vec<String> = (0..1200)
+            .map(|n| format!("\t\"crate_{n}\" compiled from C:\\src\\crate_{n}"))
+            .collect();
+        for n in (100..1200).step_by(50) {
+            lines[n] = format!("error[E0308]: mismatched types: expected \"u8\", found \"{n}\"");
+        }
+        lines.push("FAIL: the end marker".into());
+        let output = lines.join("\n");
+        assert!(output.len() > 50_000, "{}", output.len());
+        let plain = digest("exit 1", output.as_bytes(), "out-0000000a");
+        assert!(
+            json_len(&plain) + JSON_WRAPPER > DIGEST_MAX,
+            "the plain one doesn't fit"
+        );
+        let wrapped = wrapped_digest("exit 1", output.as_bytes(), "out-0000000a");
+        let read = as_the_model_reads_it(&wrapped);
+        assert!(read.len() <= DIGEST_MAX, "{}", read.len());
+        assert!(json_len(&wrapped) + JSON_WRAPPER <= DIGEST_MAX);
+        // Still a whole digest: the header, the error lines first, the last line last.
+        assert!(wrapped.starts_with("exit 1 [full output: read_artifact out-0000000a"));
+        assert!(
+            wrapped
+                .split_once('\n')
+                .unwrap()
+                .1
+                .starts_with(&format!("{MATCHES_LABEL}\nerror[E0308]"))
+        );
+        assert!(wrapped.ends_with("FAIL: the end marker"));
+        assert!(
+            wrapped.len() > DIGEST_MAX - 1000,
+            "the budget is used: {}",
+            wrapped.len()
+        );
+    }
+
+    #[test]
+    fn escaping_counts_what_json_adds() {
+        for text in [
+            "plain",
+            "a \"quote\"",
+            "back\\slash",
+            "tab\tand\nnewline",
+            "\u{1}",
+            "é€😀",
+        ] {
+            assert_eq!(
+                json_len(text),
+                serde_json::to_string(text).unwrap().len() - 2,
+                "{text:?}"
+            );
+        }
+        // Control characters everywhere still fit, however much they swell.
+        let output = "\u{1}".repeat(60_000);
+        let wrapped = wrapped_digest("exit 1", output.as_bytes(), "out-0000000b");
+        assert!(json_len(&wrapped) + JSON_WRAPPER <= DIGEST_MAX);
     }
 }
