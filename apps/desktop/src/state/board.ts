@@ -601,7 +601,7 @@ const TOOL_DOING: Readonly<Record<string, string>> = {
 };
 
 /** What the orchestrator shows while its CLI retries a failed request on its own. */
-const RETRYING: ReadonlySet<string | null> = new Set(["Reconnecting", "The model is busy, retrying"]);
+export const RETRYING: ReadonlySet<string | null> = new Set(["Reconnecting", "The model is busy, retrying"]);
 
 /** The orchestrator's current activity after one of its provider events. */
 export function doingOf(event: ProviderEvent, current: string | null): string | null {

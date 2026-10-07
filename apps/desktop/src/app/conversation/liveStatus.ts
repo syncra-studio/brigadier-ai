@@ -1,8 +1,8 @@
-import { type BlockState, isFinal } from "@/app/conversation/blocks";
+import { type BlockState, isFinal, toolHasRow } from "@/app/conversation/blocks";
 import { activelyWorking } from "@/app/conversation/taskActivity";
 import type { QuotaWait, Task } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
-import type { Board } from "@/state/board";
+import { type Board, RETRYING } from "@/state/board";
 
 /**
  * The status line's tone: `busy` shimmers, `still` waits on something that is not the user,
@@ -65,9 +65,12 @@ function needsYou({ board, requestIds, state }: StatusInput, leadRunning: boolea
 
 /** What the lead's own turn shows at the end of the work, or `null` when its rows already do. */
 function leadHead({ board, requestIds, thinkingLive, compacting }: StatusInput): StatusHead | null {
+  // A retry stalls whatever streamed so far: say so over it.
+  if (board.doing && RETRYING.has(board.doing)) return { text: board.doing, tone: "busy" };
   const runRequest = board.runRequest;
+  // A call to a worker has no row of its own: its "Delegating to a worker" shows here.
   const toolRunning = board.orchestratorSteps.some((step) => step.requestId === runRequest
-    && step.kind.type === "tool" && step.kind.status === "inProgress");
+    && step.kind.type === "tool" && step.kind.status === "inProgress" && toolHasRow(step.kind.name));
   const streaming = !!board.streaming?.text && (board.streaming.requestId === null || requestIds.includes(board.streaming.requestId));
   if (toolRunning || thinkingLive || compacting || streaming) return null;
   if (board.doing) return { text: board.doing, tone: "busy" };

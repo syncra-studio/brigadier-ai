@@ -32,6 +32,8 @@ function input(patch: Partial<Board> = {}, rest: Partial<StatusInput> = {}): Sta
 const leading = { run: "running", runRequest: "r1" } as const;
 const head = (status: StatusInput) => threadStatus(status).head;
 const line = (worker: Task) => taskActivityLines({ task: worker, activity: "Editing 3 files" }, 60_000);
+const call = (name: string) => ({ requestId: "r1", atMs: 0, position: 1,
+  kind: { type: "tool", name, status: "inProgress" } }) as unknown as OrchestratorStep;
 const error = (kind: string, willRetry = true) =>
   ({ type: "error", error: { kind, message: "", willRetry, limit: null, code: null } }) as unknown as ProviderEvent;
 
@@ -43,9 +45,10 @@ test("a plain chat: Thinking until its own rows show, then nothing extra", () =>
   assert.equal(head(input({ ...leading, streaming: { messageId: "m", text: "Hi", requestId: "r1" } })), null);
   assert.equal(head(input(leading, { thinkingLive: true })), null);
   assert.equal(head(input(leading, { compacting: true })), null);
-  const tool = { requestId: "r1", atMs: 0, position: 1,
-    kind: { type: "tool", status: "inProgress" } } as unknown as OrchestratorStep;
-  assert.equal(head(input({ ...leading, orchestratorSteps: [tool] })), null);
+  assert.equal(head(input({ ...leading, orchestratorSteps: [call("Read")] })), null);
+  // A call to a worker has no row of its own: the line says it.
+  assert.deepEqual(head(input({ ...leading, doing: "Delegating to a worker", orchestratorSteps: [call("mcp__brigadier__delegate_task")] })),
+    { text: "Delegating to a worker", tone: "busy" });
   // A message just sent, before the lead's turn starts.
   assert.deepEqual(head(input()), { text: "Thinking", tone: "busy" });
 });
@@ -132,6 +135,9 @@ test("the lead's retries show while its CLI retries, and clear when it goes on",
   assert.equal(doingOf(error("network", false), "Searching the web"), "Searching the web");
   assert.equal(doingOf({ type: "reasoningDelta" } as unknown as ProviderEvent, "Reconnecting"), null);
   assert.equal(doingOf({ type: "reasoningDelta" } as unknown as ProviderEvent, "Searching the web"), "Searching the web");
+  // A retry after some text or thinking streamed still shows over the stalled rows.
+  const stalled = { ...leading, doing: "Reconnecting", streaming: { messageId: "m", text: "Hi", requestId: "r1" } };
+  assert.deepEqual(head(input(stalled, { thinkingLive: true })), { text: "Reconnecting", tone: "busy" });
 });
 
 test("a worker's live line says what it does in plain words, never a raw tool name or shell wrapper", () => {

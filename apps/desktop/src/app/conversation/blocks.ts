@@ -163,6 +163,14 @@ const WORKING: ReadonlySet<Task["state"]> = new Set([
 const FINAL: ReadonlySet<Task["state"]> = new Set(["landed", "done", "rejected", "stopped", "failed"]);
 
 /**
+ * Whether the lead's call shows as a row of its own. A phase's lead reads and messages its
+ * workers all night: the workers' rows say what came of it.
+ */
+export function toolHasRow(name: string): boolean {
+  return !["worker", "message", "report"].includes(toolActivity(name).kind);
+}
+
+/**
  * When a request worked. One stored before its spans were kept worked from its start to its
  * end; a span still open on a request that is over ends with it.
  */
@@ -325,8 +333,7 @@ export function buildBlocks(
     })),
   ].toSorted((a, b) => a.position - b.position);
   for (const step of board.orchestratorSteps) {
-    // A phase's lead reads and messages its workers all night: the rows say what came of it.
-    if (step.kind.type === "tool" && ["worker", "message", "report"].includes(toolActivity(step.kind.name).kind)) continue;
+    if (step.kind.type === "tool" && !toolHasRow(step.kind.name)) continue;
     if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "tool")) continue;
     if (step.kind.type === "tool" && toolHasOwnResult(step.kind, authoredResults, step.requestId, step.position)) continue;
     placed.push({
