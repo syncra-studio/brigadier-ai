@@ -4,7 +4,9 @@
 //!
 //! - **Codex** runs `codex exec review --base <base>` (an outline: `codex exec` with the review
 //!   asked for on stdin), read-only, at effort high. `--json` prints its events, which carry the
-//!   turn's token use; `-o` keeps its final message, the review ([`run_codex`]). A review of a
+//!   turn's token use; `-o` keeps its final message, the review ([`run_codex`]). A range review
+//!   runs in a child thread whose use `--json` reports as zero (codex-cli 0.160.1), so it is read
+//!   from that thread's rollout instead ([`child_usage`]). A review of a
 //!   range takes no prompt of its own: Codex's own review instructions apply.
 //! - **Claude** runs through Brigadier's adapter with read-only access and only the tools that
 //!   read a change; the range is named in the prompt ([`claude_prompt`]).
@@ -12,7 +14,9 @@
 //! Either way each finding is a line that starts with its priority (`[P1] …`), which
 //! [`count_findings`] counts.
 
-use std::path::Path;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -139,6 +143,8 @@ pub fn count_findings(text: &str) -> u32 {
 /// What `codex exec --json` printed, as far as a review needs it.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct CodexEvents {
+    /// Its thread, from `thread.started`.
+    pub thread_id: Option<String>,
     /// The thread's token use at its last completed turn.
     pub usage: Option<TokenUsage>,
     /// The last message the agent wrote.
@@ -154,6 +160,12 @@ impl CodexEvents {
             return;
         };
         match event.get("type").and_then(Value::as_str) {
+            Some("thread.started") => {
+                self.thread_id = event
+                    .get("thread_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+            }
             // Its usage is the thread's total so far: the last one counts.
             Some("turn.completed") => {
                 if let Some(usage) = event.get("usage") {
@@ -304,11 +316,106 @@ pub async fn run_codex(run: CodexRun<'_>) -> Result<Review, String> {
             });
         return Err(why);
     };
+    let usage = match (events.usage, events.thread_id) {
+        (Some(usage), _) if usage != TokenUsage::default() => Some(usage),
+        (reported, Some(thread)) => {
+            let sessions = codex_home(run.env).map(|home| home.join("sessions"));
+            tokio::task::spawn_blocking(move || child_usage(&sessions?, &thread))
+                .await
+                .ok()
+                .flatten()
+                .or(reported)
+        }
+        (reported, None) => reported,
+    };
     Ok(Review {
         findings: count_findings(&text),
         text,
-        usage: events.usage,
+        usage,
     })
+}
+
+/// `$CODEX_HOME`, by default `~/.codex`.
+fn codex_home(env: &CliEnv) -> Option<PathBuf> {
+    match env.var("CODEX_HOME") {
+        Some(home) if !home.is_empty() => Some(PathBuf::from(home)),
+        _ => Some(env.home()?.join(".codex")),
+    }
+}
+
+/// What the child threads of `thread` used, from their rollouts: Codex keeps one per thread in
+/// `<sessions>/YYYY/MM/DD/rollout-<time>-<thread>.jsonl`, its first line the `session_meta`
+/// (a child's names its `parent_thread_id`) and each `token_count` line the thread's total so
+/// far. A child starts with its parent, so it is looked for in the parent's folder.
+pub fn child_usage(sessions: &Path, thread: &str) -> Option<TokenUsage> {
+    let suffix = format!("-{thread}.jsonl");
+    let parent = rollouts(sessions)
+        .into_iter()
+        .find(|path| path.to_string_lossy().ends_with(&suffix))?;
+    let mut total: Option<TokenUsage> = None;
+    for path in fs::read_dir(parent.parent()?).ok()?.flatten() {
+        let path = path.path();
+        if path == parent || !is_rollout(&path) {
+            continue;
+        }
+        let Ok(file) = File::open(&path) else {
+            continue;
+        };
+        let mut lines = BufReader::new(file).lines().map_while(Result::ok);
+        let is_child = lines
+            .next()
+            .and_then(|line| serde_json::from_str::<Value>(&line).ok())
+            .is_some_and(|meta| {
+                meta.pointer("/payload/parent_thread_id")
+                    .and_then(Value::as_str)
+                    == Some(thread)
+            });
+        if !is_child {
+            continue;
+        }
+        let last = lines
+            .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+            .filter_map(|line| {
+                (line.pointer("/payload/type").and_then(Value::as_str) == Some("token_count"))
+                    .then(|| line.pointer("/payload/info/total_token_usage").cloned())
+                    .flatten()
+            })
+            .last();
+        if let Some(usage) = last.as_ref().map(codex_usage) {
+            let sum = total.get_or_insert_with(TokenUsage::default);
+            sum.input_tokens += usage.input_tokens;
+            sum.cached_input_tokens += usage.cached_input_tokens;
+            sum.cache_write_tokens += usage.cache_write_tokens;
+            sum.output_tokens += usage.output_tokens;
+            sum.reasoning_tokens += usage.reasoning_tokens;
+        }
+    }
+    total
+}
+
+/// Every rollout under `sessions` (its year, month and day folders).
+fn rollouts(sessions: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![sessions.to_owned()];
+    for _ in 0..3 {
+        dirs = dirs
+            .iter()
+            .filter_map(|dir| fs::read_dir(dir).ok())
+            .flat_map(|entries| entries.flatten().map(|entry| entry.path()))
+            .filter(|path| path.is_dir())
+            .collect();
+    }
+    dirs.iter()
+        .filter_map(|dir| fs::read_dir(dir).ok())
+        .flat_map(|entries| entries.flatten().map(|entry| entry.path()))
+        .filter(|path| is_rollout(path))
+        .collect()
+}
+
+fn is_rollout(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "jsonl")
+        && path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("rollout-"))
 }
 
 #[cfg(test)]
@@ -350,6 +457,73 @@ mod tests {
         assert_eq!(events.error, None);
         events.read(r#"{"type":"turn.failed","error":{"message":"usage limit reached"}}"#);
         assert_eq!(events.error.as_deref(), Some("usage limit reached"));
+    }
+
+    #[test]
+    fn a_range_reviews_use_is_read_from_its_child_threads_rollout() {
+        let sessions =
+            std::env::temp_dir().join(format!("brigadier-review-usage-{}", std::process::id()));
+        let day = sessions.join("2026/10/07");
+        fs::create_dir_all(&day).unwrap();
+        let parent = "01a116c2-7168-7023-a3d9-75ca70387e74";
+        let mut events = CodexEvents::default();
+        events.read(&format!(
+            r#"{{"type":"thread.started","thread_id":"{parent}"}}"#
+        ));
+        events.read(r#"{"type":"turn.completed","usage":{"input_tokens":0,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}"#);
+        assert_eq!(events.thread_id.as_deref(), Some(parent));
+        assert_eq!(events.usage, Some(TokenUsage::default()));
+        fs::write(
+            day.join(format!("rollout-2026-10-07T17-26-44-{parent}.jsonl")),
+            r#"{"type":"session_meta","payload":{"id":"01a116c2-7168-7023-a3d9-75ca70387e74"}}"#,
+        )
+        .unwrap();
+        let token_count = |input: i64, cached: i64, output: i64| {
+            format!(
+                r#"{{"type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"cached_input_tokens":{cached},"cache_write_input_tokens":0,"output_tokens":{output},"reasoning_output_tokens":121}}}}}}}}"#
+            )
+        };
+        let child = [
+            format!(
+                r#"{{"type":"session_meta","payload":{{"id":"01a116c2-71f5","parent_thread_id":"{parent}","source":{{"subagent":"review"}}}}}}"#
+            ),
+            token_count(1000, 500, 10),
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":null}}"#.to_owned(),
+            token_count(152401, 117504, 1023),
+        ];
+        fs::write(
+            day.join("rollout-2026-10-07T17-26-44-01a116c2-71f5.jsonl"),
+            child.join("\n"),
+        )
+        .unwrap();
+        // Another thread's child doesn't count.
+        fs::write(
+            day.join("rollout-2026-10-07T17-26-44-01a116c2-9999.jsonl"),
+            [
+                r#"{"type":"session_meta","payload":{"parent_thread_id":"someone-else"}}"#
+                    .to_owned(),
+                token_count(9, 0, 9),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let usage = child_usage(&sessions, parent);
+        fs::remove_dir_all(&sessions).unwrap();
+        assert_eq!(
+            usage,
+            Some(TokenUsage {
+                input_tokens: 152401 - 117504,
+                cached_input_tokens: 117504,
+                cache_write_tokens: 0,
+                output_tokens: 1023,
+                reasoning_tokens: 121,
+                cost_usd: None,
+            })
+        );
+        assert_eq!(
+            child_usage(Path::new("/nonexistent/sessions"), parent),
+            None
+        );
     }
 
     #[test]
