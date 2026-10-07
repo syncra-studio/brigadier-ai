@@ -51,8 +51,12 @@ if a.kind == "brigadier":
             landed = env["atMs"]; heads.append(e["step"]["kind"]["head"])
         if env["atMs"] >= t0:
             last = max(last, env["atMs"])
-    db = sqlite3.connect(f"file:{os.path.join(a.arm, 'data', 'routing.sqlite')}?mode=ro", uri=True)
-    usage_last = db.execute("SELECT MAX(at_ms) FROM turn_usage WHERE conversation_id = ?", (conv,)).fetchone()[0]
+    q = ("SELECT MAX(at_ms) FROM turn_usage WHERE conversation_id = ?", (conv,))
+    path = os.path.join(a.arm, "data", "routing.sqlite")
+    try:
+        usage_last = sqlite3.connect(f"file:{path}?mode=ro", uri=True).execute(*q).fetchone()[0]
+    except sqlite3.OperationalError:  # a stopped daemon's WAL database: read it as it was left
+        usage_last = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True).execute(*q).fetchone()[0]
     print(json.dumps(row(landed, answer, max(last, usage_last or 0), {"request": request, "landed_heads": heads}), indent=1))
     sys.exit(0)
 
