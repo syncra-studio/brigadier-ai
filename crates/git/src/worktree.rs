@@ -48,10 +48,11 @@ impl Worktree {
         self.repo.resolve("HEAD")
     }
 
-    /// Puts a detached checkout still at `at` on a new branch `name` there (a worktree made
-    /// before its task had a branch). Refused when HEAD moved or a branch is already checked
-    /// out; never replaces an existing branch.
-    pub fn start_branch(&self, name: &str, at: &Oid) -> Result<()> {
+    /// Puts a detached checkout still at `at` (a worktree made before its task had a branch)
+    /// on a new branch `name` starting at `from`: only the tracked files that differ change, so
+    /// what was copied into its ignored folders stays. Refused when HEAD moved or a branch is
+    /// already checked out; never replaces an existing branch.
+    pub fn start_branch(&self, name: &str, at: &Oid, from: &Oid) -> Result<()> {
         self.repo.validate_branch(name)?;
         if self.repo.symbolic_head()?.is_some() {
             return Err(Error::Invalid("the checkout is already on a branch".into()));
@@ -62,7 +63,7 @@ impl Worktree {
             ));
         }
         self.repo
-            .cmd(&["switch", "--no-track", "-c", name], false)?;
+            .cmd(&["switch", "--no-track", "-c", name, &from.0], false)?;
         Ok(())
     }
 
@@ -814,13 +815,14 @@ mod tests {
             )
             .expect("a detached worktree");
         // A branch checked out, or a checkout that moved, is refused.
-        assert!(f.wt.start_branch("other", &f.base).is_err());
+        assert!(f.wt.start_branch("other", &f.base, &f.base).is_err());
         let moved = commit(&wt.repo, "Move", &[("m.rs", "m\n")]);
-        assert!(wt.start_branch("late", &f.base).is_err());
+        assert!(wt.start_branch("late", &f.base, &f.base).is_err());
         assert_eq!(f.repo.branch_tip("late").expect("a lookup"), None);
         // An existing branch is never replaced.
-        assert!(wt.start_branch("task", &moved).is_err());
-        wt.start_branch("fresh", &moved).expect("the branch");
+        assert!(wt.start_branch("task", &moved, &moved).is_err());
+        wt.start_branch("fresh", &moved, &moved)
+            .expect("the branch");
         assert_eq!(
             f.repo.branch_tip("fresh").expect("a lookup"),
             Some(moved.clone())
@@ -829,6 +831,31 @@ mod tests {
             wt.repo.symbolic_head().expect("HEAD").as_deref(),
             Some("fresh")
         );
+    }
+
+    #[test]
+    fn a_detached_checkout_moves_to_a_newer_start_keeping_its_ignored_files() {
+        let f = fixture("start-branch-moved");
+        let wt = f
+            .repo
+            .add_worktree(
+                &f.dir.join("warm"),
+                WorktreeSpec::Detached { at: f.base.clone() },
+            )
+            .expect("a detached worktree");
+        // A copied build cache, ignored by the repository.
+        fs::write(f.repo.root().join(".git/info/exclude"), "cache/\n").expect("an exclude");
+        fs::create_dir_all(f.dir.join("warm/cache")).expect("a folder");
+        fs::write(f.dir.join("warm/cache/built"), "built\n").expect("a cached file");
+        let newer = commit(&f.wt.repo, "Newer", &[("n.rs", "n\n")]);
+        wt.start_branch("later", &f.base, &newer)
+            .expect("the branch");
+        assert_eq!(wt.head().expect("HEAD"), newer);
+        assert_eq!(
+            fs::read_to_string(f.dir.join("warm/n.rs")).expect("the newer file"),
+            "n\n"
+        );
+        assert!(f.dir.join("warm/cache/built").exists(), "the cache stays");
     }
 
     #[test]

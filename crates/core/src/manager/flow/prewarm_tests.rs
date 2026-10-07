@@ -1,6 +1,7 @@
 //! The pre-warmed worker (THREAD-PLAN.md Q8 lever 6): the user's message makes the next
-//! task's worktree; the task delegated next starts in it under its own id; a moved base, the
-//! user's Stop, a changed permission level and expiry each leave nothing behind.
+//! task's worktree; the task delegated next starts in it under its own id, at the session's tip
+//! even when that moved on; the user's Stop, a changed permission level and expiry each leave
+//! nothing behind.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -115,7 +116,7 @@ async fn a_delegated_task_starts_in_the_pre_warmed_worktree_under_its_reserved_i
 }
 
 #[tokio::test]
-async fn a_pre_warm_whose_base_moved_is_removed_and_the_worker_starts_as_usual() {
+async fn a_pre_warm_whose_base_moved_on_is_moved_to_the_new_tip_and_still_used() {
     let seen: Arc<Mutex<Vec<PathBuf>>> = Arc::default();
     let flow = Flow::start(
         "prewarm-moved",
@@ -130,6 +131,9 @@ async fn a_pre_warm_whose_base_moved_is_removed_and_the_worker_starts_as_usual()
         .prewarm_made(&flow.conversation)
         .await
         .expect("a pre-warm");
+    // What the pre-warm copied in (untracked, like a build cache) stays through the move.
+    std::fs::create_dir_all(worktree.join("warm-cache")).unwrap();
+    std::fs::write(worktree.join("warm-cache/built"), "built\n").unwrap();
     // The session's branch moves on after the pre-warm was made.
     let workspace = flow.thread_specs()[0].1.add_dirs[0].clone();
     std::fs::write(workspace.join("moved.txt"), "moved\n").unwrap();
@@ -139,18 +143,19 @@ async fn a_pre_warm_whose_base_moved_is_removed_and_the_worker_starts_as_usual()
     let board = flow.settled().await;
     let task = Flow::task(&board, 1);
     assert_eq!(task.id, reserved);
-    // Its task's own owner now holds the worktree the worker got, not the stale one.
-    for _ in 0..100 {
-        if !worktree.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(!worktree.exists(), "{}", worktree.display());
     let started = seen.lock().unwrap().clone();
-    assert_eq!(started.len(), 1);
-    assert_ne!(started[0], worktree, "not the stale worktree");
-    assert!(started[0].join("moved.txt").exists(), "from the new tip");
+    assert_eq!(
+        started,
+        std::slice::from_ref(&worktree),
+        "the pre-warmed worktree"
+    );
+    assert!(worktree.join("moved.txt").exists(), "from the new tip");
+    assert!(worktree.join("warm-cache/built").exists(), "the copy stays");
+    let recorded = task.workspace.as_ref().expect("a workspace");
+    assert_eq!(
+        recorded.base.as_deref(),
+        Some(git(&workspace, &["rev-parse", "HEAD"]).trim())
+    );
     flow.stop().await;
 }
 

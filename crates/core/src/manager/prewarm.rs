@@ -7,11 +7,13 @@
 //! cleanup owner (`task:<id>`) from the first artifact, so taking it over moves nothing: the
 //! task created with that id simply finds its worktree. A writing task with no subject and no
 //! overnight run takes it when the session's permission level hasn't changed; its worker uses
-//! it when the base it would get now holds the same files, after putting the checkout on the
-//! task's branch. Otherwise it is removed and the worker starts as usual.
+//! it when the session still works on the same branch, after putting the checkout on the
+//! task's branch at the base it would get now (only the files that changed since are checked
+//! out). Otherwise it is removed and the worker starts as usual.
 //!
-//! One unused pre-warm per session at most: a task that takes it starts the next one. It is never made while the machine is strained, during an
-//! overnight run, or when making it would ask the user about uncommitted changes, and it is
+//! One unused pre-warm per session at most: a task that took one starts the next once its
+//! worker has started, so the two copies never compete. It is never made while the machine is
+//! strained, during an overnight run, or when making it would ask the user about uncommitted changes, and it is
 //! removed after [`PREWARM_TTL`], when the user stops the session, when the session hibernates,
 //! is archived or deleted, and when another one replaces it.
 
@@ -64,8 +66,6 @@ pub(crate) struct Warm {
     repo: PathBuf,
     target: String,
     base: Oid,
-    base_tree: Oid,
-    on_snapshot: bool,
     worktree: PathBuf,
     scratch: PathBuf,
     warmed: Vec<String>,
@@ -81,6 +81,11 @@ impl Prewarms {
         let state = self.lock();
         state.open.values().any(|slot| slot.task_id.0 == task)
             || state.claimed.keys().any(|id| id.0 == task)
+    }
+
+    /// Whether task `id` took a pre-warm its worker hasn't started from yet.
+    pub(crate) fn took(&self, id: &TaskId) -> bool {
+        self.lock().claimed.contains_key(id)
     }
 }
 
@@ -174,9 +179,6 @@ impl SessionManager {
         }
         let task_id = slot.task_id.clone();
         state.claimed.insert(task_id.clone(), slot);
-        drop(state);
-        // The next worker of a busy session finds one ready too.
-        self.prewarm(id);
         Some(task_id)
     }
 
@@ -197,7 +199,7 @@ impl SessionManager {
         let owner = format!("task:{}", task.id);
         let adopted = match warm {
             Some(warm) => match self.take_over(task, &warm).await {
-                Ok(true) => {
+                Ok(Some((base, on_snapshot))) => {
                     tracing::info!(task = %task.id, "the worker starts in the pre-warmed worktree");
                     return Some(Workspace {
                         repo: warm.repo,
@@ -207,14 +209,14 @@ impl SessionManager {
                             task.number,
                             &task.title,
                         )),
-                        base: Some(warm.base),
-                        on_snapshot: warm.on_snapshot,
+                        base: Some(base),
+                        on_snapshot,
                         target: Some(warm.target),
                         scratch: warm.scratch,
                         warmed: warm.warmed,
                     });
                 }
-                Ok(false) => "its base moved",
+                Ok(None) => "its session's branch changed",
                 Err(err) => {
                     tracing::warn!(task = %task.id, error = %err, "could not take the pre-warmed worktree over");
                     "it could not be taken over"
@@ -289,7 +291,7 @@ impl SessionManager {
         let owner = format!("task:{task_id}");
         let repo = PathBuf::from(repo);
         let target = self.ensure_target(id, &repo, environment).await?;
-        let (base, on_snapshot) = self.worker_base(id, &repo, &target, false).await?;
+        let (base, _) = self.worker_base(id, &repo, &target, false).await?;
         go_on()?;
         let scratch = self.owned_dir("scratch", &task_id.0);
         self.prepare_owned_dir(&owner, &scratch).await?;
@@ -312,70 +314,48 @@ impl SessionManager {
                 task_id,
             )
             .await?;
-        let (git, repo_path, commit) = (self.git.clone(), repo.clone(), base.0.clone());
-        let base_tree = blocking(move || {
-            git.open(&repo_path)
-                .and_then(|repo| repo.tree_of(&commit))
-                .map_err(git_error)
-        })
-        .await?;
         Ok(Warm {
             repo,
             target,
             base,
-            base_tree,
-            on_snapshot,
             worktree,
             scratch,
             warmed,
         })
     }
 
-    /// Whether `task`'s worker may start from `warm` (and then puts it on the task's branch):
-    /// the base it would get now holds the same files.
-    async fn take_over(&self, task: &Task, warm: &Warm) -> Result<bool> {
+    /// Puts `warm` on `task`'s branch at the base its worker would get now, and returns that
+    /// base: when the session's branch moved on since the pre-warm was made, only the files that
+    /// changed are checked out and the copied dependency installs and build caches stay. `None`
+    /// when the session now works on another branch.
+    async fn take_over(&self, task: &Task, warm: &Warm) -> Result<Option<(Oid, bool)>> {
         let conversation = self.core.conversation(&task.conversation_id)?;
         let Some(Setup::Session { environment, .. }) = &conversation.setup else {
-            return Ok(false);
+            return Ok(None);
         };
         let target = self
             .ensure_target(&task.conversation_id, &warm.repo, environment)
             .await?;
         if target != warm.target {
-            return Ok(false);
+            return Ok(None);
         }
         let (base, on_snapshot) = self
             .worker_base(&task.conversation_id, &warm.repo, &target, true)
             .await?;
-        if on_snapshot != warm.on_snapshot || (!on_snapshot && base != warm.base) {
-            return Ok(false);
-        }
         let branch = super::workers::task_branch(&task.conversation_id, task.number, &task.title);
-        let (git, repo_path, worktree, at, expected) = (
+        let (git, worktree, made_at, from) = (
             self.git.clone(),
-            warm.repo.clone(),
             warm.worktree.clone(),
             warm.base.clone(),
-            warm.base_tree.clone(),
+            base.clone(),
         );
         blocking(move || {
-            // A snapshot of the user's uncommitted changes is a new commit each time: the same
-            // files are what counts.
-            if on_snapshot
-                && git
-                    .open(&repo_path)
-                    .and_then(|repo| repo.tree_of(&base.0))
-                    .map_err(git_error)?
-                    != expected
-            {
-                return Ok(false);
-            }
             git.open_worktree(&worktree)
-                .and_then(|worktree| worktree.start_branch(&branch, &at))
-                .map_err(git_error)?;
-            Ok(true)
+                .and_then(|worktree| worktree.start_branch(&branch, &made_at, &from))
+                .map_err(git_error)
         })
-        .await
+        .await?;
+        Ok(Some((base, on_snapshot)))
     }
 
     /// Session `id`'s open pre-warm once made: its reserved task id and its worktree.

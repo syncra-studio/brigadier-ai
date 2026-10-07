@@ -1028,6 +1028,7 @@ impl SessionManager {
         self.set_task_state(&conversation_id, &task.id, TaskState::Starting)
             .await?;
         let owner = format!("task:{}", task.id);
+        let took_prewarm = self.prewarms.took(&task.id);
         let workspace = self
             .prepare_workspace(&owner, &task, subject.as_ref())
             .await?;
@@ -1073,7 +1074,13 @@ impl SessionManager {
             Origin::New,
             TurnInput::with_files(text, files),
         )
-        .await
+        .await?;
+        // The next worker of a busy session finds one ready too; made only now, so its copy
+        // never competes with this worker's start.
+        if took_prewarm {
+            self.prewarm(&conversation_id);
+        }
+        Ok(())
     }
 
     /// Starts (or resumes) the worker's CLI session in the task's prepared workspace and sends
