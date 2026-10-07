@@ -2,6 +2,9 @@
 # conditions.sh <meter-data-dir> : quota (from a dev daemon kept running only to read it),
 # thermal, memory and load, now. One reading per arm start and end.
 HERE=$(cd "$(dirname "$0")" && pwd)
+# The daemon reads quota only when asked to refresh; give the providers time to answer.
+python3 "$HERE/bipc.py" "${1:?meter data dir}" '{"method":"refreshProviders"}' >/dev/null
+sleep 20
 echo "time: $(date '+%F %T')"
 MAXC=1000000 python3 "$HERE/bipc.py" "${1:?meter data dir}" '{"method":"getUsage"}' | python3 -c "
 import json,sys; d=json.load(sys.stdin)['value']['usage']
