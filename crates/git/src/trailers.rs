@@ -3,7 +3,7 @@
 
 use std::{collections::HashMap, ffi::OsString};
 
-use crate::{Oid, Repo, Result, command::valid_oid, parse};
+use crate::{Oid, Repo, Result, TrailerStat, command::valid_oid, parse};
 
 /// `message` without its Co-authored-by trailers that name an AI (people's are kept), and
 /// without the blank lines that leaves at its end. Only the trailers at its end count: the
@@ -148,6 +148,50 @@ impl Repo {
         Ok(parse::text(&out)?
             .lines()
             .any(|line| line.trim().eq_ignore_ascii_case(value)))
+    }
+
+    /// The commits from `base` (excluded) to `tip` that carry the trailer `key: value` (as
+    /// [`Self::has_trailer`] matches it), and the lines they added and removed (`--numstat`;
+    /// merges show none, binary files count none).
+    pub fn trailer_stat(
+        &self,
+        base: &Oid,
+        tip: &Oid,
+        key: &str,
+        value: &str,
+    ) -> Result<TrailerStat> {
+        valid_oid(base)?;
+        valid_oid(tip)?;
+        // Each commit starts with a record separator, then its trailer values on one line.
+        let format = format!("--format=%x1e%(trailers:key={key},valueonly,separator=%x1f)");
+        let range = format!("{}..{}", base.0, tip.0);
+        let out = self.cmd(
+            &["log", "--no-renames", "--numstat", &format, &range, "--"],
+            true,
+        )?;
+        let mut stat = TrailerStat::default();
+        for commit in parse::text(&out)?.split('\x1e').skip(1) {
+            let (values, numstat) = commit.split_once('\n').unwrap_or((commit, ""));
+            if !values
+                .split('\x1f')
+                .any(|found| found.trim().eq_ignore_ascii_case(value))
+            {
+                continue;
+            }
+            stat.commits += 1;
+            for line in numstat.lines() {
+                let mut fields = line.splitn(3, '\t');
+                let (Some(added), Some(removed), Some(_)) =
+                    (fields.next(), fields.next(), fields.next())
+                else {
+                    continue;
+                };
+                // A binary file shows `-` for both.
+                stat.added += added.parse::<u64>().unwrap_or(0);
+                stat.removed += removed.parse::<u64>().unwrap_or(0);
+            }
+        }
+        Ok(stat)
     }
 
     /// The commits from `base` (excluded) to `tip`, with the Co-authored-by trailers that name

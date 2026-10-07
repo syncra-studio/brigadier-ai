@@ -1577,4 +1577,49 @@ mod tests {
         );
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn the_lines_of_the_commits_with_a_trailer_are_counted() {
+        let (dir, git) = test_git("trailer-stat");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        fs::write(root.join("a.txt"), "1\n2\n3\n").expect("a file");
+        let start = repo.commit_changes("Add a", true).expect("a commit");
+        // Marked: two lines added in a, one changed (one removed, one added), a new file of 2.
+        fs::write(root.join("a.txt"), "1\ntwo\n3\n4\n5\n").expect("a change");
+        fs::write(root.join("b.txt"), "b\nb\n").expect("a file");
+        repo.commit_changes(
+            "Edit a and add b\n\nCo-Authored-By: Someone <s@example.com>\nBrigadier-Author: thread",
+            true,
+        )
+        .expect("a commit");
+        // Not marked (the user's own, or a worker's): left out.
+        fs::write(root.join("c.txt"), "c\nc\nc\n").expect("a file");
+        repo.commit_changes("Add c\n\nSays Brigadier-Author: thread in its body.", true)
+            .expect("a commit");
+        // Marked again: one line removed, and a binary file, which counts no lines.
+        fs::write(root.join("a.txt"), "1\ntwo\n3\n4\n").expect("a change");
+        fs::write(root.join("d.bin"), [0u8, 1, 2, 0, 255]).expect("a binary file");
+        let tip = repo
+            .commit_changes("Trim a\n\nBrigadier-Author: Thread", true)
+            .expect("a commit");
+        let stat = repo
+            .trailer_stat(&start, &tip, "Brigadier-Author", "thread")
+            .unwrap();
+        assert_eq!(
+            stat,
+            crate::TrailerStat {
+                commits: 2,
+                added: 5,
+                removed: 2,
+            }
+        );
+        assert_eq!(
+            repo.trailer_stat(&tip, &tip, "Brigadier-Author", "thread")
+                .unwrap(),
+            crate::TrailerStat::default()
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

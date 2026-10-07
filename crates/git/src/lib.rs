@@ -487,6 +487,17 @@ pub struct CommitInfo {
     pub at_ms: i64,
 }
 
+/// The commits of a range that carry one trailer, and the lines they changed together.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TrailerStat {
+    /// Commits that carry it.
+    pub commits: u32,
+    /// Added text lines (binary files count none).
+    pub added: u64,
+    /// Removed text lines.
+    pub removed: u64,
+}
+
 /// Per-path and aggregate line statistics.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DiffStat {
