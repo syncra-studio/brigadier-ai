@@ -2,11 +2,13 @@
 //! read and searched, and the definitions in the files its task names, so the worker starts
 //! where the thread left off instead of searching again.
 //!
-//! The whole pack goes to `<scratch>/context.md`. Its first [`INLINE_MAX`] bytes, cut at a
-//! section's end, go in the worker's first message with a pointer to the file, so nothing is
-//! lost. Files are shown as they are in the worker's own worktree when it starts (the thread
-//! may have read an older version), numbered like a file read, most recently read first.
-//! Files outside the thread's workspace, and files the worktree doesn't have, are left out.
+//! The whole pack goes in the worker's first message, at most [`PACK_MAX`] bytes, and nowhere
+//! else, so the worker never reads it again. The searches come first, then the files the
+//! thread read, most recently read first, each cut to what still fits (a file with no room
+//! left is only named), then the definitions in the files the task names, as many as fit.
+//! Files are shown as they are in the worker's own worktree when it starts (the thread may
+//! have read an older version), numbered like a file read. Files outside the thread's
+//! workspace, and files the worktree doesn't have, are left out.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -18,12 +20,14 @@ use super::SessionManager;
 use super::reads::ThreadReads;
 use crate::work::Task;
 
-/// Bytes of the pack carried in the first message.
-pub(crate) const INLINE_MAX: usize = 16 * 1024;
-/// Bytes the pack file holds at most; files past it are only named.
-const FILE_MAX: usize = 96 * 1024;
-/// Bytes of one file shown at most.
-const ONE_FILE_MAX: usize = 32 * 1024;
+/// Bytes of the whole pack at most.
+pub(crate) const PACK_MAX: usize = 16 * 1024;
+/// Bytes of one file shown at most, so one long file doesn't push out the rest.
+const ONE_FILE_MAX: usize = 8 * 1024;
+/// Bytes kept for the definitions while the files are filled in.
+const OUTLINES_KEPT: usize = 3 * 1024;
+/// Bytes of a file's section below which it is only named.
+const FILE_MIN: usize = 1024;
 /// Files the task names that get their definitions listed, at most.
 const NAMED_MAX: usize = 12;
 /// Definitions listed per file, at most.
@@ -32,15 +36,10 @@ const OUTLINE_MAX: u32 = 40;
 const SEARCHES_MAX: usize = 20;
 
 impl SessionManager {
-    /// Writes the task's context pack to `<scratch>/context.md` and returns what its first
-    /// message carries, or `None` when the thread read nothing that applies and the task names
-    /// no indexed file. Best effort: a pack that can't be made is left out.
-    pub(crate) async fn context_pack(
-        &self,
-        task: &Task,
-        worktree: &Path,
-        scratch: &Path,
-    ) -> Option<String> {
+    /// The task's context pack for its first message, or `None` when the thread read nothing
+    /// that applies and the task names no indexed file. Best effort: a pack that can't be made
+    /// is left out.
+    pub(crate) async fn context_pack(&self, task: &Task, worktree: &Path) -> Option<String> {
         let reads = match self.thread_reads_now(&task.conversation_id).await {
             Ok(reads) => reads,
             Err(err) => {
@@ -52,8 +51,7 @@ impl SessionManager {
             .recorded_workspace(&task.conversation_id)
             .map(|workspace| workspace.path);
         let index = self.task_index(&task.conversation_id).await.ok();
-        let (spec, worktree, scratch) =
-            (task.spec.clone(), worktree.to_owned(), scratch.to_owned());
+        let (spec, worktree) = (task.spec.clone(), worktree.to_owned());
         let made = super::blocking(move || {
             let named = named_files(&spec, &worktree);
             let outlines: Vec<(String, Vec<SymbolHit>)> = match &index {
@@ -67,12 +65,7 @@ impl SessionManager {
                 None => Vec::new(),
             };
             let pack = build(&reads, workspace.as_deref(), &worktree, &outlines);
-            if pack.is_empty() {
-                return Ok(None);
-            }
-            let file = scratch.join("context.md");
-            std::fs::write(&file, &pack).map_err(|err| crate::Error::Invalid(err.to_string()))?;
-            Ok(Some(inline(&pack, &file)))
+            Ok::<_, crate::Error>((!pack.is_empty()).then_some(pack))
         })
         .await;
         match made {
@@ -85,8 +78,10 @@ impl SessionManager {
     }
 }
 
-/// The pack's text: the files the thread read, its searches, then the definitions in the
-/// files the task names (`outlines`). Empty when there is nothing.
+const HEADER: &str = "# Context pack\n\nWhat the orchestrator already looked at for this task, so you don't search for it again. It is all here; read more of the files where you need it.\n\n";
+
+/// The pack's text, at most [`PACK_MAX`] bytes: the thread's searches, the files it read, then
+/// the definitions in the files the task names (`outlines`). Empty when there is nothing.
 fn build(
     reads: &ThreadReads,
     workspace: Option<&Path>,
@@ -104,78 +99,7 @@ fn build(
         let rel = rel.to_string_lossy().into_owned();
         (!rel.is_empty()).then_some(rel)
     };
-    let mut sections: Vec<String> = Vec::new();
-    let mut shown = BTreeSet::new();
-    let mut size = 0;
-    let mut unshown = Vec::new();
-    for file in reads.files.iter().filter(|file| !file.outside) {
-        let Some(rel) = relative(&file.path) else {
-            continue;
-        };
-        let Ok(text) = std::fs::read_to_string(worktree.join(&rel)) else {
-            continue;
-        };
-        let lines: Vec<&str> = text.lines().collect();
-        let ranges: Vec<(usize, usize)> = if file.whole {
-            vec![(1, lines.len())]
-        } else {
-            file.lines
-                .iter()
-                .map(|range| {
-                    let end = range.end.map_or(lines.len(), |end| end as usize);
-                    (range.start as usize, end.min(lines.len()))
-                })
-                .filter(|(start, end)| start <= end)
-                .collect()
-        };
-        if ranges.is_empty() {
-            continue;
-        }
-        let what = if file.whole {
-            format!("the whole file, {} lines", lines.len())
-        } else {
-            let parts: Vec<String> = ranges
-                .iter()
-                .map(|(start, end)| format!("{start}–{end}"))
-                .collect();
-            format!("lines {} of {}", parts.join(", "), lines.len())
-        };
-        let mut body = String::new();
-        let mut cut = false;
-        'ranges: for (start, end) in &ranges {
-            for (number, line) in lines[start - 1..*end].iter().enumerate() {
-                if body.len() + line.len() > ONE_FILE_MAX {
-                    cut = true;
-                    break 'ranges;
-                }
-                let _ = writeln!(body, "{:>6}\t{line}", start + number);
-            }
-        }
-        if cut {
-            body.push_str("[… cut here; read the rest from the file]\n");
-        }
-        let section = format!("### {rel} ({what})\n```\n{body}```\n");
-        if size + section.len() > FILE_MAX {
-            unshown.push(format!("- {rel} ({what})"));
-            continue;
-        }
-        size += section.len();
-        shown.insert(rel);
-        sections.push(section);
-    }
-    let mut text = String::new();
-    if !sections.is_empty() || !unshown.is_empty() {
-        text.push_str("## Files the orchestrator read (as they are in your worktree now)\n\n");
-        for section in &sections {
-            text.push_str(section);
-            text.push('\n');
-        }
-        if !unshown.is_empty() {
-            text.push_str("Also read, not shown here (too much for the pack):\n");
-            text.push_str(&unshown.join("\n"));
-            text.push_str("\n\n");
-        }
-    }
+
     let searches: Vec<String> = reads
         .searches
         .iter()
@@ -201,14 +125,15 @@ fn build(
             format!("- {pattern} in {scope}{glob}: {found}")
         })
         .collect();
-    if !searches.is_empty() {
-        text.push_str("## Searches it made\n\n");
-        text.push_str(&searches.join("\n"));
-        text.push_str("\n\n");
-    }
-    let outlines: Vec<String> = outlines
+    let searches = if searches.is_empty() {
+        String::new()
+    } else {
+        format!("## Searches it made\n\n{}\n\n", searches.join("\n"))
+    };
+
+    // What the definitions would take, kept for them up to [`OUTLINES_KEPT`].
+    let outline_sections: Vec<(String, String)> = outlines
         .iter()
-        .filter(|(rel, _)| !shown.contains(rel))
         .map(|(rel, symbols)| {
             let mut section = format!("### {rel}\n");
             for symbol in symbols {
@@ -218,46 +143,134 @@ fn build(
                     symbol.line, symbol.kind, symbol.signature
                 );
             }
-            section
+            (rel.clone(), section)
         })
         .collect();
-    if !outlines.is_empty() {
-        text.push_str("## Definitions in the files the task names\n\n");
-        text.push_str(&outlines.join("\n"));
-        text.push('\n');
+    let outlines_wanted: usize = outline_sections.iter().map(|(_, s)| s.len() + 1).sum();
+    let kept = if outline_sections.is_empty() {
+        0
+    } else {
+        outlines_wanted.min(OUTLINES_KEPT) + 64
+    };
+
+    const FILES_HEADING: &str =
+        "## Files the orchestrator read (as they are in your worktree now)\n\n";
+    const UNSHOWN_HEADING: &str = "Also read, not shown here (no room left in the pack):\n";
+    let mut budget =
+        PACK_MAX.saturating_sub(HEADER.len() + searches.len() + kept + FILES_HEADING.len());
+    let mut sections: Vec<String> = Vec::new();
+    let mut shown = BTreeSet::new();
+    let mut unshown = Vec::new();
+    for file in reads.files.iter().filter(|file| !file.outside) {
+        let Some(rel) = relative(&file.path) else {
+            continue;
+        };
+        let Ok(text) = std::fs::read_to_string(worktree.join(&rel)) else {
+            continue;
+        };
+        let lines: Vec<&str> = text.lines().collect();
+        let ranges: Vec<(usize, usize)> = if file.whole {
+            vec![(1, lines.len())]
+        } else {
+            file.lines
+                .iter()
+                .map(|range| {
+                    let end = range.end.map_or(lines.len(), |end| end as usize);
+                    (range.start as usize, end.min(lines.len()))
+                })
+                .filter(|(start, end)| *start >= 1 && start <= end)
+                .collect()
+        };
+        if ranges.is_empty() {
+            continue;
+        }
+        let what = if file.whole {
+            format!("the whole file, {} lines", lines.len())
+        } else {
+            let parts: Vec<String> = ranges
+                .iter()
+                .map(|(start, end)| format!("{start}–{end}"))
+                .collect();
+            format!("lines {} of {}", parts.join(", "), lines.len())
+        };
+        // The section's heading, fences and a possible cut note, and a name in the list.
+        const CUT: &str = "[… cut here; read the rest from the file]\n";
+        let frame = format!("### {rel} ({what})\n```\n```\n\n").len() + CUT.len();
+        let room = budget
+            .saturating_sub(frame + UNSHOWN_HEADING.len())
+            .min(ONE_FILE_MAX);
+        if room < FILE_MIN {
+            unshown.push(format!("- {rel} ({what})"));
+            continue;
+        }
+        let mut body = String::new();
+        let mut cut = false;
+        'ranges: for (start, end) in &ranges {
+            for (number, line) in lines[start - 1..*end].iter().enumerate() {
+                let numbered = format!("{:>6}\t{line}\n", start + number);
+                if body.len() + numbered.len() > room {
+                    cut = true;
+                    break 'ranges;
+                }
+                body.push_str(&numbered);
+            }
+        }
+        if cut {
+            body.push_str(CUT);
+        }
+        let section = format!("### {rel} ({what})\n```\n{body}```\n\n");
+        budget = budget.saturating_sub(section.len());
+        shown.insert(rel);
+        sections.push(section);
+    }
+    let mut files = String::new();
+    if !sections.is_empty() || !unshown.is_empty() {
+        files.push_str(FILES_HEADING);
+        for section in &sections {
+            files.push_str(section);
+        }
+        if !unshown.is_empty() {
+            files.push_str(UNSHOWN_HEADING);
+            files.push_str(&unshown.join("\n"));
+            files.push_str("\n\n");
+        }
+    }
+
+    // The definitions take what is left, file by file, each cut at a whole line.
+    const OUTLINES_HEADING: &str = "## Definitions in the files the task names\n\n";
+    let used = HEADER.len() + searches.len() + files.len() + OUTLINES_HEADING.len();
+    let mut left = PACK_MAX.saturating_sub(used);
+    let mut defined = String::new();
+    for (_, section) in outline_sections
+        .iter()
+        .filter(|(rel, _)| !shown.contains(rel))
+    {
+        let mut part = String::new();
+        for line in section.split_inclusive('\n') {
+            if part.len() + line.len() + 1 > left {
+                break;
+            }
+            part.push_str(line);
+        }
+        // A heading with no definition under it says nothing.
+        if part.lines().count() < 2 {
+            break;
+        }
+        part.push('\n');
+        left -= part.len();
+        defined.push_str(&part);
+    }
+
+    let mut text = searches;
+    text.push_str(&files);
+    if !defined.is_empty() {
+        text.push_str(OUTLINES_HEADING);
+        text.push_str(&defined);
     }
     if text.is_empty() {
         return text;
     }
-    format!(
-        "# Context pack\n\nWhat the orchestrator already looked at for this task, so you don't search for it again. Read more where you need it.\n\n{text}"
-    )
-}
-
-/// What the first message carries of `pack`: all of it when it fits [`INLINE_MAX`], else
-/// its leading sections and where the rest is.
-fn inline(pack: &str, file: &Path) -> String {
-    if pack.len() <= INLINE_MAX {
-        return format!("{}\n(Also saved as {}.)", pack.trim_end(), file.display());
-    }
-    // Cut before a heading, so a file's section is never cut in two.
-    let mut end = INLINE_MAX;
-    while !pack.is_char_boundary(end) {
-        end -= 1;
-    }
-    let head = &pack[..end];
-    let cut = [head.rfind("\n### "), head.rfind("\n## ")]
-        .into_iter()
-        .flatten()
-        .max()
-        .or_else(|| head.rfind('\n'))
-        .unwrap_or(0);
-    format!(
-        "{}\n\n[The pack goes on: read the rest of it in {} ({} bytes).]",
-        pack[..cut].trim_end(),
-        file.display(),
-        pack.len()
-    )
+    format!("{HEADER}{}", text.trim_end())
 }
 
 /// The files `spec` names that the worktree has, repository-relative, in the order named:
@@ -384,16 +397,57 @@ mod tests {
     }
 
     #[test]
-    fn a_long_pack_is_cut_after_a_whole_file_and_says_where_the_rest_is() {
-        let section = format!("### f\n```\n{}```\n", "x\n".repeat(3_000));
-        let pack = format!("# Context pack\n\n{section}\n{section}\n{section}");
-        let shown = inline(&pack, Path::new("/s/context.md"));
-        assert!(shown.len() < INLINE_MAX + 200);
+    fn a_long_pack_fits_its_budget_cutting_files_and_naming_the_ones_with_no_room() {
+        let root = std::env::temp_dir().join(format!("pack-long-{}", uuid::Uuid::new_v4()));
+        let _temp = Temp(root.clone());
+        let worktree = root.join("task");
+        std::fs::create_dir_all(worktree.join("src")).unwrap();
+        let long: String = (1..=2_000)
+            .map(|n| format!("let value_{n} = {n};\n"))
+            .collect();
+        let names = ["a", "b", "c", "d"];
+        for name in names {
+            std::fs::write(worktree.join(format!("src/{name}.rs")), &long).unwrap();
+        }
+        let reads = ThreadReads {
+            files: names
+                .iter()
+                .map(|name| file(&format!("/ws/src/{name}.rs"), true, Vec::new()))
+                .collect(),
+            searches: Vec::new(),
+            dropped_files: 0,
+            dropped_searches: 0,
+        };
+        let symbols: Vec<SymbolHit> = (1..=40)
+            .map(|n| SymbolHit {
+                name: format!("f{n}"),
+                kind: "function".into(),
+                path: "src/e.rs".into(),
+                line: n,
+                end_line: n,
+                signature: format!("pub fn f{n}()"),
+                doc: None,
+            })
+            .collect();
+        let outline = vec![("src/e.rs".to_owned(), symbols)];
+        let pack = build(&reads, Some(Path::new("/ws")), &worktree, &outline);
+        assert!(pack.len() <= PACK_MAX, "{}", pack.len());
+        // The most recently read files are shown, cut at a whole line; the last is only named.
         assert!(
-            shown.contains("```\n\n[The pack goes on: read the rest of it in /s/context.md"),
-            "{shown}"
+            pack.contains("### src/a.rs (the whole file, 2000 lines)"),
+            "{pack}"
         );
-        assert_eq!(shown.matches("### f").count(), 2);
+        assert!(pack.contains("[… cut here; read the rest from the file]"));
+        assert!(
+            pack.contains("- src/d.rs (the whole file, 2000 lines)"),
+            "{pack}"
+        );
+        // The definitions keep their room.
+        assert!(
+            pack.contains("### src/e.rs\n- line 1: function `pub fn f1()`"),
+            "{pack}"
+        );
+        assert!(!pack.contains("context.md"));
     }
 
     #[test]

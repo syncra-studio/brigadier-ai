@@ -1052,7 +1052,7 @@ impl SessionManager {
         drop(fence);
         // What the thread already read goes with its first message (THREAD-PLAN.md Q8 lever 1).
         let pack = match &workspace.worktree {
-            Some(worktree) => self.context_pack(&task, worktree, &workspace.scratch).await,
+            Some(worktree) => self.context_pack(&task, worktree).await,
             None => None,
         };
         // Instructions the orchestrator sent while the task waited to start go with it.

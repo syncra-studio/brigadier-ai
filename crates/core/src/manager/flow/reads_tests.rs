@@ -279,7 +279,8 @@ async fn the_thread_s_reads_and_searches_fill_thread_reads_and_a_worker_s_do_not
                 && input.contains("### README.md (lines 1–1 of 1)"),
             "{vendor}: {input}"
         );
-        assert!(input.contains("context.md"), "{vendor}: {input}");
+        // All of it is in the message: no file to read again.
+        assert!(!input.contains("context.md"), "{vendor}: {input}");
         // The turn's calls are recorded once, when it ends.
         let recorded = flow
             .events()
