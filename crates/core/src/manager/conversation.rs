@@ -1619,11 +1619,21 @@ impl SessionManager {
 
         let grant_redactor = super::secrets::redactor(grant_values);
         let fresh = std::mem::take(&mut conv.state.lock().await.fresh);
-        let resume = if fresh {
+        let mut resume = if fresh {
             None
         } else {
             self.last_native_id(&conv.id, choice.provider).await
         };
+        // A thread whose CLI started on the instructions from before the thread's keeps them
+        // when resumed, and no note can replace a whole role: it starts over from the
+        // transcript with the thread's.
+        if resume.is_some()
+            && conv.kind == ConversationKind::Session
+            && prompts::role_outdated(&self.told_from_log(&conv.id).await)
+        {
+            tracing::info!(conversation = %conv.id, "the thread's CLI started on older instructions; starting over from the transcript");
+            resume = None;
+        }
         let reseed_needed = !fresh && resume.is_none() && self.has_history(&conv.id).await;
         let mut spec = SessionSpec {
             cwd: dir.clone(),

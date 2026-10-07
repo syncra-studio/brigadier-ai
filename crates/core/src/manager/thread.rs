@@ -240,12 +240,13 @@ impl SessionManager {
             .active
             .get(&conversation.id)
             .and_then(|active| active.workspace);
-        let mut prompt = super::prompts::orchestrator(
+        let mut prompt = super::prompts::thread(
             conversation,
             project.as_ref(),
             preferences,
             run.as_ref(),
             workspace.map(ThreadWorkspace::told).as_deref(),
+            provider,
             self.core.settings().short_replies,
         );
         if let Some(workspace) = workspace {

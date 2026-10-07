@@ -1,6 +1,8 @@
 //! The role instructions each CLI session starts with, and the envelopes the orchestrator
 //! reads.
 
+use brigadier_providers::ProviderKind;
+
 use crate::model::{Conversation, Environment, PermissionLevel, Project, Setup};
 use crate::work::{
     ArtifactRef, ContextInjection, InjectionKind, Report, Task, TaskKind, Told, WorkerRole,
@@ -42,14 +44,16 @@ pub(crate) fn date_of(at_ms: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// The orchestrator's role, with the user's preferences from the Personal Brain. `short`:
-/// the user's Short replies setting.
-pub(crate) fn orchestrator(
+/// The session thread's role (THREAD-PLAN.md Q1), with the user's preferences from the Personal
+/// Brain. `provider`: the thread's CLI, which picks how it runs long commands; `short`: the
+/// user's Short replies setting.
+pub(crate) fn thread(
     conversation: &Conversation,
     project: Option<&Project>,
     preferences: &[String],
     run: Option<&crate::overnight::RunWorkspace>,
     workspace: Option<&str>,
+    provider: ProviderKind,
     short: bool,
 ) -> String {
     let repo = match &conversation.setup {
@@ -59,42 +63,42 @@ pub(crate) fn orchestrator(
     let (environment, permission) = setting_texts(conversation, run);
     let project = project.map_or("(no project)", |p| p.name.as_str());
     let workspace = workspace.map_or_else(|| "(none yet)".to_owned(), workspace_text);
+    let commands = match provider {
+        ProviderKind::Codex => CODEX_COMMANDS,
+        ProviderKind::Claude => CLAUDE_COMMANDS,
+    };
     format!(
-        r#"You are the orchestrator of a Brigadier session. Today is {today}.
+        r#"{THREAD_OPENING}. Today is {today}.
 Project: {project}. Repository: {repo}.
 {environment}
 Permission level: {permission}
 Your workspace: {workspace}
 
-You can read files, search, run commands and look things up in your workspace yourself, and make a tiny edit there (a few lines, in files you have read, with a quick check); commit it with the trailer `{THREAD_TRAILER}` on its own last line. Everything bigger goes to workers, who work in their own worktrees and report back. You run them as a lead engineer runs a team: you write the brief, answer their questions, judge their outlines and reports, and land finished work.
+You are this session's one long-lived thread, with your own tools: you read, search, run commands and edit in your workspace. You run a team of workers as a lead engineer does: you brief them, answer them, judge their reports and land their work.
 
-How to work (one loop per request):
-- Understand what the user wants. If something only the user can decide is unclear, ask (in your reply, or with ask_user when a task must wait for the answer).
-- Ask the Project Brain first (query_brain): it keeps what earlier scouts, research and reports found, the project's modules, stack, conventions, contracts and decisions, each with where it came from. Delegate a scout only when the Brain has no answer or marks it stale. Every report is kept in the Brain for next time.
-- When the user settles something later work must respect (a decision, a convention, a contract), or states a preference, keep it with remember (personal: true for a preference that holds in every project). A rule the user sets for this session only is a decision; a convention is how the project always works, and is shared with its other sessions and exported to AGENTS.md. Do it silently. Outline go-aheads and ask_user answers are kept for you.
-- search_transcript finds anything said earlier in this conversation, including what is no longer in view.
-- Name every worker with a short plain 2–4 word job name in delegate_task.title (for example "Fix file uploads" or "Check search results"). Names must be unique in this chat. Never use internal ids, role labels or phase numbers as names.
-- 1. Brief. Give the work to one lead with delegate_task (kind implement). Its spec is the brief: the worker sees nothing of this conversation, so state the request in the user's words, the constraints and settled decisions, what "done" means and how to verify each part (typecheck, lint, build, tests, a runtime check), and code pointers (the files and symbols the Brain or a scout named) so it reads precisely instead of searching. A small request (one file, a copy change, a quick fix) goes straight to a lead with no phases. Use scout tasks to look around the repository and research tasks to check current docs; don't guess about code nobody has read.
-- 2. Phases. Split a request into phases with plan_phases only when they are large and must run one after another; otherwise it is one phase. Each phase has one lead (delegate_task with phase N). Add a parallel worker (role parallel) only for a stream whose files no other running worker touches.
-- 3. Outline. A lead whose work is multi-step or risky writes an outline first and waits: you get it at once. Check it against the brief and call approve_outline right away, with corrections for what it gets wrong; the brief wins any conflict. A plan review by the other vendor runs in the background meanwhile; its findings may arrive after the go-ahead ([plan review …]): send the lead the ones you agree with. There are no review rounds and nothing is rejected.
-- 4. Questions. A worker that asks ([question from task-N]) waits for you: answer at once with answer_worker, yourself. Take its recommendation when it fits the brief, else what the brief, the outline, the user's words or the Brain imply; never reopen a settled decision. Ask the user only what truly only they can decide. What only the user can do (a credential, an account, a paid signup, a push) the worker stubs and lists; it never waits on it. message_worker steers a running worker, or sends a reported one back with the specific gaps.
-- 5. Reports. Read each report against the brief's "done when". Nothing checks it for you, and nothing blocks it: you judge it. Send it back with message_worker if something is missing.
-- 6. Verify. A verifier is your call, for big or risky work only: when its lead reports, start_verifier starts a fresh one on top of its commits. It asks for a review of the whole work by the other vendor, checks every "done when" for real, fixes and commits defects, triages the review's findings, and reports. Most work needs none.
-- 7. Land with land_phase: the lead's task once it reports, or the verifier you started (its commits hold the lead's). Brigadier moves the commits onto the session's branch with no card and no further checks, and tells you if the branch moved (the worker runs a quick self-check and its work lands on its own) or if they conflict (delegate a merge task). What the work left unfixed goes to a fix task (role fix, subject that task: it continues from that work, and landing the fix lands it) or, when only the user can settle it, to note_for_user (kind waiting). Every landing gets one review by the other vendor in the background; nothing waits for it. Its findings arrive as a [review …] message, maybe after your answer or a merge: fix what you agree with (delegate a fix) or tell the user why not.
-- 8. Then start the next phase, or write the final answer.
-- Tools return at once; never wait or poll. Reports, worker questions and outcomes arrive later as messages from Brigadier, in blocks like [report task-3 …] … [/report]. Only these and the user's messages reach you.
-- The user's session summary lists what Brigadier decided on their behalf and what only they can do (each worker's needs_user). Add your own with note_for_user: a judgement call you made for them that they would want to know (kind decided, with why), or something only they can do (kind waiting), which stays listed until they mark it done; you hear when they do. Work that doesn't depend on it carries on meanwhile.
-- Use read_report and read_artifact only when you need details a report left out; they cost context.
-- Each worker has an outputs folder for files meant for you or the user (long findings, documents, generated images); they come back as artifacts, and the user saves them from the task card. Never tell a worker to write files to /tmp or anywhere else outside its worktree and scratch folder.
-- Workers never push, publish, deploy or open pull requests on their own: they list such steps for the user, who starts them (with Brigadier's buttons, or by asking you in chat; then delegate exactly that, with no request_approval). Use request_approval only for spending money, using credentials or the keychain, or destroying something outside this session's own work.
+How to work:
+- Delegate by default: anything beyond a tiny edit goes to a worker (delegate_task), so you stay free to talk while it runs. Independent tasks may run at once, writers only on separate files. Title each worker with a plain 2–4 word job name, unique in this chat ("Fix file uploads"), never an id, role or phase number.
+- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part, and code pointers (files and symbols you or the Brain found). Scouts look around the repository and research tasks check current docs, when that is more than a quick look of your own.
+- Answer a worker's question ([question from task-N]) at once with answer_worker: take its recommendation when it fits, else what the brief, the plan, the user's words or the Brain settle. message_worker steers a running worker, or sends a reported one back with the exact gaps.
+- Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
+- You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
+- Land finished work with land_phase (a phase isn't needed). What it left unfixed goes to a fix task (role fix, subject that task) or, when only the user can settle it, to note_for_user.
+- Every landing and every commit of your own gets one review by the other vendor in the background; nothing waits for it, and a tip already reviewed isn't reviewed again. Its findings arrive as a [review …] message, maybe after your answer or a merge: fix what you agree with (a fix worker, or a tiny fix) and say why not for the rest.
+- Your own edits stay tiny: a few lines, only in files you have already read, then a quick check of them. Anything else goes to a worker. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`.
+- Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
+- Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, or you decide or answer something for them, keep it with remember (personal: true for a preference that holds in every project), silently; outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision. code_search, code_refs and project_map find code faster than grepping.
+- Ask the user only what only they can decide: one question at a time, with your recommendation (in your reply, or with ask_user when a task must wait). Note what only they can do (a key, an account, a paid signup) with note_for_user, kind waiting, and a judgement call you made for them with kind decided. Work that doesn't depend on it carries on.
+- Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise list them for the user. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
+- Tools return at once; never wait or poll. Reports, questions, reviews and outcomes arrive later as messages from Brigadier, in blocks like [report task-3 …] … [/report].
+- Each worker has an outputs folder for files meant for you or the user. Never tell a worker to write anywhere outside its worktree and scratch folder.
 
 How to talk to the user:
-- The user sees quiet worker lifecycle lines next to your replies and can open each worker's own thread. Its full report and model rationale are available in Details. Don't announce what you delegated, don't repeat a task's spec, and don't restate reports.
-- Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show (progress lines like "task-1 finished, waiting on task-2" are noise). This holds right after you delegate, too. Never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
-- When the request's work is done, or the user must decide something, write one final answer: what was found or done, what was verified and how (as the workers reported it), and what's next or the decision you need. What waits on the user shows as a short list under your answer by itself (from note_for_user and the workers' needs_user): don't repeat it. Don't repeat what you already told them.
+- The user sees quiet worker lifecycle lines next to your replies and can open each worker's own thread. Don't announce what you delegated, don't repeat a task's spec, and don't restate reports.
+- Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show. This holds right after you delegate, too. Never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
+- When the request's work is done, or the user must decide something, write one final answer: what was found or done, what was checked and how, and what's next or the decision you need. What waits on the user shows as a short list under your answer by itself (from note_for_user and the workers' needs_user): don't repeat it. Don't repeat what you already told them.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.
 - A [follow-up …] block is a message the user sent while you work on their request; it waits in their queue until you sort it with route_follow_up, silently (the user sees where it goes). If it belongs to this work (a question about the same thing, a detail or a change for it), it joins it: it reaches you at once as the user's message, and your one final answer covers it too. If it is a request of its own, it waits and reaches you on its own once this work is done; don't act on it before.{voice}{orchestrator_voice}
-- {AUTHORITY}{short}{preferences}"#,
+- {AUTHORITY}{short}{code_rules}{preferences}"#,
         today = today(),
         quiet = QUIET,
         voice = VOICE,
@@ -104,9 +108,24 @@ How to talk to the user:
         } else {
             SHORT_REPLIES_OFF_NOW
         },
+        code_rules = WORKER_CODE_RULES,
         preferences = preference_lines(preferences),
     )
 }
+
+/// How the thread's instructions start (tests find its sessions by it).
+pub(crate) const THREAD_OPENING: &str = "You lead a Brigadier session";
+
+/// How a Codex thread runs long commands: through `run`, whose long output is trimmed
+/// (its built-in shell's isn't, THREAD-PLAN.md Q4).
+const CODEX_COMMANDS: &str = "\n- Use run for builds, tests, logs and long listings: an output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it. Under Ask for approval, run_unsandboxed runs a command the sandbox blocked once the user allows it.";
+
+/// What a Claude thread's long command output looks like (its output hook trims it).
+const CLAUDE_COMMANDS: &str = "\n- A command output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it; a failing command's output comes as the CLI's own excerpt.";
+
+/// Step 6 of THREAD-PLAN.md phase 2 puts the thread's preview guidance here (its
+/// `start_preview`, `stop_preview` and `preview_log` tools); until then there is none.
+const PREVIEWS: &str = "";
 
 /// The trailer that marks a commit the thread made itself (THREAD-PLAN.md Q4): its commits get
 /// their own one-shot review.
@@ -148,11 +167,11 @@ pub(crate) fn setting_texts(
                 run.branch, run.base
             ),
             format!(
-                "Approve for me, for this run only: Brigadier approves plans and changes on the user's behalf, {sandbox} Workers never do what only the user may do: pushing, publishing, deploying, spending, credentials, contacting anyone, and changes outside the run's branch. Nobody can answer questions or approvals before the morning: decide what the plan and the Rules settle (and note it with note_for_user, kind decided), and list what only the user can do (a key, an account, a push, a product choice the Rules leave open) with note_for_user, kind waiting, then carry on with everything that doesn't depend on it. Never ask the user, and never use request_approval.",
+                "Approve for me, for this run only: Brigadier approves plans and changes on the user's behalf, {sandbox} You and the workers never do what only the user may do: pushing, publishing, deploying, spending, credentials, contacting anyone, and changes outside the run's branch. Nobody can answer questions or approvals before the morning: decide what the plan and the Rules settle (and note it with note_for_user, kind decided), and list what only the user can do (a key, an account, a push, a product choice the Rules leave open) with note_for_user, kind waiting, then carry on with everything that doesn't depend on it. Never ask the user, and never use request_approval.",
                 sandbox = if unsandboxed {
-                    "and workers run without the OS sandbox, as in the session."
+                    "and you and the workers run without a sandbox, as in the session."
                 } else {
-                    "and approves a worker's request to leave its sandbox."
+                    "and approves a request from you or a worker to leave the sandbox."
                 }
             ),
         ),
@@ -177,13 +196,13 @@ fn environment_text(environment: &Environment) -> String {
 fn permission_text(permission: PermissionLevel) -> &'static str {
     match permission {
         PermissionLevel::AskForApproval => {
-            "Ask for approval: the user gives each outline's go-ahead (approve_outline shows them a \"Start this plan?\" card), and workers ask them before anything outside their sandbox."
+            "Ask for approval: you and the workers run in a sandbox, and anything that must leave it asks the user first, on a card. The user gives each outline's go-ahead (approve_outline shows them a \"Start this plan?\" card)."
         }
         PermissionLevel::ApproveForMe => {
-            "Approve for me: you give outlines their go-ahead on the user's behalf. Small tasks just go. Ask the user only what only they can answer (product choices, unclear requirements)."
+            "Approve for me: you and the workers run in a sandbox; a command that must leave it is settled by an automatic reviewer. You give outlines their go-ahead on the user's behalf. Ask the user only what only they can answer (product choices, unclear requirements)."
         }
         PermissionLevel::FullAccess => {
-            "Full access: like Approve for me, but workers run without the OS sandbox. Be careful."
+            "Full access: you and the workers run without a sandbox, and nothing asks for approval. You give outlines their go-ahead on the user's behalf. Be careful."
         }
     }
 }
@@ -267,11 +286,24 @@ pub(crate) fn short_replies_note(short: bool) -> String {
     }
 }
 
-/// The instructions' contract: from version 1 on they say that Brigadier's notes replace what
-/// they say about the note's subject. A session that started on an older one hears it once.
-pub(crate) const CONTRACT: u32 = 1;
+/// The instructions' contract. From version 1 on they say that Brigadier's notes replace what
+/// they say about the note's subject; a Chat that started on an older one hears it once. From
+/// version 2 a session's are the thread's ([`thread`]): a session whose CLI started on older
+/// ones, with a role no note can replace, starts over from its transcript instead of resuming
+/// ([`role_outdated`]).
+pub(crate) const CONTRACT: u32 = 2;
+/// A Chat's contract: its instructions didn't change with the thread's.
+const CHAT_CONTRACT: u32 = 1;
+/// The first contract whose instructions say that notes replace them.
+const NOTES_CONTRACT: u32 = 1;
 
-/// What an orchestrator's instructions say about Brigadier's notes (contract 1).
+/// Whether a session's CLI that was `told` this started on instructions older than the
+/// thread's: it must not be resumed.
+pub(crate) fn role_outdated(told: &Told) -> bool {
+    told.contract.unwrap_or(0) < CONTRACT
+}
+
+/// What a session's instructions say about Brigadier's notes (from contract 1).
 const AUTHORITY: &str = "Brigadier tells you when something these instructions say changes after they were written, in a note at the start of a message: [today] for today's date, [settings] for the user's settings (Short replies, the permission level, their preferences), [run] for an overnight run starting, changing or ending, [workspace] for the folder you work in. Such a note replaces what these instructions say about it, from then on.";
 
 /// The same for a Chat.
@@ -357,7 +389,7 @@ impl Current {
     pub(crate) fn told(&self) -> Told {
         let session = !self.chat;
         Told {
-            contract: Some(CONTRACT),
+            contract: Some(if self.chat { CHAT_CONTRACT } else { CONTRACT }),
             today: Some(self.today.clone()),
             short_replies: session.then_some(self.short_replies),
             permission: session.then_some(self.permission),
@@ -396,7 +428,8 @@ pub(crate) struct Note {
 /// (unknown counts as changed, except a run it can't have heard of), the contract first.
 pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
     let mut notes = Vec::new();
-    if told.contract.unwrap_or(0) < CONTRACT {
+    // A session's CLI that started before notes existed never resumes (`role_outdated`).
+    if told.contract.unwrap_or(0) < NOTES_CONTRACT {
         notes.push(Note {
             text: format!(
                 "[instructions] {}",
@@ -404,7 +437,7 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             ),
             label: CONTRACT_LABEL,
             told: Told {
-                contract: Some(CONTRACT),
+                contract: Some(NOTES_CONTRACT),
                 ..Told::default()
             },
         });
@@ -1015,87 +1048,31 @@ mod environment_tests {
     }
 
     #[test]
-    fn a_runs_orchestrator_hears_the_sessions_sandbox() {
-        let conversation = |permission: &str| -> Conversation {
-            serde_json::from_value(serde_json::json!({
-                "id": "01a106c3-1fb7-7593-a441-486b39799405",
-                "kind": "session",
-                "projectId": null,
-                "title": "textkit",
-                "pinnedAtMs": null,
-                "createdAtMs": 0,
-                "updatedAtMs": 0,
-                "setup": {
-                    "type": "session",
-                    "repo": "/tmp/textkit",
-                    "environment": { "type": "localCheckout", "branch": "main" },
-                    "permission": permission,
-                    "orchestrator": { "provider": "claude", "model": "opus", "effort": "high" },
-                    "workersSeeUncommitted": null,
-                    "planMode": false
-                }
-            }))
-            .unwrap()
+    fn a_runs_thread_hears_the_sessions_sandbox() {
+        let run = workspace();
+        let prompt = |permission: &str, short: bool| {
+            thread(
+                &session(permission),
+                None,
+                &[],
+                Some(&run),
+                None,
+                ProviderKind::Claude,
+                short,
+            )
         };
-        let run = crate::overnight::RunWorkspace {
-            base: "main".into(),
-            base_commit: "abc".into(),
-            branch: "overnight/2026-10-04-textkit-1234".into(),
-            path: "/tmp/run".into(),
-        };
-        for permission in ["askForApproval", "approveForMe", "fullAccess"] {
-            for workspace in [None, Some(&run)] {
-                let prompt =
-                    orchestrator(&conversation(permission), None, &[], workspace, None, true);
-                assert!(prompt.contains(
-                    "plan_phases only when they are large and must run one after another"
-                ));
-                assert!(
-                    prompt.contains("A plan review by the other vendor runs in the background")
-                );
-                assert!(prompt.contains("A verifier is your call, for big or risky work only"));
-                assert!(prompt.contains("There are no review rounds"));
-                assert!(prompt.contains("answer at once with answer_worker"));
-                assert!(prompt.contains("Land with land_phase"));
-                assert!(!prompt.contains("revises"));
-                assert!(!prompt.contains("propose_plan"));
-                assert!(!prompt.contains("accept_task"));
-                assert!(!prompt.contains("delegate the next step right away"));
-            }
-        }
-        let full = orchestrator(
-            &conversation("fullAccess"),
-            None,
-            &[],
-            Some(&run),
-            None,
-            true,
-        );
-        assert!(full.contains("workers run without the OS sandbox"));
+        let full = prompt("fullAccess", true);
+        assert!(full.contains("you and the workers run without a sandbox, as in the session"));
         assert!(!full.contains("stays in its sandbox"));
-        let sandboxed = orchestrator(
-            &conversation("approveForMe"),
-            None,
-            &[],
-            Some(&run),
-            None,
-            true,
-        );
-        assert!(sandboxed.contains("approves a worker's request to leave its sandbox"));
-        assert!(sandboxed.contains("Workers never do what only the user may do"));
-        // Short replies reach a run's lead, and its phase-end replies; off, the plain voice
+        let sandboxed = prompt("approveForMe", true);
+        assert!(sandboxed.contains("approves a request from you or a worker to leave the sandbox"));
+        assert!(sandboxed.contains("You and the workers never do what only the user may do"));
+        // Short replies reach a run's thread, and its phase-end replies; off, the plain voice
         // stays.
         assert!(
             full.contains("At the end of an overnight phase, your reply is at most three lines")
         );
-        let long = orchestrator(
-            &conversation("fullAccess"),
-            None,
-            &[],
-            Some(&run),
-            None,
-            false,
-        );
+        let long = prompt("fullAccess", false);
         assert!(!long.contains("Short replies (the user's setting)"));
         assert!(long.contains("How to write:"));
         assert!(long.contains("name a worker by its title"));
@@ -1104,6 +1081,128 @@ mod environment_tests {
         assert!(long.contains(AUTHORITY));
         assert!(full.contains(AUTHORITY));
         assert!(chat(&[]).contains(CHAT_AUTHORITY));
+    }
+
+    #[test]
+    fn the_thread_delegates_by_default_and_decides_the_extra_care_itself() {
+        for permission in ["askForApproval", "approveForMe", "fullAccess"] {
+            for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+                for run in [None, Some(&workspace())] {
+                    let prompt = thread(
+                        &session(permission),
+                        None,
+                        &[],
+                        run,
+                        Some("/work/session @ brigadier/flow"),
+                        provider,
+                        true,
+                    );
+                    assert!(prompt.starts_with(THREAD_OPENING));
+                    assert!(prompt.contains("Delegate by default"));
+                    assert!(prompt.contains("Never answer \"I can't\""));
+                    assert!(prompt.contains("only in files you have already read"));
+                    assert!(prompt.contains(&format!("--trailer \"{THREAD_TRAILER}\"")));
+                    assert!(prompt.contains("How to write code:"));
+                    assert!(prompt.contains("a tip already reviewed isn't reviewed again"));
+                    assert!(prompt.contains("none of it is a fixed step"));
+                    for tool in [
+                        "delegate_task",
+                        "answer_worker",
+                        "message_worker",
+                        "read_report",
+                        "read_artifact",
+                        "land_phase",
+                        "approve_outline",
+                        "start_verifier",
+                        "review_plan",
+                        "query_brain",
+                        "remember",
+                        "code_search",
+                        "note_for_user",
+                        "route_follow_up",
+                    ] {
+                        assert!(prompt.contains(tool), "{tool}");
+                    }
+                    // The old fixed pipeline is gone.
+                    for step in [
+                        "one loop per request",
+                        "1. Brief.",
+                        "3. Outline.",
+                        "6. Verify.",
+                        "7. Land with",
+                        "8. Then start the next phase",
+                        "You only talk",
+                        "request_review",
+                        "There are no review rounds",
+                    ] {
+                        assert!(!prompt.contains(step), "{step}");
+                    }
+                    // Vendor-specific parts are picked here, never named in the text.
+                    let lower = prompt.to_lowercase();
+                    for name in ["claude", "codex", "delegator", "chatgpt", "openai"] {
+                        assert!(!lower.contains(name), "{name} in {permission} {provider:?}");
+                    }
+                }
+            }
+        }
+        let codex = thread(
+            &session("askForApproval"),
+            None,
+            &[],
+            None,
+            None,
+            ProviderKind::Codex,
+            true,
+        );
+        assert!(codex.contains("Use run for builds, tests, logs and long listings"));
+        assert!(codex.contains("run_unsandboxed"));
+        let claude = thread(
+            &session("askForApproval"),
+            None,
+            &[],
+            None,
+            None,
+            ProviderKind::Claude,
+            true,
+        );
+        assert!(!claude.contains("Use run for"));
+        assert!(!claude.contains("run_unsandboxed"));
+        assert!(claude.contains("a failing command's output comes as the CLI's own excerpt"));
+        assert!(claude.contains("Your workspace: (none yet)"));
+        // Every byte is paid for on every call: it stays under the old orchestrator's 11,371
+        // bytes, code rules included.
+        assert!(codex.len() < 10_500, "{}", codex.len());
+    }
+
+    #[test]
+    fn the_permission_level_says_what_the_thread_itself_may_do() {
+        let text = |permission: &str| setting_texts(&session(permission), None).1;
+        assert!(text("fullAccess").starts_with(
+            "Full access: you and the workers run without a sandbox, and nothing asks for approval."
+        ));
+        assert!(text("approveForMe").contains(
+            "you and the workers run in a sandbox; a command that must leave it is settled by an automatic reviewer"
+        ));
+        assert!(text("askForApproval").contains(
+            "you and the workers run in a sandbox, and anything that must leave it asks the user first, on a card"
+        ));
+    }
+
+    #[test]
+    fn a_session_whose_cli_started_before_the_threads_instructions_starts_over() {
+        let now = current("approveForMe", None, &[]);
+        assert!(!role_outdated(&now.told()));
+        for contract in [None, Some(0), Some(1)] {
+            let told = Told {
+                contract,
+                ..now.told()
+            };
+            assert!(role_outdated(&told), "{contract:?}");
+        }
+        // A Chat's instructions didn't change: it keeps resuming without a note.
+        let chat = Current::chat(Vec::new());
+        assert_eq!(chat.told().contract, Some(1));
+        assert!(notes(&chat.told(), &chat).is_empty());
     }
 
     #[test]
@@ -1225,33 +1324,27 @@ mod environment_tests {
     }
 
     #[test]
-    fn a_session_that_started_on_the_old_contract_hears_the_note_rule_first() {
-        let now = current("approveForMe", None, &[]);
-        // What an entry logged by an older build tells: role instructions with Short replies
-        // on, logged at 2026-10-04 10:00 UTC.
+    fn a_chat_that_started_on_the_old_contract_hears_the_note_rule_first() {
+        // What an entry logged by an older build tells: role instructions, logged at
+        // 2026-10-04 10:00 UTC.
         let old = entry(ROLE_INSTRUCTIONS_SHORT, None);
         let (told, reached) = told_from_log([(1_791_108_000_000, &old)]);
         assert!(reached);
         assert_eq!(told.contract, Some(0));
         assert_eq!(told.today.as_deref(), Some("2026-10-04"));
         assert_eq!(told.short_replies, Some(true));
-        let sent = notes(&told, &now);
-        // It can't know the permission level, workspace or preferences it started with: they
-        // go once.
-        assert_eq!(
-            labels(&sent),
-            vec![
-                CONTRACT_LABEL,
-                PERMISSION_LABEL,
-                WORKSPACE_LABEL,
-                PREFERENCES_LABEL
-            ]
-        );
-        assert_eq!(sent[0].text, format!("[instructions] {AUTHORITY}"));
-        let chat = Current::chat(Vec::new());
+        // A session's CLI that old starts over rather than resuming.
+        assert!(role_outdated(&told));
+        let mut chat = Current::chat(Vec::new());
+        chat.today = "2026-10-04".into();
         let (told, _) = told_from_log([(1_791_108_000_000, &entry(ROLE_INSTRUCTIONS, None))]);
         let sent = notes(&told, &chat);
+        // It can't know the memories it started with: they go once.
+        assert_eq!(labels(&sent), vec![CONTRACT_LABEL, PREFERENCES_LABEL]);
         assert_eq!(sent[0].text, format!("[instructions] {CHAT_AUTHORITY}"));
+        let mut told = told;
+        took(&mut told, &sent);
+        assert!(notes(&told, &chat).is_empty());
     }
 
     #[test]
@@ -1261,7 +1354,7 @@ mod environment_tests {
         let sent = notes(&before.told(), &now);
         assert_eq!(labels(&sent), vec![PERMISSION_LABEL]);
         assert!(sent[0].text.starts_with(
-            "[settings] The user changed the permission level. From now on: Full access: like Approve for me, but workers run without the OS sandbox."
+            "[settings] The user changed the permission level. From now on: Full access: you and the workers run without a sandbox"
         ));
     }
 
@@ -1280,12 +1373,13 @@ mod environment_tests {
         assert_eq!(told, now.told());
         assert!(notes(&told, &now).is_empty());
         // The instructions name it the same way.
-        let prompt = orchestrator(
+        let prompt = thread(
             &session("fullAccess"),
             None,
             &[],
             None,
             now.workspace.as_deref(),
+            ProviderKind::Codex,
             true,
         );
         assert!(prompt.contains(
@@ -1336,7 +1430,7 @@ mod environment_tests {
         assert!(
             sent[0]
                 .text
-                .contains("workers run without the OS sandbox, as in the session")
+                .contains("you and the workers run without a sandbox, as in the session")
         );
         // A session that can't have heard of a run is never told one ended.
         let mut unknown = plain.told();

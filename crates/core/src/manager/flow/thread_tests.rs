@@ -598,3 +598,73 @@ async fn a_thread_commit_before_a_landing_in_the_same_turn_is_reviewed_on_its_ow
     assert_eq!(board.thread_tips.get(&branch), Some(&landed));
     flow.stop().await;
 }
+
+/// A thread whose CLI started on the instructions from before the thread's (an older contract
+/// in its log) isn't resumed, since it would keep its old role: it starts over from the
+/// transcript with the thread's instructions.
+#[tokio::test]
+async fn a_thread_started_on_older_instructions_starts_over_instead_of_resuming() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = inputs.clone();
+    let mut flow = Flow::start(
+        "thread-old-role",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.say("First, remember the word teal.").await;
+    flow.settled().await;
+    // What a build before the thread logged when that CLI started.
+    flow.core
+        .record(vec![(
+            crate::model::streams::orchestrator(&flow.conversation),
+            crate::model::DomainEvent::OrchestratorLogged {
+                conversation_id: flow.conversation.clone(),
+                entry: crate::work::OrchestratorEntry::Injection {
+                    injection: crate::work::ContextInjection {
+                        kind: crate::work::InjectionKind::Instructions,
+                        bytes: 11_371,
+                        tokens_estimate: 2_843,
+                        label: "role instructions, short replies".into(),
+                        task_id: None,
+                        told: Some(crate::work::Told {
+                            contract: Some(1),
+                            ..crate::work::Told::default()
+                        }),
+                    },
+                },
+            },
+        )])
+        .await
+        .unwrap();
+    flow.restart().await;
+    flow.say("Second.").await;
+    flow.until("the second turn", |_| inputs.lock().unwrap().len() >= 2)
+        .await;
+    flow.settled().await;
+    let specs = flow.thread_specs();
+    assert_eq!(specs.last().unwrap().1.origin, Origin::New, "{specs:#?}");
+    let second = inputs.lock().unwrap()[1].clone();
+    assert!(second.contains("remember the word teal"), "{second}");
+    // Its new start is logged on the thread's contract: the next restart resumes it.
+    flow.restart().await;
+    flow.say("Third.").await;
+    flow.until("the third turn", |_| inputs.lock().unwrap().len() >= 3)
+        .await;
+    flow.settled().await;
+    assert!(
+        matches!(
+            flow.thread_specs().last().unwrap().1.origin,
+            Origin::Resume { .. }
+        ),
+        "{:#?}",
+        flow.thread_specs()
+    );
+    flow.stop().await;
+}

@@ -81,7 +81,7 @@ pub(crate) type Script = Arc<dyn Fn(Turn) -> BoxFuture<'static, Reply> + Send + 
 impl Turn {
     pub fn is_orchestrator(&self) -> bool {
         self.prompt
-            .contains("You are the orchestrator of a Brigadier session")
+            .contains(crate::manager::prompts::THREAD_OPENING)
     }
 
     /// A one-shot review's session ([`Options::reviews`] answers it).
@@ -801,13 +801,14 @@ impl Flow {
             .unwrap()
             .iter()
             .filter(|(_, spec)| {
-                spec.append_system_prompt.as_deref().is_some_and(|prompt| {
-                    prompt.contains("You are the orchestrator of a Brigadier session")
-                }) && matches!(
-                    spec.origin,
-                    brigadier_providers::model::Origin::New
-                        | brigadier_providers::model::Origin::Resume { .. }
-                )
+                spec.append_system_prompt
+                    .as_deref()
+                    .is_some_and(|prompt| prompt.contains(crate::manager::prompts::THREAD_OPENING))
+                    && matches!(
+                        spec.origin,
+                        brigadier_providers::model::Origin::New
+                            | brigadier_providers::model::Origin::Resume { .. }
+                    )
             })
             .cloned()
             .collect()

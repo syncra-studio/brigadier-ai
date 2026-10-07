@@ -127,8 +127,8 @@ const LAND_PHASE: &str = "Land a finished `implement` or `merge` task's commits 
 session's branch: the lead's task once its report is in, or a verifier you started for big or \
 risky work (its commits hold the lead's). Call it after reading the report. Brigadier commits \
 what was left uncommitted, leaves litter out, and fast-forwards the branch; no card, no further \
-checks. Each landing gets one background review by the other vendor; its findings arrive later \
-as a [review …] message. If the branch moved meanwhile, the commits are rebased and the worker runs a \
+checks. Each landing gets one background review by the other vendor, unless the same commits \
+were reviewed already; its findings arrive later as a [review …] message. If the branch moved meanwhile, the commits are rebased and the worker runs a \
 quick self-check first; then they land on their own and you hear when. Conflicts come back to \
 you: delegate a merge task.";
 
