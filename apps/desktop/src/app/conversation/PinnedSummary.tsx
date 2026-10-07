@@ -686,13 +686,17 @@ export function PinnedSummary({
 function FloatingSummary({ conversation }: { conversation: Conversation }) {
   const { ref, onScroll } = useKeptScroll(`${conversation.id}/column`, true);
   // A row that opens the side panel (the workers, a worker) moves on to it: the summary closes
-  // rather than stay where it opened, over the panel.
+  // rather than stay where it opened, over the panel, and focus stays off the top bar's button.
   const { visible, state } = useContext(SidePanelContext);
   const { panel: worker } = useContext(AgentsPanelContext);
   const panel = visible ? `${state.active}/${worker}` : null;
   const shownPanel = useRef(panel);
+  const movedOn = useRef(false);
   useEffect(() => {
-    if (panel !== null && panel !== shownPanel.current) useSummary.setState({ floating: false });
+    if (panel !== null && panel !== shownPanel.current && useSummary.getState().floating) {
+      movedOn.current = true;
+      useSummary.setState({ floating: false });
+    }
     shownPanel.current = panel;
   }, [panel]);
   return (
@@ -709,6 +713,11 @@ function FloatingSummary({ conversation }: { conversation: Conversation }) {
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
+        }}
+        onCloseAutoFocus={(event) => {
+          if (!movedOn.current) return;
+          movedOn.current = false;
+          event.preventDefault();
         }}
         className={cn(
           STACK,
