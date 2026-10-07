@@ -13,8 +13,9 @@
 //! - **The key.** The git tree of the checkout as it stands (uncommitted and untracked, not
 //!   ignored files included; a private copy of the index, never the real one), the command,
 //!   the workdir relative to the repository's root, and what git doesn't see: the project's
-//!   secret files, and the ignored `.env*` files and lockfiles of the root, the workdir and
-//!   every package folder, and the toolchains' versions. When any part can't be told, the
+//!   secret files; the ignored `.env*` files, lockfiles and package manager and Cargo
+//!   configuration of the root, the workdir and every package folder; that configuration in
+//!   the user's home; and the toolchains' versions. When any part can't be told, the
 //!   cache is left out: the command runs and its result is not kept (a stale pass is worse
 //!   than a run). One run of a key at a time: a caller that waited answers from the cache.
 //! - **The value.** A finished run's status, the reply the model got and its whole output
@@ -55,6 +56,15 @@ use crate::{Error, Result, now_ms};
 const TOOLCHAIN_TTL: Duration = Duration::from_secs(5 * 60);
 /// How long a version command may take.
 const VERSION_TIMEOUT: Duration = Duration::from_secs(20);
+/// The package managers' and Cargo's own configuration, in a folder or the user's home: a
+/// check loads it whether git sees it or not.
+const CONFIG_FILES: &[&str] = &[
+    ".npmrc",
+    ".yarnrc",
+    ".yarnrc.yml",
+    ".cargo/config.toml",
+    ".cargo/config",
+];
 /// Files that pin a build's dependencies.
 const LOCKFILES: &[&str] = &[
     "Cargo.lock",
@@ -311,6 +321,7 @@ impl SessionManager {
             relative.clone(),
         ];
         parts.extend(files);
+        parts.extend(user_config_files());
         for (name, version, words) in TOOLCHAINS {
             match self.toolchain_version(&root, version).await {
                 Some(version) => parts.push(format!("{name} {version}")),
@@ -933,7 +944,7 @@ fn input_files(
         .into_iter()
         .chain(packages.iter().map(PathBuf::as_path))
     {
-        for name in LOCKFILES {
+        for name in LOCKFILES.iter().chain(CONFIG_FILES) {
             let path = folder.join(name);
             if path.is_file() {
                 add(path);
@@ -953,6 +964,21 @@ fn input_files(
     files
         .into_iter()
         .map(|(path, hash)| format!("file {path} {hash}"))
+        .collect()
+}
+
+/// The user's own package manager and Cargo configuration, by content hash: one line each
+/// that exists.
+fn user_config_files() -> Vec<String> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return vec!["home unknown".into()];
+    };
+    CONFIG_FILES
+        .iter()
+        .filter_map(|name| {
+            let bytes = std::fs::read(home.join(name)).ok()?;
+            Some(format!("home {name} {}", blake3::hash(&bytes).to_hex()))
+        })
         .collect()
 }
 
@@ -1452,6 +1478,18 @@ fn affected(
             }
         }
     }
+    // A changed package with no checks of its own (no check scripts, nothing learned) is
+    // checked with everything rather than not at all.
+    if everything.is_none()
+        && let Some(index) = touched
+            .iter()
+            .find(|index| package_checks(&packages[**index], manager, learned).is_empty())
+    {
+        everything = Some(format!(
+            "{} has no checks of its own",
+            packages[*index].folder()
+        ));
+    }
     if let Some(why) = everything {
         return Plan {
             everything: Some(why),
@@ -1683,6 +1721,16 @@ mod tests {
         std::fs::write(root.join("Cargo.lock"), "# lock\n").unwrap();
         let locked = material(&root);
         assert_ne!(locked, secret, "a lockfile is");
+        std::fs::write(
+            root.join(".gitignore"),
+            "*.log\n.env*\nsecret.json\n.npmrc\n",
+        )
+        .unwrap();
+        let ignoring = material(&root);
+        std::fs::write(root.join(".npmrc"), "registry=https://example.invalid/\n").unwrap();
+        let config = material(&root);
+        assert_eq!(config.0, ignoring.0, "an ignored config isn't in the tree");
+        assert_ne!(config.1, ignoring.1, "but it is in the key");
         // A package's own ignored env file, which a check run from the root may build with.
         std::fs::create_dir_all(root.join("apps/web")).unwrap();
         std::fs::write(root.join("apps/web/package.json"), "{\"name\": \"web\"}\n").unwrap();
@@ -2107,6 +2155,37 @@ mod tests {
             &BTreeMap::new(),
         );
         assert_eq!(plan.everything, None);
+    }
+
+    #[test]
+    fn a_changed_package_with_no_checks_of_its_own_checks_everything() {
+        let mut packages = workspace();
+        packages.push(node_package("packages/icons", r#"{"name": "@b/icons"}"#).unwrap());
+        let plan = affected(
+            &["packages/icons/index.ts".into()],
+            &packages,
+            PackageManager::Pnpm,
+            &BTreeMap::new(),
+        );
+        assert!(
+            plan.everything
+                .as_deref()
+                .unwrap()
+                .contains("packages/icons has no checks of its own")
+        );
+        assert!(commands(&plan).contains(&"cargo test --workspace".to_owned()));
+        // Once a check is learned for it, its own checks are enough.
+        let plan = affected(
+            &["packages/icons/index.ts".into()],
+            &packages,
+            PackageManager::Pnpm,
+            &BTreeMap::from([(
+                "packages/icons".to_owned(),
+                vec!["pnpm run svgo".to_owned()],
+            )]),
+        );
+        assert_eq!(plan.everything, None);
+        assert_eq!(commands(&plan), ["pnpm run svgo @ packages/icons"]);
     }
 
     #[test]
