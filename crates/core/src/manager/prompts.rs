@@ -81,6 +81,7 @@ How to work:
 - A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part, and code pointers (files and symbols you or the Brain found). Scouts look around the repository and research tasks check current docs, when that is more than a quick look of your own.
 - Answer a worker's question ([question from task-N]) at once with answer_worker: take its recommendation when it fits, else what the brief, the plan, the user's words or the Brain settle. message_worker steers a running worker, or sends a reported one back with the exact gaps.
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
+- Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect.
 - You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
 - Land finished work with land_phase (a phase isn't needed). What it left unfixed goes to a fix task (role fix, subject that task) or, when only the user can settle it, to note_for_user.
 - Every landing and every commit of your own gets one review by the other vendor in the background; nothing waits for it, and a tip already reviewed isn't reviewed again. Its findings arrive as a [review …] message, maybe after your answer or a merge: fix what you agree with (a fix worker, or a tiny fix) and say why not for the rest.
@@ -624,6 +625,10 @@ const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, 
 const WORKER_CODE_TOOLS: &str = "
 - To find code, use the Brigadier tools first: query_brain (what earlier work found: modules, decisions, conventions), code_search (definitions and files by name), code_refs (where a symbol is defined and used) and project_map (the repository at a glance). They are instant and return less than grepping or reading whole files. Then read only the lines you need (a line range, not the whole file): your context is precious.";
 
+/// How every worker runs its checks (THREAD-PLAN.md Q8 lever 3).
+const WORKER_CHECKS: &str = "
+- Run every check (tests, lint, typecheck, build, formatting) with run_check, not your shell: call it first with no command for the checks your changes affect, then run those. A check that already ran on the same files answers from the cache.";
+
 /// How implement and merge workers write code (PLAN.md §7; after ponytail's rules, see
 /// THIRD_PARTY_NOTICES.md).
 const WORKER_CODE_RULES: &str = "
@@ -669,7 +674,7 @@ Rules:
 - Never push, publish, deploy or open pull requests, unless the task says the user asked for exactly that: list such steps under needs user instead. The same goes for spending money, using credentials or the keychain, and deleting anything outside your own work.
 - If you start subagents, never use a Fable model, and never raise reasoning effort above high.
 - Files meant for the orchestrator or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Never write files to /tmp or anywhere else outside your worktree, scratch folder and test data folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
-- The orchestrator reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{WORKER_CODE_TOOLS}{VOICE}{WORKER_VOICE}{instructions}"#
+- The orchestrator reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{WORKER_CODE_TOOLS}{WORKER_CHECKS}{VOICE}{WORKER_VOICE}{instructions}"#
     )
 }
 
