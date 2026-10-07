@@ -86,6 +86,7 @@ impl MachineWatch {
             .filter(|(_, cli)| still(platform, *cli))
             .flat_map(|(owner, cli)| heavy_under(platform, cli.pid, owner))
             .collect();
+        seen = outermost(platform, seen);
         self.mark_active(&mut seen);
         // Held while acting too, so quitting waits for a round under way and none acts after.
         let mut builds = self.builds.lock().unwrap_or_else(|p| p.into_inner());
@@ -326,6 +327,27 @@ pub(crate) fn heavy_under(platform: &dyn Platform, cli: u32, owner: &str) -> Vec
         queue.extend(processes.children(pid).unwrap_or_default());
     }
     found
+}
+
+/// One command per process tree. The ledger tracks the group leaders of the commands a CLI
+/// runs, so a heavy command started inside another one in a process group of its own
+/// (`pnpm test` running `pnpm --filter app test`) is also seen on its own: it belongs to the
+/// outer command, and must never wait for the lease its own parent holds.
+pub(crate) fn outermost(platform: &dyn Platform, seen: Vec<Seen>) -> Vec<Seen> {
+    let processes = platform.processes();
+    let mut inside = std::collections::HashSet::new();
+    for command in &seen {
+        let mut queue = processes.children(command.root.pid).unwrap_or_default();
+        while let Some(pid) = queue.pop() {
+            if inside.len() > 10_000 || !inside.insert(pid) {
+                continue;
+            }
+            queue.extend(processes.children(pid).unwrap_or_default());
+        }
+    }
+    seen.into_iter()
+        .filter(|command| !inside.contains(&command.root.pid))
+        .collect()
 }
 
 /// Stops `root` and everything below it, parents before their children so nothing forks past
@@ -617,6 +639,41 @@ mod tests {
         assert_eq!(seen.len(), 1, "{seen:?}");
         assert_eq!(seen[0].root, build);
         assert_eq!(seen[0].command, "cargo test -p core");
+        platform.processes().kill_tree(worker.id()).unwrap();
+        worker.wait().unwrap();
+    }
+
+    #[test]
+    fn a_build_inside_a_build_is_part_of_it() {
+        // `pnpm test` runs `pnpm --filter app test` in a process group of its own, which the
+        // ledger tracks next to the CLI: it is seen on its own too, but it is the outer
+        // command's, not a second build waiting for the lease its parent holds.
+        let dir = TempDir::new();
+        let platform = platform(dir.path());
+        let inner = dir.path().join("inner").join("cargo");
+        std::fs::create_dir_all(inner.parent().unwrap()).unwrap();
+        std::fs::write(&inner, "#!/bin/sh\n/bin/sleep 300\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let (mut worker, _) =
+            worker_with_build_running(dir.path(), &format!("{} build", inner.display()));
+        let outer = wait_for(|| heavy_under(&*platform, worker.id(), "task:t").pop());
+        let nested = wait_for(|| {
+            let mut queue = platform.processes().children(outer.root.pid).ok()?;
+            while let Some(pid) = queue.pop() {
+                let seen = heavy_under(&*platform, pid, "task:t");
+                if let Some(seen) = seen.into_iter().find(|seen| seen.root.pid == pid) {
+                    return Some(seen);
+                }
+                queue.extend(platform.processes().children(pid).unwrap_or_default());
+            }
+            None
+        });
+        assert_eq!(nested.command, "cargo build");
+        let seen = outermost(&*platform, vec![nested, outer.clone()]);
+        assert_eq!(seen, vec![outer], "only the outer command");
         platform.processes().kill_tree(worker.id()).unwrap();
         worker.wait().unwrap();
     }
