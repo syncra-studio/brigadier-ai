@@ -227,6 +227,21 @@
   }
 }
 
+/* The same hairline down a positioned box's whole start edge (the peeking sidebar, which
+   covers the content's own beside the strip). */
+@utility start-hairline {
+  &::before {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    inset-inline-start: 0;
+    width: 0.5px;
+    background: var(--color-divider);
+    pointer-events: none;
+    z-index: 1;
+  }
+}
+
 /* A column's start edge: a short divider in the titlebar strip beside its header, and a
    hairline down its body on the page surface. */
 @utility column-divider {
@@ -469,6 +484,12 @@
 /* Fade the older edge of a live summary while keeping its newest two lines visible. */
 @utility thinking-snippet {
   mask-image: linear-gradient(to bottom, transparent, black 25%);
+}
+
+/* Cuts off whatever paints past the start edge (a shadow over the strip beside it), keeping
+   the other sides' shadow. */
+@utility clip-start {
+  clip-path: inset(-3rem -3rem -3rem 0);
 }
 
 /* The collapsed sidebar peeking: its card floats in from the start, and fades back out

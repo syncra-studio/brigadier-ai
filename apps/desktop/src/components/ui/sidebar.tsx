@@ -383,8 +383,8 @@ function SidebarPanel({
 }
 
 /**
- * The collapsed panel peeking: its expanded contents on a card over the content, which never
- * moves for it. It floats in from the start over 300ms and fades back out over 200ms (at once
+ * The collapsed panel peeking: its expanded contents over the content, which never moves for
+ * it, carried on from the strip (or, hidden, on a card at the window's start). It floats in from the start over 300ms and fades back out over 200ms (at once
  * with reduced motion). Inside it, the contents lay out as in the expanded panel.
  */
 function SidebarPeek({
@@ -410,8 +410,13 @@ function SidebarPeek({
         data-slot="sidebar-peek"
         data-sidebar-peek-panel
         className={cn(
-          "sidebar-panel-width text-sidebar-foreground bg-sidebar rounded-page ring-foreground/10 shadow-menu top-titlebar absolute bottom-0 z-40 flex flex-col overflow-hidden ring-1 motion-reduce:animate-none",
-          hidden ? "start-0" : "start-sidebar-peek",
+          "sidebar-panel-width text-sidebar-foreground bg-sidebar shadow-menu top-titlebar absolute bottom-0 z-40 flex flex-col overflow-hidden motion-reduce:animate-none",
+          // Beside the strip it is the strip's own panel carried on: flush against it, square
+          // where they meet with the strip's hairline kept, its edge and shadow on the far side
+          // only. Hidden, it is a card.
+          hidden
+            ? "rounded-page ring-foreground/10 start-0 ring-1"
+            : "rounded-e-page border-foreground/10 start-sidebar-strip start-hairline border-e clip-start",
           closing
             ? "pointer-events-none animate-[sidebar-peek-out_200ms_var(--ease-sidebar)_forwards]"
             : "animate-[sidebar-peek-in_300ms_var(--ease-sidebar)]",
