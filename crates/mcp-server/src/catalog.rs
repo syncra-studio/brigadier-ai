@@ -6,10 +6,10 @@ use std::sync::{Arc, OnceLock};
 use brigadier_core::tools::{
     AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch,
     DelegateTask, FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser, OrchestratorCall,
-    PhaseDone, PlanPhases, ProposeOvernight, ProposePhases, QueryBrain, ReadArtifact, RecordNodes,
-    Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCommand, RunTools,
-    RunUnsandboxed, SaveMemory, SearchTranscript, SubmitOutline, SubmitReport, TaskRef, ToolCall,
-    WorkerCall,
+    PhaseDone, PlanPhases, PreviewLog, ProposeOvernight, ProposePhases, QueryBrain, ReadArtifact,
+    RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCommand,
+    RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, StartPreview, StopPreview,
+    SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
@@ -154,6 +154,21 @@ lines) with an out-… id; page through the rest with read_artifact. `timeout_se
 const RUN_UNSANDBOXED: &str = "Like run, but outside the sandbox, for a command the sandbox \
 blocked (the network, files outside the workspace): it waits for approval first, decided on \
 your `justification`. Try run first; use this only when the sandbox is what stopped it.";
+
+const START_PREVIEW: &str = "Start something the user wants to see running (a dev server, \
+the app, a docs site) and keep it running: it lives across your turns until you stop it, and \
+answers at once with its first output. Run the command in the foreground (no trailing `&`). It \
+runs in the workspace (or `workdir` inside it) with this session's access, in its own process \
+group. Tell the user where to look (the URL and port). It stops when you call stop_preview, \
+when the user presses Stop, and when the session is merged, archived or deleted; for one-off \
+commands use your shell instead.";
+
+const STOP_PREVIEW: &str = "Stop a preview (`id`, e.g. \"preview-1\") or, without an id, \
+every running one: SIGTERM, then a kill after a few seconds. Returns how each ended.";
+
+const PREVIEW_LOG: &str = "The last lines of a preview's output (stdout and stderr together; \
+the latest preview's by default), with its state and an out-… id to page through its whole log \
+with read_artifact.";
 
 const LIST_TASKS: &str = "List this session's tasks: id, title, kind, status and model.";
 
@@ -330,6 +345,13 @@ fn orchestrator_tools() -> Vec<Tool> {
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
         tool("review_plan", REVIEW_PLAN, input_schema::<ReviewPlan>()),
+        tool(
+            "start_preview",
+            START_PREVIEW,
+            input_schema::<StartPreview>(),
+        ),
+        tool("stop_preview", STOP_PREVIEW, input_schema::<StopPreview>()),
+        tool("preview_log", PREVIEW_LOG, input_schema::<PreviewLog>()),
     ]
 }
 
@@ -445,6 +467,9 @@ pub fn parse_call(
                 "code_refs" => OrchestratorCall::CodeRefs(args(name, arguments)?),
                 "project_map" => OrchestratorCall::ProjectMap,
                 "review_plan" => OrchestratorCall::ReviewPlan(args(name, arguments)?),
+                "start_preview" => OrchestratorCall::StartPreview(args(name, arguments)?),
+                "stop_preview" => OrchestratorCall::StopPreview(args(name, arguments)?),
+                "preview_log" => OrchestratorCall::PreviewLog(args(name, arguments)?),
                 "run" if *run != RunTools::None => OrchestratorCall::Run(args(name, arguments)?),
                 "run_unsandboxed" if *run == RunTools::WithEscalation => {
                     OrchestratorCall::RunUnsandboxed(args(name, arguments)?)
@@ -628,6 +653,51 @@ mod tests {
         };
         assert!(tools_for(&hook).is_empty());
         assert!(parse_call(&hook, "run", command()).is_err());
+    }
+
+    #[test]
+    fn every_thread_starts_reads_and_stops_previews() {
+        for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {
+            let thread = Role::Orchestrator {
+                conversation_id: brigadier_core::model::ConversationId("c1".into()),
+                run,
+            };
+            let names: Vec<String> = tools_for(&thread)
+                .iter()
+                .map(|tool| tool.name.to_string())
+                .collect();
+            for name in ["start_preview", "stop_preview", "preview_log"] {
+                assert!(names.contains(&name.to_owned()), "{name} {run:?}");
+            }
+            let arguments = serde_json::json!({
+                "command": "python3 -m http.server 8123",
+                "name": "site",
+                "env": { "PORT": "8123" },
+                "workdir": "web",
+            });
+            let Ok(ToolCall::Orchestrator(OrchestratorCall::StartPreview(start))) =
+                parse_call(&thread, "start_preview", arguments.as_object().cloned())
+            else {
+                panic!("start_preview parses");
+            };
+            assert_eq!(start.env.unwrap()["PORT"], "8123");
+            assert!(matches!(
+                parse_call(&thread, "stop_preview", None),
+                Ok(ToolCall::Orchestrator(OrchestratorCall::StopPreview(stop))) if stop.id.is_none()
+            ));
+            let arguments = serde_json::json!({ "id": "preview-1", "tail_lines": 10 });
+            assert!(matches!(
+                parse_call(&thread, "preview_log", arguments.as_object().cloned()),
+                Ok(ToolCall::Orchestrator(OrchestratorCall::PreviewLog(log)))
+                    if log.tail_lines == Some(10)
+            ));
+        }
+        // Workers don't: a preview is the thread's.
+        let names: Vec<String> = tools_for(&worker(false))
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+        assert!(!names.iter().any(|name| name.contains("preview")));
     }
 
     #[test]
