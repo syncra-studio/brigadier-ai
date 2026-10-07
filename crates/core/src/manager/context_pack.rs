@@ -34,6 +34,9 @@ const NAMED_MAX: usize = 12;
 const OUTLINE_MAX: u32 = 40;
 /// Searches listed, at most.
 const SEARCHES_MAX: usize = 20;
+/// Bytes of the searches at most, and of one search's line.
+const SEARCHES_BYTES: usize = 4 * 1024;
+const ONE_SEARCH_MAX: usize = 512;
 
 impl SessionManager {
     /// The task's context pack for its first message, or `None` when the thread read nothing
@@ -116,19 +119,46 @@ fn build(
                 .as_deref()
                 .map(|glob| format!(" ({glob})"))
                 .unwrap_or_default();
-            let hits: Vec<String> = search.hits.iter().filter_map(|hit| relative(hit)).collect();
-            let found = match (hits.is_empty(), search.more_hits) {
+            let line = format!("- {pattern} in {scope}{glob}: ");
+            // Hits are named while the line has room; the rest are counted.
+            let mut hits: Vec<String> = Vec::new();
+            let mut more = search.more_hits as usize;
+            let mut used = line.len();
+            for hit in search.hits.iter().filter_map(|hit| relative(hit)) {
+                if used + hit.len() + 2 > ONE_SEARCH_MAX {
+                    more += 1;
+                    continue;
+                }
+                used += hit.len() + 2;
+                hits.push(hit);
+            }
+            let found = match (hits.is_empty(), more) {
                 (true, 0) => "found nothing it named".to_owned(),
+                (true, more) => format!("found {more} files"),
                 (_, 0) => format!("found {}", hits.join(", ")),
                 (_, more) => format!("found {} and {more} more", hits.join(", ")),
             };
-            format!("- {pattern} in {scope}{glob}: {found}")
+            format!("{line}{found}")
         })
         .collect();
     let searches = if searches.is_empty() {
         String::new()
     } else {
-        format!("## Searches it made\n\n{}\n\n", searches.join("\n"))
+        // Searches are listed while they fit; the rest are counted.
+        let mut listed = String::new();
+        let mut left_out = 0;
+        for search in &searches {
+            if left_out == 0 && listed.len() + search.len() < SEARCHES_BYTES {
+                listed.push_str(search);
+                listed.push('\n');
+            } else {
+                left_out += 1;
+            }
+        }
+        if left_out > 0 {
+            let _ = writeln!(listed, "- and {left_out} more searches");
+        }
+        format!("## Searches it made\n\n{listed}\n")
     };
 
     // What the definitions would take, kept for them up to [`OUTLINES_KEPT`].
@@ -156,11 +186,17 @@ fn build(
     const FILES_HEADING: &str =
         "## Files the orchestrator read (as they are in your worktree now)\n\n";
     const UNSHOWN_HEADING: &str = "Also read, not shown here (no room left in the pack):\n";
-    let mut budget =
-        PACK_MAX.saturating_sub(HEADER.len() + searches.len() + kept + FILES_HEADING.len());
+    // Kept for the list of files not shown: its heading and the count of those not named
+    // (`UNSHOWN_KEPT`), and some names (`NAMES_KEPT`, while files are shown).
+    const UNSHOWN_MORE_MAX: usize = 48;
+    const UNSHOWN_KEPT: usize = UNSHOWN_HEADING.len() + UNSHOWN_MORE_MAX + 1;
+    const NAMES_KEPT: usize = 256;
+    let mut budget = PACK_MAX
+        .saturating_sub(HEADER.len() + searches.len() + kept + FILES_HEADING.len() + UNSHOWN_KEPT);
     let mut sections: Vec<String> = Vec::new();
     let mut shown = BTreeSet::new();
-    let mut unshown = Vec::new();
+    let mut unshown: Vec<String> = Vec::new();
+    let mut unnamed = 0;
     for file in reads.files.iter().filter(|file| !file.outside) {
         let Some(rel) = relative(&file.path) else {
             continue;
@@ -196,11 +232,16 @@ fn build(
         // The section's heading, fences and a possible cut note, and a name in the list.
         const CUT: &str = "[… cut here; read the rest from the file]\n";
         let frame = format!("### {rel} ({what})\n```\n```\n\n").len() + CUT.len();
-        let room = budget
-            .saturating_sub(frame + UNSHOWN_HEADING.len())
-            .min(ONE_FILE_MAX);
+        let room = budget.saturating_sub(frame + NAMES_KEPT).min(ONE_FILE_MAX);
         if room < FILE_MIN {
-            unshown.push(format!("- {rel} ({what})"));
+            // Named while there is room for the name, else only counted.
+            let name = format!("- {rel} ({what})\n");
+            if budget >= name.len() {
+                budget -= name.len();
+                unshown.push(name);
+            } else {
+                unnamed += 1;
+            }
             continue;
         }
         let mut body = String::new();
@@ -224,15 +265,20 @@ fn build(
         sections.push(section);
     }
     let mut files = String::new();
-    if !sections.is_empty() || !unshown.is_empty() {
+    if !sections.is_empty() || !unshown.is_empty() || unnamed > 0 {
         files.push_str(FILES_HEADING);
         for section in &sections {
             files.push_str(section);
         }
-        if !unshown.is_empty() {
+        if !unshown.is_empty() || unnamed > 0 {
             files.push_str(UNSHOWN_HEADING);
-            files.push_str(&unshown.join("\n"));
-            files.push_str("\n\n");
+            for name in &unshown {
+                files.push_str(name);
+            }
+            if unnamed > 0 {
+                let _ = writeln!(files, "- and {unnamed} more files");
+            }
+            files.push('\n');
         }
     }
 
@@ -448,6 +494,56 @@ mod tests {
             "{pack}"
         );
         assert!(!pack.contains("context.md"));
+    }
+
+    #[test]
+    fn many_searches_and_unread_files_keep_the_pack_in_its_budget() {
+        let root = std::env::temp_dir().join(format!("pack-many-{}", uuid::Uuid::new_v4()));
+        let _temp = Temp(root.clone());
+        let worktree = root.join("task");
+        std::fs::create_dir_all(worktree.join("src")).unwrap();
+        let long: String = (1..=2_000)
+            .map(|n| format!("let value_{n} = {n};\n"))
+            .collect();
+        let names: Vec<String> = (0..300)
+            .map(|n| format!("src/a_rather_long_module_name_{n:03}.rs"))
+            .collect();
+        for name in &names {
+            std::fs::write(worktree.join(name), &long).unwrap();
+        }
+        let hits: Vec<String> = names
+            .iter()
+            .take(50)
+            .map(|name| format!("/ws/{name}"))
+            .collect();
+        let reads = ThreadReads {
+            files: names
+                .iter()
+                .map(|name| file(&format!("/ws/{name}"), true, Vec::new()))
+                .collect(),
+            searches: (0..20)
+                .map(|n| ThreadSearch {
+                    kind: SearchKind::Content,
+                    pattern: Some(format!("value_{n}")),
+                    scope: "/ws/src".into(),
+                    glob: None,
+                    hits: hits.clone(),
+                    more_hits: 0,
+                    outside: false,
+                })
+                .collect(),
+            dropped_files: 0,
+            dropped_searches: 0,
+        };
+        let pack = build(&reads, Some(Path::new("/ws")), &worktree, &[]);
+        assert!(pack.len() <= PACK_MAX, "{}", pack.len());
+        // Searches and files past the budget are counted, not dropped silently.
+        assert!(pack.contains(" more searches"), "{pack}");
+        assert!(pack.contains("more files"), "{pack}");
+        assert!(
+            pack.contains("### src/a_rather_long_module_name_000.rs"),
+            "{pack}"
+        );
     }
 
     #[test]

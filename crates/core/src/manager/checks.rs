@@ -6,18 +6,23 @@
 //!   thread's workspace), `workdir` relative to it, at the caller's access and recorded under
 //!   its cleanup owner, as `run` runs: at Full access the plain shell, else a Codex caller's
 //!   own sandbox (`codex sandbox`) and a Claude caller's Seatbelt profile
-//!   ([`SessionManager::seatbelt_spec`]). Its process is in the cleanup ledger while it runs,
+//!   ([`SessionManager::seatbelt_spec`]); a read-only Codex worker's from its scratch folder,
+//!   as its own shell runs, so its checks can't write its checkout either. Its process is in the cleanup ledger while it runs,
 //!   which is where the machine guard looks for builds: a heavy check (`cargo test`, `pnpm
 //!   build`) takes the build lease and waits for it like a worker's own (`crate::machine`).
 //! - **The key.** The git tree of the checkout as it stands (uncommitted and untracked, not
 //!   ignored files included; a private copy of the index, never the real one), the command,
 //!   the workdir relative to the repository's root, and what git doesn't see: the project's
-//!   secret files and the ignored `.env*` files, the lockfiles, and the toolchains' versions.
-//!   When any part can't be told, the cache is left out: the command runs and its result is
-//!   not kept (a stale pass is worse than a run).
+//!   secret files, and the ignored `.env*` files and lockfiles of the root, the workdir and
+//!   every package folder, and the toolchains' versions. When any part can't be told, the
+//!   cache is left out: the command runs and its result is not kept (a stale pass is worse
+//!   than a run). One run of a key at a time: a caller that waited answers from the cache.
 //! - **The value.** A finished run's status, the reply the model got and its whole output
-//!   (stored as the conversation's `out-…` output, so `read_artifact` reads it). Failures are
-//!   kept too: the same files fail again. `rerun` runs and replaces.
+//!   (stored as the conversation's `out-…` output, so `read_artifact` reads it), the
+//!   project's secrets hidden as in the rest of the caller's output. Failures are kept too:
+//!   the same files fail again, under the same sandbox (another sandbox runs it again). A
+//!   worker gets its own copy of a long output in its scratch folder. `rerun` runs and
+//!   replaces.
 //! - **Affected checks.** With no command, `run_check` answers with the checks the changes
 //!   since the caller's base call for: those of each changed package and of the packages that
 //!   depend on it, everything for a change to the workspace's own manifests and configuration
@@ -32,6 +37,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use brigadier_brain::{NewNode, NodeKind, Origin, Provenance};
+use brigadier_providers::redact::Redactor;
 use brigadier_providers::{Access, ProviderKind};
 use serde::{Deserialize, Serialize};
 
@@ -89,6 +95,13 @@ struct Caller {
     /// The checkout: a worker's worktree, the thread's workspace.
     tree: Option<PathBuf>,
     scratch: PathBuf,
+    /// The folder its access's writable working directory is, when that isn't its checkout
+    /// (a read-only Codex worker works from its scratch folder): its checks run from there
+    /// too, so they can't write a checkout its own shell can't.
+    cwd_grant: Option<PathBuf>,
+    /// What hides its project's secrets (and the session's grants) in a check's output, as
+    /// in the rest of its output.
+    redactor: Option<Arc<Redactor>>,
     /// What the affected checks compare the checkout against.
     base: Base,
     project: Option<ProjectId>,
@@ -127,6 +140,14 @@ struct Kept {
     /// The reply is sized for a model that reads it JSON-escaped (a Codex caller).
     wrapped: bool,
     conversation_id: ConversationId,
+    /// The worker the reply was made for (its whole output's copy is in that worker's scratch
+    /// folder); none for the thread.
+    #[serde(default)]
+    task_id: Option<TaskId>,
+    /// What the caller's sandbox allowed ([`access_class`]): a failure is only an answer for a
+    /// caller allowed the same, since the sandbox may be what failed it.
+    #[serde(default)]
+    access: Option<String>,
     alias: String,
     blob: String,
     duration_ms: u64,
@@ -160,6 +181,11 @@ impl SessionManager {
             .map_or(RUN_TIMEOUT_DEFAULT, Duration::from_secs)
             .clamp(Duration::from_secs(1), RUN_TIMEOUT_MAX);
         let key = self.check_key(&caller, &workdir, command).await;
+        // One run of a key at a time: a caller that waited answers from what the other kept.
+        let _running = match &key {
+            Ok(key) => check_lock(&key.hash, timeout).await,
+            Err(_) => None,
+        };
         if let (Ok(key), false) = (&key, args.rerun)
             && let Some(reply) = self.cached_check(&caller, key, command).await
         {
@@ -187,17 +213,23 @@ impl SessionManager {
                 .await
                 .ok_or_else(|| Error::Invalid("the task's worker isn't running".into()))?;
             let task = self.task_by_id(id, task_id).await?;
+            let redactor = self.task_redactor(&task).await;
             let workspace = task
                 .workspace
                 .ok_or_else(|| Error::Invalid("the task has no workspace".into()))?;
+            let tree = workspace.worktree.map(PathBuf::from);
+            let scratch = PathBuf::from(workspace.scratch);
+            let cwd_grant = cwd_grant(cli.provider, task.kind.writes(), tree.as_deref(), &scratch);
             return Ok(Caller {
                 conversation_id: id.clone(),
                 task_id: Some(task_id.clone()),
                 provider: cli.provider,
                 access,
                 cli,
-                tree: workspace.worktree.map(PathBuf::from),
-                scratch: PathBuf::from(workspace.scratch),
+                tree,
+                scratch,
+                cwd_grant,
+                redactor,
                 base: workspace.base.map_or(Base::Head, Base::Commit),
                 project,
                 secret_files,
@@ -219,6 +251,12 @@ impl SessionManager {
             }) => Base::Branch(base.clone()),
             _ => Base::Head,
         };
+        let redactor = match &conversation.setup {
+            Some(Setup::Session { repo, .. }) => super::secrets::redactor(
+                super::secrets::values(Path::new(repo), &secret_files).await,
+            ),
+            _ => None,
+        };
         Ok(Caller {
             conversation_id: id.clone(),
             task_id: None,
@@ -227,6 +265,8 @@ impl SessionManager {
             cli,
             tree: launch.workspace.map(|workspace| workspace.path),
             scratch: self.owned_dir("orch", &id.0),
+            cwd_grant: None,
+            redactor,
             base,
             project,
             secret_files,
@@ -253,7 +293,8 @@ impl SessionManager {
                     .open_worktree(&root)
                     .and_then(|worktree| worktree.checkout_tree())
                     .map_err(git_error)?;
-                Ok((input_files(&root, &workdir, &secrets), tree.0))
+                let packages = package_dirs(&root)?;
+                Ok((input_files(&root, &workdir, &packages, &secrets), tree.0))
             })
             .await
             .map_err(|err| format!("git could not read the tree: {err}"))?
@@ -337,17 +378,17 @@ impl SessionManager {
             }
         };
         let kept: Kept = serde_json::from_str(&body).ok()?;
+        let same = reuse(&kept, caller)?;
         let blob = kept.blob.parse().ok()?;
         // Its output went with its conversation: the check runs again.
         if !self.core.store().blobs().touch(blob).await.unwrap_or(false) {
             return None;
         }
-        let wrapped = caller.provider == ProviderKind::Codex;
-        let same = kept.conversation_id == caller.conversation_id && kept.wrapped == wrapped;
         let (reply, alias) = if same {
             (kept.reply.clone(), kept.alias.clone())
         } else {
-            // Another conversation's output: this one gets its own alias of it.
+            // Another conversation's or caller's output: this one gets its own alias of it,
+            // and a worker its own copy of the whole of it.
             let blob = kept.blob.parse().ok()?;
             let output = self.core.store().blobs().get(blob).await.ok()??;
             self.check_reply(caller, &kept.status, output).await.ok()?
@@ -421,7 +462,8 @@ impl SessionManager {
     }
 
     /// What runs `command` in `workdir` for `caller`: in its checkout's root (the sandbox's
-    /// working folder, so a build writes the workspace's own target folder) changing into
+    /// working folder, so a build writes the workspace's own target folder), or in the folder
+    /// its access grants as its working directory when that isn't its checkout, changing into
     /// `workdir` first, at the caller's access.
     fn check_spec(
         &self,
@@ -429,12 +471,7 @@ impl SessionManager {
         workdir: &Path,
         command: &str,
     ) -> Result<brigadier_sandbox::SpawnSpec> {
-        let root = caller
-            .tree
-            .as_ref()
-            .and_then(|tree| tree.canonicalize().ok())
-            .filter(|tree| workdir.starts_with(tree))
-            .unwrap_or_else(|| workdir.to_owned());
+        let root = check_root(caller.tree.as_deref(), caller.cwd_grant.as_deref(), workdir);
         let command = if root == workdir {
             command.to_owned()
         } else {
@@ -468,6 +505,14 @@ impl SessionManager {
         status: &str,
         output: Vec<u8>,
     ) -> Result<(String, String)> {
+        // Nothing of the project's secrets or the session's grants is shown, stored or copied.
+        let output = redact(
+            output,
+            &[
+                caller.redactor.clone(),
+                super::secrets::redactor(self.grants.secrets()),
+            ],
+        );
         let trimmed = output.len() > TRIM_ABOVE;
         let short = (!trimmed).then(|| format!("[{status}]\n{}", String::from_utf8_lossy(&output)));
         let whole = (trimmed && caller.task_id.is_some()).then(|| output.clone());
@@ -526,6 +571,8 @@ impl SessionManager {
             reply: reply.to_owned(),
             wrapped: caller.provider == ProviderKind::Codex,
             conversation_id: caller.conversation_id.clone(),
+            task_id: caller.task_id.clone(),
+            access: Some(access_class(caller)),
             alias: alias.to_owned(),
             blob,
             duration_ms,
@@ -709,6 +756,139 @@ impl SessionManager {
     }
 }
 
+/// Where a check of a caller with checkout `tree` runs, for `workdir`: the folder its access
+/// grants as its working directory when that isn't its checkout (`cwd_grant`), else the
+/// checkout's root when `workdir` is in it, else `workdir` itself.
+fn check_root(tree: Option<&Path>, cwd_grant: Option<&Path>, workdir: &Path) -> PathBuf {
+    if let Some(grant) = cwd_grant {
+        return grant.canonicalize().unwrap_or_else(|_| grant.to_owned());
+    }
+    tree.and_then(|tree| tree.canonicalize().ok())
+        .filter(|tree| workdir.starts_with(tree))
+        .unwrap_or_else(|| workdir.to_owned())
+}
+
+/// The folder a worker's access grants as its writable working directory when that isn't its
+/// checkout `tree` (see `launch_admitted`): a Codex worker that doesn't write works from its
+/// `scratch` folder, since Codex can't run in a read-only folder. A Claude worker's access is
+/// made for its checkout, and a writing Codex worker starts in it.
+fn cwd_grant(
+    provider: ProviderKind,
+    writes: bool,
+    tree: Option<&Path>,
+    scratch: &Path,
+) -> Option<PathBuf> {
+    match (tree, provider, writes) {
+        (Some(_), ProviderKind::Claude, _) | (Some(_), _, true) => None,
+        _ => Some(scratch.to_owned()),
+    }
+}
+
+/// Whether `kept` answers `caller`: `None` when the check runs again (a failure under another
+/// sandbox, which may be what failed it); else whether its reply is the caller's own as it is
+/// (`true`), or is made again from its output (another conversation's, or another worker's
+/// whose copy of the whole output is in that worker's scratch folder, or the thread's that has
+/// none: a worker reads the whole output only from its own).
+fn reuse(kept: &Kept, caller: &Caller) -> Option<bool> {
+    reuse_for(
+        kept,
+        &caller.conversation_id,
+        caller.task_id.as_ref(),
+        caller.provider == ProviderKind::Codex,
+        &access_class(caller),
+    )
+}
+
+fn reuse_for(
+    kept: &Kept,
+    conversation: &ConversationId,
+    task: Option<&TaskId>,
+    wrapped: bool,
+    class: &str,
+) -> Option<bool> {
+    if kept.status != "exit 0" && kept.access.as_deref() != Some(class) {
+        return None;
+    }
+    Some(
+        kept.conversation_id == *conversation
+            && kept.wrapped == wrapped
+            && kept.task_id.as_ref() == task,
+    )
+}
+
+/// What `caller`'s sandbox allows a check: everything, or the network or not and writing its
+/// checkout or not.
+fn access_class(caller: &Caller) -> String {
+    class_of(
+        &caller.access,
+        caller.tree.as_deref(),
+        caller.cwd_grant.is_some(),
+    )
+}
+
+/// [`access_class`] of `access`, for checkout `tree`, its working-directory grant elsewhere
+/// when `grant_elsewhere`.
+fn class_of(access: &Access, tree: Option<&Path>, grant_elsewhere: bool) -> String {
+    let writes = |roots: &[PathBuf]| {
+        tree.is_some_and(|tree| roots.iter().any(|root| tree.starts_with(root)))
+    };
+    match access {
+        Access::Full => "full".into(),
+        Access::Workspace { .. } => "sandboxed network writes-checkout".into(),
+        Access::Scoped {
+            write_cwd,
+            writable_roots,
+            network,
+            ..
+        } => format!(
+            "sandboxed{}{}",
+            if *network { " network" } else { "" },
+            if (*write_cwd && !grant_elsewhere) || writes(writable_roots) {
+                " writes-checkout"
+            } else {
+                ""
+            }
+        ),
+        Access::ReadOnly => "read-only".into(),
+    }
+}
+
+/// Waits, up to `timeout`, until no other check of the key `hash` runs, and holds that until
+/// dropped. `None` when the wait timed out (the check runs anyway).
+async fn check_lock(hash: &str, timeout: Duration) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+    type Running = Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>;
+    static RUNNING: OnceLock<Running> = OnceLock::new();
+    let lock = {
+        let mut running = RUNNING
+            .get_or_init(Running::default)
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        running.retain(|_, lock| lock.strong_count() > 0);
+        match running.get(hash).and_then(std::sync::Weak::upgrade) {
+            Some(lock) => lock,
+            None => {
+                let lock = Arc::new(tokio::sync::Mutex::new(()));
+                running.insert(hash.to_owned(), Arc::downgrade(&lock));
+                lock
+            }
+        }
+    };
+    tokio::time::timeout(timeout, lock.lock_owned()).await.ok()
+}
+
+/// `output` with every value the `redactors` know replaced, when it is text.
+fn redact(output: Vec<u8>, redactors: &[Option<Arc<Redactor>>]) -> Vec<u8> {
+    // Output that isn't text is kept as it is, as `store_output_as` keeps it.
+    let mut text = match String::from_utf8(output) {
+        Ok(text) => text,
+        Err(err) => return err.into_bytes(),
+    };
+    for redactor in redactors.iter().flatten() {
+        text = redactor.redact(&text).into_owned();
+    }
+    text.into_bytes()
+}
+
 /// The top of the git checkout `dir` is in: the nearest folder up that holds `.git`.
 fn repo_root(dir: &Path) -> Option<PathBuf> {
     let dir = dir.canonicalize().ok()?;
@@ -718,9 +898,15 @@ fn repo_root(dir: &Path) -> Option<PathBuf> {
 }
 
 /// What the key holds besides the tree: each secret file of the project, ignored `.env*`
-/// file and lockfile in the root and in `workdir`, by its content hash ("absent" for a
-/// listed secret file that isn't there). Sorted, one line each.
-fn input_files(root: &Path, workdir: &Path, secrets: &[String]) -> Vec<String> {
+/// file and lockfile in the root, in `workdir` and in each package folder (`packages`,
+/// repository-relative: a check run from the root may build any of them), by its content hash
+/// ("absent" for a listed secret file that isn't there). Sorted, one line each.
+fn input_files(
+    root: &Path,
+    workdir: &Path,
+    packages: &[String],
+    secrets: &[String],
+) -> Vec<String> {
     let mut files: BTreeMap<String, String> = BTreeMap::new();
     let mut add = |path: PathBuf| {
         let Ok(relative) = path.strip_prefix(root) else {
@@ -742,7 +928,11 @@ fn input_files(root: &Path, workdir: &Path, secrets: &[String]) -> Vec<String> {
             add(root.join(secret));
         }
     }
-    for folder in [root, workdir] {
+    let packages: Vec<PathBuf> = packages.iter().map(|dir| root.join(dir)).collect();
+    for folder in [root, workdir]
+        .into_iter()
+        .chain(packages.iter().map(PathBuf::as_path))
+    {
         for name in LOCKFILES {
             let path = folder.join(name);
             if path.is_file() {
@@ -859,6 +1049,27 @@ fn changed_paths(git: &brigadier_git::Git, root: &Path, base: &Base) -> Result<V
 
 /// Every file of the checkout git doesn't ignore, repository-relative.
 fn listed_files(root: &Path) -> Result<Vec<String>> {
+    git_files(root, &[])
+}
+
+/// The folders of the checkout's package manifests, repository-relative ("" for the root).
+fn package_dirs(root: &Path) -> Result<Vec<String>> {
+    let manifests = git_files(root, &[":(glob)**/package.json", ":(glob)**/Cargo.toml"])?;
+    let dirs: BTreeSet<String> = manifests
+        .iter()
+        .map(|file| {
+            Path::new(file)
+                .parent()
+                .map(|dir| dir.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default()
+        })
+        .collect();
+    Ok(dirs.into_iter().collect())
+}
+
+/// The files of the checkout git doesn't ignore that match `pathspecs` (all without),
+/// repository-relative.
+fn git_files(root: &Path, pathspecs: &[&str]) -> Result<Vec<String>> {
     let output = std::process::Command::new("git")
         .args([
             "ls-files",
@@ -866,7 +1077,9 @@ fn listed_files(root: &Path) -> Result<Vec<String>> {
             "--others",
             "--exclude-standard",
             "-z",
+            "--",
         ])
+        .args(pathspecs)
         .current_dir(root)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
@@ -954,30 +1167,83 @@ impl PackageManager {
 }
 
 /// The packages among `files`: each `Cargo.toml` with a `[package]` and each `package.json`.
+/// Only those manifests are read.
 fn read_packages(root: &Path, files: &[String]) -> Vec<Package> {
-    let mut packages = Vec::new();
-    for file in files {
-        let path = Path::new(file);
-        let name = path.file_name().and_then(|name| name.to_str());
-        let dir = path
-            .parent()
-            .map(|dir| dir.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_default();
-        let Ok(text) = std::fs::read_to_string(root.join(path)) else {
-            continue;
-        };
-        let package = match name {
-            Some("Cargo.toml") => cargo_package(&dir, &text),
-            Some("package.json") => node_package(&dir, &text),
-            _ => None,
-        };
-        packages.extend(package);
-    }
-    packages
+    let manifests: Vec<(String, &str, String)> = files
+        .iter()
+        .filter_map(|file| {
+            let path = Path::new(file);
+            let name = match path.file_name().and_then(|name| name.to_str()) {
+                Some("Cargo.toml") => "Cargo.toml",
+                Some("package.json") => "package.json",
+                _ => return None,
+            };
+            let dir = path
+                .parent()
+                .map(|dir| dir.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            let text = std::fs::read_to_string(root.join(path)).ok()?;
+            Some((dir, name, text))
+        })
+        .collect();
+    // The crates' `workspace = true` dependencies are the workspaces' own.
+    let workspaces: BTreeMap<String, BTreeMap<String, String>> = manifests
+        .iter()
+        .filter(|(_, name, _)| *name == "Cargo.toml")
+        .filter_map(|(dir, _, text)| Some((dir.clone(), workspace_path_deps(dir, text)?)))
+        .collect();
+    manifests
+        .iter()
+        .filter_map(|(dir, name, text)| match *name {
+            "Cargo.toml" => {
+                // The nearest workspace above the crate (a folder holds its own).
+                let workspace = workspaces
+                    .iter()
+                    .filter(|(root, _)| {
+                        root.is_empty() || *dir == **root || dir.starts_with(&format!("{root}/"))
+                    })
+                    .max_by_key(|(root, _)| root.len())
+                    .map(|(_, deps)| deps);
+                cargo_package_in(dir, text, workspace)
+            }
+            _ => node_package(dir, text),
+        })
+        .collect()
+}
+
+/// The path dependencies a workspace's `Cargo.toml` in `dir` declares for its crates
+/// (`[workspace.dependencies]`), by name, their folders repository-relative; `None` when it
+/// isn't a workspace's manifest.
+fn workspace_path_deps(dir: &str, text: &str) -> Option<BTreeMap<String, String>> {
+    let manifest: toml::Table = toml::from_str(text).ok()?;
+    let workspace = manifest.get("workspace")?.as_table()?;
+    Some(
+        workspace
+            .get("dependencies")
+            .and_then(|deps| deps.as_table())
+            .into_iter()
+            .flatten()
+            .filter_map(|(name, dependency)| {
+                let path = dependency.get("path")?.as_str()?;
+                Some((name.clone(), normalize(&format!("{dir}/{path}"))))
+            })
+            .collect(),
+    )
 }
 
 /// A crate from its `Cargo.toml` in `dir`; `None` for a workspace's own manifest.
+#[cfg(test)]
 fn cargo_package(dir: &str, text: &str) -> Option<Package> {
+    cargo_package_in(dir, text, None)
+}
+
+/// A crate from its `Cargo.toml` in `dir`, its `workspace = true` dependencies looked up in
+/// its `workspace`'s path dependencies; `None` for a workspace's own manifest.
+fn cargo_package_in(
+    dir: &str,
+    text: &str,
+    workspace: Option<&BTreeMap<String, String>>,
+) -> Option<Package> {
     let manifest: toml::Table = toml::from_str(text).ok()?;
     let name = manifest
         .get("package")?
@@ -1001,9 +1267,13 @@ fn cargo_package(dir: &str, text: &str) -> Option<Package> {
         }
     }
     for section in sections {
-        for dependency in section.values() {
+        for (name, dependency) in section {
             if let Some(path) = dependency.get("path").and_then(|path| path.as_str()) {
                 path_deps.push(normalize(&format!("{dir}/{path}")));
+            } else if dependency.get("workspace").and_then(toml::Value::as_bool) == Some(true)
+                && let Some(path) = workspace.and_then(|deps| deps.get(name))
+            {
+                path_deps.push(path.clone());
             }
         }
     }
@@ -1278,7 +1548,9 @@ fn package_checks(
     checks
 }
 
-/// Everything: the checks learned for the root, the root's own check scripts and the
+/// Everything: the checks learned for the root, the root's own check scripts, each other
+/// package's learned checks and the check scripts of each Node package the root has no
+/// script of that name for (a root `test` is taken to run its packages' tests), and the
 /// workspace-wide Cargo commands.
 fn everything_group(
     packages: &[Package],
@@ -1291,6 +1563,7 @@ fn everything_group(
         .flatten()
         .map(|command| (command.clone(), String::new()))
         .collect();
+    let mut root_scripts: BTreeSet<&str> = BTreeSet::new();
     for package in packages.iter().filter(|package| package.dir.is_empty()) {
         if let PackageKind::Node { scripts, .. } = &package.kind {
             checks.extend(
@@ -1298,6 +1571,30 @@ fn everything_group(
                     .iter()
                     .map(|script| (manager.run(script), String::new())),
             );
+            root_scripts.extend(scripts.iter().map(String::as_str));
+        }
+    }
+    for package in packages.iter().filter(|package| !package.dir.is_empty()) {
+        checks.extend(
+            learned
+                .get(&package.folder())
+                .into_iter()
+                .flatten()
+                .map(|command| (command.clone(), package.dir.clone())),
+        );
+        if let PackageKind::Node { scripts, .. } = &package.kind {
+            let child = Package {
+                kind: PackageKind::Node {
+                    scripts: scripts
+                        .iter()
+                        .filter(|script| !root_scripts.contains(script.as_str()))
+                        .cloned()
+                        .collect(),
+                    workspace_deps: Vec::new(),
+                },
+                ..package.clone()
+            };
+            checks.extend(package_checks(&child, manager, &BTreeMap::new()));
         }
     }
     if packages
@@ -1356,7 +1653,11 @@ mod tests {
     fn material(root: &Path) -> (String, Vec<String>) {
         let git = brigadier_git::Git::new(PathBuf::from("git"), std::env::vars_os().collect());
         let tree = git.open_worktree(root).unwrap().checkout_tree().unwrap();
-        (tree.0, input_files(root, root, &["secret.json".into()]))
+        let packages = package_dirs(root).unwrap();
+        (
+            tree.0,
+            input_files(root, root, &packages, &["secret.json".into()]),
+        )
     }
 
     #[test]
@@ -1380,7 +1681,18 @@ mod tests {
         let secret = material(&root);
         assert_ne!(secret.1, env.1, "a secret file is");
         std::fs::write(root.join("Cargo.lock"), "# lock\n").unwrap();
-        assert_ne!(material(&root), secret, "a lockfile is");
+        let locked = material(&root);
+        assert_ne!(locked, secret, "a lockfile is");
+        // A package's own ignored env file, which a check run from the root may build with.
+        std::fs::create_dir_all(root.join("apps/web")).unwrap();
+        std::fs::write(root.join("apps/web/package.json"), "{\"name\": \"web\"}\n").unwrap();
+        let package = material(&root);
+        std::fs::write(root.join("apps/web/.env.production"), "API=1\n").unwrap();
+        let env = material(&root);
+        assert_eq!(env.0, package.0, "ignored, so not in the tree");
+        assert_ne!(env.1, package.1, "a package's env file is");
+        std::fs::write(root.join("apps/web/.env.production"), "API=2\n").unwrap();
+        assert_ne!(material(&root).1, env.1, "and its content");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1402,6 +1714,152 @@ mod tests {
         assert_eq!(package_folder(&root, &root.join("crates/a")), "crates/a");
         assert_eq!(package_folder(&root, &root), ".");
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_read_only_codex_worker_checks_from_its_scratch_folder() {
+        let root = repo("grant");
+        let (tree, scratch) = (root.join("tree"), root.join("scratch"));
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::create_dir_all(&scratch).unwrap();
+        // Codex can't start in a read-only folder: its access grants its scratch folder.
+        let grant = cwd_grant(ProviderKind::Codex, false, Some(&tree), &scratch);
+        assert_eq!(grant.as_deref(), Some(scratch.as_path()));
+        assert_eq!(check_root(Some(&tree), grant.as_deref(), &tree), scratch);
+        // So the checkout isn't writable in its checks' sandbox, and their failures there
+        // aren't anyone else's answer.
+        let access = Access::Scoped {
+            write_cwd: true,
+            writable_roots: Vec::new(),
+            network: true,
+            deny_read: Vec::new(),
+            unix_sockets: Vec::new(),
+        };
+        assert_eq!(class_of(&access, Some(&tree), true), "sandboxed network");
+        assert_eq!(
+            class_of(&access, Some(&tree), false),
+            "sandboxed network writes-checkout"
+        );
+        // A writer, and any Claude worker, have their access made for their checkout.
+        for (provider, writes) in [
+            (ProviderKind::Codex, true),
+            (ProviderKind::Claude, false),
+            (ProviderKind::Claude, true),
+        ] {
+            let grant = cwd_grant(provider, writes, Some(&tree), &scratch);
+            assert_eq!(grant, None, "{provider:?} {writes}");
+            assert_eq!(check_root(Some(&tree), None, &tree.join("sub")), tree);
+        }
+        assert_eq!(class_of(&Access::Full, Some(&tree), false), "full");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_checks_output_hides_the_projects_secrets() {
+        let redactor = crate::manager::secrets::redactor(vec!["s3cret-value-123".into()]);
+        let output = redact(
+            b"token=s3cret-value-123 ok\n".to_vec(),
+            &[None, redactor.clone()],
+        );
+        let text = String::from_utf8(output).unwrap();
+        assert!(!text.contains("s3cret-value-123"), "{text}");
+        assert!(text.ends_with(" ok\n"), "{text}");
+        // Output that isn't text is kept byte for byte.
+        let binary = vec![0xff, 0xfe, b'a'];
+        assert_eq!(redact(binary.clone(), &[redactor]), binary);
+    }
+
+    fn kept(status: &str, task: Option<&str>, access: Option<&str>) -> Kept {
+        Kept {
+            status: status.into(),
+            reply: "[exit 0]\nok\n".into(),
+            wrapped: false,
+            conversation_id: ConversationId("c1".into()),
+            task_id: task.map(|task| TaskId(task.into())),
+            access: access.map(str::to_owned),
+            alias: "out-1".into(),
+            blob: "b".into(),
+            duration_ms: 1,
+            ran_at_ms: 0,
+        }
+    }
+
+    #[test]
+    fn a_kept_result_is_each_callers_own_and_a_failure_only_under_the_same_sandbox() {
+        let conversation = ConversationId("c1".into());
+        let (t1, t2) = (TaskId("t1".into()), TaskId("t2".into()));
+        let pass = kept("exit 0", Some("t1"), Some("full"));
+        // The worker that ran it reads its own reply; another worker and the thread get theirs.
+        assert_eq!(
+            reuse_for(&pass, &conversation, Some(&t1), false, "full"),
+            Some(true)
+        );
+        assert_eq!(
+            reuse_for(&pass, &conversation, Some(&t2), false, "full"),
+            Some(false)
+        );
+        assert_eq!(
+            reuse_for(&pass, &conversation, None, false, "full"),
+            Some(false)
+        );
+        // A pass answers under any sandbox.
+        assert_eq!(
+            reuse_for(&pass, &conversation, Some(&t1), false, "sandboxed"),
+            Some(true)
+        );
+        // A failure answers only a caller its sandbox allowed the same; an old one, none.
+        let failed = kept("exit 1", None, Some("sandboxed"));
+        assert_eq!(
+            reuse_for(&failed, &conversation, None, false, "sandboxed"),
+            Some(true)
+        );
+        assert_eq!(
+            reuse_for(&failed, &conversation, None, false, "sandboxed network"),
+            None
+        );
+        assert_eq!(reuse_for(&failed, &conversation, None, false, "full"), None);
+        assert_eq!(
+            reuse_for(
+                &kept("exit 1", None, None),
+                &conversation,
+                None,
+                false,
+                "full"
+            ),
+            None
+        );
+        // A result kept before the caller fields existed reads as the thread's.
+        let old: Kept = serde_json::from_str(
+            r#"{"status":"exit 0","reply":"r","wrapped":false,"conversationId":"c1","alias":"out-1","blob":"b","durationMs":1,"ranAtMs":0}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            reuse_for(&old, &conversation, None, false, "full"),
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn one_check_of_a_key_runs_at_a_time() {
+        let key = format!("key-{}", uuid::Uuid::new_v4());
+        let first = check_lock(&key, Duration::from_secs(5))
+            .await
+            .expect("free");
+        // The same key waits for it; another key doesn't.
+        assert!(check_lock(&key, Duration::from_millis(100)).await.is_none());
+        let other = format!("{key}-other");
+        assert!(
+            check_lock(&other, Duration::from_millis(100))
+                .await
+                .is_some()
+        );
+        let waiter = tokio::spawn({
+            let key = key.clone();
+            async move { check_lock(&key, Duration::from_secs(5)).await.is_some() }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        drop(first);
+        assert!(waiter.await.unwrap(), "it runs once the other ended");
     }
 
     #[test]
@@ -1463,6 +1921,49 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    #[test]
+    fn a_crates_workspace_dependencies_are_its_dependencies() {
+        let root = repo("cargo-ws");
+        let write = |path: &str, text: &str| {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write(
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"crates/*\"]\n[workspace.dependencies]\nbrigadier-index = { path = \"crates/index\" }\nserde = \"1\"\n",
+        );
+        write(
+            "crates/index/Cargo.toml",
+            "[package]\nname = \"brigadier-index\"\n",
+        );
+        write(
+            "crates/core/Cargo.toml",
+            "[package]\nname = \"brigadier-core\"\n[dependencies]\nbrigadier-index.workspace = true\nserde.workspace = true\n",
+        );
+        write(
+            "crates/daemon/Cargo.toml",
+            "[package]\nname = \"brigadierd\"\n[dependencies]\nbrigadier-core = { path = \"../core\" }\n",
+        );
+        write("crates/index/src/lib.rs", "pub fn index() {}\n");
+        let files = listed_files(&root).unwrap();
+        let packages = read_packages(&root, &files);
+        let plan = affected(
+            &["crates/index/src/lib.rs".into()],
+            &packages,
+            PackageManager::Npm,
+            &BTreeMap::new(),
+        );
+        let commands = commands(&plan);
+        for crate_name in ["brigadier-index", "brigadier-core", "brigadierd"] {
+            assert!(
+                commands.contains(&format!("cargo test -p {crate_name}")),
+                "{crate_name}: {commands:?}"
+            );
+        }
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -1559,6 +2060,9 @@ mod tests {
                 [
                     "make check",
                     "pnpm run lint",
+                    "pnpm --filter @b/ui test",
+                    "pnpm --filter desktop typecheck",
+                    "pnpm --filter desktop build",
                     "cargo test --workspace",
                     "cargo clippy --workspace --all-targets -- -D warnings",
                     "cargo fmt --check",
@@ -1566,6 +2070,35 @@ mod tests {
                 "{path}"
             );
         }
+        // A root script of the same name is taken to run its packages' (the root's `lint`
+        // here), and a package's learned checks run too.
+        let mut packages = workspace();
+        packages.push(
+            node_package(
+                "packages/lint",
+                r#"{"name": "@b/lint", "scripts": {"lint": "x"}}"#,
+            )
+            .unwrap(),
+        );
+        let plan = affected(
+            &["pnpm-lock.yaml".into()],
+            &packages,
+            PackageManager::Pnpm,
+            &BTreeMap::from([(
+                "crates/core".to_owned(),
+                vec!["cargo test -p brigadier-core --features slow".to_owned()],
+            )]),
+        );
+        let commands = commands(&plan);
+        assert!(
+            !commands.contains(&"pnpm --filter @b/lint lint".to_owned()),
+            "{commands:?}"
+        );
+        assert!(
+            commands
+                .contains(&"cargo test -p brigadier-core --features slow @ crates/core".to_owned()),
+            "{commands:?}"
+        );
         // A nested lockfile is its package's.
         let plan = affected(
             &["packages/ui/package.json".into()],
