@@ -195,10 +195,13 @@ export function workedMs(spans: readonly WorkSpan[], now: number): number {
   return total;
 }
 
-/** When the spans last stopped working, or `null` while one is open. */
+/**
+ * When the spans last stopped working, or `null` when none has. A span still open belongs to a
+ * follow-up that waits for quota, not to the wait for the user.
+ */
 export function stoppedAtMs(spans: readonly WorkSpan[]): number | null {
-  if (spans.length === 0 || spans.some((span) => span.toMs === null)) return null;
-  return Math.max(...spans.map((span) => span.toMs ?? 0));
+  const stops = spans.flatMap((span) => (span.toMs === null ? [] : [span.toMs]));
+  return stops.length ? Math.max(...stops) : null;
 }
 
 /**

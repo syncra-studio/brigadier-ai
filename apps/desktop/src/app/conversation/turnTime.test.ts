@@ -123,6 +123,9 @@ test("a joined turn waits for quota only while every waiting part does", () => {
   const [userWait] = buildBlocks(messages, {}, false, { ...empty, requests: { first, steer } }, []);
   assert.equal(userWait?.state, "waiting");
   assert.equal(userWait?.quotaWait, false);
+  // It has waited for the user since the follow-up stopped, the quota wait's open span aside.
+  assert.ok(userWait);
+  assert.equal(turnTime(userWait, 1000), 920);
   const [quota] = buildBlocks(messages, {}, false, { ...empty, requests: { first, steer: { ...steer, quotaWait: true, worked: [span(50, null)] } } }, []);
   assert.equal(quota?.quotaWait, true);
 });
