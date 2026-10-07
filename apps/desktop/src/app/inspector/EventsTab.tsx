@@ -104,6 +104,8 @@ function summary(event: DomainEvent): string {
       return `${event.review.kind} review ${event.review.state.type}`;
     case "threadCommitsSeen":
       return `${event.branch} seen at ${event.tip.slice(0, 10)}`;
+    case "outputStored":
+      return `${event.output.alias} ${event.output.source} ${event.output.bytes} B`;
     case "overnightUpdated":
       return `“${event.run.name}” ${event.run.state} r${event.run.revision}`;
     case "queueChanged":

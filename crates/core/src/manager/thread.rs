@@ -301,6 +301,7 @@ impl SessionManager {
                 return;
             }
         };
+        self.pass_unsandboxed(&conv.id, &request, &decision);
         if let Err(err) = cli
             .session
             .answer(request.id.clone(), decision.clone())
@@ -330,6 +331,7 @@ impl SessionManager {
             ApprovalDecision::AllowSimilar => ApprovalDecision::Allow,
             other => other.clone(),
         };
+        self.pass_unsandboxed(conversation_id, request, &answer);
         cli.session
             .answer(request.id.clone(), answer)
             .await
@@ -346,6 +348,21 @@ impl SessionManager {
         )
         .await;
         Ok(())
+    }
+
+    /// An approved `run_unsandboxed` call may run its command, once (see `super::run`).
+    fn pass_unsandboxed(
+        &self,
+        id: &ConversationId,
+        request: &ApprovalRequest,
+        decision: &ApprovalDecision,
+    ) {
+        if request.tool == super::run::RUN_UNSANDBOXED
+            && !matches!(decision, ApprovalDecision::Deny { .. })
+            && let Some(command) = &request.command
+        {
+            self.run_passes.grant(id, command);
+        }
     }
 
     async fn log_resolution(

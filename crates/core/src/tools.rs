@@ -26,8 +26,12 @@ use crate::work::{ChecksResult, ReviewVerdict, TaskKind, WorkerRole};
 /// What a grant allows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Role {
-    /// The orchestrator of a session.
-    Orchestrator { conversation_id: ConversationId },
+    /// The orchestrator of a session (its thread).
+    Orchestrator {
+        conversation_id: ConversationId,
+        /// Its command tools, which depend on its vendor and level.
+        run: RunTools,
+    },
     /// The worker running one task.
     Worker {
         conversation_id: ConversationId,
@@ -43,6 +47,22 @@ pub enum Role {
     },
     /// A Chat's model: it may save memories to the Personal Brain.
     Chat { conversation_id: ConversationId },
+    /// A Claude thread's output hook (`brigadierd hook post-tool-use`): it may only store the
+    /// thread's command output, and calls no tools.
+    OutputHook { conversation_id: ConversationId },
+}
+
+/// The command tools a thread has besides the orchestrator tools (THREAD-PLAN.md Q4): a Codex
+/// thread runs long commands through Brigadier, which keeps their whole output and returns a
+/// digest. A Claude thread's own `Bash` output is trimmed by its hook instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RunTools {
+    #[default]
+    None,
+    /// `run`.
+    Run,
+    /// `run`, and `run_unsandboxed` to leave the sandbox with the level's approval.
+    WithEscalation,
 }
 
 /// Live grants, keyed by their secret value. Each belongs to a cleanup-ledger owner
@@ -223,6 +243,39 @@ pub struct ReadArtifact {
     /// Bytes to read (at most 16000).
     #[serde(default)]
     pub limit: Option<u32>,
+}
+
+/// `run`: a shell command run for the thread, its whole output kept.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunCommand {
+    /// The command, as you would type it in a shell (`/bin/sh -c`).
+    pub command: String,
+    /// The folder it runs in: the workspace (the default) or a folder inside it, or your own
+    /// scratch folder.
+    #[serde(default)]
+    pub workdir: Option<String>,
+    /// How long it may run, in seconds (default 600, at most 1800); it is stopped then.
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+}
+
+/// `run_unsandboxed`: the same, outside the sandbox, once approved.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunUnsandboxed {
+    /// The command, as you would type it in a shell (`/bin/sh -c`).
+    pub command: String,
+    /// The folder it runs in: the workspace (the default) or a folder inside it, or your own
+    /// scratch folder.
+    #[serde(default)]
+    pub workdir: Option<String>,
+    /// How long it may run, in seconds (default 600, at most 1800); it is stopped then.
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+    /// Why it must run outside the sandbox (what the sandbox blocked), in a sentence: the
+    /// approval is decided on it.
+    pub justification: String,
 }
 
 /// `query_brain`: ask the Project Brain.
@@ -568,6 +621,8 @@ pub enum OrchestratorCall {
     CodeRefs(CodeRefs),
     ProjectMap,
     ReviewPlan(ReviewPlan),
+    Run(RunCommand),
+    RunUnsandboxed(RunUnsandboxed),
 }
 
 impl OrchestratorCall {
@@ -600,6 +655,8 @@ impl OrchestratorCall {
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",
             Self::ReviewPlan(_) => "review_plan",
+            Self::Run(_) => "run",
+            Self::RunUnsandboxed(_) => "run_unsandboxed",
         }
     }
 }

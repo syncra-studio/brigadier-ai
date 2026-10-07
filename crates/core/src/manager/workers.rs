@@ -1274,6 +1274,7 @@ impl SessionManager {
             allowed_models: Some(allowed_models.clone()),
             auto_review: self.permission(&conversation_id) == PermissionLevel::ApproveForMe,
             omit_ai_coauthors,
+            output_hook: None,
         };
         let Started { session, events } =
             match self.runtime.start_hosted(&owner, provider, spec).await {

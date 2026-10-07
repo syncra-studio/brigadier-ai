@@ -7,8 +7,9 @@ use brigadier_core::tools::{
     AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch,
     DelegateTask, FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser, OrchestratorCall,
     PhaseDone, PlanPhases, ProposeOvernight, ProposePhases, QueryBrain, ReadArtifact, RecordNodes,
-    Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, SaveMemory,
-    SearchTranscript, SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
+    Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCommand, RunTools,
+    RunUnsandboxed, SaveMemory, SearchTranscript, SubmitOutline, SubmitReport, TaskRef, ToolCall,
+    WorkerCall,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
@@ -142,6 +143,18 @@ something only the user can do (a key, a sign-in, an account, a push), in one li
 under \"Waiting on you\" until they mark it done, and you hear when they do. Brigadier lists its \
 own decisions and the workers' needs_user items itself: don't repeat them. Returns at once.";
 
+const RUN: &str = "Run a shell command and get its result: use it for builds, tests, logs and \
+long listings, anything that prints a lot. It runs with this session's access, in the same \
+sandbox as your own shell, in `workdir` (the workspace by default; it must be inside the \
+workspace or your scratch folder). The whole output is kept: up to 8 KB comes back as it is, \
+longer output as a digest (the exit status, the error and warning lines, the first and last \
+lines) with an out-… id; page through the rest with read_artifact. `timeout_secs` defaults to \
+600 (at most 1800); the command is stopped then.";
+
+const RUN_UNSANDBOXED: &str = "Like run, but outside the sandbox, for a command the sandbox \
+blocked (the network, files outside the workspace): it waits for approval first, decided on \
+your `justification`. Try run first; use this only when the sandbox is what stopped it.";
+
 const LIST_TASKS: &str = "List this session's tasks: id, title, kind, status and model.";
 
 const CODE_SEARCH: &str = "Search the repository's code index (instant; it is kept current \
@@ -198,12 +211,31 @@ deleted under `changes`: new files that are not listed are not kept.";
 /// checks a change or plan no `ask_orchestrator`.
 pub fn tools_for(role: &Role) -> &'static [Tool] {
     static ORCHESTRATOR: OnceLock<Vec<Tool>> = OnceLock::new();
+    static RUNNER: OnceLock<Vec<Tool>> = OnceLock::new();
+    static ESCALATING: OnceLock<Vec<Tool>> = OnceLock::new();
     static WORKER: OnceLock<Vec<Tool>> = OnceLock::new();
     static CHECKER: OnceLock<Vec<Tool>> = OnceLock::new();
     static JOB: OnceLock<Vec<Tool>> = OnceLock::new();
     static CHAT: OnceLock<Vec<Tool>> = OnceLock::new();
     match role {
-        Role::Orchestrator { .. } => ORCHESTRATOR.get_or_init(orchestrator_tools),
+        Role::Orchestrator { run, .. } => match run {
+            RunTools::None => ORCHESTRATOR.get_or_init(orchestrator_tools),
+            RunTools::Run => RUNNER.get_or_init(|| {
+                let mut tools = orchestrator_tools();
+                tools.push(tool("run", RUN, input_schema::<RunCommand>()));
+                tools
+            }),
+            RunTools::WithEscalation => ESCALATING.get_or_init(|| {
+                let mut tools = orchestrator_tools();
+                tools.push(tool("run", RUN, input_schema::<RunCommand>()));
+                tools.push(tool(
+                    "run_unsandboxed",
+                    RUN_UNSANDBOXED,
+                    input_schema::<RunUnsandboxed>(),
+                ));
+                tools
+            }),
+        },
         Role::Worker { checks: false, .. } => WORKER.get_or_init(worker_tools),
         Role::Worker { checks: true, .. } => CHECKER.get_or_init(|| {
             worker_tools()
@@ -218,6 +250,7 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
         }),
         Role::BrainJob { .. } => JOB.get_or_init(job_tools),
         Role::Chat { .. } => CHAT.get_or_init(chat_tools),
+        Role::OutputHook { .. } => &[],
     }
 }
 
@@ -382,7 +415,7 @@ pub fn parse_call(
     let arguments = Value::Object(arguments);
     let unknown = || ParseError::UnknownTool(name.to_owned());
     match role {
-        Role::Orchestrator { .. } => {
+        Role::Orchestrator { run, .. } => {
             let call = match name {
                 "delegate_task" => OrchestratorCall::DelegateTask(args(name, arguments)?),
                 "message_worker" => OrchestratorCall::MessageWorker(args(name, arguments)?),
@@ -412,6 +445,10 @@ pub fn parse_call(
                 "code_refs" => OrchestratorCall::CodeRefs(args(name, arguments)?),
                 "project_map" => OrchestratorCall::ProjectMap,
                 "review_plan" => OrchestratorCall::ReviewPlan(args(name, arguments)?),
+                "run" if *run != RunTools::None => OrchestratorCall::Run(args(name, arguments)?),
+                "run_unsandboxed" if *run == RunTools::WithEscalation => {
+                    OrchestratorCall::RunUnsandboxed(args(name, arguments)?)
+                }
                 _ => return Err(unknown()),
             };
             Ok(ToolCall::Orchestrator(call))
@@ -450,6 +487,7 @@ pub fn parse_call(
             )?))),
             _ => Err(unknown()),
         },
+        Role::OutputHook { .. } => Err(unknown()),
     }
 }
 
@@ -493,6 +531,7 @@ mod tests {
     fn the_thread_searches_the_code_index_and_asks_for_plan_reviews() {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::None,
         };
         let names: Vec<String> = tools_for(&thread)
             .iter()
@@ -526,6 +565,69 @@ mod tests {
             parse_call(&thread, "review_plan", Some(arguments)),
             Ok(ToolCall::Orchestrator(OrchestratorCall::ReviewPlan(_)))
         ));
+    }
+
+    /// `run` is a Codex thread's, and `run_unsandboxed` only a sandboxed one's; a Claude
+    /// thread (its Bash output is trimmed by its hook) and the hook's own grant have neither.
+    #[test]
+    fn only_a_codex_thread_runs_commands_through_brigadier() {
+        let thread = |run| Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run,
+        };
+        let names = |role: &Role| -> Vec<String> {
+            tools_for(role)
+                .iter()
+                .map(|tool| tool.name.to_string())
+                .collect()
+        };
+        let command = || {
+            let mut arguments = JsonObject::new();
+            arguments.insert("command".into(), Value::String("cargo test".into()));
+            arguments.insert("timeout_secs".into(), Value::from(60));
+            Some(arguments)
+        };
+        let claude = names(&thread(RunTools::None));
+        assert!(!claude.iter().any(|name| name.starts_with("run")));
+        assert!(matches!(
+            parse_call(&thread(RunTools::None), "run", command()),
+            Err(ParseError::UnknownTool(_))
+        ));
+        let full = names(&thread(RunTools::Run));
+        assert!(full.contains(&"run".to_owned()));
+        assert!(!full.contains(&"run_unsandboxed".to_owned()));
+        assert!(matches!(
+            parse_call(&thread(RunTools::Run), "run", command()),
+            Ok(ToolCall::Orchestrator(OrchestratorCall::Run(RunCommand {
+                timeout_secs: Some(60),
+                ..
+            })))
+        ));
+        assert!(matches!(
+            parse_call(&thread(RunTools::Run), "run_unsandboxed", command()),
+            Err(ParseError::UnknownTool(_))
+        ));
+        let sandboxed = names(&thread(RunTools::WithEscalation));
+        assert!(sandboxed.contains(&"run".to_owned()));
+        assert!(sandboxed.contains(&"run_unsandboxed".to_owned()));
+        let mut arguments = command().unwrap();
+        arguments.insert(
+            "justification".into(),
+            Value::String("It needs the network.".into()),
+        );
+        assert!(matches!(
+            parse_call(
+                &thread(RunTools::WithEscalation),
+                "run_unsandboxed",
+                Some(arguments)
+            ),
+            Ok(ToolCall::Orchestrator(OrchestratorCall::RunUnsandboxed(_)))
+        ));
+        let hook = Role::OutputHook {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+        };
+        assert!(tools_for(&hook).is_empty());
+        assert!(parse_call(&hook, "run", command()).is_err());
     }
 
     #[test]

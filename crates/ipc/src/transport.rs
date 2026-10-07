@@ -109,6 +109,14 @@ pub enum Accepted {
     /// A CLI session's Brigadier MCP bridge (`brigadierd mcp`). The stream carries raw MCP from
     /// here on, starting with the first byte after the frame.
     Mcp { grant: String, stream: RawStream },
+    /// A Claude thread's output hook (`brigadierd hook post-tool-use`): `output.bytes` raw
+    /// bytes follow on the stream, and the daemon answers with one length-prefixed
+    /// [`crate::protocol::HookReply`] ([`encode_frame`]).
+    Hook {
+        grant: String,
+        output: crate::protocol::HookOutput,
+        stream: RawStream,
+    },
 }
 
 impl Pending {
@@ -146,6 +154,11 @@ impl Pending {
                 })
             }
             Ok(Some(ClientFrame::Mcp { grant })) => Ok(Accepted::Mcp { grant, stream }),
+            Ok(Some(ClientFrame::Hook { grant, output })) => Ok(Accepted::Hook {
+                grant,
+                output,
+                stream,
+            }),
             Ok(Some(ClientFrame::Request { .. })) => {
                 Err(Error::Unauthorized("first frame was not a hello"))
             }
@@ -190,7 +203,8 @@ async fn read_first_frame(stream: &mut Stream) -> Result<Option<ClientFrame>, Er
     Ok(Some(serde_json::from_slice(&buffer)?))
 }
 
-fn encode_frame<T: Serialize>(frame: &T) -> Result<Vec<u8>, Error> {
+/// One length-prefixed JSON frame.
+pub fn encode_frame<T: Serialize>(frame: &T) -> Result<Vec<u8>, Error> {
     let json = serde_json::to_vec(frame)?;
     if json.len() > crate::MAX_FRAME_BYTES {
         return Err(Error::FrameTooLarge(json.len()));
@@ -202,8 +216,8 @@ fn encode_frame<T: Serialize>(frame: &T) -> Result<Vec<u8>, Error> {
 }
 
 /// Connects to the daemon for `paths` without an async runtime and sends `first`, a
-/// [`ClientFrame::Mcp`]. For the short-lived helper process CLI sessions start (`brigadierd
-/// mcp`), which never reads the token.
+/// [`ClientFrame::Mcp`] or [`ClientFrame::Hook`]. For the short-lived helper processes CLI
+/// sessions start (`brigadierd mcp`, `brigadierd hook`), which never read the token.
 pub fn connect_blocking(
     paths: &AppPaths,
     first: &ClientFrame,

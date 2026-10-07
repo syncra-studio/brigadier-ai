@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use brigadier_providers::{
     Access, ApprovalDecision, Artifact, Decider, ErrorKind, InputFile, InputPart, ItemStatus,
-    LimitHit, McpServer, Origin, ProviderEvent, ProviderKind, ProviderSession,
+    LimitHit, McpServer, Origin, OutputHook, ProviderEvent, ProviderKind, ProviderSession,
     Role as ProviderRole, SessionSpec, Started, ToolSet, TurnInput, TurnStatus,
 };
 use brigadier_store::StreamPage;
@@ -50,7 +50,7 @@ use crate::model::{
 use crate::routing::TokenMeter;
 use crate::runtime::{is_delta, merge_delta};
 use crate::sessions::{inline_image_tokens, push_block};
-use crate::tools::Role;
+use crate::tools::{Role, RunTools};
 use crate::work::{
     AttachmentRef, Compaction, CompactionState, ContextInjection, InjectionKind, OrchestratorEntry,
     OrchestratorStepKind, QueuedMessage, QuotaWait, RequestState, RunState, Task, TaskId,
@@ -61,6 +61,8 @@ use crate::{Error, Result, now_ms};
 const DELTA_WINDOW: Duration = Duration::from_millis(30);
 /// How long a blocking MCP call may take for the orchestrator (its tools return at once).
 const ORCHESTRATOR_TOOL_TIMEOUT_SECS: u64 = 120;
+/// The same for a Codex thread, whose `run` waits for its command (THREAD-PLAN.md Q4).
+const RUNNER_TOOL_TIMEOUT_SECS: u64 = super::run::RUN_TIMEOUT_MAX.as_secs();
 /// A Chat's Brigadier tools (saving a memory) answer within this.
 const CHAT_TOOL_TIMEOUT_SECS: u64 = 60;
 /// Messages carried verbatim when a conversation's CLI session is started over.
@@ -1524,6 +1526,7 @@ impl SessionManager {
         let short = self.core.settings().short_replies;
         let mut launch = None;
         let mut auto_review = false;
+        let mut output_hook = None;
         let (choice, prompt, mcp, current) = match (&conversation.setup, conv.kind) {
             (Some(Setup::Session { orchestrator, .. }), _) => {
                 let choice = fallback.unwrap_or_else(|| orchestrator.clone());
@@ -1532,6 +1535,7 @@ impl SessionManager {
                     self.thread_launch(&conv.id, &dir, choice.provider).await?;
                 auto_review = reviews;
                 let workspace = started_for.workspace.clone();
+                let permission = started_for.permission;
                 launch = Some(started_for);
                 let preferences = self.memory_lines(super::brain_jobs::MEMORY_BYTES).await;
                 let run = self.run_setting(&conv.id).await;
@@ -1551,19 +1555,36 @@ impl SessionManager {
                     preferences,
                     workspace.as_ref().map(super::thread::ThreadWorkspace::told),
                 );
+                // A Codex thread runs long commands through `run`; a Claude thread's own Bash
+                // output is trimmed by its hook (THREAD-PLAN.md Q4).
+                let commands = super::run::run_tools(choice.provider, permission);
                 let grant = self.grants.issue(
                     &owner,
                     Role::Orchestrator {
                         conversation_id: conv.id.clone(),
+                        run: commands,
                     },
                 );
                 grant_values.push(grant.clone());
-                (
-                    choice,
-                    prompt,
-                    vec![self.brigadier_server(grant, ORCHESTRATOR_TOOL_TIMEOUT_SECS, false)],
-                    current,
-                )
+                let mut server = if commands == RunTools::None {
+                    self.brigadier_server(grant, ORCHESTRATOR_TOOL_TIMEOUT_SECS, false)
+                } else {
+                    self.brigadier_server(grant, RUNNER_TOOL_TIMEOUT_SECS, false)
+                };
+                if commands == RunTools::WithEscalation {
+                    server.prompt_tools = vec![super::run::RUN_UNSANDBOXED.into()];
+                }
+                if choice.provider == ProviderKind::Claude {
+                    let hook_grant = self.grants.issue(
+                        &owner,
+                        Role::OutputHook {
+                            conversation_id: conv.id.clone(),
+                        },
+                    );
+                    grant_values.push(hook_grant.clone());
+                    output_hook = Some(self.output_hook(hook_grant));
+                }
+                (choice, prompt, vec![server], current)
             }
             (Some(Setup::Chat { .. }) | None, ConversationKind::Chat) => {
                 let model = match &conversation.setup {
@@ -1646,6 +1667,7 @@ impl SessionManager {
             allowed_models: None,
             auto_review,
             omit_ai_coauthors: self.core.settings().omit_ai_coauthors,
+            output_hook,
         };
         let mut resumed = resume.is_some();
         let started = match self
@@ -1743,6 +1765,22 @@ impl SessionManager {
             tool_timeout_secs: Some(timeout_secs),
             trusted: true,
             always_load,
+            prompt_tools: Vec::new(),
+        }
+    }
+
+    /// A Claude thread's output hook (`brigadierd hook post-tool-use`), with its grant.
+    fn output_hook(&self, grant: String) -> OutputHook {
+        OutputHook {
+            command: self.config.daemon_exe.clone(),
+            args: vec![
+                "hook".into(),
+                "post-tool-use".into(),
+                "--data-dir".into(),
+                self.data_dir.to_string_lossy().into_owned(),
+            ],
+            env: vec![(super::tool_output::HOOK_GRANT_ENV.into(), grant)],
+            timeout_secs: super::tool_output::HOOK_TIMEOUT_SECS,
         }
     }
 

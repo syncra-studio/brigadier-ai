@@ -379,6 +379,40 @@ pub struct ArtifactRef {
     pub file_name: Option<String>,
 }
 
+/// A command's output the thread's model got as a digest, kept whole in the blob store
+/// (THREAD-PLAN.md Q4). The model reads it with `read_artifact` by its alias, in this
+/// conversation only; it goes with the conversation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredOutput {
+    /// `out-<id>`, unique in the conversation.
+    pub alias: String,
+    /// Content hash in the blob store.
+    pub blob: String,
+    pub source: OutputSource,
+    /// How the command ended ("exit 0", "exit 1", "timed out after 600 s").
+    pub status: String,
+    pub bytes: u64,
+    pub lines: u64,
+    /// What the model got instead, when it got a digest.
+    #[serde(default)]
+    pub shown_bytes: Option<u64>,
+    pub at_ms: i64,
+}
+
+/// Where a [`StoredOutput`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum OutputSource {
+    /// A Claude thread's successful `Bash` call: its whole output.
+    Bash,
+    /// A Claude thread's failing `Bash` call: only the excerpt the CLI gives a failure's hook
+    /// (at most about 10,000 characters of it), not the whole output.
+    BashExcerpt,
+    /// A Codex thread's `run`: its whole output, stdout and stderr together.
+    Run,
+}
+
 /// Lines added and removed, per file and in total.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

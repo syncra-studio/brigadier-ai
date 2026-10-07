@@ -1386,6 +1386,7 @@ fn spec_for(session: &RawSession, origin: Origin, record_to: Option<PathBuf>) ->
         allowed_models: None,
         auto_review: false,
         omit_ai_coauthors: false,
+        output_hook: None,
     }
 }
 

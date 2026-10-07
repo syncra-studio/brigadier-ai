@@ -261,6 +261,7 @@ impl SessionManager {
             allowed_models: None,
             auto_review: false,
             omit_ai_coauthors: false,
+            output_hook: None,
         };
         let shown: String = patch.chars().take(PATCH_CHARS).collect();
         let cut = if shown.len() < patch.len() {

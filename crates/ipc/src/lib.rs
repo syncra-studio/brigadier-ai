@@ -19,7 +19,7 @@ pub mod transport;
 pub use token::Token;
 pub use transport::{
     Accepted, Connection, Listener, Pending, RawStream, Reader, Writer, connect, connect_blocking,
-    connect_to, read_frame_blocking,
+    connect_to, encode_frame, read_frame_blocking,
 };
 
 /// Largest frame accepted in either direction.

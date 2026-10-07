@@ -1434,6 +1434,12 @@ pub enum DomainEvent {
         branch: String,
         tip: String,
     },
+    /// A command output of the thread's was stored whole; the model got a digest of it, or
+    /// (a failing Claude `Bash` call) the CLI's excerpt (THREAD-PLAN.md Q4).
+    OutputStored {
+        conversation_id: ConversationId,
+        output: crate::work::StoredOutput,
+    },
     QueueChanged {
         conversation_id: ConversationId,
         queue: MessageQueue,
@@ -1536,6 +1542,7 @@ impl DomainEvent {
             Self::PlanUpdated { .. } => "plan.updated",
             Self::ReviewUpdated { .. } => "review.updated",
             Self::ThreadCommitsSeen { .. } => "thread.seen",
+            Self::OutputStored { .. } => "output.stored",
             Self::QueueChanged { .. } => "queue.changed",
             Self::WorkerEvent { .. } => "worker.event",
             Self::OrchestratorLogged { .. } => "orchestrator.logged",

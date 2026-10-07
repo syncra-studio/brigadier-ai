@@ -2,7 +2,7 @@
 //!
 //! Frames are length-prefixed JSON (see [`crate::frame`]). The first client frame must be a
 //! [`ClientFrame::Hello`] carrying the per-launch token, or the grant-scoped frame CLI sessions
-//! use ([`ClientFrame::Mcp`]); anything else closes the connection.
+//! use ([`ClientFrame::Mcp`], [`ClientFrame::Hook`]); anything else closes the connection.
 //! Requests carry a client-chosen id echoed on the response. Responses reuse the request's
 //! `method` tag, so TypeScript can pair them with `Extract<Response, { method: M }>`.
 
@@ -91,6 +91,33 @@ pub enum ClientFrame {
     Mcp {
         grant: String,
     },
+    /// First frame of a Claude thread's output hook (`brigadierd hook post-tool-use`): the
+    /// hook's grant and the output that follows the frame, `output.bytes` raw bytes. The daemon
+    /// answers with one [`HookReply`] frame; a refused grant just closes the connection.
+    Hook {
+        grant: String,
+        output: HookOutput,
+    },
+}
+
+/// What a thread's output hook sends after its [`ClientFrame::Hook`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HookOutput {
+    /// A failing call's excerpt (the most the CLI gives a failure's hook), not a whole output.
+    pub excerpt: bool,
+    /// How the command ended ("exit 0", "exit 1", or the CLI's interpretation of a benign
+    /// non-zero exit).
+    pub status: String,
+    pub bytes: u64,
+}
+
+/// The daemon's answer to a thread's output hook.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HookReply {
+    /// What the model gets instead of the output (its digest); none: the output as it is.
+    pub replacement: Option<String>,
 }
 
 /// Commands and queries.

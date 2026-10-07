@@ -265,16 +265,21 @@ impl SessionManager {
                 Ok(text)
             }
             OrchestratorCall::ReadArtifact(args) => {
-                self.check_artifact(id, &args.id).await?;
+                // A trimmed command output of this conversation's (`out-<id>`), or a report's
+                // artifact of this project.
+                let output = self.output_blob(id, args.id.trim()).await?;
+                if output.is_none() {
+                    self.check_artifact(id, &args.id).await?;
+                }
                 let limit = args
                     .limit
                     .unwrap_or(ARTIFACT_PAGE_MAX)
                     .min(ARTIFACT_PAGE_MAX);
                 let offset = args.offset.unwrap_or(0);
-                let (bytes, total) = self
-                    .core
-                    .read_blob_range(args.id.clone(), offset, limit)
-                    .await?;
+                let blob = output
+                    .as_ref()
+                    .map_or_else(|| args.id.clone(), |(blob, _)| blob.clone());
+                let (bytes, total) = self.core.read_blob_range(blob, offset, limit).await?;
                 let text = match std::str::from_utf8(&bytes) {
                     Ok(text) => text.to_owned(),
                     // A page may end inside a character.
@@ -286,7 +291,10 @@ impl SessionManager {
                 let end = offset + text.len() as u64;
                 // Paging on through the same artifact is one read.
                 if offset == 0 {
-                    let name = self.artifact_name(id, &args.id).await;
+                    let name = match output {
+                        Some((_, name)) => name,
+                        None => self.artifact_name(id, &args.id).await,
+                    };
                     self.orchestrator_step(id, OrchestratorStepKind::ReadArtifact { name })
                         .await;
                 }
@@ -348,6 +356,28 @@ impl SessionManager {
             OrchestratorCall::CodeRefs(args) => self.code_refs_tool(id, args).await,
             OrchestratorCall::ProjectMap => self.project_map_tool(id).await,
             OrchestratorCall::ReviewPlan(args) => self.review_thread_plan(id, args).await,
+            OrchestratorCall::Run(args) => {
+                self.run_tool(
+                    id,
+                    &args.command,
+                    args.workdir.as_deref(),
+                    args.timeout_secs,
+                    false,
+                )
+                .await
+            }
+            // Codex let it through: under Approve for me its auto-reviewer approved it, under
+            // Ask for approval the user did.
+            OrchestratorCall::RunUnsandboxed(args) => {
+                self.run_tool(
+                    id,
+                    &args.command,
+                    args.workdir.as_deref(),
+                    args.timeout_secs,
+                    true,
+                )
+                .await
+            }
             OrchestratorCall::ListTasks => {
                 let tasks = self.core.tasks(id).await?;
                 if tasks.is_empty() {

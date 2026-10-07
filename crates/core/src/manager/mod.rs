@@ -52,9 +52,11 @@ mod research;
 mod review;
 mod review_runs;
 mod routing;
+mod run;
 mod secrets;
 mod side_chat;
 mod thread;
+mod tool_output;
 mod tools;
 mod undo;
 mod uninstall;
@@ -87,6 +89,7 @@ use crate::{Core, Error, Result};
 pub use brains::{BrainCounters, IndexRunStats};
 pub use closing::Turn;
 pub use conversation::SendOutcome;
+pub use tool_output::{HOOK_GRANT_ENV, HookOutput, OUTPUT_MAX_BYTES};
 pub use uninstall::TearDown;
 
 use self::cards::Waiters;
@@ -123,6 +126,9 @@ pub struct SessionManager {
     /// Held while the thread's new commits are looked for and their tip recorded
     /// ([`thread`]), so a range is taken once.
     thread_scans: tokio::sync::Mutex<()>,
+    /// Commands a Codex thread's `run_unsandboxed` may run, each once: what the user (or their
+    /// "allow similar") approved when Codex asked ([`run`]).
+    run_passes: run::RunPasses,
     /// The one-shot reviews running now, by id: their conversation, and what ends one when
     /// its conversation closes.
     running_reviews: Mutex<HashMap<String, (ConversationId, tokio_util::sync::CancellationToken)>>,
@@ -202,6 +208,7 @@ impl SessionManager {
             plans: tokio::sync::Mutex::new(()),
             reviews: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
+            run_passes: run::RunPasses::default(),
             running_reviews: Mutex::default(),
             task_writes: tokio::sync::Mutex::new(()),
             waiting: tokio::sync::Mutex::new(()),
@@ -610,9 +617,12 @@ impl ToolHost for SessionManager {
                 return ToolReply::error("This grant is not valid (the session ended).");
             };
             match (role, call) {
-                (Role::Orchestrator { conversation_id }, ToolCall::Orchestrator(call)) => {
-                    manager.orchestrator_call(conversation_id, call).await
-                }
+                (
+                    Role::Orchestrator {
+                        conversation_id, ..
+                    },
+                    ToolCall::Orchestrator(call),
+                ) => manager.orchestrator_call(conversation_id, call).await,
                 (
                     Role::Worker {
                         conversation_id,

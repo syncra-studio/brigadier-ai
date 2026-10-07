@@ -37,6 +37,10 @@ pub enum Control {
         /// `mcp_tool_call`), rather than for information.
         tool_approval: bool,
         message: String,
+        /// For a tool approval: the tool, as the message names it (`… to run tool "<name>"?`).
+        tool: Option<String>,
+        /// For a tool approval: the call's arguments (`_meta.tool_params`).
+        arguments: Value,
     },
     /// A server request Brigadier does not serve.
     Unsupported { rpc_id: Value, method: String },
@@ -52,6 +56,9 @@ pub enum PendingKind {
     FileChange,
     /// The requested permission profile, echoed back when granted.
     Permissions(Value),
+    /// A trusted server's tool call that still asks first (`approval_mode = "prompt"`),
+    /// answered as an elicitation.
+    McpTool,
 }
 
 #[derive(Debug)]
@@ -531,6 +538,14 @@ impl Parser {
                     .pointer("/_meta/codex_approval_kind")
                     .and_then(Value::as_str)
                     == Some("mcp_tool_call"),
+                tool: text("message")
+                    .split_once("run tool \"")
+                    .and_then(|(_, rest)| rest.split_once('"'))
+                    .map(|(tool, _)| tool.to_owned()),
+                arguments: params
+                    .pointer("/_meta/tool_params")
+                    .cloned()
+                    .unwrap_or(Value::Null),
                 message: clip(&text("message"), 300),
                 rpc_id,
             }));

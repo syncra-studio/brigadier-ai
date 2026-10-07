@@ -568,6 +568,7 @@ impl SessionManager {
             allowed_models: Some(brigadier_providers::AllowedModels::default()),
             auto_review: false,
             omit_ai_coauthors: false,
+            output_hook: None,
         };
         let access = spec.access.clone();
         let time = match job.kind {

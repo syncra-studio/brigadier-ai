@@ -16,11 +16,13 @@
 //!
 //! - `brigadierd mcp`: the stdio bridge CLI sessions start for the Brigadier MCP tools
 //!   ([`bridge`]);
+//! - `brigadierd hook post-tool-use`: a Claude thread's output hook ([`hook`]);
 //! - `brigadierd quit`: asks a data directory's daemon to quit ([`quit`]).
 
 mod awake;
 mod bridge;
 mod dictation;
+mod hook;
 mod idle;
 mod logging;
 mod metrics;
@@ -107,6 +109,10 @@ fn main() -> ExitCode {
     // `brigadierd mcp`: the stdio MCP bridge a CLI session starts.
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "mcp") {
         return bridge::run(std::env::args_os().skip(2));
+    }
+    // `brigadierd hook post-tool-use [--data-dir PATH]`: a Claude thread's output hook.
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "hook") {
+        return hook::run(std::env::args_os().skip(2));
     }
     // `brigadierd transcribe <model>`: one dictation's speech engine (see `dictation`).
     if std::env::args_os()

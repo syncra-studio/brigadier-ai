@@ -161,6 +161,11 @@ pub async fn accept_loop(
                 Ok(Accepted::Mcp { grant, stream }) => {
                     upgrade::serve_mcp(daemon_for_task, grant, stream).await
                 }
+                Ok(Accepted::Hook {
+                    grant,
+                    output,
+                    stream,
+                }) => upgrade::serve_hook(daemon_for_task, grant, output, stream).await,
                 Err(err) => tracing::warn!(error = %err, "rejected IPC connection"),
             }
         });

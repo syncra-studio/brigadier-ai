@@ -448,7 +448,20 @@ impl Provider for Codex {
                 .filter(|server| server.trusted)
                 .map(|server| server.name.clone())
                 .collect();
-            tokio::spawn(read_loop(rpc.clone(), stdout, shared.clone(), trusted));
+            // Trusted servers with tools that still ask first.
+            let prompting: HashSet<String> = spec
+                .mcp_servers
+                .iter()
+                .filter(|server| server.trusted && !server.prompt_tools.is_empty())
+                .map(|server| server.name.clone())
+                .collect();
+            tokio::spawn(read_loop(
+                rpc.clone(),
+                stdout,
+                shared.clone(),
+                trusted,
+                prompting,
+            ));
 
             let profile = permission_profile(&spec, &cwd);
             let profiled = profile.is_some();
@@ -889,6 +902,12 @@ async fn thread_config(
         if server.trusted {
             config["default_tools_approval_mode"] = json!("approve");
         }
+        // `mcp_servers.<id>.tools.<tool>.approval_mode` ("Per-tool approval behavior override
+        // for one MCP tool on this server", Codex config reference): `prompt` sends the call
+        // through the session's approvals.
+        for tool in &server.prompt_tools {
+            config["tools"][tool.as_str()] = json!({ "approval_mode": "prompt" });
+        }
         servers.insert(server.name.clone(), config);
     }
 
@@ -949,19 +968,29 @@ async fn thread_config(
 /// Codex 0.156.1 on macOS). Profiles are set when the thread opens; turns then set no sandbox
 /// policy of their own, which would bring back the legacy settings.
 fn permission_profile(spec: &SessionSpec, cwd: &Path) -> Option<Value> {
+    let Access::Scoped { deny_read, .. } = &spec.access else {
+        return None;
+    };
+    if deny_read.is_empty() || !can_deny_reads(spec.owned_cwd, cwd) {
+        return None;
+    }
+    scoped_profile(&spec.access)
+}
+
+/// The permission profile that holds a command to `access` (scoped only): what a session with
+/// folders it must not read runs under ([`permission_profile`]), and what a thread's `run`
+/// tool runs its commands under ([`sandbox_args`]).
+fn scoped_profile(access: &Access) -> Option<Value> {
     let Access::Scoped {
         writable_roots,
         network,
         deny_read,
         unix_sockets,
         ..
-    } = &spec.access
+    } = access
     else {
         return None;
     };
-    if deny_read.is_empty() || !can_deny_reads(spec.owned_cwd, cwd) {
-        return None;
-    }
     let real = |path: &PathBuf| {
         path.canonicalize()
             .unwrap_or_else(|_| path.clone())
@@ -987,6 +1016,54 @@ fn permission_profile(spec: &SessionSpec, cwd: &Path) -> Option<Value> {
         "filesystem": filesystem,
         "network": { "enabled": network, "unix_sockets": sockets },
     }))
+}
+
+/// The `codex` arguments that run `command` in `workdir` held to `access` exactly as a Codex
+/// session with that access is: `codex sandbox` (codex-cli 0.160.1, `codex sandbox --help`:
+/// "Run commands within a Codex-provided sandbox", `-P/--permission-profile`, `-C/--cd`,
+/// `-c key=value` parsed as TOML) under the session's own permission profile
+/// ([`scoped_profile`]): Codex's Seatbelt policy, with the same writable roots, network, denied
+/// reads and unix sockets, and the command's exit status as its own. `None` for an access that
+/// has no sandbox to keep (full access runs a command as it is).
+pub fn sandbox_args(access: &Access, workdir: &Path, command: &[String]) -> Option<Vec<String>> {
+    let profile = scoped_profile(&access.resolved())?;
+    let mut args = vec![
+        "sandbox".to_owned(),
+        "-P".to_owned(),
+        PROFILE.to_owned(),
+        "-C".to_owned(),
+        workdir.display().to_string(),
+        "-c".to_owned(),
+        format!("default_permissions={}", toml_string(PROFILE)),
+        "-c".to_owned(),
+        format!("permissions.{PROFILE}={}", toml_value(&profile)),
+        "--".to_owned(),
+    ];
+    args.extend(command.iter().cloned());
+    Some(args)
+}
+
+/// A JSON value as a TOML inline value, for a `-c` override (strings, booleans, numbers,
+/// arrays and tables; a null is an empty string).
+fn toml_value(value: &Value) -> String {
+    match value {
+        Value::Null => toml_string(""),
+        Value::Bool(flag) => flag.to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::String(text) => toml_string(text),
+        Value::Array(items) => format!(
+            "[{}]",
+            items.iter().map(toml_value).collect::<Vec<_>>().join(", ")
+        ),
+        Value::Object(table) => format!(
+            "{{{}}}",
+            table
+                .iter()
+                .map(|(key, value)| format!("{} = {}", toml_string(key), toml_value(value)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
 }
 
 /// Whether a Codex session started in `cwd` can be kept from reading folders
@@ -1600,6 +1677,10 @@ impl ProviderSession for CodexSession {
                     "permissions": if allow { requested } else { json!({}) },
                     "scope": "turn",
                 }),
+                // An elicitation's answer (`mcpServer/elicitation/request`); declined, the
+                // model reads "user rejected MCP tool call".
+                PendingKind::McpTool if allow => json!({ "action": "accept", "content": {} }),
+                PendingKind::McpTool => json!({ "action": "decline" }),
             };
             self.rpc.respond(rpc_id, result).await
         })
@@ -1636,6 +1717,7 @@ async fn read_loop(
     mut stdout: mpsc::Receiver<String>,
     shared: Arc<Shared>,
     trusted: HashSet<String>,
+    prompting: HashSet<String>,
 ) {
     let mut parser = Parser::live();
     while let Some(line) = stdout.recv().await {
@@ -1659,7 +1741,27 @@ async fn read_loop(
                     rpc_id,
                     server,
                     tool_approval,
+                    tool,
+                    arguments,
+                    ..
+                }) if tool_approval && prompting.contains(&server) => {
+                    // A trusted server's tool that still asks (a thread's `run_unsandboxed`):
+                    // the session's approvals decide, as for a command that leaves the
+                    // sandbox. Under Approve for me Codex's auto-reviewer settles it and
+                    // nothing arrives here (checked live on 0.160.1).
+                    let (request, approval_id) = tool_approval_request(&rpc_id, tool, &arguments);
+                    lock(&shared.approvals).insert(approval_id, (rpc_id, PendingKind::McpTool));
+                    shared
+                        .events
+                        .send(ProviderEvent::ApprovalRequested { request })
+                        .await;
+                }
+                Output::Control(Control::Elicitation {
+                    rpc_id,
+                    server,
+                    tool_approval,
                     message,
+                    ..
                 }) => {
                     // Trusted servers' tool calls are configured to run without asking, so
                     // this should not happen; answer rather than leave the turn hanging.
@@ -1703,6 +1805,37 @@ async fn read_loop(
                 .flatten(),
         })
         .await;
+}
+
+/// The approval request for a trusted server's tool call that asks first: a command that
+/// leaves the sandbox when its arguments carry one (`command`, `workdir`, `justification`, as
+/// a thread's `run_unsandboxed` has).
+fn tool_approval_request(
+    rpc_id: &Value,
+    tool: Option<String>,
+    arguments: &Value,
+) -> (ApprovalRequest, String) {
+    let text = |key: &str| {
+        arguments
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
+    let approval_id = format!("codex-{rpc_id}");
+    let command = text("command");
+    let request = ApprovalRequest {
+        id: approval_id.clone(),
+        kind: ApprovalKind::Command,
+        tool: tool.unwrap_or_else(|| "mcp tool".into()),
+        grant: command.as_deref().and_then(crate::policy::command_prefix),
+        command: command.clone(),
+        cwd: text("workdir"),
+        paths: Vec::new(),
+        reason: text("justification"),
+        escalation: true,
+        input: command.or_else(|| Some(crate::clip(&arguments.to_string(), 2000))),
+    };
+    (request, approval_id)
 }
 
 fn exit_message(process: &CliProcess) -> String {
@@ -1777,6 +1910,7 @@ mod tests {
             allowed_models,
             auto_review: false,
             omit_ai_coauthors: false,
+            output_hook: None,
         }
     }
 
@@ -1845,5 +1979,108 @@ mod tests {
         ));
         assert!(matches!(reviewer(true), p::ApprovalsReviewer::AutoReview));
         assert!(matches!(reviewer(false), p::ApprovalsReviewer::User));
+    }
+
+    /// A thread's `run` holds its command to the session's own permission profile through
+    /// `codex sandbox`; full access has no sandbox to keep.
+    #[test]
+    fn run_keeps_the_sessions_profile_through_codex_sandbox() {
+        let command = [
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "cargo test".to_owned(),
+        ];
+        assert!(sandbox_args(&Access::Full, Path::new("/w"), &command).is_none());
+        let access = Access::Scoped {
+            write_cwd: true,
+            writable_roots: vec![PathBuf::from("/data/orch/c1"), PathBuf::from("/work/s")],
+            network: false,
+            deny_read: vec![PathBuf::from("/data/run")],
+            unix_sockets: vec![PathBuf::from("/data/run/brigadierd.sock")],
+        };
+        let args = sandbox_args(&access, Path::new("/work/s/crate"), &command).expect("args");
+        // The same profile a session with this access opens with.
+        let session = SessionSpec {
+            access: access.clone(),
+            ..spec(ToolSet::Thread, None)
+        };
+        let profile = scoped_profile(&session.access.resolved()).expect("a profile");
+        assert_eq!(
+            args,
+            [
+                "sandbox",
+                "-P",
+                PROFILE,
+                "-C",
+                "/work/s/crate",
+                "-c",
+                "default_permissions=\"brigadier\"",
+                "-c",
+                &format!("permissions.brigadier={}", toml_value(&profile)),
+                "--",
+                "/bin/sh",
+                "-c",
+                "cargo test",
+            ]
+        );
+        let table = &args[8];
+        for part in [
+            "\":root\" = \"read\"",
+            "\":workspace_roots\" = \"write\"",
+            "\"/work/s\" = \"write\"",
+            "\"/data/run\" = \"deny\"",
+            "\"enabled\" = false",
+            "\"unix_sockets\" = {\"/data/run/brigadierd.sock\" = \"allow\"}",
+        ] {
+            assert!(table.contains(part), "{part} in {table}");
+        }
+    }
+
+    /// A prompt-mode tool call reaches the client as an elicitation (shape seen live on
+    /// codex-cli 0.160.1 under `approvals_reviewer: user`); it becomes an escalation request
+    /// for the command, answered accept or decline.
+    #[test]
+    fn a_prompted_tool_call_is_an_escalation_for_its_command() {
+        let line = json!({ "id": 7, "method": "mcpServer/elicitation/request", "params": {
+            "threadId": "t1", "turnId": "u1", "serverName": "brigadier", "mode": "form",
+            "_meta": {
+                "codex_approval_kind": "mcp_tool_call",
+                "tool_description": "Like run, but outside the sandbox",
+                "tool_params": {
+                    "command": "curl -sI https://example.com",
+                    "workdir": "/work/s",
+                    "justification": "It needs the network.",
+                },
+            },
+            "message": "Allow the brigadier MCP server to run tool \"run_unsandboxed\"?",
+            "requestedSchema": { "type": "object", "properties": {} },
+        }});
+        let mut parser = Parser::live();
+        let outputs = parser.feed(&line.to_string());
+        let [
+            Output::Control(Control::Elicitation {
+                rpc_id,
+                server,
+                tool_approval: true,
+                tool,
+                arguments,
+                ..
+            }),
+        ] = outputs.as_slice()
+        else {
+            panic!("{outputs:?}");
+        };
+        assert_eq!(server, "brigadier");
+        let (request, id) = tool_approval_request(rpc_id, tool.clone(), arguments);
+        assert_eq!(id, "codex-7");
+        assert_eq!(request.tool, "run_unsandboxed");
+        assert_eq!(
+            request.command.as_deref(),
+            Some("curl -sI https://example.com")
+        );
+        assert_eq!(request.cwd.as_deref(), Some("/work/s"));
+        assert_eq!(request.reason.as_deref(), Some("It needs the network."));
+        assert!(request.escalation);
+        assert_eq!(request.kind, ApprovalKind::Command);
     }
 }

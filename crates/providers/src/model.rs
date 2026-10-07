@@ -824,6 +824,24 @@ pub struct McpServer {
     /// tools behind its tool search, and a model that has to look a tool up first tends to
     /// fall back to its built-in ones.
     pub always_load: bool,
+    /// Tools of a trusted server whose calls still go through the session's approvals
+    /// (Codex: `mcp_servers.<id>.tools.<tool>.approval_mode = "prompt"`): a thread's command
+    /// that leaves its sandbox.
+    pub prompt_tools: Vec<String>,
+}
+
+/// A command Claude runs after each of a thread's `Bash` calls, with the call's event on its
+/// stdin (`PostToolUse` and `PostToolUseFailure` hooks, matcher `Bash`). Its reply may replace
+/// a successful call's output for the model: Brigadier's lossless trimming (`brigadierd hook
+/// post-tool-use`, THREAD-PLAN.md Q4). Only a [`ToolSet::Thread`] session gets it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputHook {
+    pub command: PathBuf,
+    pub args: Vec<String>,
+    /// Set in the CLI's environment, which its hooks inherit (a grant, which never goes on a
+    /// command line).
+    pub env: Vec<(String, String)>,
+    pub timeout_secs: u64,
 }
 
 /// Everything needed to start a provider session.
@@ -880,6 +898,8 @@ pub struct SessionSpec {
     /// (the user's setting, for sessions that commit): Claude through its attribution
     /// settings; Codex, which has none, is told in its instructions by the caller.
     pub omit_ai_coauthors: bool,
+    /// A Claude thread's output hook; Codex runs no hooks.
+    pub output_hook: Option<OutputHook>,
 }
 
 impl SessionSpec {

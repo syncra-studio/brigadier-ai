@@ -107,20 +107,30 @@ impl Turn {
     /// Asks for approval to run `command` outside the sandbox, as a CLI would, and waits for
     /// the answer (`None`: none came in time).
     pub async fn ask_approval(&self, command: &str, grant: &str) -> Option<ApprovalDecision> {
+        self.ask_tool_approval("Bash", command, Some(grant)).await
+    }
+
+    /// The same for a call of `tool` (a prompted MCP tool, such as `run_unsandboxed`).
+    pub async fn ask_tool_approval(
+        &self,
+        tool: &str,
+        command: &str,
+        grant: Option<&str>,
+    ) -> Option<ApprovalDecision> {
         let id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.answers.lock().unwrap().insert(id.clone(), tx);
         let request = brigadier_providers::ApprovalRequest {
             id,
             kind: brigadier_providers::model::ApprovalKind::Command,
-            tool: "Bash".into(),
+            tool: tool.into(),
             command: Some(command.into()),
             cwd: Some(self.cwd.display().to_string()),
             paths: Vec::new(),
             reason: Some("It needs the network.".into()),
             escalation: true,
             input: None,
-            grant: Some(grant.into()),
+            grant: grant.map(Into::into),
         };
         self.events
             .send(ProviderEvent::ApprovalRequested { request })
@@ -194,6 +204,9 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "submit_report" => ToolCall::Worker(W::SubmitReport(arg(name, args))),
         "review_code" => ToolCall::Worker(W::ReviewCode),
         "review_plan" => ToolCall::Orchestrator(O::ReviewPlan(arg(name, args))),
+        "read_artifact" => ToolCall::Orchestrator(O::ReadArtifact(arg(name, args))),
+        "run" => ToolCall::Orchestrator(O::Run(arg(name, args))),
+        "run_unsandboxed" => ToolCall::Orchestrator(O::RunUnsandboxed(arg(name, args))),
         "project_map" if orchestrator => ToolCall::Orchestrator(O::ProjectMap),
         "project_map" => ToolCall::Worker(W::ProjectMap),
         other => panic!("the flow harness doesn't know the tool {other}"),
@@ -890,3 +903,5 @@ mod overnight_tests;
 mod tests;
 #[cfg(test)]
 mod thread_tests;
+#[cfg(test)]
+mod trim_tests;

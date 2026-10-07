@@ -126,6 +126,7 @@ impl Projection {
             | DomainEvent::PlanUpdated { .. }
             | DomainEvent::ReviewUpdated { .. }
             | DomainEvent::ThreadCommitsSeen { .. }
+            | DomainEvent::OutputStored { .. }
             | DomainEvent::OvernightUpdated { .. }
             | DomainEvent::QueueChanged { .. }
             | DomainEvent::WorkerEvent { .. }

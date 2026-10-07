@@ -727,6 +727,7 @@ impl SessionManager {
             allowed_models: Some(AllowedModels::default()),
             auto_review: false,
             omit_ai_coauthors: false,
+            output_hook: None,
         };
         let counted_as = TaskId(review_owner(&review.id));
         let meter = TokenMeter::default();

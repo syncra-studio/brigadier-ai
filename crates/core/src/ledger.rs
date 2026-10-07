@@ -205,6 +205,14 @@ impl CleanupLedger {
         self.remove(owner, processes).await
     }
 
+    /// A process `owner` recorded ended on its own: it is forgotten (whatever still answers to
+    /// its recorded identity is ended first).
+    pub async fn forget(&self, owner: &str, process: Artifact) {
+        if is_process(&process) {
+            self.remove(owner, vec![process]).await;
+        }
+    }
+
     /// Removes everything `owner` created. What cannot be removed now stays recorded and is
     /// retried by the next sweep.
     pub async fn dispose(&self, owner: &str) -> Leftovers {

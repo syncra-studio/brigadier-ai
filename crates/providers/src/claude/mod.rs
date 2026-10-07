@@ -604,7 +604,45 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents) -> Value {
         settings["includeCoAuthoredBy"] = json!(false);
         settings["attribution"] = json!({ "commit": "", "pr": "" });
     }
+    if let Some(hooks) = output_hooks(spec) {
+        settings["hooks"] = hooks;
+    }
     settings
+}
+
+/// A thread's output hook ([`SessionSpec::output_hook`]) as settings `hooks`: the same command
+/// after every `Bash` call, successful (`PostToolUse`) or not (`PostToolUseFailure`). Settings
+/// passed with `--settings` hold under `--setting-sources project`, and a successful call's
+/// output is replaced by the hook's `hookSpecificOutput.updatedToolOutput` (code.claude.com/
+/// docs/en/hooks, "PostToolUse decision control"; checked on 2.1.292,
+/// docs/evidence/2026-10-07-thread-phase2-contracts.md §2).
+fn output_hooks(spec: &SessionSpec) -> Option<Value> {
+    let hook = spec
+        .output_hook
+        .as_ref()
+        .filter(|_| spec.tools == ToolSet::Thread)?;
+    let command = std::iter::once(hook.command.display().to_string())
+        .chain(hook.args.iter().cloned())
+        .map(|part| shell_quote(&part))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let entry = json!([{
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": command, "timeout": hook.timeout_secs }],
+    }]);
+    Some(json!({ "PostToolUse": entry, "PostToolUseFailure": entry }))
+}
+
+/// `text` as one word for the shell Claude runs a hook command with.
+fn shell_quote(text: &str) -> String {
+    if !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/-_.,:=@%+".contains(c))
+    {
+        return text.to_owned();
+    }
+    format!("'{}'", text.replace('\'', "'\\''"))
 }
 
 /// The `availableModels` list that holds a session to `allowed`, or `None` when Claude can't
@@ -815,9 +853,16 @@ impl Provider for Claude {
             process_spec.args = args.into_iter().map(Into::into).collect();
             process_spec.cwd = Some(cwd.clone());
             let mut env = spec.env.clone();
-            // What the MCP config refers to by name.
+            // What the MCP config refers to by name, and what the output hook reads.
             for server in &spec.mcp_servers {
                 env.extend(server.env.iter().cloned());
+            }
+            if let Some(hook) = spec
+                .output_hook
+                .as_ref()
+                .filter(|_| spec.tools == ToolSet::Thread)
+            {
+                env.extend(hook.env.iter().cloned());
             }
             if let Some(secs) = spec
                 .mcp_servers
@@ -1594,6 +1639,7 @@ mod tests {
             allowed_models: Some(allowed(ids, &["claude-opus-5-5", "claude-fable-5-1"])),
             auto_review: false,
             omit_ai_coauthors: false,
+            output_hook: None,
         }
     }
 
@@ -1810,6 +1856,66 @@ mod tests {
             ..thread(Access::Full, false)
         };
         assert!(read_only.access_with_dirs().writable_roots().is_empty());
+    }
+
+    /// Only a thread gets the output hook: one command after every `Bash` call, successful or
+    /// not, its grant in the CLI's environment and never on the command line.
+    #[test]
+    fn only_a_thread_gets_the_output_hook() {
+        let cwd = Temp::new();
+        let hook = OutputHook {
+            command: PathBuf::from("/Applications/Brigadier App.app/brigadierd"),
+            args: vec![
+                "hook".into(),
+                "post-tool-use".into(),
+                "--data-dir".into(),
+                "/Users/me/Library/Application Support/Brigadier".into(),
+            ],
+            env: vec![("BRIGADIER_HOOK_GRANT".into(), "brg_secret".into())],
+            timeout_secs: 60,
+        };
+        let thread = SessionSpec {
+            tools: ToolSet::Thread,
+            allowed_models: None,
+            output_hook: Some(hook.clone()),
+            ..spec(cwd.path(), &[])
+        };
+        let hooks = &settings(&thread, cwd.path(), &SubAgents::Any)["hooks"];
+        let expected = json!([{
+            "matcher": "Bash",
+            "hooks": [{
+                "type": "command",
+                "command": "'/Applications/Brigadier App.app/brigadierd' hook post-tool-use \
+                    --data-dir '/Users/me/Library/Application Support/Brigadier'",
+                "timeout": 60,
+            }],
+        }]);
+        assert_eq!(hooks["PostToolUse"], expected);
+        assert_eq!(hooks["PostToolUseFailure"], expected);
+        assert_eq!(hooks.as_object().map(Map::len), Some(2));
+        let args =
+            Claude::session_args(&thread, cwd.path(), "00000000-0000-4000-8000-000000000000")
+                .expect("args");
+        assert!(!args.iter().any(|arg| arg.contains("brg_secret")));
+        // Any other session has none, even if one was given.
+        for tools in [
+            ToolSet::Lean,
+            ToolSet::Default,
+            ToolSet::Web,
+            ToolSet::Review,
+        ] {
+            let other = SessionSpec {
+                tools,
+                ..thread.clone()
+            };
+            assert!(
+                settings(&other, cwd.path(), &SubAgents::Any)
+                    .get("hooks")
+                    .is_none(),
+                "{tools:?}"
+            );
+        }
+        assert_eq!(shell_quote("it's"), r"'it'\''s'");
     }
 
     #[test]
