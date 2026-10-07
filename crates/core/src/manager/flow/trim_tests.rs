@@ -450,6 +450,13 @@ async fn a_run_is_killed_at_its_timeout_and_when_the_thread_ends() {
         .trim()
         .parse()
         .unwrap();
+    // Killed, its orphan is gone once launchd reaps it (a zombie still answers a signal).
+    for _ in 0..50 {
+        if !platform.processes().is_alive(child) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     assert!(
         !platform.processes().is_alive(child),
         "its sleep was killed too"
