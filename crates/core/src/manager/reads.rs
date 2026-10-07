@@ -332,7 +332,8 @@ fn resolve(
 }
 
 /// `path` made absolute against `base`, `.` and `..` resolved, symlinks resolved as far as
-/// the file system has it.
+/// the file system has it: by the file system itself for a path that exists, as a `..` after
+/// a symlink leaves the symlink's target, which resolving it by name gets wrong.
 fn absolute(base: &Path, path: &str) -> PathBuf {
     let path = Path::new(path);
     let joined = if path.is_absolute() {
@@ -340,6 +341,9 @@ fn absolute(base: &Path, path: &str) -> PathBuf {
     } else {
         base.join(path)
     };
+    if let Ok(real) = joined.canonicalize() {
+        return real;
+    }
     let lexical = lexical(&joined);
     real_path(&lexical).unwrap_or(lexical)
 }
@@ -512,6 +516,42 @@ mod tests {
         assert_eq!(searches[0].scope, at(&workspace));
         assert_eq!(searches[1].hits, [at(&workspace.join("src/a.rs"))]);
         assert!(!searches[1].outside);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `link/..` is the parent of the link's target, not the folder the link is in.
+    #[cfg(unix)]
+    #[test]
+    fn a_parent_after_a_symlink_is_the_targets_parent() {
+        let dir = std::env::temp_dir().join(format!("brigadier-reads-{}", uuid::Uuid::new_v4()));
+        let root = {
+            std::fs::create_dir_all(&dir).unwrap();
+            real_path(&dir).unwrap()
+        };
+        let workspace = root.join("repo");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("c.rs"), "inside").unwrap();
+        std::fs::create_dir_all(root.join("elsewhere/dir")).unwrap();
+        std::fs::write(root.join("elsewhere/c.rs"), "outside").unwrap();
+        std::os::unix::fs::symlink(root.join("elsewhere/dir"), workspace.join("link")).unwrap();
+        let event = ProviderEvent::Looked {
+            item_id: "1".into(),
+            cwd: Some(workspace.display().to_string()),
+            reads: vec![FileRead {
+                path: "link/../c.rs".into(),
+                lines: None,
+            }],
+            searches: Vec::new(),
+        };
+        let (reads, _) = resolve(vec![event], Some(&workspace), &root);
+        assert_eq!(
+            reads,
+            [ThreadRead {
+                path: root.join("elsewhere/c.rs").display().to_string(),
+                lines: None,
+                outside: true
+            }]
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
