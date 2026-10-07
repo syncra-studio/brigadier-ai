@@ -120,8 +120,10 @@ pub(crate) const THREAD_OPENING: &str = "You lead a Brigadier session";
 /// (its built-in shell's isn't, THREAD-PLAN.md Q4).
 const CODEX_COMMANDS: &str = "\n- Use run for builds, tests, logs and long listings: an output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it. Under Ask for approval, run_unsandboxed runs a command the sandbox blocked once the user allows it.";
 
-/// What a Claude thread's long command output looks like (its output hook trims it).
-const CLAUDE_COMMANDS: &str = "\n- A command output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it; a failing command's output comes as the CLI's own excerpt.";
+/// Where a Claude thread's shell starts (its CLI runs in its scratch folder, so a workspace
+/// change can resume the same session) and what its long command output looks like (its
+/// output hook trims it).
+const CLAUDE_COMMANDS: &str = "\n- Your shell starts in a scratch folder, not in your workspace: run a command there as `cd <your workspace> && …`.\n- A command output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it; a failing command's output comes as the CLI's own excerpt.";
 
 /// How the thread shows the user something running (THREAD-PLAN.md Q6): its previews outlive
 /// its CLI, and in Brigadier's own repository they never touch the installed app's data.
