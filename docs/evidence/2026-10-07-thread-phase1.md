@@ -200,16 +200,34 @@ landing. The landing review returned "findings 1".
 tag-scoped cmux Computer Use runtime is not listening … toggle Computer Use off and on". The
 frozen check commands (T1.4) passed on both results.
 
+## Codex review of `257bccd8..thread-p1`
+
+`codex exec review --base 257bccd8 -c model_reasoning_effort="high"` (codex-cli 0.160.1)
+returned 1 P1 and 5 P2s. All six were real, and all are fixed, each with a test:
+
+| Finding | Fix |
+|---|---|
+| P1: a review that ends after its overnight run's report is dropped (`queue_envelope` refuses ended runs) | The outcome reaches the thread as a notice the user reads (`34146043`; test `findings_after_the_runs_report_reach_the_thread`) |
+| P2: a failed Codex turn's progress message is taken as a clean review | A review needs a completed turn with none failed (`507ad4ef`; test `progress_written_before_a_failed_turn_is_no_review`) |
+| P2: a review's news answers a worker's pending `ask_orchestrator` question | `tell_worker` steers the news in and leaves the question open (`34146043`; test `a_reviews_news_leaves_a_workers_question_open`, which fails without the fix) |
+| P2: archiving or deleting a session leaves its reviews running | Each running review has a stop that `wind_down` fires. It removes its checkout and ends failed, and a closing session starts no new review (`34146043`; test `archiving_a_session_ends_its_running_review`) |
+| P2: Codex review threads are not in the cleanup ledger | The review's thread and its child are recorded as `CodexThread` leftovers of the review (`507ad4ef`) |
+| P2: an earlier merge card counts later reviews | A card speaks for reviews started before its answer (`0b46de79`; `reviewStatus.test.ts`) |
+
+The four new flow tests passed 3× in a row.
+
 ## Checks
 
-`tools/full-checks.sh` on `ae9873e3` passed (exit 0, "full checks passed"). It ran:
+`tools/full-checks.sh` on the final engine tree (`0b46de79`) passed (exit 0, "full checks
+passed"):
 - `cargo fmt --all --check`;
 - gen-ts ("generated types are up to date");
 - `pnpm build`;
 - `cargo clippy --locked --workspace --all-targets -- -D warnings`;
-- `cargo test --locked --workspace --lib --bins --tests`;
-- `pnpm typecheck`, `lint` and `test`;
+- `cargo test --locked --workspace --lib --bins --tests`: 333 passed, 0 failed;
+- `pnpm typecheck` and `lint`;
+- `pnpm test`: 129 passed, 0 failed;
 - `git diff --check`.
 
-The commits after it change only `tools/ab` Python and this doc. The final tree's run is in the
-worker report.
+The phase-1 runs above used daemons built before these review fixes. The fixes change no path
+those runs measured.
