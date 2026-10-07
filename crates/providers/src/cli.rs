@@ -49,6 +49,13 @@ impl CliEnv {
         Self { vars }
     }
 
+    /// Exactly these variables: for tests, and tools that run a CLI they set up themselves.
+    pub fn from_vars(vars: impl IntoIterator<Item = (OsString, OsString)>) -> Self {
+        Self {
+            vars: vars.into_iter().collect(),
+        }
+    }
+
     /// Absolute path of a CLI on the login PATH.
     pub fn resolve(&self, provider: ProviderKind) -> Option<PathBuf> {
         let path = self.vars.get(OsStr::new("PATH"))?;

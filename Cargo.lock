@@ -590,6 +590,7 @@ dependencies = [
  "brigadier-sandbox",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 

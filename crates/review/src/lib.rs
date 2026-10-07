@@ -25,6 +25,7 @@ use brigadier_providers::process::{self, Options};
 use brigadier_providers::{Artifact, Ledger, ProviderKind, TokenUsage};
 use brigadier_sandbox::Platform;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 /// A reviewer's reasoning effort.
 pub const EFFORT: &str = "high";
@@ -55,8 +56,14 @@ pub struct Review {
     pub text: String,
     /// The findings it lists ([`count_findings`]).
     pub findings: u32,
-    /// What it used, when its CLI said (Codex; Claude's use is metered from its session's
-    /// events instead).
+}
+
+/// How a Codex review ended ([`run_codex`]), and what it used either way: one that failed,
+/// ran out of time or was stopped may have used tokens too.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CodexReview {
+    /// The review, or why there is none.
+    pub outcome: Result<Review, String>,
     pub usage: Option<TokenUsage>,
 }
 
@@ -240,10 +247,24 @@ pub struct CodexRun<'a> {
     pub ledger: Arc<dyn Ledger>,
     /// Its time box.
     pub time: Duration,
+    /// Ends it early (its conversation closed): its threads are still recorded for cleanup.
+    pub stop: CancellationToken,
 }
 
-/// Runs `codex exec` for one review and returns it, or why there is none.
-pub async fn run_codex(run: CodexRun<'_>) -> Result<Review, String> {
+/// Why a review that was stopped has none.
+pub const STOPPED: &str = "its conversation closed";
+
+/// Runs `codex exec` for one review and returns it, or why there is none, with what it used.
+pub async fn run_codex(run: CodexRun<'_>) -> CodexReview {
+    let mut usage = None;
+    let outcome = run_codex_review(run, &mut usage).await;
+    CodexReview { outcome, usage }
+}
+
+async fn run_codex_review(
+    run: CodexRun<'_>,
+    used: &mut Option<TokenUsage>,
+) -> Result<Review, String> {
     let binary = run
         .env
         .resolve(ProviderKind::Codex)
@@ -285,18 +306,36 @@ pub async fn run_codex(run: CodexRun<'_>) -> Result<Review, String> {
     }
     process.close_stdin().await;
     let mut events = CodexEvents::default();
-    let ran = tokio::time::timeout(run.time, async {
-        while let Some(line) = stdout.recv().await {
-            events.read(&line);
+    let ledger = run.ledger.clone();
+    let record = async |thread_id: &str| {
+        let artifact = Artifact::CodexThread {
+            thread_id: thread_id.to_owned(),
+        };
+        if let Err(err) = ledger.record(artifact).await {
+            tracing::warn!(thread = %thread_id, error = %err, "could not record a review's thread");
         }
-        process.exited().await
-    })
-    .await;
+    };
+    let ran = tokio::select! {
+        ran = tokio::time::timeout(run.time, async {
+            while let Some(line) = stdout.recv().await {
+                let known = events.thread_id.is_some();
+                events.read(&line);
+                // Its own thread goes with the review's other leftovers as soon as it exists.
+                if !known && let Some(thread) = &events.thread_id {
+                    record(thread).await;
+                }
+            }
+            process.exited().await
+        }) => ran.map_err(|_| format!(
+            "it ran out of its {}-minute time box",
+            run.time.as_secs() / 60
+        )),
+        () = run.stop.cancelled() => Err(STOPPED.to_owned()),
+    };
     if ran.is_err() {
         process.shutdown(EXIT_GRACE).await;
     }
-    // Its threads go with the review's other leftovers: its own, and the child a range review
-    // runs in, whose rollout also holds what it used.
+    // So does the child a range review runs in, whose rollout also holds what it used.
     let children = match (events.thread_id.clone(), codex_home(run.env)) {
         (Some(thread), Some(home)) => {
             tokio::task::spawn_blocking(move || child_threads(&home.join("sessions"), &thread))
@@ -305,24 +344,14 @@ pub async fn run_codex(run: CodexRun<'_>) -> Result<Review, String> {
         }
         _ => Vec::new(),
     };
-    for thread_id in events
-        .thread_id
-        .iter()
-        .chain(children.iter().map(|child| &child.id))
-    {
-        let artifact = Artifact::CodexThread {
-            thread_id: thread_id.clone(),
-        };
-        if let Err(err) = run.ledger.record(artifact).await {
-            tracing::warn!(thread = %thread_id, error = %err, "could not record a review's thread");
-        }
+    for child in &children {
+        record(&child.id).await;
     }
-    let Ok(exit) = ran else {
-        return Err(format!(
-            "it ran out of its {}-minute time box",
-            run.time.as_secs() / 60
-        ));
+    *used = match events.usage {
+        Some(usage) if usage != TokenUsage::default() => Some(usage),
+        reported => children_usage(&children).or(reported),
     };
+    let exit = ran?;
     // A turn that failed (a usage limit, say) may have written progress first: that is no
     // review.
     if !events.completed {
@@ -357,14 +386,9 @@ pub async fn run_codex(run: CodexRun<'_>) -> Result<Review, String> {
             });
         return Err(why);
     };
-    let usage = match events.usage {
-        Some(usage) if usage != TokenUsage::default() => Some(usage),
-        reported => children_usage(&children).or(reported),
-    };
     Ok(Review {
         findings: count_findings(&text),
         text,
-        usage,
     })
 }
 
@@ -485,6 +509,139 @@ fn is_rollout(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a review recorded for cleanup.
+    #[derive(Default)]
+    struct Recorded(std::sync::Mutex<Vec<Artifact>>);
+
+    impl Ledger for Recorded {
+        fn record(
+            &self,
+            artifact: Artifact,
+        ) -> brigadier_providers::BoxFuture<'_, brigadier_providers::Result<()>> {
+            self.0.lock().unwrap().push(artifact);
+            Box::pin(async { Ok(()) })
+        }
+
+        fn holds(&self, artifact: &Artifact) -> bool {
+            self.0.lock().unwrap().contains(artifact)
+        }
+    }
+
+    /// A `codex` that runs `body` (a shell script) whatever it is asked, in a folder of its own
+    /// that is also its HOME.
+    #[cfg(unix)]
+    fn fake_codex(name: &str, body: &str) -> (PathBuf, CliEnv) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("brigadier-review-{name}-{}", std::process::id()));
+        let bin = dir.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let codex = bin.join("codex");
+        fs::write(&codex, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+        let env = CliEnv::from_vars([
+            (
+                "PATH".into(),
+                format!("{}:/bin:/usr/bin", bin.display()).into(),
+            ),
+            ("HOME".into(), dir.clone().into()),
+        ]);
+        (dir, env)
+    }
+
+    #[cfg(unix)]
+    async fn review_with(
+        dir: &Path,
+        env: &CliEnv,
+        ledger: Arc<Recorded>,
+        stop: CancellationToken,
+    ) -> CodexReview {
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.join("data")),
+        })
+        .unwrap();
+        run_codex(CodexRun {
+            platform,
+            env,
+            cwd: dir,
+            output: &dir.join("review.md"),
+            model: None,
+            subject: Subject::Code { base: "HEAD~1" },
+            ledger,
+            time: Duration::from_secs(60),
+            stop,
+        })
+        .await
+    }
+
+    const STARTED: &str = r#"echo '{"type":"thread.started","thread_id":"01a1-review"}'"#;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stopped_review_leaves_its_thread_recorded_for_cleanup() {
+        let (dir, env) = fake_codex("stopped", &format!("{STARTED}\nsleep 30"));
+        let ledger = Arc::new(Recorded::default());
+        let stop = CancellationToken::new();
+        let review = tokio::spawn({
+            let (dir, env, ledger, stop) = (dir.clone(), env.clone(), ledger.clone(), stop.clone());
+            async move { review_with(&dir, &env, ledger, stop).await }
+        });
+        let thread = Artifact::CodexThread {
+            thread_id: "01a1-review".into(),
+        };
+        // Recorded as soon as it starts, not when the review ends.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while !ledger.holds(&thread) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "its thread is recorded"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        stop.cancel();
+        let ended = tokio::time::timeout(Duration::from_secs(20), review)
+            .await
+            .expect("a stopped review ends at once")
+            .unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(ended.outcome, Err(STOPPED.to_owned()));
+        assert!(ledger.holds(&thread));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_reviews_use_still_counts() {
+        let (dir, env) = fake_codex(
+            "failed",
+            &format!(
+                r#"{STARTED}
+echo '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":5,"reasoning_output_tokens":0}}}}'
+echo '{{"type":"turn.failed","error":{{"message":"usage limit reached"}}}}'
+exit 1"#
+            ),
+        );
+        let ended = review_with(
+            &dir,
+            &env,
+            Arc::new(Recorded::default()),
+            CancellationToken::new(),
+        )
+        .await;
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(ended.outcome, Err("usage limit reached".to_owned()));
+        assert_eq!(
+            ended.usage,
+            Some(TokenUsage {
+                input_tokens: 60,
+                cached_input_tokens: 40,
+                cache_write_tokens: 0,
+                output_tokens: 5,
+                reasoning_tokens: 0,
+                cost_usd: None,
+            })
+        );
+    }
 
     #[test]
     fn codex_usage_comes_from_the_last_completed_turn_with_cached_input_apart() {

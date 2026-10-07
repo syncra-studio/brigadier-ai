@@ -100,3 +100,14 @@ test("a merged card keeps its own reviews and none of the work after it", () => 
     ["later"],
   );
 });
+
+test("a merge card counts the reviews of what landed, not a worker's own review of its work", () => {
+  const card = merge("m1", 40, { type: "pending" });
+  const own = { ...review("own", 10, { type: "findings", count: 3 }), notify: { type: "worker" as const, taskId: "t1" } };
+  const landing = review("landing", 30, { type: "clean" });
+  assert.deepEqual(
+    mergeReviews(card, [card], [own, landing]).map((found) => found.id),
+    ["landing"],
+  );
+  assert.equal(reviewStatus(mergeReviews(card, [card], [own, landing])), "Review: clean");
+});

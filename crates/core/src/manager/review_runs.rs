@@ -72,15 +72,19 @@ fn other_vendor(author: ProviderKind) -> ProviderKind {
     }
 }
 
-/// The code review of `base..tip` among `reviews`, if that range has one.
+/// The code review of `base..tip` among `reviews`, if that range has one. One that could not
+/// run doesn't count: the range is reviewed again.
 fn review_of<'a>(
     reviews: impl IntoIterator<Item = &'a ReviewRun>,
     base: &str,
     tip: &str,
 ) -> Option<&'a ReviewRun> {
-    reviews
-        .into_iter()
-        .find(|review| review.kind == ReviewKind::Code && review.base == base && review.tip == tip)
+    reviews.into_iter().find(|review| {
+        review.kind == ReviewKind::Code
+            && review.base == base
+            && review.tip == tip
+            && !matches!(review.state, ReviewState::Failed { .. })
+    })
 }
 
 fn short(commit: &str) -> &str {
@@ -266,8 +270,12 @@ impl SessionManager {
             (ReviewState::Running, true) => format!(
                 "Started a review of your committed work by {reviewer}. It returns now: keep working on your checks. Its findings arrive as a message from Brigadier; if you finish everything else first, end your turn and they start your next one. Fix what you agree with and commit, then report."
             ),
-            (ReviewState::Running, false) => {
+            (ReviewState::Running, false) if review.notify == ReviewFor::Worker { task_id: task.id.clone() } => {
                 "This exact work is being reviewed already; the findings arrive as a message."
+                    .to_owned()
+            }
+            (ReviewState::Running, false) => {
+                "This exact work is being reviewed already for someone else, who gets its findings. Check your work yourself meanwhile and report."
                     .to_owned()
             }
             (ReviewState::Clean, _) => {
@@ -291,7 +299,9 @@ impl SessionManager {
     }
 
     /// Records a review and starts it, or finds the one its range already has (a code review;
-    /// then `false`). One whose reviewer can't be routed is recorded failed, not started.
+    /// then `false`). That one passes to the new asker when the worker it was for no longer
+    /// works: a verifier on its lead's last commit, or the landing of a worker's reviewed tip.
+    /// One whose reviewer can't be routed is recorded failed, not started.
     async fn start_review(&self, new: NewReview) -> Result<(ReviewRun, bool)> {
         // A closing conversation starts nothing more.
         drop(self.enter(&new.conversation_id)?);
@@ -299,7 +309,15 @@ impl SessionManager {
         if new.kind == ReviewKind::Code {
             let board = self.core.board(&new.conversation_id).await?;
             if let Some(known) = review_of(board.reviews.values(), &new.base.0, &new.tip.0) {
-                return Ok((known.clone(), false));
+                let mut known = known.clone();
+                if known.notify != new.notify
+                    && let ReviewFor::Worker { task_id } = &known.notify
+                    && !self.still_works(&known.conversation_id, task_id).await
+                {
+                    known.notify = new.notify.clone();
+                    self.store_review(&known).await?;
+                }
+                return Ok((known, false));
             }
         }
         let reviewer = other_vendor(new.author.provider);
@@ -344,21 +362,12 @@ impl SessionManager {
                 (review.conversation_id.clone(), stop.clone()),
             );
         self.spawn(async move {
-            let closed = || Err("its conversation closed".to_owned());
             let outcome = if manager.is_closing(&started.conversation_id) {
-                closed()
+                Err(brigadier_review::STOPPED.to_owned())
             } else {
-                tokio::select! {
-                    outcome = manager.run_review(&started, &new.repo, new.plan.as_ref(), effort) => outcome,
-                    () = stop.cancelled() => {
-                        // Cut off before its own cleanup: what it made goes now.
-                        let leftovers = manager.runtime.ledger().dispose(&review_owner(&started.id)).await;
-                        if !leftovers.is_clean() {
-                            tracing::warn!(review = %started.id, failures = ?leftovers.failures, "a stopped review's checkout is not removed yet");
-                        }
-                        closed()
-                    }
-                }
+                manager
+                    .run_review(&started, &new.repo, new.plan.as_ref(), effort, stop)
+                    .await
             };
             manager
                 .running_reviews
@@ -417,13 +426,15 @@ impl SessionManager {
         }
     }
 
-    /// Runs `review` in a checkout of its own and removes everything it made after.
+    /// Runs `review` in a checkout of its own and removes everything it made after, also when
+    /// `stop` ends it early (its conversation closed).
     async fn run_review(
         &self,
         review: &ReviewRun,
         repo: &Path,
         plan: Option<&(String, String)>,
         effort: Option<String>,
+        stop: tokio_util::sync::CancellationToken,
     ) -> std::result::Result<Review, String> {
         let owner = review_owner(&review.id);
         let project = self
@@ -438,9 +449,19 @@ impl SessionManager {
         );
         let checkout = self.owned_dir("worktrees", &project).join(&name);
         let scratch = self.owned_dir("scratch", &name);
-        let outcome = self
-            .review_in(review, &owner, repo, &checkout, &scratch, plan, effort)
-            .await;
+        // Its checkout is made to the end even when it is stopped meanwhile, so that what is
+        // disposed after is all there is.
+        let outcome = match self
+            .set_up_review(review, &owner, repo, &checkout, &scratch)
+            .await
+        {
+            Err(why) => Err(why),
+            Ok(()) if stop.is_cancelled() => Err(brigadier_review::STOPPED.to_owned()),
+            Ok(()) => {
+                self.review_in(review, &owner, &checkout, &scratch, plan, effort, stop)
+                    .await
+            }
+        };
         let leftovers = self.runtime.ledger().dispose(&owner).await;
         if !leftovers.is_clean() {
             tracing::warn!(review = %review.id, failures = ?leftovers.failures, "a review's checkout is not removed yet");
@@ -448,17 +469,15 @@ impl SessionManager {
         outcome
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn review_in(
+    /// Makes `review`'s detached checkout at its tip, and its scratch folder.
+    async fn set_up_review(
         &self,
         review: &ReviewRun,
         owner: &str,
         repo: &Path,
         checkout: &Path,
         scratch: &Path,
-        plan: Option<&(String, String)>,
-        effort: Option<String>,
-    ) -> std::result::Result<Review, String> {
+    ) -> std::result::Result<(), String> {
         let setting_up = |err: Error| format!("its checkout could not be made: {err}");
         let ledger = self.runtime.ledger();
         // Recorded before it exists: a restart removes what is left of it.
@@ -501,27 +520,57 @@ impl SessionManager {
             Ok(())
         })
         .await
-        .map_err(setting_up)?;
+        .map_err(setting_up)
+    }
+
+    /// Runs `review` in its checkout: Codex as `codex exec`, Claude through its adapter.
+    #[allow(clippy::too_many_arguments)]
+    async fn review_in(
+        &self,
+        review: &ReviewRun,
+        owner: &str,
+        checkout: &Path,
+        scratch: &Path,
+        plan: Option<&(String, String)>,
+        effort: Option<String>,
+        stop: tokio_util::sync::CancellationToken,
+    ) -> std::result::Result<Review, String> {
         let subject = match plan {
             Some((brief, outline)) => Subject::Plan { brief, outline },
             None => Subject::Code { base: &review.base },
         };
         if self.reviews_hosted(review.reviewer) {
-            return self
-                .review_hosted(review, owner, checkout, subject, effort)
-                .await;
+            return tokio::select! {
+                outcome = self.review_hosted(review, owner, checkout, subject, effort) => outcome,
+                () = stop.cancelled() => Err(brigadier_review::STOPPED.to_owned()),
+            };
         }
-        brigadier_review::run_codex(CodexRun {
+        let ran = brigadier_review::run_codex(CodexRun {
             platform: self.runtime.platform().clone(),
             env: self.runtime.cli_env(),
             cwd: checkout,
             output: &scratch.join("review.md"),
             model: review.reviewer_model.as_deref(),
             subject,
-            ledger: ledger.handle(owner.to_owned()),
+            ledger: self.runtime.ledger().handle(owner.to_owned()),
             time: REVIEW_TIME,
+            stop,
         })
-        .await
+        .await;
+        // What it used counts whether or not it came to a review (Claude's is counted as it
+        // goes).
+        if let Some(usage) = &ran.usage {
+            self.note_tokens(
+                &TokenMeter::default(),
+                review.reviewer,
+                review.reviewer_model.as_deref(),
+                TokenOwner::Task(&review.conversation_id, &TaskId(review_owner(&review.id))),
+                usage,
+                None,
+            )
+            .await;
+        }
+        ran.outcome
     }
 
     /// Whether `reviewer`'s reviews run through its adapter: Claude's always; Codex's run as
@@ -646,8 +695,19 @@ impl SessionManager {
         Ok(Review {
             findings: brigadier_review::count_findings(&text),
             text,
-            usage: None,
         })
+    }
+
+    /// Whether `task_id` still works: a review's news reaches it as a message.
+    async fn still_works(&self, conversation_id: &ConversationId, task_id: &TaskId) -> bool {
+        self.task_by_id(conversation_id, task_id)
+            .await
+            .is_ok_and(|task| {
+                matches!(
+                    task.state,
+                    TaskState::Starting | TaskState::Running | TaskState::Blocked
+                )
+            })
     }
 
     /// Records how `review` ended and tells whoever asked.
@@ -656,19 +716,6 @@ impl SessionManager {
         ended.ended_at_ms = Some(now_ms());
         let text = match outcome {
             Ok(found) => {
-                // Codex's use comes with its review; Claude's was counted as it went.
-                if let Some(usage) = &found.usage {
-                    let counted_as = TaskId(review_owner(&ended.id));
-                    self.note_tokens(
-                        &TokenMeter::default(),
-                        ended.reviewer,
-                        ended.reviewer_model.as_deref(),
-                        TokenOwner::Task(&ended.conversation_id, &counted_as),
-                        usage,
-                        None,
-                    )
-                    .await;
-                }
                 match self
                     .core
                     .store()
@@ -702,8 +749,17 @@ impl SessionManager {
         {
             return;
         }
-        if let Err(err) = self.store_review(&ended).await {
-            tracing::warn!(review = %ended.id, error = %err, "could not record a review's end");
+        {
+            // Whoever it passed to meanwhile hears it ([`Self::start_review`]).
+            let _held = self.reviews.lock().await;
+            if let Ok(board) = self.core.board(&ended.conversation_id).await
+                && let Some(now) = board.reviews.get(&ended.id)
+            {
+                ended.notify = now.notify.clone();
+            }
+            if let Err(err) = self.store_review(&ended).await {
+                tracing::warn!(review = %ended.id, error = %err, "could not record a review's end");
+            }
         }
         self.tell_review(&ended, text.as_deref()).await;
     }
@@ -963,6 +1019,20 @@ mod tests {
         // review of code.
         assert!(review_of(&reviews, "b2", "c3").is_none());
         assert!(review_of(&reviews[..1], "a1", "b2").is_none());
+    }
+
+    #[test]
+    fn a_review_that_could_not_run_leaves_its_range_to_be_reviewed() {
+        let mut failed = review("failed", ReviewKind::Code, "a1", "b2");
+        failed.state = ReviewState::Failed {
+            reason: "no Codex model can review it now".into(),
+        };
+        assert!(review_of([&failed], "a1", "b2").is_none());
+        let again = review("again", ReviewKind::Code, "a1", "b2");
+        assert_eq!(
+            review_of([&failed, &again], "a1", "b2").map(|review| review.id.as_str()),
+            Some("again")
+        );
     }
 
     #[test]

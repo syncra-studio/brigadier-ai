@@ -2,9 +2,11 @@ import type { Approval, ReviewRun } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
 
 /**
- * The code reviews a merge card speaks for: every landing's (and every worker's own) since the
- * session's previous merge, up to the card's own answer. Each landed change gets one, by the
- * other vendor, in the background; one still running at the merge stays the card's until it ends.
+ * The code reviews a merge card speaks for: every landing's since the session's previous merge,
+ * up to the card's own answer. Each landed change gets one, by the other vendor, in the
+ * background; one still running at the merge stays the card's until it ends. A worker's review of
+ * its own work in progress is not one: the worker answered it before it reported. (When a landing
+ * reuses a worker's review of the same commits, the daemon hands that review to the orchestrator.)
  */
 export function mergeReviews(
   card: Approval,
@@ -22,7 +24,11 @@ export function mergeReviews(
     .reduce((latest, other) => Math.max(latest, other.resolvedAtMs ?? other.createdAtMs), 0);
   const until = card.resolvedAtMs ?? Number.POSITIVE_INFINITY;
   return reviews.filter(
-    (review) => review.kind === "code" && review.startedAtMs >= since && review.startedAtMs < until,
+    (review) =>
+      review.kind === "code" &&
+      review.notify.type === "orchestrator" &&
+      review.startedAtMs >= since &&
+      review.startedAtMs < until,
   );
 }
 
