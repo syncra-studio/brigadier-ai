@@ -463,6 +463,75 @@ impl Core {
         Ok(())
     }
 
+    /// The engine the store belongs to; none before the thread engine's first start.
+    pub(crate) fn engine(&self) -> Option<String> {
+        self.projection().engine.clone()
+    }
+
+    /// The conversations an engine's first start is deleting, while it hasn't finished.
+    pub(crate) fn engine_switch(&self) -> Option<Vec<ConversationId>> {
+        self.projection().engine_switch.clone()
+    }
+
+    /// Starts `engine`'s first start, in one durable write: the conversations it deletes, each
+    /// marked as being deleted (gone for the user from now on, see [`Self::mark_deleting`]),
+    /// and the default permission back to Full access.
+    pub(crate) async fn begin_engine_switch(
+        &self,
+        engine: &str,
+        conversations: Vec<ConversationId>,
+    ) -> Result<()> {
+        let _writes = self.settings_writes.lock().await;
+        let marks: Vec<(String, DomainEvent)> = {
+            let projection = self.projection();
+            conversations
+                .iter()
+                .filter(|id| {
+                    projection
+                        .conversations
+                        .get(id)
+                        .is_some_and(|conversation| !conversation.deleting)
+                })
+                .map(|id| {
+                    (
+                        streams::CATALOG.into(),
+                        DomainEvent::ConversationDeleting { id: id.clone() },
+                    )
+                })
+                .collect()
+        };
+        let mut events = vec![(
+            streams::CATALOG.into(),
+            DomainEvent::EngineSwitching {
+                engine: engine.to_owned(),
+                conversations,
+            },
+        )];
+        events.extend(marks);
+        let mut settings = self.settings();
+        if settings.default_permission != crate::model::PermissionLevel::FullAccess {
+            settings.default_permission = crate::model::PermissionLevel::FullAccess;
+            events.push((
+                streams::SETTINGS.into(),
+                DomainEvent::SettingsChanged { settings },
+            ));
+        }
+        self.record(events).await?;
+        Ok(())
+    }
+
+    /// Records that the store belongs to `engine`: its first start is over.
+    pub(crate) async fn finish_engine_switch(&self, engine: &str) -> Result<()> {
+        self.record(vec![(
+            streams::CATALOG.into(),
+            DomainEvent::EngineSwitched {
+                engine: engine.to_owned(),
+            },
+        )])
+        .await?;
+        Ok(())
+    }
+
     pub async fn rename_conversation(
         &self,
         id: ConversationId,

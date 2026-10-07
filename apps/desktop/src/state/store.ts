@@ -549,6 +549,10 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "cleanupRequested":
     case "cleanupCompleted":
     case "conversationCleanup":
+    // The daemon's own record of the thread engine's first start; its deletes arrive as
+    // conversationDeleting.
+    case "engineSwitching":
+    case "engineSwitched":
     // Conversation views (tasks, cards, queue, streaming) and the Inspector's orchestrator
     // log read these themselves.
     case "thinkingDelta":

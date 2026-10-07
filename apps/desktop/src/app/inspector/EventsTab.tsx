@@ -71,6 +71,10 @@ function summary(event: DomainEvent): string {
     case "conversationDeleted":
     case "projectRemoved":
       return "deleted";
+    case "engineSwitching":
+      return `${event.engine}: deleting ${event.conversations.length}`;
+    case "engineSwitched":
+      return event.engine;
     case "thinkingDelta":
     case "messageDelta":
       return event.text.slice(0, 120).replace(/\s+/g, " ");

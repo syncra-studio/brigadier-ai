@@ -25,6 +25,7 @@ mod cold;
 mod conversation;
 pub(crate) mod decisions;
 pub mod disk;
+mod engine;
 mod fallback;
 #[cfg(debug_assertions)]
 pub mod fault;
@@ -235,6 +236,9 @@ impl SessionManager {
         manager.start_machine_watch().await;
         // Cleanups a quit cut off finish before anything of those conversations resumes.
         manager.finish_cut_off_cleanups().await;
+        // The thread engine's first start deletes the earlier engine's conversations, before
+        // anything of theirs could resume.
+        manager.switch_engine().await?;
         manager.recover_active_runs().await;
         manager.recover().await;
         manager.resume_runs().await;

@@ -1399,6 +1399,16 @@ pub enum DomainEvent {
     ProjectRemoved {
         id: ProjectId,
     },
+    /// The first start of `engine` began deleting the conversations made before it (THREAD-PLAN
+    /// Q14): exactly these, also after a restart cut it off, until [`Self::EngineSwitched`].
+    EngineSwitching {
+        engine: String,
+        conversations: Vec<ConversationId>,
+    },
+    /// The store belongs to `engine`: its first start is over and does not run again.
+    EngineSwitched {
+        engine: String,
+    },
     /// Assistant text as it streams. The final `messageAppended` with the same id replaces it.
     MessageDelta {
         conversation_id: ConversationId,
@@ -1584,6 +1594,8 @@ impl DomainEvent {
             Self::ConversationDeleting { .. } => "conversation.deleting",
             Self::ConversationDeleted { .. } => "conversation.deleted",
             Self::ProjectRemoved { .. } => "project.removed",
+            Self::EngineSwitching { .. } => "engine.switching",
+            Self::EngineSwitched { .. } => "engine.switched",
             Self::MessageDelta { .. } => "message.delta",
             Self::ThinkingDelta { .. } => "thinking.delta",
             Self::RunStateChanged { .. } => "conversation.run",

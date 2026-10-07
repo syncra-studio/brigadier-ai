@@ -907,6 +907,8 @@ impl Flow {
 }
 
 #[cfg(test)]
+mod engine_tests;
+#[cfg(test)]
 mod overnight_tests;
 mod preview_tests;
 #[cfg(test)]

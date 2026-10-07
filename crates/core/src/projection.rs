@@ -12,6 +12,11 @@ pub(crate) struct Projection {
     /// Conversations that were deleted: nothing more is recorded on their streams.
     pub(crate) deleted: HashSet<ConversationId>,
     pub(crate) settings: Settings,
+    /// The engine the store belongs to ([`DomainEvent::EngineSwitched`]); none before the first
+    /// start of the thread engine.
+    pub(crate) engine: Option<String>,
+    /// The conversations an engine's first start is deleting, until it has finished.
+    pub(crate) engine_switch: Option<Vec<ConversationId>>,
     /// Global seq of the event that last set each last-writer-wins field. Concurrent writers
     /// can resume in a different order than they committed; an older event must not win.
     title_seqs: HashMap<String, i64>,
@@ -67,6 +72,13 @@ impl Projection {
             }
             DomainEvent::ProjectRemoved { id } => {
                 self.projects.remove(id);
+            }
+            DomainEvent::EngineSwitching { conversations, .. } => {
+                self.engine_switch = Some(conversations.clone());
+            }
+            DomainEvent::EngineSwitched { engine } => {
+                self.engine = Some(engine.clone());
+                self.engine_switch = None;
             }
             DomainEvent::ConversationCreated { conversation } => {
                 self.conversations
