@@ -1,4 +1,8 @@
-//! A Codex thread's `run` and `run_unsandboxed` tools (THREAD-PLAN.md Q4).
+//! A thread's `run` and `run_unsandboxed` tools (THREAD-PLAN.md Q4; a Claude thread's too,
+//! the user's ruling of 2026-10-07). A Claude thread's `run` is sandboxed by Brigadier's own
+//! Seatbelt profile with the thread's folders ([`SessionManager::seatbelt_spec`]); under
+//! Approve for me its `run_unsandboxed` is decided by Brigadier's reviewer
+//! (`super::escalation`), under Ask for approval by the user, as Codex's is.
 //!
 //! Codex's hooks stay off, so its built-in shell's output reaches the model untrimmed. `run`
 //! is the shell the thread uses for builds, tests and logs instead: Brigadier owns the command,
@@ -55,18 +59,20 @@ const SHELL: &str = "/bin/sh";
 /// How long an approved `run_unsandboxed` command waits for its call.
 const PASS_TTL: Duration = Duration::from_secs(120);
 
-/// The command tools a thread on `provider` at `permission` has: a Codex thread runs long
-/// commands through `run`, and under Ask for approval leaves its sandbox through
-/// `run_unsandboxed`; a Claude thread has its hook. Not on Windows, which has no `/bin/sh` and
-/// no `codex sandbox`.
+/// The command tools a thread on `provider` at `permission` has. Both vendors run builds,
+/// tests, logs and long listings through `run`. A Codex thread leaves its sandbox through
+/// `run_unsandboxed` under Ask for approval only (under Approve for me its own shell asks
+/// Codex's auto-reviewer); a Claude thread has it at both sandboxed levels: Claude's auto mode
+/// declines every command that leaves its sandbox, so under Approve for me Brigadier's
+/// reviewer decides (`super::escalation`). Full access has no sandbox to leave. Not on
+/// Windows, which has no `/bin/sh` and no sandbox `run` can keep.
 pub(crate) fn run_tools(provider: ProviderKind, permission: PermissionLevel) -> RunTools {
-    match provider {
+    match (provider, permission) {
         _ if cfg!(windows) => RunTools::None,
-        ProviderKind::Claude => RunTools::None,
-        ProviderKind::Codex if permission == PermissionLevel::AskForApproval => {
-            RunTools::WithEscalation
-        }
-        ProviderKind::Codex => RunTools::Run,
+        (_, PermissionLevel::FullAccess) => RunTools::Run,
+        (_, PermissionLevel::AskForApproval) => RunTools::WithEscalation,
+        (ProviderKind::Claude, PermissionLevel::ApproveForMe) => RunTools::WithEscalation,
+        (ProviderKind::Codex, PermissionLevel::ApproveForMe) => RunTools::Run,
     }
 }
 
@@ -140,18 +146,22 @@ impl SessionManager {
         if command.trim().is_empty() {
             return Err(Error::Invalid("`command` is empty".into()));
         }
-        if unsandboxed && !self.run_passes.take(id, command, workdir) {
+        let cli = self
+            .conv(id)?
+            .live_cli()
+            .await
+            .ok_or_else(|| Error::Invalid("the session's thread has ended".into()))?;
+        // A Claude thread at Approve for me asks Brigadier's reviewer once its folder is known.
+        let reviewed = unsandboxed
+            && cli.provider == ProviderKind::Claude
+            && self.permission(id) == PermissionLevel::ApproveForMe;
+        if unsandboxed && !reviewed && !self.run_passes.take(id, command, workdir) {
             return Err(Error::Invalid(
                 "run_unsandboxed runs only a command the user approved when it was asked, \
                  once; nothing approved this one"
                     .into(),
             ));
         }
-        let cli = self
-            .conv(id)?
-            .live_cli()
-            .await
-            .ok_or_else(|| Error::Invalid("the session's thread has ended".into()))?;
         let launch = cli
             .launch
             .as_ref()
@@ -162,6 +172,10 @@ impl SessionManager {
             .as_ref()
             .map(|workspace| workspace.path.clone());
         let workdir = run_workdir(workdir, workspace.as_deref(), &scratch)?;
+        if reviewed {
+            self.decide_escalation(id, command, &workdir, workspace.as_deref())
+                .await?;
+        }
         let timeout = timeout_secs
             .map_or(RUN_TIMEOUT_DEFAULT, Duration::from_secs)
             .clamp(Duration::from_secs(1), RUN_TIMEOUT_MAX);
@@ -170,10 +184,17 @@ impl SessionManager {
         } else {
             launch.access.clone()
         };
-        let mut spec = self.run_spec(&access, &workdir, command)?;
+        // A Claude thread's sandbox is Brigadier's own Seatbelt profile with its folders;
+        // Codex's is `codex sandbox` with its session's profile.
+        let mut spec = match cli.provider {
+            ProviderKind::Claude if access != Access::Full => {
+                self.seatbelt_spec(&access, &workdir, &shell_command(command)[1..])?
+            }
+            _ => self.run_spec(&access, &workdir, command)?,
+        };
         brigadier_providers::cli::apply_session_env(
             &mut spec,
-            &SessionManager::thread_env(&scratch, ProviderKind::Codex),
+            &SessionManager::thread_env(&scratch, cli.provider),
             &[],
         );
         let ran = run_command(
@@ -466,13 +487,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_a_codex_thread_runs_and_only_under_ask_does_it_escalate() {
+    fn every_thread_runs_and_leaves_its_sandbox_where_something_decides() {
         if cfg!(windows) {
             return;
         }
         assert_eq!(
+            run_tools(ProviderKind::Claude, PermissionLevel::FullAccess),
+            RunTools::Run
+        );
+        // Brigadier's reviewer decides at Approve for me, the user at Ask.
+        assert_eq!(
+            run_tools(ProviderKind::Claude, PermissionLevel::ApproveForMe),
+            RunTools::WithEscalation
+        );
+        assert_eq!(
             run_tools(ProviderKind::Claude, PermissionLevel::AskForApproval),
-            RunTools::None
+            RunTools::WithEscalation
         );
         assert_eq!(
             run_tools(ProviderKind::Codex, PermissionLevel::FullAccess),

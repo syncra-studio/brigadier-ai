@@ -121,10 +121,11 @@ pub(crate) const THREAD_OPENING: &str = "You lead a Brigadier session";
 /// (its built-in shell's isn't, THREAD-PLAN.md Q4).
 const CODEX_COMMANDS: &str = "\n- Use run for builds, tests, logs and long listings: an output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it. Under Ask for approval, run_unsandboxed runs a command the sandbox blocked once the user allows it.";
 
-/// Where a Claude thread's shell starts (its CLI runs in its scratch folder, so a workspace
-/// change can resume the same session) and what its long command output looks like (its
-/// output hook trims it).
-const CLAUDE_COMMANDS: &str = "\n- Your shell starts in a scratch folder, not in your workspace: run a command there as `cd <your workspace> && …`.\n- A command output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it; a failing command's output comes as the CLI's own excerpt.";
+/// How a Claude thread runs long commands: through `run` too, whose output Brigadier keeps
+/// whole, a failure's included; where its own shell starts (its CLI runs in its scratch
+/// folder, so a workspace change can resume the same session) and what that shell's long
+/// output looks like (its output hook trims it).
+const CLAUDE_COMMANDS: &str = "\n- Use run for builds, tests, logs and long listings: it runs in your workspace, and an output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it, a failure's too. When the sandbox blocks a command, run_unsandboxed runs it outside once it is approved for you.\n- Your own shell starts in a scratch folder, not in your workspace: run a command there as `cd <your workspace> && …`. Its output over 8 KB comes back as a digest too; a failing command's output comes as the CLI's own excerpt.";
 
 /// How the thread shows the user something running (THREAD-PLAN.md Q6): its previews outlive
 /// its CLI, and in Brigadier's own repository they never touch the installed app's data.
@@ -1205,8 +1206,8 @@ mod environment_tests {
             ProviderKind::Claude,
             true,
         );
-        assert!(!claude.contains("Use run for"));
-        assert!(!claude.contains("run_unsandboxed"));
+        assert!(claude.contains("Use run for builds, tests, logs and long listings"));
+        assert!(claude.contains("run_unsandboxed"));
         assert!(claude.contains("a failing command's output comes as the CLI's own excerpt"));
         assert!(claude.contains("Your workspace: (none yet)"));
         // Every byte is paid for on every call: it stays under the old orchestrator's 11,371

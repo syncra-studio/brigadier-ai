@@ -132,12 +132,13 @@ async fn a_trimmed_output_is_read_back_whole_by_its_own_session_only() {
             conversation_id: flow.conversation.clone()
         })
     );
-    // Its tools: no `run` (its own Bash output is trimmed by the hook).
+    // Its tools: `run` too (the user's ruling of 2026-10-07); its own Bash output is trimmed
+    // by the hook. At Full access there is no sandbox to leave.
     assert_eq!(
         flow.manager.grants.resolve(&grant),
         Some(Role::Orchestrator {
             conversation_id: flow.conversation.clone(),
-            run: RunTools::None,
+            run: RunTools::Run,
         })
     );
     // Its run_check waits for its command as a Codex thread's run does.
