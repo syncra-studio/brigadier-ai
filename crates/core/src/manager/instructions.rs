@@ -4,7 +4,9 @@
 //!
 //! - **Claude Code**, with the adapter's `instructionFiles = claude-md-and-agents-md`: the root
 //!   `CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules/*.md` and the root `AGENTS.md` at start,
-//!   and a subfolder's `CLAUDE.md` / `AGENTS.md` when it reads a file there. Nothing is added.
+//!   and a subfolder's `CLAUDE.md` / `AGENTS.md` when it reads a file there, but only below its
+//!   working folder. A Claude worker starts in the session's worker folder, outside its
+//!   worktree (THREAD-PLAN.md Q8 lever 2), so its prompt carries all of them, like the thread's.
 //! - **Codex**: only the `AGENTS.md` files from the repository root down to its working
 //!   folder; no `CLAUDE.md`, and no nested files below. A Codex worker's prompt carries the
 //!   `CLAUDE.md` files, `.claude/CLAUDE.md`, `.claude/rules/*.md`, and the nested
@@ -29,13 +31,16 @@ const MAX_BYTES: usize = 32 * 1024;
 
 /// The instruction files `provider` does not load itself, formatted for the worker prompt.
 pub(crate) async fn for_worker(provider: ProviderKind, worktree: &Path) -> String {
-    if provider == ProviderKind::Claude {
-        return String::new();
-    }
     let worktree = worktree.to_owned();
-    tokio::task::spawn_blocking(move || collect(&worktree))
-        .await
-        .unwrap_or_default()
+    tokio::task::spawn_blocking(move || {
+        if provider == ProviderKind::Claude {
+            collect_files(&worktree, true, "The task spec wins over them")
+        } else {
+            collect(&worktree)
+        }
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Every instruction file of the workspace, formatted for the thread's prompt: its working
@@ -195,7 +200,11 @@ mod tests {
         );
         assert!(worker.contains("Keep components small."));
         assert!(worker.contains("The task spec wins over them"));
-        assert!(for_worker(ProviderKind::Claude, &dir).await.is_empty());
+        // A Claude worker starts outside its worktree: it gets every file, the root's too.
+        let claude = for_worker(ProviderKind::Claude, &dir).await;
+        assert_eq!(claude.matches("Use pnpm.").count(), 1, "{claude}");
+        assert!(claude.contains("Keep components small."));
+        assert!(claude.contains("The task spec wins over them"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

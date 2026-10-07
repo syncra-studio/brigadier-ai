@@ -318,7 +318,7 @@ impl SessionManager {
                     OwnerState::Unfinished
                 } else {
                     let alive = match owner.split_once(':') {
-                        Some(("orch" | "chat" | "session", id)) => {
+                        Some(("orch" | "chat" | "session" | "workers", id)) => {
                             records.conversation(id).is_some()
                         }
                         Some(("task", id)) => records.task(id).is_some(),
@@ -690,7 +690,7 @@ impl SessionManager {
             .filter(|(_, _, disposing)| !disposing)
             .any(|(owner, artifacts, _)| {
                 let conversation_gone = match owner.split_once(':') {
-                    Some(("orch" | "chat" | "session", id)) => {
+                    Some(("orch" | "chat" | "session" | "workers", id)) => {
                         !catalog.conversations.iter().any(|c| c.id.0 == id)
                     }
                     _ => false,
@@ -1377,7 +1377,7 @@ impl Scanner<'_> {
                 _ => false,
             });
             let what = match owner.split_once(':') {
-                Some(("orch" | "session", _)) => "a session",
+                Some(("orch" | "session" | "workers", _)) => "a session",
                 Some(("chat", _)) => "a Chat",
                 Some(("task", _)) => "a worker",
                 Some(("brain", _)) => "a Brain job",

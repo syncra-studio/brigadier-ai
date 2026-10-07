@@ -501,9 +501,17 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents) -> Value {
             deny_read,
             unix_sockets,
         } => {
-            if !write_cwd {
+            // Its added folders are writable exactly when its working directory is.
+            let read_only: Vec<&Path> = if *write_cwd {
+                Vec::new()
+            } else {
+                std::iter::once(cwd)
+                    .chain(spec.add_dirs.iter().map(PathBuf::as_path))
+                    .collect()
+            };
+            for dir in &read_only {
                 for tool in ["Edit", "Write", "NotebookEdit"] {
-                    deny.push(format!("{tool}({})", rule_path(cwd)));
+                    deny.push(format!("{tool}({})", rule_path(dir)));
                 }
             }
             for path in deny_read {
@@ -518,10 +526,8 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents) -> Value {
                 "allowWrite": paths(writable_roots),
                 "denyRead": paths(deny_read),
             });
-            let mut deny_write = Vec::new();
-            if !write_cwd {
-                deny_write.push(cwd.to_owned());
-            }
+            let mut deny_write: Vec<PathBuf> =
+                read_only.iter().map(|dir| dir.to_path_buf()).collect();
             // A writer may commit into a repository's git folder, but not plant hooks or
             // change its config: those run outside the sandbox the next time the user runs git.
             // Claude's file tools work outside the OS sandbox: deny them there too.
@@ -1956,6 +1962,34 @@ mod tests {
                 git.join("hooks").display().to_string(),
                 git.join("config").display().to_string(),
             ])
+        );
+    }
+
+    #[test]
+    fn a_reader_started_outside_its_checkout_may_not_edit_the_checkout_either() {
+        let cwd = Temp::new();
+        let checkout = cwd.path().join("checkout");
+        let spec = SessionSpec {
+            access: Access::Scoped {
+                write_cwd: false,
+                writable_roots: Vec::new(),
+                network: true,
+                deny_read: Vec::new(),
+                unix_sockets: Vec::new(),
+            },
+            add_dirs: vec![checkout.clone()],
+            ..spec(cwd.path(), &["claude-sonnet-5"])
+        };
+        let settings = settings(&spec, cwd.path(), &SubAgents::Any);
+        let deny = settings["permissions"]["deny"]
+            .as_array()
+            .expect("deny rules");
+        for dir in [cwd.path(), checkout.as_path()] {
+            assert!(deny.contains(&json!(format!("Edit({})", rule_path(dir)))));
+        }
+        assert_eq!(
+            settings["sandbox"]["filesystem"]["denyWrite"],
+            json!(paths(&[cwd.path().to_owned(), checkout.clone()]))
         );
     }
 

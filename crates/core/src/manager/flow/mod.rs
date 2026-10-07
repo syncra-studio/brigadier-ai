@@ -36,10 +36,13 @@ const PATIENCE: Duration = Duration::from_secs(60);
 /// One turn a scripted CLI is asked to take.
 pub(crate) struct Turn {
     pub provider: ProviderKind,
-    /// Brigadier's instructions for the session (its system prompt addition).
+    /// Brigadier's instructions for the session (its system prompt addition), and a worker's
+    /// task, its new session's first message.
     pub prompt: String,
     /// What the turn was started with.
     pub input: String,
+    /// Where it works: a worker's worktree (its CLI starts in the session's worker folder with
+    /// the worktree added), else the CLI's working directory.
     pub cwd: PathBuf,
     /// The session's extra folders (a thread's workspace).
     pub add_dirs: Vec<PathBuf>,
@@ -402,6 +405,7 @@ impl Provider for FakeCli {
                 events: Mutex::new(Some(tx)),
                 turns: std::sync::atomic::AtomicU32::new(0),
                 answers: Answers::default(),
+                brief: Mutex::new(None),
                 running: Arc::default(),
                 steer_tx,
                 steers: Arc::new(tokio::sync::Mutex::new(steers)),
@@ -444,6 +448,8 @@ struct FakeSession {
     events: Mutex<Option<mpsc::Sender<ProviderEvent>>>,
     turns: std::sync::atomic::AtomicU32,
     answers: Answers,
+    /// A worker's task, from its first message.
+    brief: Mutex<Option<String>>,
     /// A turn is running: a steer joins it rather than starting another.
     running: Arc<std::sync::atomic::AtomicBool>,
     /// Steers into a running turn, which the turn may read ([`Turn::steered`]).
@@ -491,11 +497,26 @@ impl ProviderSession for FakeSession {
             .await
             .expect("the manager is running");
             let earlier = self.turns.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let worker = self.prompt.starts_with("You are a Brigadier worker.");
+            let prompt = {
+                let mut brief = self.brief.lock().unwrap();
+                if worker && brief.is_none() {
+                    *brief = Some(input_text(&input));
+                }
+                match &*brief {
+                    Some(brief) => format!("{}\n\n{brief}", self.prompt),
+                    None => self.prompt.clone(),
+                }
+            };
+            let cwd = match self.add_dirs.first() {
+                Some(worktree) if worker => worktree.clone(),
+                _ => self.cwd.clone(),
+            };
             let turn = Turn {
                 provider: self.kind,
-                prompt: self.prompt.clone(),
+                prompt,
                 input: input_text(&input),
-                cwd: self.cwd.clone(),
+                cwd,
                 add_dirs: self.add_dirs.clone(),
                 earlier,
                 grant: self.grant.clone(),

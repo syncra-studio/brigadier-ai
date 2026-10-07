@@ -654,8 +654,29 @@ fn preference_lines(preferences: &[String]) -> String {
 pub(crate) const NO_AI_COAUTHORS: &str =
     "Don't add Co-authored-by trailers that name an AI to commit messages.";
 
-/// A worker's role and task.
-pub(crate) fn worker(task: &Task, repo_note: &str, instructions: &str, extra: &str) -> String {
+/// A worker's system prompt: the same for every worker of a repository on one vendor, so a
+/// second worker's first call reads it from the prompt cache (THREAD-PLAN.md Q8 lever 2). It
+/// holds the rules every worker follows, then the repository's own instructions
+/// (`instructions`); what its task changes is in [`worker_brief`], its first message. A
+/// pre-warmed worker's CLI starts on it before its task is known.
+pub(crate) fn worker_system(instructions: &str) -> String {
+    format!(
+        r#"You are a Brigadier worker. Your model's knowledge may be older than today (your first message gives the date): check current docs before relying on any third-party API, version or CLI.
+
+Your first message is your task: what it is, where you work, what you may change and the rules for its kind. These rules hold for every task.
+
+Rules:
+- Never push, publish, deploy or open pull requests, unless the task says the user asked for exactly that: list such steps under needs user instead. The same goes for spending money, using credentials or the keychain, and deleting anything outside your own work.
+- If you start subagents, never use a Fable model, and never raise reasoning effort above high.
+- Files meant for the orchestrator or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Never write files to /tmp or anywhere else outside your worktree, scratch folder and test data folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
+- The orchestrator reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{WORKER_CODE_TOOLS}{VOICE}{WORKER_VOICE}{instructions}"#
+    )
+}
+
+/// A worker's task, the first message of each new CLI session it gets (a successor's too):
+/// the date, the task and its kind, where it works (`repo_note`), the rules for that kind,
+/// `extra` (a review's or merge's brief, notes) and the spec.
+pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String {
     let kind = match task.kind {
         TaskKind::Scout => {
             "scout: look around the repository and answer the question. Change nothing."
@@ -699,13 +720,11 @@ pub(crate) fn worker(task: &Task, repo_note: &str, instructions: &str, extra: &s
     } else {
         "You report to the orchestrator, who speaks for the user: treat its answers as the user's. Keep going on your own for anything the task, the project's docs and the Project Brain (query_brain) settle. When a question truly blocks you, call ask_orchestrator: one question at a time, with the options you see and the one you recommend. It waits for the answer."
     };
-    let mut practices = String::new();
-    if task.kind != TaskKind::Research {
-        practices.push_str(WORKER_CODE_TOOLS);
-    }
-    if matches!(task.kind, TaskKind::Implement | TaskKind::Merge) {
-        practices.push_str(WORKER_CODE_RULES);
-    }
+    let code_rules = if matches!(task.kind, TaskKind::Implement | TaskKind::Merge) {
+        WORKER_CODE_RULES
+    } else {
+        ""
+    };
     // An overnight run's Waiting on you holds only what its done-when needs (PLAN.md §10.11).
     let needs_user = if task.run.is_some() {
         "If a \"done when\" criterion can't be met without something only the user can do (a credential, a sign-in, an account, a paid signup), list exactly that under needs_user and finish everything else around it. Anything optional the user could add goes under risks, not needs_user."
@@ -713,19 +732,15 @@ pub(crate) fn worker(task: &Task, repo_note: &str, instructions: &str, extra: &s
         "If something only the user can do blocks part of the task (a credential, a sign-in, an account, a paid signup), don't stall on it: stub it (read it from an environment variable or config), list it under needs_user and finish everything else around it."
     };
     format!(
-        r#"You are a Brigadier worker. Today is {today}. Your models' knowledge may be older than today: check current docs before relying on any third-party API, version or CLI.
+        r#"Today is {today}.
 
 Task task-{number}: {title}
 Kind: {kind}
 {repo_note}
 
-Rules:
+Rules for this task:
 - {alone}{write_rules}
-- Never push, publish, deploy or open pull requests, unless the task says the user asked for exactly that: list such steps under needs user instead. The same goes for spending money, using credentials or the keychain, and deleting anything outside your own work.
-- {needs_user}
-- If you start subagents, never use a Fable model, and never raise reasoning effort above high.
-- Files meant for the orchestrator or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Never write files to /tmp or anywhere else outside your worktree, scratch folder and test data folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
-- The orchestrator reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{practices}{VOICE}{WORKER_VOICE}{instructions}{extra}
+- {needs_user}{code_rules}{extra}
 
 The task:
 {spec}"#,
@@ -979,9 +994,14 @@ mod tests {
         .expect("a task")
     }
 
+    /// What a worker reads before it starts: its system prompt, then its first message.
+    fn worker(task: &Task) -> String {
+        format!("{}\n\n{}", worker_system(""), worker_brief(task, "", ""))
+    }
+
     #[test]
     fn a_lead_outlines_big_work_reviews_small_work_and_commits_its_steps() {
-        let lead = worker(&task("claude", Some("lead")), "", "", "");
+        let lead = worker(&task("claude", Some("lead")));
         assert!(lead.contains("submit_outline"));
         assert!(lead.contains("call review_code once"));
         assert!(lead.contains("Commit each finished step"));
@@ -992,12 +1012,27 @@ mod tests {
         assert!(lead.contains("never use a Fable model"));
         assert!(lead.contains("query_brain"));
         // Codex's sandbox may keep it from committing: Brigadier commits for it.
-        let codex = worker(&task("codex", Some("lead")), "", "", "");
+        let codex = worker(&task("codex", Some("lead")));
         assert!(codex.contains("Brigadier commits them when you ask for a review or report"));
         // A verifier follows its own steps, not a lead's.
-        let verifier = worker(&task("claude", Some("verifier")), "", "", "");
+        let verifier = worker(&task("claude", Some("verifier")));
         assert!(!verifier.contains("submit_outline"));
         assert!(verifier.contains("check your own work"));
+    }
+
+    #[test]
+    fn every_worker_shares_one_system_prompt_and_hears_its_task_first() {
+        let instructions = "\n\n### CLAUDE.md\nUse pnpm.";
+        let system = worker_system(instructions);
+        // Nothing a task, its date or its paths change is in it.
+        assert!(!system.contains("Add the flag"));
+        assert!(!system.contains("Today is"));
+        assert!(system.ends_with(instructions));
+        let brief = worker_brief(&task("claude", Some("lead")), "Your worktree: /w/t1", "");
+        assert!(brief.starts_with("Today is "));
+        assert!(brief.contains("Task task-1: Add the flag"));
+        assert!(brief.contains("Your worktree: /w/t1"));
+        assert!(brief.ends_with("The task:\nAdd the flag."));
     }
 }
 

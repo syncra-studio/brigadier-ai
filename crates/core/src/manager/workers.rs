@@ -1151,18 +1151,35 @@ impl SessionManager {
 
         let provider = task.route.choice.provider;
         let write = task.kind.writes();
-        // Codex cannot run with a read-only cwd: a read-only Codex worker works from its
-        // scratch folder and reads the worktree by path.
-        let cwd = match (&workspace.worktree, provider, write) {
-            (Some(worktree), ProviderKind::Claude, _) => worktree.clone(),
-            (Some(worktree), _, true) => worktree.clone(),
+        // A Claude worker starts in the conversation's worker folder, the same for all its
+        // workers, with its worktree added: Claude's prompt names its working directory, so
+        // one shared folder lets a second worker read the first one's prompt from the cache
+        // (THREAD-PLAN.md Q8 lever 2). Codex cannot run with a read-only cwd: a read-only
+        // Codex worker works from its scratch folder and reads the worktree by path.
+        let home = match (&workspace.worktree, provider) {
+            (Some(_), ProviderKind::Claude) => {
+                let home = self.worker_home(&conversation_id).await?;
+                Some(home)
+            }
+            _ => None,
+        };
+        let cwd = match (&workspace.worktree, &home, write) {
+            (Some(_), Some(home), _) => home.clone(),
+            (Some(worktree), None, true) => worktree.clone(),
             _ => workspace.scratch.clone(),
         };
         let repo_note = match (&workspace.worktree, write) {
             (Some(worktree), true) if cwd != *worktree => format!(
-                "Your worktree (a checkout of the repository on branch `{}`): {}\nYou start in your scratch folder: run every command in your worktree (`cd` there first, or `git -C <worktree>`), and edit its files by their full path.\nYour scratch folder: {}",
+                "Your worktree (a checkout of the repository on branch `{}`): {}\n{}: run every command in your worktree (`cd` there first, or `git -C <worktree>`), and edit its files by their full path.\nYour scratch folder: {}",
                 workspace.branch.clone().unwrap_or_default(),
                 worktree.display(),
+                start_note(&cwd, &workspace.scratch),
+                workspace.scratch.display()
+            ),
+            (Some(worktree), false) if home.is_some() => format!(
+                "A read-only checkout of the repository: {}\n{}: `cd` into the checkout first, and read its files by their full path.\nYour scratch folder (writable): {}",
+                worktree.display(),
+                start_note(&cwd, &workspace.scratch),
                 workspace.scratch.display()
             ),
             (Some(worktree), true) => format!(
@@ -1200,7 +1217,12 @@ impl SessionManager {
         }
         let test_dir = test_data_dir(&task.id);
         self.prepare_owned_dir(&owner, &test_dir).await?;
-        let access = self.worker_access(task, &workspace, &cwd);
+        // Its rights in the worktree are those of a worker started there; its start folder
+        // and the worktree (added) are writable together or not at all.
+        let access = match (&home, &workspace.worktree) {
+            (Some(_), Some(worktree)) => self.worker_access(task, &workspace, worktree),
+            _ => self.worker_access(task, &workspace, &cwd),
+        };
         repo_note.push_str("\n\n");
         repo_note.push_str(&prompts::environment(&prompts::WorkerEnvironment {
             access: &access,
@@ -1230,7 +1252,17 @@ impl SessionManager {
             extra.push_str("\n\n");
             extra.push_str(super::phases::PLAN_MODE_HOLD);
         }
-        let prompt = prompts::worker(task, &repo_note, &native, &extra);
+        let prompt = prompts::worker_system(&native);
+        // A new CLI session hears its task first; a resumed or forked one has it already.
+        let mut first = first;
+        if matches!(origin, Origin::New) {
+            first.parts.insert(
+                0,
+                brigadier_providers::InputPart::Text(prompts::worker_brief(
+                    task, &repo_note, &extra,
+                )),
+            );
+        }
 
         let worker_grant = self.grants.issue(
             &owner,
@@ -1254,7 +1286,10 @@ impl SessionManager {
             append_system_prompt: Some(prompt),
             mcp_servers: vec![self.brigadier_server(worker_grant, WORKER_TOOL_TIMEOUT_SECS, true)],
             tools: ToolSet::Lean,
-            add_dirs: Vec::new(),
+            add_dirs: match (&home, &workspace.worktree) {
+                (Some(_), Some(worktree)) => vec![worktree.clone()],
+                _ => Vec::new(),
+            },
             env: worker_env(&workspace.scratch),
             unset_env: Vec::new(),
             low_priority: true,
@@ -1470,6 +1505,28 @@ impl SessionManager {
             deny_read: vec![self.runtime.platform().paths().run_dir.clone()],
             unix_sockets: self.socket_path().into_iter().collect(),
         }
+    }
+
+    /// The folder every Claude worker of the conversation starts in (see `launch_admitted`),
+    /// made on first use. It belongs to the conversation (owner `workers:<id>`): only its
+    /// archive or deletion removes it, never one worker's end.
+    pub(crate) async fn worker_home(&self, conversation_id: &ConversationId) -> Result<PathBuf> {
+        let home = self.owned_dir("worker-home", &conversation_id.0);
+        self.runtime
+            .ledger()
+            .record(
+                &worker_home_owner(conversation_id),
+                Artifact::ScratchDir {
+                    path: home.to_string_lossy().into_owned(),
+                },
+            )
+            .await?;
+        let dir = home.clone();
+        blocking(move || {
+            std::fs::create_dir_all(&dir).map_err(|err| Error::Invalid(err.to_string()))
+        })
+        .await?;
+        Ok(home)
     }
 
     /// Creates the task's scratch folder and worktree, recorded in the ledger first.
@@ -3694,6 +3751,20 @@ pub(crate) fn commit_roots(repo: &brigadier_git::Repo, provider: ProviderKind) -
         roots.push(common.join("packed-refs.lock"));
     }
     roots
+}
+
+/// The cleanup owner of a conversation's worker folder ([`SessionManager::worker_home`]).
+pub(crate) fn worker_home_owner(conversation_id: &ConversationId) -> String {
+    format!("workers:{conversation_id}")
+}
+
+/// How a worker's repo note names the folder its CLI starts in.
+fn start_note(cwd: &Path, scratch: &Path) -> &'static str {
+    if cwd == scratch {
+        "You start in your scratch folder"
+    } else {
+        "You start in a folder shared with this session's other workers, not your worktree; don't write there"
+    }
 }
 
 /// Where a task's tests and smoke runs keep their data: under the system's temporary folder,

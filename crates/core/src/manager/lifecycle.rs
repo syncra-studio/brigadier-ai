@@ -467,7 +467,7 @@ impl SessionManager {
         }
         let (owner, _) = conversation_owner(conversation);
         self.grants.revoke_owner(&owner);
-        let mut owners = vec![owner];
+        let mut owners = vec![owner, super::workers::worker_home_owner(id)];
         // Its previews' log folder.
         let previews = super::preview::preview_owner(id);
         if !self.runtime.ledger().artifacts(&previews).is_empty() {
