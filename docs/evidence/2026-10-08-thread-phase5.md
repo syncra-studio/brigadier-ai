@@ -81,8 +81,9 @@ read "Claude 278.4k · Codex 170k" and "Claude 142.5k · Codex 88.7k".
 
 Keep-awake, sampled every 10 s (`/tmp/w14/live/sampler.log`): the first sample after Start (+6 s)
 had none yet; from +16 s to the end `caffeinate -d -i -s -w 44836` and SleepDisabled=1 (the lid
-rule, "sleep disabled for the closed lid" in the daemon log); 4 s after `finished` neither, and
-"sleep restored". SleepDisabled was 0 before, between and after the runs.
+rule, "sleep disabled for the closed lid" in the daemon log); the sample 3 s after `finished`
+still had both, the daemon logged "sleep restored" 7 s after it, and the next sample (13 s after)
+had neither. SleepDisabled was 0 before, between and after the runs.
 
 **Run 3, restart.** "Farewell", 1 phase, rules "delegate phase 1 to a worker". Start
 `1791411774805`; the worker `01a11876-7c23` running; daemon killed at `1791411794` and started
@@ -126,3 +127,62 @@ overnight path, so T1 is the same within one run's noise (+3.9 s, −3% raw).
 - `tools/full-checks.sh` on `5dc2df63`: passed (fmt, gen-ts up to date, pnpm build, stage-sidecar,
   clippy `-D warnings`, `cargo test --workspace` (core 275 passed, 1 ignored), pnpm typecheck, lint,
   test 142 passed, `git diff --check`).
+
+## Independent verification (after `bd005f87`)
+
+**The done-whens, re-derived from the raw files** (the recorder's events, the sampler log, the
+daemon log, the scratch repo and the thread transcript):
+- Run 2: Start `1791410631506`, wind-down due `1791411431506` (+800.0 s), `windingDown` with stop
+  `deadline` at +828.0 s, `finished` at +841.2 s, deadline +1200 s. Of the 83 keep-awake samples
+  inside the run, 82 had the daemon's `caffeinate -d -i -s -w` and SleepDisabled=1 (the first, at
+  +5.5 s, had neither).
+- The run branch has `4125e0b` and `314dccb`, both `Brigadier-Author: thread`; the session branch
+  is at `17c9807`. The preview's `workdir` is the run worktree, and it ended at `finished` with
+  "the thread's workspace changed". The thread CLI went `--session-id c06d419d…` in the session
+  checkout, then `--resume c06d419d…` in the run worktree, then `--resume c06d419d…` in the
+  session checkout again; its one transcript holds only that session id, and it answered
+  `brigadier/44812b70/session`.
+- Restart: "resuming an overnight run after a restart" in the daemon log, the first worker
+  `stopped`, the second `landed`, stop `done`. Stop: `windingDown` at the Stop, `finished` 25.4 s
+  later, stop `stopped`. T1: the arm's `times.json` and `tokens.json` match the table above, and
+  `turn_usage` matches the transcripts (+0).
+- None of the 26 phase-loop function names of `d3653dfa`'s `conductor.rs` appears in `crates`
+  or `apps`.
+
+**Codex review of `d3653dfa..bd005f87`: four findings, all fixed.**
+- An old store's `planning` and `phaseGate` run states, whole-phase check roles and per-phase
+  injection and rebirth no longer decoded. The thread engine's first start deletes those
+  conversations, but a delete that can't finish at once is retried at each launch, and its board
+  couldn't be read, so its run and tasks weren't released. Each now reads as its nearest kept
+  kind (`ae2b5f3c`). The engine test seeds such a store and fails without the fix.
+- A bare goal's plan, recorded by the thread, didn't take the user's skip/only. A phase left
+  out went back to `building` when its lead's earlier work landed, and could then be delegated
+  again. A task of a phase left out that was still waiting to start (for a worker slot or the
+  task it builds on) started later. Fixed in `917d78fc`: a recorded plan takes the run's
+  restrictions, a left-out step stays so, and work still waiting is stopped. A task stopped while
+  it waits to start now stays `stopped`; it used to end `failed`, which a user's Stop of a
+  waiting worker also hit.
+- New flow tests: a live run steered mid-run ("skip phase 2", "skip phase 4", "stop after phase
+  3", under "max 2 workers") refuses `delegate_task` for phases 2, 4 and 5. The working lead of
+  a left-out phase hands off and its work lands with the step still skipped, and the one waiting
+  for a slot never starts. The run winds down once phase 3 is settled, with stop `stopDirective`
+  and no `end_run`. A separate test covers a bare goal with "skip phase 2". Both fail without
+  the fixes.
+
+**Live re-check on `917d78fc`** (dev daemon, scratch data dir and repo, Full access). A 2-phase
+run, "For 30 minutes". The thread gave phase 2 to a worker, which went into a 120 s check. A
+mid-run "skip phase 2" set step 2 `skipped` at once. The worker handed off when its check ended
+("the user left this phase out of the overnight run"), its task ended `done`, and the step
+stayed `skipped`. Stop then went to `windingDown` at once and `finished` 13.1 s later, with stop
+`stopped`. The report says "0 of 1 phase done", "– Phase 2 · Notes file: skipped." and
+"Nothing settled done to merge yet." All 20 samples inside the run had `caffeinate -d -i -s -w
+<daemon>` and SleepDisabled=1, and the first sample 2.5 s after `finished` had neither. The
+thread's one native session (`3ffb4b84…`) started in the run worktree and resumed after the run
+in the session checkout, where it answered `brigadier/dd015cb4/session`.
+
+**Each commit**, built in a scratch worktree: `cargo clippy --workspace --exclude
+brigadier-desktop --all-targets -D warnings` and `cargo test -p brigadier-core --lib` pass at
+`d9a73d3a`, `52dfbd11` and `5dc2df63`. The desktop shell's build script needs the frontend build,
+which a bare worktree lacks. One run at `d9a73d3a` had a flow test time out while a cold build
+ran alongside it; two reruns passed (274 passed).
+
