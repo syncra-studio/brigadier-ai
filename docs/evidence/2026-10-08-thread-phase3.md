@@ -212,3 +212,46 @@ What this means:
   or skills from the cwd, the same as the thread. The repository's instruction files are carried
   in the prompt instead.
 - **The context pack lives only in the first message** (see Context pack).
+
+## Independent verification after the rebase onto phase 5
+
+Phase 3 was rebased onto phase 5's verified tip `6d08e1f8` and verified again.
+
+**Rebase.** There was one textual conflict: the import list in the MCP catalog. The IPC protocol
+went to 13, because phase 3 adds the `checkRan` event and phase 5 had already taken 12. The
+combined tool lists and the thread prompt were read again as one; nothing is duplicated or
+contradicts. Phase 5's flow tests pass on the rebased tree: `overnight_tests` (8),
+`engine_tests` (6), and the merge and accepted-tip tests.
+
+**Live re-check on the rebased tree.** A dev daemon with a scratch data folder and a tiny repo,
+in one Approve for me session:
+
+| Check | Result |
+|---|---|
+| `delegate_task` → first worker event | **800 ms and 821 ms** (`firstevent.py`); both workers started in their pre-warmed worktree |
+| Second worker's first call from cache | **0.58** (12,804 read, 9,282 written) |
+| `run` `seq 1 20000; exit 3` | `exit 3`, 108,894 B stored; `cmp` with `seq 1 20000` identical |
+| `run` `seq 1 10500` | `exit 0`, 51,894 B stored; `cmp` identical; sha256 `63b531cf…` |
+| `run` writing outside the workspace | blocked by the sandbox. `run_unsandboxed` went to Brigadier's reviewer, which refused ("writes outside the project"), so it became a card. Allowed there, it ran once. One `turn_usage` row has step `escalation` |
+| `run` `curl` | ran in the sandbox: Approve for me keeps the network on (only Ask turns it off) |
+
+**Re-derived from the arm files.**
+- Run 1 landed at 586.7 s and run 2 at 403.9 s.
+- No check key ran twice in either run.
+- Run 2's tokens are 2,550,273 raw, which matches.
+- Run 1's tokens are **5,308,191 raw** through its last settlement (686.8 s). The 4,831,714 above
+  stopped at its first answer (598.0 s); a later review round settled at 686.8 s. Run 1 misses
+  the token bound either way.
+
+**Fixes from the code review of the rebased branch.**
+- A read-only Codex worker's checks no longer write its checkout.
+- Check output hides the project's secrets.
+- Crates' `workspace = true` dependencies count when finding the dependents of a change.
+- A workspace-wide change checks the packages whose check scripts the root lacks.
+- The key covers every package's `.env*` files and the package manager and Cargo configuration.
+- A worker gets its own copy of a cached long output.
+- A failure is reused only under the same sandbox.
+- One run per key at a time.
+- The pack's searches and unshown file names stay in its budget.
+- Only manifests are read when listing packages.
+- From corrections 4 and 5: a changed package with no checks of its own checks everything.
