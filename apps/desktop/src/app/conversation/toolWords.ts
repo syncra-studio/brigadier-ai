@@ -108,6 +108,15 @@ const WORDS: Record<string, Words> = {
   WebFetch: words("web", "Reading a web page", "Read a web page"),
   web_fetch: words("web", "Reading a web page", "Read a web page"),
   Bash: words("run", "Running a command", "Ran a command"),
+  run: words("run", "Running a command", "Ran a command"),
+  run_unsandboxed: words("run", "Running a command", "Ran a command"),
+  start_preview: words("run", "Starting a preview", "Started a preview"),
+  stop_preview: words("run", "Stopping a preview", "Stopped a preview"),
+  preview_log: words(
+    "read",
+    "Reading a preview’s output",
+    "Read a preview’s output",
+  ),
   exec_command: words("run", "Running a command", "Ran a command"),
   shell: words("run", "Running a command", "Ran a command"),
   apply_patch: words("edit", "Editing files", "Edited files"),
@@ -174,6 +183,9 @@ export function toolHasOwnResult(
   );
 }
 
+/** A preview is named by what it is, not run as a command in the words. */
+const PREVIEW = ["start_preview", "stop_preview"];
+
 /** The past tense describes an attempted action too; its outcome never looks still active. */
 export function toolWords(
   kind: ToolStep,
@@ -198,7 +210,7 @@ export function toolWords(
   ) {
     action = `${kind.status === "inProgress" ? "Reading" : "Read"} ${detail}`;
     target = "";
-  } else if (detail && activity.kind === "run") {
+  } else if (detail && activity.kind === "run" && !PREVIEW.includes(short)) {
     action = `${kind.status === "inProgress" ? "Running" : "Ran"} ${detail}`;
     target = "";
   } else if (

@@ -2551,6 +2551,7 @@ impl SessionManager {
                     .as_deref()
                     .and_then(|input| serde_json::from_str(input).ok())
                     .unwrap_or_default();
+                // A preview by its name, a command (Bash, run) by its own words.
                 let detail = [
                     "query",
                     "pattern",
@@ -2559,6 +2560,8 @@ impl SessionManager {
                     "url",
                     "title",
                     "task",
+                    "name",
+                    "command",
                 ]
                 .into_iter()
                 .find_map(|key| args.get(key).and_then(serde_json::Value::as_str))
@@ -2580,6 +2583,48 @@ impl SessionManager {
                 {
                     self.orchestrator_step(&conv.id, kind).await;
                 }
+            }
+            // A Codex thread's own shell commands and edits come as items of their own, not as
+            // tool calls: the live line names them the same way.
+            ProviderEvent::Command {
+                item_id,
+                command,
+                status,
+                ..
+            } => {
+                let command = brigadier_providers::policy::unwrapped_command(command);
+                self.orchestrator_step(
+                    &conv.id,
+                    OrchestratorStepKind::Tool {
+                        item_id: item_id.clone(),
+                        name: "shell".into(),
+                        detail: Some(command.chars().take(240).collect()),
+                        status: *status,
+                        through_position: 0,
+                    },
+                )
+                .await;
+            }
+            ProviderEvent::FileChanges {
+                item_id,
+                changes,
+                status,
+            } => {
+                let detail = changes.first().map(|first| match changes.len() {
+                    1 => first.path.clone(),
+                    n => format!("{} and {} more", first.path, n - 1),
+                });
+                self.orchestrator_step(
+                    &conv.id,
+                    OrchestratorStepKind::Tool {
+                        item_id: item_id.clone(),
+                        name: "apply_patch".into(),
+                        detail,
+                        status: *status,
+                        through_position: 0,
+                    },
+                )
+                .await;
             }
             ProviderEvent::RateLimits { quota } => {
                 self.runtime.note_quota_snapshot(quota.clone()).await;

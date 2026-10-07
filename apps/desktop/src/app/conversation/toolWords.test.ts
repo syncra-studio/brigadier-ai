@@ -61,6 +61,12 @@ test("every registered action keeps its verb across provider namespaces and outc
     "Edit",
     "exec_command",
     "apply_patch",
+    "run",
+    "run_unsandboxed",
+    "start_preview",
+    "stop_preview",
+    "preview_log",
+    "shell",
   ];
   for (const action of actions) {
     for (const name of [
@@ -167,5 +173,36 @@ test("deduplication needs the matching authored result in this call's window", (
     ),
     false,
     "an overlapping call's result cannot hide the earlier action",
+  );
+});
+
+test("the thread's own steps name what they act on", () => {
+  assert.equal(
+    toolWords(call("Bash", "inProgress", "cargo test -p core")),
+    "Running cargo test -p core",
+  );
+  assert.equal(
+    toolWords(call("mcp__brigadier__run", "completed", "pnpm test")),
+    "Ran pnpm test",
+  );
+  assert.equal(
+    toolWords(call("shell", "failed", "cargo build")),
+    "Ran cargo build — failed",
+  );
+  assert.equal(
+    toolWords(call("Read", "inProgress", "/repo/src/main.rs")),
+    "Reading /repo/src/main.rs",
+  );
+  assert.equal(
+    toolWords(call("apply_patch", "completed", "src/a.rs and 2 more")),
+    "Edited files: src/a.rs and 2 more",
+  );
+  assert.equal(
+    toolWords(call("mcp__brigadier__start_preview", "inProgress", "web")),
+    "Starting a preview: web",
+  );
+  assert.equal(
+    toolWords(call("mcp__brigadier__preview_log", "completed")),
+    "Read a preview’s output",
   );
 });
