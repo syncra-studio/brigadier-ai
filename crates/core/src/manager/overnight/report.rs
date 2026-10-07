@@ -143,6 +143,8 @@ impl SessionManager {
                             steered_into: None,
                             steered_after: None,
                             undo: None,
+                            worked: Vec::new(),
+                            quota_wait: false,
                         },
                     }],
                 )

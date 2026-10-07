@@ -19,7 +19,7 @@ const reason = (text: string, atMs: number, itemId = "first", complete = false):
 const events: EventEnvelope[] = [
   envelope(1, 0, { type: "messageAppended", message }),
   envelope(2, 0, { type: "requestUpdated", request: { id: "request", conversationId, preview: message.text,
-    state: { type: "working" }, startedAtMs: 0, endedAtMs: null, steeredInto: null, steeredAfter: null, undo: null } }),
+    state: { type: "working" }, startedAtMs: 0, endedAtMs: null, steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false } }),
   envelope(3, 2000, reason("I will check the settings", 2000)),
   envelope(4, 6000, reason(" and find where the choice is stored.", 6000)),
   envelope(5, 12000, { type: "orchestratorStepped", step: { requestId: "request", atMs: 12000, position: 5,

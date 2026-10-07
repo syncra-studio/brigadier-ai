@@ -12,7 +12,7 @@ function plan(state: PlanState, id = "plan", createdAtMs = 1): Plan {
   };
 }
 function request(state: UserRequest["state"], id = "request", startedAtMs = 1): UserRequest {
-  return { id, conversationId: "session", preview: "Request", state, startedAtMs, endedAtMs: null, steeredInto: null, steeredAfter: null, undo: null };
+  return { id, conversationId: "session", preview: "Request", state, startedAtMs, endedAtMs: null, steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false };
 }
 const approved = plan({ type: "approved", by: "orchestrator" });
 const label = (states: (TaskState | undefined)[]) => planProgress(approved, states).label;

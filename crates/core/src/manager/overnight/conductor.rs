@@ -220,6 +220,11 @@ impl SessionManager {
                         steered_into: None,
                         steered_after: None,
                         undo: None,
+                        worked: vec![crate::work::WorkSpan {
+                            from_ms: now,
+                            to_ms: None,
+                        }],
+                        quota_wait: false,
                     },
                 }],
             )

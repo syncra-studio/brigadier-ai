@@ -34,6 +34,7 @@ import {
   isLive,
   isRunRequest,
   type SequenceEntry as Entry,
+  turnTime,
 } from "@/app/conversation/blocks";
 import { type PhaseView, phaseViewOf, splitReport } from "@/app/conversation/phaseView";
 import { TaskRow } from "@/app/conversation/TaskRow";
@@ -54,7 +55,7 @@ import { RateItem, RateMenu } from "@/components/assistant-ui/rate-menu";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";
-import type { AttachmentRef, ModelChoice, ThinkingSegment } from "@/ipc/generated";
+import type { AttachmentRef, ModelChoice, ThinkingSegment, WorkSpan } from "@/ipc/generated";
 import { formatDuration, formatSentAt } from "@/lib/format";
 import { modelName, sameModel, useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
@@ -82,6 +83,10 @@ export type BlockMeta = {
   state: BlockState;
   startedAtMs: number;
   endedAtMs: number | null;
+  /** When its requests worked, for "Worked for …". */
+  worked: WorkSpan[];
+  /** It waits only for quota, not for the user. */
+  quotaWait: boolean;
   /** The model the user picked, to flag a fallback. */
   picked: ModelChoice | null;
   /** A session's block always says it works; a Chat's only until its reply streams. */
@@ -96,14 +101,20 @@ export type BlockMeta = {
   answerId: string | null;
 };
 
-/** Seconds since `from`, ticking while `live`. */
-function useElapsed(from: number, to: number | null, live: boolean): number {
+/** Now, ticking each second while `live`. */
+function useTicking(live: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!live) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [live]);
+  return now;
+}
+
+/** Seconds since `from`, ticking while `live`. */
+function useElapsed(from: number, to: number | null, live: boolean): number {
+  const now = useTicking(live);
   return Math.max(0, (live || to === null ? now : to) - from);
 }
 
@@ -114,7 +125,7 @@ function headerLabel(state: BlockState, elapsed: number, quota = false): string 
       if (quota) return `Waiting for quota · ${time}`;
       return elapsed < 1000 ? "Working" : `Working for ${time}`;
     case "waiting":
-      return `Waiting for you · ${time}`;
+      return quota ? `Waiting for quota · ${time}` : `Waiting for you · ${time}`;
     case "done":
       return `Worked for ${time}`;
     case "stopped":
@@ -149,13 +160,11 @@ const WorkHeader: FC<{
   /** Called with the header, before the fold opens or closes. */
   onToggle: (header: HTMLElement) => void;
 }> = ({ meta, phase, open, foldable, quota, onToggle }) => {
-  const elapsed = useElapsed(
-    phase?.startedAtMs ?? meta.startedAtMs,
-    phase ? phase.endedAtMs : meta.endedAtMs,
-    phase ? !phase.settled : isLive(meta.state),
-  );
+  const phaseElapsed = useElapsed(phase?.startedAtMs ?? 0, phase?.endedAtMs ?? null, !!phase && !phase.settled);
+  const now = useTicking(!phase && isLive(meta.state));
+  const elapsed = phase ? phaseElapsed : turnTime(meta, now);
   if (!phase && meta.state === "working" && !foldable && !quota && elapsed < HEADER_AFTER_MS) return null;
-  const label = phase ? phaseLabel(phase, elapsed) : headerLabel(meta.state, elapsed, quota);
+  const label = phase ? phaseLabel(phase, elapsed) : headerLabel(meta.state, elapsed, quota || meta.quotaWait);
   const text = (
     <span
       className={cn(

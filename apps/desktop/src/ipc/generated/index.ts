@@ -328,6 +328,7 @@ export type { WaitingSource } from "./WaitingSource";
 export type { WindowHistory } from "./WindowHistory";
 export type { WindowState } from "./WindowState";
 export type { WindowTokens } from "./WindowTokens";
+export type { WorkSpan } from "./WorkSpan";
 export type { WorkerAccess } from "./WorkerAccess";
 export type { WorkerDiff } from "./WorkerDiff";
 export type { WorkerPage } from "./WorkerPage";

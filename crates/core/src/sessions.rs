@@ -19,7 +19,7 @@ use crate::model::{
 use crate::projection::Projection;
 use crate::work::{
     AttachmentRef, ConversationActivity, Mention, MessageQueue, OrchestratorEntry, QueuedMessage,
-    RequestState, RequestUndo, Task, TaskId, UserRequest,
+    RequestState, RequestUndo, Task, TaskId, UserRequest, WorkSpan,
 };
 use crate::{Error, Result, now_ms};
 
@@ -579,6 +579,11 @@ impl Core {
                         steered_into: None,
                         steered_after: None,
                         undo: None,
+                        worked: vec![WorkSpan {
+                            from_ms: message.created_at_ms,
+                            to_ms: None,
+                        }],
+                        quota_wait: false,
                     },
                 },
             ),
@@ -1186,6 +1191,7 @@ impl Core {
         id: &ConversationId,
         request_id: &str,
         state: RequestState,
+        quota_wait: bool,
     ) -> Result<bool> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
@@ -1199,14 +1205,10 @@ impl Core {
         else {
             return Ok(false);
         };
-        if request.state == state {
+        if request.state == state && request.quota_wait == quota_wait {
             return Ok(false);
         }
-        request.ended_at_ms = match state {
-            RequestState::Working => None,
-            _ => Some(now_ms()),
-        };
-        request.state = state;
+        request.moved_to(state, quota_wait, now_ms());
         let event = DomainEvent::RequestUpdated { request };
         let stored = self
             .record(vec![(streams::conversation(id), event.clone())])
@@ -1236,9 +1238,15 @@ impl Core {
         else {
             return Err(Error::NotFound(format!("request {request_id}")));
         };
+        let now = now_ms();
         request.state = RequestState::Working;
-        request.started_at_ms = now_ms();
+        request.started_at_ms = now;
         request.ended_at_ms = None;
+        request.worked = vec![WorkSpan {
+            from_ms: now,
+            to_ms: None,
+        }];
+        request.quota_wait = false;
         let event = DomainEvent::RequestUpdated { request };
         let stored = self
             .record(vec![(streams::conversation(id), event.clone())])

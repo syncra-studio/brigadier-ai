@@ -2,6 +2,7 @@
 import type { ConversationId } from "./ConversationId";
 import type { RequestState } from "./RequestState";
 import type { RequestUndo } from "./RequestUndo";
+import type { WorkSpan } from "./WorkSpan";
 
 /**
  * What one user message set in motion. The message starts it; the model's replies, the tasks
@@ -33,4 +34,14 @@ steeredAfter: string | null,
 /**
  * The user's Undo of what its workers landed, once they used it.
  */
-undo: RequestUndo | null, };
+undo: RequestUndo | null, 
+/**
+ * When it worked, oldest first; the last is open while it works. Waiting for quota is
+ * work, waiting for the user is not. Absent on requests stored before it was kept.
+ */
+worked: Array<WorkSpan>, 
+/**
+ * It is `Waiting` only for quota (a worker paused until a model is free), not for the
+ * user.
+ */
+quotaWait: boolean, };

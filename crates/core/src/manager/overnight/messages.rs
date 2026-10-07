@@ -103,8 +103,7 @@ impl SessionManager {
         if let Some(request) = &message.request_id {
             let board = self.core.board(id).await?;
             if let Some(mut record) = board.requests.get(request).cloned() {
-                record.state = RequestState::Done;
-                record.ended_at_ms = Some(crate::now_ms());
+                record.moved_to(RequestState::Done, false, crate::now_ms());
                 self.core
                     .record_conversation(id, vec![DomainEvent::RequestUpdated { request: record }])
                     .await?;

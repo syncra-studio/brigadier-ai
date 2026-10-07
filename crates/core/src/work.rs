@@ -1385,6 +1385,58 @@ pub struct UserRequest {
     /// The user's Undo of what its workers landed, once they used it.
     #[serde(default)]
     pub undo: Option<RequestUndo>,
+    /// When it worked, oldest first; the last is open while it works. Waiting for quota is
+    /// work, waiting for the user is not. Absent on requests stored before it was kept.
+    #[serde(default)]
+    pub worked: Vec<WorkSpan>,
+    /// It is `Waiting` only for quota (a worker paused until a model is free), not for the
+    /// user.
+    #[serde(default)]
+    pub quota_wait: bool,
+}
+
+/// A stretch of time a request worked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkSpan {
+    pub from_ms: i64,
+    /// Absent while it still works.
+    pub to_ms: Option<i64>,
+}
+
+impl UserRequest {
+    /// Moves it to `state` at `now`: a span opens when it starts working (or waits only for
+    /// quota) and closes when it waits for the user or is over.
+    pub fn moved_to(&mut self, state: RequestState, quota_wait: bool, now: i64) {
+        if self.worked.is_empty() {
+            // Stored before spans were kept: what it did so far counts from its start.
+            let working = self.state == RequestState::Working || self.quota_wait;
+            self.worked.push(WorkSpan {
+                from_ms: self.started_at_ms,
+                to_ms: if working {
+                    None
+                } else {
+                    Some(self.ended_at_ms.unwrap_or(now))
+                },
+            });
+        }
+        let quota_wait = quota_wait && state == RequestState::Waiting;
+        let works = state == RequestState::Working || quota_wait;
+        let open = self.worked.last_mut().filter(|span| span.to_ms.is_none());
+        match open {
+            Some(span) if !works => span.to_ms = Some(now.max(span.from_ms)),
+            None if works => self.worked.push(WorkSpan {
+                from_ms: now,
+                to_ms: None,
+            }),
+            _ => {}
+        }
+        if self.state != state {
+            self.ended_at_ms = (state != RequestState::Working).then_some(now);
+        }
+        self.state = state;
+        self.quota_wait = quota_wait;
+    }
 }
 
 /// The user's Undo and Reapply of what a request's workers landed (the turn diff card).

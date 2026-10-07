@@ -21,6 +21,7 @@ import type {
   UserRequest,
   WorkerStep,
   WorkerStepKind,
+  WorkSpan,
 } from "@/ipc/generated";
 import type { Board } from "@/state/board";
 import { shownIdOf } from "@/state/shownIds";
@@ -128,6 +129,10 @@ export type Block = {
   error: string | null;
   startedAtMs: number;
   endedAtMs: number | null;
+  /** When its requests worked (open while one does), for "Worked for …". */
+  worked: WorkSpan[];
+  /** It waits only for quota, not for the user. */
+  quotaWait: boolean;
 };
 
 /** The parts of the board the blocks depend on (not worker activity or transcripts). */
@@ -156,6 +161,52 @@ const WORKING: ReadonlySet<Task["state"]> = new Set([
 ]);
 
 const FINAL: ReadonlySet<Task["state"]> = new Set(["landed", "done", "rejected", "stopped", "failed"]);
+
+/**
+ * When a request worked. One stored before its spans were kept worked from its start to its
+ * end; a span still open on a request that is over ends with it.
+ */
+export function requestSpans(request: UserRequest): WorkSpan[] {
+  const over = !isLive(request.state.type);
+  // Older records (stored boards, an older daemon) have no spans at all.
+  const stored: readonly WorkSpan[] | undefined = request.worked;
+  const spans = stored?.length ? stored : [{ fromMs: request.startedAtMs, toMs: request.endedAtMs }];
+  return spans.map((span) => (span.toMs === null && over && request.endedAtMs !== null ? { ...span, toMs: request.endedAtMs } : span));
+}
+
+/** How long the spans worked in all, overlaps counted once; an open span works until `now`. */
+export function workedMs(spans: readonly WorkSpan[], now: number): number {
+  let total = 0;
+  let reach = Number.NEGATIVE_INFINITY;
+  for (const span of spans.toSorted((a, b) => a.fromMs - b.fromMs)) {
+    const to = Math.max(span.fromMs, span.toMs ?? now);
+    const from = Math.max(span.fromMs, reach);
+    if (to > from) total += to - from;
+    reach = Math.max(reach, to);
+  }
+  return total;
+}
+
+/** When the spans last stopped working, or `null` while one is open. */
+export function stoppedAtMs(spans: readonly WorkSpan[]): number | null {
+  if (spans.length === 0 || spans.some((span) => span.toMs === null)) return null;
+  return Math.max(...spans.map((span) => span.toMs ?? 0));
+}
+
+/**
+ * The time a turn shows: while it works or waits for quota, how long it worked so far; while it
+ * waits for the user, how long it has waited; once over, how long it worked, its waits for the
+ * user left out.
+ */
+export function turnTime(
+  meta: { state: BlockState; worked: readonly WorkSpan[]; quotaWait: boolean; endedAtMs: number | null },
+  now: number,
+): number {
+  if (meta.state === "waiting" && !meta.quotaWait) {
+    return Math.max(0, now - (stoppedAtMs(meta.worked) ?? meta.endedAtMs ?? now));
+  }
+  return workedMs(meta.worked, now);
+}
 
 /** Whether a task is over: its worker is gone and it will not run again. */
 export function isFinal(task: Task): boolean {
@@ -384,6 +435,8 @@ export function buildBlocks(
         error: request?.state.type === "failed" ? request.state.error : null,
         startedAtMs: request?.startedAtMs ?? startedAtMs,
         endedAtMs: request?.endedAtMs ?? null,
+        worked: request ? requestSpans(request) : [{ fromMs: startedAtMs, toMs: null }],
+        quotaWait: !!request?.quotaWait,
       };
       blocks.set(key, block);
       order.push(key);
@@ -486,6 +539,8 @@ export function buildBlocks(
       error: null,
       startedAtMs: entry.createdAtMs,
       endedAtMs: null,
+      worked: [{ fromMs: entry.createdAtMs, toMs: null }],
+      quotaWait: false,
     });
   }
   return result;
@@ -497,8 +552,8 @@ function blockTime(block: Block): number {
 
 /**
  * A request steered into the running turn of the block just before it joins that block: its
- * message becomes a bubble inside the block, its work follows, and the header times from the
- * steer.
+ * message becomes a bubble inside the block, its work follows, and the header still times the
+ * whole turn.
  */
 function joinSteered(blocks: Block[], requests: BoardDigest["requests"]): Block[] {
   const joined: Block[] = [];
@@ -535,7 +590,10 @@ function joinSteered(blocks: Block[], requests: BoardDigest["requests"]): Block[
       requestIds: [...previous.requestIds, ...block.requestIds],
       state,
       error: state === block.state ? block.error : null,
-      startedAtMs: block.startedAtMs,
+      // The turn's time runs from its first message, the follow-ups' work counted with it.
+      startedAtMs: Math.min(previous.startedAtMs, block.startedAtMs),
+      worked: [...previous.worked, ...block.worked],
+      quotaWait: state === "waiting" && [previous, block].every((part) => part.state !== "waiting" || part.quotaWait),
       endedAtMs:
         live.length > 0 ? null : Math.max(previous.endedAtMs ?? 0, block.endedAtMs ?? 0) || null,
     };
@@ -819,5 +877,6 @@ function settled(block: Block, chain: readonly Message[]): Block {
     .map((message) => message.createdAtMs);
   const user = block.user?.kind === "message" ? block.user.message.createdAtMs : undefined;
   const start = user ?? times[0] ?? block.startedAtMs;
-  return { ...block, state: "done", error: null, startedAtMs: start, endedAtMs: times.at(-1) ?? start };
+  const end = times.at(-1) ?? start;
+  return { ...block, state: "done", error: null, startedAtMs: start, endedAtMs: end, worked: [{ fromMs: start, toMs: end }], quotaWait: false };
 }
