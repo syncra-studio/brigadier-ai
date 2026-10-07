@@ -620,6 +620,280 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
     flow.stop().await;
 }
 
+/// The landing's review is still running when the user merges the session: the merge doesn't
+/// wait for it, and its findings still reach the orchestrator after the merge. The review read
+/// a checkout of its own, which the merge left alone and the review's end removed. One review
+/// for the one landing.
+#[tokio::test]
+async fn a_review_still_running_at_the_merge_reports_its_findings_after_it() {
+    let heard: Heard = Arc::default();
+    let log = heard.clone();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let held = release.clone();
+    let checkout: Arc<std::sync::Mutex<Option<std::path::PathBuf>>> = Arc::default();
+    let seen = checkout.clone();
+    let flow = Flow::start(
+        "merged-before-review",
+        Options {
+            reviews: Some(script(move |turn| {
+                let (held, seen) = (held.clone(), seen.clone());
+                async move {
+                    *seen.lock().unwrap() = Some(turn.cwd.clone());
+                    held.notified().await;
+                    std::fs::read_to_string(turn.cwd.join("hello.txt"))
+                        .expect("the review's checkout outlives the merge");
+                    Reply::text(
+                        "- [P2] hello.txt lacks a trailing newline — hello.txt:1\n  Add one.",
+                    )
+                }
+            })),
+            ..Options::default()
+        },
+        script(move |turn| {
+            log.lock().unwrap().push(turn.input.clone());
+            async move {
+                if turn.is_orchestrator() {
+                    if turn.input.contains("[review task-1") {
+                        return Reply::text(
+                            "The review found a missing newline; tell me if you want it fixed.",
+                        );
+                    }
+                    if turn.input.contains("[finished]") {
+                        return Reply::text("Merged the greeting into main.");
+                    }
+                    if let Some(n) = reports_in(&turn.input).first() {
+                        let reply = turn
+                            .call("land_phase", json!({"task": format!("task-{n}")}))
+                            .await;
+                        assert!(reply.text.contains("Landed"), "{}", reply.text);
+                        let reply = turn.call("finish_session", json!({})).await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        return Reply::text("[quiet]");
+                    }
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"title": "Add a greeting", "kind": "implement",
+                                   "spec": "Create hello.txt.", "provider": "codex"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                turn.write("hello.txt", "hello");
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "Added hello.txt.", "changes": ["hello.txt"]}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("Reported.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add a greeting file.").await;
+    let board = flow
+        .until("the merge card", |board| {
+            board.approvals.values().any(|card| {
+                card.state == CardState::Pending
+                    && matches!(card.subject, ApprovalSubject::FinishSession { .. })
+            })
+        })
+        .await;
+    let card = board
+        .approvals
+        .values()
+        .find(|card| card.state == CardState::Pending)
+        .unwrap()
+        .id
+        .clone();
+    assert!(
+        board
+            .reviews
+            .values()
+            .all(|review| review.state == crate::work::ReviewState::Running),
+        "the review still runs when the user is asked to merge"
+    );
+    flow.manager
+        .answer_card(
+            flow.conversation.clone(),
+            card,
+            brigadier_providers::ApprovalDecision::Allow,
+        )
+        .await
+        .unwrap();
+    let repo = flow.repo.clone();
+    let board = flow
+        .until("the merge", |_| {
+            std::process::Command::new("git")
+                .args(["cat-file", "-e", "main:hello.txt"])
+                .current_dir(&repo)
+                .status()
+                .is_ok_and(|status| status.success())
+        })
+        .await;
+    assert_eq!(board.reviews.len(), 1);
+    assert_eq!(
+        board.reviews.values().next().unwrap().state,
+        crate::work::ReviewState::Running,
+        "the merge didn't wait for the review"
+    );
+    release.notify_one();
+    let board = reviews_ended(&flow, 1).await;
+    flow.until("the orchestrator to hear the review", |_| {
+        heard
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|input| input.contains("[review task-1") && input.contains("trailing newline"))
+    })
+    .await;
+    let lead = Flow::task(&board, 1);
+    assert_eq!(
+        board.tasks.len(),
+        1,
+        "a lead only: no verifier, no reviewer task"
+    );
+    assert_eq!(board.reviews.len(), 1, "one review for the one landing");
+    let review = board.reviews.values().next().unwrap();
+    assert_eq!(review.kind, crate::work::ReviewKind::Code);
+    assert_eq!(review.task_id.as_ref(), Some(&lead.id));
+    assert_eq!(lead.landed.as_deref(), Some(review.tip.as_str()));
+    assert_eq!(
+        review.state,
+        crate::work::ReviewState::Findings { count: 1 }
+    );
+    let checkout = checkout.lock().unwrap().clone().expect("the review ran");
+    assert!(!checkout.exists(), "the review's checkout is removed");
+    assert!(
+        !super::git(&flow.repo, &["worktree", "list"]).contains(&checkout.display().to_string()),
+        "git forgot the review's checkout"
+    );
+    flow.stop().await;
+}
+
+/// A verifier only when the orchestrator wants one: it starts it on the lead's report; the
+/// verifier asks for the review (review_code), which returns at once, gets the findings as a
+/// message, fixes the one it agrees with and reports; the orchestrator lands the verifier.
+#[tokio::test]
+async fn a_verifier_the_orchestrator_started_triages_its_review_and_reports() {
+    let flow = Flow::start(
+        "verifier-review",
+        Options {
+            reviews: Some(script(|turn| async move {
+                let greeting = std::fs::read_to_string(turn.cwd.join("hello.txt"))
+                    .expect("the reviewer's checkout holds the work");
+                if greeting.ends_with('\n') {
+                    Reply::text("No findings.")
+                } else {
+                    Reply::text(
+                        "- [P2] hello.txt lacks a trailing newline — hello.txt:1\n  Add one.",
+                    )
+                }
+            })),
+            ..Options::default()
+        },
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                match reports_in(&turn.input).last().copied() {
+                    Some(1) => {
+                        let reply = turn.call("start_verifier", json!({"task": "task-1"})).await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        return Reply::text("[quiet]");
+                    }
+                    Some(n) => {
+                        let reply = turn
+                            .call("land_phase", json!({"task": format!("task-{n}")}))
+                            .await;
+                        assert!(reply.text.contains("Landed"), "{}", reply.text);
+                        return Reply::text("Added the greeting, verified.");
+                    }
+                    None => {}
+                }
+                if turn.input.contains("[review ") {
+                    return Reply::text("[quiet]");
+                }
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"title": "Add a greeting", "kind": "implement",
+                               "spec": "Create hello.txt.", "provider": "claude"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            if turn.prompt.contains("You verify this phase") {
+                let review = own_review(&turn).await;
+                assert!(review.contains("found 1"), "{review}");
+                assert!(review.contains("trailing newline"), "{review}");
+                turn.write("hello.txt", "hello\n");
+                turn.git(&["commit", "-qam", "End hello.txt with a newline"]);
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "Checks pass. The review found a missing trailing newline in hello.txt; fixed.",
+                               "changes": ["hello.txt"],
+                               "done_when": "[met] hello.txt exists: cat shows it"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Verified.");
+            }
+            turn.write("hello.txt", "hello");
+            turn.git(&["add", "hello.txt"]);
+            turn.git(&["commit", "-q", "-m", "Add hello.txt"]);
+            let reply = turn
+                .call(
+                    "submit_report",
+                    json!({"summary": "Added hello.txt.", "changes": ["hello.txt"]}),
+                )
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        }),
+    )
+    .await;
+    flow.say("Add a greeting file.").await;
+    flow.settled().await;
+    let board = reviews_ended(&flow, 2).await;
+    let lead = Flow::task(&board, 1);
+    let verifier = Flow::task(&board, 2);
+    assert_eq!(board.tasks.len(), 2, "a lead and the verifier it was given");
+    assert_eq!(verifier.role, Some(crate::work::WorkerRole::Verifier));
+    assert_eq!(verifier.subject.as_ref(), Some(&lead.id));
+    assert_eq!(verifier.state, TaskState::Landed);
+    let asked = board
+        .reviews
+        .values()
+        .find(|review| {
+            matches!(&review.notify, crate::work::ReviewFor::Worker { task_id } if *task_id == verifier.id)
+        })
+        .expect("the verifier's own review");
+    assert_eq!(asked.state, crate::work::ReviewState::Findings { count: 1 });
+    assert!(
+        verifier
+            .report
+            .as_ref()
+            .is_some_and(|report| report.summary.contains("trailing newline")),
+        "the verifier reports what the review found"
+    );
+    let target = verifier.workspace.as_ref().unwrap().target.clone().unwrap();
+    assert_eq!(
+        super::git(
+            &flow.repo,
+            &["cat-file", "-s", &format!("{target}:hello.txt")]
+        )
+        .trim(),
+        "6",
+        "the verifier's fix landed"
+    );
+    assert!(board.approvals.is_empty(), "no cards");
+    flow.stop().await;
+}
+
 /// Done when (2): a request of two phases. Phase 1's lead outlines and gets the go-ahead at
 /// once (its plan review runs in the background), builds, asks for its own review and reports;
 /// the orchestrator judges the phase big enough for a verifier and starts one, which asks for
