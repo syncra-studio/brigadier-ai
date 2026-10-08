@@ -733,6 +733,38 @@ export type ThreadTree = {
   headId: string | null;
 };
 
+/** Turns a long thread shows before its older ones fold into "N earlier messages" (THREAD-UX-PLAN.md §5). */
+export const SHOWN_TURNS = 30;
+
+/**
+ * The thread with only its newest `keep` turns on the branch shown, and how many older turns
+ * were left out. A turn starts at a node that holds a user message; other branches go with the
+ * turn they branch off, so a left-out turn takes its other versions along.
+ */
+export function foldTurns(tree: ThreadTree, keep: number): { tree: ThreadTree; hidden: number } {
+  const byId = new Map(tree.nodes.map((node) => [node.id, node]));
+  const path: ThreadNode[] = [];
+  for (let node = tree.headId ? byId.get(tree.headId) : undefined; node; node = node.parentId ? byId.get(node.parentId) : undefined) {
+    path.unshift(node);
+  }
+  const starts = path.flatMap((node, index) => (node.kind === "user" || node.block.user ? [index] : []));
+  const hidden = starts.length - keep;
+  const first = path[starts[hidden] ?? -1];
+  if (hidden <= 0 || !first) return { tree, hidden: 0 };
+  // A node stays when its line of parents reaches the first turn kept.
+  const kept = new Map<string, boolean>([[first.id, true]]);
+  const stays = (node: ThreadNode): boolean => {
+    const known = kept.get(node.id);
+    if (known !== undefined) return known;
+    const parent = node.parentId ? byId.get(node.parentId) : undefined;
+    const result = parent ? stays(parent) : false;
+    kept.set(node.id, result);
+    return result;
+  };
+  const nodes = tree.nodes.filter(stays).map((node) => (node.id === first.id ? { ...node, parentId: null } : node));
+  return { tree: { nodes, headId: tree.headId }, hidden };
+}
+
 /**
  * The parent of `messages[at]` on its branch: its own, or (for messages from before branches
  * existed) the message before it. `null` at the start of the conversation; `undefined` when

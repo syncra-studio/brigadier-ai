@@ -319,7 +319,7 @@ export function WorkerThread({ task }: { task: Task }) {
           element.scrollHeight - element.scrollTop - element.clientHeight < tokenPx("--spacing-row");
       }}
     >
-      <div className="max-w-thread mx-auto flex flex-col gap-4 pt-5">
+      <div className="max-w-thread mx-auto gap-activity flex flex-col pt-5">
         <Brief text={task.spec} />
         <WorkHeader task={task} />
         {(previousCount > 0 || transcript?.hasMore) && <Collapsible open={open} onOpenChange={setOpen}>
@@ -327,7 +327,7 @@ export function WorkerThread({ task }: { task: Task }) {
             {previousCount} previous {previousCount === 1 ? "message" : "messages"}
             <ChevronRight aria-hidden className={cn("size-3", open ? "-rotate-90" : "rotate-90")} />
           </CollapsibleTrigger>
-          <CollapsibleContent className="flex flex-col gap-4 py-4">
+          <CollapsibleContent className="gap-activity flex flex-col py-4">
             {transcript?.hasMore && <Button size="xs" variant="ghost" className="self-start" disabled={transcript.loading}
               onClick={() => void loadEarlierWorkerEntries(task.conversationId, task.id)}>Load earlier</Button>}
             {task.messages.map((text, index) => <WorkerMarkdown key={index} text={text} />)}

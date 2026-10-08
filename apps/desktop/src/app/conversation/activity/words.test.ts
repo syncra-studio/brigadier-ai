@@ -63,6 +63,9 @@ test("a step names what it acts on, by the file's name", () => {
   assert.equal(lead("mcp__brigadier__run_check", "inProgress", "cargo test"), "Running cargo test");
   assert.equal(lead("mcp__brigadier__run_check"), "Ran checks");
   assert.equal(lead("shell", "failed", "cargo build"), "Ran cargo build — failed");
+  // Moving into the worktree first is no part of what it runs.
+  assert.equal(lead("shell", "completed", "cd /tmp/w/session-1 && python3 -m pytest -q"), "Ran python3 -m pytest -q");
+  assert.equal(lead("Bash", "completed", "cd '/tmp/a b' && cat notes.py"), "Read notes.py");
   assert.equal(lead("Read", "inProgress", "/repo/src/main.rs"), "Reading main.rs");
   assert.equal(lead("apply_patch", "completed", "src/a.rs and 2 more"), "Edited a.rs and 2 more");
   assert.equal(lead("Grep", "completed", "sidebar"), "Searched code for “sidebar”");

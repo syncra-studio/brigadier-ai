@@ -556,7 +556,7 @@ export const RequestBlock: FC = () => {
               )}
             >
               {/* min-w-0: a long unbroken line (a branch in code) wraps instead of widening the fold. */}
-              <div className={cn("flex min-h-0 min-w-0 flex-col gap-3", fold.state !== "open" && "overflow-hidden")}>
+              <div className={cn("flex min-h-0 min-w-0 flex-col gap-activity", fold.state !== "open" && "overflow-hidden")}>
                 <ActivityItems activity={folded} live={false} streaming={() => false} />
               </div>
             </div>
@@ -590,7 +590,7 @@ export const RequestBlock: FC = () => {
           {!answering && <WaitingOnYou requestIds={meta.requestIds} />}
         </>
       ) : (
-        <div data-slot="request-work" data-follow-content className="flex flex-col gap-3">
+        <div data-slot="request-work" data-follow-content className="gap-activity flex flex-col">
           <ActivityItems
             activity={activity}
             live={live}

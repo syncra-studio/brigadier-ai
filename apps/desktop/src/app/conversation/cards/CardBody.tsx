@@ -1,16 +1,12 @@
 import { ApprovalCardView } from "@/app/conversation/cards/ApprovalCardView";
 import { PlanCardLink } from "@/app/conversation/cards/PlanCardLink";
 import { QuestionCardView } from "@/app/conversation/cards/QuestionCardView";
-import { TaskCardView } from "@/app/conversation/cards/TaskCardView";
 
 export type CardType = "task" | "approval" | "question" | "plan";
 
-/** The card a thread item shows. Loaded with the first card, not at startup: worker cards
- * bring the transcript renderer and its virtualizer. */
+/** The card a thread item shows. Loaded with the first card, not at startup. */
 export default function CardBody({ type, id }: { type: CardType; id: string }) {
   switch (type) {
-    case "task":
-      return <TaskCardView taskId={id} />;
     case "approval":
       return <ApprovalCardView cardId={id} />;
     case "question":

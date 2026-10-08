@@ -1,7 +1,7 @@
 import { ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
 import type { ComponentProps, ReactNode } from "react";
 
-import { CHEVRON, ROW, ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row";
+import { CHEVRON, OPENS, ROW, ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +26,8 @@ export function ThreadActivity({ detail, detailClassName, className, children, .
         <ChevronRight aria-hidden className={CHEVRON} />
       </div>
     </CollapsibleTrigger>
-    <CollapsibleContent className={detailClassName ?? ROW_DETAIL}>{detail}</CollapsibleContent>
+    <CollapsibleContent className={OPENS}>
+      <div className={detailClassName ?? ROW_DETAIL}>{detail}</div>
+    </CollapsibleContent>
   </Collapsible>;
 }

@@ -17,17 +17,21 @@
   @keyframes collapsible-down {
     from {
       height: 0;
+      opacity: 0;
     }
     to {
       height: var(--radix-collapsible-content-height, auto);
+      opacity: 1;
     }
   }
   @keyframes collapsible-up {
     from {
       height: var(--radix-collapsible-content-height, auto);
+      opacity: 1;
     }
     to {
       height: 0;
+      opacity: 0;
     }
   }
   /* One sweep in the first second of every four, in 48 steps; at rest the band is past the end. */
@@ -41,9 +45,10 @@
       background-position: 250% 0;
     }
   }
-  --animate-collapsible-down: collapsible-down 150ms ease-out;
+  /* A thread's group or row opening (THREAD-UX-PLAN.md §3.8). */
+  --animate-collapsible-down: collapsible-down 160ms ease-out;
   --animate-shimmer: shimmer 4s 600ms infinite;
-  --animate-collapsible-up: collapsible-up 150ms ease-out;
+  --animate-collapsible-up: collapsible-up 160ms ease-out;
   /* A rail card opens from nothing to its height. */
   @keyframes rail-open {
     from {

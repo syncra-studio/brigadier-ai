@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import type { GroupItem, Thought as ThoughtItem } from "@/app/conversation/activity/group";
 import { stepLabel, type StepWords, summarize } from "@/app/conversation/activity/words";
 import { ThinkingRow } from "@/app/conversation/ThinkingRow";
-import { CHEVRON, ROW, WORK_ICONS } from "@/components/assistant-ui/elements/activity-row";
+import { CHEVRON, OPENS, ROW, WORK_ICONS } from "@/components/assistant-ui/elements/activity-row";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { ItemStatus } from "@/ipc/generated";
@@ -72,17 +72,25 @@ export function ActivityGroup<S>({ items, live, describe, renderStep }: {
     <Collapsible data-slot="work-group">
       <CollapsibleTrigger className={cn(ROW, "group hover:text-foreground rounded-control w-full text-start")}>
         {head && <StepIcon words={head.words} />}
-        <span className={cn("min-w-0 truncate", live && current?.status === "inProgress" && "shimmer")}>{label}</span>
+        {/* A live group's step changes in place: its words cross-fade, with no jump. */}
+        <span
+          key={live ? label : undefined}
+          className={cn("min-w-0 truncate", live && "animate-in fade-in duration-160 motion-reduce:animate-none", live && current?.status === "inProgress" && "shimmer")}
+        >
+          {label}
+        </span>
         <ChevronRight aria-hidden className={CHEVRON} />
       </CollapsibleTrigger>
-      <CollapsibleContent className="flex min-w-0 flex-col gap-1 pt-1">
-        {items.map((item) =>
-          item.type === "step" ? (
-            renderStep(item.step, item.key)
-          ) : (
-            <Thought key={`thought:${item.thought.key}`} thought={item.thought} />
-          ),
-        )}
+      <CollapsibleContent className={OPENS}>
+        <div className="flex min-w-0 flex-col gap-1 pt-1">
+          {items.map((item) =>
+            item.type === "step" ? (
+              renderStep(item.step, item.key)
+            ) : (
+              <Thought key={`thought:${item.thought.key}`} thought={item.thought} />
+            ),
+          )}
+        </div>
       </CollapsibleContent>
     </Collapsible>
   );

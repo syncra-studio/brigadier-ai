@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import { type Block, type BoardDigest, blockSequence, buildBlocks, judgementCall } from "@/app/conversation/blocks";
+import { type Block, type BoardDigest, blockSequence, buildBlocks, foldTurns, judgementCall, type ThreadNode } from "@/app/conversation/blocks";
 import { checkersOf, checkResult, checksCount, machineWords, taskRowDetail, taskState } from "@/app/conversation/rowWords";
 import type { Decision, MachineStep, Message, OrchestratorStep, OvernightRun, Plan, Task, UserRequest } from "@/ipc/generated";
 
@@ -303,4 +303,23 @@ test("the lead managing its team shows: a message, an answer, a stop with its re
   const shown = sequence(buildBlocks([user], {}, false, replay, [])[0]!).flatMap((entry) =>
     entry.kind === "row" ? [`row:${entry.row.kind}`] : entry.kind === "orchestrator" ? entry.steps.map((s) => s.kind.type) : []);
   assert.deepEqual(shown, ["row:started", "messaged", "answered", "stopped", "landed"]);
+});
+
+const node = (id: string, parentId: string | null, kind: ThreadNode["kind"]): ThreadNode =>
+  ({ id, parentId, kind, block: { user: null } as unknown as Block, head: null });
+
+test("a long thread folds its oldest turns, other versions of a folded turn with it", () => {
+  // Turn n is a user node and its reply; turn 2 has a second version (an edit) branching off turn 1.
+  const nodes: ThreadNode[] = [];
+  for (let turn = 1; turn <= 5; turn += 1) {
+    nodes.push(node(`u${turn}`, turn === 1 ? null : `r${turn - 1}`, "user"), node(`r${turn}`, `u${turn}`, "block"));
+  }
+  nodes.push(node("u2-edit", "r1", "user"), node("r2-edit", "u2-edit", "block"));
+  const tree = { nodes, headId: "r5" };
+  const folded = foldTurns(tree, 3);
+  assert.equal(folded.hidden, 2);
+  assert.deepEqual(folded.tree.nodes.map((kept) => kept.id), ["u3", "r3", "u4", "r4", "u5", "r5"]);
+  assert.equal(folded.tree.nodes[0]?.parentId, null);
+  // Short enough: nothing folds.
+  assert.deepEqual(foldTurns(tree, 5), { tree, hidden: 0 });
 });

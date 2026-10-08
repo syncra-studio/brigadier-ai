@@ -13,6 +13,7 @@ import {
 } from "@assistant-ui/react";
 import { Unarchive, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
+  createContext,
   type FC,
   useCallback,
   useContext,
@@ -44,6 +45,8 @@ import {
   type Block,
   type BoardDigest,
   buildThread,
+  foldTurns,
+  SHOWN_TURNS,
   type ThreadNode,
 } from "@/app/conversation/blocks";
 import {
@@ -454,7 +457,7 @@ export function ConversationView({
   }, [conversationId, thread.items, thread.fullText]);
 
   const session = conversation?.kind === "session" || resolved.kind === "session";
-  const tree = useMemo(
+  const full = useMemo(
     () =>
       buildThread(
         thread.items,
@@ -465,6 +468,17 @@ export function ConversationView({
         session ? "edits" : "all",
       ),
     [thread.items, thread.fullText, thread.hasMore, digest, pending, session],
+  );
+  // A long thread shows its newest turns; the older ones wait behind "N earlier messages".
+  const [unfoldedIn, setUnfoldedIn] = useState<string | null>(null);
+  const folded = useMemo(
+    () => (unfoldedIn === conversationId ? { tree: full, hidden: 0 } : foldTurns(full, SHOWN_TURNS)),
+    [full, unfoldedIn, conversationId],
+  );
+  const tree = folded.tree;
+  const earlier = useMemo(
+    () => ({ hidden: folded.hidden, show: () => setUnfoldedIn(conversationId) }),
+    [folded.hidden, conversationId],
   );
   const setup = conversation?.setup;
   const picked =
@@ -739,6 +753,7 @@ export function ConversationView({
   );
   return (
     <ViewContext.Provider value={{ selection, conversation, embedded }}>
+      <EarlierTurnsContext.Provider value={earlier}>
       <ComposerTargetContext.Provider value={target}>
         <SidePanelContext.Provider value={sidePanel}>
           <AgentsPanelContext.Provider value={agents}>
@@ -840,6 +855,7 @@ export function ConversationView({
           </AgentsPanelContext.Provider>
         </SidePanelContext.Provider>
       </ComposerTargetContext.Provider>
+      </EarlierTurnsContext.Provider>
     </ViewContext.Provider>
   );
 }
@@ -879,11 +895,24 @@ const Welcome: FC = () => {
   );
 };
 
+/** The older turns a long thread folds away, and how to show them. */
+const EarlierTurnsContext = createContext<{ hidden: number; show: () => void }>({ hidden: 0, show: () => {} });
+
 const LoadEarlier: FC = () => {
   const { selection } = useContext(ViewContext);
   const conversationId = selection.type === "conversation" ? selection.id : "";
   const hasMore = useApp((s) => s.threads[conversationId]?.hasMore ?? false);
   const loading = useApp((s) => s.threads[conversationId]?.loading ?? false);
+  const earlier = useContext(EarlierTurnsContext);
+  if (earlier.hidden > 0) {
+    return (
+      <div className="mb-4 flex justify-center">
+        <Button variant="ghost" size="sm" data-slot="earlier-turns" onClick={earlier.show}>
+          {earlier.hidden} earlier {earlier.hidden === 1 ? "message" : "messages"}
+        </Button>
+      </div>
+    );
+  }
   if (!hasMore) return null;
   return (
     <div className="mb-4 flex justify-center">

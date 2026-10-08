@@ -3,7 +3,7 @@ import { memo, useContext, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { workerDone, workerWorking, workerState, workerPreview } from "@/app/conversation/workerPresentation";
-import { TaskDetails } from "@/app/conversation/cards/TaskCardView";
+import { TaskDetails } from "@/app/conversation/TaskDetails";
 import { useTaskActivityLine } from "@/app/conversation/WorkerActivity";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import {

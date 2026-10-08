@@ -104,10 +104,13 @@ const SEARCHERS = new Set(["rg", "grep", "ag", "ack"]);
 const NETWORK = new Set(["curl", "wget", "http", "ping", "ssh", "scp", "nc", "dig"]);
 const NETWORK_GIT = new Set(["fetch", "pull", "push", "clone", "ls-remote"]);
 
-/** The command a shell wrapper runs: `/bin/zsh -c 'wc -l notes.py'` → `wc -l notes.py`. */
+/**
+ * The command a shell wrapper runs, without moving into its folder first:
+ * `/bin/zsh -c 'wc -l notes.py'` and `cd /tmp/wt && wc -l notes.py` → `wc -l notes.py`.
+ */
 export function unwrapCommand(command: string): string {
   const wrapped = /^(?:\/\S*\/)?(?:ba|z)?sh\s+-l?c\s+(['"])([\s\S]*)\1$/.exec(command.trim());
-  return (wrapped?.[2] ?? command).trim();
+  return (wrapped?.[2] ?? command).trim().replace(/^(?:cd\s+(?:'[^']*'|"[^"]*"|\S+)\s*&&\s*)+/, "");
 }
 
 export function basename(path: string): string {

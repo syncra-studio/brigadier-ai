@@ -26,6 +26,13 @@ export const ROW_DETAIL = "text-foreground/60 flex max-h-action-list min-w-0 fle
 export const CHEVRON =
   "text-foreground/40 size-icon-xs shrink-0 transition-[rotate] group-data-[state=open]:rotate-90 motion-reduce:transition-none";
 
+/**
+ * How a row's or group's detail opens and closes: its height and opacity over 160 ms, at once
+ * with reduced motion. On the collapsible's content; the detail's own layout goes inside it.
+ */
+export const OPENS =
+  "overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up motion-reduce:animate-none";
+
 export const WORK_ICONS: Record<WorkKind, FC<{ className?: string }>> = {
   read: Book,
   edit: EditPencil,
