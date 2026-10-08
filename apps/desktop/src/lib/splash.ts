@@ -10,6 +10,7 @@
 import { useSyncExternalStore } from "react";
 
 import { startupFinished } from "@/ipc/client";
+import { markStartup } from "@/lib/startup";
 
 /** How long startup may take before the splash gives up waiting (also `--splash-late-after`). */
 const STALL_MS = 10_000;
@@ -76,6 +77,7 @@ async function fadeOut(): Promise<void> {
   const root = document.documentElement;
   if (element) {
     root.dataset.splash = "leaving";
+    markStartup("fading");
     // The transitions start at the next style pass; with reduced motion there are none.
     void getComputedStyle(element).opacity;
     await Promise.all(element.getAnimations().map((animation) => animation.finished)).catch(
@@ -86,11 +88,13 @@ async function fadeOut(): Promise<void> {
   delete root.dataset.splash;
   revealed = true;
   for (const listener of listeners) listener();
-  // The window's startup blur is covered from here on.
-  await startupFinished().catch((error: unknown) => {
-    console.error("clearing the startup backdrop failed", error);
-  });
-  finishStartup();
+  // The window's startup blur is covered from here on, so the app is shown without waiting for
+  // it to be cleared; work that waits for startup to be over (whenRevealed) waits for that too.
+  void startupFinished()
+    .catch((error: unknown) => {
+      console.error("clearing the startup backdrop failed", error);
+    })
+    .then(finishStartup);
 }
 
 function subscribe(listener: () => void): () => void {
