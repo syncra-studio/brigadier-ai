@@ -575,12 +575,13 @@ impl SessionManager {
             BrainJobKind::Skeleton => SKELETON_TIME,
             BrainJobKind::Enrichment => ENRICH_TIME,
         };
+        let account = self.runtime.launch_account(provider, spec.model.as_deref());
         let ran = async {
             let Started {
                 session,
                 mut events,
-            } = self.runtime.start_hosted(&owner, provider, spec).await?;
-            let meter = TokenMeter::default();
+            } = self.runtime.start_hosted(&owner, &account, spec).await?;
+            let meter = TokenMeter::default().on_account(account.account.clone());
             let turn = async {
                 session
                     .send(TurnInput::text(prompt))
@@ -590,7 +591,7 @@ impl SessionManager {
                     match event {
                         ProviderEvent::RateLimits { quota } => {
                             self.runtime
-                            .note_quota_snapshot(&crate::accounts::AccountRef::own(quota.provider), quota.clone())
+                            .note_quota_snapshot(&account, quota.clone())
                             .await;
                         }
                         ProviderEvent::Usage { total, last } => self.note_tokens(

@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use brigadier_providers::claude::Claude;
 use brigadier_providers::codex::Codex;
-use brigadier_providers::{Artifact, Provider, cleanup};
+use brigadier_providers::{Artifact, Provider, ProviderKind, cleanup};
 use brigadier_sandbox::Platform;
 use brigadier_store::NewEvent;
 
@@ -76,6 +76,9 @@ impl Leftovers {
     }
 }
 
+/// The adapter of the extra account whose CLI home is the given folder, while it is set up.
+pub type AccountResolver = Arc<dyn Fn(&str) -> Option<Arc<dyn Provider>> + Send + Sync>;
+
 pub struct CleanupLedger {
     core: Arc<Core>,
     platform: Arc<dyn Platform>,
@@ -83,6 +86,7 @@ pub struct CleanupLedger {
     codex: Arc<Codex>,
     state: Mutex<State>,
     worktrees: Mutex<Option<WorktreeRemover>>,
+    accounts: Mutex<Option<AccountResolver>>,
 }
 
 impl CleanupLedger {
@@ -135,11 +139,36 @@ impl CleanupLedger {
             codex,
             state: Mutex::new(state),
             worktrees: Mutex::new(None),
+            accounts: Mutex::new(None),
         })
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Wires in the extra accounts: a session's files go with the adapter of the home it ran
+    /// in while that account is set up (the user's own adapter otherwise).
+    pub fn set_account_resolver(&self, resolver: AccountResolver) {
+        *self.accounts.lock().unwrap_or_else(|p| p.into_inner()) = Some(resolver);
+    }
+
+    /// The adapter that removes `kind`'s files of a session that ran in `home`.
+    fn remover(&self, kind: ProviderKind, home: Option<&str>) -> Arc<dyn Provider> {
+        let resolver = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        if let (Some(home), Some(resolver)) = (home, resolver)
+            && let Some(provider) = resolver(home).filter(|provider| provider.kind() == kind)
+        {
+            return provider;
+        }
+        match kind {
+            ProviderKind::Claude => self.claude.clone(),
+            ProviderKind::Codex => self.codex.clone(),
+        }
     }
 
     /// Wires in the git engine for removing worktrees.
@@ -399,8 +428,15 @@ impl CleanupLedger {
             return leftovers;
         }
         let mut removed = Vec::new();
-        let mut claude = Vec::new();
-        let mut codex = Vec::new();
+        // The CLIs' own files, by the home of the session that made them.
+        let mut cli_files: Vec<(ProviderKind, Option<String>, Vec<Artifact>)> = Vec::new();
+        let mut add = |kind: ProviderKind, home: Option<String>, artifact: Artifact| match cli_files
+            .iter_mut()
+            .find(|(k, h, _)| *k == kind && *h == home)
+        {
+            Some((_, _, artifacts)) => artifacts.push(artifact),
+            None => cli_files.push((kind, home, vec![artifact])),
+        };
         for artifact in artifacts {
             match &artifact {
                 Artifact::Process { pid, started_at_ms } => {
@@ -420,13 +456,18 @@ impl CleanupLedger {
                         Err(err) => leftovers.failures.push(err.to_string()),
                     }
                 }
-                Artifact::ClaudeSession { .. }
-                | Artifact::ClaudeProjectDir { .. }
+                Artifact::ClaudeSession { home, .. } => {
+                    add(ProviderKind::Claude, home.clone(), artifact)
+                }
+                Artifact::ClaudeProjectDir { .. }
                 | Artifact::ClaudeStagingDir { .. }
-                | Artifact::ClaudeTempDir { .. } => claude.push(artifact),
-                Artifact::CodexThread { .. }
-                | Artifact::CodexGeneratedImages { .. }
-                | Artifact::CodexProjectTrust { .. } => codex.push(artifact),
+                | Artifact::ClaudeTempDir { .. } => add(ProviderKind::Claude, None, artifact),
+                Artifact::CodexThread { home, .. } => {
+                    add(ProviderKind::Codex, home.clone(), artifact)
+                }
+                Artifact::CodexGeneratedImages { .. } | Artifact::CodexProjectTrust { .. } => {
+                    add(ProviderKind::Codex, None, artifact)
+                }
                 // Run segments share one worktree: the last owner using it removes it.
                 Artifact::Worktree { path, .. } if self.state().shares_worktree(owner, path) => {
                     tracing::info!(owner, path, "left a worktree another owner still uses");
@@ -479,13 +520,8 @@ impl CleanupLedger {
                 }
             }
         }
-        for (provider, artifacts) in [
-            (&*self.claude as &dyn Provider, claude),
-            (&*self.codex as &dyn Provider, codex),
-        ] {
-            if artifacts.is_empty() {
-                continue;
-            }
+        for (kind, home, artifacts) in cli_files {
+            let provider = self.remover(kind, home.as_deref());
             match provider.remove(artifacts.clone()).await {
                 Ok(()) => removed.extend(artifacts),
                 Err(err) => leftovers

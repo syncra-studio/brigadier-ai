@@ -324,7 +324,11 @@ impl SessionManager {
         }
         let command = self
             .runtime
-            .terminal_command(provider, session.spec, cwd)
+            .terminal_command(
+                &self.runtime.account_for(&task.route.choice),
+                session.spec,
+                cwd,
+            )
             .await?;
         let terminal = host.start(
             &task.conversation_id.0,

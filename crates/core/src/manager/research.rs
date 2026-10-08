@@ -263,9 +263,10 @@ impl SessionManager {
             omit_ai_coauthors: false,
             output_hook: None,
         };
-        let meter = TokenMeter::default();
+        let account = self.runtime.launch_account(runs_on, spec.model.as_deref());
+        let meter = TokenMeter::default().on_account(account.account.clone());
         let ran = run_web_session(
-            self.runtime.start_hosted(&owner, runs_on, spec),
+            self.runtime.start_hosted(&owner, &account, spec),
             prompt,
             &cancel,
             &self.research.stop,
@@ -274,10 +275,7 @@ impl SessionManager {
                 match event {
                     ProviderEvent::RateLimits { quota } => {
                         self.runtime
-                            .note_quota_snapshot(
-                                &crate::accounts::AccountRef::own(quota.provider),
-                                quota.clone(),
-                            )
+                            .note_quota_snapshot(&account, quota.clone())
                             .await;
                     }
                     ProviderEvent::Usage { total, last } => {

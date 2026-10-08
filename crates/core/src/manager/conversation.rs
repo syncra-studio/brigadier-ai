@@ -1635,16 +1635,15 @@ impl SessionManager {
         self.settle_requests(&conv.id).await;
     }
 
-    /// The user changed the model, effort or Fast since the CLI started: close it while nothing
-    /// runs, so the next turn resumes the conversation on the new choice, taking effect on the
-    /// next message.
+    /// The user changed the model, effort, Fast or account since the CLI started: close it
+    /// while nothing runs, so the next turn resumes the conversation on the new choice, taking
+    /// effect on the next message.
     async fn retire_changed_cli(&self, conv: &Arc<ConvLive>) {
         let Ok(conversation) = self.core.conversation(&conv.id) else {
             return;
         };
         let wanted = setup_choice(&conversation);
         if let Some(cli) = conv.idle_cli().await
-            && cli.chosen.is_some()
             && cli.chosen != wanted
         {
             conv.retire_cli(&cli).await;
@@ -1829,9 +1828,12 @@ impl SessionManager {
             output_hook,
         };
         let mut resumed = resume.is_some();
+        // Every account shares the CLI's session history: a conversation resumes on whichever
+        // account it runs on now.
+        let account = self.runtime.account_for(&choice);
         let started = match self
             .runtime
-            .start_hosted(&owner, choice.provider, spec.clone())
+            .start_hosted(&owner, &account, spec.clone())
             .await
         {
             Ok(started) => started,
@@ -1840,11 +1842,7 @@ impl SessionManager {
                 spec.origin = Origin::New;
                 resumed = false;
                 conv.state.lock().await.reseed = true;
-                match self
-                    .runtime
-                    .start_hosted(&owner, choice.provider, spec)
-                    .await
-                {
+                match self.runtime.start_hosted(&owner, &account, spec).await {
                     Ok(started) => started,
                     Err(err) => {
                         self.grants.revoke_owner(&owner);
@@ -1883,8 +1881,9 @@ impl SessionManager {
         let Started { session, events } = started;
         let cli = Arc::new(Cli {
             provider: choice.provider,
-            account: crate::accounts::AccountRef::own(choice.provider),
-            meter: TokenMeter::new(resumed && choice.provider == ProviderKind::Codex),
+            meter: TokenMeter::new(resumed && choice.provider == ProviderKind::Codex)
+                .on_account(account.account.clone()),
+            account,
             model: choice,
             chosen: setup_choice(&conversation),
             session,

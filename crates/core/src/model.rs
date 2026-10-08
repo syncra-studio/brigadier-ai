@@ -186,8 +186,9 @@ pub struct ModelChoice {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub fast: Option<bool>,
-    /// The provider's account it runs on ([`AccountEntry::id`]). Absent: the provider's
-    /// default account ([`Settings::accounts`]).
+    /// The provider's account it runs on ([`AccountEntry::id`], or
+    /// [`crate::accounts::OWN`] for the user's own login). Absent: the provider's default
+    /// account ([`Settings::accounts`]), or the one with the most left when that is used up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub account: Option<String>,

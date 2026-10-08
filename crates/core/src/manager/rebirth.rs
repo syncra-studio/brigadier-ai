@@ -340,10 +340,11 @@ impl SessionManager {
             output_hook: None,
         };
         let owner = format!("orch:{id}");
+        let account = self.runtime.account_for(&choice);
         let Started {
             session,
             mut events,
-        } = match self.runtime.start_hosted(&owner, provider, spec).await {
+        } = match self.runtime.start_hosted(&owner, &account, spec).await {
             Ok(started) => started,
             Err(err) => {
                 tracing::warn!(conversation = %id, error = %err, "could not fork the orchestrator for its handoff note");
@@ -351,7 +352,8 @@ impl SessionManager {
             }
         };
         // A forked Codex thread may carry its parent's totals: its first report is a baseline.
-        let meter = TokenMeter::new(provider == ProviderKind::Codex);
+        let meter =
+            TokenMeter::new(provider == ProviderKind::Codex).on_account(account.account.clone());
         let written = async {
             let prompt = match purpose {
                 HandoffPurpose::Threshold => HANDOFF_PROMPT,
@@ -368,10 +370,7 @@ impl SessionManager {
                     } => parts.push(text),
                     ProviderEvent::RateLimits { quota } => {
                         self.runtime
-                            .note_quota_snapshot(
-                                &crate::accounts::AccountRef::own(quota.provider),
-                                quota.clone(),
-                            )
+                            .note_quota_snapshot(&account, quota.clone())
                             .await;
                     }
                     ProviderEvent::Usage { total, last } => {

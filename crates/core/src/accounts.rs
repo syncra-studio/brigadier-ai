@@ -12,6 +12,9 @@ use ts_rs::TS;
 
 use crate::model::Settings;
 
+/// [`crate::model::ModelChoice::account`] for the user's own login, chosen over the default.
+pub const OWN: &str = "own";
+
 /// One login of a provider: the user's own (`account` absent) or an extra account's id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -33,6 +36,11 @@ impl AccountRef {
 
     pub fn new(provider: ProviderKind, account: Option<String>) -> Self {
         Self { provider, account }
+    }
+
+    /// How a [`crate::model::ModelChoice`] names it: [`OWN`] for the user's own login.
+    pub fn choice_id(&self) -> String {
+        self.account.clone().unwrap_or_else(|| OWN.to_owned())
     }
 
     /// Its folder name in the data directory's `accounts`, and the key its quota is kept

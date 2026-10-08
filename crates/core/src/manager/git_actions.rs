@@ -274,7 +274,10 @@ impl SessionManager {
             let Started {
                 session,
                 mut events,
-            } = self.runtime.start_hosted(&owner, provider, spec).await?;
+            } = self
+                .runtime
+                .start_hosted(&owner, &self.runtime.launch_account(provider, None), spec)
+                .await?;
             let reply = async {
                 session.send(TurnInput::text(prompt)).await.map_err(|err| {
                     Error::Provider(format!("the message writer didn't start: {err}"))

@@ -750,14 +750,17 @@ impl SessionManager {
             output_hook: None,
         };
         let counted_as = TaskId(review_owner(&review.id));
-        let meter = TokenMeter::default();
+        let account = self
+            .runtime
+            .launch_account(review.reviewer, review.reviewer_model.as_deref());
+        let meter = TokenMeter::default().on_account(account.account.clone());
         meter.turn_started(now_ms());
         let Started {
             session,
             mut events,
         } = self
             .runtime
-            .start_hosted(owner, review.reviewer, spec)
+            .start_hosted(owner, &account, spec)
             .await
             .map_err(|err| format!("its CLI didn't start: {err}"))?;
         let turn = async {
@@ -775,10 +778,7 @@ impl SessionManager {
                     } => last = text,
                     ProviderEvent::RateLimits { quota } => {
                         self.runtime
-                            .note_quota_snapshot(
-                                &crate::accounts::AccountRef::own(quota.provider),
-                                quota.clone(),
-                            )
+                            .note_quota_snapshot(&account, quota.clone())
                             .await;
                     }
                     ProviderEvent::Usage {

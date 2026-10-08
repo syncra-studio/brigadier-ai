@@ -217,6 +217,12 @@ impl Runtime {
             #[cfg(test)]
             fake_accounts: Mutex::new(None),
         });
+        let resolving = Arc::downgrade(&runtime);
+        runtime
+            .ledger
+            .set_account_resolver(Arc::new(move |home: &str| {
+                resolving.upgrade()?.account_by_home(home)
+            }));
         runtime.load().await?;
         runtime.sweep().await;
         let ledger = runtime.ledger.clone();
@@ -435,30 +441,31 @@ impl Runtime {
         }
     }
 
-    /// Starts a CLI session owned by `owner` (`orch:…`, `task:…`, `chat:…`); everything it
-    /// creates is recorded under `owner` in the cleanup ledger.
+    /// Starts a CLI session owned by `owner` (`orch:…`, `task:…`, `chat:…`) on `account`;
+    /// everything it creates is recorded under `owner` in the cleanup ledger.
     pub async fn start_hosted(
         &self,
         owner: &str,
-        kind: ProviderKind,
+        account: &AccountRef,
         spec: SessionSpec,
     ) -> Result<Started> {
         self.admit()?;
-        self.provider(kind)
+        self.provider_for(account)?
             .start(spec, self.ledger.handle(owner.to_owned()))
             .await
             .map_err(provider_error)
     }
 
-    /// The command that continues `spec`'s session in a terminal in `cwd` ("Open in terminal").
+    /// The command that continues `spec`'s session in a terminal in `cwd` ("Open in terminal"),
+    /// on `account`.
     pub async fn terminal_command(
         &self,
-        kind: ProviderKind,
+        account: &AccountRef,
         spec: SessionSpec,
         cwd: std::path::PathBuf,
     ) -> Result<brigadier_providers::TerminalCommand> {
         self.admit()?;
-        self.provider(kind)
+        self.provider_for(account)?
             .terminal(spec, cwd)
             .await
             .map_err(provider_error)

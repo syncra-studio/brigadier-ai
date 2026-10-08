@@ -53,6 +53,23 @@ impl Runtime {
         }
     }
 
+    /// The adapter of the extra account whose CLI home is `home`, while it is set up.
+    pub(super) fn account_by_home(&self, home: &str) -> Option<Arc<dyn Provider>> {
+        self.accounts()
+            .values()
+            .find(|live| self.account_home(&live.entry.id) == std::path::Path::new(home))
+            .map(|live| live.provider.clone())
+    }
+
+    /// The homes of `provider`'s extra accounts set up now.
+    pub fn account_homes(&self, provider: ProviderKind) -> Vec<PathBuf> {
+        self.accounts()
+            .values()
+            .filter(|live| live.entry.provider == provider)
+            .map(|live| self.account_home(&live.entry.id))
+            .collect()
+    }
+
     pub(super) fn accounts(&self) -> std::sync::MutexGuard<'_, HashMap<String, AccountLive>> {
         self.accounts
             .lock()
@@ -257,6 +274,23 @@ impl Runtime {
             &self.account_candidates(provider),
             &[],
         )
+    }
+
+    /// The account work on `choice` runs on: the one it names while that is still there,
+    /// otherwise as [`Self::launch_account`] says.
+    pub fn account_for(&self, choice: &crate::model::ModelChoice) -> AccountRef {
+        match choice.account.as_deref() {
+            Some(crate::accounts::OWN) => AccountRef::own(choice.provider),
+            Some(id)
+                if self
+                    .accounts()
+                    .get(id)
+                    .is_some_and(|live| live.entry.provider == choice.provider) =>
+            {
+                AccountRef::new(choice.provider, Some(id.to_owned()))
+            }
+            _ => self.launch_account(choice.provider, choice.model.as_deref()),
+        }
     }
 
     /// Where work on `from` goes on when `from` hit its limit: another account of the same

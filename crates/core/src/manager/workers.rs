@@ -1469,8 +1469,9 @@ impl SessionManager {
             .worker_session(task, subject, origin, Some(&mut first), &owner)
             .await?;
         let provider = task.route.choice.provider;
+        let account = self.runtime.account_for(&task.route.choice);
         let Started { session, events } =
-            match self.runtime.start_hosted(&owner, provider, spec).await {
+            match self.runtime.start_hosted(&owner, &account, spec).await {
                 Ok(started) => started,
                 Err(err) => {
                     self.grants.revoke_owner(&owner);
@@ -1479,8 +1480,8 @@ impl SessionManager {
             };
         let cli = Arc::new(Cli {
             provider,
-            account: crate::accounts::AccountRef::own(provider),
-            meter: TokenMeter::new(continues),
+            meter: TokenMeter::new(continues).on_account(account.account.clone()),
+            account,
             model: task.route.choice.clone(),
             chosen: None,
             session,

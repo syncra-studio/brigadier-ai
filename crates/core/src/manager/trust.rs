@@ -18,8 +18,8 @@
 
 use std::path::Path;
 
-use brigadier_providers::Artifact;
 use brigadier_providers::trust::{self, TrustCli, Written};
+use brigadier_providers::{Artifact, ProviderKind};
 
 use super::workers::access_for;
 use super::{SessionManager, blocking};
@@ -158,19 +158,30 @@ impl SessionManager {
         }
     }
 
-    /// The file `cli` keeps folder trust in, for the CLIs' environment.
-    fn trust_file(&self, cli: TrustCli) -> Option<std::path::PathBuf> {
+    /// The files `cli` keeps folder trust in, for the CLIs' environment: the user's own, and
+    /// each extra Claude account's (an extra Codex account's `config.toml` is the user's own,
+    /// linked).
+    fn trust_files(&self, cli: TrustCli) -> Vec<std::path::PathBuf> {
         #[cfg(test)]
-        {
-            let home = self.trust_home.get()?;
+        let own = self.trust_home.get().and_then(|home| {
             let env = brigadier_providers::cli::CliEnv::from_vars([(
                 std::ffi::OsString::from("HOME"),
                 home.clone().into_os_string(),
             )]);
             cli.file(&env)
-        }
+        });
         #[cfg(not(test))]
-        cli.file(self.runtime.cli_env())
+        let own = cli.file(self.runtime.cli_env());
+        let mut files: Vec<_> = own.into_iter().collect();
+        if cli == TrustCli::Claude {
+            files.extend(
+                self.runtime
+                    .account_homes(ProviderKind::Claude)
+                    .into_iter()
+                    .map(|home| home.join(".claude.json")),
+            );
+        }
+        files
     }
 
     /// The entry the CLIs look up for `folder`: its repository's main checkout (both CLIs key
@@ -199,14 +210,13 @@ impl SessionManager {
         let folder = key.as_str();
         let mut failures = Vec::new();
         for &cli in clis {
-            let Some(file) = self.trust_file(cli) else {
-                continue;
-            };
-            if !set_up(cli, &file) {
-                continue;
-            }
-            if let Err(err) = self.write_one(holder, cli, &file, folder).await {
-                failures.push(format!("{}: {err}", cli.label()));
+            for file in self.trust_files(cli) {
+                if !set_up(cli, &file) {
+                    continue;
+                }
+                if let Err(err) = self.write_one(holder, cli, &file, folder).await {
+                    failures.push(format!("{}: {err}", cli.label()));
+                }
             }
         }
         failures

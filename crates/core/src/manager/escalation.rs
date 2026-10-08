@@ -149,12 +149,12 @@ impl SessionManager {
             omit_ai_coauthors: false,
             output_hook: None,
         };
-        let meter = TokenMeter::default();
-        meter.turn_started(now_ms());
-        let started = self
+        let account = self
             .runtime
-            .start_hosted(&owner, ProviderKind::Claude, spec)
-            .await;
+            .launch_account(ProviderKind::Claude, Some(REVIEWER_MODEL));
+        let meter = TokenMeter::default().on_account(account.account.clone());
+        meter.turn_started(now_ms());
+        let started = self.runtime.start_hosted(&owner, &account, spec).await;
         let reply = match started {
             Ok(Started {
                 session,
