@@ -143,3 +143,12 @@ run stops at the last event plus 1 s, with `finished: false`.
 - **The pending block's first fraction of a second** is approximated, as described above.
 - **Only the main view is replayed.** A side-chat board, the background-workers strip and the
   side panel aren't.
+
+## Self-test
+
+    [APP=<apps/desktop>] tools/ab/replay/selftest.sh
+
+Replays `fixture/` (the first 10 s of the phase-3 T1 arm `t1-p3b`, its recorded events with the
+log, cleanup, settings and provider-check envelopes left out) and checks that the folded row of
+the thread's first tool steps ("Searched project memory, searched code") counts as a row from
+the second it shows. It fails on a harness that reads only `orchestrator-step` rows.
