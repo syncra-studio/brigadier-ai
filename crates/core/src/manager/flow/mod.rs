@@ -48,6 +48,10 @@ pub(crate) struct Turn {
     pub add_dirs: Vec<PathBuf>,
     /// The session's turns before this one.
     pub earlier: u32,
+    /// The extra account its CLI runs on (`None`: the user's own login).
+    pub account: Option<String>,
+    /// Its CLI session.
+    pub native_id: String,
     grant: String,
     host: Arc<SessionManager>,
     events: mpsc::Sender<ProviderEvent>,
@@ -73,6 +77,8 @@ pub(crate) struct Reply {
     pub text: String,
     /// The context it reports filled at the end of the turn.
     pub context_tokens: Option<i64>,
+    /// The turn fails on this usage limit of its account.
+    pub limit: Option<brigadier_providers::LimitHit>,
 }
 
 impl Reply {
@@ -80,6 +86,19 @@ impl Reply {
         Self {
             text: text.into(),
             context_tokens: None,
+            limit: None,
+        }
+    }
+
+    /// The turn fails on its account's 5-hour limit, which resets in an hour.
+    pub fn limited() -> Self {
+        Self {
+            limit: Some(brigadier_providers::LimitHit {
+                kind: brigadier_providers::LimitKind::UsageWindow,
+                window: Some("five_hour".into()),
+                resets_at_ms: Some(crate::now_ms() + 60 * 60 * 1000),
+            }),
+            ..Self::default()
         }
     }
 }
@@ -317,6 +336,8 @@ pub(crate) static GATED_TERMINALS: Mutex<
 /// A scripted stand-in for one CLI.
 struct FakeCli {
     kind: ProviderKind,
+    /// The extra account it stands in for.
+    account: Option<String>,
     specs: Specs,
     script: Script,
     /// What answers its one-shot reviews ([`no_findings`] unless a test scripts them).
@@ -442,6 +463,7 @@ impl Provider for FakeCli {
             };
             let session = Arc::new(FakeSession {
                 kind: self.kind,
+                account: self.account.clone(),
                 native_id,
                 prompt,
                 cwd: spec.cwd.clone(),
@@ -526,6 +548,7 @@ impl Replayer for NoRecordings {
 
 struct FakeSession {
     kind: ProviderKind,
+    account: Option<String>,
     native_id: String,
     prompt: String,
     cwd: PathBuf,
@@ -608,6 +631,8 @@ impl ProviderSession for FakeSession {
                 cwd,
                 add_dirs: self.add_dirs.clone(),
                 earlier,
+                account: self.account.clone(),
+                native_id: self.native_id.clone(),
                 grant: self.grant.clone(),
                 host,
                 events: tx.clone(),
@@ -641,7 +666,20 @@ impl ProviderSession for FakeSession {
                         .await;
                 }
                 running.store(false, std::sync::atomic::Ordering::SeqCst);
-                let status = if stops.0.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                let status = if let Some(limit) = reply.limit {
+                    let _ = tx
+                        .send(ProviderEvent::Error {
+                            error: brigadier_providers::ProviderError {
+                                kind: brigadier_providers::ErrorKind::UsageLimit,
+                                message: "You've hit your usage limit.".into(),
+                                will_retry: false,
+                                limit: Some(limit),
+                                code: None,
+                            },
+                        })
+                        .await;
+                    TurnStatus::Failed
+                } else if stops.0.swap(false, std::sync::atomic::Ordering::SeqCst) {
                     TurnStatus::Interrupted
                 } else {
                     TurnStatus::Completed
@@ -743,20 +781,35 @@ async fn boot(
         tokio::spawn(task);
     });
     let host: Arc<OnceLock<Weak<SessionManager>>> = Arc::default();
-    let fake = |kind| -> Arc<dyn Provider> {
-        Arc::new(FakeCli {
-            kind,
-            specs: specs.clone(),
-            script: script.clone(),
-            reviews: reviews.clone(),
-            host: host.clone(),
+    let fake = {
+        let (specs, script, reviews, host) =
+            (specs.clone(), script.clone(), reviews.clone(), host.clone());
+        move |kind, account| -> Arc<dyn Provider> {
+            Arc::new(FakeCli {
+                kind,
+                account,
+                specs: specs.clone(),
+                script: script.clone(),
+                reviews: reviews.clone(),
+                host: host.clone(),
+            })
+        }
+    };
+    let accounts = {
+        let fake = fake.clone();
+        Arc::new(move |account: &crate::accounts::AccountRef| {
+            fake(account.provider, account.account.clone())
         })
     };
     let runtime = Runtime::start_faked(
         core.clone(),
         platform,
         spawner.clone(),
-        [fake(ProviderKind::Claude), fake(ProviderKind::Codex)],
+        [
+            fake(ProviderKind::Claude, None),
+            fake(ProviderKind::Codex, None),
+        ],
+        accounts,
     )
     .await
     .unwrap();
@@ -929,6 +982,38 @@ impl Flow {
             .unwrap();
     }
 
+    /// Adds extra accounts, each a scripted CLI of its own, sets account switching, and waits
+    /// until each was checked.
+    pub async fn add_accounts(&self, accounts: &[(ProviderKind, &str)], switch: bool) {
+        let mut settings = self.core.settings();
+        settings.accounts = accounts
+            .iter()
+            .map(|(provider, id)| crate::model::AccountEntry {
+                id: (*id).into(),
+                provider: *provider,
+                name: format!("Account {id}"),
+                default: false,
+                added_at_ms: 0,
+            })
+            .collect();
+        settings.switch_accounts = switch;
+        self.core.update_settings(settings).await.unwrap();
+        self.manager.runtime.sync_accounts().await;
+        let deadline = tokio::time::Instant::now() + PATIENCE;
+        while !self
+            .manager
+            .runtime
+            .accounts_view()
+            .accounts
+            .iter()
+            .filter(|view| view.account.account.is_some())
+            .all(|view| view.status.is_some() && !view.checking)
+        {
+            assert!(tokio::time::Instant::now() < deadline, "accounts checked");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
     /// The sessions the thread's CLIs were started with, in order.
     pub fn thread_specs(&self) -> Vec<(ProviderKind, SessionSpec)> {
         self.specs
@@ -1033,6 +1118,8 @@ impl Flow {
     }
 }
 
+#[cfg(test)]
+mod accounts_tests;
 #[cfg(test)]
 mod checks_tests;
 #[cfg(test)]

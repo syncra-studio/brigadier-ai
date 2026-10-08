@@ -121,7 +121,7 @@ pub struct Runtime {
     fakes: Option<[Arc<dyn Provider>; 2]>,
     /// Tests: scripted stand-ins for extra accounts' CLIs.
     #[cfg(test)]
-    fake_accounts: Mutex<Option<accounts::FakeAccounts>>,
+    fake_accounts: Option<accounts::FakeAccounts>,
 }
 
 impl Runtime {
@@ -132,19 +132,28 @@ impl Runtime {
         platform: Arc<dyn Platform>,
         spawner: Spawner,
     ) -> Result<Arc<Self>> {
-        Self::start_with(core, platform, spawner, None).await
+        Self::start_with(
+            core,
+            platform,
+            spawner,
+            None,
+            #[cfg(test)]
+            None,
+        )
+        .await
     }
 
-    /// [`Runtime::start`] with scripted CLIs (Claude's, then Codex's) in place of the real
-    /// ones. Only the Unix-only flow tests use it.
+    /// [`Runtime::start`] with scripted CLIs (Claude's, then Codex's, and those of extra
+    /// accounts) in place of the real ones. Only the Unix-only flow tests use it.
     #[cfg(all(test, unix))]
     pub(crate) async fn start_faked(
         core: Arc<Core>,
         platform: Arc<dyn Platform>,
         spawner: Spawner,
         fakes: [Arc<dyn Provider>; 2],
+        accounts: accounts::FakeAccounts,
     ) -> Result<Arc<Self>> {
-        Self::start_with(core, platform, spawner, Some(fakes)).await
+        Self::start_with(core, platform, spawner, Some(fakes), Some(accounts)).await
     }
 
     async fn start_with(
@@ -152,6 +161,7 @@ impl Runtime {
         platform: Arc<dyn Platform>,
         spawner: Spawner,
         #[cfg_attr(not(test), allow(unused_variables))] fakes: Option<[Arc<dyn Provider>; 2]>,
+        #[cfg(test)] fake_accounts: Option<accounts::FakeAccounts>,
     ) -> Result<Arc<Self>> {
         let env = {
             let platform = platform.clone();
@@ -215,7 +225,7 @@ impl Runtime {
             #[cfg(test)]
             fakes,
             #[cfg(test)]
-            fake_accounts: Mutex::new(None),
+            fake_accounts,
         });
         let resolving = Arc::downgrade(&runtime);
         runtime

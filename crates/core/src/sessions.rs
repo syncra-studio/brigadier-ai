@@ -2097,9 +2097,11 @@ fn remember(project: &mut Project, setup: Option<&Setup>) -> bool {
     };
     let before = project.prefs.clone();
     project.prefs.permission = Some(*permission);
-    // Fast spends usage faster: each session opts in again rather than inheriting it.
+    // Fast spends usage faster: each session opts in again rather than inheriting it. An
+    // account is chosen per session: a new one starts on the default account again.
     project.prefs.orchestrator = Some(ModelChoice {
         fast: None,
+        account: None,
         ..orchestrator.clone()
     });
     project.prefs.environment = Some(match environment {

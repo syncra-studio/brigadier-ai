@@ -146,6 +146,23 @@ impl SessionManager {
         let from = task.route.choice.clone();
         if let AttemptEnd::Limit { limit } = &end {
             self.runtime.note_limit(&account, limit.clone()).await;
+            // Another account of the provider can take it (with switching on): routing now
+            // sees that account's quota, and the task is handed on there.
+            if let Some(next) = self.runtime.switch_target(&account, from.model.as_deref()) {
+                let text = format!(
+                    "{} hit its usage limit on {}; task {} continues on {}.",
+                    from.provider.label(),
+                    self.runtime.account_label(&account),
+                    task.number,
+                    self.runtime.account_label(&next),
+                );
+                self.notice(
+                    &task.conversation_id,
+                    brigadier_providers::NoticeLevel::Info,
+                    &text,
+                )
+                .await;
+            }
         }
         if matches!(
             &end,

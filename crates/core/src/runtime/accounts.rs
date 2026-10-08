@@ -121,7 +121,7 @@ impl Runtime {
     /// An account's home, made (and linked to the user's own) when missing, and its adapter.
     async fn make_account(&self, entry: &AccountEntry) -> Result<Arc<dyn Provider>> {
         #[cfg(test)]
-        if let Some(fakes) = self.fake_accounts.lock().unwrap().clone() {
+        if let Some(fakes) = &self.fake_accounts {
             return Ok(fakes(&AccountRef::new(
                 entry.provider,
                 Some(entry.id.clone()),
@@ -145,12 +145,6 @@ impl Runtime {
                 Arc::new(Codex::for_account(self.platform.clone(), &self.env, &home))
             }
         })
-    }
-
-    /// Tests: scripted stand-ins for extra accounts' CLIs.
-    #[cfg(test)]
-    pub(crate) fn fake_accounts(&self, fakes: FakeAccounts) {
-        *self.fake_accounts.lock().unwrap() = Some(fakes);
     }
 
     /// Checks an extra account in the background: its login, then its quota (a read that
@@ -290,6 +284,29 @@ impl Runtime {
                 AccountRef::new(choice.provider, Some(id.to_owned()))
             }
             _ => self.launch_account(choice.provider, choice.model.as_deref()),
+        }
+    }
+
+    /// How the app names `account` to the user: its name, else its email, else (the user's own
+    /// login) "your own login".
+    pub fn account_label(&self, account: &AccountRef) -> String {
+        let (name, status) = match &account.account {
+            None => (
+                String::new(),
+                self.overview(account.provider)
+                    .and_then(|overview| overview.status),
+            ),
+            Some(id) => match self.accounts().get(id) {
+                Some(live) => (live.entry.name.clone(), live.status.clone()),
+                None => (String::new(), None),
+            },
+        };
+        let email = status.and_then(|status| status.email);
+        match (name.trim(), email) {
+            (name, _) if !name.is_empty() => name.to_owned(),
+            (_, Some(email)) if !email.is_empty() => email,
+            _ if account.account.is_none() => "your own login".into(),
+            _ => "an extra account".into(),
         }
     }
 

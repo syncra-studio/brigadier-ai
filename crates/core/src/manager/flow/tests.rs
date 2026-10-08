@@ -1599,6 +1599,7 @@ async fn a_worker_past_the_handoff_size_continues_in_a_fresh_session_that_keeps_
                 Reply {
                     text: NOTE.into(),
                     context_tokens: Some(310_000),
+                    limit: None,
                 }
             }
         }),

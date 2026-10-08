@@ -140,6 +140,11 @@ struct ConvState {
     /// The turn was sent and its CLI hasn't begun it yet: the run shows as starting until it
     /// has (a fresh CLI takes seconds to start; the live line says so rather than "Thinking").
     awaiting_start: bool,
+    /// The CLI began the running turn: it holds the turn's messages in its session.
+    landed: bool,
+    /// The next turn carries on a turn cut short by an account's limit on another account:
+    /// its messages are already in the resumed session, so it says to carry on instead.
+    continuing: bool,
     /// The thread's commands (Bash, `run`, a Codex shell item) running in this turn.
     commands: HashSet<String>,
     /// The user stopped the turn while a command ran: its CLI is closed when the turn ends,
@@ -1449,6 +1454,7 @@ impl SessionManager {
                 None => envelopes[0].1.clone(),
             };
             state.busy = true;
+            state.landed = false;
             state.limit_hit = None;
             state.turn_error = None;
             state.last_reply = None;
@@ -1508,9 +1514,17 @@ impl SessionManager {
         let notes = self
             .request_notes(&conv.id, &envelopes, request.as_deref())
             .await;
-        let mut input = self
-            .turn_input(&conv, &users, &[user_notes, notes.clone()].concat())
-            .await;
+        let continuing = std::mem::take(&mut conv.state.lock().await.continuing);
+        let mut input = if continuing {
+            let mut input = self
+                .turn_input(&conv, &[], &[user_notes, notes.clone()].concat())
+                .await;
+            input.prepend_text(prompts::CONTINUE_ON_ACCOUNT);
+            input
+        } else {
+            self.turn_input(&conv, &users, &[user_notes, notes.clone()].concat())
+                .await
+        };
         let mut reborn = None;
         if let Some(plan) = briefing {
             let (text, mut record) = self
@@ -2788,6 +2802,7 @@ impl SessionManager {
                 cli.meter.turn_started(now_ms());
                 let started = {
                     let mut state = conv.state.lock().await;
+                    state.landed = true;
                     std::mem::take(&mut state.awaiting_start).then(|| state.request.clone())
                 };
                 if let Some(request) = started {
@@ -2960,7 +2975,7 @@ impl SessionManager {
             // this CLI, past the swap threshold.
             self.consider_rebirth(conv, cli).await;
         }
-        let (limit_hit, carried, asked, served, end_commands) = {
+        let (limit_hit, landed, carried, asked, served, end_commands) = {
             let mut state = conv.state.lock().await;
             state.commands.clear();
             // Taken now, so no turn starts on it in between (a stand-in closes it anyway).
@@ -3004,6 +3019,7 @@ impl SessionManager {
             }
             (
                 state.limit_hit.take(),
+                state.landed,
                 std::mem::take(&mut state.in_turn),
                 std::mem::take(&mut state.asked),
                 served,
@@ -3020,6 +3036,24 @@ impl SessionManager {
             && status != TurnStatus::Completed
         {
             self.runtime.note_limit(&cli.account, limit.clone()).await;
+            // Another account of the provider first, with switching on.
+            if let Some(next) = self
+                .runtime
+                .switch_target(&cli.account, cli.model.model.as_deref())
+            {
+                // The request isn't over: its turn goes on there.
+                if let Some(request) = &served {
+                    conv.state.lock().await.outcomes.remove(request);
+                }
+                // Not from inside the CLI's own event pump: closing the CLI waits for it.
+                let (manager, conv, cli) = (self.arc(), conv.clone(), cli.clone());
+                self.spawn(async move {
+                    manager
+                        .switch_account(&conv, &cli, next, carried, landed)
+                        .await;
+                });
+                return;
+            }
             match self.stand_in_choice(conv, &cli.model).await {
                 Ok(next) => {
                     // Not from inside the CLI's own event pump: closing the CLI waits for it.
@@ -3334,6 +3368,69 @@ impl SessionManager {
             state.pending = pending;
         }
         self.kick(conv);
+    }
+
+    /// `cli`'s account hit its limit and another account of its provider can take the work:
+    /// the same CLI session resumes there (every account shares the CLI's session history).
+    /// The failed turn's messages (`carried`) go again, or, once the CLI had begun that turn
+    /// (`landed`), a note to carry on goes in their place, so nothing it did is done twice.
+    async fn switch_account(
+        &self,
+        conv: &Arc<ConvLive>,
+        cli: &Arc<Cli>,
+        next: crate::accounts::AccountRef,
+        carried: Vec<Message>,
+        landed: bool,
+    ) {
+        let (from, to) = (
+            self.runtime.account_label(&cli.account),
+            self.runtime.account_label(&next),
+        );
+        self.notice(
+            &conv.id,
+            brigadier_providers::NoticeLevel::Info,
+            &format!(
+                "{} hit its usage limit on {from}; continuing on {to}.",
+                cli.provider.label()
+            ),
+        )
+        .await;
+        conv.close_cli().await;
+        if let Err(err) = self.run_on_account(&conv.id, &cli.model, &next).await {
+            tracing::warn!(conversation = %conv.id, error = %err, "could not record the account it moved to");
+        }
+        {
+            let mut state = conv.state.lock().await;
+            state.continuing = landed && !carried.is_empty();
+            let mut pending = carried;
+            pending.append(&mut state.pending);
+            state.pending = pending;
+        }
+        self.kick(conv);
+    }
+
+    /// Records that the conversation now runs on `account`: in its stand-in while one stands
+    /// in, else in its own choice (where the app's account switch shows it).
+    async fn run_on_account(
+        &self,
+        id: &ConversationId,
+        running: &ModelChoice,
+        account: &crate::accounts::AccountRef,
+    ) -> Result<()> {
+        let conversation = self.core.conversation(id)?;
+        let named = Some(account.choice_id());
+        if let Some(mut fallback) = conversation.fallback.clone() {
+            fallback.choice.account = named;
+            return self.core.set_fallback(id, Some(fallback)).await.map(drop);
+        }
+        let mut setup = conversation.setup.clone().unwrap_or_else(|| Setup::Chat {
+            model: running.clone(),
+        });
+        match &mut setup {
+            Setup::Session { orchestrator, .. } => orchestrator.account = named,
+            Setup::Chat { model } => model.account = named,
+        }
+        self.core.set_setup(id.clone(), setup).await.map(drop)
     }
 
     /// A conversation's model hit its limit and no model it may use can stand in: its messages

@@ -15,6 +15,10 @@ pub(crate) const SESSION_RESET: &str = "brigadier: CLI session reset";
 /// Brigadier never shows it.
 pub(crate) const QUIET: &str = "[quiet]";
 
+/// A turn's input after its account hit its usage limit mid-turn and the session resumed on
+/// another account: the CLI already holds the user's message and what the turn did.
+pub(crate) const CONTINUE_ON_ACCOUNT: &str = "[Your last turn stopped early: its account hit a usage limit. You now run on another account, in the same session. Carry on from where you stopped. Don't redo anything you already did.]";
+
 /// Today's date (UTC). Development builds take `BRIGADIER_FAKE_TODAY` instead when it is set,
 /// so a check can start a session on another day.
 pub(crate) fn today() -> String {
