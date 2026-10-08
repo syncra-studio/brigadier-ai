@@ -203,6 +203,8 @@ export const useApp = create<AppState>()(() => ({
     hiddenModels: [],
     knownModels: [],
     omitAiCoauthors: true,
+    accounts: [],
+    switchAccounts: true,
     settingsVersion: 1,
   },
   threads: {},

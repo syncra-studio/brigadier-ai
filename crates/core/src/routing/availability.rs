@@ -354,6 +354,7 @@ mod tests {
             model: model.map(str::to_owned),
             effort: None,
             fast: None,
+            account: None,
         };
         let check = |provider, model| check_choice(&settings, &choice(provider, model), &[]);
         assert!(check(ProviderKind::Claude, Some("opus")).is_ok());
@@ -400,6 +401,7 @@ mod tests {
                     model: model.map(str::to_owned),
                     effort: None,
                     fast: None,
+                    account: None,
                 },
                 &catalog,
             )

@@ -511,6 +511,7 @@ pub(crate) fn route_from(routed: Routed) -> Route {
             model: Some(routed.model),
             effort: routed.effort,
             fast: None,
+            account: None,
         },
         reason: routed.reason,
         explanation: Some(routed.explanation),

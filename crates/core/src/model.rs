@@ -186,6 +186,11 @@ pub struct ModelChoice {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub fast: Option<bool>,
+    /// The provider's account it runs on ([`AccountEntry::id`]). Absent: the provider's
+    /// default account ([`Settings::accounts`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub account: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -602,10 +607,50 @@ pub struct Settings {
     /// Every model Brigadier has seen in its agent's list. One seen after its agent's first
     /// list starts without worker tasks (a rule the Routing page's switch removes).
     pub known_models: Vec<ModelRef>,
+    /// The user's extra CLI accounts (Settings → Accounts), in the order they were added. The
+    /// user's own login, the one their terminal uses, is each provider's first account and is
+    /// not listed.
+    pub accounts: Vec<AccountEntry>,
+    /// When an account hits its usage limit, its work carries on with the provider's account
+    /// with the most quota left; only when every account is used up does it move to another
+    /// provider.
+    #[serde(default = "default_true")]
+    pub switch_accounts: bool,
     /// The shape saved settings were last brought up to ([`SETTINGS_VERSION`]). Settings saved
     /// before it existed read as 0, so their conversions run.
     #[serde(default)]
     pub settings_version: u32,
+}
+
+/// An extra account of a CLI: a home of its own under the data directory
+/// (`accounts/<id>`), where the CLI keeps that account's login. Brigadier keeps no secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountEntry {
+    pub id: String,
+    pub provider: ProviderKind,
+    /// The user's name for it.
+    pub name: String,
+    /// New work on its provider starts here (the user's own login when none is).
+    #[serde(default)]
+    pub default: bool,
+    pub added_at_ms: i64,
+}
+
+impl Settings {
+    /// `provider`'s default account: `None` for the user's own login.
+    pub fn default_account(&self, provider: ProviderKind) -> Option<&AccountEntry> {
+        self.accounts
+            .iter()
+            .find(|account| account.provider == provider && account.default)
+    }
+
+    /// The extra account `id` of `provider`.
+    pub fn account(&self, provider: ProviderKind, id: &str) -> Option<&AccountEntry> {
+        self.accounts
+            .iter()
+            .find(|account| account.provider == provider && account.id == id)
+    }
 }
 
 /// A setting that is on unless the user turned it off, also in settings saved before it
@@ -647,6 +692,8 @@ impl Default for Settings {
             disabled_providers: Vec::new(),
             hidden_models: Vec::new(),
             known_models: Vec::new(),
+            accounts: Vec::new(),
+            switch_accounts: true,
             settings_version: SETTINGS_VERSION,
         }
     }

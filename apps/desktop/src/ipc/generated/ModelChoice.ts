@@ -12,4 +12,9 @@ model: string | null, effort: string | null,
 /**
  * On the model's fast service tier, where it has one (labeled "Fast").
  */
-fast?: boolean, };
+fast?: boolean, 
+/**
+ * The provider's account it runs on ([`AccountEntry::id`]). Absent: the provider's
+ * default account ([`Settings::accounts`]).
+ */
+account?: string, };

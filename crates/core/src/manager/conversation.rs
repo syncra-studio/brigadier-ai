@@ -3290,6 +3290,7 @@ impl SessionManager {
             model: Some(next.model.clone()),
             effort: next.effort.clone(),
             fast: None,
+            account: None,
         };
         let replaces = match self.core.conversation(&conv.id) {
             Ok(conversation) => conversation
@@ -3518,6 +3519,7 @@ impl SessionManager {
                 model: None,
                 effort: None,
                 fast: None,
+                account: None,
             })
     }
 

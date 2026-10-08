@@ -960,6 +960,7 @@ impl SessionManager {
                         model: Some(first.model.clone()),
                         effort: None,
                         fast: None,
+                        account: None,
                     },
                     reason: format!("Waits: {}", waiting.reason),
                     explanation: None,

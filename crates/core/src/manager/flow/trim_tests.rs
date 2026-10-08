@@ -234,6 +234,7 @@ async fn a_trimmed_output_is_read_back_whole_by_its_own_session_only() {
                     model: Some("claude-opus-5-5".into()),
                     effort: None,
                     fast: None,
+                    account: None,
                 },
                 plan_mode: false,
             }),
