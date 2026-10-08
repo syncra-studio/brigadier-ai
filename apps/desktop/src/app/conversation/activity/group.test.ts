@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { type Activity, groupActivity, type Sorted, turnActivity, workerActivity } from "@/app/conversation/activity/group";
+import { type Activity, groupActivity, type Sorted, turnActivity, workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
 import { blockSequence, buildBlocks } from "@/app/conversation/blocks";
 import type { ThreadEntry } from "@/components/transcript/activity";
 import type { TranscriptItem } from "@/components/transcript/transcript";
@@ -133,4 +133,18 @@ test("T1's unfolded turn: one row per run of work, thinking inside its groups, n
   }
   const thoughts = groups.flatMap((group) => (group.type === "group" ? group.items : [])).filter((inner) => inner.type === "thought");
   assert.ok(thoughts.length > 0, "the session's thinking is kept, inside the groups");
+});
+
+function notice(key: string, cli?: "started" | "exited"): ThreadEntry {
+  const item = { kind: "notice" as const, key, level: cli === "exited" ? ("warning" as const) : ("info" as const), text: key };
+  return { kind: "item", item: cli ? { ...item, cli } : item };
+}
+
+test("a worker's CLI start and exit are plumbing, unless the worker failed", () => {
+  assert.equal(workerCliNotice(notice("Session s1 started", "started"), false), true);
+  assert.equal(workerCliNotice(notice("Session s1 started", "started"), true), true);
+  // Brigadier ends a landed worker's CLI itself: exit 1 there is no failure.
+  assert.equal(workerCliNotice(notice("CLI exited with code 1", "exited"), false), true);
+  assert.equal(workerCliNotice(notice("CLI exited with code 1", "exited"), true), false);
+  assert.equal(workerCliNotice(notice("Approval a1 answered"), false), false);
 });

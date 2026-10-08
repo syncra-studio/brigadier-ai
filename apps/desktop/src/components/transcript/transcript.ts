@@ -58,7 +58,14 @@ export type TranscriptItem =
       usage: TokenUsage | null;
     }
   | { kind: "error"; key: string; error: ProviderError }
-  | { kind: "notice"; key: string; level: NoticeLevel; text: string };
+  | {
+      kind: "notice";
+      key: string;
+      level: NoticeLevel;
+      text: string;
+      /** The CLI's own start or exit, plumbing a worker's thread shows only when it failed. */
+      cli?: "started" | "exited";
+    };
 
 /** The latest session-wide figures, as last reported. */
 export type TranscriptStats = {
@@ -140,6 +147,7 @@ export class TranscriptFolder {
             kind: "notice",
             key: `seq:${streamSeq}`,
             level: "info",
+            cli: "started",
             text: `Session ${event.nativeId} started${event.model ? ` · ${event.model}` : ""}${event.cwd ? ` · ${event.cwd}` : ""}`,
           });
           break;
@@ -329,6 +337,7 @@ export class TranscriptFolder {
             kind: "notice",
             key: `seq:${streamSeq}`,
             level: event.code === 0 ? "info" : "warning",
+            cli: "exited",
             text: `CLI exited${event.code === null ? "" : ` with code ${event.code}`}${event.stderrTail ? `: ${event.stderrTail}` : ""}`,
           });
           break;

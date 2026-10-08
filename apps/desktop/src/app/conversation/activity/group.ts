@@ -166,6 +166,15 @@ function workerPlumbing(item: ActionItem): boolean {
   return item.kind === "tool" && (isPlumbing(item.name) || item.name === "ToolSearch");
 }
 
+/**
+ * The CLI's start and exit in a worker's thread: plumbing, except the exit of a worker that
+ * failed. Brigadier ends a finished worker's CLI itself, often with a non-zero code.
+ */
+export function workerCliNotice(entry: ThreadEntry, failed: boolean): boolean {
+  if (entry.kind !== "item" || entry.item.kind !== "notice" || !entry.item.cli) return false;
+  return entry.item.cli === "started" || !failed;
+}
+
 /** A worker's thread's activity: its transcript's entries, grouped the same way. */
 export function workerActivity(entries: readonly ThreadEntry[], live: boolean): Activity<ActionItem, ThreadEntry>[] {
   type Flat = ThreadEntry | { kind: "action"; item: ActionItem };

@@ -19,7 +19,7 @@ import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
 import { workerDone, workerWorking, workerPreview } from "@/app/conversation/workerPresentation";
 import { ActivityGroup, StepRow } from "@/app/conversation/activity/ActivityGroup";
 import { actionDetail } from "@/app/conversation/activity/StepDetail";
-import { workerActivity } from "@/app/conversation/activity/group";
+import { workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
 import { type ActionItem, itemCall, stepWords } from "@/app/conversation/activity/words";
 import { ROW } from "@/components/assistant-ui/elements/activity-row";
 import { useAction } from "@/app/conversation/useAction";
@@ -257,7 +257,14 @@ export function WorkerThread({ task }: { task: Task }) {
 
   const [folding] = useState(() => new IncrementalFold());
   const raw = transcript?.entries ?? NO_ENTRIES;
-  const entries = useMemo(() => threadEntries(folding.fold(raw)).filter((entry) => !(entry.kind === "item" && entry.item.kind === "message" && entry.item.role === "user")), [folding, raw]);
+  const failed = task.state === "failed";
+  const entries = useMemo(
+    () =>
+      threadEntries(folding.fold(raw)).filter(
+        (entry) => !(entry.kind === "item" && entry.item.kind === "message" && entry.item.role === "user") && !workerCliNotice(entry, failed),
+      ),
+    [folding, raw, failed],
+  );
   const working = workerWorking(task);
   // The prompt and early steps belong to the same previous-messages disclosure.
   const tail = entries.at(-1);
