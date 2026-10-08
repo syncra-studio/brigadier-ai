@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 
 import { AppSidebar, AppStrip, TitlebarNav } from "@/app/AppSidebar";
 import { DeleteDialog } from "@/app/dialogs/DeleteDialog";
@@ -11,8 +11,6 @@ import { FolderDropZone } from "@/app/FolderDropZone";
 import { ConversationView } from "@/app/ConversationView";
 import { OnboardingDialog } from "@/app/onboarding/OnboardingDialog";
 import { GlobalSearch } from "@/app/SearchDialog";
-import { SettingsNav } from "@/app/settings/SettingsNav";
-import { SettingsView } from "@/app/settings/SettingsView";
 import { TerminalButton } from "@/app/conversation/SidePanel";
 import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { useNavigationShortcuts } from "@/app/navigationShortcuts";
@@ -33,6 +31,14 @@ import { useApp, type Selection } from "@/state/store";
 import { HOME_PLACE } from "@/state/terminalPlaces";
 
 let readyReported = false;
+
+// Settings (with its pages and their search) loads when first opened, off the cold-start path.
+const SettingsNav = lazy(() =>
+  import("@/app/settings/SettingsNav").then((module) => ({ default: module.SettingsNav })),
+);
+const SettingsView = lazy(() =>
+  import("@/app/settings/SettingsView").then((module) => ({ default: module.SettingsView })),
+);
 
 /** Drafts share one key: switching the composer's project must not lose the typed text. */
 function viewKey(selection: Selection): string {
@@ -159,7 +165,13 @@ export function App() {
             strip={selection.type === "settings" ? null : <AppStrip />}
             foot={selection.type === "settings" ? null : <SidebarFoot />}
           >
-            {selection.type === "settings" ? <SettingsNav /> : <AppSidebar />}
+            {selection.type === "settings" ? (
+              <Suspense fallback={null}>
+                <SettingsNav />
+              </Suspense>
+            ) : (
+              <AppSidebar />
+            )}
           </SidebarPanel>
           <main className="body-divider relative flex h-full min-w-0 flex-1">
             <div className="relative flex h-full min-w-0 flex-1 flex-col">
@@ -175,7 +187,9 @@ export function App() {
                     </TitlebarTips>
                   </div>
                   <div className="min-h-0 flex-1">
-                    <SettingsView page={selection.page} />
+                    <Suspense fallback={null}>
+                      <SettingsView page={selection.page} />
+                    </Suspense>
                   </div>
                   {/* Home's terminal, under the page. */}
                   <TerminalPane place={HOME_PLACE} />
