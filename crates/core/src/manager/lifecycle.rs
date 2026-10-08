@@ -553,14 +553,18 @@ impl SessionManager {
         self.drop_prewarm(id, "the session was merged");
         let owner = format!("session:{id}");
         let leftovers = self.runtime.ledger().dispose(&owner).await;
-        if !leftovers.is_clean() {
+        let removed = leftovers.is_clean();
+        if !removed {
             tracing::warn!(
                 owner,
                 ?leftovers,
-                "some of the merged session's worktree will be retried at the next launch"
+                "the merged session's worktree couldn't be removed; the next message retries"
             );
         }
-        if self.forget_session_worktree(&conversation).await {
+        let deleted = self.forget_session_worktree(&conversation).await;
+        if !removed {
+            " Its worktree couldn't be removed yet; the user's next message tries again, then starts a fresh branch from the base in the same folder.".into()
+        } else if deleted {
             format!(
                 " Its worktree and branch are removed; the user's next message starts a fresh branch from `{base}` in the same folder."
             )
@@ -573,7 +577,7 @@ impl SessionManager {
     /// A new-worktree session's worktree is gone: its branch goes too while the base has all
     /// of its work, and the session records no worktree, so the next one is made from the base
     /// (at the same path, under the same branch name). Returns whether the branch went.
-    async fn forget_session_worktree(&self, conversation: &Conversation) -> bool {
+    pub(super) async fn forget_session_worktree(&self, conversation: &Conversation) -> bool {
         let id = &conversation.id;
         let Some(Setup::Session {
             repo,

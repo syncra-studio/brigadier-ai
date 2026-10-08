@@ -873,6 +873,95 @@ async fn a_merge_removes_the_session_worktree_and_the_next_message_starts_fresh(
     flow.stop().await;
 }
 
+/// A merge whose worktree removal failed (a folder it may not empty) says so, and the user's
+/// next message removes it first, then starts fresh from the base's tip at the same path: the
+/// next launch's sweep has nothing left to remove from under the session.
+#[tokio::test]
+async fn a_merge_whose_worktree_removal_failed_retries_it_at_the_next_message() {
+    use std::os::unix::fs::PermissionsExt;
+    let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
+    let log = seen.clone();
+    let flow = Flow::start(
+        "thread-merge-unremovable",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                log.lock()
+                    .unwrap()
+                    .push((turn.input.clone(), turn.add_dirs.clone()));
+                if turn.input.contains("Add notes and merge.") {
+                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                    let reply = turn.call("finish_session", json!({})).await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add notes and merge.").await;
+    let board = flow
+        .until("the merge card", |board| {
+            board
+                .approvals
+                .values()
+                .any(|card| card.state == CardState::Pending)
+        })
+        .await;
+    let worktree = session_worktree(&flow);
+    let branch = git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    let mode = |path: &std::path::Path, mode: u32| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    mode(&worktree, 0o555);
+    let card = board.approvals.values().next().unwrap().id.clone();
+    flow.manager
+        .answer_card(flow.conversation.clone(), card, ApprovalDecision::Allow)
+        .await
+        .unwrap();
+    flow.until("the [finished] turn", |_| {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .any(|(input, _)| input.contains("[finished]"))
+    })
+    .await;
+    flow.settled().await;
+    mode(&worktree, 0o755);
+    let finished = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(input, _)| input.contains("[finished]"))
+        .unwrap()
+        .0
+        .clone();
+    assert!(finished.contains("couldn't be removed yet"), "{finished}");
+    let owner = format!("session:{}", flow.conversation);
+    assert!(flow.manager.runtime.ledger().disposing().contains(&owner));
+    std::fs::write(flow.repo.join("LATER.md"), "later\n").unwrap();
+    git(&flow.repo, &["add", "LATER.md"]);
+    git(&flow.repo, &["commit", "-q", "-m", "Later"]);
+    let main_tip = git(&flow.repo, &["rev-parse", "main"]);
+    flow.say("Next.").await;
+    flow.settled().await;
+    assert_eq!(session_worktree(&flow), worktree, "the same path");
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), main_tip);
+    assert_eq!(
+        git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        branch
+    );
+    assert!(
+        !flow.manager.runtime.ledger().disposing().contains(&owner),
+        "nothing left for the next launch's sweep"
+    );
+    let (input, _) = seen.lock().unwrap().last().unwrap().clone();
+    assert!(input.contains("Next."), "{input}");
+    flow.stop().await;
+}
+
 /// Uncommitted changes in the session's worktree, or a lock the user put on it, keep it and its
 /// branch after a merge, and the thread is told why.
 #[tokio::test]

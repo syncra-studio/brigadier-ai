@@ -1953,6 +1953,30 @@ impl SessionManager {
                     return Ok(branch.clone());
                 }
                 let owner = format!("session:{conversation_id}");
+                // A merged session's worktree whose removal failed is removed first (THREAD-PLAN.md
+                // Q9); the next launch's sweep would otherwise remove the one made now.
+                let (conversation, start) = if self.runtime.ledger().disposing().contains(&owner) {
+                    let leftovers = self.runtime.ledger().dispose(&owner).await;
+                    if !leftovers.is_clean() {
+                        return Err(Error::Invalid(format!(
+                            "the session's earlier worktree couldn't be removed yet: {}",
+                            leftovers.failures.join("; ")
+                        )));
+                    }
+                    // Its merged branch, kept while that worktree was there, goes now too.
+                    self.forget_session_worktree(&conversation).await;
+                    let conversation = self.core.conversation(conversation_id)?;
+                    let start = match &conversation.setup {
+                        Some(Setup::Session {
+                            environment: Environment::NewWorktree { start, .. },
+                            ..
+                        }) => start.clone(),
+                        _ => start.clone(),
+                    };
+                    (conversation, start)
+                } else {
+                    (conversation, start.clone())
+                };
                 let worktree = self.session_worktree_path(&conversation);
                 self.runtime
                     .ledger()
