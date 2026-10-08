@@ -95,10 +95,14 @@ function timed(source: ActivitySource, text: string, now: number): string {
   return `${text} · ${elapsed}${changes}`;
 }
 
-/** At most two lines of what a worker is at. */
-export function taskActivityLines(source: ActivitySource, now: number): ActivityLines {
+/**
+ * At most two lines of what a worker is at, with its time and changes unless `withTime` is false
+ * (the Workers strip shows those in columns of their own).
+ */
+export function taskActivityLines(source: ActivitySource, now: number, withTime = true): ActivityLines {
   const empty = { first: "", second: "", firstWorking: false, secondWorking: false };
   const task = source.task;
   if (!task || !hasTaskActivity(task)) return empty;
-  return { ...empty, first: timed(source, semantic(source), now), firstWorking: activelyWorking(source) };
+  const text = semantic(source);
+  return { ...empty, first: withTime ? timed(source, text, now) : text, firstWorking: activelyWorking(source) };
 }

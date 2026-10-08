@@ -32,7 +32,7 @@ function Elapsed({ taskId }: { taskId: string }) {
 const StripRow = memo(function StripRow({ taskId }: { taskId: string }) {
   const name = useWorkerName(taskId);
   const { setPanel } = useContext(AgentsPanelContext);
-  const { ref, first, firstWorking } = useTaskActivityLine(taskId);
+  const { ref, first, firstWorking } = useTaskActivityLine(taskId, false);
   const done = useBoard((s) => {
     const task = s.board?.tasks[taskId];
     return task && workerDone(task) ? workerState(task) : null;

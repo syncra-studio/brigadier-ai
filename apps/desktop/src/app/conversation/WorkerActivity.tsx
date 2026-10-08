@@ -7,7 +7,7 @@ import { useActivityClock } from "@/hooks/use-activity-clock";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 
-export function useTaskActivityLine(taskId: string) {
+export function useTaskActivityLine(taskId: string, withTime = true) {
   const active = useBoard((s) => {
     const task = s.board?.tasks[taskId];
     return !!task && taskActivityTicks(task);
@@ -28,7 +28,7 @@ export function useTaskActivityLine(taskId: string) {
           : undefined,
       };
     };
-    return taskActivityLines(source(taskId), now);
+    return taskActivityLines(source(taskId), now, withTime);
   }));
   return { ref, ...lines };
 }

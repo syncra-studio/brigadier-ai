@@ -8,6 +8,8 @@ export type StripView = {
   working: number;
   waiting: number;
   done: number;
+  /** Of the finished, those stopped before they finished: the user's Stop all, or the lead. */
+  stopped: number;
   /** Whether Stop all has anything to stop. */
   stoppable: boolean;
 };
@@ -35,21 +37,24 @@ export function workersStrip(
   const finished = byAge.filter((task) => workerDone(task) && finishedAtMs(task, steps) >= since);
   if (live.length + finished.length === 0) return null;
   const working = live.filter(workerWorking).length;
+  const stopped = finished.filter((task) => task.state === "stopped").length;
   return {
     rows: [...live, ...finished].map((task) => task.id),
     working,
     waiting: live.length - working,
-    done: finished.length,
+    done: finished.length - stopped,
+    stopped,
     stoppable: live.some(workerStoppable),
   };
 }
 
 /** "2 workers working · 1 waiting · 1 done": the first count names them, zeros are left out. */
-export function stripWords({ working, waiting, done }: Pick<StripView, "working" | "waiting" | "done">): string {
+export function stripWords({ working, waiting, done, stopped }: Pick<StripView, "working" | "waiting" | "done" | "stopped">): string {
   const counts = [
     [working, "working"],
     [waiting, "waiting"],
     [done, "done"],
+    [stopped, "stopped"],
   ] as const;
   return counts
     .filter(([count]) => count > 0)

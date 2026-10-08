@@ -19,7 +19,7 @@ test("the strip is about workers at it and those finished since the user's last 
   const waiting = task({ state: "paused" });
   const finished = task({ state: "reported", updatedAtMs: 500 });
   const view = workersStrip([finished, waiting, older, running], [sent(1), sent(100)], []);
-  assert.deepEqual(view, { rows: [running.id, waiting.id, finished.id], working: 1, waiting: 1, done: 1, stoppable: true });
+  assert.deepEqual(view, { rows: [running.id, waiting.id, finished.id], working: 1, waiting: 1, done: 1, stopped: 0, stoppable: true });
   // A new message: what finished before it leaves the strip; nothing left hides it.
   assert.equal(workersStrip([older, finished], [sent(1_000)], []), null);
   assert.equal(workersStrip([], [], []), null);
@@ -32,7 +32,7 @@ test("a worker counts as finished when it ended, not when it was last updated", 
   // Stopped before the user's last message, its kept patch restored after it: still not new.
   const restored = task({ state: "stopped", updatedAtMs: 900 });
   assert.equal(workersStrip([restored], [sent(500)], [ended(restored.id, 100), ended(restored.id, 950, "updated")]), null);
-  assert.equal(workersStrip([restored], [sent(500)], [ended(restored.id, 600)])?.done, 1);
+  assert.equal(workersStrip([restored], [sent(500)], [ended(restored.id, 600)])?.stopped, 1);
 });
 
 test("Stop all shows only while a worker runs or waits to run", () => {
@@ -43,7 +43,10 @@ test("Stop all shows only while a worker runs or waits to run", () => {
 });
 
 test("the collapsed strip counts in one line, naming workers once", () => {
-  assert.equal(stripWords({ working: 2, waiting: 0, done: 1 }), "2 workers working · 1 done");
-  assert.equal(stripWords({ working: 1, waiting: 1, done: 0 }), "1 worker working · 1 waiting");
-  assert.equal(stripWords({ working: 0, waiting: 0, done: 3 }), "3 workers done");
+  assert.equal(stripWords({ working: 2, waiting: 0, done: 1, stopped: 0 }), "2 workers working · 1 done");
+  assert.equal(stripWords({ working: 1, waiting: 1, done: 0, stopped: 0 }), "1 worker working · 1 waiting");
+  assert.equal(stripWords({ working: 0, waiting: 0, done: 3, stopped: 0 }), "3 workers done");
+  // After Stop all, the stopped ones aren't "done".
+  assert.equal(stripWords({ working: 0, waiting: 0, done: 0, stopped: 2 }), "2 workers stopped");
+  assert.equal(stripWords({ working: 0, waiting: 0, done: 1, stopped: 1 }), "1 worker done · 1 stopped");
 });
