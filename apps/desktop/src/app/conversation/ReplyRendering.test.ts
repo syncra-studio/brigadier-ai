@@ -92,10 +92,12 @@ test("the real reply path loads without raw Markdown and renders rich text", { t
       reject(new Error(`Vite exited ${code}: ${serverErrors}`));
     });
   });
-  // One process: a worker's sandbox lets Chromium look up Mach services but not register the
-  // one its child processes rendezvous on, so the multi-process browser aborts there.
+  // One process on macOS: a worker's sandbox lets Chromium look up Mach services but not register
+  // the one its child processes rendezvous on, so the multi-process browser aborts there. Linux
+  // Chrome crashes (SIGTRAP) in single-process mode, so it keeps the default.
+  const oneProcess = process.platform === "darwin" ? ["--single-process"] : [];
   const { stdout } = await promisify(execFile)(binary, [
-    "--headless", "--no-sandbox", "--single-process", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+    "--headless", "--no-sandbox", ...oneProcess, "--disable-gpu", "--no-first-run", "--no-default-browser-check",
     `--user-data-dir=${join(scratch, "profile")}`,
     "--dump-dom", "--virtual-time-budget=5000",
     `${url}fixtures/reply-rendering.html`,
