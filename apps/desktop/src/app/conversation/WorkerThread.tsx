@@ -14,7 +14,7 @@ import {
   useState,
 } from "react";
 
-import { ArtifactFiles } from "@/app/conversation/cards/TaskCardView";
+import { FileList } from "@/app/conversation/FileList";
 import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
 import { workerDone, workerWorking, workerPreview } from "@/app/conversation/workerPresentation";
 import { ActivityGroup, StepRow } from "@/app/conversation/activity/ActivityGroup";
@@ -165,6 +165,42 @@ function liveLabel(entries: readonly ThreadEntry[]): string | null {
   return "Thinking";
 }
 
+/** The brief, as the thread's first bubble: three lines, then "Show brief" for the rest. */
+function Brief({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const [long, setLong] = useState(false);
+  const body = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const element = body.current;
+    if (element && !open) setLong(element.scrollHeight > element.clientHeight + 1);
+  }, [open]);
+  return (
+    <div data-slot="worker-brief" className="bg-secondary rounded-thread ms-8 flex flex-col gap-1 self-end px-3 py-2 text-sm">
+      <div ref={body} data-slot="worker-instructions" className={cn("leading-relaxed wrap-break-word", !open && "line-clamp-3")}>
+        <WorkerMarkdown text={text} />
+      </div>
+      {(long || open) && (
+        <button type="button" onClick={() => setOpen(!open)} className="text-foreground/60 hover:text-foreground self-start text-xs">
+          {open ? "Show less" : "Show brief"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** "Working for 1m 2s" while it works, "Worked for 3m 10s" once done, over a hairline. */
+function WorkHeader({ task }: { task: Task }) {
+  const done = workerDone(task);
+  const now = useNow(done ? null : 1000);
+  const start = task.attempts[0]?.startedAtMs ?? task.createdAtMs;
+  const took = formatDuration(Math.max(0, (done ? task.updatedAtMs : now) - start));
+  return (
+    <div data-slot="worker-work-header" className="text-foreground/50 border-border border-b pb-2 text-sm tabular-nums">
+      {done ? `Worked for ${took}` : `Working for ${took}`}
+    </div>
+  );
+}
+
 /** The report as the thread's answer, with copy and rate; when it came shows on hover. */
 function Answer({ task, text }: { task: Task; text?: string | undefined }) {
   const { isCopied, copyToClipboard } = useCopyToClipboard();
@@ -179,11 +215,11 @@ function Answer({ task, text }: { task: Task; text?: string | undefined }) {
   const rate = (rating: Rating) =>
     action.run(() => rateMessage(task.conversationId, subject, rating));
   return (
-    <div className="group/answer flex flex-col gap-2">
+    <div data-slot="worker-report" className="group/answer flex scroll-mt-4 flex-col gap-2">
       <div className="text-foreground leading-relaxed wrap-break-word">
         <MarkdownBlock text={summary} />
       </div>
-      {files.length > 0 && <ArtifactFiles artifacts={files} onView={setArtifact} />}
+      {files.length > 0 && <FileList artifacts={files} onView={setArtifact} />}
       {task.report?.needsUser.map((need, index) => <p key={index} className="leading-relaxed"><WorkerLine text={need} /></p>)}
       <ArtifactDialog artifact={artifact} onOpenChange={(next) => !next && setArtifact(null)} />
       <div className="text-muted-foreground -ms-1 flex items-center gap-1">
@@ -229,7 +265,7 @@ export function WorkerThread({ task }: { task: Task }) {
   const visibleEntries = finalReply ? entries.slice(0, -1) : entries;
   const activity = workerActivity(visibleEntries, working);
   const previous = activity.slice(0, Math.max(0, activity.length - 3));
-  const previousCount = 1 + task.messages.length + previous.reduce((count, item) => count + (item.type === "group" ? item.items.length : 1), 0);
+  const previousCount = task.messages.length + previous.reduce((count, item) => count + (item.type === "group" ? item.items.length : 1), 0);
   const recent = activity.slice(previous.length);
   const last = visibleEntries.at(-1);
   // A thought with no words yet is the live line's "Thinking".
@@ -251,13 +287,24 @@ export function WorkerThread({ task }: { task: Task }) {
     );
   const [open, setOpen] = useState(false);
 
-  // Follow new output while the view is scrolled to the bottom.
+  // A finished worker opens at its report's top; a live one follows new output while the view
+  // is scrolled to the bottom.
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  const placed = useRef(false);
   useLayoutEffect(() => {
     const element = scrollRef.current;
-    if (pinned.current && element && entries.length > 0) element.scrollTop = element.scrollHeight;
-  }, [entries]);
+    if (!element || entries.length === 0) return;
+    const report = element.querySelector<HTMLElement>('[data-slot="worker-report"]');
+    if (!placed.current && !working && report) {
+      placed.current = true;
+      pinned.current = false;
+      report.scrollIntoView({ block: "start" });
+      return;
+    }
+    placed.current = true;
+    if (pinned.current) element.scrollTop = element.scrollHeight;
+  }, [entries, working]);
 
   const now = working ? liveLabel(entries) : null;
   return (
@@ -272,8 +319,10 @@ export function WorkerThread({ task }: { task: Task }) {
           element.scrollHeight - element.scrollTop - element.clientHeight < tokenPx("--spacing-row");
       }}
     >
-      <div className="max-w-thread mx-auto flex flex-col gap-4">
-        <Collapsible open={open} onOpenChange={setOpen}>
+      <div className="max-w-thread mx-auto flex flex-col gap-4 pt-5">
+        <Brief text={task.spec} />
+        <WorkHeader task={task} />
+        {(previousCount > 0 || transcript?.hasMore) && <Collapsible open={open} onOpenChange={setOpen}>
           <CollapsibleTrigger className="text-foreground/50 border-border hover:text-foreground flex min-h-7 w-full items-center gap-1 border-b text-start text-sm">
             {previousCount} previous {previousCount === 1 ? "message" : "messages"}
             <ChevronRight aria-hidden className={cn("size-3", open ? "-rotate-90" : "rotate-90")} />
@@ -281,11 +330,10 @@ export function WorkerThread({ task }: { task: Task }) {
           <CollapsibleContent className="flex flex-col gap-4 py-4">
             {transcript?.hasMore && <Button size="xs" variant="ghost" className="self-start" disabled={transcript.loading}
               onClick={() => void loadEarlierWorkerEntries(task.conversationId, task.id)}>Load earlier</Button>}
-            <div data-slot="worker-instructions" className="text-foreground leading-relaxed wrap-break-word"><WorkerMarkdown text={task.spec} /></div>
             {task.messages.map((text, index) => <WorkerMarkdown key={index} text={text} />)}
             {previous.map((item, index) => show(item, index))}
           </CollapsibleContent>
-        </Collapsible>
+        </Collapsible>}
         {error && (
           <p role="alert" className="text-destructive text-xs">
             {error}

@@ -1,32 +1,17 @@
-import { type FC, memo, useMemo } from "react";
+import { type FC, useMemo } from "react";
 
-import { WorkerName } from "@/app/conversation/activity/TeamSentence";
 import { type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
-import { useTaskActivityLine } from "@/app/conversation/WorkerActivity";
-import { useWorkerText, WorkerGlyph } from "@/app/conversation/WorkerChip";
+import { useWorkerText } from "@/app/conversation/WorkerChip";
 import type { BlockState } from "@/app/conversation/blocks";
 import type { QuotaWait } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 
-/** A worker the turn waits for: its name, then what it is at, shimmering only while it works. */
-const WorkerStatus = memo(function WorkerStatus({ taskId }: { taskId: string }) {
-  const { ref, first, firstWorking } = useTaskActivityLine(taskId);
-  return (
-    <div ref={ref} data-slot="thread-status-worker" className="text-foreground/65 flex min-w-0 items-center gap-1.5 text-sm leading-5">
-      <WorkerGlyph taskId={taskId} className="size-4 shrink-0" />
-      <span className="shrink-0"><WorkerName taskId={taskId} glyph={false} /></span>
-      {first && (
-        <span className={cn("min-w-0 truncate", firstWorking ? "shimmer" : "text-muted-foreground")}>{first}</span>
-      )}
-    </div>
-  );
-});
-
 /**
- * The last line of a live turn: what happens right now ("Thinking", "Delegating to a worker"),
- * what waits on the user ("Waiting for your approval"), or the workers the turn waits for, each
- * with what it is at. It is gone once the turn is over. Token ticks never announce a live region.
+ * The last line of a live turn, one line: what happens right now ("Thinking", "Delegating to a
+ * worker"), what waits on the user ("Waiting for your approval"), or how many workers the turn
+ * waits for (each worker's progress is in the Workers strip on the composer). It is gone once
+ * the turn is over. Token ticks never announce a live region.
  */
 export const ThreadStatus: FC<{
   requestIds: string[];
@@ -44,26 +29,22 @@ export const ThreadStatus: FC<{
   });
   const view = useMemo(() => (json ? (JSON.parse(json) as ThreadStatusView) : null), [json]);
   const words = useWorkerText(view?.head?.text ?? "");
-  if (!view || (!view.head && view.workers.length === 0)) return null;
-  const { head, workers, more } = view;
+  const head = view?.head;
+  if (!head) return null;
   return (
-    <div data-slot="thread-status" data-tone={head?.tone} className="flex min-w-0 flex-col gap-1.5">
-      {head && (
-        // As wide as its words, so the sweep crosses them rather than the whole row.
-        <div
-          data-slot="request-activity"
-          className={cn(
-            "w-fit max-w-full truncate text-sm",
-            head.tone === "busy" && "shimmer",
-            head.tone === "still" && "text-muted-foreground",
-            head.tone === "needsYou" && "text-foreground/80",
-          )}
-        >
-          {words}
-        </div>
-      )}
-      {workers.map((taskId) => <WorkerStatus key={taskId} taskId={taskId} />)}
-      {more > 0 && <div className="text-muted-foreground text-sm">and {more} more</div>}
+    <div data-slot="thread-status" data-tone={head.tone} className="flex min-w-0">
+      {/* As wide as its words, so the sweep crosses them rather than the whole row. */}
+      <div
+        data-slot="request-activity"
+        className={cn(
+          "w-fit max-w-full truncate text-sm",
+          head.tone === "busy" && "shimmer",
+          head.tone === "still" && "text-muted-foreground",
+          head.tone === "needsYou" && "text-foreground/80",
+        )}
+      >
+        {words}
+      </div>
     </div>
   );
 };

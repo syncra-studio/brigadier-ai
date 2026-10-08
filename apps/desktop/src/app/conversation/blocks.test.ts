@@ -280,19 +280,20 @@ test("stored lifecycle events merge when adjacent and of one word: starts with s
   assert.deepEqual(rows[1]?.taskIds, ["two", "one"]);
 });
 
+const teamStep = (position: number, kind: OrchestratorStep["kind"]): OrchestratorStep => ({ requestId: "team", atMs: position, position, kind });
+
 test("the lead managing its team shows: a message, an answer, a stop with its reason, a landing; a stop isn't said twice", () => {
   const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
   const one = { ...byNumber(1), id: "one", requestId: "team", position: 2 };
   const two = { ...byNumber(1), id: "two", requestId: "team", position: 3 };
-  const step = (position: number, kind: OrchestratorStep["kind"]): OrchestratorStep => ({ requestId: "team", atMs: position, position, kind });
   const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: { one, two }, requests: {},
     orchestratorSteps: [
-      step(4, { type: "created", taskId: "one" }),
-      step(5, { type: "messaged", taskId: "one", text: "Use the new table." }),
-      step(6, { type: "answered", taskId: "two", question: "Which file?", answer: "notes.py", why: "" }),
-      step(8, { type: "stopped", taskId: "two", reason: "The other worker covers it." }),
-      step(10, { type: "readReport", taskId: "one" }),
-      step(11, { type: "landed", taskIds: ["one"], commits: 2, branch: "b", head: "h" }),
+      teamStep(4, { type: "created", taskId: "one" }),
+      teamStep(5, { type: "messaged", taskId: "one", text: "Use the new table." }),
+      teamStep(6, { type: "answered", taskId: "two", question: "Which file?", answer: "notes.py", why: "" }),
+      teamStep(8, { type: "stopped", taskId: "two", reason: "The other worker covers it." }),
+      teamStep(10, { type: "readReport", taskId: "one" }),
+      teamStep(11, { type: "landed", taskIds: ["one"], commits: 2, branch: "b", head: "h" }),
     ],
     workerSteps: [
       { taskId: "one", requestId: "team", kind: "started", position: 2, atMs: 10 },

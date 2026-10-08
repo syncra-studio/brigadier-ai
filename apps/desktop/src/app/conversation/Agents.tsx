@@ -4,6 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { workerDone, workerWorking, workerState, workerPreview } from "@/app/conversation/workerPresentation";
 import { TaskDetails } from "@/app/conversation/cards/TaskCardView";
+import { useTaskActivityLine } from "@/app/conversation/WorkerActivity";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import {
   AgentsPanelContext,
@@ -68,10 +69,13 @@ const AgentRow = memo(function AgentRow({ taskId }: { taskId: string }) {
   const task = useBoard((s) => s.board?.tasks[taskId]);
   const name = useWorkerName(taskId);
   const { setPanel } = useContext(AgentsPanelContext);
+  // A working row previews its current step, as the Workers strip does.
+  const { ref, first } = useTaskActivityLine(taskId);
   if (!task) return null;
-  const status = workerPreview(task);
+  const status = workerWorking(task) && first ? first : workerPreview(task);
   return (
     <li>
+      <div ref={ref}>
       <button
         type="button"
         data-task={`task-${task.number}`}
@@ -98,6 +102,7 @@ const AgentRow = memo(function AgentRow({ taskId }: { taskId: string }) {
           )}
         </span>
       </button>
+      </div>
     </li>
   );
 });
@@ -206,12 +211,12 @@ function WorkerList({ conversationId }: { conversationId: string }) {
     >
       <div className="max-w-thread mx-auto flex w-full flex-col">
         <AgentSection
-          title="Active"
+          title="Working"
           counted
           ids={lists.active}
           page={ACTIVE_PAGE}
           trailing={waiting > 0 ? `${waiting} waiting` : undefined}
-          empty={`No active ${WORKERS_LABEL.toLowerCase()}`}
+          empty={`No ${WORKERS_LABEL.toLowerCase()} working`}
         />
         <AgentSection
           title="Done"

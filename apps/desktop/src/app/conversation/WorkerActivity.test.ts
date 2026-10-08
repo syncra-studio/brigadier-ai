@@ -43,7 +43,7 @@ function chromium(): string {
   throw new Error("Worker activity rendering test needs Chromium. Set CHROME_BIN to an installed Chrome/Chromium.");
 }
 
-type Rendering = { thread: Record<string, string>; summary: string; list: string; strip: number; avatars: number[] };
+type Rendering = { thread: Record<string, string>; summary: string; list: string; strip: string; stripRows: number; avatars: number[] };
 
 // Vite serves the real React components, and Chromium clicks the real Collapsible trigger.
 // Disposable profiles and Vite's cache use the system temporary folder, never the app's data.
@@ -105,13 +105,16 @@ test("worker lifecycle and overview stay quiet and include waiting and done work
   const serialized = stdout.match(/<pre id="worker-activity-result">([^<]+)<\/pre>/)?.[1];
   assert.ok(serialized, `Fixture did not render its result:\n${stdout}`);
   const rendering = JSON.parse(serialized) as Rendering;
-  assert.equal(rendering.strip, 0, "There is no composer worker strip");
+  // The Workers strip counts them in one line and, open, lists each with Stop all.
+  assert.match(rendering.strip, /1 worker working · 2 waiting · 1 done/);
+  assert.match(rendering.strip, /Stop all/);
+  assert.equal(rendering.stripRows, 4);
   assert.match(rendering.thread.active!, /Check active started working/);
   assert.match(rendering.thread.blocked!, /Check blocked is waiting/);
   assert.match(rendering.thread.completed!, /Check completed finished/);
   assert.match(rendering.summary, /3 working/);
   assert.match(rendering.summary, /1 done/);
-  assert.match(rendering.list, /Active · 3/);
+  assert.match(rendering.list, /Working · 3/);
   assert.match(rendering.list, /Done · 1/);
   assert.match(rendering.list, /Waiting for its plan to be reviewed/);
   assert.match(rendering.list, /Waiting for a free slot/);

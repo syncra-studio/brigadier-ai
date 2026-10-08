@@ -13,17 +13,11 @@ export type StatusTone = "busy" | "still" | "needsYou";
 
 export type StatusHead = { text: string; tone: StatusTone };
 
-/** What the end of a live turn says: a head line, then the request's workers still at it. */
-export type ThreadStatusView = {
-  head: StatusHead | null;
-  /** The workers listed under the head, by task id, oldest first. */
-  workers: string[];
-  /** Workers at it beyond those listed. */
-  more: number;
-};
-
-/** Workers listed by name under the head; the rest are counted. */
-export const LISTED_WORKERS = 3;
+/**
+ * What the end of a live turn says: one line. Each worker's own progress is in the Workers
+ * strip on the composer, so it is never shown twice in the thread column.
+ */
+export type ThreadStatusView = { head: StatusHead | null };
 
 export type StatusInput = {
   board: Pick<Board, "tasks" | "approvals" | "questions" | "plans" | "waiting" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps">;
@@ -82,41 +76,39 @@ function leadHead({ board, requestIds, thinkingLive, compacting }: StatusInput):
 
 /**
  * The live line at the end of a turn: what the lead does right now, what waits on the user, or
- * which workers it waits for. Nothing once the turn is over.
+ * how many workers it waits for. Nothing once the turn is over.
  */
 export function threadStatus(input: StatusInput): ThreadStatusView {
   const { board, requestIds, state, quotaWait } = input;
-  const none: ThreadStatusView = { head: null, workers: [], more: 0 };
+  const none: ThreadStatusView = { head: null };
   if (state !== "working" && state !== "waiting") return none;
   const leadRunning = board.runRequest !== null && requestIds.includes(board.runRequest)
     && (board.run === "running" || board.run === "starting");
   const live = Object.values(board.tasks)
     .filter((task) => task.requestId !== null && requestIds.includes(task.requestId) && !isFinal(task))
     .toSorted((a, b) => a.createdAtMs - b.createdAtMs);
-  const workers = live.slice(0, LISTED_WORKERS).map((task) => task.id);
-  const more = Math.max(0, live.length - LISTED_WORKERS);
   const working = live.some((task) => activelyWorking({ task }));
 
   const needs = needsYou(input, leadRunning, live);
-  if (needs) return { head: { text: needs, tone: "needsYou" }, workers, more };
-  if (leadRunning) return { head: leadHead(input), workers, more };
-  if (quotaWait && !working) return { head: { text: quotaWords(quotaWait.resetsAtMs), tone: "still" }, workers, more };
+  if (needs) return { head: { text: needs, tone: "needsYou" } };
+  if (leadRunning) return { head: leadHead(input) };
+  if (quotaWait && !working) return { head: { text: quotaWords(quotaWait.resetsAtMs), tone: "still" } };
   if (live.length > 0) {
     const quota = live.every((task) => task.quotaWait);
     if (quota) {
       const resets = live.map((task) => task.quotaWait?.resetsAtMs ?? null).filter((at) => at !== null);
-      return { head: { text: quotaWords(resets.length ? Math.min(...resets) : null), tone: "still" }, workers, more };
+      return { head: { text: quotaWords(resets.length ? Math.min(...resets) : null), tone: "still" } };
     }
-    if (live.every((task) => task.state === "landing")) return { head: { text: "Landing the changes", tone: "busy" }, workers: [], more: 0 };
+    if (live.every((task) => task.state === "landing")) return { head: { text: "Landing the changes", tone: "busy" } };
     // A worker that reported is done: the thread picks up its report next.
     const busy = live.filter((task) => task.state !== "reported");
     if (busy.length === 0) {
       const text = live.length === 1 ? "Worker finished, handing back" : `${live.length} workers finished, handing back`;
-      return { head: { text, tone: "busy" }, workers, more };
+      return { head: { text, tone: "busy" } };
     }
     const text = busy.length === 1 ? "Waiting for a worker" : `Waiting for ${busy.length} workers`;
-    return { head: { text, tone: working ? "busy" : "still" }, workers, more };
+    return { head: { text, tone: working ? "busy" : "still" } };
   }
   // Between the lead's turns (a message just sent, a change being landed): it still works.
-  return { head: { text: "Thinking", tone: "busy" }, workers, more };
+  return { head: { text: "Thinking", tone: "busy" } };
 }

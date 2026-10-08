@@ -42,13 +42,12 @@ memory (see "Emulated" below).
 4. **Render.** It renders the real `<RequestBlock/>` with `react-dom/server`
    `renderToStaticMarkup`, inside `TooltipProvider` and `ViewContext.Provider` (holding the
    conversation from `useApp`, so `quotaWait` counts). That runs the app's real code:
-   - `WorkHeader`, `headerLabel` and `HEADER_AFTER_MS`, `blockSequence`, `foldWork`, and the
-     done/answering/fold logic in RequestBlock
-   - `ActivityRow` (`board.doing || "Thinking"`)
-   - `OrchestratorSteps`/`StepRow`/`MachineRow`, with `machineWords` and `workerName`
-     (rowWords.ts)
-   - `TaskRow` with `lifecycleWords`
-   - `TaskActivity`/`useTaskActivityLine`, with `taskActivityLines` (taskActivity.ts)
+   - `WorkHeader`, `headerLabel`, `blockSequence`, and the done/answering/fold logic in
+     RequestBlock
+   - the work groups of `activity/` (`groupActivity`, `ActivityGroup`, `StepRow`, `LeadStep`),
+     with the one vocabulary of `activity/words.ts`
+   - the team sentences and notices (`activity/TeamSentence.tsx`, `activity/Notice.tsx`)
+   - `ThreadStatus`, the single live line (`liveStatus.ts`)
 
    Every `useBoard`/`useApp` selector reads the replayed stores.
 5. **Read-out.** It parses the markup with parse5 and reads the `data-slot`s the components set:
@@ -59,9 +58,10 @@ memory (see "Emulated" below).
        Created/Landed/Decided/Answered…, and machine rows such as "Waiting for another build to
        finish". A `work-group` counts too: a run of the thread's finished tool steps folds into
        one row ("Searched code, ran a command"), and closed it renders only that summary line.
-     - `task-row`: **worker rows**
-     - `task-activity`: the worker's current-activity line under its row. It's reported
-       separately.
+     - `task-row`: **worker rows** (a team sentence: "Started A and B", "A finished")
+     - `task-activity`: a worker's current-activity line. The thread no longer shows one (each
+       worker's progress is in the Workers strip on the composer), so it stays empty on newer
+       app code.
      - `request-card` and `request-steer`: cards
    - `request-activity`: the live line ("Thinking", "Delegating to a worker", …)
    - when the work has folded: the answer text
@@ -141,8 +141,8 @@ run stops at the last event plus 1 s, with `finished: false`.
   effect), so a long reply shows its stored preview; that changes the text, not whether a
   note is visible.
 - **The pending block's first fraction of a second** is approximated, as described above.
-- **Only the main view is replayed.** A side-chat board, the background-workers strip and the
-  side panel aren't.
+- **Only the main view is replayed.** A side-chat board, the Workers strip on the composer and
+  the side panel aren't.
 
 ## Self-test
 

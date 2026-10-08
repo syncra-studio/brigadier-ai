@@ -1,0 +1,32 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import { stripWords, workersStrip } from "@/app/conversation/activity/stripView";
+import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
+import type { Task, UserRequest } from "@/ipc/generated";
+
+const base = Object.values(night.tasks)[0] as unknown as Task;
+let next = 0;
+const task = (patch: Partial<Task> = {}): Task => {
+  next += 1;
+  return { ...base, id: `t${next}`, number: next, state: "running", createdAtMs: next * 10, updatedAtMs: next * 10, ...patch };
+};
+const sent = (startedAtMs: number) => ({ startedAtMs }) as UserRequest;
+
+test("the strip is about workers at it and those finished since the user's last message", () => {
+  const older = task({ state: "done", updatedAtMs: 5 });
+  const running = task();
+  const waiting = task({ state: "paused" });
+  const finished = task({ state: "reported", updatedAtMs: 500 });
+  const view = workersStrip([finished, waiting, older, running], [sent(1), sent(100)]);
+  assert.deepEqual(view, { rows: [running.id, waiting.id, finished.id], working: 1, waiting: 1, done: 1 });
+  // A new message: what finished before it leaves the strip; nothing left hides it.
+  assert.equal(workersStrip([older, finished], [sent(1_000)]), null);
+  assert.equal(workersStrip([], []), null);
+});
+
+test("the collapsed strip counts in one line, naming workers once", () => {
+  assert.equal(stripWords({ working: 2, waiting: 0, done: 1 }), "2 workers working · 1 done");
+  assert.equal(stripWords({ working: 1, waiting: 1, done: 0 }), "1 worker working · 1 waiting");
+  assert.equal(stripWords({ working: 0, waiting: 0, done: 3 }), "3 workers done");
+});
