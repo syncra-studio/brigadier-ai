@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { type BlockRow, lifecycleWord } from "@/app/conversation/blocks";
 import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversation/WorkerChip";
-import { workerState } from "@/app/conversation/workerPresentation";
+import { workerDone, workerPreview, workerState, workerWorking } from "@/app/conversation/workerPresentation";
 import { ROW, ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
 import type { OrchestratorStepKind, Task } from "@/ipc/generated";
@@ -87,8 +87,14 @@ function verb(word: ReturnType<typeof lifecycleWord>, tasks: readonly (Task | un
   switch (word) {
     case "started":
       return "started working";
-    case "waiting":
-      return many ? "are waiting" : "is waiting for an answer";
+    case "waiting": {
+      // The event doesn't say what for; a worker still waiting says it (an answer, an approval,
+      // a free slot, quota).
+      const [only] = tasks;
+      if (many || !only || workerDone(only) || workerWorking(only)) return many ? "are waiting" : "is waiting";
+      const why = workerPreview(only);
+      return why ? `is ${why.charAt(0).toLowerCase()}${why.slice(1)}` : "is waiting";
+    }
     case "stopped":
       return "stopped";
     case "failed":

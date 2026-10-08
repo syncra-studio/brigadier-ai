@@ -1115,7 +1115,7 @@ fn edit_diff(tool: &str, input: &Value) -> Option<String> {
         "Write" => lines(str_of(input, "content").unwrap_or_default(), '+', &mut out),
         _ => return None,
     }
-    (!out.is_empty()).then(|| clip(&out, OUTPUT_CLIP))
+    (!out.is_empty()).then(|| clip(&out, crate::DIFF_RAW_CLIP))
 }
 
 /// Claude reports a failed command's status as `Exit code N` at the top of its output.

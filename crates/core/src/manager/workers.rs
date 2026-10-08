@@ -3400,6 +3400,12 @@ impl SessionManager {
     /// Stops a worker for good (`stop_worker`, or the user's stop button). Unfinished changes
     /// are kept on the task branch as a WIP commit.
     pub async fn stop_task(&self, task_id: TaskId) -> Result<()> {
+        self.stop_if_unfinished(task_id).await.map(drop)
+    }
+
+    /// [`Self::stop_task`], saying whether it stopped it: false when it had already ended,
+    /// decided under its settle lock so a report recorded meanwhile counts as ended.
+    async fn stop_if_unfinished(&self, task_id: TaskId) -> Result<bool> {
         let conversation_id = self.conversation_of_task(&task_id).await?;
         let live = self.existing_task_live(&task_id);
         // A report being recorded right now is recorded first (or not at all).
@@ -3409,7 +3415,7 @@ impl SessionManager {
         };
         let task = self.task_by_id(&conversation_id, &task_id).await?;
         if task.state.is_final() {
-            return Ok(());
+            return Ok(false);
         }
         // Until it is recorded stopped, a landing that fails as its worktree goes hands
         // nothing back to the orchestrator.
@@ -3419,7 +3425,7 @@ impl SessionManager {
         }
         self.dispose_task(&task, stopped_state(&task)).await;
         drop(settled);
-        Ok(())
+        Ok(true)
     }
 
     /// Stops `task` for good and files a "Stopped" row saying `reason` (the orchestrator's
@@ -3430,10 +3436,10 @@ impl SessionManager {
         task: &Task,
         reason: String,
     ) -> Result<bool> {
-        if task.state.is_final() {
+        // It may have finished since the caller looked: only a real stop is filed.
+        if !self.stop_if_unfinished(task.id.clone()).await? {
             return Ok(false);
         }
-        self.stop_task(task.id.clone()).await?;
         self.orchestrator_step(
             conversation_id,
             OrchestratorStepKind::Stopped {

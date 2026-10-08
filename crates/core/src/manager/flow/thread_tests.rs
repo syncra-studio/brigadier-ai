@@ -1743,6 +1743,8 @@ async fn stop_all_stops_every_running_worker_and_tells_the_orchestrator_once() {
         Flow::task(&board, 1).id.clone(),
         Flow::task(&board, 2).id.clone(),
     );
+    // A look at the board from before they ended, as a stop racing their finish would have.
+    let stale = Flow::task(&board, 1).clone();
     let stopped = flow
         .manager
         .stop_workers(flow.conversation.clone())
@@ -1753,6 +1755,14 @@ async fn stop_all_stops_every_running_worker_and_tells_the_orchestrator_once() {
     for id in [&first, &second] {
         assert_eq!(board.tasks[id].state, crate::work::TaskState::Stopped);
     }
+    // Stopping it again from that old look stops nothing and files no second row.
+    assert!(
+        !flow
+            .manager
+            .stop_worker(&flow.conversation, &stale, "Again".into())
+            .await
+            .unwrap()
+    );
     let steps: Vec<OrchestratorStepKind> = flow
         .events()
         .await

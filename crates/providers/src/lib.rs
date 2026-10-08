@@ -211,6 +211,14 @@ pub fn now_ms() -> i64 {
         .unwrap_or_default()
 }
 
+/// A file change's diff as shown: clipped on the way out, after it is redacted
+/// (`events::Events::send`), so a secret that crosses the cut is still recognised whole and never
+/// kept in part.
+pub(crate) const DIFF_CLIP: usize = 8 * 1024;
+/// How much of a diff a parser keeps for redaction to see, well past [`DIFF_CLIP`]: a secret
+/// that crosses this cut lies in the part [`DIFF_CLIP`] drops.
+pub(crate) const DIFF_RAW_CLIP: usize = 4 * DIFF_CLIP;
+
 /// `text` cut to at most `max` bytes on a character boundary, marked when cut.
 pub(crate) fn clip(text: &str, max: usize) -> String {
     if text.len() <= max {

@@ -372,7 +372,8 @@ impl Parser {
                 let changes: Vec<FileChange> = changes
                     .into_iter()
                     .map(|change| FileChange {
-                        diff: (!change.diff.is_empty()).then(|| clip(&change.diff, OUTPUT_CLIP)),
+                        diff: (!change.diff.is_empty())
+                            .then(|| clip(&change.diff, crate::DIFF_RAW_CLIP)),
                         path: change.path,
                         kind: match change.kind {
                             p::PatchChangeKind::Add => FileChangeKind::Add,

@@ -213,11 +213,13 @@ function LeadToolDetail({ conversationId, kind }: { conversationId: string; kind
   if (error) return <p className="text-destructive text-xs">{error}</p>;
   if (!item) return <span className="shimmer text-xs">Loading</span>;
   const short = toolName(kind.name);
-  const command = SHELLS.has(short) && !item.input ? kind.detail : null;
+  // An edit the CLI reported as file changes (no call input): the daemon gives their diffs, each
+  // after its path.
+  if (EDITS.has(short) && !item.input && item.output) return <Diffs files={fileDiffs(item.output)} />;
+  // A CLI's own command gives its command line as plain text, not a call's JSON.
+  const command = SHELLS.has(short) && parsedInput(item.input) === null ? item.input || kind.detail : null;
   const detail = callDetail(kind.name, kind.status, { input: item.input, output: item.output, exit: item.exit ?? kind.exit ?? null, command });
   if (detail) return <>{detail}</>;
-  // An edit the CLI reported as file changes: the daemon gives their diffs, each after its path.
-  if (EDITS.has(short) && item.output) return <Diffs files={fileDiffs(item.output)} />;
   if (EDITS.has(short) && kind.detail) return <ToolBox title="Files" body={kind.detail} />;
   return <span className="text-muted-foreground text-xs">Nothing more was kept of this step.</span>;
 }
