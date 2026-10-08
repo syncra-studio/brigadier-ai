@@ -131,8 +131,9 @@ quick self-check first; then they land on their own and you hear when. Conflicts
 you: delegate a merge task.";
 
 const FINISH_SESSION: &str = "New-worktree sessions only: merge the session branch into its \
-base branch, once the user's latest message asks for it (\"merge it\") or plainly agrees to the \
-merge your reply right before proposed, as a question naming the base (\"yes\"). Pass their \
+base branch, once the user's latest message asks for it (\"merge it\", also together with the \
+work: then merge as soon as it has landed, without asking again) or plainly agrees to the merge \
+your reply right before proposed, as a question naming the base (\"yes\"). Pass their \
 words in user_words, quoted exactly from that message. Brigadier checks them against it and \
 refuses on a question, a condition, a \"no\" or a \"wait\", or words already used for a merge; \
 then propose it and wait for their answer. Never merge on silence. Returns when merged.";
