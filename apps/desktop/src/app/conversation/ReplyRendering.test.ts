@@ -54,14 +54,25 @@ test("the real reply path loads without raw Markdown and renders rich text", { t
     logLevel: "error",
     server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, watch: null },
   };
+  // Vite logs each request's start (>) and end (<), so a page that never finishes loading names
+  // the request it waits on.
   const server = spawn(process.execPath, ["--input-type=module", "--eval", `
     import { createServer } from "vite";
-    const server = await createServer(${JSON.stringify(config)});
+    const requests = { name: "requests", configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        console.log("> " + request.url);
+        response.on("close", () => console.log("< " + request.url));
+        next();
+      });
+    } };
+    const server = await createServer({ ...${JSON.stringify(config)}, plugins: [requests] });
     await server.listen();
     console.log(server.resolvedUrls.local[0]);
     process.on("SIGTERM", async () => { await server.close(); process.exit(0); });
   `], { stdio: ["ignore", "pipe", "pipe"] });
   let serverErrors = "";
+  let serverOutput = "";
+  server.stdout.on("data", (chunk: Buffer) => { serverOutput += chunk.toString(); });
   server.stderr.on("data", (chunk: Buffer) => { serverErrors += chunk.toString(); });
   t.after(async () => {
     if (server.exitCode === null) {
@@ -74,10 +85,8 @@ test("the real reply path loads without raw Markdown and renders rich text", { t
   });
   const url = await new Promise<string>((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error(`Vite startup timed out: ${serverErrors}`)), 15000);
-    let output = "";
-    server.stdout.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
-      const address = output.match(/http:\/\/127\.0\.0\.1:\d+\//)?.[0];
+    server.stdout.on("data", () => {
+      const address = serverOutput.match(/http:\/\/127\.0\.0\.1:\d+\//)?.[0];
       if (address) {
         clearTimeout(timeout);
         resolve(address);
@@ -96,14 +105,27 @@ test("the real reply path loads without raw Markdown and renders rich text", { t
   // the one its child processes rendezvous on, so the multi-process browser aborts there. Linux
   // Chrome crashes (SIGTRAP) in single-process mode, so it keeps the default.
   const oneProcess = process.platform === "darwin" ? ["--single-process"] : [];
-  const { stdout } = await promisify(execFile)(binary, [
+  // Chrome stopped at the timeout exits cleanly with no DOM, so the failure names the time it ran.
+  const started = Date.now();
+  const { stdout, stderr } = await promisify(execFile)(binary, [
     "--headless", "--no-sandbox", ...oneProcess, "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+    "--enable-logging=stderr",
     `--user-data-dir=${join(scratch, "profile")}`,
     "--dump-dom", "--virtual-time-budget=5000",
     `${url}fixtures/reply-rendering.html`,
   ], { timeout: 45000, maxBuffer: 4 * 1024 * 1024 });
   const serialized = stdout.match(/<pre id="reply-rendering-result">([^<]+)<\/pre>/)?.[1];
-  assert.ok(serialized, `Fixture did not render its result:\n${stdout}`);
+  if (!serialized) {
+    const open = new Map<string, number>();
+    for (const [, mark, path] of serverOutput.matchAll(/^([<>]) (.*)$/gm)) open.set(path!, (open.get(path!) ?? 0) + (mark === ">" ? 1 : -1));
+    const unanswered = [...open].filter(([, count]) => count > 0).map(([path]) => path);
+    assert.fail([
+      `Fixture did not render its result; Chrome ran ${Date.now() - started} ms of its 45000.`,
+      `Requests Vite never answered: ${unanswered.join(", ") || "none"}`,
+      `Chrome's log:\n${stderr.slice(-4000)}`,
+      `DOM:\n${stdout}`,
+    ].join("\n"));
+  }
   const rendering = JSON.parse(serialized) as {
     loadingSeen: boolean; rawMarkdownSeen: boolean; strong: string[]; listItems: number; inlineCode: string[];
   };
