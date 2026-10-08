@@ -359,7 +359,7 @@ impl SessionManager {
     }
 
     /// Session `id`'s open pre-warm once made: its reserved task id and its worktree.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) async fn prewarm_made(&self, id: &ConversationId) -> Option<(TaskId, PathBuf)> {
         let slot = self.prewarms.lock().open.get(id).cloned()?;
         let warm = slot.ready.lock().await.clone()?;
@@ -367,7 +367,7 @@ impl SessionManager {
     }
 
     /// Session `id`'s open pre-warm's reserved task id, made or not.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn prewarm_id(&self, id: &ConversationId) -> Option<TaskId> {
         let state = self.prewarms.lock();
         state.open.get(id).map(|slot| slot.task_id.clone())

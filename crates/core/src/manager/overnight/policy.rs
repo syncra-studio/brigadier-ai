@@ -41,7 +41,7 @@ impl ActiveRuns {
     }
 
     /// Makes `run` the session's active run, as a test sets it up.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn insert(&self, id: ConversationId, run: ActiveRun) {
         self.lock().insert(id, run);
     }

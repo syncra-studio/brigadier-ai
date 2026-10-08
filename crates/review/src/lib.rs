@@ -544,9 +544,11 @@ mod tests {
     use super::*;
 
     /// What a review recorded for cleanup.
+    #[cfg(unix)]
     #[derive(Default)]
     struct Recorded(std::sync::Mutex<Vec<Artifact>>);
 
+    #[cfg(unix)]
     impl Ledger for Recorded {
         fn record(
             &self,
@@ -608,6 +610,7 @@ mod tests {
         .await
     }
 
+    #[cfg(unix)]
     const STARTED: &str = r#"echo '{"type":"thread.started","thread_id":"01a1-review"}'"#;
 
     #[cfg(unix)]

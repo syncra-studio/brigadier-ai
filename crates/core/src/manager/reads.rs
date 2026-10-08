@@ -186,7 +186,7 @@ impl SessionManager {
     /// [`SEARCHES_KEPT`] latest searches and [`HITS_STORED`] files per search. What goes past
     /// those is counted (`dropped_files`, `dropped_searches`, a search's `more_hits`), never
     /// dropped silently. Files outside the thread's workspace are kept, marked `outside`.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(all(test, unix)), allow(dead_code))]
     pub(crate) async fn thread_reads(&self, id: &ConversationId) -> Result<ThreadReads> {
         Ok(self.core.board(id).await?.thread_reads.snapshot())
     }
