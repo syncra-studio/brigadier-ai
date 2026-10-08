@@ -76,13 +76,18 @@ impl TokenMeter {
                 ..latest?.clone()
             },
             Baseline::Seen(previous) if sum(total) >= sum(&previous) => TokenUsage {
+                // Claude's cost is the session's so far too.
+                cost_usd: match (total.cost_usd, previous.cost_usd) {
+                    (Some(now), Some(before)) if now >= before => Some(now - before),
+                    (Some(now), None) => Some(now),
+                    _ => None,
+                },
                 input_tokens: (total.input_tokens - previous.input_tokens).max(0),
                 cached_input_tokens: (total.cached_input_tokens - previous.cached_input_tokens)
                     .max(0),
                 cache_write_tokens: (total.cache_write_tokens - previous.cache_write_tokens).max(0),
                 output_tokens: (total.output_tokens - previous.output_tokens).max(0),
                 reasoning_tokens: (total.reasoning_tokens - previous.reasoning_tokens).max(0),
-                cost_usd: None,
             },
             Baseline::Fresh | Baseline::Seen(_) => total.clone(),
         };
@@ -92,4 +97,41 @@ impl TokenMeter {
 
 fn sum(usage: &TokenUsage) -> i64 {
     usage.input_tokens + usage.cached_input_tokens + usage.cache_write_tokens + usage.output_tokens
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn usage(input: i64, cost: Option<f64>) -> TokenUsage {
+        TokenUsage {
+            input_tokens: input,
+            cost_usd: cost,
+            ..TokenUsage::default()
+        }
+    }
+
+    #[test]
+    fn a_turns_cost_is_what_the_sessions_cost_grew_by() {
+        let meter = TokenMeter::new(false);
+        let first = meter.delta(&usage(10, Some(0.5)), None).unwrap();
+        assert_eq!(first.cost_usd, Some(0.5));
+        let second = meter.delta(&usage(25, Some(0.75)), None).unwrap();
+        assert_eq!(second.input_tokens, 15);
+        assert_eq!(second.cost_usd, Some(0.25));
+        // A CLI that doesn't say what it cost.
+        let codex = TokenMeter::new(false);
+        codex.delta(&usage(10, None), None);
+        assert_eq!(codex.delta(&usage(20, None), None).unwrap().cost_usd, None);
+        // A resumed session's first report: its cost so far isn't this turn's.
+        let resumed = TokenMeter::new(true);
+        let latest = usage(4, Some(0.1));
+        assert_eq!(
+            resumed
+                .delta(&usage(40, Some(2.0)), Some(&latest))
+                .unwrap()
+                .cost_usd,
+            None
+        );
+    }
 }

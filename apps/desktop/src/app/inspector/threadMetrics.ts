@@ -1,5 +1,5 @@
-import type { RequestContext, ThreadEdits } from "@/ipc/generated";
-import { formatTokens } from "@/lib/format";
+import type { ProviderTokens, RequestContext, RequestSummary, ThreadEdits } from "@/ipc/generated";
+import { formatDuration, formatTokens } from "@/lib/format";
 
 /** The thread's own commits in a line: how many, and the lines they changed. */
 export function editsLine(edits: ThreadEdits | null): string {
@@ -41,4 +41,55 @@ export function growthRows(requests: readonly RequestContext[], limit: number): 
           : `${formatTokens(request.firstTokens)} → ${formatTokens(request.lastTokens)}`,
       growth: request.calls === 1 ? "" : formatGrowth(request.growthTokens),
     }));
+}
+
+/** A time after the request was sent: tenths of a second under a minute, else "6m 40s". */
+export function formatSince(ms: number): string {
+  return ms < 60_000 ? `${(ms / 1000).toFixed(1)} s` : formatDuration(ms);
+}
+
+function providerName(provider: ProviderTokens["provider"]): string {
+  return provider.charAt(0).toUpperCase() + provider.slice(1);
+}
+
+export type SummaryRow = {
+  key: string;
+  /** The start of the user's message. */
+  label: string;
+  /** "first 1.2 s · answer 6m 40s · landed 6m 2s · settled 7m 1s"; "working" while it works. */
+  times: string;
+  /** Per provider: "Claude 1.3M raw, 210K without cache reads, $0.75". */
+  providers: string[];
+  /** "thread 1.3K · worker 2.2K (3 calls)". */
+  steps: string;
+};
+
+/** Each request's time and tokens, newest first, at most `limit` of them. */
+export function summaryRows(summaries: readonly RequestSummary[], limit: number): SummaryRow[] {
+  return summaries
+    .slice(-limit)
+    .toReversed()
+    .map((summary) => {
+      const times = [
+        summary.firstEventMs !== null && `first ${formatSince(summary.firstEventMs)}`,
+        summary.answerMs !== null ? `answer ${formatSince(summary.answerMs)}` : "working",
+        summary.landedMs !== null && `landed ${formatSince(summary.landedMs)}`,
+        summary.settledMs !== null && `settled ${formatSince(summary.settledMs)}`,
+      ].filter(Boolean);
+      return {
+        key: summary.requestId,
+        label: summary.preview.trim() || "An earlier request",
+        times: times.join(" · "),
+        providers: summary.providers.map((tokens) => {
+          const cost = tokens.costUsd !== null ? `, $${tokens.costUsd.toFixed(2)}` : "";
+          return `${providerName(tokens.provider)} ${formatTokens(tokens.raw)} raw, ${formatTokens(tokens.rawWithoutCacheReads)} without cache reads${cost}`;
+        }),
+        steps: summary.steps
+          .map((step) => {
+            const calls = step.calls === 1 ? "" : ` (${step.calls} calls)`;
+            return `${step.step} ${formatTokens(step.raw)}${calls}`;
+          })
+          .join(" · "),
+      };
+    });
 }

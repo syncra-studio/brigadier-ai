@@ -102,6 +102,8 @@ fn migrations() -> Migrations<'static> {
                 at_ms            INTEGER NOT NULL
             ) STRICT, WITHOUT ROWID;",
         ),
+        // THREAD-PLAN.md phase 4: what a Claude turn cost (the Inspector's per-request summary).
+        M::up("ALTER TABLE turn_usage ADD COLUMN cost_usd REAL;"),
     ])
 }
 
@@ -196,6 +198,8 @@ pub struct TurnUsage {
     /// For use read from a Codex child thread's rollout ([`StepKind::Guardian`]): that thread.
     /// The A/B tools, which add Codex child threads from rollouts, leave these out.
     pub child_thread: Option<String>,
+    /// What the use cost, as Claude reports it (Codex doesn't).
+    pub cost_usd: Option<f64>,
 }
 
 impl TurnUsage {
@@ -222,7 +226,8 @@ pub struct StoredEdits {
 
 /// The columns [`turn_of`] reads, after `provider`.
 const TURN_COLUMNS: &str = "at_ms, model, conversation_id, project_id, task_id, input, \
-     cached_input, cache_write, output, step, duration_ms, request_id, context, child_thread";
+     cached_input, cache_write, output, step, duration_ms, request_id, context, child_thread, \
+     cost_usd";
 
 fn turn_of(provider: ProviderKind, row: &rusqlite::Row<'_>) -> rusqlite::Result<TurnUsage> {
     Ok(TurnUsage {
@@ -244,6 +249,7 @@ fn turn_of(provider: ProviderKind, row: &rusqlite::Row<'_>) -> rusqlite::Result<
         request_id: row.get(12)?,
         context: row.get(13)?,
         child_thread: row.get(14)?,
+        cost_usd: row.get(15)?,
     })
 }
 
@@ -251,8 +257,8 @@ fn insert_turn(conn: &Connection, turn: &TurnUsage) -> rusqlite::Result<()> {
     conn.prepare_cached(
         "INSERT INTO turn_usage (at_ms, provider, model, conversation_id, project_id, task_id,
              input, cached_input, cache_write, output, step, duration_ms, request_id, context,
-             child_thread)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+             child_thread, cost_usd)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
     )?
     .execute(params![
         turn.at_ms,
@@ -270,6 +276,7 @@ fn insert_turn(conn: &Connection, turn: &TurnUsage) -> rusqlite::Result<()> {
         turn.request_id,
         turn.context,
         turn.child_thread,
+        turn.cost_usd,
     ])?;
     Ok(())
 }
@@ -413,6 +420,27 @@ impl RoutingStore {
                  WHERE conversation_id = ?1 AND step = ?2 ORDER BY at_ms, rowid"
             ))?;
             let rows = query.query_map(params![conversation_id, step.as_str()], |row| {
+                let provider: String = row.get(0)?;
+                provider_of(&provider)
+                    .map(|provider| turn_of(provider, row))
+                    .transpose()
+            })?;
+            rows.filter_map(|row| row.transpose()).collect()
+        })
+        .await
+    }
+
+    /// All of a conversation's turns, every step, oldest first.
+    pub async fn conversation_turns(
+        self: &Arc<Self>,
+        conversation_id: String,
+    ) -> Result<Vec<TurnUsage>> {
+        self.run(move |conn| {
+            let mut query = conn.prepare_cached(&format!(
+                "SELECT provider, {TURN_COLUMNS} FROM turn_usage
+                 WHERE conversation_id = ?1 ORDER BY at_ms, rowid"
+            ))?;
+            let rows = query.query_map(params![conversation_id], |row| {
                 let provider: String = row.get(0)?;
                 provider_of(&provider)
                     .map(|provider| turn_of(provider, row))
@@ -691,6 +719,7 @@ mod tests {
             request_id: None,
             context: None,
             child_thread: None,
+            cost_usd: None,
         }
     }
 

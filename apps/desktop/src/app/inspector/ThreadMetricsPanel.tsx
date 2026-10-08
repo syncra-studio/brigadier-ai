@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { editsLine, growthRows } from "@/app/inspector/threadMetrics";
+import { editsLine, growthRows, summaryRows } from "@/app/inspector/threadMetrics";
 import { request } from "@/ipc/client";
 import type { ThreadMetrics } from "@/ipc/generated";
 import { formatTokens } from "@/lib/format";
@@ -48,6 +48,7 @@ export function ThreadMetricsPanel({ sessionId }: { sessionId: string }) {
 
   const shown = metrics?.conversationId === sessionId ? metrics : null;
   const rows = shown ? growthRows(shown.requests, SHOWN_REQUESTS) : [];
+  const summaries = shown ? summaryRows(shown.summaries, SHOWN_REQUESTS) : [];
   return (
     <section aria-label="Thread metrics" className="flex flex-col gap-1">
       <div className="flex items-baseline gap-2">
@@ -75,6 +76,26 @@ export function ThreadMetricsPanel({ sessionId }: { sessionId: string }) {
               <span className="text-muted-foreground shrink-0">{row.calls}</span>
               <span className="text-muted-foreground shrink-0">{row.span}</span>
               <span className="w-16 shrink-0 text-end">{row.growth}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {summaries.length > 0 && (
+        <ul className="mt-1 flex flex-col gap-1" aria-label="Time and tokens per request">
+          {summaries.map((row) => (
+            <li key={row.key} className="flex flex-col tabular-nums">
+              <span className="flex items-baseline gap-2">
+                <span className="text-foreground min-w-0 flex-1 truncate" title={row.label}>
+                  {row.label}
+                </span>
+                <span className="text-muted-foreground shrink-0">{row.times}</span>
+              </span>
+              {row.providers.map((line) => (
+                <span key={line} className="text-muted-foreground ps-3">
+                  {line}
+                </span>
+              ))}
+              {row.steps && <span className="text-muted-foreground ps-3">{row.steps}</span>}
             </li>
           ))}
         </ul>

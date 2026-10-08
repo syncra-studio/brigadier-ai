@@ -1061,6 +1061,60 @@ pub struct ThreadMetrics {
     pub requests: Vec<RequestContext>,
     /// The context its latest model call read, when known.
     pub context_tokens: Option<i64>,
+    /// Each user request's time and tokens, oldest first.
+    pub summaries: Vec<RequestSummary>,
+}
+
+/// One user request's time and tokens, everything it started included (THREAD-PLAN.md
+/// phase 4; the Inspector). The times are in ms after the request was sent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestSummary {
+    pub request_id: String,
+    /// The start of the user's message, on one line.
+    pub preview: String,
+    pub started_at_ms: i64,
+    /// The first thing the thread did for it: its first step or first finished model call.
+    pub first_event_ms: Option<i64>,
+    /// Its answer: when it last stopped working (absent while it works).
+    pub answer_ms: Option<i64>,
+    /// Its last landing.
+    pub landed_ms: Option<i64>,
+    /// The last use of a model by anything it started, reviews after the answer included
+    /// (absent while it works).
+    pub settled_ms: Option<i64>,
+    /// Tokens per provider, most first.
+    pub providers: Vec<ProviderTokens>,
+    /// Tokens per kind of step (thread, worker, review…), most first.
+    pub steps: Vec<StepTokens>,
+}
+
+/// What one provider's models read and wrote for a request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderTokens {
+    pub provider: ProviderKind,
+    pub input: i64,
+    pub cached_input: i64,
+    pub cache_write: i64,
+    pub output: i64,
+    /// All four together.
+    pub raw: i64,
+    /// `raw` without cache reads.
+    pub raw_without_cache_reads: i64,
+    /// What it cost, when the provider says (Claude); absent when no use said.
+    pub cost_usd: Option<f64>,
+}
+
+/// The tokens of one kind of step for a request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StepTokens {
+    /// `thread`, `worker`, `review`, `guardian`…
+    pub step: String,
+    pub raw: i64,
+    /// Its model calls (Claude: turns).
+    pub calls: u32,
 }
 
 /// The commits on a session's branch marked `Brigadier-Author: thread`, from where the thread

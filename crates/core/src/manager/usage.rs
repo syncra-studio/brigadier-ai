@@ -71,6 +71,7 @@ impl SessionManager {
         turn.cached_input = used.cached_input_tokens;
         turn.cache_write = used.cache_write_tokens;
         turn.output = used.output_tokens;
+        turn.cost_usd = used.cost_usd;
         turn.duration_ms = duration_ms;
         turn.context = last.map(context_of).or(context);
         if let Err(err) = store.add_turn(turn).await {
@@ -156,6 +157,7 @@ impl SessionManager {
             request_id,
             context: None,
             child_thread: None,
+            cost_usd: None,
         }
     }
 
@@ -287,6 +289,7 @@ mod tests {
             request_id: Some("r1".into()),
             context: Some(9),
             child_thread: None,
+            cost_usd: None,
         };
         let sessions = dir.join("sessions");
         let turn_end = || async {

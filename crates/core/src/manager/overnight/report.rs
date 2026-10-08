@@ -1563,6 +1563,7 @@ mod tests {
             request_id: None,
             context: None,
             child_thread: None,
+            cost_usd: None,
         };
         let board = Board::default();
         assert!(counts_for(&turn("c", None), &run, &board));
