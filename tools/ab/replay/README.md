@@ -57,7 +57,8 @@ memory (see "Emulated" below).
      - `aui_assistant-message-content`: **orchestrator notes**, the replies shown in the work
      - `orchestrator-step` and `compaction`: **action rows**. These are the grey step lines:
        Created/Landed/Decided/Answered…, and machine rows such as "Waiting for another build to
-       finish".
+       finish". A `work-group` counts too: a run of the thread's finished tool steps folds into
+       one row ("Searched code, ran a command"), and closed it renders only that summary line.
      - `task-row`: **worker rows**
      - `task-activity`: the worker's current-activity line under its row. It's reported
        separately.

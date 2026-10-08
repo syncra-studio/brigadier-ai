@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { type BoardDigest, buildThread } from "@/app/conversation/blocks";
-import { reportTexts, shownTexts } from "@/app/conversation/phaseView";
+import * as phaseView from "@/app/conversation/phaseView";
 import { type BlockMeta, RequestBlock } from "@/app/conversation/RequestBlock";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -65,7 +65,9 @@ function readBlock(html: string, parseFragment: (html: string) => Node, t: numbe
   const header = findAll(root, slot("request-work-header"))[0];
   const inWork = (name: string) => (work ? findAll(work, slot(name)).map((n) => clean(textOf(n))) : []);
   const notes = inWork("aui_assistant-message-content");
-  const actionRows = inWork("orchestrator-step").concat(inWork("compaction"));
+  // A run of finished thread tool steps folds into one `work-group` row ("Searched code, ran a
+  // command"); closed, it renders only its summary line, so that line is the row on screen.
+  const actionRows = inWork("orchestrator-step").concat(inWork("work-group"), inWork("compaction"));
   const workerRows = work ? findAll(work, slot("task-row")).map((n) => clean(textOf(n))) : [];
   const workerActivity = inWork("task-activity");
   const cards = work ? findAll(work, slot("request-card")).length + findAll(work, slot("request-steer")).length : 0;
@@ -159,7 +161,16 @@ export async function run(arm: string, parseFragment: (html: string) => Node): P
       head: board.head,
     };
     const session = conversation?.kind === "session";
-    const texts = shownTexts(thread.fullText, reportTexts(board.overnight));
+    // Before phase 5's record cleanup, the app swapped stored overnight reports' texts in
+    // (`shownTexts`/`reportTexts`); since then it passes the stored texts as they are.
+    const legacy = phaseView as unknown as {
+      shownTexts?: (t: typeof thread.fullText, r: unknown) => typeof thread.fullText;
+      reportTexts?: (o: unknown) => unknown;
+    };
+    const texts =
+      legacy.shownTexts && legacy.reportTexts
+        ? legacy.shownTexts(thread.fullText, legacy.reportTexts(board.overnight))
+        : thread.fullText;
     const tree = buildThread(thread.items, texts, thread.hasMore, digest, [], session ? "edits" : "all");
     const node = tree.nodes.find((n) => n.kind === "block" && requestId !== null && n.block.requestIds.includes(requestId));
     if (!node) {
