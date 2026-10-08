@@ -291,6 +291,19 @@ pub fn neutral_role(role: &str, subrole: Option<&str>) -> String {
     .into()
 }
 
+/// A label for an unlabelled control whose subrole says what it is.
+fn subrole_label(subrole: &str) -> Option<&'static str> {
+    Some(match subrole {
+        "AXCloseButton" => "close",
+        "AXMinimizeButton" => "minimise",
+        "AXZoomButton" => "zoom",
+        "AXFullScreenButton" => "full screen",
+        "AXIncrementArrow" => "increment",
+        "AXDecrementArrow" => "decrement",
+        _ => return None,
+    })
+}
+
 /// Accessibility actions shown on an element's line (the role's default press is not).
 fn neutral_actions(names: &[String], role: &str) -> Vec<String> {
     let pressable = matches!(
@@ -311,7 +324,15 @@ fn neutral_actions(names: &[String], role: &str) -> Vec<String> {
             "AXPress" if !pressable => Some("press"),
             "AXIncrement" if role != "slider" && role != "stepper" => Some("increment"),
             "AXDecrement" if role != "slider" && role != "stepper" => Some("decrement"),
-            "AXConfirm" => Some("confirm"),
+            // Text fields all offer confirm; it is their return key, not worth a word per line.
+            "AXConfirm"
+                if !matches!(
+                    role,
+                    "textfield" | "secure-field" | "search-field" | "combo"
+                ) =>
+            {
+                Some("confirm")
+            }
             "AXPick" => Some("pick"),
             "AXCancel" => Some("cancel"),
             _ => None,
@@ -400,7 +421,12 @@ fn read_one(
     let placeholder = get(12).and_then(as_string).filter(|s| !s.is_empty());
     node.role = neutral_role(&role, subrole.as_deref());
     node.secure = node.role == "secure-field";
-    node.label = title.or(desc).or(placeholder);
+    node.label = title.or(desc).or(placeholder).or_else(|| {
+        subrole
+            .as_deref()
+            .and_then(subrole_label)
+            .map(str::to_owned)
+    });
     let value = if node.secure {
         None
     } else {
