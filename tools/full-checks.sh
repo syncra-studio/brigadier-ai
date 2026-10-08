@@ -62,6 +62,7 @@ if $cross; then
     -p brigadier-core -p brigadier-store -p brigadier-ipc -p brigadier-providers
     -p brigadier-brain -p brigadier-index -p brigadier-router -p brigadier-review
     -p brigadier-git -p brigadier-registry -p brigadier-sandbox -p brigadier-mcp-server
+    -p brigadier-computer
   )
   run cargo-zigbuild clippy --locked --target x86_64-unknown-linux-gnu "${crates[@]}" \
     --all-targets -- -D warnings

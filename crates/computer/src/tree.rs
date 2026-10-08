@@ -1,0 +1,562 @@
+//! The structure part of an observation (§4.3): the pruned tree, refs that stay stable while the
+//! element is the same, generations that catch recycled and replaced elements, and the compact
+//! text a model reads, full or as a diff against what this worker saw last.
+
+use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write as _;
+use std::hash::Hash;
+
+use serde::{Deserialize, Serialize};
+
+use crate::geom::Rect;
+
+/// A checkbox-like state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Check {
+    On,
+    Off,
+    Mixed,
+}
+
+/// One element as a backend reads it, in pre-order with its depth.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RawNode<E> {
+    pub element: E,
+    pub depth: u16,
+    /// A short, platform-neutral role: `button`, `checkbox`, `textfield`, `text`, `group`…
+    pub role: String,
+    pub label: Option<String>,
+    /// Never set for a secure field: backends drop it, and the renderer would too.
+    pub value: Option<String>,
+    /// In window points.
+    pub frame: Option<Rect>,
+    pub enabled: bool,
+    pub focused: bool,
+    pub selected: bool,
+    pub checked: Option<Check>,
+    pub expanded: Option<bool>,
+    pub secure: bool,
+    /// Platform-neutral action names beyond the role's default (`show-menu`, `increment`…).
+    pub actions: Vec<String>,
+}
+
+impl<E> RawNode<E> {
+    pub fn new(element: E, depth: u16, role: &str) -> Self {
+        Self {
+            element,
+            depth,
+            role: role.to_owned(),
+            label: None,
+            value: None,
+            frame: None,
+            enabled: true,
+            focused: false,
+            selected: false,
+            checked: None,
+            expanded: None,
+            secure: false,
+            actions: Vec::new(),
+        }
+    }
+}
+
+/// Roles a model acts on even when they carry no label.
+const INTERACTIVE: &[&str] = &[
+    "button",
+    "checkbox",
+    "radio",
+    "textfield",
+    "secure-field",
+    "text-area",
+    "slider",
+    "stepper",
+    "popup",
+    "combo",
+    "menu-button",
+    "link",
+    "tab",
+    "row",
+    "cell",
+    "menu-item",
+    "disclosure",
+    "scroll",
+    "table",
+    "outline",
+    "list",
+    "web",
+    "canvas",
+    "sheet",
+    "window",
+    "toolbar",
+    "tabs",
+    "menu-bar-item",
+    "search-field",
+    "color-well",
+    "date-field",
+];
+
+/// Whether an element earns a line of its own.
+fn keep<E>(n: &RawNode<E>) -> bool {
+    let named = n.label.as_deref().is_some_and(|l| !l.trim().is_empty());
+    let valued = n.value.as_deref().is_some_and(|v| !v.trim().is_empty());
+    let stateful =
+        n.focused || n.selected || n.checked.is_some() || n.expanded.is_some() || n.secure;
+    if n.role == "group" || n.role == "unknown" || n.role == "split-group" || n.role == "layout" {
+        return named;
+    }
+    named || valued || stateful || !n.actions.is_empty() || INTERACTIVE.contains(&n.role.as_str())
+}
+
+/// How long a value is shown before it is clipped.
+const VALUE_CLIP: usize = 80;
+
+fn quote(s: &str, max: usize) -> String {
+    let flat: String = s
+        .chars()
+        .map(|c| {
+            if c == '\n' || c == '\r' || c == '\t' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    let n = flat.chars().count();
+    if n <= max {
+        format!("{flat:?}")
+    } else {
+        let cut: String = flat.chars().take(max).collect();
+        format!("{:?}… ({n} chars)", cut)
+    }
+}
+
+/// The line a kept element renders to, without its ref and indentation.
+pub fn render_line<E>(n: &RawNode<E>) -> String {
+    let mut s = n.role.clone();
+    if let Some(l) = n.label.as_deref().filter(|l| !l.trim().is_empty()) {
+        let _ = write!(s, " {}", quote(l, VALUE_CLIP));
+    }
+    if n.secure {
+        s.push_str(" value=<hidden>");
+    } else if let Some(v) = n.value.as_deref().filter(|v| !v.is_empty())
+        && n.label.as_deref() != Some(v)
+    {
+        let _ = write!(s, " value={}", quote(v, VALUE_CLIP));
+    }
+    match n.checked {
+        Some(Check::On) => s.push_str(" checked"),
+        Some(Check::Mixed) => s.push_str(" mixed"),
+        Some(Check::Off) => s.push_str(" unchecked"),
+        None => {}
+    }
+    if n.expanded == Some(true) {
+        s.push_str(" expanded");
+    }
+    if n.focused {
+        s.push_str(" focused");
+    }
+    if n.selected {
+        s.push_str(" selected");
+    }
+    if !n.enabled {
+        s.push_str(" disabled");
+    }
+    if !n.actions.is_empty() {
+        let _ = write!(s, " actions={}", n.actions.join(","));
+    }
+    if let Some(f) = n.frame {
+        let _ = write!(
+            s,
+            " @{},{} {}x{}",
+            f.x.round() as i64,
+            f.y.round() as i64,
+            f.w.round() as i64,
+            f.h.round() as i64
+        );
+    }
+    s
+}
+
+/// What a ref remembers about its element, re-checked before every action (§4.3).
+#[derive(Debug, Clone)]
+pub struct RefRecord<E> {
+    pub element: E,
+    pub role: String,
+    pub label: Option<String>,
+    pub enabled: bool,
+    pub frame: Option<Rect>,
+    pub secure: bool,
+    /// The window's content generation when the ref was last seen.
+    pub generation: u64,
+}
+
+/// One rendered element of an observation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Line {
+    pub r: u32,
+    pub depth: u16,
+    pub text: String,
+    /// The nearest kept ancestor, for paging and `find`.
+    pub parent: Option<u32>,
+}
+
+/// The refs of one window.
+#[derive(Debug)]
+pub struct WindowRefs<E> {
+    refs: HashMap<E, u32>,
+    records: HashMap<u32, RefRecord<E>>,
+    next: u32,
+    /// Bumped when the window navigates: refs from before are stale.
+    pub generation: u64,
+}
+
+impl<E> Default for WindowRefs<E> {
+    fn default() -> Self {
+        Self {
+            refs: HashMap::new(),
+            records: HashMap::new(),
+            next: 1,
+            generation: 0,
+        }
+    }
+}
+
+impl<E: Clone + Eq + Hash> WindowRefs<E> {
+    /// Gives every kept node a ref (keeping the ref of an element seen before) and returns the
+    /// rendered lines. Elements gone from the tree lose their refs.
+    pub fn assign(&mut self, nodes: &[RawNode<E>]) -> Vec<Line> {
+        let mut lines = Vec::new();
+        // The kept ancestors of the current node, by raw depth.
+        let mut stack: Vec<(u16, u32, u16)> = Vec::new(); // (raw depth, ref, kept depth)
+        let mut seen: HashMap<E, u32> = HashMap::with_capacity(nodes.len());
+        for n in nodes {
+            while stack.last().is_some_and(|&(d, _, _)| d >= n.depth) {
+                stack.pop();
+            }
+            if !keep(n) {
+                continue;
+            }
+            let r = match self.refs.get(&n.element) {
+                Some(&r) => r,
+                None => {
+                    let r = self.next;
+                    self.next += 1;
+                    r
+                }
+            };
+            seen.insert(n.element.clone(), r);
+            self.records.insert(
+                r,
+                RefRecord {
+                    element: n.element.clone(),
+                    role: n.role.clone(),
+                    label: n.label.clone(),
+                    enabled: n.enabled,
+                    frame: n.frame,
+                    secure: n.secure,
+                    generation: self.generation,
+                },
+            );
+            let parent = stack.last().map(|&(_, r, _)| r);
+            let depth = stack.last().map_or(0, |&(_, _, k)| k + 1);
+            lines.push(Line {
+                r,
+                depth,
+                text: render_line(n),
+                parent,
+            });
+            stack.push((n.depth, r, depth));
+        }
+        self.records.retain(|r, _| seen.values().any(|v| v == r));
+        self.refs = seen;
+        lines
+    }
+
+    pub fn get(&self, r: u32) -> Option<&RefRecord<E>> {
+        self.records.get(&r)
+    }
+
+    /// The frames of the password fields seen last, to paint over in images.
+    pub fn secure_frames(&self) -> Vec<Rect> {
+        self.records
+            .values()
+            .filter(|r| r.secure)
+            .filter_map(|r| r.frame)
+            .collect()
+    }
+
+    /// The window navigated: every ref handed out so far is stale.
+    pub fn navigate(&mut self) {
+        self.generation += 1;
+    }
+}
+
+/// Parses `e12` (or `12`) into a ref number.
+pub fn parse_ref(s: &str) -> Option<u32> {
+    s.strip_prefix('e').unwrap_or(s).parse().ok()
+}
+
+/// What `render` should include.
+#[derive(Debug, Clone, Default)]
+pub struct Filter {
+    /// Only this element and what is under it.
+    pub element: Option<u32>,
+    /// Only lines containing this text (case-insensitive), plus their ancestors.
+    pub find: Option<String>,
+}
+
+fn select(lines: &[Line], f: &Filter) -> Vec<bool> {
+    let mut on = vec![f.element.is_none() && f.find.is_none(); lines.len()];
+    let index: HashMap<u32, usize> = lines.iter().enumerate().map(|(i, l)| (l.r, i)).collect();
+    if let Some(root) = f.element {
+        let mut inside: Vec<u32> = Vec::new();
+        for (i, l) in lines.iter().enumerate() {
+            let under = l.r == root || l.parent.is_some_and(|p| inside.contains(&p));
+            if under {
+                inside.push(l.r);
+                on[i] = true;
+            }
+        }
+    }
+    if let Some(needle) = f.find.as_deref().map(str::to_lowercase) {
+        let scope = on.clone();
+        let scoped = f.element.is_some();
+        on = vec![false; lines.len()];
+        for (i, l) in lines.iter().enumerate() {
+            if (!scoped || scope[i]) && l.text.to_lowercase().contains(&needle) {
+                on[i] = true;
+                let mut p = l.parent;
+                while let Some(r) = p {
+                    let Some(&j) = index.get(&r) else { break };
+                    on[j] = true;
+                    p = lines[j].parent;
+                }
+            }
+        }
+    }
+    on
+}
+
+/// Renders lines in full, within `budget` characters. What doesn't fit is named by where it
+/// is, so the model can ask for that part (§4.3: paging, not truncation).
+pub fn render_full(lines: &[Line], filter: &Filter, budget: usize) -> String {
+    let on = select(lines, filter);
+    let base_depth = lines
+        .iter()
+        .zip(&on)
+        .filter(|(_, o)| **o)
+        .map(|(l, _)| l.depth)
+        .min()
+        .unwrap_or(0);
+    let mut out = String::new();
+    let mut left_out: BTreeMap<Option<u32>, usize> = BTreeMap::new();
+    for (l, _) in lines.iter().zip(&on).filter(|(_, o)| **o) {
+        let line = format!(
+            "{}e{} {}\n",
+            "  ".repeat(usize::from(l.depth - base_depth)),
+            l.r,
+            l.text
+        );
+        if out.len() + line.len() > budget || !left_out.is_empty() {
+            *left_out.entry(l.parent).or_default() += 1;
+            continue;
+        }
+        out.push_str(&line);
+    }
+    for (parent, n) in left_out {
+        match parent {
+            Some(p) => {
+                let _ = writeln!(out, "… {n} more under e{p}: observe element e{p}");
+            }
+            None => {
+                let _ = writeln!(out, "… {n} more at the top level: observe with find");
+            }
+        }
+    }
+    out
+}
+
+/// Renders what changed since `base` (ref → line text): `~` changed, `+` added, `-` ranges of
+/// removed refs. One line when nothing changed.
+pub fn render_diff(lines: &[Line], base: &HashMap<u32, String>, budget: usize) -> String {
+    let mut out = String::new();
+    let mut omitted = 0usize;
+    let mut push = |out: &mut String, s: String| {
+        if out.len() + s.len() > budget {
+            omitted += 1;
+        } else {
+            out.push_str(&s);
+        }
+    };
+    for l in lines {
+        match base.get(&l.r) {
+            Some(old) if *old == l.text => {}
+            Some(_) => push(&mut out, format!("~ e{} {}\n", l.r, l.text)),
+            None => push(&mut out, format!("+ e{} {}\n", l.r, l.text)),
+        }
+    }
+    let now: std::collections::HashSet<u32> = lines.iter().map(|l| l.r).collect();
+    let mut gone: Vec<u32> = base.keys().copied().filter(|r| !now.contains(r)).collect();
+    gone.sort_unstable();
+    for (a, b) in ranges(&gone) {
+        let s = if a == b {
+            format!("- e{a}\n")
+        } else {
+            format!("- e{a}–e{b}\n")
+        };
+        push(&mut out, s);
+    }
+    if omitted > 0 {
+        let _ = writeln!(out, "… {omitted} more changes: observe full");
+    }
+    if out.is_empty() {
+        out.push_str("no change\n");
+    }
+    out
+}
+
+fn ranges(sorted: &[u32]) -> Vec<(u32, u32)> {
+    let mut out: Vec<(u32, u32)> = Vec::new();
+    for &r in sorted {
+        match out.last_mut() {
+            Some((_, b)) if *b + 1 == r => *b = r,
+            _ => out.push((r, r)),
+        }
+    }
+    out
+}
+
+/// A rough token count for text: 4 characters a token.
+pub fn text_tokens(s: &str) -> usize {
+    s.len().div_ceil(4)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(id: u32, depth: u16, role: &str, label: Option<&str>) -> RawNode<u32> {
+        let mut n = RawNode::new(id, depth, role);
+        n.label = label.map(str::to_owned);
+        n.frame = Some(Rect::new(f64::from(id), 0.0, 10.0, 10.0));
+        n
+    }
+
+    fn sample() -> Vec<RawNode<u32>> {
+        vec![
+            node(1, 0, "window", Some("Doc")),
+            node(2, 1, "group", None),
+            node(3, 2, "group", None),
+            node(4, 3, "button", Some("OK")),
+            node(5, 3, "text", None),
+            node(6, 1, "checkbox", Some("Bold")),
+        ]
+    }
+
+    #[test]
+    fn unnamed_containers_collapse_and_kept_elements_rise() {
+        let mut refs = WindowRefs::default();
+        let lines = refs.assign(&sample());
+        let text = render_full(&lines, &Filter::default(), 10_000);
+        assert_eq!(
+            text,
+            "e1 window \"Doc\" @1,0 10x10\n  e2 button \"OK\" @4,0 10x10\n  e3 checkbox \"Bold\" @6,0 10x10\n"
+        );
+    }
+
+    #[test]
+    fn refs_survive_a_reobserve_and_new_elements_get_new_ones() {
+        let mut refs = WindowRefs::default();
+        refs.assign(&sample());
+        let mut next = sample();
+        next.insert(4, node(9, 3, "button", Some("Cancel")));
+        let lines = refs.assign(&next);
+        let ok = lines.iter().find(|l| l.text.contains("OK")).unwrap();
+        let cancel = lines.iter().find(|l| l.text.contains("Cancel")).unwrap();
+        assert_eq!(ok.r, 2);
+        assert_eq!(cancel.r, 4);
+    }
+
+    #[test]
+    fn a_ref_remembers_role_label_and_generation() {
+        let mut refs = WindowRefs::default();
+        refs.assign(&sample());
+        let rec = refs.get(2).unwrap();
+        assert_eq!(
+            (rec.role.as_str(), rec.label.as_deref(), rec.generation),
+            ("button", Some("OK"), 0)
+        );
+        refs.navigate();
+        assert_eq!(
+            refs.get(2).unwrap().generation,
+            0,
+            "the old ref keeps its old generation"
+        );
+        assert_eq!(refs.generation, 1);
+    }
+
+    #[test]
+    fn gone_elements_lose_their_refs() {
+        let mut refs = WindowRefs::default();
+        refs.assign(&sample());
+        let mut next = sample();
+        next.retain(|n| n.element != 4);
+        refs.assign(&next);
+        assert!(refs.get(2).is_none());
+    }
+
+    #[test]
+    fn diffs_show_changes_additions_and_removed_ranges() {
+        let mut refs = WindowRefs::default();
+        let first = refs.assign(&sample());
+        let base: HashMap<u32, String> = first.iter().map(|l| (l.r, l.text.clone())).collect();
+        assert_eq!(render_diff(&first, &base, 10_000), "no change\n");
+        let mut next = sample();
+        next[5].checked = Some(Check::On);
+        next.retain(|n| n.element != 4);
+        next.push(node(7, 1, "button", Some("Apply")));
+        let lines = refs.assign(&next);
+        let d = render_diff(&lines, &base, 10_000);
+        assert_eq!(
+            d,
+            "~ e3 checkbox \"Bold\" checked @6,0 10x10\n+ e4 button \"Apply\" @7,0 10x10\n- e2\n"
+        );
+    }
+
+    #[test]
+    fn over_budget_output_says_where_the_rest_is() {
+        let mut nodes = vec![node(1, 0, "table", Some("Rows"))];
+        for i in 0..200 {
+            nodes.push(node(100 + i, 1, "row", Some(&format!("Row {i}"))));
+        }
+        let mut refs = WindowRefs::default();
+        let lines = refs.assign(&nodes);
+        let text = render_full(&lines, &Filter::default(), 600);
+        assert!(text.len() < 700);
+        assert!(
+            text.ends_with("more under e1: observe element e1\n"),
+            "{text}"
+        );
+        let sub = render_full(
+            &lines,
+            &Filter {
+                element: Some(1),
+                find: Some("Row 173".into()),
+            },
+            600,
+        );
+        assert!(sub.contains("Row 173") && sub.contains("e1 table"), "{sub}");
+    }
+
+    #[test]
+    fn secure_values_never_render_and_long_values_say_their_length() {
+        let mut n = node(1, 0, "secure-field", Some("Password"));
+        n.secure = true;
+        n.value = Some("hunter2".into());
+        assert!(!render_line(&n).contains("hunter2"));
+        let mut t = node(2, 0, "text-area", None);
+        t.value = Some("x".repeat(500));
+        assert!(render_line(&t).contains("(500 chars)"));
+    }
+}
