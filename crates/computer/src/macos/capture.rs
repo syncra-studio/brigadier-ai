@@ -1,0 +1,167 @@
+//! One window's pixels through ScreenCaptureKit, at an exact scale, covered or not.
+
+use std::ptr::NonNull;
+use std::sync::mpsc;
+use std::time::Duration;
+
+use block2::RcBlock;
+use objc2::AnyThread;
+use objc2::rc::Retained;
+use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
+use objc2_core_graphics::{CGDataProvider, CGImage};
+use objc2_foundation::NSError;
+use objc2_screen_capture_kit::{
+    SCContentFilter, SCScreenshotManager, SCShareableContent, SCStreamConfiguration, SCWindow,
+};
+
+use crate::error::{CuResult, ErrorCode, err};
+use crate::geom::{ImageTransform, Rect};
+use crate::redact::Rgba;
+
+const TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The shareable windows, cached: listing them costs tens of milliseconds (§2).
+#[derive(Default)]
+pub struct Shareable {
+    content: Option<Retained<SCShareableContent>>,
+}
+
+fn fetch_content() -> CuResult<Retained<SCShareableContent>> {
+    let (tx, rx) = mpsc::channel::<Option<Retained<SCShareableContent>>>();
+    let block = RcBlock::new(
+        move |content: *mut SCShareableContent, _error: *mut NSError| {
+            // SAFETY: the handler's content is either null or a live object we retain.
+            let c = unsafe { Retained::retain(content) };
+            let _ = tx.send(c);
+        },
+    );
+    // SAFETY: the block lives until the handler ran (we wait for it below).
+    unsafe {
+        SCShareableContent::getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler(
+            true, false, &block,
+        );
+    }
+    match rx.recv_timeout(TIMEOUT) {
+        Ok(Some(c)) => Ok(c),
+        Ok(None) => err(
+            ErrorCode::PermissionMissing,
+            "the Screen Recording permission is missing",
+        ),
+        Err(_) => err(ErrorCode::Failed, "the window list didn't arrive"),
+    }
+}
+
+impl Shareable {
+    fn window(&mut self, id: u32) -> CuResult<Retained<SCWindow>> {
+        for refresh in [false, true] {
+            if refresh || self.content.is_none() {
+                self.content = Some(fetch_content()?);
+            }
+            if let Some(c) = &self.content {
+                // SAFETY: plain getters on a live object.
+                let found = unsafe { c.windows() }
+                    .iter()
+                    .find(|w| unsafe { w.windowID() } == id);
+                if let Some(w) = found {
+                    return Ok(w);
+                }
+            }
+        }
+        err(
+            ErrorCode::NoSuchTarget,
+            format!("window {id} can't be captured"),
+        )
+    }
+
+    /// Captures `crop` (window points) of the window at `scale` pixels per point.
+    pub fn capture(
+        &mut self,
+        id: u32,
+        frame: Rect,
+        crop: Rect,
+        scale: f64,
+        max_side: u32,
+    ) -> CuResult<(Rgba, ImageTransform)> {
+        let win = self.window(id)?;
+        let t = ImageTransform::fit(id, frame, crop, scale, max_side);
+        // SAFETY: plain object creation and setters.
+        let (filter, config) = unsafe {
+            let filter =
+                SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &win);
+            let config = SCStreamConfiguration::new();
+            config.setWidth(t.width as usize);
+            config.setHeight(t.height as usize);
+            config.setSourceRect(CGRect::new(
+                CGPoint::new(crop.x, crop.y),
+                CGSize::new(crop.w, crop.h),
+            ));
+            config.setShowsCursor(false);
+            config.setIgnoreShadowsSingleWindow(true);
+            config.setScalesToFit(true);
+            (filter, config)
+        };
+        let (tx, rx) = mpsc::channel::<Option<CFRetained<CGImage>>>();
+        let block = RcBlock::new(move |img: *mut CGImage, _error: *mut NSError| {
+            // SAFETY: the handler's image is null or live; retaining keeps it past the handler.
+            let img = NonNull::new(img).map(|p| unsafe { CFRetained::retain(p) });
+            let _ = tx.send(img);
+        });
+        // SAFETY: the block lives until the handler ran (we wait for it below).
+        unsafe {
+            SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
+                &filter,
+                &config,
+                Some(&block),
+            );
+        }
+        let img = match rx.recv_timeout(TIMEOUT) {
+            Ok(Some(i)) => i,
+            Ok(None) => {
+                // The window may be gone or the list stale: drop the cache for next time.
+                self.content = None;
+                return err(ErrorCode::Failed, "the capture failed");
+            }
+            Err(_) => return err(ErrorCode::Failed, "the capture timed out"),
+        };
+        Ok((to_rgba(&img, t.width, t.height)?, t))
+    }
+}
+
+/// Copies a BGRA capture into packed RGBA of exactly `w`×`h`.
+fn to_rgba(img: &CGImage, w: u32, h: u32) -> CuResult<Rgba> {
+    let iw = CGImage::width(Some(img)) as u32;
+    let ih = CGImage::height(Some(img)) as u32;
+    let bpr = CGImage::bytes_per_row(Some(img));
+    let bpp = CGImage::bits_per_pixel(Some(img));
+    if bpp != 32 {
+        return err(
+            ErrorCode::Failed,
+            format!("unexpected capture format ({bpp} bits a pixel)"),
+        );
+    }
+    let provider = CGImage::data_provider(Some(img));
+    let Some(data) = CGDataProvider::data(provider.as_deref()) else {
+        return err(ErrorCode::Failed, "the capture had no pixels");
+    };
+    // SAFETY: the bytes stay alive while `data` does.
+    let bytes = unsafe { data.as_bytes_unchecked() };
+    let (w, h) = (w.min(iw), h.min(ih));
+    let mut out = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h as usize {
+        let row = &bytes[y * bpr..];
+        for x in 0..w as usize {
+            let s = &row[x * 4..x * 4 + 4];
+            let d = (y * w as usize + x) * 4;
+            // BGRA in memory (little-endian, alpha first) to RGBA.
+            out[d] = s[2];
+            out[d + 1] = s[1];
+            out[d + 2] = s[0];
+            out[d + 3] = s[3];
+        }
+    }
+    Ok(Rgba {
+        width: w,
+        height: h,
+        data: out,
+    })
+}

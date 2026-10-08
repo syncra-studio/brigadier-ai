@@ -164,6 +164,16 @@ impl<D: Desktop> Engine<D> {
         id
     }
 
+    /// The transform an image was made with, while the engine still keeps it.
+    pub fn image_transform(&self, id: &str) -> Option<ImageTransform> {
+        self.image(id).ok()
+    }
+
+    /// A ref's frame (window points) as last observed.
+    pub fn ref_frame(&self, window: u32, r: u32) -> Option<Rect> {
+        self.windows.get(&window)?.get(r)?.frame
+    }
+
     fn image(&self, id: &str) -> CuResult<ImageTransform> {
         self.images
             .iter()
@@ -301,7 +311,8 @@ impl<D: Desktop> Engine<D> {
         let mut text = match diff_base {
             Some(b) => {
                 let note = format!(" (changes since obs {})", b.obs);
-                let body = tree::render_diff(&lines, &b.lines, PAGE_CHARS);
+                let visible: Vec<Line> = lines.iter().filter(|l| !l.hidden).cloned().collect();
+                let body = tree::render_diff(&visible, &b.lines, PAGE_CHARS);
                 self.header(&w, obs, &note)? + &body
             }
             None => {

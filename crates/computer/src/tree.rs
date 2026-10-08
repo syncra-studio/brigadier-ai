@@ -108,6 +108,27 @@ fn keep<E>(n: &RawNode<E>) -> bool {
     named || valued || stateful || !n.actions.is_empty() || INTERACTIVE.contains(&n.role.as_str())
 }
 
+/// An unlabelled row, cell or group whose only kept content is one text leaf shows that text
+/// on its own line, and the leaf gets no line of its own: `row "Row 3"` instead of two lines.
+fn merge_child<E>(nodes: &[RawNode<E>], kept: &[bool], i: usize, end: usize) -> Option<usize> {
+    let n = &nodes[i];
+    if !kept[i]
+        || n.label.is_some()
+        || n.value.is_some()
+        || !matches!(n.role.as_str(), "row" | "cell" | "group" | "list-item")
+    {
+        return None;
+    }
+    let mut inner = (i + 1..end).filter(|&j| kept[j]);
+    let only = inner.next()?;
+    if inner.next().is_some() {
+        return None;
+    }
+    let c = &nodes[only];
+    let leaf = matches!(c.role.as_str(), "text" | "textfield" | "cell" | "image");
+    (leaf && !c.secure && (c.label.is_some() || c.value.is_some())).then_some(only)
+}
+
 /// How long a value is shown before it is clipped.
 const VALUE_CLIP: usize = 80;
 
@@ -199,6 +220,8 @@ pub struct Line {
     pub text: String,
     /// The nearest kept ancestor, for paging and `find`.
     pub parent: Option<u32>,
+    /// Scrolled out of view: left out unless asked for.
+    pub hidden: bool,
 }
 
 /// The refs of one window.
@@ -226,15 +249,48 @@ impl<E: Clone + Eq + Hash> WindowRefs<E> {
     /// Gives every kept node a ref (keeping the ref of an element seen before) and returns the
     /// rendered lines. Elements gone from the tree lose their refs.
     pub fn assign(&mut self, nodes: &[RawNode<E>]) -> Vec<Line> {
+        let kept: Vec<bool> = nodes.iter().map(keep).collect();
+        // Where each node's subtree ends.
+        let mut end = vec![nodes.len(); nodes.len()];
+        let mut open: Vec<usize> = Vec::new();
+        for (i, n) in nodes.iter().enumerate() {
+            while open.last().is_some_and(|&j| nodes[j].depth >= n.depth) {
+                if let Some(j) = open.pop() {
+                    end[j] = i;
+                }
+            }
+            open.push(i);
+        }
+        let mut merged_into: HashMap<usize, usize> = HashMap::new();
+        for (i, &stop) in end.iter().enumerate() {
+            if let Some(child) = merge_child(nodes, &kept, i, stop) {
+                merged_into.insert(child, i);
+            }
+        }
         let mut lines = Vec::new();
-        // The kept ancestors of the current node, by raw depth.
-        let mut stack: Vec<(u16, u32, u16)> = Vec::new(); // (raw depth, ref, kept depth)
+        // The kept ancestors: (raw depth, ref, kept depth).
+        let mut stack: Vec<(u16, u32, u16)> = Vec::new();
+        // The visible area: the window, narrowed by every scroll view on the way down.
+        let mut clips: Vec<(u16, Rect)> = Vec::new();
         let mut seen: HashMap<E, u32> = HashMap::with_capacity(nodes.len());
-        for n in nodes {
+        for (i, n) in nodes.iter().enumerate() {
             while stack.last().is_some_and(|&(d, _, _)| d >= n.depth) {
                 stack.pop();
             }
-            if !keep(n) {
+            while clips.last().is_some_and(|&(d, _)| d >= n.depth) {
+                clips.pop();
+            }
+            let clip = clips.last().map(|&(_, c)| c);
+            let hidden = match (clip, n.frame) {
+                (Some(c), Some(f)) => f.intersect(&c).is_empty(),
+                _ => false,
+            };
+            if (n.role == "scroll" || n.role == "window")
+                && let Some(f) = n.frame
+            {
+                clips.push((n.depth, clip.map_or(f, |c| c.intersect(&f))));
+            }
+            if !kept[i] || merged_into.contains_key(&i) {
                 continue;
             }
             let r = match self.refs.get(&n.element) {
@@ -260,15 +316,26 @@ impl<E: Clone + Eq + Hash> WindowRefs<E> {
             );
             let parent = stack.last().map(|&(_, r, _)| r);
             let depth = stack.last().map_or(0, |&(_, _, k)| k + 1);
+            let text = match merged_into.iter().find(|&(_, &into)| into == i) {
+                Some((&child, _)) => {
+                    let c = &nodes[child];
+                    let mut shown = n.clone();
+                    shown.label = c.label.clone().or_else(|| c.value.clone());
+                    render_line(&shown)
+                }
+                None => render_line(n),
+            };
             lines.push(Line {
                 r,
                 depth,
-                text: render_line(n),
+                text,
                 parent,
+                hidden,
             });
             stack.push((n.depth, r, depth));
         }
-        self.records.retain(|r, _| seen.values().any(|v| v == r));
+        let live: std::collections::HashSet<u32> = seen.values().copied().collect();
+        self.records.retain(|r, _| live.contains(r));
         self.refs = seen;
         lines
     }
@@ -351,7 +418,13 @@ pub fn render_full(lines: &[Line], filter: &Filter, budget: usize) -> String {
         .unwrap_or(0);
     let mut out = String::new();
     let mut left_out: BTreeMap<Option<u32>, usize> = BTreeMap::new();
+    let mut out_of_view: BTreeMap<Option<u32>, usize> = BTreeMap::new();
+    let filtered = filter.element.is_some() || filter.find.is_some();
     for (l, _) in lines.iter().zip(&on).filter(|(_, o)| **o) {
+        if l.hidden && !filtered {
+            *out_of_view.entry(l.parent).or_default() += 1;
+            continue;
+        }
         let line = format!(
             "{}e{} {}\n",
             "  ".repeat(usize::from(l.depth - base_depth)),
@@ -363,6 +436,11 @@ pub fn render_full(lines: &[Line], filter: &Filter, budget: usize) -> String {
             continue;
         }
         out.push_str(&line);
+    }
+    for (parent, n) in out_of_view {
+        if let Some(p) = parent {
+            let _ = writeln!(out, "… {n} out of view under e{p}: observe element e{p}");
+        }
     }
     for (parent, n) in left_out {
         match parent {
