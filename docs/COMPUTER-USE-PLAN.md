@@ -77,10 +77,9 @@ on a scratch file:
   background click landed in a view **that accepts the first click**, at the right point (±0 pt in x; y depends on
   the title-bar height, which the transform takes from the window's real content rectangle). The frontmost app and
   the real cursor didn't change.
-- **Views that don't accept the first click ignore it**, as they do for a person clicking an inactive window: a
-  standard button, and TextEdit's text view (the caret didn't move). For those, the element path (press, set value,
-  set the selected range) is the background route. Making a background app believe it is active while the user's
-  app stays in front may be possible through private calls; the Phase 1 spike tries it (table below).
+- **Views that don't accept the first click ignore a plain background click**, as they do for a person clicking an
+  inactive window (a canvas that refuses the first click, TextEdit's text view). A standard `NSButton` does take it.
+  The spike (§2.1) found a background route for the rest: **synthetic activation**, below.
 - **Window pairing needs care.** An app's first capturable window was a hidden 500×500 utility window, not the
   document. Windows are paired between the accessibility tree and the capture list by window id, never "the first".
 
@@ -91,7 +90,46 @@ means the frontmost app, the real cursor position and the other apps' key window
 
 | Case | Background route tried | Lands? | Confirmed effect | Focus kept |
 |---|---|---|---|---|
-| (filled by the spike) | | | | |
+| Standard button (`NSButton`), inactive window | pid-posted down/up, window field + window location | yes | `pressed` logged | yes |
+| Canvas that refuses the first click | same | events reach the window, not the view | none | yes |
+| Canvas that refuses the first click | synthetic activation, then the same click | yes, `key=true active=true` | `down`/`up` at the asked point | yes |
+| Canvas that takes the first click (no accessibility) | plain background click | yes | `down`/`up` at the asked point, ±0 pt | yes |
+| Covered window (another app's window over the point) | plain background click | yes, the covered window gets it, the cover gets nothing | `down`/`up` in the covered view | yes |
+| Text view already focused | unicode key events to the pid | yes | text changed `"abc"` | yes |
+| Scroll view, covered | scroll-wheel event to the pid, window field + location | yes | scroll offset 0 → 50 | yes |
+| Drag on a first-click canvas | down, 10 drags, up, all with the window field | yes | 10 `dragged` points along the line, `up` at the end | yes |
+| Chromium page button (browser launched by the spike) | plain background click | no | none | yes |
+| Chromium page button | plain click + authentication envelope | no | none | yes |
+| Chromium page button | synthetic activation, then the click | yes | `onclick` ran (title `clicked 1`) | yes |
+| Chromium text input, focused by an activated click | unicode key events, no envelope | yes | `input` events, value `xy` | yes |
+| Chromium text input | delete key (virtual key 51), no envelope | yes | value lost one character | yes |
+| Chromium scrollable `div` | plain scroll-wheel event | yes | `scrollTop` 0 → 200 | yes |
+
+"Focus kept" was checked on every case: the frontmost app and its focused window (read through accessibility), the
+real cursor (`NSEvent.mouseLocation` and the event-system cursor), and the window server's front process (read
+before the action with `_SLPSGetFrontProcess`). No case changed any of them, and no application-activated
+notification fired. Dispatch took 12–28 ms for a plain click, scroll or 3 keys, and about 100 ms with synthetic
+activation (two 30 ms waits that the engine will tune).
+
+**Synthetic activation.** Two event records posted to the target process (`SLPSPostEventRecordTo`, §12): a focus
+record for the target window, then a make-key pair. The target app then believes it is active and its window key
+(`NSApp.isActive`, `isKeyWindow`), so its views take ordinary clicks, while the window server's front process, the
+user's frontmost app and its key window stay as they were. So the user's own typing still goes to their app. After
+the action a matching defocus record puts the target back to inactive: the next plain click saw `key=false
+active=false`. Activation is per application, so it runs under the application lease that keyboard and focus work
+already take (§4.4).
+
+**The authentication envelope** (`SLEventSetAuthenticationMessage` with an `SLSEventAuthenticationMessage`) was not
+needed for any case on macOS 27: Chromium took plain pid-posted keys and scroll, and its clicks failed with or
+without the envelope until the app was activated. The engine binds it (ABI pinned in §12) but doesn't attach it by
+default. Phase 5 re-tests it on Electron apps.
+
+**Launching.** Chromium made itself frontmost at launch even with `open -g`. So `launch` records the frontmost app
+before it starts anything and puts it back if the launched app takes the front, and the result says so.
+
+The engine's background rung is therefore: element actions first; then a plain background event where the target
+takes it; then the same event with synthetic activation. Covered windows are **not** refused: their clicks land.
+`occluded` is kept only for windows that are minimised or on another display that is asleep (Phase 5).
 
 ## 3. Where this sits in Brigadier
 
@@ -258,11 +296,10 @@ skipped with `invalidated`, and the result carries the new state.
 1. **Accessibility action or attribute**: press, pick, set value, set the selected text range, raise a menu,
    increment. No events at all, works on hidden and other-Space windows.
 2. **Background events to the window**: keys and text posted to the app's pid (measured working, §2). Key events
-   carry the system's authentication envelope (macOS 14+), so Chromium and Electron accept them as live input. Mouse
-   events are posted to the pid with the window-routing field and a window-local location (measured working on
-   first-click views, §2). Whether a covered window still receives its click is settled by the spike (§2.1): clicks
-   are refused with `occluded` only where the spike shows they would land on the covering window. A view that
-   ignores a first click gets the element path, or the foreground rung.
+   don't need the system's authentication envelope on macOS 27 (§2.1); it is bound and kept for apps that ask. Mouse
+   events are posted to the pid with the window-routing field and a window-local location. Covered windows take
+   them (§2.1). A view that refuses the first click, and Chromium pages, get the same events wrapped in synthetic
+   activation (§2.1), which leaves the user's frontmost app, key window and cursor alone.
 3. **Foreground, the strict last resort.** Used only when the user has been idle for at least 60 s (HID idle time,
    `CGEventSourceSecondsSinceLastEventType`). The engine re-checks idle right before raising, raises the window,
    acts, and right after restores the previous frontmost app, window order and cursor position. The action is
@@ -719,8 +756,13 @@ disables the capabilities that need it (`unsupported_capability`) without affect
 | mouse event field 103 | `CGEventField` raw value | `int64` window id | the same for mouse-moved events (measured, §2) |
 | `CGEventSetWindowLocation` | function (SkyLight, exported) | `void (CGEventRef, CGPoint)`, window-local, top-left | the event's location inside the target window (measured, §2) |
 | `SLEventPostToPid` | function (SkyLight) | `void (pid_t, CGEventRef)` | posting through the window server's own path where the public post isn't enough (spike decides) |
-| `SLEventSetAuthenticationMessage`, `SLSEventAuthenticationMessage` | functions (SkyLight, macOS 14+) | to be pinned by the spike | key events Chromium and Electron accept as live input |
-| `SLPSPostEventRecordTo` | function (SkyLight) | `int32 (const ProcessSerialNumber *, const uint8_t record[0xf8])` | synthetic activation experiments only (spike) |
+| `SLEventSetAuthenticationMessage` | function (SkyLight) | `void (CGEventRef, SLSEventAuthenticationMessage *)` | the authentication envelope; bound, not attached by default (§2.1) |
+| `SLSEventAuthenticationMessage` | Objective-C class (SkyLight) | `+messageWithEventRecord:(SLSEventRecord *)pid:(int32)version:(uint32)` | builds the envelope for one event |
+| `SLEventRecordPointer` | function (SkyLight) | `SLSEventRecord * (CGEventRef)` | the event record the envelope signs |
+| `SLPSPostEventRecordTo` | function (SkyLight) | `int32 (const ProcessSerialNumber *, const uint8_t record[0xf8])` | synthetic activation (§2.1) |
+| focus record | 0xf8-byte record | `[0x04]=0xf8`, `[0x08]=0x0d`, `[0x3c..0x40]` = window id, `[0x8a]` = 1 focus / 2 defocus | the target app believes it is active, or stops believing it |
+| make-key records | 0xf8-byte records | `[0x04]=0xf8`, `[0x08]` = 1 then 2, `[0x20..0x30]=0xff`, `[0x3a]=0x10`, `[0x3c..0x40]` = window id | the target window becomes key inside its app |
+| `_SLPSGetFrontProcess` | function (SkyLight) | `OSStatus (ProcessSerialNumber *)` | the window server's front process, for the focus checks (F1) |
 | `GetProcessForPID` | function (deprecated, public) | `OSStatus (pid_t, ProcessSerialNumber *)` | the PSN for the record call |
 
 The spike adds a row for anything else it needs, with the ABI it verified.
