@@ -33,5 +33,12 @@ export default defineConfig({
     // Served from inside the app bundle, not over a network: one main chunk loads faster than
     // several at cold start (measured by the smoke check). The Inspector is split out lazily.
     chunkSizeWarningLimit: 1024,
+    rolldownOptions: {
+      output: {
+        // Left to itself the bundler splits what startup needs into dozens of chunks shared with
+        // the lazy views, each a request the webview makes before the app's code runs.
+        codeSplitting: { groups: [{ name: "index", tags: ["$initial"] }] },
+      },
+    },
   },
 });
