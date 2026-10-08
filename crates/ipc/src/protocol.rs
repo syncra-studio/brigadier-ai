@@ -727,7 +727,7 @@ pub enum Request {
         hash: String,
     },
     UpdateSettings {
-        settings: Settings,
+        settings: Box<Settings>,
     },
     /// Starts the live event feed. Events after `afterSeq` that were already committed are
     /// replayed first; then new events stream as they commit.

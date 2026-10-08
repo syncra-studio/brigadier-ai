@@ -212,7 +212,7 @@ impl SessionManager {
             }
             fault.fired = true;
             self.runtime
-                .debug_limit(fault.provider, fault.limit.clone());
+                .debug_limit(cli.account.clone(), fault.limit.clone());
             let session = cli.session.clone();
             self.spawn(async move {
                 if let Err(err) = session.interrupt().await {

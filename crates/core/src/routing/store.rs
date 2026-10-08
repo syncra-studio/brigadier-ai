@@ -9,6 +9,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use brigadier_providers::ProviderKind;
+
+use crate::accounts::AccountRef;
 use brigadier_router::{Outcome, QuotaSample, ResearchNote};
 use rusqlite::{Connection, OptionalExtension, params};
 use rusqlite_migration::{M, Migrations};
@@ -104,13 +106,19 @@ fn migrations() -> Migrations<'static> {
         ),
         // THREAD-PLAN.md phase 4: what a Claude turn cost (the Inspector's per-request summary).
         M::up("ALTER TABLE turn_usage ADD COLUMN cost_usd REAL;"),
+        // Several accounts per provider: whose quota a sample is, whose quota a turn used ('' for
+        // the user's own login, as every row stored before).
+        M::up(
+            "ALTER TABLE quota_samples ADD COLUMN account TEXT NOT NULL DEFAULT '';
+            ALTER TABLE turn_usage ADD COLUMN account TEXT NOT NULL DEFAULT '';",
+        ),
     ])
 }
 
 /// One sample of a window, as stored.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredSample {
-    pub provider: ProviderKind,
+    pub account: AccountRef,
     pub window: String,
     pub sample: QuotaSample,
     pub resets_at_ms: Option<i64>,
@@ -200,6 +208,8 @@ pub struct TurnUsage {
     pub child_thread: Option<String>,
     /// What the use cost, as Claude reports it (Codex doesn't).
     pub cost_usd: Option<f64>,
+    /// The extra account whose quota it used; absent: the user's own login.
+    pub account: Option<String>,
 }
 
 impl TurnUsage {
@@ -227,7 +237,7 @@ pub struct StoredEdits {
 /// The columns [`turn_of`] reads, after `provider`.
 const TURN_COLUMNS: &str = "at_ms, model, conversation_id, project_id, task_id, input, \
      cached_input, cache_write, output, step, duration_ms, request_id, context, child_thread, \
-     cost_usd";
+     cost_usd, account";
 
 fn turn_of(provider: ProviderKind, row: &rusqlite::Row<'_>) -> rusqlite::Result<TurnUsage> {
     Ok(TurnUsage {
@@ -250,6 +260,7 @@ fn turn_of(provider: ProviderKind, row: &rusqlite::Row<'_>) -> rusqlite::Result<
         context: row.get(13)?,
         child_thread: row.get(14)?,
         cost_usd: row.get(15)?,
+        account: Some(row.get::<_, String>(16)?).filter(|account| !account.is_empty()),
     })
 }
 
@@ -257,8 +268,8 @@ fn insert_turn(conn: &Connection, turn: &TurnUsage) -> rusqlite::Result<()> {
     conn.prepare_cached(
         "INSERT INTO turn_usage (at_ms, provider, model, conversation_id, project_id, task_id,
              input, cached_input, cache_write, output, step, duration_ms, request_id, context,
-             child_thread, cost_usd)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+             child_thread, cost_usd, account)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
     )?
     .execute(params![
         turn.at_ms,
@@ -277,6 +288,7 @@ fn insert_turn(conn: &Connection, turn: &TurnUsage) -> rusqlite::Result<()> {
         turn.context,
         turn.child_thread,
         turn.cost_usd,
+        turn.account.as_deref().unwrap_or(""),
     ])?;
     Ok(())
 }
@@ -333,16 +345,18 @@ impl RoutingStore {
         }
         self.run(move |conn| {
             let mut insert = conn.prepare_cached(
-                "INSERT INTO quota_samples (provider, window, used_percent, resets_at_ms, at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO quota_samples
+                     (provider, window, used_percent, resets_at_ms, at_ms, account)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )?;
             for stored in &samples {
                 insert.execute(params![
-                    stored.provider.to_string(),
+                    stored.account.provider.to_string(),
                     stored.window,
                     stored.sample.used_percent,
                     stored.resets_at_ms,
                     stored.sample.at_ms,
+                    stored.account.key(),
                 ])?;
             }
             Ok(())
@@ -354,8 +368,8 @@ impl RoutingStore {
     pub async fn samples_since(self: &Arc<Self>, since_ms: i64) -> Result<Vec<StoredSample>> {
         self.run(move |conn| {
             let mut query = conn.prepare(
-                "SELECT provider, window, used_percent, resets_at_ms, at_ms FROM quota_samples
-                 WHERE at_ms >= ?1 ORDER BY at_ms",
+                "SELECT provider, window, used_percent, resets_at_ms, at_ms, account
+                 FROM quota_samples WHERE at_ms >= ?1 ORDER BY at_ms",
             )?;
             let rows = query.query_map(params![since_ms], |row| {
                 Ok((
@@ -364,14 +378,18 @@ impl RoutingStore {
                     row.get::<_, f64>(2)?,
                     row.get::<_, Option<i64>>(3)?,
                     row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             })?;
             let mut samples = Vec::new();
             for row in rows {
-                let (provider, window, used_percent, resets_at_ms, at_ms) = row?;
+                let (provider, window, used_percent, resets_at_ms, at_ms, account) = row?;
                 if let Some(provider) = provider_of(&provider) {
                     samples.push(StoredSample {
-                        provider,
+                        account: AccountRef::new(
+                            provider,
+                            (!account.is_empty()).then_some(account),
+                        ),
                         window,
                         sample: QuotaSample {
                             at_ms,
@@ -720,6 +738,7 @@ mod tests {
             context: None,
             child_thread: None,
             cost_usd: None,
+            account: None,
         }
     }
 
@@ -771,6 +790,43 @@ mod tests {
         let mut old = turn(Some("c1"), None);
         (old.input, old.cached_input, old.cache_write, old.output) = (1, 2, 3, 4);
         assert_eq!(turns, [old]);
+    }
+
+    #[tokio::test]
+    async fn samples_stored_before_accounts_read_back_as_the_users_own() {
+        let dir = std::env::temp_dir().join(format!("brigadier-routing-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("routing.sqlite");
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            migrations().to_version(&mut conn, 1).unwrap();
+            conn.execute(
+                "INSERT INTO quota_samples VALUES ('codex', 'primary', 40.0, NULL, 5)",
+                [],
+            )
+            .unwrap();
+        }
+        let store = RoutingStore::open(&path).unwrap();
+        let work = AccountRef::new(ProviderKind::Codex, Some("acct-1".into()));
+        store
+            .add_samples(vec![StoredSample {
+                account: work.clone(),
+                window: "primary".into(),
+                sample: QuotaSample {
+                    at_ms: 6,
+                    used_percent: 10.0,
+                },
+                resets_at_ms: None,
+            }])
+            .await
+            .unwrap();
+        let samples = store.samples_since(0).await.unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let accounts: Vec<_> = samples
+            .iter()
+            .map(|stored| stored.account.clone())
+            .collect();
+        assert_eq!(accounts, [AccountRef::own(ProviderKind::Codex), work]);
     }
 
     #[tokio::test]

@@ -33,6 +33,7 @@ use brigadier_store::StreamPage;
 
 use super::SessionManager;
 use super::workers::TaskLive;
+use crate::accounts::AccountRef;
 use crate::model::{DomainEvent, ModelChoice, streams};
 use crate::work::{Attempt, AttemptEnd, QuotaWait, Route, Task, TaskState};
 use crate::{Error, Result, now_ms};
@@ -134,12 +135,17 @@ impl SessionManager {
             self.worker_failed(&task, &reason).await;
             return;
         }
+        let account = live
+            .cli()
+            .await
+            .map(|cli| cli.account.clone())
+            .unwrap_or_else(|| AccountRef::own(task.route.choice.provider));
         live.close_cli().await;
         // A new attempt: its stalls are counted afresh.
         live.reset_stalls().await;
         let from = task.route.choice.clone();
         if let AttemptEnd::Limit { limit } = &end {
-            self.runtime.note_limit(from.provider, limit.clone()).await;
+            self.runtime.note_limit(&account, limit.clone()).await;
         }
         if matches!(
             &end,

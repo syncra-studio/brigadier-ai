@@ -622,6 +622,38 @@ pub struct Settings {
     pub settings_version: u32,
 }
 
+/// Every account of each provider, for Settings → Accounts.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountsView {
+    /// Each provider's own login first, then its extra accounts as added.
+    pub accounts: Vec<AccountView>,
+}
+
+/// One account as Settings → Accounts shows it. Nothing secret: who is logged in, as the CLI
+/// says, and its quota.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountView {
+    pub account: crate::accounts::AccountRef,
+    /// The user's name for an extra account; empty for their own login.
+    pub name: String,
+    /// New work on its provider starts here.
+    pub default: bool,
+    /// Its login, as the CLI last reported it; unknown until first checked.
+    pub status: Option<ProviderStatus>,
+    /// Its quota now; unknown until first read.
+    pub quota: Option<QuotaSnapshot>,
+    /// When its quota was last read or reported.
+    pub quota_at_ms: Option<i64>,
+    /// When its login was last checked.
+    pub checked_at_ms: Option<i64>,
+    /// Being checked now.
+    pub checking: bool,
+    /// What went wrong when last checked.
+    pub error: Option<String>,
+}
+
 /// An extra account of a CLI: a home of its own under the data directory
 /// (`accounts/<id>`), where the CLI keeps that account's login. Brigadier keeps no secret.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -1514,6 +1546,11 @@ pub enum DomainEvent {
     ProviderChecked {
         overview: ProviderOverview,
     },
+    /// Settings → Accounts changed: an account was added, removed or checked, or its quota
+    /// moved (full snapshot).
+    AccountsChecked {
+        accounts: AccountsView,
+    },
     /// What can be updated changed: a check finished, or an update started or ended.
     UpdatesChanged {
         updates: UpdatesView,
@@ -1759,6 +1796,7 @@ impl DomainEvent {
             Self::CleanupCompleted { .. } => "cleanup.completed",
             Self::RankingsChanged => "rankings.changed",
             Self::ProviderChecked { .. } => "provider.checked",
+            Self::AccountsChecked { .. } => "accounts.checked",
             Self::UpdatesChanged { .. } => "updates.changed",
             Self::ProjectUpdated { .. } => "project.updated",
             Self::ConversationSetUp { .. } => "conversation.setUp",
@@ -1818,6 +1856,8 @@ pub mod streams {
     /// The cleanup ledger of every CLI session.
     pub const CLEANUP: &str = "cleanup";
     pub const PROVIDERS: &str = "providers";
+    /// Settings → Accounts snapshots.
+    pub const ACCOUNTS: &str = "accounts";
     /// Newer versions of Brigadier and the agent CLIs.
     pub const UPDATES: &str = "updates";
 

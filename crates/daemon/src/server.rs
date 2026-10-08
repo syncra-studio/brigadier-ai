@@ -1548,11 +1548,22 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         },
         Request::UpdateSettings { settings } => {
             let before = core.settings();
-            let settings = core.update_settings(settings).await?;
+            let settings = core.update_settings(*settings).await?;
             daemon.awake.apply().await;
             // New rules or rankings, or an agent or model turned back on, may let work waiting
             // for quota run now.
-            if brigadier_core::routing::availability::wakes_waiting_work(&before, &settings) {
+            if before.accounts != settings.accounts
+                || before.switch_accounts != settings.switch_accounts
+            {
+                // A new account is set up and checked, a removed one dropped, and the account
+                // new work starts on chosen again: work waiting for quota may run on it.
+                let (runtime, sessions) = (daemon.runtime.clone(), daemon.sessions.clone());
+                daemon.supervisor.spawn(async move {
+                    runtime.sync_accounts().await;
+                    sessions.retry_waiting_work().await;
+                });
+            } else if brigadier_core::routing::availability::wakes_waiting_work(&before, &settings)
+            {
                 let sessions = daemon.sessions.clone();
                 daemon
                     .supervisor

@@ -36,6 +36,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use crate::accounts::AccountRef;
 use crate::ledger::CleanupLedger;
 use crate::model::{
     DomainEvent, Fixture, ProviderOverview, ProvidersView, RawApprovals, RawEntry, RawPage,
@@ -54,6 +55,8 @@ const QUOTA_RECORD_INTERVAL_MS: i64 = 10_000;
 const REPLAY_MAX_GAP: Duration = Duration::from_millis(250);
 const PROVIDER_CHECKS_KEPT: u32 = 100;
 const STREAM_PAGE: u32 = 1_000;
+
+mod accounts;
 
 /// Runs a task on the daemon's instrumented runtime.
 pub type Spawner = Arc<dyn Fn(Pin<Box<dyn Future<Output = ()> + Send>>) + Send + Sync>;
@@ -84,6 +87,8 @@ struct State {
     live: HashMap<RawSessionId, Live>,
     overviews: HashMap<ProviderKind, ProviderOverview>,
     quota_recorded_ms: HashMap<ProviderKind, i64>,
+    /// When Settings → Accounts was last recorded for a live quota update.
+    accounts_recorded_ms: i64,
     /// Providers being checked now.
     refreshing: HashSet<ProviderKind>,
 }
@@ -109,9 +114,14 @@ pub struct Runtime {
     /// Counts the provider overviews recorded: work waiting for quota looks again when it
     /// moves (a login, a limit, a fresh usage read).
     checked: tokio::sync::watch::Sender<u64>,
+    /// The user's extra accounts, by id.
+    accounts: Mutex<HashMap<String, accounts::AccountLive>>,
     /// Tests: scripted stand-ins for the Claude and Codex CLIs.
     #[cfg(test)]
     fakes: Option<[Arc<dyn Provider>; 2]>,
+    /// Tests: scripted stand-ins for extra accounts' CLIs.
+    #[cfg(test)]
+    fake_accounts: Mutex<Option<accounts::FakeAccounts>>,
 }
 
 impl Runtime {
@@ -201,8 +211,11 @@ impl Runtime {
             pumps: TaskTracker::new(),
             cache_dir: data_dir.join("cache"),
             recordings_dir: record::recordings_dir(&data_dir),
+            accounts: Mutex::new(HashMap::new()),
             #[cfg(test)]
             fakes,
+            #[cfg(test)]
+            fake_accounts: Mutex::new(None),
         });
         runtime.load().await?;
         runtime.sweep().await;
@@ -211,6 +224,8 @@ impl Runtime {
             .pumps
             .spawn(async move { ledger.archive_codex_threads().await });
         runtime.refresh_providers(None);
+        let syncing = runtime.clone();
+        runtime.spawn(async move { syncing.sync_accounts().await });
         let poller = runtime.clone();
         runtime.spawn(async move { poller.poll_quota().await });
         Ok(runtime)
@@ -234,7 +249,8 @@ impl Runtime {
         kind: ProviderKind,
         now: i64,
     ) -> Option<brigadier_router::ProviderQuota> {
-        let snapshot = self.monitor.current(kind, now)?;
+        let lead = self.monitor.lead(kind);
+        let snapshot = self.monitor.current_for(&lead, now)?;
         let history: Vec<(String, Vec<brigadier_router::QuotaSample>)> = snapshot
             .windows
             .iter()
@@ -242,7 +258,7 @@ impl Runtime {
                 let span_ms = window.window_minutes.unwrap_or(7 * 24 * 60) * 60 * 1000;
                 (
                     window.id.clone(),
-                    self.monitor.history(kind, &window.id, now - span_ms),
+                    self.monitor.history(&lead, &window.id, now - span_ms),
                 )
             })
             .collect();
@@ -292,6 +308,7 @@ impl Runtime {
                     }
                 }
             }
+            self.poll_accounts().await;
             let now = now_ms();
             if now - pruned_ms > 24 * 60 * 60 * 1000 {
                 pruned_ms = now;
@@ -304,54 +321,69 @@ impl Runtime {
         }
     }
 
-    /// Development builds: holds `provider` at `limit` until its reset (see
-    /// [`QuotaMonitor::inject`]) and records the provider's overview.
+    /// Development builds: holds `account` at `limit` until its reset (see
+    /// [`QuotaMonitor::inject`]) and records what changed.
     #[cfg(debug_assertions)]
     pub fn debug_limit(
         self: &Arc<Self>,
-        provider: ProviderKind,
+        account: AccountRef,
         limit: brigadier_providers::LimitHit,
     ) {
-        self.monitor.inject(provider, limit);
+        self.monitor.inject(&account, limit);
         let runtime = self.clone();
-        self.spawn(async move {
-            let overview = {
-                let mut state = runtime.state();
-                let Some(overview) = state.overviews.get_mut(&provider) else {
-                    return;
-                };
-                overview.quota = runtime.monitor.current(provider, now_ms());
-                overview.clone()
-            };
-            runtime.record_overview(overview).await;
-        });
+        self.spawn(async move { runtime.quota_moved(account.provider, None).await });
     }
 
     /// Takes in a limit a session's error reported (see [`QuotaMonitor::note_limit`]) and
-    /// records the provider's overview.
-    pub async fn note_limit(&self, provider: ProviderKind, limit: brigadier_providers::LimitHit) {
-        let overview = {
-            let mut state = self.state();
-            let Some(overview) = state.overviews.get_mut(&provider) else {
-                return;
-            };
-            overview.quota = Some(self.monitor.note_limit(provider, limit, now_ms()));
-            overview.clone()
-        };
-        self.record_overview(overview).await;
+    /// records what changed.
+    pub async fn note_limit(&self, account: &AccountRef, limit: brigadier_providers::LimitHit) {
+        self.monitor.note_limit(account, limit, now_ms());
+        self.quota_moved(account.provider, None).await;
     }
 
-    /// Takes in a fresh quota read and records the provider's overview.
+    /// Takes in a fresh quota read of the user's own login and records what changed.
     async fn note_read(&self, quota: brigadier_providers::QuotaSnapshot) {
-        let overview = {
+        let kind = quota.provider;
+        self.monitor.note(&AccountRef::own(kind), &quota, now_ms());
+        self.quota_moved(kind, None).await;
+    }
+
+    /// After one of `kind`'s accounts' quota moved: chooses its lead again and records its
+    /// overview (whose quota is the lead's) and Settings → Accounts. With `throttle`, the
+    /// time of the last such record kept per stream: a live update is recorded at most every
+    /// [`QUOTA_RECORD_INTERVAL_MS`].
+    async fn quota_moved(&self, kind: ProviderKind, throttle: Option<i64>) {
+        // A new lead records its overview itself.
+        self.update_leads().await;
+        let (overview, accounts) = {
             let mut state = self.state();
-            let Some(overview) = state.overviews.get_mut(&quota.provider) else {
+            let Some(overview) = state.overviews.get_mut(&kind) else {
                 return;
             };
-            overview.quota = Some(self.monitor.note(&quota, now_ms()));
-            overview.clone()
+            overview.quota = self.monitor.current(kind, now_ms());
+            let overview = overview.clone();
+            match throttle {
+                None => (Some(overview), true),
+                Some(now) => {
+                    let last = state.quota_recorded_ms.entry(kind).or_default();
+                    let overview = (now - *last >= QUOTA_RECORD_INTERVAL_MS).then(|| {
+                        *last = now;
+                        overview
+                    });
+                    let accounts = now - state.accounts_recorded_ms >= QUOTA_RECORD_INTERVAL_MS;
+                    if accounts {
+                        state.accounts_recorded_ms = now;
+                    }
+                    (overview, accounts)
+                }
+            }
         };
-        self.record_overview(overview).await;
+        if let Some(overview) = overview {
+            self.record_overview(overview).await;
+        }
+        if accounts && !self.accounts().is_empty() {
+            self.publish_accounts().await;
+        }
     }
 
     /// Whether an Inspector session's CLI is open.
@@ -706,7 +738,10 @@ impl Runtime {
             Err(err) => errors.push(format!("models: {err}")),
         }
         match quota {
-            Ok(quota) => overview.quota = Some(self.monitor.note(&quota, now_ms())),
+            Ok(quota) => {
+                self.monitor.note(&AccountRef::own(kind), &quota, now_ms());
+                overview.quota = self.monitor.current(kind, now_ms());
+            }
             Err(err) => errors.push(format!("quota: {err}")),
         }
         overview.error = (!errors.is_empty()).then(|| errors.join("; "));
@@ -1298,52 +1333,28 @@ impl Runtime {
         }
     }
 
-    /// Keeps the provider overview's quota current from live rate-limit events.
+    /// Keeps the provider overview's quota current from live rate-limit events (Inspector
+    /// sessions run on the user's own login).
     async fn note_quota(&self, id: &RawSessionId, quota: brigadier_providers::QuotaSnapshot) {
-        let overview = {
-            let mut state = self.state();
-            if !matches!(
-                state.sessions.get(id).map(|session| &session.source),
-                Some(RawSource::Live)
-            ) {
-                return;
-            }
-            let kind = quota.provider;
-            let now = now_ms();
-            let Some(overview) = state.overviews.get_mut(&kind) else {
-                return;
-            };
-            overview.quota = Some(self.monitor.note(&quota, now));
-            let overview = overview.clone();
-            let last = state.quota_recorded_ms.entry(kind).or_default();
-            if now - *last < QUOTA_RECORD_INTERVAL_MS {
-                return;
-            }
-            *last = now;
-            overview
-        };
-        self.record_overview(overview).await;
+        let live = matches!(
+            self.state().sessions.get(id).map(|session| &session.source),
+            Some(RawSource::Live)
+        );
+        if live {
+            self.note_quota_snapshot(&AccountRef::own(quota.provider), quota)
+                .await;
+        }
     }
 
-    /// Keeps the provider overview's quota current from a hosted session's rate-limit events.
-    pub async fn note_quota_snapshot(&self, quota: brigadier_providers::QuotaSnapshot) {
-        let overview = {
-            let mut state = self.state();
-            let kind = quota.provider;
-            let now = now_ms();
-            let Some(overview) = state.overviews.get_mut(&kind) else {
-                return;
-            };
-            overview.quota = Some(self.monitor.note(&quota, now));
-            let overview = overview.clone();
-            let last = state.quota_recorded_ms.entry(kind).or_default();
-            if now - *last < QUOTA_RECORD_INTERVAL_MS {
-                return;
-            }
-            *last = now;
-            overview
-        };
-        self.record_overview(overview).await;
+    /// Keeps `account`'s quota current from a hosted session's rate-limit events.
+    pub async fn note_quota_snapshot(
+        &self,
+        account: &AccountRef,
+        quota: brigadier_providers::QuotaSnapshot,
+    ) {
+        let now = now_ms();
+        self.monitor.note(account, &quota, now);
+        self.quota_moved(account.provider, Some(now)).await;
     }
 
     async fn record_raw(&self, id: &RawSessionId, events: Vec<ProviderEvent>) {

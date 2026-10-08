@@ -62,6 +62,8 @@ impl SessionManager {
         now: i64,
     ) -> ProviderUsage {
         let provider = state.provider;
+        // The provider's quota is its lead account's: only that account's use moved it.
+        let account = self.runtime.monitor().lead(provider);
         let quota = state.quota.clone();
         let windows: Vec<_> = quota
             .as_ref()
@@ -78,7 +80,7 @@ impl SessionManager {
             .map(|window| WindowHistory {
                 window_id: window.id.clone(),
                 samples: self.runtime.monitor().history(
-                    provider,
+                    &account,
                     &window.id,
                     window_start(window, now),
                 ),
@@ -93,7 +95,10 @@ impl SessionManager {
             Some(store) => store
                 .turns_since(provider, earliest)
                 .await
-                .unwrap_or_default(),
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|turn| turn.account == account.account)
+                .collect(),
             None => Vec::new(),
         };
         let tokens = windows

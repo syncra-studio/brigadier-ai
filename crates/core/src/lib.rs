@@ -4,6 +4,7 @@
 //! catalog (projects, sessions, chats, settings) rebuilt from the log on start, and records
 //! every change as a [`DomainEvent`].
 
+pub mod accounts;
 mod board;
 pub mod digest;
 pub mod knowledge;

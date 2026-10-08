@@ -346,6 +346,7 @@ mod tests {
             context,
             child_thread: None,
             cost_usd: None,
+            account: None,
         }
     }
 

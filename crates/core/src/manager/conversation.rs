@@ -109,6 +109,8 @@ pub(crate) struct Envelope {
 /// A live CLI session of a conversation or task.
 pub(crate) struct Cli {
     pub provider: ProviderKind,
+    /// The login it runs on.
+    pub account: crate::accounts::AccountRef,
     pub model: ModelChoice,
     /// The conversation's own model choice it was started for (none for a task, or a Chat on
     /// the default model): a different one in the setup means the user changed it since.
@@ -1881,6 +1883,7 @@ impl SessionManager {
         let Started { session, events } = started;
         let cli = Arc::new(Cli {
             provider: choice.provider,
+            account: crate::accounts::AccountRef::own(choice.provider),
             meter: TokenMeter::new(resumed && choice.provider == ProviderKind::Codex),
             model: choice,
             chosen: setup_choice(&conversation),
@@ -2778,7 +2781,9 @@ impl SessionManager {
                 .await;
             }
             ProviderEvent::RateLimits { quota } => {
-                self.runtime.note_quota_snapshot(quota.clone()).await;
+                self.runtime
+                    .note_quota_snapshot(&cli.account, quota.clone())
+                    .await;
             }
             ProviderEvent::TurnStarted { .. } => {
                 cli.meter.turn_started(now_ms());
@@ -3015,7 +3020,7 @@ impl SessionManager {
         if let Some(limit) = limit_hit
             && status != TurnStatus::Completed
         {
-            self.runtime.note_limit(cli.provider, limit.clone()).await;
+            self.runtime.note_limit(&cli.account, limit.clone()).await;
             match self.stand_in_choice(conv, &cli.model).await {
                 Ok(next) => {
                     // Not from inside the CLI's own event pump: closing the CLI waits for it.

@@ -17,6 +17,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use brigadier_providers::{LimitHit, LimitKind, ProviderKind, QuotaSnapshot, QuotaSource};
+
+use crate::accounts::AccountRef;
 use brigadier_router::QuotaSample;
 
 use super::store::{HISTORY_MS, RoutingStore, StoredSample};
@@ -40,20 +42,26 @@ struct Tracked {
     history: HashMap<String, VecDeque<QuotaSample>>,
     /// When a running session last reported this provider's quota.
     last_event_ms: i64,
+    /// When this account's quota was last read or reported.
+    read_at_ms: Option<i64>,
     /// Development builds: a limit injected to exercise fallback, held until its reset.
     #[cfg(debug_assertions)]
     injected: Option<LimitHit>,
 }
 
+/// Every account's quota is kept apart ([`AccountRef`]); a provider's quota, as routing and
+/// the Usage page see it, is its lead account's: the one new work starts on
+/// ([`crate::accounts::select`], set with [`QuotaMonitor::set_lead`]).
 pub struct QuotaMonitor {
     store: Option<Arc<RoutingStore>>,
-    state: Mutex<HashMap<ProviderKind, Tracked>>,
+    state: Mutex<HashMap<AccountRef, Tracked>>,
+    leads: Mutex<HashMap<ProviderKind, AccountRef>>,
 }
 
 impl QuotaMonitor {
     /// A monitor over `store`, with the history it holds loaded.
     pub async fn load(store: Option<Arc<RoutingStore>>, now_ms: i64) -> Arc<Self> {
-        let mut state: HashMap<ProviderKind, Tracked> = HashMap::new();
+        let mut state: HashMap<AccountRef, Tracked> = HashMap::new();
         if let Some(store) = &store {
             if let Err(err) = store.prune(now_ms).await {
                 tracing::warn!(error = %err, "could not prune the quota history");
@@ -62,7 +70,7 @@ impl QuotaMonitor {
                 Ok(samples) => {
                     for stored in samples {
                         state
-                            .entry(stored.provider)
+                            .entry(stored.account.clone())
                             .or_default()
                             .history
                             .entry(stored.window)
@@ -76,27 +84,50 @@ impl QuotaMonitor {
         Arc::new(Self {
             store,
             state: Mutex::new(state),
+            leads: Mutex::new(HashMap::new()),
         })
     }
 
-    fn state(&self) -> MutexGuard<'_, HashMap<ProviderKind, Tracked>> {
+    fn state(&self) -> MutexGuard<'_, HashMap<AccountRef, Tracked>> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Takes in a provider's report and answers what is known now. New samples are stored in
+    /// The account whose quota is `provider`'s (the user's own login until set).
+    pub fn lead(&self, provider: ProviderKind) -> AccountRef {
+        self.leads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&provider)
+            .cloned()
+            .unwrap_or_else(|| AccountRef::own(provider))
+    }
+
+    /// Makes `account` its provider's lead; answers whether that changed.
+    pub fn set_lead(&self, account: AccountRef) -> bool {
+        let mut leads = self.leads.lock().unwrap_or_else(PoisonError::into_inner);
+        leads.insert(account.provider, account.clone()).as_ref() != Some(&account)
+    }
+
+    /// Takes in an account's report and answers what is known now. New samples are stored in
     /// the background.
-    pub fn note(&self, incoming: &QuotaSnapshot, now_ms: i64) -> QuotaSnapshot {
+    pub fn note(
+        &self,
+        account: &AccountRef,
+        incoming: &QuotaSnapshot,
+        now_ms: i64,
+    ) -> QuotaSnapshot {
         let (current, samples) = {
             let mut state = self.state();
-            let tracked = state.entry(incoming.provider).or_default();
+            let tracked = state.entry(account.clone()).or_default();
             if incoming.source == QuotaSource::Event {
                 tracked.last_event_ms = now_ms;
             }
+            tracked.read_at_ms = Some(incoming.observed_at_ms);
             match &mut tracked.quota {
                 Some(known) => known.merge(incoming),
                 None => tracked.quota = Some(incoming.clone()),
             }
-            let samples = sample(tracked, incoming.provider, now_ms);
+            let samples = sample(tracked, account, now_ms);
             (current(tracked, now_ms), samples)
         };
         if let Some(store) = &self.store
@@ -112,18 +143,30 @@ impl QuotaMonitor {
         current.unwrap_or_else(|| incoming.clone())
     }
 
-    /// What is known about a provider's quota now: limits past their reset lifted, windows past
-    /// their reset read as unused.
+    /// What is known about a provider's quota now (its lead account's): limits past their
+    /// reset lifted, windows past their reset read as unused.
     pub fn current(&self, provider: ProviderKind, now_ms: i64) -> Option<QuotaSnapshot> {
+        self.current_for(&self.lead(provider), now_ms)
+    }
+
+    /// What is known about one account's quota now.
+    pub fn current_for(&self, account: &AccountRef, now_ms: i64) -> Option<QuotaSnapshot> {
         self.state()
-            .get(&provider)
+            .get(account)
             .and_then(|tracked| current(tracked, now_ms))
     }
 
-    /// A window's samples since `since_ms`, oldest first.
-    pub fn history(&self, provider: ProviderKind, window: &str, since_ms: i64) -> Vec<QuotaSample> {
+    /// When `account`'s quota was last read or reported; `None` before the first.
+    pub fn read_at(&self, account: &AccountRef) -> Option<i64> {
         self.state()
-            .get(&provider)
+            .get(account)
+            .and_then(|tracked| tracked.read_at_ms)
+    }
+
+    /// One of an account's windows' samples since `since_ms`, oldest first.
+    pub fn history(&self, account: &AccountRef, window: &str, since_ms: i64) -> Vec<QuotaSample> {
+        self.state()
+            .get(account)
             .and_then(|tracked| tracked.history.get(window))
             .map(|samples| {
                 samples
@@ -168,14 +211,15 @@ impl QuotaMonitor {
     /// used up and the provider stays usable for its other models.
     pub fn note_limit(
         &self,
-        provider: ProviderKind,
+        account: &AccountRef,
         mut limit: LimitHit,
         now_ms: i64,
     ) -> QuotaSnapshot {
+        let provider = account.provider;
         let incoming = {
             let state = self.state();
             let mut windows = state
-                .get(&provider)
+                .get(account)
                 .and_then(|tracked| tracked.quota.as_ref())
                 .map(|quota| quota.windows.clone())
                 .unwrap_or_default();
@@ -211,14 +255,14 @@ impl QuotaMonitor {
                 },
             }
         };
-        self.note(&incoming, now_ms)
+        self.note(account, &incoming, now_ms)
     }
 
-    /// Development builds: makes `provider` refuse work as `limit` says until its reset, so
+    /// Development builds: makes `account` refuse work as `limit` says until its reset, so
     /// no read can clear it early.
     #[cfg(debug_assertions)]
-    pub fn inject(&self, provider: ProviderKind, limit: LimitHit) {
-        self.state().entry(provider).or_default().injected = Some(limit);
+    pub fn inject(&self, account: &AccountRef, limit: LimitHit) {
+        self.state().entry(account.clone()).or_default().injected = Some(limit);
     }
 }
 
@@ -266,7 +310,7 @@ fn current(tracked: &Tracked, now_ms: i64) -> Option<QuotaSnapshot> {
 }
 
 /// New samples for the windows of `tracked`'s quota, added to its history.
-fn sample(tracked: &mut Tracked, provider: ProviderKind, now_ms: i64) -> Vec<StoredSample> {
+fn sample(tracked: &mut Tracked, account: &AccountRef, now_ms: i64) -> Vec<StoredSample> {
     let Some(quota) = &tracked.quota else {
         return Vec::new();
     };
@@ -308,11 +352,72 @@ fn sample(tracked: &mut Tracked, provider: ProviderKind, now_ms: i64) -> Vec<Sto
             history.pop_front();
         }
         stored.push(StoredSample {
-            provider,
+            account: account.clone(),
             window: window.id.clone(),
             sample,
             resets_at_ms: window.resets_at_ms,
         });
     }
     stored
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use brigadier_providers::QuotaWindow;
+
+    fn read(provider: ProviderKind, used: f64, at_ms: i64) -> QuotaSnapshot {
+        QuotaSnapshot {
+            provider,
+            windows: vec![QuotaWindow {
+                id: "five_hour".into(),
+                label: "5-hour".into(),
+                used_percent: used,
+                resets_at_ms: None,
+                window_minutes: Some(300),
+                bucket: None,
+                model: None,
+            }],
+            limit: None,
+            observed_at_ms: at_ms,
+            source: QuotaSource::Read,
+        }
+    }
+
+    fn used(quota: Option<QuotaSnapshot>) -> Option<f64> {
+        quota.map(|quota| quota.windows[0].used_percent)
+    }
+
+    #[tokio::test]
+    async fn each_account_keeps_its_own_quota_and_the_lead_is_the_providers() {
+        let monitor = QuotaMonitor::load(None, 0).await;
+        let own = AccountRef::own(ProviderKind::Claude);
+        let work = AccountRef::new(ProviderKind::Claude, Some("work".into()));
+        monitor.note(&own, &read(ProviderKind::Claude, 80.0, 10), 10);
+        monitor.note(&work, &read(ProviderKind::Claude, 5.0, 20), 20);
+        assert_eq!(used(monitor.current_for(&own, 30)), Some(80.0));
+        assert_eq!(used(monitor.current_for(&work, 30)), Some(5.0));
+        assert_eq!(
+            (monitor.read_at(&own), monitor.read_at(&work)),
+            (Some(10), Some(20))
+        );
+        // The user's own login leads until another account is made the lead.
+        assert_eq!(used(monitor.current(ProviderKind::Claude, 30)), Some(80.0));
+        assert!(monitor.set_lead(work.clone()));
+        assert!(!monitor.set_lead(work.clone()));
+        assert_eq!(used(monitor.current(ProviderKind::Claude, 30)), Some(5.0));
+        // A limit on one account leaves the other free.
+        monitor.note_limit(
+            &own,
+            LimitHit {
+                kind: LimitKind::UsageWindow,
+                window: Some("five_hour".into()),
+                resets_at_ms: Some(1_000_000),
+            },
+            40,
+        );
+        assert!(monitor.current_for(&own, 50).unwrap().limit.is_some());
+        assert!(monitor.current_for(&work, 50).unwrap().limit.is_none());
+        assert_eq!(monitor.history(&work, "five_hour", 0).len(), 1);
+    }
 }

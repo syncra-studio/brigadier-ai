@@ -178,7 +178,22 @@ impl SessionManager {
         started: i64,
         ended: i64,
     ) -> Option<f64> {
-        let quota = self.runtime.monitor().current(provider, ended)?;
+        let turns = store.turns_since(provider, started).await.ok()?;
+        // The account the attempt ran on (most of its use): only its quota, and only the use
+        // charged to it, say what the attempt cost.
+        let mut by_account: HashMap<Option<&str>, i64> = HashMap::new();
+        for turn in turns.iter().filter(|turn| {
+            turn.at_ms <= ended && turn.task_id.as_deref() == Some(task.id.0.as_str())
+        }) {
+            *by_account.entry(turn.account.as_deref()).or_default() +=
+                turn.input + turn.cached_input + turn.output;
+        }
+        let account = by_account
+            .into_iter()
+            .max_by_key(|(_, tokens)| *tokens)
+            .and_then(|(account, _)| account.map(str::to_owned));
+        let account = crate::accounts::AccountRef::new(provider, account);
+        let quota = self.runtime.monitor().current_for(&account, ended)?;
         let window = quota
             .windows
             .iter()
@@ -188,7 +203,7 @@ impl SessionManager {
         let samples =
             self.runtime
                 .monitor()
-                .history(provider, &window.id, started - BASELINE_LOOKBACK_MS);
+                .history(&account, &window.id, started - BASELINE_LOOKBACK_MS);
         let before = samples
             .iter()
             .rev()
@@ -198,9 +213,11 @@ impl SessionManager {
         if moved < 0.0 {
             return None;
         }
-        let turns = store.turns_since(provider, started).await.ok()?;
         let (mut own, mut all) = (0_i64, 0_i64);
-        for turn in turns.iter().filter(|turn| turn.at_ms <= ended) {
+        for turn in turns
+            .iter()
+            .filter(|turn| turn.at_ms <= ended && turn.account == account.account)
+        {
             let tokens = turn.input + turn.cached_input + turn.output;
             all += tokens;
             if turn.task_id.as_deref() == Some(task.id.0.as_str()) {

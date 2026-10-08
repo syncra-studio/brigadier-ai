@@ -14,6 +14,9 @@ pub struct TokenMeter {
     mark: Mutex<Option<i64>>,
     /// When the session's Codex child threads were last looked for.
     children: Mutex<Option<i64>>,
+    /// The extra account the session runs on (its use counts against that account's quota);
+    /// absent: the user's own login.
+    account: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -40,7 +43,19 @@ impl TokenMeter {
             }),
             mark: Mutex::new(None),
             children: Mutex::new(None),
+            account: None,
         }
+    }
+
+    /// The same meter, for a session on `account`.
+    pub fn on_account(mut self, account: Option<String>) -> Self {
+        self.account = account;
+        self
+    }
+
+    /// The extra account its session runs on.
+    pub fn account(&self) -> Option<&str> {
+        self.account.as_deref()
     }
 
     /// A turn started at `at_ms`: its first report's use took from here.

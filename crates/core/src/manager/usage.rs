@@ -67,6 +67,7 @@ impl SessionManager {
             return;
         };
         let mut turn = self.turn_for(&owner, provider, model, at_ms).await;
+        turn.account = meter.account().map(str::to_owned);
         turn.input = used.input_tokens;
         turn.cached_input = used.cached_input_tokens;
         turn.cache_write = used.cache_write_tokens;
@@ -158,6 +159,7 @@ impl SessionManager {
             context: None,
             child_thread: None,
             cost_usd: None,
+            account: None,
         }
     }
 
@@ -202,13 +204,11 @@ impl SessionManager {
         })
         .await
         .unwrap_or_default();
-        meter_children(
-            &store,
-            self.turn_for(&owner, cli.provider, cli.model.model.as_deref(), now_ms())
-                .await,
-            children,
-        )
-        .await;
+        let mut row = self
+            .turn_for(&owner, cli.provider, cli.model.model.as_deref(), now_ms())
+            .await;
+        row.account = cli.meter.account().map(str::to_owned);
+        meter_children(&store, row, children).await;
     }
 }
 
@@ -290,6 +290,7 @@ mod tests {
             context: Some(9),
             child_thread: None,
             cost_usd: None,
+            account: None,
         };
         let sessions = dir.join("sessions");
         let turn_end = || async {

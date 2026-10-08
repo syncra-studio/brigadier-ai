@@ -273,7 +273,12 @@ impl SessionManager {
             |event| async {
                 match event {
                     ProviderEvent::RateLimits { quota } => {
-                        self.runtime.note_quota_snapshot(quota).await;
+                        self.runtime
+                            .note_quota_snapshot(
+                                &crate::accounts::AccountRef::own(quota.provider),
+                                quota.clone(),
+                            )
+                            .await;
                     }
                     ProviderEvent::Usage { total, last } => {
                         self.note_tokens(

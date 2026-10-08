@@ -1479,6 +1479,7 @@ impl SessionManager {
             };
         let cli = Arc::new(Cli {
             provider,
+            account: crate::accounts::AccountRef::own(provider),
             meter: TokenMeter::new(continues),
             model: task.route.choice.clone(),
             chosen: None,
@@ -2298,7 +2299,9 @@ impl SessionManager {
                 return;
             }
             ProviderEvent::RateLimits { quota } => {
-                self.runtime.note_quota_snapshot(quota.clone()).await;
+                self.runtime
+                    .note_quota_snapshot(&cli.account, quota.clone())
+                    .await;
             }
             ProviderEvent::Usage { total, last } => {
                 self.note_tokens(
