@@ -538,7 +538,7 @@ impl SessionManager {
                     )
                     .await;
                 }
-                // Nothing would merge on a click any more: the orchestrator asks again.
+                // A merge card from before merging was asked for in words: the thread asks again.
                 ApprovalSubject::FinishSession { branch, base, .. } => {
                     self.deliver_for(
                         conversation_id,
@@ -547,7 +547,7 @@ impl SessionManager {
                             label: "finish session".into(),
                             task_id: None,
                             text: format!(
-                                "[not finished] The user had not answered whether to merge `{branch}` into `{base}` when Brigadier restarted; nothing was merged. Call finish_session again."
+                                "[not finished] The user had not answered whether to merge `{branch}` into `{base}` when Brigadier restarted; nothing was merged. Ask them in your reply, and call finish_session once they say yes."
                             ),
                         },
                         approval.request_id.clone(),

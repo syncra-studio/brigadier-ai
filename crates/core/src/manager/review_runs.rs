@@ -883,7 +883,7 @@ impl SessionManager {
 
     /// Hands a review's outcome to whoever asked: the worker while it still works, else the
     /// orchestrator. A clean review of a landing or an outline is no news for the orchestrator:
-    /// the merge card shows it.
+    /// the context card shows it, and finish_session's answer says it.
     pub(super) async fn tell_review(&self, review: &ReviewRun, text: Option<&str>) {
         let review_text = text;
         let reviewer = review.reviewer.label();

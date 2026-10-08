@@ -442,12 +442,12 @@ fn pending_approval(event: &EventEnvelope) -> Option<(String, String)> {
             .filter(|reason| !reason.trim().is_empty())
             .or(request.command)
             .unwrap_or_else(|| format!("A worker asks to use {}.", request.tool)),
-        // Only in recorded conversations: nothing asks this way any more.
-        ApprovalSubject::OutwardCommand { .. } => return None,
-        ApprovalSubject::Landing { branch, .. } => format!("Land a commit on {branch}?"),
-        ApprovalSubject::FinishSession { branch, base, .. } => {
-            format!("Merge {branch} into {base}?")
+        // Only in recorded conversations: nothing asks this way any more (a merge is asked
+        // for in words).
+        ApprovalSubject::OutwardCommand { .. } | ApprovalSubject::FinishSession { .. } => {
+            return None;
         }
+        ApprovalSubject::Landing { branch, .. } => format!("Land a commit on {branch}?"),
         ApprovalSubject::Action { action, .. } => action,
         ApprovalSubject::Outline { title, .. } => format!("Start this plan? {title}"),
     };
@@ -563,16 +563,14 @@ mod tests {
             pending_approval(&envelope(&approval(outline.clone(), CardState::Pending))),
             Some(("a1".to_owned(), "Start this plan? Dark mode".to_owned()))
         );
+        // A recorded merge card notifies no more: merging is asked for in words.
         let merge = ApprovalSubject::FinishSession {
             branch: "brigadier/s1".into(),
             base: "main".into(),
             commits: 2,
             diff_stat: Default::default(),
         };
-        assert_eq!(
-            pending_approval(&envelope(&approval(merge, CardState::Pending))).map(|(_, what)| what),
-            Some("Merge brigadier/s1 into main?".to_owned())
-        );
+        assert!(pending_approval(&envelope(&approval(merge, CardState::Pending))).is_none());
         // A settled approval doesn't notify.
         let answered = CardState::Expired {
             reason: "The worker stopped.".into(),

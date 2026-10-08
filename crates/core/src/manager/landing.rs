@@ -17,8 +17,8 @@
 //! Every landing then gets one read-only review by the other vendor in the background
 //! ([`super::review_runs`]); nothing waits for it.
 //!
-//! Finishing a new-worktree session merges the session branch into its base the same way,
-//! after the user's one click.
+//! Finishing a new-worktree session merges the session branch into its base the same way, when
+//! the user's latest message asks for it in words (`merge_consent`): no card.
 
 use std::path::{Path, PathBuf};
 
@@ -27,15 +27,12 @@ use brigadier_git::{
     PrepareOutcome, SeriesOutcome, litter,
 };
 
-use brigadier_providers::ApprovalDecision;
-
-use super::cards::CardAnswer;
 use super::conversation::Envelope;
 use super::workers::Workspace;
-use super::{SessionManager, blocking, git_error};
-use crate::model::{ConversationId, Environment, Setup};
+use super::{SessionManager, blocking, git_error, merge_consent};
+use crate::model::{ConversationId, Environment, MessageRole, Setup};
 use crate::work::{
-    ApprovalSubject, DecisionKind, DecisionSource, DiffStat, ExcludedFile, FileStat, InjectionKind,
+    DecisionKind, DecisionSource, DiffStat, ExcludedFile, FileStat, InjectionKind,
     OrchestratorStepKind, PhaseStage, Task, TaskState,
 };
 use crate::{Error, Result};
@@ -1047,10 +1044,12 @@ impl SessionManager {
         Ok(run)
     }
 
-    /// `finish_session`: merges the session branch into its base after the user's click.
+    /// `finish_session`: merges the session branch into its base, when the user's latest message
+    /// asks for it (`user_words`, quoted from it; [`merge_consent`]). No card: the user said so.
     pub(crate) async fn finish_session(
         &self,
         id: &ConversationId,
+        user_words: &str,
         message: Option<String>,
     ) -> Result<String> {
         if self.overnight.active.get(id).is_some() {
@@ -1068,6 +1067,12 @@ impl SessionManager {
             return Err(Error::Invalid(
                 "this session works on a local checkout: its commits are already on the picked branch".into(),
             ));
+        };
+        let conv = self.conv(id)?;
+        let (asked_in, wrote) = {
+            let wrote = conv.user_wrote.lock().await;
+            let asked_in = self.merge_consent(id, user_words, &branch, &base).await?;
+            (asked_in, *wrote)
         };
         // What the thread committed itself gets its review before the branch is merged.
         self.scan_thread_commits(id, self.thread_turn_running(id).await)
@@ -1104,23 +1109,20 @@ impl SessionManager {
                 .map_err(git_error)?;
             match outcome {
                 MergeOutcome::Ready {
-                    commit,
-                    base_tip,
-                    fast_forward,
+                    commit, base_tip, ..
                 } => {
                     let tip = repo
                         .branch_tip(&branch_name)
                         .map_err(git_error)?
                         .ok_or_else(|| Error::Invalid("the session branch is gone".into()))?;
                     let commits = repo.count_commits(&base_tip, &tip).map_err(git_error)?;
-                    let stat = repo.diff_stat(&base_tip, &commit).map_err(git_error)?;
-                    Ok(Ok((commit, base_tip, tip, fast_forward, commits, stat)))
+                    Ok(Ok((commit, base_tip, tip, commits)))
                 }
                 MergeOutcome::Conflicts { paths } => Ok(Err(paths)),
             }
         })
         .await?;
-        let (commit, base_tip, session_tip, _fast_forward, commits, stat) = match prepared {
+        let (commit, base_tip, session_tip, commits) = match prepared {
             Ok(ready) => ready,
             Err(paths) => {
                 return Err(Error::Invalid(format!(
@@ -1134,84 +1136,133 @@ impl SessionManager {
                 "`{branch}` has no commits that `{base}` lacks"
             )));
         }
-        let (approval, rx) = self
-            .open_approval(
-                id,
-                None,
-                ApprovalSubject::FinishSession {
-                    branch: branch.clone(),
-                    base: base.clone(),
-                    commits,
-                    diff_stat: diff_stat_of(&stat),
-                },
-            )
-            .await?;
-        let manager = self.arc();
-        let id = id.clone();
-        self.spawn(async move {
-            let text = match rx.await {
-                Ok(CardAnswer::Decision(ApprovalDecision::Allow)) => {
-                    let (git, repo_path, session_branch) =
-                        (manager.git.clone(), PathBuf::from(&repo), branch.clone());
-                    let request = LandRequest {
-                        branch: base.clone(),
-                        expected_tip: base_tip,
-                        commit,
-                    };
-                    // What the user approved is the session branch as it was: work that landed
-                    // on it while the card was open would be left out.
-                    let landing = blocking(move || {
-                        let repo = git.open(&repo_path).map_err(git_error)?;
-                        if repo.branch_tip(&session_branch).map_err(git_error)? != Some(session_tip) {
-                            return Ok(None);
-                        }
-                        repo.land(&request).map(Some).map_err(git_error)
-                    });
-                    let landing = landing.await;
-                    // The session's work is merged: what showed it stops, and its worktree
-                    // and branch go (THREAD-PLAN.md Q9).
-                    let released = if let Ok(Some(LandOutcome::Landed { .. })) = &landing {
-                        manager.stop_previews(&id, "the session was merged").await;
-                        manager.release_merged_session(&id).await
-                    } else {
-                        String::new()
-                    };
-                    match landing {
-                        Ok(None) => format!("[not finished] `{branch}` changed after the user was asked. Nothing was merged; call finish_session again."),
-                        Ok(Some(LandOutcome::Landed { new_tip })) => format!(
-                            "[finished] The user approved: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{released}",
-                            if commits == 1 { "" } else { "s" },
-                            short(&new_tip)
-                        ),
-                        Ok(Some(LandOutcome::Blocked(block))) => format!("[not finished] Merging `{branch}` into `{base}` is not safe now: {block} Nothing was changed; call finish_session again."),
-                        Err(err) => format!("[not finished] Merging failed: {err}. Nothing was changed."),
-                    }
-                }
-                Ok(CardAnswer::Decision(ApprovalDecision::Deny { message })) => format!(
-                    "[decision] The user did not merge `{branch}` into `{base}`{}.",
-                    if message.trim().is_empty() { String::new() } else { format!(": {message}") }
-                ),
-                _ => {
-                    manager
-                        .settle_approval(&approval, crate::work::CardState::Expired { reason: "withdrawn".into() })
-                        .await;
-                    return;
-                }
+        #[cfg(test)]
+        {
+            let pause = conv.merge_pause.lock().unwrap().clone();
+            if let Some((reached, release)) = pause {
+                reached.notify_one();
+                release.notified().await;
+            }
+        }
+        // The last look at consent and the landing are one step for what the user writes: a
+        // "wait" sent while the merge was prepared stops it; one sent now comes after it.
+        let landing = {
+            let now = conv.user_wrote.lock().await;
+            if *now != wrote {
+                return Err(Error::Invalid(
+                    "[not merged] The user wrote again while the merge was being prepared: read what they said. Nothing was merged; call finish_session again only if their latest message asks for it.".into(),
+                ));
+            }
+            self.merge_consent(id, user_words, &branch, &base).await?;
+            let (git, repo_path, session_branch) =
+                (self.git.clone(), PathBuf::from(&repo), branch.clone());
+            let request = LandRequest {
+                branch: base.clone(),
+                expected_tip: base_tip,
+                commit,
             };
-            manager
-                .deliver_for(
-                    &id,
-                    Envelope {
-                        kind: InjectionKind::Decision,
-                        label: "finish session".into(),
-                        task_id: None,
-                        text,
-                    },
-                    approval.request_id.clone(),
-                )
-                .await;
-        });
-        Ok("Asked the user to approve merging the session branch; the outcome arrives as a message.".into())
+            // What the user asked for is the session branch as it was: work that landed on it
+            // meanwhile would be left out.
+            blocking(move || {
+                let repo = git.open(&repo_path).map_err(git_error)?;
+                if repo.branch_tip(&session_branch).map_err(git_error)? != Some(session_tip) {
+                    return Ok(None);
+                }
+                repo.land(&request).map(Some).map_err(git_error)
+            })
+            .await
+        };
+        let new_tip = match landing {
+            Ok(Some(LandOutcome::Landed { new_tip })) => new_tip,
+            Ok(None) => {
+                return Err(Error::Invalid(format!(
+                    "[not merged] `{branch}` changed while the merge was being prepared. Nothing was merged; call finish_session again."
+                )));
+            }
+            Ok(Some(LandOutcome::Blocked(block))) => {
+                return Err(Error::Invalid(format!(
+                    "[not merged] Merging `{branch}` into `{base}` is not safe now: {block} Nothing was changed; call finish_session again."
+                )));
+            }
+            Err(err) => {
+                return Err(Error::Invalid(format!(
+                    "[not merged] Merging failed: {err}. Nothing was changed."
+                )));
+            }
+        };
+        let reviews = match self.core.board(id).await {
+            Ok(board) => merged_reviews(&board),
+            Err(_) => String::new(),
+        };
+        self.orchestrator_step(
+            id,
+            OrchestratorStepKind::Merged {
+                branch: branch.clone(),
+                base: base.clone(),
+                commits,
+                asked_in: Some(asked_in),
+            },
+        )
+        .await;
+        // The session's work is merged: what showed it stops, and its worktree and branch go
+        // (THREAD-PLAN.md Q9).
+        self.stop_previews(id, "the session was merged").await;
+        let released = self.release_merged_session(id).await;
+        Ok(format!(
+            "[finished] As the user asked: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{reviews}{released}",
+            if commits == 1 { "" } else { "s" },
+            short(&new_tip)
+        ))
+    }
+
+    /// The user message that gives consent to the session's merge: the latest on the branch
+    /// shown, with `user_words` in it ([`merge_consent::check`]), nothing the user wrote waiting
+    /// after it, and no merge asked in it already.
+    async fn merge_consent(
+        &self,
+        id: &ConversationId,
+        user_words: &str,
+        branch: &str,
+        base: &str,
+    ) -> Result<String> {
+        let refuse = |why: String| {
+            Error::Invalid(format!(
+                "[not merged] {why}. Nothing was merged. Merge only when the user's latest message asks for it: propose it in your reply, as a question that names `{base}`, and wait for their answer."
+            ))
+        };
+        let board = self.core.board(id).await?;
+        let messages = match &board.head {
+            Some((head, _)) => self.core.branch(id, head).await?,
+            None => self.core.all_messages(id).await?,
+        };
+        let Some(at) = messages
+            .iter()
+            .rposition(|message| message.role == MessageRole::User)
+        else {
+            return Err(refuse("the user hasn't written anything".into()));
+        };
+        let latest = &messages[at];
+        if board.queue.items.iter().any(|item| {
+            item.queued_at_ms.max(item.edited_at_ms.unwrap_or(0)) >= latest.created_at_ms
+        }) {
+            return Err(refuse(
+                "the user wrote again since (it waits in the queue): read it first".into(),
+            ));
+        }
+        if board.orchestrator_steps.iter().any(|step| {
+            matches!(&step.kind, OrchestratorStepKind::Merged { asked_in: Some(asked), .. } if *asked == latest.id)
+        }) {
+            return Err(refuse(
+                "the user's latest message already asked for a merge, and it is done; another merge needs their fresh words".into(),
+            ));
+        }
+        let before = at
+            .checked_sub(1)
+            .map(|before| &messages[before])
+            .filter(|message| message.role == MessageRole::Assistant)
+            .map(|message| message.text.as_str());
+        merge_consent::check(user_words, &latest.text, before, branch, base).map_err(refuse)?;
+        Ok(latest.id.clone())
     }
 
     /// A commit message Brigadier writes, without AI co-authors while the user leaves them out.
@@ -1228,6 +1279,55 @@ impl SessionManager {
             Some(Setup::Session { repo, .. }) => Ok(PathBuf::from(repo)),
             _ => Err(Error::Invalid("tasks belong to a session".into())),
         }
+    }
+}
+
+/// What the code reviews of the work merged now say, for the thread to tell the user: those it
+/// hears, started since the session's previous merge (the context card shows the same line).
+fn merged_reviews(board: &crate::board::Board) -> String {
+    use crate::work::{ReviewFor, ReviewKind, ReviewState};
+    let since = board
+        .orchestrator_steps
+        .iter()
+        .filter(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
+        .map(|step| step.at_ms)
+        .max()
+        .unwrap_or(0);
+    let reviews: Vec<_> = board
+        .reviews
+        .values()
+        .filter(|review| {
+            review.kind == ReviewKind::Code
+                && review.notify == ReviewFor::Orchestrator
+                && review.started_at_ms >= since
+        })
+        .collect();
+    if reviews.is_empty() {
+        return String::new();
+    }
+    let findings: u32 = reviews
+        .iter()
+        .map(|review| match review.state {
+            ReviewState::Findings { count } => count,
+            _ => 0,
+        })
+        .sum();
+    if reviews
+        .iter()
+        .any(|review| review.state == ReviewState::Running)
+    {
+        " Its review still runs; if it finds anything, you hear it as a [review …] message: tell the user then.".into()
+    } else if findings > 0 {
+        format!(
+            " Its review found {findings}; if you haven't told the user what, and what you did about it, do."
+        )
+    } else if reviews
+        .iter()
+        .all(|review| matches!(review.state, ReviewState::Failed { .. }))
+    {
+        " Its review couldn't run.".into()
+    } else {
+        " Its review is clean.".into()
     }
 }
 

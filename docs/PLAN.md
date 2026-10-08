@@ -106,7 +106,7 @@ The user talks to exactly one **orchestrator**. The orchestrator never does work
 - **Project:** a workspace of one or more repos. It owns one **Project Brain** and a service map.
 - **Session:** one orchestrator conversation in a project. It can live indefinitely, and several sessions can run at once. Its environment is chosen in the composer:
   - **Local checkout:** reviewed task commits land directly on the branch you pick, in your own checkout. Workers still use temporary worktrees for parallel work, created from that branch's latest commit. Your uncommitted changes are never overwritten, and Brigadier asks whether workers should see them.
-  - **New worktree:** you pick a base branch, and the session gets its own worktree on a new branch. Worker worktrees are created from the session branch and merge back into it. When the work is done, the session branch merges into the base branch after your one-click go-ahead.
+  - **New worktree:** you pick a base branch, and the session gets its own worktree on a new branch. Worker worktrees are created from the session branch and merge back into it. When the work is done, the session branch merges into the base branch when you ask the thread to, in words (or say yes to the merge it proposes); there is no merge card (THREAD-PLAN.md, user decision 6).
   - In both modes Brigadier's git engine performs merges on the orchestrator's instruction, and a merge worker resolves conflicts.
 - **Chat:** a plain conversation outside any project, listed under "Chats" in the sidebar. It is **not** a Brigadier session: there is no orchestrator and no workers. You talk directly to the model you picked. Chats get:
   - web search and attachments;
@@ -201,7 +201,7 @@ Each phase lists its **goal**, **deliverables**, **key design**, and **done when
 - **Non-blocking orchestration.** The user can chat at any time. Worker results queue up as events for the orchestrator's next turn, and only final reports and blocking questions enter its context.
 - **Git flow:** the two session environments from §5.
   - **Local checkout:** commits land on the picked branch.
-  - **New worktree:** a session branch created from the picked base, merged into the base after one-click approval.
+  - **New worktree:** a session branch created from the picked base, merged into the base when the user asks for it in words.
   - Worker worktrees are used in both modes.
   - A phase lands once, after its verifier (or, for a small un-outlined request, after the lead's own different-vendor review): the lead works in its own worktree off the session tip, then fast-forwards (rebasing first if the tip moved) onto the session branch or the picked branch, with no landing card.
   - Uncommitted changes are never overwritten.
@@ -568,7 +568,7 @@ The following references are to `c2d2756`, before this section was added. Reuse 
 | `crates/core/src/manager/mod.rs:140`, `:195`, `:214` | Manager startup runs recovery before timers; shutdown closes every CLI. Conductor recovery must participate before ordinary recovery disposes of active run work. |
 | `crates/core/src/manager/conversation.rs:3282`; `crates/core/src/sessions.rs:556` | Conversation runtime/request attribution and assistant-message persistence provide fresh phase turns and the final thread report. Keep native CLI contexts disposable. |
 | `crates/core/src/manager/workers.rs:721`, `:1269`, `:1429` | Task creation, worker workspaces and serialized session worktree creation. Extend them with immutable run/phase context; never change the session setup beneath old tasks. |
-| `crates/core/src/manager/landing.rs:54`, `:266`, `:890`, `:1067` | Candidate creation, task gates, safe landing and user-confirmed session merge. `finish_session` requires a NewWorktree session, merges its tip and checks all open write tasks. Add a distinct run-merge path for the run's verified SHA, independent of session setup. |
+| `crates/core/src/manager/landing.rs:54`, `:266`, `:890`, `:1067` | Candidate creation, task gates, safe landing and the session merge the user asks for in words. `finish_session` requires a NewWorktree session and the user's words from their latest message (checked in code, `merge_consent.rs`), merges its tip and checks all open write tasks. Add a distinct run-merge path for the run's verified SHA, independent of session setup. |
 | `crates/core/src/work.rs:361`, `:505`; `crates/core/src/manager/gates.rs:98`, `:642` | Task/plan gate records and the bounded automatic fix loop. Add a phase owner and full-phase checks rather than treating passing task gates as phase completion. |
 | `crates/core/src/manager/plan_gates.rs:46`, `:67`; `crates/core/src/manager/tools.rs:523` | Two plan-review rounds, findings with IDs, revisions answering every finding. Reuse for each phase plan and Phase 0. |
 | `crates/core/src/work.rs:215`; `crates/core/src/manager/decisions.rs:327` | Reports already carry done-when evidence, risks and user-only needs; Waiting items can be answered. Add criterion IDs and run/phase provenance, preserving old report decoding. |

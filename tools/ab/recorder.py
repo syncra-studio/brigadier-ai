@@ -2,16 +2,15 @@
 """Records every committed daemon event (Subscribe + EventsSince backfill, deduped by seq) and
 answers any card by the A/B response policy (POLICY.md), logging each answer with its time in
 cards.jsonl so it is counted: a question gets "Go with your recommendation."; a plan, an outline,
-a landing or an action gets approved ("Go ahead."), unless it would push; the session's merge card
-(finish_session) and anything that pushes are never approved: the merge card is left alone, a push
-is denied. With --merge (phase checks only, never an A/B arm) the merge card is approved too. Session transcripts are hard-linked into <out-dir>/../transcripts
+a landing or an action gets approved ("Go ahead."), unless it would push; anything that pushes is
+denied. A merge into the base is asked of the user in words (no card): the recorder never answers
+in words, so nothing merges. Session transcripts are hard-linked into <out-dir>/../transcripts
 as soon as they exist, because Brigadier deletes them when a task is cleaned up.
-usage: recorder.py <data-dir> <out-dir> [--merge]"""
+usage: recorder.py <data-dir> <out-dir>"""
 import json, os, sys, time, threading
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bipc import connect, frame, read, call
 data, out = sys.argv[1], sys.argv[2]
-merge = "--merge" in sys.argv[3:]
 os.makedirs(out, exist_ok=True)
 evf = open(os.path.join(out, "events.jsonl"), "a")
 cardf = open(os.path.join(out, "cards.jsonl"), "a")
@@ -42,9 +41,6 @@ def handle(env):
         a = ev["approval"]
         if a["state"].get("type") == "pending" and a["id"] not in answered:
             answered.add(a["id"])
-            if a["subject"].get("type") == "finishSession" and not merge:
-                log_card("merge-card", a, "left for the user")
-                return
             if pushes(a["subject"]):
                 decision = {"type": "deny", "message": "No push: leave the work on its branch."}
             else:

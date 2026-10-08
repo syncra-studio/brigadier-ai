@@ -4,9 +4,9 @@ import { test } from "node:test";
 import { type StatusInput, threadStatus } from "@/app/conversation/liveStatus";
 import { taskActivityLines } from "@/app/conversation/taskActivity";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import type { Approval, OrchestratorStep, ProviderEvent, Question, Task, WaitingItem } from "@/ipc/generated";
+import type { OrchestratorStep, ProviderEvent, Question, Task, WaitingItem } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
-import { applyToBoard, type Board, doingOf, emptyBoard } from "@/state/board";
+import { applyToBoard, type Board, doingOf, emptyBoard, type ShownApproval } from "@/state/board";
 
 const base = Object.values(night.tasks)[0] as unknown as Task;
 let next = 0;
@@ -112,11 +112,11 @@ test("the lead at work keeps its own line, with its workers under it", () => {
 });
 
 test("only a card or a question for the user reads as needing them, and workers stay listed", () => {
-  const approval = { id: "a", requestId: "r1", state: { type: "pending" } } as unknown as Approval;
+  const approval = { id: "a", requestId: "r1", state: { type: "pending" } } as unknown as ShownApproval;
   const worker = task();
   const view = threadStatus(input({ ...leading, approvals: byId([approval]), tasks: byId([worker]) }, { state: "waiting" }));
   assert.deepEqual(view, { head: { text: "Waiting for your approval", tone: "needsYou" }, workers: [worker.id], more: 0 });
-  const allowed = { ...approval, state: { type: "allowed" } } as unknown as Approval;
+  const allowed = { ...approval, state: { type: "allowed" } } as unknown as ShownApproval;
   assert.equal(head(input({ approvals: byId([allowed]) }))?.tone, "busy");
   const question = { id: "q", requestId: "r1", answer: null, answeredAtMs: null } as unknown as Question;
   assert.deepEqual(head(input({ questions: byId([question]) }, { state: "waiting" })), { text: "Waiting for your answer", tone: "needsYou" });

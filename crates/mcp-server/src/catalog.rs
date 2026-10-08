@@ -130,9 +130,12 @@ were reviewed already; its findings arrive later as a [review …] message. If t
 quick self-check first; then they land on their own and you hear when. Conflicts come back to \
 you: delegate a merge task.";
 
-const FINISH_SESSION: &str = "New-worktree sessions only: when all the work has landed, ask \
-the user to merge the session branch into its base branch (one click on a card). Returns at \
-once; the outcome arrives later as a message.";
+const FINISH_SESSION: &str = "New-worktree sessions only: merge the session branch into its \
+base branch, once the user's latest message asks for it (\"merge it\") or plainly agrees to the \
+merge your reply right before proposed, as a question naming the base (\"yes\"). Pass their \
+words in user_words, quoted exactly from that message. Brigadier checks them against it and \
+refuses on a question, a condition, a \"no\" or a \"wait\", or words already used for a merge; \
+then propose it and wait for their answer. Never merge on silence. Returns when merged.";
 
 const NOTE_FOR_USER: &str = "Keep the user's session summary current. kind \"decided\": a \
 judgement call you made on the user's behalf that they would want to know (a product or scope \

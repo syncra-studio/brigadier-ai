@@ -7,13 +7,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use brigadier_providers::{ApprovalDecision, Artifact};
+use brigadier_providers::Artifact;
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::board::Board;
 use crate::model::{Environment, Setup};
-use crate::work::{ApprovalSubject, CardState, Preview, PreviewState};
+use crate::work::{Preview, PreviewState};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -54,7 +54,7 @@ fn thread(replies: Replies) -> Script {
                 } else if input.contains("Please stop it.") {
                     ("stop_preview", json!({}))
                 } else if input.contains("Please merge.") {
-                    ("finish_session", json!({}))
+                    ("finish_session", json!({ "user_words": "Please merge." }))
                 } else if input.contains("Show me the log.") {
                     ("preview_log", json!({}))
                 } else {
@@ -440,7 +440,7 @@ async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
         .await
         .unwrap();
 
-    // The merge: the thread committed in the worktree, asked to merge, the user approved.
+    // The merge: the thread committed in the worktree, and the user asked for the merge.
     let (preview, child) = start(&flow, &pids).await;
     flow.settled().await;
     let worktree = workspace(&flow);
@@ -448,26 +448,6 @@ async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
     super::git(&worktree, &["add", "page.html"]);
     super::git(&worktree, &["commit", "-q", "-m", "Add the page"]);
     flow.say("Please merge.").await;
-    let board = flow
-        .until("the merge card", |board| {
-            board.approvals.values().any(|card| {
-                card.state == CardState::Pending
-                    && matches!(card.subject, ApprovalSubject::FinishSession { .. })
-            })
-        })
-        .await;
-    assert!(alive(&flow, preview.pid.unwrap()), "asking doesn't stop it");
-    let card = board
-        .approvals
-        .values()
-        .find(|card| card.state == CardState::Pending)
-        .unwrap()
-        .id
-        .clone();
-    flow.manager
-        .answer_card(flow.conversation.clone(), card, ApprovalDecision::Allow)
-        .await
-        .unwrap();
     gone(&flow, preview.pid.unwrap()).await;
     gone(&flow, child).await;
     let board = flow

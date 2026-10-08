@@ -1,30 +1,21 @@
-import type { Approval, ReviewRun } from "@/ipc/generated";
+import { useShallow } from "zustand/react/shallow";
+
+import type { OrchestratorStep, ReviewRun } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
 
 /**
- * The code reviews a merge card speaks for: those the orchestrator hears, since the session's
- * previous merge, up to the card's own answer. Each landed change gets one, by the other vendor,
- * in the background, and so does each range of commits the thread made itself (a review with no
- * task, started before the merge card opens); one still running at the merge stays the card's
- * until it ends. A worker's review of its own work in progress is not one: the worker answered it
- * before it reported. (When a landing reuses a worker's review of the same commits, the daemon
- * hands that review to the orchestrator.)
+ * The code reviews of one batch of the session's work, started from `since` up to `until`:
+ * those the orchestrator hears. Each landed change gets one, by the other vendor, in the
+ * background, and so does each range of commits the thread made itself (a review with no task,
+ * started before the merge that takes them). A worker's review of its own work in progress is
+ * not one: the worker answered it before it reported. (When a landing reuses a worker's review of
+ * the same commits, the daemon hands that review to the orchestrator.)
  */
-export function mergeReviews(
-  card: Approval,
-  approvals: readonly Approval[],
+export function batchReviews(
   reviews: readonly ReviewRun[],
+  since: number,
+  until: number,
 ): ReviewRun[] {
-  const since = approvals
-    .filter(
-      (other) =>
-        other.id !== card.id &&
-        other.subject.type === "finishSession" &&
-        other.state.type === "allowed" &&
-        other.createdAtMs < card.createdAtMs,
-    )
-    .reduce((latest, other) => Math.max(latest, other.resolvedAtMs ?? other.createdAtMs), 0);
-  const until = card.resolvedAtMs ?? Number.POSITIVE_INFINITY;
   return reviews.filter(
     (review) =>
       review.kind === "code" &&
@@ -50,13 +41,42 @@ export function reviewStatus(reviews: readonly ReviewRun[]): string | null {
   return "Review: clean";
 }
 
-/** A merge card's review line, live; null for any other card. */
-export function useMergeReviewStatus(card: Approval | undefined): string | null {
-  return useBoard((s) => {
-    const board = s.board;
-    if (!board || card?.subject.type !== "finishSession") return null;
-    return reviewStatus(
-      mergeReviews(card, Object.values(board.approvals), Object.values(board.reviews)),
-    );
-  });
+/** The context card's review lines; null where there is nothing to say. */
+export type ReviewLines = {
+  /** The work the last merge took: its review may still run, and its outcome stays. */
+  merged: string | null;
+  /** The work since the last merge (or since the session began). */
+  current: string | null;
+};
+
+/**
+ * The review lines of the context card, from the session's "Merged …" rows (the user asks for a
+ * merge in words; there is no card to carry them). The work the last merge took keeps its line
+ * until the next merge, so a review still running when the user merged shows its outcome after.
+ */
+export function reviewLines(
+  steps: readonly OrchestratorStep[],
+  reviews: readonly ReviewRun[],
+): ReviewLines {
+  const merges = steps
+    .filter((step) => step.kind.type === "merged")
+    .map((step) => step.atMs)
+    .toSorted((a, b) => a - b);
+  const last = merges.at(-1);
+  const current = reviewStatus(batchReviews(reviews, last ?? 0, Number.POSITIVE_INFINITY));
+  if (last === undefined) return { merged: null, current };
+  return { merged: reviewStatus(batchReviews(reviews, merges.at(-2) ?? 0, last)), current };
+}
+
+/** The open conversation's review lines, live. */
+export function useReviewLines(conversationId: string): ReviewLines {
+  const [merged, current] = useBoard(
+    useShallow((s) => {
+      const board = s.board;
+      if (!board || board.conversationId !== conversationId) return [null, null];
+      const lines = reviewLines(board.orchestratorSteps, Object.values(board.reviews));
+      return [lines.merged, lines.current];
+    }),
+  );
+  return { merged, current };
 }

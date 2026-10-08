@@ -10,7 +10,7 @@ use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn, git};
 use crate::model::{Environment, PermissionLevel, Setup};
-use crate::work::{ApprovalSubject, CardState};
+use crate::work::{ApprovalSubject, CardState, OrchestratorStepKind};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -627,11 +627,11 @@ async fn a_thread_commit_before_a_landing_in_the_same_turn_is_reviewed_on_its_ow
     flow.stop().await;
 }
 
-/// The thread commits and asks for the merge in the same turn: the review of its commit has
-/// started (for the thread, with no task) before the merge card opens, so the card's review
-/// line counts it, "Review running…" until it ends and its findings after.
+/// The thread commits and merges in the same turn, as the user asked: the review of its commit
+/// has started (for the thread, with no task) before the merge, so it counts with the merged
+/// work, and the merge's answer says it still runs. No card opens.
 #[tokio::test]
-async fn the_merge_card_counts_the_review_of_the_threads_own_commit() {
+async fn a_merge_counts_the_review_of_the_threads_own_commit() {
     let release = Arc::new(tokio::sync::Notify::new());
     let held = release.clone();
     let flow = Flow::start(
@@ -654,9 +654,12 @@ async fn the_merge_card_counts_the_review_of_the_threads_own_commit() {
                     "notes\n",
                     "Add notes\n\nBrigadier-Author: thread",
                 );
-                let reply = turn.call("finish_session", json!({})).await;
+                let reply = turn
+                    .call("finish_session", json!({"user_words": "merge"}))
+                    .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                assert!(reply.text.contains("review still runs"), "{}", reply.text);
+                return Reply::text("Merged; the review still runs.");
             }
             Reply::text("Noted.")
         }),
@@ -664,14 +667,31 @@ async fn the_merge_card_counts_the_review_of_the_threads_own_commit() {
     .await;
     flow.say("Add notes and merge.").await;
     let board = flow
-        .until("the merge card", |board| {
+        .until("the merge", |board| {
             board
-                .approvals
-                .values()
-                .any(|card| matches!(card.subject, ApprovalSubject::FinishSession { .. }))
+                .orchestrator_steps
+                .iter()
+                .any(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
         })
         .await;
-    let card = board.approvals.values().next().unwrap().clone();
+    assert!(board.approvals.is_empty(), "no merge card");
+    let merged = board
+        .orchestrator_steps
+        .iter()
+        .find(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
+        .unwrap()
+        .clone();
+    assert!(
+        matches!(
+            &merged.kind,
+            OrchestratorStepKind::Merged {
+                commits: 1,
+                asked_in: Some(_),
+                ..
+            }
+        ),
+        "{merged:?}"
+    );
     let reviews: Vec<_> = board.reviews.values().cloned().collect();
     assert_eq!(reviews.len(), 1, "{reviews:#?}");
     let review = &reviews[0];
@@ -680,8 +700,8 @@ async fn the_merge_card_counts_the_review_of_the_threads_own_commit() {
     assert_eq!(review.notify, crate::work::ReviewFor::Orchestrator);
     assert_eq!(review.state, crate::work::ReviewState::Running);
     assert!(
-        review.started_at_ms <= card.created_at_ms,
-        "started before the card, so the card speaks for it"
+        review.started_at_ms <= merged.at_ms,
+        "started before the merge, so it counts with the merged work"
     );
     release.notify_one();
     let reviews = code_reviews(&flow, 1).await;
@@ -762,8 +782,8 @@ async fn a_thread_started_on_older_instructions_starts_over_instead_of_resuming(
     flow.stop().await;
 }
 
-/// After the user's merge the session's worktree and merged branch are gone (THREAD-PLAN.md
-/// Q9). The `[finished]` turn doesn't bring them back; the user's next message does, at the
+/// After the merge the user asked for, the session's worktree and merged branch are gone
+/// (THREAD-PLAN.md Q9). The rest of that turn doesn't bring them back; the user's next message does, at the
 /// same path, on a fresh branch from the base's tip as it is then, and the thread goes on in
 /// the same CLI session.
 #[tokio::test]
@@ -779,45 +799,34 @@ async fn a_merge_removes_the_session_worktree_and_the_next_message_starts_fresh(
                 log.lock()
                     .unwrap()
                     .push((turn.input.clone(), turn.add_dirs.clone()));
-                if turn.input.contains("Add notes and merge.") {
+                if turn.input.contains("Add notes.") {
                     commit_in_workspace(
                         &turn,
                         "NOTES.md",
                         "notes\n",
                         "Add notes\n\nBrigadier-Author: thread",
                     );
-                    let reply = turn.call("finish_session", json!({})).await;
+                    return Reply::text("Notes added. Merge them into `main`?");
+                }
+                if turn.input.contains("yes, merge it") {
+                    let reply = turn
+                        .call("finish_session", json!({"user_words": "yes, merge it"}))
+                        .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    log.lock().unwrap().push((reply.text.clone(), Vec::new()));
+                    return Reply::text("Merged.");
                 }
                 Reply::text("Done.")
             }
         }),
     )
     .await;
-    flow.say("Add notes and merge.").await;
-    let board = flow
-        .until("the merge card", |board| {
-            board.approvals.values().any(|card| {
-                card.state == CardState::Pending
-                    && matches!(card.subject, ApprovalSubject::FinishSession { .. })
-            })
-        })
-        .await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
     let worktree = session_worktree(&flow);
     let branch = git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]);
-    let card = board
-        .approvals
-        .values()
-        .find(|card| card.state == CardState::Pending)
-        .unwrap()
-        .id
-        .clone();
-    flow.manager
-        .answer_card(flow.conversation.clone(), card, ApprovalDecision::Allow)
-        .await
-        .unwrap();
-    flow.until("the [finished] turn", |_| {
+    flow.say("yes, merge it").await;
+    flow.until("the [finished] answer", |_| {
         seen.lock()
             .unwrap()
             .iter()
@@ -890,38 +899,33 @@ async fn a_merge_whose_worktree_removal_failed_retries_it_at_the_next_message() 
                 log.lock()
                     .unwrap()
                     .push((turn.input.clone(), turn.add_dirs.clone()));
-                if turn.input.contains("Add notes and merge.") {
+                if turn.input.contains("Add notes.") {
                     commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    let reply = turn.call("finish_session", json!({})).await;
+                    return Reply::text("Notes added. Merge them into `main`?");
+                }
+                if turn.input.contains("yes, merge it") {
+                    let reply = turn
+                        .call("finish_session", json!({"user_words": "yes, merge it"}))
+                        .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    log.lock().unwrap().push((reply.text.clone(), Vec::new()));
+                    return Reply::text("Merged.");
                 }
                 Reply::text("Done.")
             }
         }),
     )
     .await;
-    flow.say("Add notes and merge.").await;
-    let board = flow
-        .until("the merge card", |board| {
-            board
-                .approvals
-                .values()
-                .any(|card| card.state == CardState::Pending)
-        })
-        .await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
     let worktree = session_worktree(&flow);
     let branch = git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]);
     let mode = |path: &std::path::Path, mode: u32| {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
     };
     mode(&worktree, 0o555);
-    let card = board.approvals.values().next().unwrap().id.clone();
-    flow.manager
-        .answer_card(flow.conversation.clone(), card, ApprovalDecision::Allow)
-        .await
-        .unwrap();
-    flow.until("the [finished] turn", |_| {
+    flow.say("yes, merge it").await;
+    flow.until("the [finished] answer", |_| {
         seen.lock()
             .unwrap()
             .iter()
@@ -987,26 +991,25 @@ async fn merge_keeps_the_worktree(locked: bool) {
                 log.lock()
                     .unwrap()
                     .push((turn.input.clone(), turn.add_dirs.clone()));
-                if turn.input.contains("Add notes and merge.") {
+                if turn.input.contains("Add notes.") {
                     commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    let reply = turn.call("finish_session", json!({})).await;
+                    return Reply::text("Notes added. Merge them into `main`?");
+                }
+                if turn.input.contains("yes, merge it") {
+                    let reply = turn
+                        .call("finish_session", json!({"user_words": "yes, merge it"}))
+                        .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    log.lock().unwrap().push((reply.text.clone(), Vec::new()));
+                    return Reply::text("Merged.");
                 }
                 Reply::text("Done.")
             }
         }),
     )
     .await;
-    flow.say("Add notes and merge.").await;
-    let board = flow
-        .until("the merge card", |board| {
-            board
-                .approvals
-                .values()
-                .any(|card| card.state == CardState::Pending)
-        })
-        .await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
     let worktree = session_worktree(&flow);
     if locked {
         git(
@@ -1017,12 +1020,8 @@ async fn merge_keeps_the_worktree(locked: bool) {
         std::fs::write(worktree.join("DRAFT.md"), "draft\n").unwrap();
     }
     let branch = git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]);
-    let card = board.approvals.values().next().unwrap().id.clone();
-    flow.manager
-        .answer_card(flow.conversation.clone(), card, ApprovalDecision::Allow)
-        .await
-        .unwrap();
-    flow.until("the [finished] turn", |_| {
+    flow.say("yes, merge it").await;
+    flow.until("the [finished] answer", |_| {
         seen.lock()
             .unwrap()
             .iter()
@@ -1246,5 +1245,160 @@ async fn a_running_preview_or_review_leaves_the_answer_done_and_findings_work_ag
         .stop_preview(flow.conversation.clone(), None)
         .await
         .unwrap();
+    flow.stop().await;
+}
+
+/// What the thread was told by its finish_session calls, in order.
+type MergeReplies = Arc<Mutex<Vec<(String, bool)>>>;
+
+async fn finish(turn: &Turn, words: &str, replies: &MergeReplies) -> bool {
+    let reply = turn
+        .call("finish_session", json!({ "user_words": words }))
+        .await;
+    replies
+        .lock()
+        .unwrap()
+        .push((reply.text.clone(), reply.is_error));
+    !reply.is_error
+}
+
+fn on_main(flow: &Flow, path: &str) -> bool {
+    std::process::Command::new("git")
+        .args(["cat-file", "-e", &format!("main:{path}")])
+        .current_dir(&flow.repo)
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Merging is asked for in words, with no card: the thread proposes it in its reply, and
+/// finish_session refuses until the user's latest message agrees (silence, the thread's own
+/// guess at a yes, a "no", a "not yet"); then a "yes, merge it" merges, once.
+#[tokio::test]
+async fn the_merge_is_asked_in_words_and_happens_only_on_the_users_yes() {
+    let replies: MergeReplies = Arc::default();
+    let log = replies.clone();
+    let flow = Flow::start(
+        "thread-merge-words",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                let input = turn.input.clone();
+                if input.contains("Add notes.") {
+                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                    // Before the user answered: neither the thread's guess nor their request
+                    // for the work is consent.
+                    assert!(!finish(&turn, "yes", &log).await);
+                    assert!(!finish(&turn, "Add notes", &log).await);
+                    return Reply::text(
+                        "Notes added, and the review is clean. Merge them into `main`?",
+                    );
+                }
+                if input.contains("No, not yet.") {
+                    assert!(!finish(&turn, "No, not yet.", &log).await);
+                    return Reply::text("OK, it stays on its branch. Merge it into `main` now?");
+                }
+                if input.contains("don't merge it") {
+                    assert!(!finish(&turn, "merge it", &log).await);
+                    return Reply::text("Left unmerged.");
+                }
+                if input.contains("yes, merge it") {
+                    assert!(finish(&turn, "yes, merge it", &log).await);
+                    // One yes, one merge.
+                    assert!(!finish(&turn, "yes, merge it", &log).await);
+                    return Reply::text("Merged.");
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    flow.say("No, not yet.").await;
+    flow.settled().await;
+    flow.say("Hmm, don't merge it").await;
+    flow.settled().await;
+    assert!(
+        !on_main(&flow, "NOTES.md"),
+        "nothing merged on silence or a no"
+    );
+    flow.say("OK, yes, merge it").await;
+    flow.settled().await;
+    assert!(on_main(&flow, "NOTES.md"), "merged on the yes");
+    let replies = replies.lock().unwrap().clone();
+    let errors: Vec<_> = replies.iter().filter(|(_, error)| *error).collect();
+    assert_eq!(errors.len(), 5, "{replies:#?}");
+    assert!(
+        errors.iter().all(|(text, _)| text.contains("[not merged]")),
+        "{replies:#?}"
+    );
+    assert!(
+        replies[0].0.contains("is not in the user's latest message"),
+        "{replies:#?}"
+    );
+    assert!(
+        replies[5].0.contains("already asked for a merge"),
+        "{replies:#?}"
+    );
+    let finished = replies.iter().find(|(_, error)| !error).unwrap();
+    assert!(
+        finished.0.contains("[finished] As the user asked"),
+        "{replies:#?}"
+    );
+    let board = flow.board().await;
+    assert!(board.approvals.is_empty(), "no merge card");
+    let merged: Vec<_> = board
+        .orchestrator_steps
+        .iter()
+        .filter(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
+        .collect();
+    assert_eq!(merged.len(), 1, "{merged:#?}");
+    flow.stop().await;
+}
+
+/// A "wait" the user sends while the merge is being prepared stops it: the last look at their
+/// consent, right before it lands, sees they wrote again.
+#[tokio::test]
+async fn a_wait_sent_while_the_merge_is_prepared_stops_it() {
+    let replies: MergeReplies = Arc::default();
+    let log = replies.clone();
+    let flow = Flow::start(
+        "thread-merge-withdrawn",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if turn.input.contains("Add notes and merge it.") {
+                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                    assert!(!finish(&turn, "merge it", &log).await);
+                    return Reply::text("You wrote again, so I didn't merge.");
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    *flow
+        .manager
+        .conv(&flow.conversation)
+        .unwrap()
+        .merge_pause
+        .lock()
+        .unwrap() = Some((reached.clone(), release.clone()));
+    flow.say("Add notes and merge it.").await;
+    reached.notified().await;
+    flow.say("wait!").await;
+    release.notify_one();
+    flow.until("the refused merge", |_| !replies.lock().unwrap().is_empty())
+        .await;
+    flow.settled().await;
+    let replies = replies.lock().unwrap().clone();
+    assert!(replies[0].0.contains("wrote again"), "{replies:#?}");
+    assert!(!on_main(&flow, "NOTES.md"), "nothing merged");
     flow.stop().await;
 }

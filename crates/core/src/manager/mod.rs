@@ -41,6 +41,7 @@ mod instructions;
 mod landing;
 mod lifecycle;
 mod machine;
+mod merge_consent;
 mod outcomes;
 mod outputs;
 pub mod overnight;

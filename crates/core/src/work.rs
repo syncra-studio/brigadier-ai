@@ -820,7 +820,8 @@ pub enum ApprovalSubject {
         branch: String,
         diff_stat: DiffStat,
     },
-    /// Merge the session branch into its base.
+    /// Merge the session branch into its base. Only in recorded conversations: the user asks
+    /// for the merge in words now (`finish_session`).
     FinishSession {
         branch: String,
         base: String,
@@ -1329,8 +1330,16 @@ pub enum OrchestratorStepKind {
         branch: String,
         head: String,
     },
-    /// "Merged {branch} into {base}".
-    Merged { branch: String, base: String },
+    /// "Merged {branch} into {base}": the user asked for it in the thread.
+    Merged {
+        branch: String,
+        base: String,
+        #[serde(default)]
+        commits: u32,
+        /// The user message whose words asked for it: it asks for no other merge.
+        #[serde(default)]
+        asked_in: Option<String>,
+    },
 }
 
 /// One step of the orchestrator, where it happened in the conversation.

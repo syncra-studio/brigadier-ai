@@ -6,4 +6,8 @@ import type { TaskId } from "./TaskId";
  * What the orchestrator (or a Chat's model) did that the thread tells as a grey row, in
  * its own words. What already shows by itself (a worker's own row, a card) has none.
  */
-export type OrchestratorStepKind = { "type": "tool", itemId: string, name: string, detail: string | null, status: ItemStatus, throughPosition: number, } | { "type": "messaged", taskId: TaskId, } | { "type": "readReport", taskId: TaskId, } | { "type": "readArtifact", name: string, } | { "type": "accepted", taskId: TaskId, } | { "type": "searchedWeb", query: string, } | { "type": "readPage", url: string, } | { "type": "created", taskId: TaskId, } | { "type": "answered", taskId: TaskId, question: string, answer: string, why: string, } | { "type": "landed", taskIds: Array<TaskId>, commits: number, branch: string, head: string, } | { "type": "merged", branch: string, base: string, };
+export type OrchestratorStepKind = { "type": "tool", itemId: string, name: string, detail: string | null, status: ItemStatus, throughPosition: number, } | { "type": "messaged", taskId: TaskId, } | { "type": "readReport", taskId: TaskId, } | { "type": "readArtifact", name: string, } | { "type": "accepted", taskId: TaskId, } | { "type": "searchedWeb", query: string, } | { "type": "readPage", url: string, } | { "type": "created", taskId: TaskId, } | { "type": "answered", taskId: TaskId, question: string, answer: string, why: string, } | { "type": "landed", taskIds: Array<TaskId>, commits: number, branch: string, head: string, } | { "type": "merged", branch: string, base: string, commits: number, 
+/**
+ * The user message whose words asked for it: it asks for no other merge.
+ */
+askedIn: string | null, };

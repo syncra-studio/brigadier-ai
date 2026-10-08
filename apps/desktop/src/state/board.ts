@@ -6,6 +6,7 @@ import { showConversationNotice } from "@/state/notices";
 
 import type {
   Approval,
+  ApprovalSubject,
   Compaction,
   ContextUsage,
   ConversationView,
@@ -36,6 +37,18 @@ import type {
   WorkerStep,
 } from "@/ipc/generated";
 
+/**
+ * A card the thread shows: any approval but a merge card from a recorded conversation. The user
+ * asks for a merge in words now; the thread merges when they do.
+ */
+export type ShownApproval = Approval & {
+  subject: Exclude<ApprovalSubject, { type: "finishSession" }>;
+};
+
+export function shownApproval(approval: Approval): approval is ShownApproval {
+  return approval.subject.type !== "finishSession";
+}
+
 /** Newest entries kept per open worker transcript; older ones load on demand. */
 export const WORKER_ENTRIES = 3_000;
 
@@ -60,7 +73,7 @@ export type Board = {
   conversationId: string;
   loaded: boolean;
   tasks: Record<string, Task>;
-  approvals: Record<string, Approval>;
+  approvals: Record<string, ShownApproval>;
   questions: Record<string, Question>;
   plans: Record<string, Plan>;
   /** One-shot reviews by the other vendor (a landing's, a worker's own, an outline's), by id. */
@@ -328,7 +341,7 @@ export function boardFromView(
     conversationId: view.conversation.id,
     loaded: true,
     tasks: byId(view.tasks),
-    approvals: byId(view.approvals),
+    approvals: byId(view.approvals.filter(shownApproval)),
     questions: byId(view.questions),
     plans: byId(view.plans),
     // A daemon from before one-shot reviews sends none.
@@ -494,6 +507,7 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
     case "taskUpdated":
       return { ...board, tasks: placed(board.tasks, event.task, envelope, board) };
     case "approvalUpdated":
+      if (!shownApproval(event.approval)) return board;
       return { ...board, approvals: placed(board.approvals, event.approval, envelope, board) };
     case "questionUpdated":
       return { ...board, questions: placed(board.questions, event.question, envelope, board) };
@@ -611,7 +625,7 @@ const TOOL_DOING: Readonly<Record<string, string>> = {
   approve_outline: "Reading a worker's outline",
   request_approval: "Asking for your approval",
   land_phase: "Landing a worker's commits",
-  finish_session: "Finishing the session",
+  finish_session: "Merging the session",
   list_tasks: "Checking on the workers",
   route_follow_up: "Sorting your follow-up",
   note_for_user: "Noting it for you",

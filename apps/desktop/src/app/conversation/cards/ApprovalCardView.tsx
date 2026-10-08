@@ -1,5 +1,4 @@
 import {
-  Branch,
   Check,
   Commit,
   Globe,
@@ -11,7 +10,6 @@ import { memo, type ReactNode } from "react";
 
 import { DiffStatView } from "@/app/conversation/cards/common";
 import { WaitingRow } from "@/app/conversation/cards/common";
-import { useMergeReviewStatus } from "@/app/conversation/reviewStatus";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
 import {
   ApprovalCard,
@@ -19,9 +17,9 @@ import {
 } from "@/components/assistant-ui/elements/approval-card";
 import { DECIDERS } from "@/components/transcript/TranscriptRow";
 import { Badge } from "@/components/ui/badge";
-import type { Approval, CardState } from "@/ipc/generated";
+import type { CardState } from "@/ipc/generated";
 import { NEVER_PUSHES_NOTE } from "@/lib/setup";
-import { useBoard } from "@/state/board";
+import { type ShownApproval, useBoard } from "@/state/board";
 
 /** Shell-quotes an argument only where needed, so the exact argv reads unambiguously. */
 function quote(arg: string): string {
@@ -69,10 +67,9 @@ function byline(by: ReactNode, text: string | null): ReactNode {
 }
 
 function describe(
-  approval: Approval,
+  approval: ShownApproval,
   actorId: string | null,
   landingId: string | null,
-  review: string | null,
 ): Shown {
   // The worker that asks, and the one to land, as their chips.
   const by = actorId === null ? null : <WorkerChip taskId={actorId} />;
@@ -129,16 +126,6 @@ function describe(
         subtitle: "One commit",
         body: <DiffStatView stat={subject.diffStat} />,
       };
-    case "finishSession": {
-      // Merging never waits for the review: its line follows it, also after the merge.
-      const commits = `${subject.commits} commit${subject.commits === 1 ? "" : "s"}`;
-      return {
-        icon: <Branch />,
-        title: `Merge ${subject.branch} into ${subject.base}?`,
-        subtitle: review ? `${commits} · ${review}` : commits,
-        body: <DiffStatView stat={subject.diffStat} />,
-      };
-    }
     case "action":
       return {
         icon: <Sparkle />,
@@ -167,10 +154,9 @@ export const ApprovalCardView = memo(function ApprovalCardView({ cardId }: { car
       ? approval.subject.taskId
       : null,
   );
-  const review = useMergeReviewStatus(approval);
   if (!approval) return null;
 
-  const shown = describe(approval, actorId, landingId, review);
+  const shown = describe(approval, actorId, landingId);
   if (approval.state.type === "pending") {
     return <WaitingRow icon={shown.icon}>Waiting for your approval</WaitingRow>;
   }

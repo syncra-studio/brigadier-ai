@@ -3,7 +3,8 @@ import { test } from "node:test";
 
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
 import { pendingActionKeys } from "@/app/conversation/pendingActions";
-import type { Approval, Conversation, OvernightRun, Plan, Question, Setup } from "@/ipc/generated";
+import type { Conversation, OvernightRun, Plan, Question, Setup } from "@/ipc/generated";
+import type { ShownApproval } from "@/state/board";
 
 type Session = Extract<Setup, { type: "session" }>;
 const setup: Session = {
@@ -20,7 +21,7 @@ const run: OvernightRun = {
   ...Object.values(night.overnight as unknown as Record<string, OvernightRun>)[0]!,
   id: "night", state: "proposed",
 };
-const approval: Approval = {
+const approval: ShownApproval = {
   id: "approval", conversationId: conversation.id, taskId: null, requestId: null,
   position: 3, subject: { type: "action", action: "Continue", details: "" },
   state: { type: "pending" }, createdAtMs: 0, resolvedAtMs: null,

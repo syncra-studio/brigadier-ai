@@ -1,5 +1,4 @@
 import {
-  Branch,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -27,7 +26,6 @@ import { useShallow } from "zustand/react/shallow";
 
 import { pendingActionKeys, type PendingAction } from "@/app/conversation/pendingActions";
 import { PlanCardLink } from "@/app/conversation/cards/PlanCardLink";
-import { useMergeReviewStatus } from "@/app/conversation/reviewStatus";
 import { revealOvernight } from "@/app/conversation/summaryState";
 import { useAction } from "@/app/conversation/useAction";
 import { ViewContext } from "@/app/conversation/viewContext";
@@ -59,14 +57,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type {
-  Approval,
   ApprovalDecision,
   Conversation,
   DiffStat,
 } from "@/ipc/generated";
 import { shownCommand } from "@/components/transcript/activity";
 import { answerCard, answerQuestion, decidePlan } from "@/state/actions";
-import { useBoard } from "@/state/board";
+import { type ShownApproval, useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
 /* Pending decisions sit on the rail above the full composer. Their shortcuts leave
@@ -292,15 +289,13 @@ function CardProse({ children }: { children: ReactNode }) {
 
 /**
  * What a card asks, compactly: its kind ("Terminal", "Edit files", "Internet access", "Ask
- * permission", "Merge", "Plan"), the asker's one-line reason as the title, and the exact thing
- * asked about. `cwd` shows only when the command runs outside the session's own folders.
- * `review`: a merge card's review line ("Review running…", "Review: clean").
+ * permission", "Plan"), the asker's one-line reason as the title, and the exact thing asked
+ * about. `cwd` shows only when the command runs outside the session's own folders.
  */
 function describe(
-  approval: Approval,
+  approval: ShownApproval,
   landingId: string | null,
   inSession: (path: string) => boolean,
-  review: string | null,
 ): Shown {
   const { subject } = approval;
   switch (subject.type) {
@@ -362,19 +357,6 @@ function describe(
         ),
         body: <ActionFileList files={fileStats(subject.diffStat)} />,
         allow: "Land",
-      };
-    case "finishSession":
-      return {
-        icon: <Branch />,
-        kind: "Merge",
-        title: `Merge ${subject.branch} into ${subject.base}? ${subject.commits} commit${subject.commits === 1 ? "" : "s"}.`,
-        body: (
-          <>
-            {review && <p className="text-foreground/55 px-4 text-xs">{review}</p>}
-            <ActionFileList files={fileStats(subject.diffStat)} />
-          </>
-        ),
-        allow: "Merge",
       };
     case "action":
       return {
@@ -443,7 +425,6 @@ export function ApprovalAction({
       : null,
   );
   const inSession = useInSession(approval?.conversationId);
-  const review = useMergeReviewStatus(approval);
   const action = useAction();
   const allow = useRef<HTMLButtonElement>(null);
   // Unless the user is typing somewhere, Allow takes focus.
@@ -465,7 +446,7 @@ export function ApprovalAction({
   });
   if (!approval) return null;
 
-  const shown = describe(approval, landingId, inSession, review);
+  const shown = describe(approval, landingId, inSession);
   const request =
     approval.subject.type === "cli" ? approval.subject.request : null;
   const grant = request?.grant ?? null;

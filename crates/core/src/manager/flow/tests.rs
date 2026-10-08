@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
-use crate::work::{ApprovalSubject, CardState, RequestState, TaskState};
+use crate::work::{CardState, RequestState, TaskState};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -478,7 +478,7 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
         }),
     )
     .await;
-    flow.say("Add a greeting file.").await;
+    flow.say("Add a greeting file and merge it.").await;
     flow.settled().await;
     // The lead's own review and the landing's.
     let board = reviews_ended(&flow, 2).await;
@@ -561,17 +561,19 @@ async fn a_review_still_running_at_the_merge_reports_its_findings_after_it() {
                             "The review found a missing newline; tell me if you want it fixed.",
                         );
                     }
-                    if turn.input.contains("[finished]") {
-                        return Reply::text("Merged the greeting into main.");
-                    }
                     if let Some(n) = reports_in(&turn.input).first() {
                         let reply = turn
                             .call("land_phase", json!({"task": format!("task-{n}")}))
                             .await;
                         assert!(reply.text.contains("Landed"), "{}", reply.text);
-                        let reply = turn.call("finish_session", json!({})).await;
+                        // The user asked for the merge with the work: no card.
+                        let reply = turn
+                            .call("finish_session", json!({"user_words": "merge it"}))
+                            .await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("[quiet]");
+                        assert!(reply.text.contains("[finished]"), "{}", reply.text);
+                        assert!(reply.text.contains("review still runs"), "{}", reply.text);
+                        return Reply::text("Merged the greeting into main.");
                     }
                     let reply = turn
                         .call(
@@ -596,37 +598,7 @@ async fn a_review_still_running_at_the_merge_reports_its_findings_after_it() {
         }),
     )
     .await;
-    flow.say("Add a greeting file.").await;
-    let board = flow
-        .until("the merge card", |board| {
-            board.approvals.values().any(|card| {
-                card.state == CardState::Pending
-                    && matches!(card.subject, ApprovalSubject::FinishSession { .. })
-            })
-        })
-        .await;
-    let card = board
-        .approvals
-        .values()
-        .find(|card| card.state == CardState::Pending)
-        .unwrap()
-        .id
-        .clone();
-    assert!(
-        board
-            .reviews
-            .values()
-            .all(|review| review.state == crate::work::ReviewState::Running),
-        "the review still runs when the user is asked to merge"
-    );
-    flow.manager
-        .answer_card(
-            flow.conversation.clone(),
-            card,
-            brigadier_providers::ApprovalDecision::Allow,
-        )
-        .await
-        .unwrap();
+    flow.say("Add a greeting file and merge it.").await;
     let repo = flow.repo.clone();
     let board = flow
         .until("the merge", |_| {
@@ -643,6 +615,7 @@ async fn a_review_still_running_at_the_merge_reports_its_findings_after_it() {
         crate::work::ReviewState::Running,
         "the merge didn't wait for the review"
     );
+    assert!(board.approvals.is_empty(), "no merge card");
     release.notify_one();
     let board = reviews_ended(&flow, 1).await;
     flow.until("the orchestrator to hear the review", |_| {
@@ -759,7 +732,7 @@ async fn a_verifier_the_orchestrator_started_triages_its_review_and_reports() {
         }),
     )
     .await;
-    flow.say("Add a greeting file.").await;
+    flow.say("Add a greeting file and merge it.").await;
     flow.settled().await;
     let board = reviews_ended(&flow, 2).await;
     let lead = Flow::task(&board, 1);
@@ -904,7 +877,7 @@ async fn a_verifier_takes_over_its_leads_review_still_running() {
         }),
     )
     .await;
-    flow.say("Add a greeting file.").await;
+    flow.say("Add a greeting file and merge it.").await;
     flow.settled().await;
     let board = flow
         .until("the verifier to land", |board| {
@@ -1374,7 +1347,7 @@ async fn archiving_a_session_ends_its_running_review() {
         }),
     )
     .await;
-    flow.say("Add a greeting file.").await;
+    flow.say("Add a greeting file and merge it.").await;
     flow.until("the landing's review to run", |board| {
         board
             .reviews

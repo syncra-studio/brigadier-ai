@@ -252,6 +252,14 @@ pub(crate) struct ConvLive {
     /// Held while waiting messages are routed again, so a timer and a routing change never
     /// both start a model for them.
     retry: tokio::sync::Mutex<()>,
+    /// How many times the user wrote (sent, edited, steered a queued message). A merge holds
+    /// it from its last look at the user's consent until it lands, so a "wait" sent meanwhile
+    /// either stops it or comes after it.
+    pub(super) user_wrote: tokio::sync::Mutex<u64>,
+    /// Tests: what a merge waits for once prepared, before its last look at consent.
+    #[cfg(test)]
+    pub(super) merge_pause:
+        std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
 impl ConvLive {
@@ -270,7 +278,15 @@ impl ConvLive {
                 ..ConvState::default()
             }),
             retry: tokio::sync::Mutex::new(()),
+            user_wrote: tokio::sync::Mutex::new(0),
+            #[cfg(test)]
+            merge_pause: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Counts what the user wrote, waiting while a merge lands.
+    pub(super) async fn note_user_wrote(&self) {
+        *self.user_wrote.lock().await += 1;
     }
 
     /// Holds what a tool call of the thread read or searched for the turn; the batch to record
@@ -559,6 +575,7 @@ impl SessionManager {
     ) -> Result<SendOutcome> {
         self.admit()?;
         let conversation = self.core.conversation(&id)?;
+        self.conv(&id)?.note_user_wrote().await;
         match conversation.lifecycle {
             Lifecycle::Archived => {
                 return Err(Error::Invalid(
@@ -686,6 +703,7 @@ impl SessionManager {
     pub async fn steer_queued(&self, id: ConversationId, item_id: String) -> Result<()> {
         self.admit()?;
         let conv = self.conv(&id)?;
+        conv.note_user_wrote().await;
         let working = self.working_request(&id).await;
         let item = self.core.take_queued(&id, &item_id).await?;
         let message = self

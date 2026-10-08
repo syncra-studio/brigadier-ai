@@ -80,7 +80,7 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
 **Q2: keep the product, make the pipeline optional.**
 - **Keep the worker-control interface** (`crates/mcp-server/src/catalog.rs:210-282`) as the thread's async tools:
   - `delegate_task` (routed, watchable, either vendor), `message_worker`, `answer_worker`, `stop_worker`, `read_report`, `read_artifact`, `list_tasks`, `ask_user`, `note_for_user`, `request_approval`;
-  - `land_phase`, renamed in the UI to "land", with no phase required; `finish_session` (the merge card);
+  - `land_phase`, renamed in the UI to "land", with no phase required; `finish_session` (the merge, asked for in words: user decision 6);
   - `query_brain`, `remember`, `search_transcript`.
 - **Add for the thread:**
   - `code_search`, `code_refs`, `project_map` (today worker-only, `catalog.rs:311-313`);
@@ -236,7 +236,7 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
   - It runs in a detached worktree at `tip` (`git worktree add --detach`) owned by `review:<id>`. So landing disposal (`:638`), merge and the next session branch don't remove it.
   - The reviewer is always the other vendor from the author.
 - **Findings** reach the thread as a `[review …]` message, even after an early merge. The thread fixes them (a fix worker or a tiny fix on the current session branch) or notes why not.
-- **Merge card** (`ActionCards.tsx:359-366`, `cards/ApprovalCardView.tsx:130-135`): "Review running…", then "Review: clean" or "N findings". Merge is allowed before the review finishes.
+- **Review status** on the summary's context card (`PinnedSummary.tsx` `ReviewRows`, `reviewStatus.ts`): "Review running…", then "Review: clean" or "N findings", for the work since the last merge. The work a merge took keeps its own line ("Merged") until the next merge, so a review still running when the user merged shows its outcome there. Merge is allowed before the review finishes. (This replaced the merge card's review line: user decision 6.)
 - The thread may still add a verifier or a deeper review for big or risky work.
 
 **Q13: no edit guard; metrics to tune the prompt.** Per session, measure:
@@ -415,6 +415,15 @@ If a task is inconclusive, rerun it once with the arm order swapped. Missing evi
 3. T2 (the thread-indicator request, base `53c5cd32`) is the second A/B task. Yes.
 4. The "deciding" follow-up routing (PLAN §9 Q30) stays as it is; the user likes it. Revisit only if phase 2 shows a reason.
 5. Baselines at the start of phase 1, a T1 run per phase, the full A/B in phase 6. Yes.
+
+**The user decided (2026-10-08):**
+6. **Merging is conversational.** No merge card, no Merge/Deny buttons: "user can ask to the orchestrator to merge it, orchestrator can recommend/propose to merge, user agrees, in words, without any buttons. Just like a normal thread." When work has landed, the thread may propose the merge in its reply, as a question naming the base, with what the reviews found. `finish_session` merges only when the user's latest message asks for it or plainly agrees to that proposal. The thread passes the user's words (`user_words`), and the daemon checks them in code (`M/merge_consent.rs`, no model call) against the latest user message on the branch shown:
+   - It refuses a question, a condition ("if", "once", "after"…), a "no", a "wait" or a "don't".
+   - It refuses a plain yes unless the thread's reply right before proposed this merge.
+   - It refuses words from a message that already asked for a merge.
+   - It refuses when the user has written again since, in the queue or while the merge was being prepared. The last look at consent and the landing are one step for what the user writes.
+   - Overnight runs keep their own Merge on the run's card (`MergeOvernight`, bound to the accepted tip).
+   - This supersedes Q12's merge-card UI; the review status moved to the context card (Q12 above).
 
 ## Checked third-party contracts (2026-10-07)
 

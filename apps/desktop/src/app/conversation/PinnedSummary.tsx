@@ -11,6 +11,7 @@ import {
   PullRequestDraft,
   PullRequestMerged,
   PullRequestOpen,
+  ShieldCheck,
   Tasks,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
@@ -36,6 +37,7 @@ import {
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
 import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgress";
+import { useReviewLines } from "@/app/conversation/reviewStatus";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
 import { useAction } from "@/app/conversation/useAction";
@@ -766,6 +768,29 @@ function BranchRow({ branch, diff }: { branch: string; diff: DiffStat | null }) 
 }
 
 /**
+ * The code reviews' outcome, quietly: of the work since the last merge, and of the work that
+ * merge took, which keeps its line (a review may still run when the user merges) until the next.
+ * The thread tells the user what they found in words.
+ */
+function ReviewRows({ conversationId }: { conversationId: string }) {
+  const { merged, current } = useReviewLines(conversationId);
+  return (
+    <>
+      {merged && (
+        <SummaryRow icon={<ShieldCheck />} muted meta="Merged">
+          {merged}
+        </SummaryRow>
+      )}
+      {current && (
+        <SummaryRow icon={<ShieldCheck />} muted>
+          {current}
+        </SummaryRow>
+      )}
+    </>
+  );
+}
+
+/**
  * The summary's cards, pinned in the pane or floating from the top bar: the context card (with
  * the session's plan as one of its sections), then the run's card. `active` while they can be
  * seen, for their scroll offsets.
@@ -844,6 +869,7 @@ function SummaryContent({
                 <BranchRow branch={setup.environment.branch} diff={diff} />
               </GitActions>
             )}
+            <ReviewRows conversationId={conversation.id} />
             {pullRequest && <PullRequestRow pullRequest={pullRequest} />}
           </SummarySection>
           <WaitingOnYou conversationId={conversation.id} />

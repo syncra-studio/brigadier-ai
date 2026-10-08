@@ -192,7 +192,7 @@ fn environment_text(environment: &Environment) -> String {
             "Local checkout: landed work goes, as the workers' own commits, directly onto `{branch}` in the user's own checkout."
         ),
         Environment::NewWorktree { base, branch, .. } => format!(
-            "New worktree: landed work goes, as the workers' own commits, onto the session branch `{branch}` (from `{base}`). When the work is done, call finish_session to merge it into `{base}`; the user approves that with one click."
+            "New worktree: landed work goes, as the workers' own commits, onto the session branch `{branch}` (from `{base}`). Merging it into `{base}` is the user's call, in words, like the rest of the thread: there is no card. When the work has landed, you may propose it in your reply, as a question that names `{base}` (\"Merge `{branch}` into `{base}`?\"), with what the reviews found. Call finish_session only once the user's latest message asks for the merge or plainly agrees to the one you proposed, and pass their words; on silence, \"no\", \"wait\" or a condition (\"once the tests pass\"), don't, and never take an earlier yes for a later merge."
         ),
     }
 }

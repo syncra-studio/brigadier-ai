@@ -44,6 +44,7 @@ impl SessionManager {
             return Err(Error::Invalid("the message is empty".into()));
         }
         let conv = self.conv(&id)?;
+        conv.note_user_wrote().await;
         let messages = self.core.all_messages(&id).await?;
         let at = messages
             .iter()

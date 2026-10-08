@@ -346,7 +346,8 @@ impl SessionManager {
             }
             OrchestratorCall::FinishSession(args) => {
                 self.check_plan_mode(id).await?;
-                self.finish_session(id, args.message).await
+                self.finish_session(id, &args.user_words, args.message)
+                    .await
             }
             OrchestratorCall::NoteForUser(args) => self.note_for_user(id, args).await,
             OrchestratorCall::SettleStep(args) => self.settle_step(id, args).await,

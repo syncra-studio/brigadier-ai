@@ -530,11 +530,14 @@ pub struct ReviewPlan {
     pub brief: String,
 }
 
-/// `finish_session`: merge the session branch into its base (new-worktree sessions), behind the
-/// user's one-click approval.
+/// `finish_session`: merge the session branch into its base (new-worktree sessions), once the
+/// user asked for it in their own words.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FinishSession {
+    /// The user's own words that ask for the merge or agree to the one you proposed, quoted
+    /// exactly from their latest message ("yes, merge it").
+    pub user_words: String,
     /// The merge commit message, when a merge commit is needed.
     #[serde(default)]
     pub message: Option<String>,
