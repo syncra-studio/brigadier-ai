@@ -586,6 +586,8 @@ async fn a_runs_output_hides_the_projects_secrets() {
                 for args in [
                     // The session's worktree has no copy of the user's `.env`: read the checkout's.
                     json!({ "command": "cat \"$(git rev-parse --git-common-dir)/../.env\"" }),
+                    // A byte that isn't UTF-8 doesn't let the rest through.
+                    json!({ "command": "cat \"$(git rev-parse --git-common-dir)/../.env\"; printf '\\377\\n'" }),
                     json!({
                         "command": "i=0; while [ $i -lt 3000 ]; do echo \"line $i\"; i=$((i+1)); \
                                     done; echo \"error: TOKEN=$(cut -d= -f2 \"$(git rev-parse --git-common-dir)/../.env\")\"; \
@@ -621,14 +623,15 @@ async fn a_runs_output_hides_the_projects_secrets() {
     flow.say("Show me the env file.").await;
     flow.settled().await;
     let replies = replies.lock().unwrap().clone();
-    assert_eq!(replies.len(), 2, "{replies:?}");
+    assert_eq!(replies.len(), 3, "{replies:?}");
     for reply in &replies {
         assert!(!reply.contains("s3cret-value-123"), "{reply}");
     }
     assert!(replies[0].starts_with("[exit 0]\nTOKEN="), "{}", replies[0]);
-    assert!(replies[1].contains("error: TOKEN="), "{}", replies[1]);
+    assert!(replies[1].starts_with("[exit 0]\nTOKEN="), "{}", replies[1]);
+    assert!(replies[2].contains("error: TOKEN="), "{}", replies[2]);
     let board = flow.board().await;
-    let stored = &board.outputs[&alias(&replies[1])];
+    let stored = &board.outputs[&alias(&replies[2])];
     let blob = flow
         .manager
         .core

@@ -66,12 +66,14 @@ impl SessionManager {
     pub(crate) async fn hide_secrets(&self, id: &ConversationId, output: Vec<u8>) -> Vec<u8> {
         let mut hidden = self.grants.secrets();
         hidden.extend(self.session_secret_values(id).await);
-        match (
-            super::secrets::redactor(hidden),
-            std::str::from_utf8(&output),
-        ) {
-            (Some(redactor), Ok(text)) => redactor.redact(text).into_owned().into_bytes(),
-            _ => output,
+        // Output that isn't UTF-8 is read the way the thread is shown it, so a stray byte
+        // doesn't let a secret through.
+        match super::secrets::redactor(hidden) {
+            Some(redactor) => redactor
+                .redact(&String::from_utf8_lossy(&output))
+                .into_owned()
+                .into_bytes(),
+            None => output,
         }
     }
 
