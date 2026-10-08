@@ -27,9 +27,10 @@ use std::sync::Arc;
 use brigadier_providers::model::Origin;
 use brigadier_providers::{Artifact, ProviderKind, TerminalCommand, TurnInput};
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use super::SessionManager;
-use super::workers::TaskLive;
+use super::workers::{TaskLive, ToolAccess};
 use crate::work::{Takeover, Task, TaskId, TaskState};
 use crate::{Error, Result, now_ms};
 
@@ -170,7 +171,9 @@ impl SessionManager {
             .start_terminal(&*host, &task, &native_id, cols, rows)
             .await
         {
-            Ok(terminal) => {
+            Ok((terminal, tools)) => {
+                // Its tool calls (`run_check`) run with the terminal's access.
+                live.set_terminal_access(Some(tools)).await;
                 let terminal_id = terminal.id.clone();
                 let _ = self
                     .update_task(&conversation_id, &task_id, |t| {
@@ -228,7 +231,7 @@ impl SessionManager {
         native_id: &str,
         cols: u16,
         rows: u16,
-    ) -> Result<HostedTerminal> {
+    ) -> Result<(HostedTerminal, ToolAccess)> {
         let subject = match &task.subject {
             Some(id) => self.task_by_id(&task.conversation_id, id).await.ok(),
             None => None,
@@ -245,6 +248,12 @@ impl SessionManager {
             )
             .await?;
         let provider = task.route.choice.provider;
+        let tools = ToolAccess {
+            provider,
+            access: session.access.clone(),
+            owner: task_owner(&task.id),
+            ended: CancellationToken::new(),
+        };
         // Claude finds the session from any folder (spike, check 4), so the terminal opens in
         // the task's worktree; a Codex thread keeps its own folder (a read-only Codex worker
         // works from its scratch folder), where its sandbox was set up.
@@ -280,7 +289,7 @@ impl SessionManager {
                 tracing::warn!(task = %task.id, error = %err, "could not record a worker's terminal");
             }
         }
-        Ok(terminal)
+        Ok((terminal, tools))
     }
 
     /// An open that didn't finish: the task is as before, and a worker that was working goes
@@ -316,6 +325,7 @@ impl SessionManager {
             return;
         }
         *reservation = None;
+        live.set_terminal_access(None).await;
         self.grants.revoke_owner(&grant_owner(&live.id));
         let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await else {
             return;
@@ -429,6 +439,7 @@ impl SessionManager {
         if let (Some(open), Some(host)) = (reservation.take(), self.terminal_host.get()) {
             host.terminate(&open.terminal_id).await;
         }
+        live.set_terminal_access(None).await;
         self.grants.revoke_owner(&grant_owner(&task.id));
         self.forget_terminal(&now).await;
         live.set_taken_over(false).await;

@@ -169,6 +169,20 @@ struct TaskLiveState {
     taken_over: bool,
     /// The orchestrator's messages while it was open in the terminal, oldest first.
     held_messages: Vec<String>,
+    /// The terminal its session is open in: what its tool calls run with.
+    terminal: Option<ToolAccess>,
+}
+
+/// What a worker's tool calls that run commands (`run_check`) run with: its headless CLI's, or
+/// while it is open in the user's terminal, the terminal's.
+#[derive(Clone)]
+pub(crate) struct ToolAccess {
+    pub provider: ProviderKind,
+    pub access: Access,
+    /// The cleanup-ledger owner its commands are recorded under.
+    pub owner: String,
+    /// Cancelled when the CLI or the terminal ends: its commands end with it.
+    pub ended: CancellationToken,
 }
 
 impl TaskLiveState {
@@ -456,10 +470,26 @@ impl TaskLive {
         self.state.lock().await.stalls = 0;
     }
 
-    /// The worker's CLI session and the access it runs with, while one runs.
-    pub(crate) async fn session_access(&self) -> Option<(Arc<Cli>, Access)> {
+    /// What the worker's tool calls run with, while its CLI runs headless or in a terminal.
+    pub(crate) async fn tool_access(&self) -> Option<ToolAccess> {
         let state = self.state.lock().await;
-        Some((state.cli.clone()?, state.access.clone()?))
+        if let (Some(cli), Some(access)) = (&state.cli, &state.access) {
+            return Some(ToolAccess {
+                provider: cli.provider,
+                access: access.clone(),
+                owner: cli.owner.clone(),
+                ended: cli.ended.clone(),
+            });
+        }
+        state.terminal.clone()
+    }
+
+    /// The terminal the session is open in, or none any more (its commands end then).
+    pub(crate) async fn set_terminal_access(&self, terminal: Option<ToolAccess>) {
+        let old = std::mem::replace(&mut self.state.lock().await.terminal, terminal);
+        if let Some(old) = old {
+            old.ended.cancel();
+        }
     }
 
     /// The worker's CLI session, while one runs.

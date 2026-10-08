@@ -191,6 +191,20 @@ async fn call_with(flow: &Flow, grant: &str) -> bool {
     !reply.is_error
 }
 
+/// A check run from the terminal with `grant`: its reply.
+async fn check_with(flow: &Flow, grant: &str) -> crate::tools::ToolReply {
+    ToolHost::call(
+        &*flow.manager,
+        grant,
+        ToolCall::Worker(WorkerCall::RunCheck(crate::tools::RunCheck {
+            command: Some("cat notes.txt".into()),
+            workdir: None,
+            timeout_secs: None,
+            rerun: true,
+        })),
+    )
+    .await
+}
 /// For each vendor: the worker's own session opens in a terminal (its headless CLI closed
 /// first, a fresh grant that works for Brigadier's tools), a second open finds it, messages
 /// wait; when it ends, the same session resumes headless, never handed off for its size first,
@@ -231,6 +245,12 @@ async fn a_worker_opens_in_a_terminal_and_reports_what_was_done_there() {
         assert_eq!(command.cwd, std::path::PathBuf::from(&worktree));
         let grant = grant_of(command);
         assert!(call_with(&flow, &grant).await, "the terminal's grant works");
+        let check = check_with(&flow, &grant).await;
+        assert!(
+            !check.is_error && check.text.contains("notes"),
+            "its checks run: {}",
+            check.text
+        );
 
         // A second open reattaches; a message waits.
         let again = flow

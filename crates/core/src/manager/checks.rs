@@ -41,10 +41,11 @@ use brigadier_brain::{NewNode, NodeKind, Origin, Provenance};
 use brigadier_providers::redact::Redactor;
 use brigadier_providers::{Access, ProviderKind};
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use super::SessionManager;
-use super::conversation::Cli;
 use super::run::{RUN_TIMEOUT_DEFAULT, RUN_TIMEOUT_MAX, run_command, run_workdir, shell_command};
+use super::workers::ToolAccess;
 use super::{blocking, git_error};
 use crate::digest::TRIM_ABOVE;
 use crate::model::{ConversationId, DomainEvent, Environment, ProjectId, Setup};
@@ -101,7 +102,10 @@ struct Caller {
     task_id: Option<TaskId>,
     provider: ProviderKind,
     access: Access,
-    cli: Arc<Cli>,
+    /// Cancelled when its CLI (or terminal) ends.
+    ended: CancellationToken,
+    /// The cleanup-ledger owner its commands are recorded under.
+    owner: String,
     /// The checkout: a worker's worktree, the thread's workspace.
     tree: Option<PathBuf>,
     scratch: PathBuf,
@@ -218,8 +222,13 @@ impl SessionManager {
             let live = self
                 .existing_task_live(task_id)
                 .ok_or_else(|| Error::Invalid("the task's worker isn't running".into()))?;
-            let (cli, access) = live
-                .session_access()
+            let ToolAccess {
+                provider,
+                access,
+                owner,
+                ended,
+            } = live
+                .tool_access()
                 .await
                 .ok_or_else(|| Error::Invalid("the task's worker isn't running".into()))?;
             let task = self.task_by_id(id, task_id).await?;
@@ -229,13 +238,14 @@ impl SessionManager {
                 .ok_or_else(|| Error::Invalid("the task has no workspace".into()))?;
             let tree = workspace.worktree.map(PathBuf::from);
             let scratch = PathBuf::from(workspace.scratch);
-            let cwd_grant = cwd_grant(cli.provider, task.kind.writes(), tree.as_deref(), &scratch);
+            let cwd_grant = cwd_grant(provider, task.kind.writes(), tree.as_deref(), &scratch);
             return Ok(Caller {
                 conversation_id: id.clone(),
                 task_id: Some(task_id.clone()),
-                provider: cli.provider,
+                provider,
                 access,
-                cli,
+                ended,
+                owner,
                 tree,
                 scratch,
                 cwd_grant,
@@ -267,7 +277,8 @@ impl SessionManager {
             task_id: None,
             provider: cli.provider,
             access: launch.access,
-            cli,
+            ended: cli.ended.clone(),
+            owner: cli.owner.clone(),
             tree: launch.workspace.map(|workspace| workspace.path),
             scratch: self.owned_dir("orch", &id.0),
             cwd_grant: None,
@@ -433,8 +444,8 @@ impl SessionManager {
             self.runtime.platform().clone(),
             &spec,
             timeout,
-            caller.cli.ended.clone(),
-            &caller.cli.owner,
+            caller.ended.clone(),
+            &caller.owner,
             self.runtime.ledger(),
         )
         .await?;
