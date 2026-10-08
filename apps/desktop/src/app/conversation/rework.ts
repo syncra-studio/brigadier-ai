@@ -34,7 +34,7 @@ export function reworkableRequest(board: Board): string | null {
       (approval) =>
         approval.requestId === id &&
         approval.state.type === "allowed" &&
-        (approval.subject.type === "landing" || approval.subject.type === "finishSession"),
+        approval.subject.type === "landing",
     );
   return landed ? null : id;
 }

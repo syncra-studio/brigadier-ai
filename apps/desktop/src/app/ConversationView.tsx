@@ -102,7 +102,7 @@ import {
   switchBranch,
 } from "@/state/actions";
 import { toast } from "@/state/toasts";
-import { type Board, useBoard } from "@/state/board";
+import { useBoard } from "@/state/board";
 import { CHAT_TAB, openFileTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { placeOf, setTerminalCover } from "@/state/terminalPlaces";
 import {

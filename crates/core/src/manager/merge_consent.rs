@@ -126,13 +126,10 @@ fn words(text: &str) -> Vec<String> {
 
 /// The words with the clause each is in: punctuation ends a clause.
 fn clause_words(text: &str) -> Vec<(String, usize)> {
-    let mut out = Vec::new();
-    let mut clause = 0;
-    for piece in text.split_inclusive(|c: char| ".,;:!?()\n\u{2014}\u{2013}\"".contains(c)) {
-        out.extend(words(piece).into_iter().map(|word| (word, clause)));
-        clause += 1;
-    }
-    out
+    text.split_inclusive(|c: char| ".,;:!?()\n\u{2014}\u{2013}\"".contains(c))
+        .enumerate()
+        .flat_map(|(clause, piece)| words(piece).into_iter().map(move |word| (word, clause)))
+        .collect()
 }
 
 fn says_merge(words: &[String]) -> bool {
