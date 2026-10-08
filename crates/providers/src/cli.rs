@@ -19,6 +19,14 @@ const NESTED_SESSION_VARS: &[&str] = &[
     "CLAUDE_CODE_ENTRYPOINT",
     "CLAUDE_CODE_SSE_PORT",
     "CLAUDE_AGENT_SDK_VERSION",
+    // An interactive Claude that sees it answers but saves nothing of its session (checked on
+    // 2.1.292, docs/evidence/2026-10-07-thread-open-in-terminal-spike.md).
+    "CLAUDE_CODE_CHILD_SESSION",
+    // Another session's own.
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_PID",
     "CODEX_SANDBOX",
     "CODEX_SANDBOX_NETWORK_DISABLED",
     "CODEX_THREAD_ID",

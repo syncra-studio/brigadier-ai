@@ -307,6 +307,7 @@ export type { StorageReport } from "./StorageReport";
 export type { StoreMetrics } from "./StoreMetrics";
 export type { StoredOutput } from "./StoredOutput";
 export type { StreamingMessage } from "./StreamingMessage";
+export type { Takeover } from "./Takeover";
 export type { Task } from "./Task";
 export type { TaskCategory } from "./TaskCategory";
 export type { TaskId } from "./TaskId";

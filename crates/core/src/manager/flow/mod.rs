@@ -445,6 +445,30 @@ impl Provider for FakeCli {
     fn replayer(&self) -> Box<dyn Replayer> {
         Box::new(NoRecordings)
     }
+
+    /// `<cli> --resume <id>` in `cwd`, with the session's MCP variables (its grant).
+    fn terminal(
+        &self,
+        spec: SessionSpec,
+        cwd: PathBuf,
+    ) -> BoxFuture<'_, brigadier_providers::Result<brigadier_providers::TerminalCommand>> {
+        Box::pin(async move {
+            let brigadier_providers::model::Origin::Resume { native_id } = &spec.origin else {
+                return Err(brigadier_providers::Error::Invalid("not a resume".into()));
+            };
+            Ok(brigadier_providers::TerminalCommand {
+                program: PathBuf::from(format!("/fake/{}", self.kind)),
+                args: vec!["--resume".into(), native_id.clone()],
+                cwd,
+                env: spec
+                    .mcp_servers
+                    .iter()
+                    .flat_map(|server| server.env.iter())
+                    .map(|(name, value)| (name.into(), value.into()))
+                    .collect(),
+            })
+        })
+    }
 }
 
 /// Scripted CLIs have no recordings to replay.
@@ -979,6 +1003,8 @@ mod preview_tests;
 mod prewarm_tests;
 #[cfg(test)]
 mod reads_tests;
+#[cfg(test)]
+mod takeover_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

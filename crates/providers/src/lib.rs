@@ -29,6 +29,7 @@ pub mod simulate;
 mod time;
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -102,11 +103,29 @@ pub trait Provider: Send + Sync {
     /// A fresh parser over the CLI's raw output, for replaying recordings.
     fn replayer(&self) -> Box<dyn Replayer>;
 
+    /// The command that continues `spec`'s session (an [`Origin::Resume`]) interactively in a
+    /// terminal in `cwd`, with the same flags as its headless process. Nothing may run the
+    /// session meanwhile: Claude has no lock of its own. A Codex thread is unarchived first.
+    fn terminal(&self, spec: SessionSpec, cwd: PathBuf) -> BoxFuture<'_, Result<TerminalCommand>> {
+        let _ = (spec, cwd);
+        Box::pin(async { Err(Error::Invalid("this CLI cannot open in a terminal".into())) })
+    }
+
     /// The folders the user's own sessions of this CLI ran in, most recent first, from the
     /// CLI's session files (read, never changed).
     fn past_folders(&self) -> BoxFuture<'_, Vec<history::PastFolder>> {
         Box::pin(async { Vec::new() })
     }
+}
+
+/// A CLI session continued in a terminal: the resolved binary (never a name looked up on a
+/// terminal's PATH, where a wrapper may stand in), its arguments, and exactly its environment.
+#[derive(Debug, Clone)]
+pub struct TerminalCommand {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub cwd: PathBuf,
+    pub env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
 }
 
 /// A started session and its event stream.

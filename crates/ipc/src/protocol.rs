@@ -31,7 +31,7 @@ use ts_rs::TS;
 use crate::metrics::{DaemonMetrics, Diagnostics};
 
 /// Bumped on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 13;
+pub const PROTOCOL_VERSION: u32 = 14;
 
 /// What a development build's injected limit applies to.
 #[cfg(debug_assertions)]
@@ -253,6 +253,14 @@ pub enum Request {
     OpenSetupTerminal {
         provider: ProviderKind,
         install: bool,
+        cols: u16,
+        rows: u16,
+    },
+    /// "Open in terminal": continues a worker's own CLI session in a terminal (the task is
+    /// taken over until it ends, then the worker reports), or reattaches to the one open. Its
+    /// output then streams like [`Request::OpenTerminal`]'s.
+    OpenWorkerTerminal {
+        task_id: TaskId,
         cols: u16,
         rows: u16,
     },
@@ -940,6 +948,11 @@ pub enum Response {
     },
     OpenSetupTerminal {
         terminal: TerminalInfo,
+    },
+    OpenWorkerTerminal {
+        terminal: TerminalInfo,
+        /// The worker's CLI (Claude asks whether to trust a folder it never saw).
+        provider: ProviderKind,
     },
     OpenSideChat {
         conversation: Box<Conversation>,

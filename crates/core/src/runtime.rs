@@ -418,6 +418,20 @@ impl Runtime {
             .map_err(provider_error)
     }
 
+    /// The command that continues `spec`'s session in a terminal in `cwd` ("Open in terminal").
+    pub async fn terminal_command(
+        &self,
+        kind: ProviderKind,
+        spec: SessionSpec,
+        cwd: std::path::PathBuf,
+    ) -> Result<brigadier_providers::TerminalCommand> {
+        self.admit()?;
+        self.provider(kind)
+            .terminal(spec, cwd)
+            .await
+            .map_err(provider_error)
+    }
+
     /// Tests: whether the CLIs are scripted stand-ins (one-shot work that would run a real CLI
     /// directly goes through them instead).
     #[cfg(test)]

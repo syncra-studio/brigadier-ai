@@ -97,6 +97,12 @@ impl SessionManager {
                         self.recover_fix(&task).await;
                         continue;
                     }
+                    // Its worktree and session stay: the terminal is gone, and the session
+                    // goes back to its worker (or the end under way finishes).
+                    TaskState::TakenOver => {
+                        self.recover_takeover(&task).await;
+                        continue;
+                    }
                     // A write task that reported changing nothing has nothing to land.
                     TaskState::Reported if self.changed_nothing(&task).await => {
                         self.dispose_task(&task, TaskState::Done).await;
@@ -278,6 +284,7 @@ impl SessionManager {
                         | TaskState::Running
                         | TaskState::Blocked
                         | TaskState::Landing
+                        | TaskState::TakenOver
                 )
             })
         })

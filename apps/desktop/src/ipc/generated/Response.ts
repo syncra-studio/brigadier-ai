@@ -34,6 +34,7 @@ import type { ProbeBurst } from "./ProbeBurst";
 import type { Project } from "./Project";
 import type { ProjectCandidate } from "./ProjectCandidate";
 import type { ProjectRemoval } from "./ProjectRemoval";
+import type { ProviderKind } from "./ProviderKind";
 import type { ProvidersView } from "./ProvidersView";
 import type { PullRequest } from "./PullRequest";
 import type { RankingsRefresh } from "./RankingsRefresh";
@@ -70,7 +71,11 @@ files: Array<string>,
 /**
  * Set when the checkout has more files than were listed.
  */
-truncated: boolean, } | { "method": "readFile", file: CheckoutFile, } | { "method": "openTerminal", terminal: TerminalInfo, } | { "method": "openSetupTerminal", terminal: TerminalInfo, } | { "method": "openSideChat", conversation: Conversation, } | { "method": "writeTerminal" } | { "method": "resizeTerminal" } | { "method": "clearTerminal" } | { "method": "closeTerminal" } | { "method": "getDictation", dictation: DictationStatus, } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation", dictationId: string, } | { "method": "appendDictation" } | { "method": "finishDictation" } | { "method": "cancelDictation" } | { "method": "rateMessage" } | { "method": "getSessionDiff", 
+truncated: boolean, } | { "method": "readFile", file: CheckoutFile, } | { "method": "openTerminal", terminal: TerminalInfo, } | { "method": "openSetupTerminal", terminal: TerminalInfo, } | { "method": "openWorkerTerminal", terminal: TerminalInfo, 
+/**
+ * The worker's CLI (Claude asks whether to trust a folder it never saw).
+ */
+provider: ProviderKind, } | { "method": "openSideChat", conversation: Conversation, } | { "method": "writeTerminal" } | { "method": "resizeTerminal" } | { "method": "clearTerminal" } | { "method": "closeTerminal" } | { "method": "getDictation", dictation: DictationStatus, } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation", dictationId: string, } | { "method": "appendDictation" } | { "method": "finishDictation" } | { "method": "cancelDictation" } | { "method": "rateMessage" } | { "method": "getSessionDiff", 
 /**
  * Absent for Chats and local-checkout sessions.
  */

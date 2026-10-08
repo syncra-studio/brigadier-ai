@@ -47,7 +47,8 @@ use crate::model::*;
 use crate::process::{self, CliProcess};
 use crate::record::{self, Direction, Recorder};
 use crate::{
-    BoxFuture, Error, Ledger, Provider, ProviderSession, Replayer, Result, Started, now_ms,
+    BoxFuture, Error, Ledger, Provider, ProviderSession, Replayer, Result, Started,
+    TerminalCommand, now_ms,
 };
 use parse::{Control, Output, Parser};
 
@@ -206,11 +207,6 @@ impl Claude {
     }
 
     fn session_args(spec: &SessionSpec, cwd: &Path, native_id: &str) -> Result<Vec<String>> {
-        // Its extra folders are writable wherever its working directory is.
-        let spec = &SessionSpec {
-            access: spec.access_with_dirs(),
-            ..spec.clone()
-        };
         let mut args = Self::stream_args();
         args.extend(
             [
@@ -219,12 +215,47 @@ impl Claude {
                 "--replay-user-messages",
                 "--permission-prompt-tool",
                 "stdio",
-                "--strict-mcp-config",
-                "--setting-sources",
-                "project",
             ]
             .map(str::to_owned),
         );
+        args.extend(Self::session_flags(spec, cwd));
+        if let Some(prompt) = &spec.append_system_prompt {
+            args.push("--append-system-prompt".into());
+            args.push(prompt.clone());
+        }
+        match &spec.origin {
+            Origin::New => {
+                args.push("--session-id".into());
+                args.push(native_id.into());
+            }
+            Origin::Resume { native_id: resumed } => {
+                files::check_session_id(resumed)?;
+                args.push("--resume".into());
+                args.push(resumed.clone());
+            }
+            Origin::Fork { native_id: parent } => {
+                files::check_session_id(parent)?;
+                args.push("--resume".into());
+                args.push(parent.clone());
+                args.push("--fork-session".into());
+                args.push("--session-id".into());
+                args.push(native_id.into());
+            }
+        }
+        Ok(args)
+    }
+
+    /// The session's flags that hold in print mode and in an interactive terminal alike (none
+    /// of them is stored in the transcript, so a resume repeats them all).
+    fn session_flags(spec: &SessionSpec, cwd: &Path) -> Vec<String> {
+        // Its extra folders are writable wherever its working directory is.
+        let spec = &SessionSpec {
+            access: spec.access_with_dirs(),
+            ..spec.clone()
+        };
+        let mut args: Vec<String> = ["--strict-mcp-config", "--setting-sources", "project"]
+            .map(str::to_owned)
+            .to_vec();
         args.push("--mcp-config".into());
         args.push(mcp_config(&spec.mcp_servers).to_string());
         // Decided once, for both the tools and the settings.
@@ -285,31 +316,41 @@ impl Claude {
             args.push("--effort".into());
             args.push(effort.clone());
         }
-        if let Some(prompt) = &spec.append_system_prompt {
-            args.push("--append-system-prompt".into());
-            args.push(prompt.clone());
-        }
-        match &spec.origin {
-            Origin::New => {
-                args.push("--session-id".into());
-                args.push(native_id.into());
-            }
-            Origin::Resume { native_id: resumed } => {
-                files::check_session_id(resumed)?;
-                args.push("--resume".into());
-                args.push(resumed.clone());
-            }
-            Origin::Fork { native_id: parent } => {
-                files::check_session_id(parent)?;
-                args.push("--resume".into());
-                args.push(parent.clone());
-                args.push("--fork-session".into());
-                args.push("--session-id".into());
-                args.push(native_id.into());
-            }
-        }
-        Ok(args)
+        args
     }
+}
+
+/// The session's own variables on top of the CLI environment: its env, what its MCP config
+/// refers to by name, what the output hook reads, its MCP time limits and auto-compaction.
+fn session_env(spec: &SessionSpec) -> Vec<(String, String)> {
+    let mut env = spec.env.clone();
+    // What the MCP config refers to by name, and what the output hook reads.
+    for server in &spec.mcp_servers {
+        env.extend(server.env.iter().cloned());
+    }
+    if let Some(hook) = spec
+        .output_hook
+        .as_ref()
+        .filter(|_| spec.tools == ToolSet::Thread)
+    {
+        env.extend(hook.env.iter().cloned());
+    }
+    if let Some(secs) = spec
+        .mcp_servers
+        .iter()
+        .filter_map(|server| server.tool_timeout_secs)
+        .max()
+    {
+        // The overall limit, and the limit on a stdio call that sends nothing back while it
+        // waits (30 minutes by default), which a blocking question can exceed.
+        let ms = (secs * 1000).to_string();
+        env.push(("MCP_TOOL_TIMEOUT".into(), ms.clone()));
+        env.push(("CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT".into(), ms));
+    }
+    if !spec.auto_compact {
+        env.push(("DISABLE_AUTO_COMPACT".into(), "1".into()));
+    }
+    env
 }
 
 /// Claude's `--mcp-config` for the session's servers.
@@ -865,30 +906,7 @@ impl Provider for Claude {
             let mut process_spec = self.env.spec(&binary);
             process_spec.args = args.into_iter().map(Into::into).collect();
             process_spec.cwd = Some(cwd.clone());
-            let mut env = spec.env.clone();
-            // What the MCP config refers to by name, and what the output hook reads.
-            for server in &spec.mcp_servers {
-                env.extend(server.env.iter().cloned());
-            }
-            if let Some(hook) = spec
-                .output_hook
-                .as_ref()
-                .filter(|_| spec.tools == ToolSet::Thread)
-            {
-                env.extend(hook.env.iter().cloned());
-            }
-            if let Some(secs) = spec
-                .mcp_servers
-                .iter()
-                .filter_map(|server| server.tool_timeout_secs)
-                .max()
-            {
-                // The overall limit, and the limit on a stdio call that sends nothing back
-                // while it waits (30 minutes by default), which a blocking question can exceed.
-                let ms = (secs * 1000).to_string();
-                env.push(("MCP_TOOL_TIMEOUT".into(), ms.clone()));
-                env.push(("CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT".into(), ms));
-            }
+            let mut env = session_env(&spec);
             // Claude keeps its own temp files, and points sandboxed commands' TMPDIR, under
             // `CLAUDE_CODE_TMPDIR` (`/tmp` by default). A session with a TMPDIR of its own
             // gets a short folder of its own there, removed with it.
@@ -913,9 +931,6 @@ impl Provider for Claude {
                     None => tmp.clone(),
                 };
                 env.push(("CLAUDE_CODE_TMPDIR".into(), dir));
-            }
-            if !spec.auto_compact {
-                env.push(("DISABLE_AUTO_COMPACT".into(), "1".into()));
             }
             crate::cli::apply_session_env(&mut process_spec, &env, &spec.unset_env);
             process_spec.low_priority = spec.low_priority;
@@ -1000,6 +1015,36 @@ impl Provider for Claude {
             tokio::task::spawn_blocking(move || files::remove(&config, &artifacts))
                 .await
                 .map_err(|err| Error::Io(std::io::Error::other(err)))?
+        })
+    }
+
+    fn terminal(&self, spec: SessionSpec, cwd: PathBuf) -> BoxFuture<'_, Result<TerminalCommand>> {
+        Box::pin(async move {
+            let Origin::Resume { native_id } = &spec.origin else {
+                return Err(Error::Invalid(
+                    "only a session that exists can open in a terminal".into(),
+                ));
+            };
+            files::check_session_id(native_id)?;
+            let program = self.binary()?.to_owned();
+            let cwd = cwd.canonicalize().map_err(|err| {
+                Error::Invalid(format!("working directory {}: {err}", cwd.display()))
+            })?;
+            // The session's flags without print mode's (an interactive Claude refuses
+            // `--input-format`, `--include-partial-messages` and `--replay-user-messages`).
+            // Its instructions are in the session record (`--system-prompt-snapshot`, on by
+            // default), so `--append-system-prompt` isn't repeated.
+            let mut args = Self::session_flags(&spec, &cwd);
+            args.push("--resume".into());
+            args.push(native_id.clone());
+            let mut process = self.env.spec(&program);
+            crate::cli::apply_session_env(&mut process, &session_env(&spec), &spec.unset_env);
+            Ok(TerminalCommand {
+                program,
+                args,
+                cwd,
+                env: process.env,
+            })
         })
     }
 

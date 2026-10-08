@@ -1,6 +1,6 @@
 //! Accepts IPC connections and serves requests and the live event feed.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -16,7 +16,7 @@ use brigadier_ipc::metrics::{DaemonMetrics, Diagnostics, budgets};
 use brigadier_ipc::protocol::{
     ArtifactText, ClientFrame, ClientInfo, DaemonActivity, DaemonInfo, DictationUpdate, ErrorCode,
     EventEnvelope, IpcError, LifecycleOutcome, Outcome, RawJson, Request, Response, SendOutcome,
-    ServerFrame, TerminalOutput,
+    ServerFrame, TerminalInfo, TerminalOutput,
 };
 use brigadier_ipc::{Accepted, Connection, Listener, Reader, Token, Writer};
 use brigadier_providers::ProviderKind;
@@ -69,7 +69,7 @@ pub struct Daemon {
     pub drained: watch::Receiver<bool>,
     pub connections: TaskTracker,
     /// The sessions' terminals (the side panel's Terminal tab).
-    pub terminals: Terminals,
+    pub terminals: Arc<Terminals>,
     /// The composer's dictation: its speech model and running dictations.
     pub dictation: Arc<Dictation>,
     /// Keeps the computer awake per the settings.
@@ -99,6 +99,7 @@ impl Daemon {
         dictation: Arc<Dictation>,
         awake: Arc<Awake>,
     ) -> Self {
+        let terminals = Arc::new(Terminals::with_platform(runtime.platform().clone()));
         Self {
             info,
             core,
@@ -111,7 +112,7 @@ impl Daemon {
             quit,
             drained,
             connections: TaskTracker::new(),
-            terminals: Terminals::new(),
+            terminals,
             dictation,
             awake,
             storage: Storage::default(),
@@ -186,6 +187,7 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
         metrics: None,
         terminal_feed: None,
         terminals: HashSet::new(),
+        worker_terminals: HashMap::new(),
         dictation_feed: None,
         dictations: HashSet::new(),
         late_tx,
@@ -213,6 +215,8 @@ struct Session {
     terminal_feed: Option<broadcast::Receiver<TerminalOutput>>,
     /// The terminals this connection opened: only their output is forwarded.
     terminals: HashSet<String>,
+    /// Worker terminals being opened, by request id: the size to attach them at.
+    worker_terminals: HashMap<u32, (u16, u16)>,
     /// Dictation updates, once this connection dictated or downloaded the speech model.
     dictation_feed: Option<broadcast::Receiver<DictationUpdate>>,
     /// The dictations this connection started: only their text is forwarded.
@@ -294,7 +298,10 @@ impl Session {
                     }
                     Err(RecvError::Closed) => self.feed = None,
                 },
-                Some((id, outcome)) = self.late.recv() => self.respond(id, outcome).await?,
+                Some((id, outcome)) = self.late.recv() => {
+                    let outcome = self.attach_worker_terminal(id, outcome).await?;
+                    self.respond(id, outcome).await?;
+                }
                 sample = next_metrics(&mut self.metrics) => {
                     if let Some(metrics) = sample {
                         self.writer.write(&ServerFrame::Metrics { metrics }).await?;
@@ -364,6 +371,38 @@ impl Session {
                 cols,
                 rows,
             } => self.open_setup_terminal(provider, install, cols, rows),
+            // Long (the worker's turn ends and its CLI closes first): opened beside the
+            // connection's other requests, then attached here (`attach_worker_terminal`).
+            Request::OpenWorkerTerminal {
+                task_id,
+                cols,
+                rows,
+            } => {
+                // Subscribed first, so none of a new terminal's output is missed.
+                if self.terminal_feed.is_none() {
+                    self.terminal_feed = Some(self.daemon.terminals.subscribe());
+                }
+                self.worker_terminals.insert(id, (cols, rows));
+                let sessions = self.daemon.sessions.clone();
+                let late = self.late_tx.clone();
+                self.daemon.supervisor.spawn(async move {
+                    let outcome = sessions
+                        .open_worker_terminal(task_id, cols, rows)
+                        .await
+                        .map(|opened| Response::OpenWorkerTerminal {
+                            terminal: TerminalInfo {
+                                id: opened.terminal_id,
+                                shell: String::new(),
+                                cwd: String::new(),
+                                scrollback: String::new(),
+                            },
+                            provider: opened.provider,
+                        })
+                        .map_err(IpcError::from);
+                    let _ = late.send((id, outcome)).await;
+                });
+                return Ok(Flow::Continue);
+            }
             Request::GetDictation => Ok(Response::GetDictation {
                 dictation: self.daemon.dictation.status(),
             }),
@@ -570,6 +609,46 @@ impl Session {
             .ok_or_else(|| IpcError::from(brigadier_core::Error::Invalid("no home folder".into())))?
             .display()
             .to_string())
+    }
+
+    /// A worker terminal just opened (or found open) for request `id`: its output comes to this
+    /// connection from now on, and the answer carries everything it showed so far. Output
+    /// already queued for it is dropped (the snapshot holds it); other terminals' is sent.
+    async fn attach_worker_terminal(
+        &mut self,
+        id: u32,
+        outcome: Result<Response, IpcError>,
+    ) -> anyhow::Result<Result<Response, IpcError>> {
+        let Some((cols, rows)) = self.worker_terminals.remove(&id) else {
+            return Ok(outcome);
+        };
+        let Ok(Response::OpenWorkerTerminal { terminal, provider }) = outcome else {
+            return Ok(outcome);
+        };
+        let Some(feed) = self.terminal_feed.as_mut() else {
+            return Ok(Err(IpcError::from(brigadier_core::Error::Invalid(
+                "the terminal feed is closed".into(),
+            ))));
+        };
+        let (terminal, others) = match self.daemon.terminals.attach(&terminal.id, feed, cols, rows)
+        {
+            Ok(attached) => attached,
+            Err(err) => return Ok(Err(IpcError::from(err))),
+        };
+        for output in others {
+            let id = match &output {
+                TerminalOutput::Data { terminal_id, .. }
+                | TerminalOutput::Exited { terminal_id, .. } => terminal_id,
+            };
+            if self.terminals.contains(id) {
+                if matches!(output, TerminalOutput::Exited { .. }) {
+                    self.terminals.remove(id);
+                }
+                self.writer.write(&ServerFrame::Terminal { output }).await?;
+            }
+        }
+        self.terminals.insert(terminal.id.clone());
+        Ok(Ok(Response::OpenWorkerTerminal { terminal, provider }))
     }
 
     /// Opens (or re-attaches to) the terminal that sets up a CLI: its install or sign-in
@@ -1020,7 +1099,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => Response::ReadFile {
             file: sessions.read_file(&conversation_id, path).await?,
         },
-        Request::OpenTerminal { .. } | Request::OpenSetupTerminal { .. } => {
+        Request::OpenTerminal { .. }
+        | Request::OpenSetupTerminal { .. }
+        | Request::OpenWorkerTerminal { .. } => {
             return Err(IpcError::from(brigadier_core::Error::Invalid(
                 "a terminal opens on the connection that shows it".into(),
             )));

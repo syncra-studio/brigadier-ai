@@ -339,6 +339,8 @@ async fn run(
         )),
         awake.clone(),
     ));
+    // "Open in terminal" runs a worker's session in the daemon's terminals.
+    daemon.sessions.set_terminal_host(daemon.terminals.clone());
     supervisor.spawn_critical(
         "ipc accept loop",
         server::accept_loop(daemon.clone(), listener, token),

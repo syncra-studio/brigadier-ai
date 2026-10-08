@@ -48,7 +48,8 @@ use crate::model::*;
 use crate::process::{self, CliProcess};
 use crate::record::{self, Direction, Recorder};
 use crate::{
-    BoxFuture, Error, Ledger, Provider, ProviderSession, Replayer, Result, Started, now_ms,
+    BoxFuture, Error, Ledger, Provider, ProviderSession, Replayer, Result, Started,
+    TerminalCommand, now_ms,
 };
 use parse::{Control, Output, Parser, PendingKind};
 use protocol as p;
@@ -272,6 +273,82 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     args.push("-c".into());
     args.push("allow_login_shell=false".into());
     args
+}
+
+/// `codex resume` for `spec`'s thread in a terminal: the worker's own `--disable`/`-c` flags
+/// and thread config (as `-c` overrides), its model, effort and access as flags. A thread's
+/// sandbox and approvals are per process, not stored with it, so they are repeated; its
+/// developer instructions are stored. The MCP servers' variables (a grant) go in the
+/// terminal's environment, named in `env_vars`, never on the command line.
+fn terminal_command(
+    program: PathBuf,
+    spec: &SessionSpec,
+    native_id: &str,
+    cwd: PathBuf,
+    mut config: Map<String, Value>,
+    profiled: bool,
+    env: &CliEnv,
+) -> TerminalCommand {
+    let mut args: Vec<String> = vec![
+        "resume".into(),
+        native_id.into(),
+        // The thread lives in the terminal's own process (`codex resume --help`).
+        "--no-daemon".into(),
+        "--no-alt-screen".into(),
+    ];
+    args.extend(app_server_args(Some(spec)).into_iter().skip(1));
+    let mut variables = spec.env.clone();
+    if let Some(Value::Object(servers)) = config.get_mut("mcp_servers") {
+        for server in &spec.mcp_servers {
+            if let Some(Value::Object(entry)) = servers.get_mut(&server.name) {
+                entry.remove("env");
+                entry.insert(
+                    "env_vars".into(),
+                    json!(server.env.iter().map(|(name, _)| name).collect::<Vec<_>>()),
+                );
+                variables.extend(server.env.iter().cloned());
+            }
+        }
+    }
+    if let Some(model) = &spec.model {
+        args.extend(["-m".into(), model.clone()]);
+    }
+    if let Some(effort) = &spec.effort {
+        args.extend([
+            "-c".into(),
+            format!("model_reasoning_effort={}", toml_value(&json!(effort))),
+        ]);
+    }
+    for (key, value) in &config {
+        args.extend(["-c".into(), format!("{key}={}", toml_value(value))]);
+    }
+    match &spec.access {
+        Access::Full => args.push("--dangerously-bypass-approvals-and-sandbox".into()),
+        access => {
+            // A profile sets the sandbox itself; the legacy mode would replace it.
+            if !profiled {
+                let mode = match access {
+                    Access::ReadOnly => "read-only",
+                    _ => "workspace-write",
+                };
+                args.extend(["-s".into(), mode.into()]);
+            }
+            if spec.auto_review && !matches!(access, Access::ReadOnly) {
+                args.push("--approve-for-me".into());
+            } else {
+                // The terminal's `-a` takes only `on-request` and `never` (0.160.1).
+                args.extend(["-a".into(), "on-request".into()]);
+            }
+        }
+    }
+    let mut process = env.spec(&program);
+    crate::cli::apply_session_env(&mut process, &variables, &spec.unset_env);
+    TerminalCommand {
+        program,
+        args,
+        cwd,
+        env: process.env,
+    }
 }
 
 /// Serves a control app-server's output: only responses matter.
@@ -592,6 +669,37 @@ impl Provider for Codex {
                 Ok(())
             })
             .await
+        })
+    }
+
+    fn terminal(&self, spec: SessionSpec, cwd: PathBuf) -> BoxFuture<'_, Result<TerminalCommand>> {
+        Box::pin(async move {
+            let Origin::Resume { native_id } = &spec.origin else {
+                return Err(Error::Invalid(
+                    "only a session that exists can open in a terminal".into(),
+                ));
+            };
+            let native_id = native_id.clone();
+            let spec = SessionSpec {
+                access: spec.access_with_dirs().resolved(),
+                ..spec
+            };
+            let program = self.binary()?.to_owned();
+            let cwd = cwd.canonicalize().map_err(|err| {
+                Error::Invalid(format!("working directory {}: {err}", cwd.display()))
+            })?;
+            let profile = permission_profile(&spec, &cwd);
+            let profiled = profile.is_some();
+            // Brigadier archived the thread when it closed it; the terminal would ask first.
+            let config = self
+                .control(async |rpc: &Rpc| {
+                    unarchive_thread(rpc, &native_id).await?;
+                    thread_config(rpc, &spec, &cwd, profile).await
+                })
+                .await?;
+            Ok(terminal_command(
+                program, &spec, &native_id, cwd, config, profiled, &self.env,
+            ))
         })
     }
 

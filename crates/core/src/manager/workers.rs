@@ -98,6 +98,19 @@ pub(crate) struct Workspace {
     pub warmed: Vec<String>,
 }
 
+/// A worker's CLI session as [`SessionManager::worker_session`] makes it.
+pub(crate) struct WorkerSession {
+    pub spec: SessionSpec,
+    /// Where its CLI runs.
+    pub cwd: PathBuf,
+    pub access: Access,
+    pub outputs: PathBuf,
+    pub redactor: Option<Arc<brigadier_providers::redact::Redactor>>,
+    pub allowed_models: AllowedModels,
+    /// The task's worktree, if it has one.
+    pub worktree: Option<PathBuf>,
+}
+
 #[derive(Default)]
 struct TaskLiveState {
     cli: Option<Arc<Cli>>,
@@ -152,6 +165,10 @@ struct TaskLiveState {
     orphaned_at_ms: Option<i64>,
     /// The models the CLI session's sub-agents were held to when it started (PLAN.md §7).
     allowed_models: Option<AllowedModels>,
+    /// Its session is (being) opened in the user's terminal: no headless CLI may register.
+    taken_over: bool,
+    /// The orchestrator's messages while it was open in the terminal, oldest first.
+    held_messages: Vec<String>,
 }
 
 impl TaskLiveState {
@@ -194,6 +211,9 @@ pub(crate) struct TaskLive {
     /// Held while the end of a worker's turn is handled (what it wrote after its report among
     /// it): see [`TaskLive::turn_over`].
     turn_end: tokio::sync::Mutex<()>,
+    /// Held while the task is opened in a terminal, handed back or its terminal ended; the
+    /// terminal it is open in ([`super::takeover`]).
+    pub(crate) takeover: tokio::sync::Mutex<Option<super::takeover::LiveTakeover>>,
 }
 
 impl TaskLive {
@@ -459,7 +479,28 @@ impl TaskLive {
             watchdog_busy: std::sync::atomic::AtomicBool::new(false),
             learning: Arc::default(),
             turn_end: tokio::sync::Mutex::new(()),
+            takeover: tokio::sync::Mutex::new(None),
         }
+    }
+
+    /// Marks the session as open in the user's terminal, or no longer.
+    pub(crate) async fn set_taken_over(&self, taken: bool) {
+        self.state.lock().await.taken_over = taken;
+    }
+
+    /// Keeps `message` for the report request while the session is open in a terminal;
+    /// `false` when it isn't.
+    pub(crate) async fn held_for_terminal(&self, message: &str) -> bool {
+        let mut state = self.state.lock().await;
+        if state.taken_over {
+            state.held_messages.push(message.to_owned());
+        }
+        state.taken_over
+    }
+
+    /// The messages held while the session was open in a terminal.
+    pub(crate) async fn take_held_messages(&self) -> Vec<String> {
+        std::mem::take(&mut self.state.lock().await.held_messages)
     }
 
     /// Waits until the worker's running turn is over and its end handled, so what it wrote
@@ -699,6 +740,10 @@ impl SessionManager {
         state: TaskState,
     ) -> Result<Task> {
         self.update_task(conversation_id, id, |task| {
+            // Only the takeover moves a task out of the user's terminal, or its end.
+            if task.state == TaskState::TakenOver && !state.is_final() {
+                return;
+            }
             task.state = state;
             if state != TaskState::Blocked {
                 task.blocked_reason = None;
@@ -714,7 +759,7 @@ impl SessionManager {
         };
         let result = self
             .update_task(&live.conversation_id, id, |task| {
-                if task.state.is_final() {
+                if task.state.is_final() || task.state == TaskState::TakenOver {
                     return;
                 }
                 match &reason {
@@ -986,6 +1031,7 @@ impl SessionManager {
             messages: Vec::new(),
             rework_rounds: 0,
             native_session: None,
+            takeover: None,
             trial_slot: waits && trial_slot,
             created_at_ms: now,
             updated_at_ms: now,
@@ -1131,26 +1177,19 @@ impl SessionManager {
         launched
     }
 
-    /// [`Self::launch_worker`] once admitted.
-    async fn launch_admitted(
+    /// The worker's CLI session for `task` as its headless process runs it (and a terminal
+    /// continues it): its spec, with a fresh worker grant issued to `grant_owner`. A new
+    /// session's `first` message gets the task's brief in front.
+    pub(crate) async fn worker_session(
         &self,
-        live: &Arc<TaskLive>,
         task: &Task,
         subject: Option<&Task>,
         origin: Origin,
-        first: TurnInput,
-    ) -> Result<()> {
+        first: Option<&mut TurnInput>,
+        grant_owner: &str,
+    ) -> Result<WorkerSession> {
         let conversation_id = task.conversation_id.clone();
         let owner = format!("task:{}", task.id);
-        // A resumed Codex thread's token totals include the turns counted before.
-        let resumed = matches!(origin, Origin::Resume { .. });
-        let continues = task.route.choice.provider == ProviderKind::Codex && resumed;
-        // A session resumed after a restart: where it started is in its recorded events.
-        let seeded_start = if resumed && live.context().await.1.is_none() {
-            self.last_worker_context(&task.id).await.1
-        } else {
-            None
-        };
         let recorded = task
             .workspace
             .clone()
@@ -1291,8 +1330,7 @@ impl SessionManager {
         }
         let prompt = prompts::worker_system(&native);
         // A new CLI session hears its task first; a resumed or forked one has it already.
-        let mut first = first;
-        if matches!(origin, Origin::New) {
+        if let (Origin::New, Some(first)) = (&origin, first) {
             first.parts.insert(
                 0,
                 brigadier_providers::InputPart::Text(prompts::worker_brief(
@@ -1302,7 +1340,7 @@ impl SessionManager {
         }
 
         let worker_grant = self.grants.issue(
-            &owner,
+            grant_owner,
             Role::Worker {
                 conversation_id: conversation_id.clone(),
                 task_id: task.id.clone(),
@@ -1339,6 +1377,51 @@ impl SessionManager {
             omit_ai_coauthors,
             output_hook: None,
         };
+        let worktree = workspace.worktree.clone();
+        Ok(WorkerSession {
+            spec,
+            cwd,
+            access,
+            outputs,
+            redactor,
+            allowed_models,
+            worktree,
+        })
+    }
+
+    /// [`Self::launch_worker`] once admitted.
+    async fn launch_admitted(
+        &self,
+        live: &Arc<TaskLive>,
+        task: &Task,
+        subject: Option<&Task>,
+        origin: Origin,
+        first: TurnInput,
+    ) -> Result<()> {
+        let conversation_id = task.conversation_id.clone();
+        let owner = format!("task:{}", task.id);
+        // A resumed Codex thread's token totals include the turns counted before.
+        let resumed = matches!(origin, Origin::Resume { .. });
+        let continues = task.route.choice.provider == ProviderKind::Codex && resumed;
+        // A session resumed after a restart: where it started is in its recorded events.
+        let seeded_start = if resumed && live.context().await.1.is_none() {
+            self.last_worker_context(&task.id).await.1
+        } else {
+            None
+        };
+        let mut first = first;
+        let WorkerSession {
+            spec,
+            cwd,
+            access,
+            outputs,
+            redactor,
+            allowed_models,
+            ..
+        } = self
+            .worker_session(task, subject, origin, Some(&mut first), &owner)
+            .await?;
+        let provider = task.route.choice.provider;
         let Started { session, events } =
             match self.runtime.start_hosted(&owner, provider, spec).await {
                 Ok(started) => started,
@@ -1357,9 +1440,19 @@ impl SessionManager {
             ended: CancellationToken::new(),
             launch: None,
         });
-        self.brains.jobs.user_work(provider);
         {
             let mut state = live.state.lock().await;
+            // Opened in the user's terminal meanwhile: the terminal is the session's one
+            // writer.
+            if state.taken_over {
+                drop(state);
+                cli.session.close().await;
+                self.grants.revoke_owner(&cli.owner);
+                return Err(Error::Invalid(format!(
+                    "task-{} is open in the user's terminal",
+                    task.number
+                )));
+            }
             state.cli = Some(cli.clone());
             state.access = Some(access);
             state.cwd = Some(cwd);
@@ -1390,6 +1483,22 @@ impl SessionManager {
         self.spawn(async move { manager.pump_worker(pumped.0, pumped.1, events).await });
         self.set_task_state(&conversation_id, &task.id, TaskState::Running)
             .await?;
+        if live.state.lock().await.taken_over {
+            // Opened in the user's terminal as it started (the open closed it): what it was
+            // to be told waits for the report request.
+            let text: Vec<&str> = first
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    brigadier_providers::InputPart::Text(text) => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            if !text.is_empty() {
+                live.held_for_terminal(&text.join("\n")).await;
+            }
+            return Ok(());
+        }
         cli.session
             .send(first)
             .await
@@ -1453,7 +1562,7 @@ impl SessionManager {
     /// The worker's CLI session to resume: the one recorded on the task, else (a task recorded
     /// before it was kept there) the latest session start in its events, which is then
     /// recorded.
-    async fn last_worker_native_id(&self, task: &Task) -> Option<String> {
+    pub(crate) async fn last_worker_native_id(&self, task: &Task) -> Option<String> {
         if let Some(native_id) = &task.native_session {
             return Some(native_id.clone());
         }
@@ -3023,6 +3132,10 @@ impl SessionManager {
         answers: bool,
     ) -> Result<(String, bool)> {
         drop(self.enter(conversation_id)?);
+        // Open in the user's terminal: it waits for the report request.
+        if let Some(held) = self.hold_for_terminal(task, &text).await {
+            return Ok((held, false));
+        }
         // An idle worker of an overnight run starts a turn only with a free worker slot: when
         // its run has none, the message waits for one rather than holding up the caller.
         if task.run.is_some()
@@ -3554,6 +3667,8 @@ impl SessionManager {
     /// `task:<id>` is removed. Branches with unlanded work stay; a task branch with nothing to
     /// keep goes with the worktree.
     pub(crate) async fn dispose_task(&self, task: &Task, state: TaskState) {
+        // A terminal it is open in ends first, handing nothing back.
+        self.end_takeover(task, &format!("{state:?}")).await;
         if let Some(live) = self.existing_task_live(&task.id) {
             live.close_cli().await;
         }

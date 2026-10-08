@@ -202,6 +202,9 @@ pub enum TaskState {
     Paused,
     /// The worker submitted its report; the orchestrator decides what happens next.
     Reported,
+    /// The user continues the worker's own session in a terminal ("Open in terminal"): no
+    /// headless CLI runs it until the terminal ends, then it reports what was done there.
+    TakenOver,
     /// Its commits are being moved onto the target branch (`land_phase`), or it runs a
     /// quick self-check after they were rebased onto a target that moved.
     Landing,
@@ -230,6 +233,7 @@ enum StoredTaskState {
     Blocked,
     Paused,
     Reported,
+    TakenOver,
     Landing,
     Reviewing,
     AwaitingApproval,
@@ -250,6 +254,7 @@ impl<'de> Deserialize<'de> for TaskState {
             StoredTaskState::Blocked => Self::Blocked,
             StoredTaskState::Paused => Self::Paused,
             StoredTaskState::Reported => Self::Reported,
+            StoredTaskState::TakenOver => Self::TakenOver,
             StoredTaskState::Landing
             | StoredTaskState::Reviewing
             | StoredTaskState::AwaitingApproval => Self::Landing,
@@ -271,6 +276,31 @@ impl TaskState {
             Self::Landed | Self::Done | Self::Rejected | Self::Stopped | Self::Failed
         )
     }
+}
+
+/// A worker's session open in the user's terminal: what is handed back when it ends, and
+/// what a restart finds (the terminal's process, ended if it survived).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Takeover {
+    /// The worker's CLI session the terminal continues.
+    #[ts(skip)]
+    pub native_id: String,
+    pub since_ms: i64,
+    /// The task's state before; it goes back to it if the terminal never opened.
+    pub from: TaskState,
+    /// The terminal's process, once it runs.
+    #[serde(default)]
+    #[ts(skip)]
+    pub pid: Option<u32>,
+    #[serde(default)]
+    #[ts(skip)]
+    pub started_at_ms: Option<f64>,
+    /// Recorded before a deliberate end closes the terminal (Stop, archive, delete): the task
+    /// ends instead of being handed back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub ending: Option<String>,
 }
 
 /// Where a task works.
@@ -690,6 +720,10 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub native_session: Option<String>,
+    /// While the user has the worker's session open in a terminal ([`TaskState::TakenOver`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub takeover: Option<Takeover>,
     /// It took a trial slot when created and waits to start: it keeps the slot until then.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(skip)]

@@ -15,6 +15,7 @@ import type { QuotaWait } from "./QuotaWait";
 import type { Report } from "./Report";
 import type { Route } from "./Route";
 import type { RunTaskContext } from "./RunTaskContext";
+import type { Takeover } from "./Takeover";
 import type { TaskId } from "./TaskId";
 import type { TaskKind } from "./TaskKind";
 import type { TaskState } from "./TaskState";
@@ -128,4 +129,8 @@ messages: Array<string>,
  * Times it was sent back to work after reporting (a review asking for changes, or a
  * message from the orchestrator).
  */
-reworkRounds: number, createdAtMs: number, updatedAtMs: number, };
+reworkRounds: number, 
+/**
+ * While the user has the worker's session open in a terminal ([`TaskState::TakenOver`]).
+ */
+takeover?: Takeover, createdAtMs: number, updatedAtMs: number, };

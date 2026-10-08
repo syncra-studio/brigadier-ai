@@ -2,6 +2,10 @@
 //! pseudo terminal. Its output streams live to the connections that opened it, and a tail is
 //! kept so a tab opened again shows what came before; none of it is stored. A shell ends when
 //! its tab closes, its conversation is archived or deleted, or the daemon quits.
+//!
+//! A worker's terminal ("Open in terminal") runs the worker's own CLI directly, not through a
+//! shell, with exactly the environment the session manager gives it; the session manager hears
+//! when it ends, and can end it and wait until its process is gone ([`TerminalHost`]).
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -10,15 +14,20 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use brigadier_core::Error;
+use brigadier_core::manager::{HostedTerminal, TerminalHost};
 use brigadier_ipc::protocol::{TerminalInfo, TerminalOutput};
+use brigadier_providers::TerminalCommand;
+use brigadier_sandbox::Platform;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, oneshot, watch};
 
 /// The output kept for a tab opened again, in bytes of text.
 const SCROLLBACK: usize = 256 * 1024;
 /// Output chunks a connection may fall behind by before it misses some.
 const FEED: usize = 1024;
 const READ_CHUNK: usize = 16 * 1024;
+/// How long an ended terminal's process has to be reaped after its tree was killed.
+const TERMINATE_WAIT: Duration = Duration::from_secs(5);
 /// How often, and how many times, an ended shell is checked for its exit code.
 const REAP_POLL: Duration = Duration::from_millis(50);
 const REAP_TRIES: u32 = 40;
@@ -33,6 +42,8 @@ pub struct Terminals {
     live: Arc<Mutex<HashMap<String, Arc<Terminal>>>>,
     feed: broadcast::Sender<TerminalOutput>,
     next: AtomicU64,
+    /// Ends a worker terminal's process tree.
+    platform: Option<Arc<dyn Platform>>,
 }
 
 struct Terminal {
@@ -44,7 +55,13 @@ struct Terminal {
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
+    /// Held while output is kept and sent, so a reattach's snapshot and the feed agree.
     scrollback: Mutex<String>,
+    /// Told when its process has ended (a worker's terminal).
+    on_exit: Mutex<Option<oneshot::Sender<()>>>,
+    /// Becomes true once its output ended and its process was reaped.
+    ended: watch::Sender<bool>,
+    pid: Option<u32>,
 }
 
 impl Terminal {
@@ -71,6 +88,15 @@ impl Terminals {
             live: Arc::new(Mutex::new(HashMap::new())),
             feed,
             next: AtomicU64::new(1),
+            platform: None,
+        }
+    }
+
+    /// Terminals that can end a worker terminal's whole process tree.
+    pub fn with_platform(platform: Arc<dyn Platform>) -> Self {
+        Self {
+            platform: Some(platform),
+            ..Self::new()
         }
     }
 
@@ -132,9 +158,6 @@ impl Terminals {
             return Ok(terminal.info());
         }
 
-        let failed =
-            |err: anyhow::Error| Error::Invalid(format!("couldn't start a terminal: {err}"));
-        let pair = native_pty_system().openpty(size).map_err(failed)?;
         let shell = default_shell();
         let mut command = CommandBuilder::new(&shell);
         if cfg!(unix) {
@@ -155,6 +178,30 @@ impl Terminals {
                 command.env_remove(key);
             }
         }
+        let terminal = self.spawn(conversation, session, shell, cwd, command, size, None)?;
+        // A new shell's first output already streams to the connection that subscribed
+        // before opening it; sending it here too would show it twice.
+        Ok(TerminalInfo {
+            scrollback: String::new(),
+            ..terminal.info()
+        })
+    }
+
+    /// Starts `command` on a new pseudo terminal and pumps its output.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn(
+        &self,
+        conversation: &str,
+        session: Option<&str>,
+        shell: String,
+        cwd: String,
+        mut command: CommandBuilder,
+        size: PtySize,
+        on_exit: Option<oneshot::Sender<()>>,
+    ) -> Result<Arc<Terminal>> {
+        let failed =
+            |err: anyhow::Error| Error::Invalid(format!("couldn't start a terminal: {err}"));
+        let pair = native_pty_system().openpty(size).map_err(failed)?;
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
         let child = pair.slave.spawn_command(command).map_err(failed)?;
@@ -163,6 +210,7 @@ impl Terminals {
         let writer = pair.master.take_writer().map_err(failed)?;
 
         let id = format!("terminal-{}", self.next.fetch_add(1, Ordering::Relaxed));
+        let pid = child.process_id();
         let terminal = Arc::new(Terminal {
             id: id.clone(),
             conversation: conversation.to_owned(),
@@ -173,6 +221,9 @@ impl Terminals {
             writer: Mutex::new(writer),
             child: Mutex::new(child),
             scrollback: Mutex::new(String::new()),
+            on_exit: Mutex::new(on_exit),
+            ended: watch::Sender::new(false),
+            pid,
         });
         lock(&self.live).insert(id.clone(), terminal.clone());
         let live = self.live.clone();
@@ -187,12 +238,102 @@ impl Terminals {
             return Err(Error::Invalid(format!("couldn't start a terminal: {err}")));
         }
         tracing::info!(terminal = %id, conversation, "terminal started");
-        // A new shell's first output already streams to the connection that subscribed
-        // before opening it; sending it here too would show it twice.
-        Ok(TerminalInfo {
-            scrollback: String::new(),
-            ..terminal.info()
+        Ok(terminal)
+    }
+
+    /// A worker's terminal: `command` run directly (no shell), with exactly its environment.
+    pub fn start_command(
+        &self,
+        conversation: &str,
+        key: &str,
+        command: TerminalCommand,
+        cols: u16,
+        rows: u16,
+    ) -> Result<HostedTerminal> {
+        let size = PtySize {
+            rows: rows.max(1),
+            cols: cols.max(1),
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut builder = CommandBuilder::new(&command.program);
+        builder.args(&command.args);
+        builder.cwd(&command.cwd);
+        builder.env_clear();
+        for (key, value) in &command.env {
+            builder.env(key, value);
+        }
+        let name = command
+            .program
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let (exit_tx, exited) = oneshot::channel();
+        let terminal = self.spawn(
+            conversation,
+            Some(key),
+            name,
+            command.cwd.display().to_string(),
+            builder,
+            size,
+            Some(exit_tx),
+        )?;
+        let started_at_ms = match (&self.platform, terminal.pid) {
+            (Some(platform), Some(pid)) => platform.processes().start_time_ms(pid).ok(),
+            _ => None,
+        };
+        Ok(HostedTerminal {
+            id: terminal.id.clone(),
+            pid: terminal.pid,
+            started_at_ms,
+            exited,
         })
+    }
+
+    /// A running terminal resized to `cols` × `rows`, and everything it showed so far. Its
+    /// output already queued in `feed` (this connection's subscription) is dropped, so
+    /// nothing shows twice; what came for other terminals meanwhile is returned to forward.
+    pub fn attach(
+        &self,
+        id: &str,
+        feed: &mut broadcast::Receiver<TerminalOutput>,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(TerminalInfo, Vec<TerminalOutput>)> {
+        let terminal = self.get(id)?;
+        if let Err(err) = lock(&terminal.master).resize(PtySize {
+            rows: rows.max(1),
+            cols: cols.max(1),
+            pixel_width: 0,
+            pixel_height: 0,
+        }) {
+            tracing::debug!(terminal = %id, error = %err, "resize failed");
+        }
+        // No output is kept or sent while this holds the scrollback.
+        let scrollback = lock(&terminal.scrollback);
+        let mut others = Vec::new();
+        loop {
+            match feed.try_recv() {
+                Ok(output) => {
+                    let ours = match &output {
+                        TerminalOutput::Data { terminal_id, .. }
+                        | TerminalOutput::Exited { terminal_id, .. } => terminal_id == id,
+                    };
+                    if !ours {
+                        others.push(output);
+                    }
+                }
+                Err(broadcast::error::TryRecvError::Lagged(_)) => {}
+                Err(_) => break,
+            }
+        }
+        let info = TerminalInfo {
+            id: terminal.id.clone(),
+            shell: terminal.shell.clone(),
+            cwd: terminal.cwd.clone(),
+            scrollback: scrollback.clone(),
+        };
+        Ok((info, others))
     }
 
     fn get(&self, id: &str) -> Result<Arc<Terminal>> {
@@ -300,18 +441,17 @@ fn pump_output(
         if data.is_empty() {
             continue;
         }
-        {
-            let mut scrollback = lock(&terminal.scrollback);
-            scrollback.push_str(&data);
-            if scrollback.len() > SCROLLBACK {
-                let mut cut = scrollback.len() - SCROLLBACK;
-                while !scrollback.is_char_boundary(cut) {
-                    cut += 1;
-                }
-                scrollback.drain(..cut);
+        let mut scrollback = lock(&terminal.scrollback);
+        scrollback.push_str(&data);
+        if scrollback.len() > SCROLLBACK {
+            let mut cut = scrollback.len() - SCROLLBACK;
+            while !scrollback.is_char_boundary(cut) {
+                cut += 1;
             }
+            scrollback.drain(..cut);
         }
-        // No receiver just means no tab is open.
+        // Sent under the scrollback's lock: a reattach sees it either kept or queued. No
+        // receiver just means no tab is open.
         let _ = feed.send(TerminalOutput::Data {
             terminal_id: terminal.id.clone(),
             data,
@@ -332,6 +472,53 @@ fn pump_output(
         terminal_id: terminal.id.clone(),
         code,
     });
+    terminal.ended.send_replace(true);
+    if let Some(on_exit) = lock(&terminal.on_exit).take() {
+        let _ = on_exit.send(());
+    }
+}
+
+impl TerminalHost for Terminals {
+    fn start(
+        &self,
+        conversation: &str,
+        key: &str,
+        command: TerminalCommand,
+        cols: u16,
+        rows: u16,
+    ) -> brigadier_core::Result<HostedTerminal> {
+        self.start_command(conversation, key, command, cols, rows)
+    }
+
+    fn terminate(
+        &self,
+        id: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+        let terminal = self.get(id).ok();
+        let platform = self.platform.clone();
+        let id = id.to_owned();
+        Box::pin(async move {
+            let Some(terminal) = terminal else {
+                return;
+            };
+            let mut ended = terminal.ended.subscribe();
+            match (&platform, terminal.pid) {
+                (Some(platform), Some(pid)) => {
+                    if let Err(err) = platform.processes().kill_tree(pid) {
+                        tracing::debug!(terminal = %id, error = %err, "could not kill a terminal's tree");
+                        terminal.kill();
+                    }
+                }
+                _ => terminal.kill(),
+            }
+            if tokio::time::timeout(TERMINATE_WAIT, ended.wait_for(|ended| *ended))
+                .await
+                .is_err()
+            {
+                tracing::warn!(terminal = %id, "a terminal's process did not end in time");
+            }
+        })
+    }
 }
 
 /// The ended shell's exit code. Its output closed, so it is exiting; one that lingers past
@@ -431,5 +618,77 @@ mod tests {
         assert!(terminals.get(&other.id).is_ok());
         terminals.close_all();
         assert_eq!(terminals.count(), 0);
+    }
+
+    /// A worker's terminal runs its program directly with exactly the environment given; a
+    /// reattach shows what it printed once; ending it kills its whole tree and waits.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_worker_terminal_runs_its_command_and_ends_with_its_tree() {
+        use brigadier_core::manager::TerminalHost;
+        use brigadier_providers::TerminalCommand;
+        use std::time::Duration;
+
+        let data = std::env::temp_dir().join(format!("brig-terminals-{}", std::process::id()));
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(data.clone()),
+        })
+        .unwrap();
+        let terminals = Terminals::with_platform(platform);
+        let mut feed = terminals.subscribe();
+        let command = TerminalCommand {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "echo \"[$WORKER_GRANT][$HOME]\"; sleep 600 & echo \"child:$!\"; wait".into(),
+            ],
+            cwd: std::env::temp_dir(),
+            env: vec![("WORKER_GRANT".into(), "g-1".into())],
+        };
+        let started =
+            TerminalHost::start(&terminals, "worker-test", "worker:t1", command, 80, 24).unwrap();
+        assert!(started.pid.is_some());
+        assert!(
+            started.started_at_ms.is_some(),
+            "its start time tells it apart"
+        );
+        let (info, child) = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let (info, _) = terminals.attach(&started.id, &mut feed, 100, 30).unwrap();
+                if let Some(child) = info
+                    .scrollback
+                    .split("child:")
+                    .nth(1)
+                    .and_then(|rest| rest.split_whitespace().next())
+                    .and_then(|pid| pid.parse::<u32>().ok())
+                {
+                    return (info, child);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the command printed");
+        assert!(info.scrollback.contains("[g-1][]"), "{}", info.scrollback);
+        assert_eq!(info.shell, "sh");
+        // Nothing of it is left queued: the snapshot held it.
+        assert!(feed.try_recv().is_err());
+
+        TerminalHost::terminate(&terminals, &started.id).await;
+        assert!(started.exited.await.is_ok(), "told of its end");
+        let alive = std::process::Command::new("kill")
+            .args(["-0", &child.to_string()])
+            .status()
+            .unwrap()
+            .success();
+        assert!(!alive, "its child went with it");
+        // Ending one that already ended returns at once.
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            TerminalHost::terminate(&terminals, &started.id),
+        )
+        .await
+        .unwrap();
+        let _ = std::fs::remove_dir_all(data);
     }
 }

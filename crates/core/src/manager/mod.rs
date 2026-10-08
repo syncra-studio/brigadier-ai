@@ -62,6 +62,7 @@ mod routing;
 mod run;
 mod secrets;
 mod side_chat;
+mod takeover;
 mod thread;
 mod thread_metrics;
 mod tool_output;
@@ -97,6 +98,7 @@ use crate::{Core, Error, Result};
 pub use brains::{BrainCounters, IndexRunStats};
 pub use closing::Turn;
 pub use conversation::SendOutcome;
+pub use takeover::{HostedTerminal, TerminalHost, WorkerTerminal};
 pub use tool_output::{HOOK_GRANT_ENV, HookOutput, OUTPUT_MAX_BYTES};
 pub use uninstall::TearDown;
 
@@ -166,6 +168,8 @@ pub struct SessionManager {
     machine: Arc<crate::machine::MachineWatch>,
     /// Conversations being archived or deleted: their fences and cleanups.
     closing: closing::Closing,
+    /// Where "Open in terminal" runs a worker's session (the daemon's terminals).
+    terminal_host: std::sync::OnceLock<Arc<dyn takeover::TerminalHost>>,
     /// Background model turns, for maintenance's idle check.
     activity: Arc<quiet::Activity>,
 }
@@ -237,6 +241,7 @@ impl SessionManager {
             overnight: overnight::Runs::default(),
             machine,
             closing: closing::Closing::default(),
+            terminal_host: std::sync::OnceLock::new(),
             activity: Arc::default(),
         });
         manager.install_worktree_remover();

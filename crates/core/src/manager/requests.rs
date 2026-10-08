@@ -416,6 +416,8 @@ fn waits_on_user(board: &Board, request: &str) -> bool {
         || board.tasks.values().any(|task| {
             of(&task.request_id)
                 && (task.state == TaskState::ReadyToLand
+                    // The user works with it in their terminal.
+                    || task.state == TaskState::TakenOver
                     || (task.state == TaskState::Paused && task.quota_wait.is_none()))
         })
 }
