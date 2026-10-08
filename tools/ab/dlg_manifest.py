@@ -4,7 +4,8 @@
 - every worker (successors included): Claude ids from session.json, Codex ids from codex.log;
 - every checkout the run used: the clone, its git worktrees, and each worker's cwd
   (session.json, launch.sh);
-- every Codex session started in the window in one of those checkouts (reviews, plan reviews);
+- every Codex session started in the window in one of those checkouts (reviews, plan reviews),
+  and every descendant of a counted Codex thread, recursively, whatever its cwd;
 - every review file the run saved (msgs/*review*.md) must match the final message of a counted
   Codex session; one that matches none is listed under unmatched_reviews (its usage is unknown).
 Codex sessions started in the window elsewhere are listed apart, not counted, for a manual look.
@@ -132,6 +133,28 @@ for f in glob.glob(f"{H}/.codex/sessions/*/*/*/rollout-*.jsonl"):
             {"started": p["timestamp"], "cwd": p.get("cwd")})
     else:
         elsewhere.append({"id": p["id"], "cwd": p.get("cwd"), "started": p["timestamp"]})
+
+# Descendants, recursively and whatever their cwd: every Codex thread whose rollout names a counted
+# thread as its parent (a review's subagent, an auto-review "guardian", a spawned agent).
+metas = {}
+for f in glob.glob(f"{H}/.codex/sessions/*/*/*/rollout-*.jsonl"):
+    if os.path.getmtime(f) * 1000 < t0:
+        continue
+    try:
+        p = json.loads(open(f).readline()).get("payload", {})
+    except ValueError:
+        continue
+    metas[p.get("id")] = p
+grew = True
+while grew:
+    grew = False
+    counted_codex = {s["id"] for s in out if s["provider"] == "codex"}
+    for tid, p in metas.items():
+        if p.get("parent_thread_id") in counted_codex and tid not in counted_codex:
+            add(f"child of {p['parent_thread_id'][:13]} ({p.get('thread_source') or 'child'})", "codex child", "codex", tid,
+                {"cwd": p.get("cwd"), "parent": p["parent_thread_id"]})
+            elsewhere[:] = [e for e in elsewhere if e["id"] != tid]
+            grew = True
 
 reviews = sorted(glob.glob(run + "/msgs/*review*.md")) if run else []
 counted = {s["id"] for s in out}

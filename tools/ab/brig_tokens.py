@@ -14,6 +14,10 @@ import collections, json, os, sqlite3, sys
 arm = sys.argv[1]; end = int(sys.argv[2])
 st = json.load(open(os.path.join(arm, "start.json"))); conv = st["conversation"]; t0 = st["t0_ms"]
 db = sqlite3.connect(f"file:{os.path.join(arm, 'data', 'routing.sqlite')}?mode=ro", uri=True)
+try:
+    db.execute("PRAGMA schema_version").fetchone()
+except sqlite3.OperationalError:  # a WAL database whose daemon is gone has no -shm to open read-only
+    db = sqlite3.connect(f"file:{os.path.join(arm, 'data', 'routing.sqlite')}?mode=ro&immutable=1", uri=True)
 FIELDS = ("input", "cached_input", "cache_write", "output")
 COLUMNS = {row[1] for row in db.execute("PRAGMA table_info(turn_usage)")}
 STEP = "step" if "step" in COLUMNS else "NULL"

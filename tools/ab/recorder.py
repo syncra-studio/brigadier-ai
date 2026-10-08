@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Records every committed daemon event (Subscribe + EventsSince backfill, deduped by seq) and
-answers any card the way the user would, logging it so it is counted. The session's merge card
-(finish_session) is logged but left alone: the user's merge click is outside the measured span.
-With --merge it is approved too. Session transcripts are hard-linked into <out-dir>/../transcripts
+answers any card by the A/B response policy (POLICY.md), logging each answer with its time in
+cards.jsonl so it is counted: a question gets "Go with your recommendation."; a plan, an outline,
+a landing or an action gets approved ("Go ahead."), unless it would push; the session's merge card
+(finish_session) and anything that pushes are never approved: the merge card is left alone, a push
+is denied. With --merge (phase checks only, never an A/B arm) the merge card is approved too. Session transcripts are hard-linked into <out-dir>/../transcripts
 as soon as they exist, because Brigadier deletes them when a task is cleaned up.
 usage: recorder.py <data-dir> <out-dir> [--merge]"""
 import json, os, sys, time, threading
@@ -23,6 +25,10 @@ def answer(req):
         s, _ = connect(data); r = call(s, req); s.close(); return r
     except Exception as e:
         return {"error": str(e)}
+def pushes(subject):
+    """Whether an approval would push or publish: never approved in an A/B arm."""
+    text = json.dumps(subject).lower()
+    return "git push" in text or "gh pr" in text or "push to" in text
 def handle(env):
     ev = env["event"]; t = ev.get("type")
     if t == "cleanupRecorded":
@@ -39,17 +45,19 @@ def handle(env):
             if a["subject"].get("type") == "finishSession" and not merge:
                 log_card("merge-card", a, "left for the user")
                 return
-            log_card("approval", a, "allow")
+            if pushes(a["subject"]):
+                decision = {"type": "deny", "message": "No push: leave the work on its branch."}
+            else:
+                decision = {"type": "allow"}
+            log_card("approval", a, decision["type"])
             threading.Thread(target=lambda: log_card("approval-answer", {"id": a["id"]}, answer(
                 {"method": "answerCard", "conversationId": a["conversationId"], "cardId": a["id"],
-                 "decision": {"type": "allow"}})), daemon=True).start()
+                 "decision": decision})), daemon=True).start()
     elif t == "questionUpdated":
         q = ev["question"]
         if q.get("answer") is None and q["id"] not in answered:
             answered.add(q["id"])
-            opts = q.get("options") or []
-            rec = q.get("recommended")
-            text = opts[rec] if (rec is not None and rec < len(opts)) else "Go with your recommendation."
+            text = "Go with your recommendation."
             log_card("question", q, text)
             threading.Thread(target=lambda: log_card("question-answer", {"id": q["id"]}, answer(
                 {"method": "answerQuestion", "conversationId": q["conversationId"], "cardId": q["id"],

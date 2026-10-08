@@ -3,8 +3,9 @@
 with their owners), plus every Codex child thread of a listed thread: a range review's and an
 Approve-for-me auto-review's ("guardian") run in their own thread, which the event log doesn't
 list and whose use the parent thread doesn't report. Their rollouts name the parent in
-`session_meta.parent_thread_id`. usage: brig_manifest.py <arm-dir> > manifest.json"""
-import glob, json, os, sys
+`session_meta.parent_thread_id`; descendants are followed recursively.
+usage: brig_manifest.py <arm-dir> [--also DIR ...] > manifest.json"""
+import glob, json, os, re, sys
 arm = sys.argv[1]; conv = json.load(open(arm + "/start.json"))["conversation"]
 tasks = {}; brain = set(); out = []; seen = set()
 for l in open(arm + "/rec/events.jsonl"):
@@ -45,11 +46,35 @@ for rid, (r, at) in reviews.items():
         if meta.get("parent_thread_id") is None and meta.get("cwd", "").endswith(f"/review-{rid[-12:]}") and meta.get("id") not in seen:
             seen.add(meta["id"])
             out.append({"label": f"review {r['kind']} {rid[:8]}", "role": "review", "provider": "codex", "id": meta["id"], "owner": f"review:{rid}", "at_ms": at})
-parents = {s["id"]: s for s in out if s["provider"] == "codex"}
-for meta in metas:
-    parent = parents.get(meta.get("parent_thread_id"))
-    if not parent or meta.get("id") in seen: continue
-    seen.add(meta["id"])
-    kind = meta.get("thread_source") or "child"
-    out.append({"label": f"{parent['label']} · {kind}", "role": f"{parent['role']} child", "provider": "codex", "id": meta["id"], "owner": parent["owner"], "at_ms": parent["at_ms"], "parent": parent["id"]})
+# --also DIR: a dev Brigadier data dir (or other folder) a worker ran model turns in: every Claude
+# session under it (by project slug) and every Codex session started in it after t0 counts too.
+t0 = json.load(open(arm + "/start.json"))["t0_ms"]
+H = os.path.expanduser("~")
+also = [sys.argv[i + 1] for i, v in enumerate(sys.argv) if v == "--also"]
+for d in also:
+    d = os.path.realpath(d)
+    for c in {d, d[len("/private"):] if d.startswith("/private/") else d}:
+        for f in sorted(glob.glob(f"{H}/.claude/projects/{re.sub(r'[^A-Za-z0-9]', '-', c)}*/*.jsonl")):
+            sid = os.path.basename(f)[:-6]
+            if os.path.getmtime(f) * 1000 >= t0 and sid not in seen:
+                seen.add(sid)
+                out.append({"label": f"dev app {os.path.basename(os.path.dirname(f))[:60]}", "role": "worker-dev-app", "provider": "claude", "id": sid, "owner": f"also:{d}", "at_ms": t0})
+        for meta in metas:
+            cwd = meta.get("cwd") or ""
+            if (cwd == c or cwd.startswith(c + "/")) and meta.get("id") not in seen and meta.get("parent_thread_id") is None:
+                seen.add(meta["id"])
+                out.append({"label": f"dev app codex {meta['id'][:13]}", "role": "worker-dev-app", "provider": "codex", "id": meta["id"], "owner": f"also:{d}", "at_ms": t0})
+# Codex descendants, recursively: a review's, an auto-review's or a spawned agent's thread names
+# its parent in `session_meta.parent_thread_id`.
+grew = True
+while grew:
+    grew = False
+    parents = {s["id"]: s for s in out if s["provider"] == "codex"}
+    for meta in metas:
+        parent = parents.get(meta.get("parent_thread_id"))
+        if not parent or meta.get("id") in seen: continue
+        seen.add(meta["id"]); grew = True
+        kind = meta.get("thread_source") or "child"
+        role = parent["role"] if parent["role"].endswith(" child") else f"{parent['role']} child"
+        out.append({"label": f"{parent['label']} · {kind}", "role": role, "provider": "codex", "id": meta["id"], "owner": parent["owner"], "at_ms": parent["at_ms"], "parent": parent["id"]})
 print(json.dumps(out, indent=1))
