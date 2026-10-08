@@ -50,6 +50,8 @@ use crate::work::{OutputSource, Preview, PreviewState};
 use crate::{Error, Result, now_ms};
 
 /// How long a stopped preview has to exit after SIGTERM before it is killed.
+/// Why a preview the user stopped ended: their Stop on its chip, or on the conversation.
+pub(crate) const USER_STOP: &str = "stopped by the user";
 const STOP_GRACE: Duration = Duration::from_secs(5);
 /// How long `start_preview` watches a new preview for an early exit before it answers.
 const START_WATCH: Duration = Duration::from_millis(1500);
@@ -424,6 +426,23 @@ impl SessionManager {
             Err(_) => None,
         };
         if let Some(mut preview) = preview {
+            // What the thread didn't do itself and no other note tells it: the user's Stop
+            // (the chip's or the conversation's), or an end on its own. It hears of it with
+            // the user's next message, so it never says a stopped preview "is running".
+            let told = match &state {
+                PreviewState::Stopped { reason } if reason == USER_STOP => {
+                    Some("was stopped by the user".to_owned())
+                }
+                PreviewState::Exited { status, .. } => Some(format!("ended on its own ({status})")),
+                _ => None,
+            };
+            if let (Some(told), Ok(conv)) = (told, self.conv(id)) {
+                conv.note(format!(
+                    "[preview] {} \"{}\" {told}; it is not running now. Start it again if the user wants it.",
+                    preview.id, preview.name
+                ))
+                .await;
+            }
             preview.state = state;
             preview.ended_at_ms = Some(now_ms());
             if log.is_some() {
@@ -609,7 +628,7 @@ impl SessionManager {
     /// The user's Stop on a preview chip: stops `preview`, or every running preview of the
     /// conversation.
     pub async fn stop_preview(&self, id: ConversationId, preview: Option<String>) -> Result<()> {
-        self.stop_previews_of(&id, preview.as_deref(), "stopped by the user")
+        self.stop_previews_of(&id, preview.as_deref(), USER_STOP)
             .await
             .map(drop)
     }

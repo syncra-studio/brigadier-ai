@@ -135,6 +135,9 @@ struct ConvState {
     told: Option<crate::work::Told>,
     /// A turn is starting or running.
     busy: bool,
+    /// The turn was sent and its CLI hasn't begun it yet: the run shows as starting until it
+    /// has (a fresh CLI takes seconds to start; the live line says so rather than "Thinking").
+    awaiting_start: bool,
     /// The CLI is being closed on purpose (hibernate, archive, fallback).
     closing: bool,
     /// Envelopes for coming turns, each with the request it belongs to.
@@ -1006,7 +1009,7 @@ impl SessionManager {
                 .map_err(|err| Error::Provider(err.to_string())),
             None => Ok(()),
         };
-        self.stop_previews(&id, "stopped by the user").await;
+        self.stop_previews(&id, super::preview::USER_STOP).await;
         self.drop_prewarm(&id, "stopped by the user");
         interrupted
     }
@@ -1478,9 +1481,9 @@ impl SessionManager {
             )
             .await;
         }
-        self.set_run_for(&conv.id, RunState::Running, None, request)
-            .await;
+        conv.state.lock().await.awaiting_start = true;
         if let Err(err) = cli.session.send(input).await {
+            conv.state.lock().await.awaiting_start = false;
             // The briefing goes with the next try.
             if let Some((plan, _)) = reborn {
                 conv.state.lock().await.briefing = Some(plan);
@@ -2670,7 +2673,17 @@ impl SessionManager {
             ProviderEvent::RateLimits { quota } => {
                 self.runtime.note_quota_snapshot(quota.clone()).await;
             }
-            ProviderEvent::TurnStarted { .. } => cli.meter.turn_started(now_ms()),
+            ProviderEvent::TurnStarted { .. } => {
+                cli.meter.turn_started(now_ms());
+                let started = {
+                    let mut state = conv.state.lock().await;
+                    std::mem::take(&mut state.awaiting_start).then(|| state.request.clone())
+                };
+                if let Some(request) = started {
+                    self.set_run_for(&conv.id, RunState::Running, None, request)
+                        .await;
+                }
+            }
             ProviderEvent::Usage { total, last } => {
                 // Claude sums a turn's calls; the context its last call read came apart.
                 let context = conv.context_used().await;
@@ -2812,6 +2825,8 @@ impl SessionManager {
     }
 
     async fn turn_completed(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>, status: TurnStatus) {
+        // A turn that ended before its CLI said it began starts nothing more.
+        conv.state.lock().await.awaiting_start = false;
         let unfinished = match status {
             TurnStatus::Interrupted => "You stopped it".to_owned(),
             _ => conv
