@@ -2,8 +2,9 @@
 //! last checked, and which account work starts on ([`crate::accounts::select`]).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use brigadier_providers::claude::Claude;
 use brigadier_providers::codex::Codex;
@@ -42,6 +43,9 @@ impl Runtime {
     pub fn provider_for(&self, account: &AccountRef) -> Result<Arc<dyn Provider>> {
         match &account.account {
             None => Ok(self.provider(account.provider)),
+            Some(id) if self.is_removing(id) => Err(Error::Invalid(
+                "that account is being removed in Settings → Accounts".into(),
+            )),
             Some(id) => self
                 .accounts()
                 .get(id)
@@ -168,6 +172,14 @@ impl Runtime {
         });
     }
 
+    /// Checks every extra account again in the background.
+    pub fn refresh_accounts(self: &Arc<Self>) {
+        let ids: Vec<String> = self.accounts().keys().cloned().collect();
+        for id in ids {
+            self.refresh_account(id);
+        }
+    }
+
     async fn check_account(&self, id: &str) {
         let Some((provider, kind)) = self
             .accounts()
@@ -244,7 +256,7 @@ impl Runtime {
         for entry in settings
             .accounts
             .iter()
-            .filter(|entry| entry.provider == provider)
+            .filter(|entry| entry.provider == provider && !self.is_removing(&entry.id))
         {
             let account = AccountRef::new(provider, Some(entry.id.clone()));
             candidates.push(Candidate {
@@ -276,10 +288,11 @@ impl Runtime {
         match choice.account.as_deref() {
             Some(crate::accounts::OWN) => AccountRef::own(choice.provider),
             Some(id)
-                if self
-                    .accounts()
-                    .get(id)
-                    .is_some_and(|live| live.entry.provider == choice.provider) =>
+                if !self.is_removing(id)
+                    && self
+                        .accounts()
+                        .get(id)
+                        .is_some_and(|live| live.entry.provider == choice.provider) =>
             {
                 AccountRef::new(choice.provider, Some(id.to_owned()))
             }
@@ -426,5 +439,129 @@ impl Runtime {
         if let Err(err) = result {
             tracing::warn!(error = %err, "could not record the accounts");
         }
+    }
+
+    fn is_removing(&self, id: &str) -> bool {
+        self.removing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(id)
+    }
+
+    /// Marks extra account `id` as being removed until the guard is dropped: no work starts
+    /// on it meanwhile. Fails while it is already being removed.
+    pub fn start_removing(self: &Arc<Self>, id: &str) -> Result<RemovingAccount> {
+        let mut removing = self
+            .removing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !removing.insert(id.to_owned()) {
+            return Err(Error::Invalid(
+                "that account is being removed already".into(),
+            ));
+        }
+        Ok(RemovingAccount {
+            runtime: self.clone(),
+            id: id.to_owned(),
+        })
+    }
+
+    /// Signs extra account `entry` out with its CLI's own command, run in its home, so the
+    /// CLI clears the login it keeps. Brigadier never sees it.
+    pub async fn sign_out(&self, entry: &AccountEntry) -> Result<()> {
+        #[cfg(test)]
+        if self.fake_accounts.is_some() {
+            return Ok(());
+        }
+        let home = self.account_home(&entry.id);
+        if !home.is_dir() {
+            return Ok(());
+        }
+        let program = self.env.resolve(entry.provider).ok_or_else(|| {
+            Error::Invalid(format!("{} is not installed", entry.provider.label()))
+        })?;
+        let env = self.env.for_account(entry.provider, &home);
+        let mut command = tokio::process::Command::new(program);
+        command
+            .args(sign_out_args(entry.provider))
+            .env_clear()
+            .envs(env.vars())
+            .current_dir(&home)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(Duration::from_secs(30), command.output())
+            .await
+            .map_err(|_| Error::Invalid("signing out took too long".into()))?
+            .map_err(|err| Error::Invalid(format!("couldn't sign out: {err}")))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(Error::Invalid(format!(
+                "signing out failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )))
+        }
+    }
+
+    /// Removes a removed account's home: the folder trust Brigadier wrote in it is undone
+    /// first, then the folder goes (its links, never what they point to).
+    pub async fn remove_account_home(&self, id: &str) -> Result<()> {
+        let home = self.account_home(id);
+        for (owner, artifacts, _) in self.ledger.owners() {
+            let inside: Vec<_> = artifacts
+                .into_iter()
+                .filter(|artifact| match artifact {
+                    brigadier_providers::Artifact::CliTrust { file, .. } => {
+                        Path::new(file).starts_with(&home)
+                    }
+                    _ => false,
+                })
+                .collect();
+            if !inside.is_empty() {
+                let left = self.ledger.release(&owner, inside).await;
+                if !left.is_clean() {
+                    tracing::warn!(owner, failures = ?left.failures, "folder trust in a removed account left in place");
+                }
+            }
+        }
+        tokio::task::spawn_blocking(move || brigadier_providers::accounts::remove_home(&home))
+            .await
+            .map_err(|err| Error::Invalid(err.to_string()))?
+            .map_err(|err| Error::Invalid(format!("couldn't remove the account's folder: {err}")))
+    }
+}
+
+/// An extra account being removed; dropping it ends that.
+pub struct RemovingAccount {
+    runtime: Arc<Runtime>,
+    id: String,
+}
+
+impl Drop for RemovingAccount {
+    fn drop(&mut self) {
+        self.runtime
+            .removing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.id);
+    }
+}
+
+/// The CLI's own sign-out (`claude auth logout`, `codex logout`; both in the installed CLIs'
+/// `--help`).
+fn sign_out_args(kind: ProviderKind) -> &'static [&'static str] {
+    match kind {
+        ProviderKind::Claude => &["auth", "logout"],
+        ProviderKind::Codex => &["logout"],
+    }
+}
+
+/// The CLI's own sign-in (`claude auth login`, `codex login`).
+pub fn sign_in_args(kind: ProviderKind) -> &'static [&'static str] {
+    match kind {
+        ProviderKind::Claude => &["auth", "login"],
+        ProviderKind::Codex => &["login"],
     }
 }

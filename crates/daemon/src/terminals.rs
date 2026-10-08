@@ -136,6 +136,17 @@ impl Terminals {
         self.open_inner(conversation, None, cwd, cols, rows, run)
     }
 
+    /// The running terminal of `conversation`'s `session`, if any.
+    pub fn running(&self, conversation: &str, session: &str) -> Option<String> {
+        lock(&self.live)
+            .values()
+            .find(|terminal| {
+                terminal.conversation == conversation
+                    && terminal.session.as_deref() == Some(session)
+            })
+            .map(|terminal| terminal.id.clone())
+    }
+
     /// Opens an independent shell while keeping archive/delete ownership on the conversation.
     pub fn open_session(
         &self,

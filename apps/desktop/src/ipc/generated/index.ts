@@ -1,5 +1,8 @@
 export type { Access } from "./Access";
 export type { AccountEntry } from "./AccountEntry";
+export type { AccountRef } from "./AccountRef";
+export type { AccountView } from "./AccountView";
+export type { AccountsView } from "./AccountsView";
 export type { Alternative } from "./Alternative";
 export type { AppInfo } from "./AppInfo";
 export type { AppRemoval } from "./AppRemoval";

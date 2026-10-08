@@ -54,6 +54,8 @@ function summary(event: DomainEvent): string {
       return "model rankings changed";
     case "providerChecked":
       return event.overview.provider;
+    case "accountsChecked":
+      return `${event.accounts.accounts.length} accounts`;
     case "updatesChanged":
       return event.updates.items.length === 0
         ? "up to date"

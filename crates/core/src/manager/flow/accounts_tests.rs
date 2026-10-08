@@ -429,3 +429,84 @@ async fn a_workers_task_carries_on_with_another_account_of_its_provider() {
     );
     flow.stop().await;
 }
+
+#[tokio::test]
+async fn an_account_in_use_is_not_removed_and_a_chat_pinned_to_a_removed_one_runs_on() {
+    let log = Log::default();
+    let hold = Arc::new(tokio::sync::Notify::new());
+    let release = hold.clone();
+    let script: Script = {
+        let log = log.clone();
+        Arc::new(move |turn: Turn| {
+            let (log, release) = (log.clone(), release.clone());
+            Box::pin(async move {
+                log.lock().unwrap().push(Seen {
+                    provider: turn.provider,
+                    account: turn.account.clone(),
+                    native_id: turn.native_id.clone(),
+                    input: turn.input.clone(),
+                });
+                if turn.input.contains("Hold.") {
+                    release.notified().await;
+                }
+                Reply::text("Done.")
+            })
+        })
+    };
+    let flow = Flow::start("accounts-remove", Options::default(), script).await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let Some(Setup::Session {
+        repo,
+        environment,
+        permission,
+        orchestrator,
+        workers_see_uncommitted,
+        plan_mode,
+    }) = flow.core.conversation(&flow.conversation).unwrap().setup
+    else {
+        panic!("a session");
+    };
+    flow.manager
+        .set_setup(
+            flow.conversation.clone(),
+            Setup::Session {
+                repo,
+                environment,
+                permission,
+                orchestrator: ModelChoice {
+                    account: Some("acct-b".into()),
+                    ..orchestrator
+                },
+                workers_see_uncommitted,
+                plan_mode,
+            },
+        )
+        .await
+        .unwrap();
+    flow.say("Hold.").await;
+    flow.until("the turn runs", |_| !seen(&log).is_empty())
+        .await;
+    let refused = flow.manager.remove_account("acct-b").await;
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(flow.core.settings().accounts.len(), 1);
+    hold.notify_waiters();
+    flow.settled().await;
+    // Once the turn is over, the account can go (the chat's idle CLI on it is closed).
+    let settings = flow.manager.remove_account("acct-b").await.unwrap();
+    assert!(settings.accounts.is_empty());
+    assert!(
+        flow.manager
+            .runtime
+            .accounts_view()
+            .accounts
+            .iter()
+            .all(|view| view.account.account.is_none())
+    );
+    // The chat still names the removed account, and runs on the user's own login.
+    flow.say("After.").await;
+    flow.until("the next turn", |_| seen(&log).len() >= 2).await;
+    flow.settled().await;
+    assert_eq!(seen(&log).last().unwrap().account, None);
+    flow.stop().await;
+}

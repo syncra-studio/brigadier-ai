@@ -12,15 +12,16 @@ use brigadier_core::storage::{
     UninstallPlan, UninstallReport, UnlandedBranch,
 };
 use brigadier_core::{
-    AttachmentRef, BrainJobKind, BrainOverview, CardId, Catalog, CheckoutFile, CommitOutcome,
-    ConventionsExport, Conversation, ConversationActivity, ConversationId, ConversationKind,
-    ConversationStatus, ConversationView, DiffStat, FolderCheck, FolderListing, FolderTrustReport,
-    ForkPlace, GitState, Mention, Message, MessagePage, MessageQueue, OrchestratorPage,
-    OvernightRun, OvernightRunId, ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch,
-    ProposedPlan, ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals, RawPage,
-    RawSession, RawSessionId, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview,
-    Settings, Setup, SetupRequest, SourceScope, SourceState, TaskId, ThreadItem, ThreadMetrics,
-    UpdateTarget, UpdatesView, UsageView, WorkerDiff, WorkerPage,
+    AccountEntry, AccountsView, AttachmentRef, BrainJobKind, BrainOverview, CardId, Catalog,
+    CheckoutFile, CommitOutcome, ConventionsExport, Conversation, ConversationActivity,
+    ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat, FolderCheck,
+    FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, Message, MessagePage,
+    MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, ProbeBurst, Project,
+    ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView, PullRequest,
+    QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId, RepoInfo,
+    RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, Settings, Setup, SetupRequest,
+    SourceScope, SourceState, TaskId, ThreadItem, ThreadMetrics, UpdateTarget, UpdatesView,
+    UsageView, WorkerDiff, WorkerPage,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -764,6 +765,30 @@ pub enum Request {
     RunUpdate {
         target: UpdateTarget,
     },
+    /// Settings → Accounts: each provider's own login and extra accounts, who is signed in
+    /// to each (as its CLI says) and its quota. Changes arrive as `accountsChecked`.
+    GetAccounts,
+    /// Adds an extra account of `provider` (a CLI home of its own) and opens the terminal
+    /// that signs it in: the CLI's own sign-in, run with that home. Its output streams like
+    /// [`Request::OpenTerminal`]'s; the account is checked again when it ends.
+    AddAccount {
+        provider: ProviderKind,
+        cols: u16,
+        rows: u16,
+    },
+    /// Opens (or shows again) the terminal that signs extra account `id` in again.
+    SignInAccount {
+        id: String,
+        cols: u16,
+        rows: u16,
+    },
+    /// Signs extra account `id` out with its CLI's own sign-out and removes it. Refused while
+    /// a chat or worker runs on it. Renaming, the default account and switching are settings.
+    RemoveAccount {
+        id: String,
+    },
+    /// Checks every account's login and quota again; results arrive as `accountsChecked`.
+    RefreshAccounts,
     /// Providers (login, models, quota), raw sessions and replayable fixtures.
     GetProviders,
     /// Checks every provider (or only `provider`) again in the background; results arrive as
@@ -1206,6 +1231,20 @@ pub enum Response {
         updates: UpdatesView,
     },
     RunUpdate,
+    GetAccounts {
+        accounts: AccountsView,
+    },
+    AddAccount {
+        account: AccountEntry,
+        terminal: TerminalInfo,
+    },
+    SignInAccount {
+        terminal: TerminalInfo,
+    },
+    RemoveAccount {
+        settings: Box<Settings>,
+    },
+    RefreshAccounts,
     GetProviders {
         view: ProvidersView,
     },

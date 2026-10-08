@@ -371,6 +371,21 @@ impl Session {
                 cols,
                 rows,
             } => self.open_setup_terminal(provider, install, cols, rows),
+            Request::AddAccount {
+                provider,
+                cols,
+                rows,
+            } => match self.daemon.sessions.add_account(provider).await {
+                Ok(account) => match self.open_account_terminal(&account.id, cols, rows).await? {
+                    Ok(terminal) => Ok(Response::AddAccount { account, terminal }),
+                    Err(err) => Err(err),
+                },
+                Err(err) => Err(IpcError::from(err)),
+            },
+            Request::SignInAccount { id, cols, rows } => self
+                .open_account_terminal(&id, cols, rows)
+                .await?
+                .map(|terminal| Response::SignInAccount { terminal }),
             // Long (the worker's turn ends and its CLI closes first): opened beside the
             // connection's other requests, then attached here (`attach_worker_terminal`).
             Request::OpenWorkerTerminal {
@@ -702,6 +717,91 @@ impl Session {
         )?;
         self.terminals.insert(terminal.id.clone());
         Ok(Response::OpenSetupTerminal { terminal })
+    }
+
+    /// Opens (or shows again) the terminal that signs extra account `id` in: its CLI's own
+    /// sign-in, run directly with the account's home and the user's environment less any
+    /// login variable. When it ends, the account is checked again.
+    async fn open_account_terminal(
+        &mut self,
+        id: &str,
+        cols: u16,
+        rows: u16,
+    ) -> anyhow::Result<Result<TerminalInfo, IpcError>> {
+        let invalid = |text: String| IpcError::from(brigadier_core::Error::Invalid(text));
+        let Some(entry) = self
+            .daemon
+            .core
+            .settings()
+            .accounts
+            .into_iter()
+            .find(|entry| entry.id == id)
+        else {
+            return Ok(Err(invalid("that account was removed".into())));
+        };
+        let runtime = self.daemon.runtime.clone();
+        let home = runtime.account_home(id);
+        let env = runtime.cli_env();
+        let Some(program) = env.resolve(entry.provider) else {
+            return Ok(Err(invalid(format!(
+                "{} is not installed",
+                entry.provider.label()
+            ))));
+        };
+        if self.terminal_feed.is_none() {
+            self.terminal_feed = Some(self.daemon.terminals.subscribe());
+        }
+        let key = format!("account:{id}");
+        let terminal_id = match self.daemon.terminals.running(&key, &key) {
+            Some(open) => open,
+            None => {
+                let command = brigadier_providers::TerminalCommand {
+                    program,
+                    args: brigadier_core::runtime::accounts::sign_in_args(entry.provider)
+                        .iter()
+                        .map(|arg| (*arg).to_owned())
+                        .collect(),
+                    cwd: home.clone(),
+                    env: env.for_account(entry.provider, &home).vars(),
+                };
+                let hosted = match self
+                    .daemon
+                    .terminals
+                    .start_command(&key, &key, command, cols, rows)
+                {
+                    Ok(hosted) => hosted,
+                    Err(err) => return Ok(Err(IpcError::from(err))),
+                };
+                let (exited, account) = (hosted.exited, id.to_owned());
+                self.daemon.supervisor.spawn(async move {
+                    let _ = exited.await;
+                    runtime.refresh_account(account);
+                });
+                hosted.id
+            }
+        };
+        let Some(feed) = self.terminal_feed.as_mut() else {
+            return Ok(Err(invalid("the terminal feed is closed".into())));
+        };
+        let (terminal, others) = match self.daemon.terminals.attach(&terminal_id, feed, cols, rows)
+        {
+            Ok(attached) => attached,
+            Err(err) => return Ok(Err(IpcError::from(err))),
+        };
+        for output in others {
+            let id = match &output {
+                TerminalOutput::Data { terminal_id, .. }
+                | TerminalOutput::Exited { terminal_id, .. } => terminal_id,
+            };
+            if self.terminals.contains(id) {
+                if matches!(output, TerminalOutput::Exited { .. }) {
+                    self.terminals.remove(id);
+                }
+                self.writer.write(&ServerFrame::Terminal { output }).await?;
+            }
+        }
+        self.terminals.insert(terminal.id.clone());
+        Ok(Ok(terminal))
     }
 
     /// Forwards dictation updates to this connection from now on.
@@ -1121,6 +1221,8 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         },
         Request::OpenTerminal { .. }
         | Request::OpenSetupTerminal { .. }
+        | Request::AddAccount { .. }
+        | Request::SignInAccount { .. }
         | Request::OpenWorkerTerminal { .. } => {
             return Err(IpcError::from(brigadier_core::Error::Invalid(
                 "a terminal opens on the connection that shows it".into(),
@@ -1548,7 +1650,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         },
         Request::UpdateSettings { settings } => {
             let before = core.settings();
-            let settings = core.update_settings(*settings).await?;
+            let settings = core
+                .update_settings(brigadier_core::accounts::edited(&before, *settings))
+                .await?;
             daemon.awake.apply().await;
             // New rules or rankings, or an agent or model turned back on, may let work waiting
             // for quota run now.
@@ -1609,6 +1713,17 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::RunUpdate { target } => {
             crate::updates::start(daemon, target).map_err(brigadier_core::Error::Invalid)?;
             Response::RunUpdate
+        }
+        Request::GetAccounts => Response::GetAccounts {
+            accounts: daemon.runtime.accounts_view(),
+        },
+        Request::RemoveAccount { id } => Response::RemoveAccount {
+            settings: Box::new(daemon.sessions.remove_account(&id).await?),
+        },
+        Request::RefreshAccounts => {
+            daemon.runtime.refresh_providers(None);
+            daemon.runtime.refresh_accounts();
+            Response::RefreshAccounts
         }
         Request::GetProviders => Response::GetProviders {
             view: daemon.runtime.view().await,

@@ -121,8 +121,19 @@ impl CliEnv {
 /// Makes an account's home (owner-only) and links it to the main home `main` (see
 /// [`shared`]). Safe to repeat: an existing link is kept, and so is anything the CLI put in
 /// its place. A link the main home no longer backs is left for the CLI to report.
+///
+/// A new Claude home starts with a `.claude.json` that says its first-run setup is done
+/// (`hasCompletedOnboarding`, the key Claude Code 2.1.295 keeps there): the user went
+/// through it with their own login, and a terminal that resumes a session on this account
+/// must not ask again. Nothing else of the user's own `.claude.json` is copied.
 pub fn prepare_home(kind: ProviderKind, main: &Path, home: &Path) -> io::Result<()> {
     create_private_dir(home)?;
+    if kind == ProviderKind::Claude {
+        let config = home.join(".claude.json");
+        if std::fs::symlink_metadata(&config).is_err() {
+            std::fs::write(&config, "{\n  \"hasCompletedOnboarding\": true\n}\n")?;
+        }
+    }
     for entry in shared(kind) {
         let target = main.join(entry.name());
         if let Shared::Dir(_) = entry {
@@ -298,6 +309,14 @@ mod tests {
         }
         // Missing in the main home: not linked.
         assert!(std::fs::symlink_metadata(home.join("agents")).is_err());
+        // Its own config, with the first-run setup done; kept as the CLI leaves it.
+        let config = home.join(".claude.json");
+        let first: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        assert_eq!(first["hasCompletedOnboarding"], true);
+        std::fs::write(&config, "{}").unwrap();
+        prepare_home(ProviderKind::Claude, &main, &home).unwrap();
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), "{}");
         // Owner-only.
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(

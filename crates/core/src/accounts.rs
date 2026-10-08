@@ -50,6 +50,30 @@ impl AccountRef {
     }
 }
 
+/// `incoming` settings with their accounts as an edit may change them: a name, the default
+/// (one per provider) and nothing else. Accounts are added and removed by their own requests
+/// (adding makes the account's home; removing signs it out first).
+pub fn edited(current: &Settings, mut incoming: Settings) -> Settings {
+    let mut accounts = current.accounts.clone();
+    for account in &mut accounts {
+        if let Some(edit) = incoming.accounts.iter().find(|edit| edit.id == account.id) {
+            account.name = edit.name.trim().to_owned();
+            account.default = edit.default;
+        }
+    }
+    for provider in ProviderKind::ALL {
+        let mut seen = false;
+        for account in accounts
+            .iter_mut()
+            .filter(|a| a.provider == provider && a.default)
+        {
+            account.default = !std::mem::replace(&mut seen, true);
+        }
+    }
+    incoming.accounts = accounts;
+    incoming
+}
+
 /// What is known of one account when choosing.
 #[derive(Debug, Clone)]
 pub struct Candidate {
@@ -257,6 +281,32 @@ mod tests {
             .account,
             None
         );
+    }
+
+    #[test]
+    fn an_edit_renames_and_picks_the_default_but_adds_and_removes_nothing() {
+        let current = settings(None, true);
+        let mut incoming = current.clone();
+        incoming.accounts[0].name = " Work ".into();
+        incoming.accounts[0].default = true;
+        incoming.accounts[1].default = true;
+        incoming.accounts[1].provider = ProviderKind::Codex;
+        incoming.accounts.push(AccountEntry {
+            id: "new".into(),
+            provider: ProviderKind::Claude,
+            name: "new".into(),
+            default: false,
+            added_at_ms: 0,
+        });
+        let after = edited(&current, incoming.clone());
+        let ids: Vec<_> = after.accounts.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, ["work", "home"]);
+        assert_eq!(after.accounts[0].name, "Work");
+        // One default per provider, and an account keeps its provider.
+        assert!(after.accounts[0].default && !after.accounts[1].default);
+        assert_eq!(after.accounts[1].provider, ProviderKind::Claude);
+        incoming.accounts.clear();
+        assert_eq!(edited(&current, incoming).accounts.len(), 2);
     }
 
     #[test]

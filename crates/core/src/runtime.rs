@@ -56,7 +56,7 @@ const REPLAY_MAX_GAP: Duration = Duration::from_millis(250);
 const PROVIDER_CHECKS_KEPT: u32 = 100;
 const STREAM_PAGE: u32 = 1_000;
 
-mod accounts;
+pub mod accounts;
 
 /// Runs a task on the daemon's instrumented runtime.
 pub type Spawner = Arc<dyn Fn(Pin<Box<dyn Future<Output = ()> + Send>>) + Send + Sync>;
@@ -116,6 +116,8 @@ pub struct Runtime {
     checked: tokio::sync::watch::Sender<u64>,
     /// The user's extra accounts, by id.
     accounts: Mutex<HashMap<String, accounts::AccountLive>>,
+    /// Extra accounts being removed: no work starts on them.
+    removing: Mutex<HashSet<String>>,
     /// Tests: scripted stand-ins for the Claude and Codex CLIs.
     #[cfg(test)]
     fakes: Option<[Arc<dyn Provider>; 2]>,
@@ -222,6 +224,7 @@ impl Runtime {
             cache_dir: data_dir.join("cache"),
             recordings_dir: record::recordings_dir(&data_dir),
             accounts: Mutex::new(HashMap::new()),
+            removing: Mutex::new(HashSet::new()),
             #[cfg(test)]
             fakes,
             #[cfg(test)]

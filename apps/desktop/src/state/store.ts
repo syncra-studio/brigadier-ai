@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import type {
+  AccountsView,
   AppInfo,
   AttachmentRef,
   Conversation,
@@ -174,6 +175,8 @@ export type AppState = {
     diagnostics: Diagnostics | null;
   };
   providers: ProvidersState;
+  /** Settings → Accounts, once read (`getAccounts`), kept current by `accountsChecked`. */
+  accounts: AccountsView | null;
   /** Counts `rankingsChanged` events: views showing model ratings read them again on a change. */
   rankingsRevision: number;
 };
@@ -222,6 +225,7 @@ export const useApp = create<AppState>()(() => ({
     diagnostics: null,
   },
   providers: { view: null, selected: null, transcripts: {} },
+  accounts: null,
   rankingsRevision: 0,
 }));
 
@@ -324,9 +328,10 @@ export function mergeMessages(
 export function applyEvents(envelopes: readonly EventEnvelope[]): void {
   if (envelopes.length === 0) return;
   useApp.setState((state) => {
-    let { projects, conversations, threads, pending, settings, providers, rankingsRevision } = state;
+    let { projects, conversations, threads, pending, settings, providers, accounts, rankingsRevision } =
+      state;
     for (const envelope of envelopes) {
-      ({ projects, conversations, threads, pending, settings, providers, rankingsRevision } =
+      ({ projects, conversations, threads, pending, settings, providers, accounts, rankingsRevision } =
         applyEvent(envelope, {
           projects,
           conversations,
@@ -334,6 +339,7 @@ export function applyEvents(envelopes: readonly EventEnvelope[]): void {
           pending,
           settings,
           providers,
+          accounts,
           rankingsRevision,
         }));
     }
@@ -349,6 +355,7 @@ export function applyEvents(envelopes: readonly EventEnvelope[]): void {
       pending,
       settings,
       providers,
+      accounts,
       rankingsRevision,
       inspector: { ...state.inspector, events },
     };
@@ -363,6 +370,7 @@ type Slice = Pick<
   | "pending"
   | "settings"
   | "providers"
+  | "accounts"
   | "rankingsRevision"
 >;
 
@@ -537,6 +545,8 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "rawEvent":
     case "providerChecked":
       return { ...slice, providers: applyProviderEvent(envelope, slice.providers) };
+    case "accountsChecked":
+      return { ...slice, accounts: event.accounts };
     // A refresh ended, the rankings were reset or a newer registry was installed: the ratings,
     // route previews and refresh state are read again (getUsage in state/usage).
     case "rankingsChanged":
