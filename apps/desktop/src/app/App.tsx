@@ -5,6 +5,7 @@ import { DeleteDialog } from "@/app/dialogs/DeleteDialog";
 import { useLifecycleShortcuts } from "@/app/lifecycleShortcuts";
 import { AddProjectDialog } from "@/app/dialogs/AddProjectDialog";
 import { StorageDialog } from "@/app/dialogs/StorageDialog";
+import { TrustDialog } from "@/app/dialogs/TrustDialog";
 import { UninstallDialog } from "@/app/dialogs/UninstallDialog";
 import { FolderDropZone } from "@/app/FolderDropZone";
 import { ConversationView } from "@/app/ConversationView";
@@ -190,6 +191,7 @@ export function App() {
         <GlobalSearch />
         <OnboardingDialog />
         <AddProjectDialog />
+        <TrustDialog />
         <StorageDialog />
         <UninstallDialog />
         <DeleteDialog />

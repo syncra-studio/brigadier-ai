@@ -39,6 +39,10 @@ export const PERMISSION_DETAILS: Record<PermissionLevel, string> = {
   fullAccess: "Workers run like your own terminal, without asking",
 };
 
+/** The permission menu's line in a folder the user doesn't trust. */
+export const UNTRUSTED_NOTE =
+  "This folder isn't trusted, so sessions here ask first. Change it in the project's settings.";
+
 /** The README's section on permission levels ("Learn more"). */
 export const PERMISSIONS_HELP_URL =
   "https://github.com/stephen-golban/brigadier-ai#permission-levels";

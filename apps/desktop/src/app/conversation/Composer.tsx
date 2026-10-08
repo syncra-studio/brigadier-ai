@@ -73,6 +73,7 @@ import {
 } from "@/state/dictation";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
 import { useApp } from "@/state/store";
+import { folderTrust } from "@/state/trust";
 
 
 const ComposerEditor = lazy(() => import("@/app/conversation/ComposerEditor"));
@@ -193,6 +194,10 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
                   resolved.kind === "session" && (
                     <PermissionPicker
                       value={resolved.permission}
+                      untrusted={
+                        resolved.repoPath !== null &&
+                        folderTrust(resolved.project, resolved.repoPath) === false
+                      }
                       onChange={(permission) =>
                         updateDraft(resolved.project?.id ?? null, { permission })
                       }

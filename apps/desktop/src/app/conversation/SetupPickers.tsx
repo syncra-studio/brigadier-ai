@@ -53,6 +53,7 @@ import {
   PERMISSION_LEVELS,
   PERMISSIONS_HELP_URL,
   resolveModel,
+  UNTRUSTED_NOTE,
   useModelGroups,
   withChoice,
 } from "@/lib/setup";
@@ -61,6 +62,7 @@ import { cn } from "@/lib/utils";
 import { openSettings, updateSetup } from "@/state/actions";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
+import { folderTrust } from "@/state/trust";
 
 /** Opens a project's settings, for a project that has no repository yet. */
 export function ProjectSettingsButton({ project }: { project: Project }) {
@@ -106,17 +108,21 @@ export function openPermissionsHelp(): void {
  * The permission pill and menu, opening upward: "How should Brigadier's actions be approved?"
  * with "Learn more", each level with its icon and a one-line summary, a check on the one in
  * use, Full access in orange and confirmed before it turns on. In a narrow composer the pill
- * keeps only its icon.
+ * keeps only its icon. In a folder the user doesn't trust it shows Ask for approval, the only
+ * level sessions there run at, and the others can't be picked.
  */
 export function PermissionPicker({
-  value,
+  value: chosen,
+  untrusted = false,
   onChange,
 }: {
   value: PermissionLevel;
+  untrusted?: boolean;
   onChange: (level: PermissionLevel) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const value: PermissionLevel = untrusted ? "askForApproval" : chosen;
   const full = value === "fullAccess";
   const Icon = PERMISSION_ICONS[value];
   return (
@@ -156,6 +162,12 @@ export function PermissionPicker({
               Learn more
             </button>
           </div>
+          {untrusted && (
+            // As wide as the menu, never widening it.
+            <p className="text-muted-foreground w-0 min-w-full px-2 pb-1.5 text-xs">
+              {UNTRUSTED_NOTE}
+            </p>
+          )}
           <DropdownMenuRadioGroup
             value={value}
             onValueChange={(next) => {
@@ -171,6 +183,7 @@ export function PermissionPicker({
                 <DropdownMenuRadioItem
                   key={level}
                   value={level}
+                  disabled={untrusted && level !== "askForApproval"}
                   indicator={<Check className="size-icon-md" />}
                   className={cn(
                     "h-auto gap-3 rounded-xl py-1.5 pe-9",
@@ -442,15 +455,27 @@ function WaitingPill({ wait }: { wait: QuotaWait }) {
   );
 }
 
+/** Whether the user doesn't trust the folder `repo` of the project `projectId`. */
+function useUntrusted(projectId: string | null, repo: string | null): boolean {
+  return useApp(
+    (s) => projectId !== null && repo !== null && folderTrust(s.projects[projectId], repo) === false,
+  );
+}
+
 /** Permission level of a started session. */
 export function ConversationPermissionPicker({ conversation }: { conversation: Conversation }) {
   const action = useAction();
   const setup = conversation.setup;
+  const untrusted = useUntrusted(
+    conversation.projectId,
+    setup?.type === "session" ? setup.repo : null,
+  );
   if (setup?.type !== "session") return null;
   return (
     <>
       <PermissionPicker
         value={setup.permission}
+        untrusted={untrusted}
         onChange={(permission) =>
           action.run(() => updateSetup(conversation.id, { ...setup, permission }))
         }

@@ -1,6 +1,7 @@
 import { Plus, Trash } from "@openai/apps-sdk-ui/components/Icon";
 import { useId, useState, type FormEvent } from "react";
 
+import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine, errorText, Field, FolderField } from "@/app/dialogs/fields";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,8 +13,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import type { Project } from "@/ipc/generated";
 import { updateProject } from "@/state/actions";
+import { useApp } from "@/state/store";
+import { folderTrust, setFolderTrust } from "@/state/trust";
 
 export type ProjectDialogProps = {
   open: boolean;
@@ -21,7 +25,7 @@ export type ProjectDialogProps = {
   project: Project | null;
 };
 
-/** Edits a project's name, repository and secrets (new projects: `AddProjectDialog`). */
+/** Edits a project's name, repository, folder trust and secrets (new projects: `AddProjectDialog`). */
 export function ProjectDialog(props: ProjectDialogProps) {
   return (
     <Dialog open={props.open && props.project !== null} onOpenChange={props.onOpenChange}>
@@ -32,6 +36,36 @@ export function ProjectDialog(props: ProjectDialogProps) {
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Whether the project's (saved) folder is trusted, applied at once. A folder never asked about
+ * shows off until answered.
+ */
+function TrustRow({ projectId, folder }: { projectId: string; folder: string }) {
+  const id = useId();
+  const trusted = useApp((s) => folderTrust(s.projects[projectId], folder) === true);
+  const save = useAction();
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex items-center justify-between gap-4">
+        <label htmlFor={`${id}-trusted`} className="text-muted-foreground text-xs">
+          Trusted folder
+        </label>
+        <Switch
+          id={`${id}-trusted`}
+          checked={trusted}
+          disabled={save.busy}
+          onCheckedChange={(on) => save.run(() => setFolderTrust(projectId, folder, on))}
+        />
+      </div>
+      <p className="text-muted-foreground text-xs">
+        Agents read files and run commands here. Off: every session here asks before doing
+        anything.
+      </p>
+      <ErrorLine error={save.error} />
+    </div>
   );
 }
 
@@ -114,6 +148,7 @@ function SettingsForm({
       >
         <FolderField id={`${id}-repo`} value={repo} onChange={setRepo} />
       </Field>
+      {initialRepo && <TrustRow projectId={project.id} folder={initialRepo} />}
       <Field
         label="Secret env files"
         hint="Gitignored files (paths relative to the repository root) copied into every worker worktree. Their values are redacted in the UI, logs and the Brain."
