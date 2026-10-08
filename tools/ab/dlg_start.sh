@@ -35,12 +35,12 @@ done
 text=$(python3 - "$HERE" "$taskf" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
-from task import load_task
+from task import load_task, SAFETY
 t = load_task(sys.argv[2])
 text = t["request"]
 if t.get("image"):
     text += f" (Image #{t['image-number']} is the file {t['image']})"
-print(text)
+print(text + " " + SAFETY)
 PY
 )
 "$HERE/cmx.sh" "$A" send -- "/delegator $text"

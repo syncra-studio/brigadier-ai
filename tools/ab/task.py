@@ -4,6 +4,11 @@ verbatim request (the first ```text block) and the check commands (the ```sh blo
 usage: task.py <task.md> [key]  prints the task as JSON, or one key."""
 import json, os, re, sys
 
+# Phase 6 (2026-10-08, the Delegator's decision): both arms' request ends with this sentence, so no
+# arm's worker drives the user's installed app. A recorded deviation from the frozen text.
+SAFETY = ("(Safety: never touch the installed /Applications/Brigadier.app or its data; any GUI check "
+          "uses your own dev build under its own identity and data dir, driven by its PID only.)")
+
 
 def load_task(path):
     text = open(path).read()

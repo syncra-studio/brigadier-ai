@@ -9,7 +9,7 @@ marker. Permission defaults to the daemon's default for new sessions."""
 import argparse, base64, json, mimetypes, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bipc import req
-from task import load_task
+from task import load_task, SAFETY
 
 ap = argparse.ArgumentParser()
 ap.add_argument("data"); ap.add_argument("repo"); ap.add_argument("task"); ap.add_argument("arm")
@@ -40,7 +40,7 @@ if task.get("image"):
     ref["inline"] = int(task["image-number"])
     attachments.append(ref)
 t0 = int(time.time() * 1000)
-r2 = req(a.data, {"method": "sendMessage", "conversationId": conv, "text": task["request"], "attachments": attachments,
+r2 = req(a.data, {"method": "sendMessage", "conversationId": conv, "text": task["request"] + " " + SAFETY, "attachments": attachments,
                   "mentions": [], "steer": False})
 os.makedirs(a.arm, exist_ok=True)
 json.dump({"arm": "brigadier", "conversation": conv, "t0_ms": t0, "permission": permission, "environment": a.environment,
