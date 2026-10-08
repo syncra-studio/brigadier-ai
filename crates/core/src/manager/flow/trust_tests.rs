@@ -209,6 +209,124 @@ async fn a_restart_finishes_or_undoes_folder_trust_by_the_answers() {
     flow.stop().await;
 }
 
+/// A value the user set in a CLI after Brigadier's entry (their own `untrusted`) is what the
+/// project's removal puts back, once a restart trusted the entry again: the newer record
+/// replaces the one that remembered no entry.
+#[tokio::test]
+async fn removal_puts_back_the_value_the_user_set_since() {
+    let flow = Flow::start(
+        "trust-theirs-since",
+        Options::default(),
+        super::no_findings(),
+    )
+    .await;
+    let home = Home::new();
+    home.serve(&flow);
+    let project = project_of(&flow);
+    let repo = std::fs::canonicalize(&flow.repo)
+        .unwrap()
+        .display()
+        .to_string();
+
+    flow.manager
+        .set_folder_trust(project.clone(), None, true)
+        .await
+        .unwrap();
+    // The user says no in each CLI's own settings.
+    let codex = home.text(TrustCli::Codex).replace(
+        &format!("[projects.\"{repo}\"]\ntrust_level = \"trusted\""),
+        &format!("[projects.\"{repo}\"]\ntrust_level = \"untrusted\""),
+    );
+    let claude = {
+        let text = home.text(TrustCli::Claude);
+        let at = text.find(&format!("\"{repo}\"")).unwrap();
+        let (head, tail) = text.split_at(at);
+        format!("{head}{}", tail.replacen("true", "false", 1))
+    };
+    assert_ne!(codex, home.text(TrustCli::Codex));
+    std::fs::write(home.file(TrustCli::Codex), &codex).unwrap();
+    std::fs::write(home.file(TrustCli::Claude), &claude).unwrap();
+    for cli in BOTH {
+        assert!(!home.trusts(cli, &flow.repo), "{cli:?}");
+    }
+
+    flow.manager.reconcile_trust().await;
+    for cli in BOTH {
+        assert!(home.trusts(cli, &flow.repo), "{cli:?}");
+    }
+    assert_eq!(trust_records(&flow, &project).len(), 2);
+
+    let removed = flow
+        .manager
+        .remove_project(project.clone(), Vec::new(), true)
+        .await
+        .unwrap();
+    assert!(removed.failures.is_empty(), "{:?}", removed.failures);
+    assert_eq!(home.text(TrustCli::Codex), codex);
+    assert_eq!(home.text(TrustCli::Claude), claude);
+    flow.stop().await;
+}
+
+/// A project whose folder is a linked worktree: both CLIs look its trust up at the main
+/// checkout, so that is the entry written (and removed), not the worktree's.
+#[tokio::test]
+async fn a_linked_worktree_project_trusts_its_main_checkout() {
+    let flow = Flow::start("trust-linked", Options::default(), super::no_findings()).await;
+    let home = Home::new();
+    home.serve(&flow);
+    let linked = home.0.join("linked");
+    super::git(
+        &flow.repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "linked",
+            &linked.display().to_string(),
+        ],
+    );
+    let linked = std::fs::canonicalize(&linked).unwrap();
+    let main = std::fs::canonicalize(&flow.repo).unwrap();
+    let project = flow
+        .core
+        .create_project("linked".into(), Some(linked.display().to_string()))
+        .await
+        .unwrap();
+
+    let report = flow
+        .manager
+        .set_folder_trust(project.id.clone(), None, true)
+        .await
+        .unwrap();
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    for cli in BOTH {
+        assert!(home.trusts(cli, &main), "{cli:?}");
+        assert!(
+            !home.text(cli).contains(&linked.display().to_string()),
+            "{cli:?}"
+        );
+    }
+
+    flow.manager
+        .set_folder_trust(project.id.clone(), None, false)
+        .await
+        .unwrap();
+    assert_eq!(home.text(TrustCli::Claude), CLAUDE);
+    assert_eq!(home.text(TrustCli::Codex), CODEX);
+    assert!(trust_records(&flow, &project.id).is_empty());
+    super::git(
+        &flow.repo,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            &linked.display().to_string(),
+        ],
+    );
+    flow.stop().await;
+}
+
 /// Tests that set no home write nothing at all.
 #[tokio::test]
 async fn without_a_scratch_home_tests_write_no_cli_settings() {

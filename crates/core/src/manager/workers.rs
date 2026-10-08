@@ -504,6 +504,11 @@ impl TaskLive {
         self.state.lock().await.cli.clone()
     }
 
+    /// Whether a CLI session of the worker runs now.
+    pub(crate) async fn has_cli(&self) -> bool {
+        self.state.lock().await.cli.is_some()
+    }
+
     fn new(id: TaskId, conversation_id: ConversationId) -> Self {
         Self {
             id,

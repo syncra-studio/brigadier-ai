@@ -2,7 +2,8 @@
 //!
 //! - **Trusted.** The CLIs' own trust prompts are answered for the folder in their settings
 //!   ([`brigadier_providers::trust`]), so "Open in terminal" asks nothing: one entry for the
-//!   repository's top folder covers its worktrees in both CLIs. A terminal that starts outside
+//!   repository's main checkout covers its worktrees in both CLIs (also when the project's
+//!   folder is itself a linked worktree: both CLIs look up its main checkout). A terminal that starts outside
 //!   the checkout (a read-only Codex worker's scratch folder) gets an entry for that folder,
 //!   owned by its task. Every entry is recorded in the cleanup ledger, with what it replaced,
 //!   before it is written; Don't trust, the project's removal or the task's end puts back what
@@ -89,6 +90,13 @@ impl SessionManager {
     /// cut short is written now), and entries no answer stands behind any more are removed.
     pub(super) async fn reconcile_trust(&self) {
         let projects = self.core.catalog().projects;
+        // The CLI entries each project's trusted folders stand behind.
+        let mut keys: Vec<(&ProjectId, String)> = Vec::new();
+        for project in &projects {
+            for folder in project.trust.iter().filter(|folder| folder.trusted) {
+                keys.push((&project.id, self.trust_key(&folder.path).await));
+            }
+        }
         let ledger = self.runtime.ledger();
         for (holder, artifacts, _) in ledger.owners() {
             let Some(project) = holder.strip_prefix("trust:") else {
@@ -97,9 +105,9 @@ impl SessionManager {
             let stale: Vec<Artifact> = artifacts
                 .into_iter()
                 .filter(|artifact| match artifact {
-                    Artifact::CliTrust { folder, .. } => !projects
+                    Artifact::CliTrust { folder, .. } => !keys
                         .iter()
-                        .any(|p| p.id.0 == project && p.trusts(folder) == Some(true)),
+                        .any(|(id, key)| id.0 == project && key == folder),
                     _ => false,
                 })
                 .collect();
@@ -165,9 +173,30 @@ impl SessionManager {
         cli.file(self.runtime.cli_env())
     }
 
-    /// Writes `folder`'s trust in each of `clis`' settings, recorded under `holder` first.
-    /// Returns what failed, by CLI.
+    /// The entry the CLIs look up for `folder`: its repository's main checkout (both CLIs key
+    /// a linked worktree's trust there; checked with 2.1.294 and codex-cli 0.160.1,
+    /// `docs/evidence/2026-10-08-trust-dialog.md`), else the folder's real path.
+    pub(super) async fn trust_key(&self, folder: &str) -> String {
+        let (git, folder) = (self.git.clone(), std::path::PathBuf::from(folder));
+        blocking(move || {
+            let key = match git.find_repo(&folder) {
+                Ok(Some(repo)) => repo.root,
+                _ => std::fs::canonicalize(&folder).unwrap_or(folder),
+            };
+            Ok(key.display().to_string())
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    /// Writes the trust of `folder`'s entry ([`Self::trust_key`]) in each of `clis`' settings,
+    /// recorded under `holder` first. Returns what failed, by CLI.
     async fn write_cli_trust(&self, holder: &str, folder: &str, clis: &[TrustCli]) -> Vec<String> {
+        let key = self.trust_key(folder).await;
+        if key.is_empty() {
+            return vec![format!("{folder}: its folder couldn't be read")];
+        }
+        let folder = key.as_str();
         let mut failures = Vec::new();
         for &cli in clis {
             let Some(file) = self.trust_file(cli) else {
@@ -210,7 +239,18 @@ impl SessionManager {
                 blocking(move || trust::write(cli, &path, &name, &before).map_err(provider_error))
                     .await;
             match written {
-                Ok(Written::Trusted) => return Ok(()),
+                Ok(Written::Trusted) => {
+                    // An earlier record of this entry restored a value it no longer held:
+                    // this one's `before` is what the entry held last.
+                    for old in ledger.artifacts(holder) {
+                        let same = matches!(&old, Artifact::CliTrust { cli: c, file: f, folder: d, .. }
+                            if *c == cli && *f == file.display().to_string() && d == folder);
+                        if same && old != artifact {
+                            ledger.unrecord(holder, old).await?;
+                        }
+                    }
+                    return Ok(());
+                }
                 // Trusted meanwhile by someone else, or changed: not Brigadier's to undo.
                 Ok(Written::AlreadyTrusted) => {
                     ledger.unrecord(holder, artifact).await?;
@@ -233,7 +273,8 @@ impl SessionManager {
     /// terminal folders. Returns what failed.
     async fn release_cli_trust(&self, project: &Project, path: &str) -> Vec<String> {
         let ledger = self.runtime.ledger();
-        let mut holders = vec![(owner(&project.id), Some(path.to_owned()))];
+        let key = self.trust_key(path).await;
+        let mut holders = vec![(owner(&project.id), Some([path.to_owned(), key]))];
         for id in self.sessions_on(project, path) {
             for task in self.core.tasks(&id).await.unwrap_or_default() {
                 holders.push((format!("task:{}", task.id), None));
@@ -246,7 +287,7 @@ impl SessionManager {
                 .into_iter()
                 .filter(|artifact| match artifact {
                     Artifact::CliTrust { folder, .. } => {
-                        only.as_ref().is_none_or(|only| folder == only)
+                        only.as_ref().is_none_or(|only| only.contains(folder))
                     }
                     _ => false,
                 })
@@ -291,7 +332,7 @@ impl SessionManager {
                 let Some(live) = self.existing_task_live(&task.id) else {
                     continue;
                 };
-                if live.cli().await.is_none() {
+                if !live.has_cli().await {
                     continue;
                 }
                 if !above && task.access == access_for(task.kind, PermissionLevel::AskForApproval) {

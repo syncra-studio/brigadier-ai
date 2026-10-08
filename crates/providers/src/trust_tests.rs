@@ -265,6 +265,36 @@ args = ["--port", "1"]
 "#;
 
 #[test]
+fn overlapping_codex_writes_keep_every_entry() {
+    let scratch = Scratch::new();
+    let file = scratch.file("config.toml", Some(CODEX));
+    let folders: Vec<String> = (0..16).map(|n| format!("/Users/me/code/app-{n}")).collect();
+    let start = std::sync::Arc::new(std::sync::Barrier::new(folders.len()));
+    let writers: Vec<_> = folders
+        .iter()
+        .map(|folder| {
+            let (file, folder, start) = (file.clone(), folder.clone(), start.clone());
+            std::thread::spawn(move || {
+                start.wait();
+                let before = plan(TrustCli::Codex, &file, &folder).unwrap().unwrap();
+                write(TrustCli::Codex, &file, &folder, &before).unwrap()
+            })
+        })
+        .collect();
+    for writer in writers {
+        assert_eq!(writer.join().unwrap(), Written::Trusted);
+    }
+    for folder in &folders {
+        assert_eq!(
+            plan(TrustCli::Codex, &file, folder).unwrap(),
+            None,
+            "{folder} was lost"
+        );
+    }
+    assert!(!scratch.0.join("config.toml.brigadier.lock").exists());
+}
+
+#[test]
 fn codex_new_entry_round_trips_byte_for_byte() {
     let scratch = Scratch::new();
     let file = scratch.file("config.toml", Some(CODEX));

@@ -7,7 +7,9 @@
 //!   refreshed while held), and re-reads the file under the lock before each write
 //!   (`saveConfigWithLock`). Brigadier takes the same lock, so neither loses the other's write.
 //! - **Codex** keeps it as `[projects."<path>"] trust_level = "trusted"` in
-//!   `$CODEX_HOME/config.toml` (by default `~/.codex/config.toml`).
+//!   `$CODEX_HOME/config.toml` (by default `~/.codex/config.toml`). Codex takes no lock for
+//!   it; Brigadier's own writes take one beside it (`config.toml.brigadier.lock`, made like
+//!   Claude's), so two of them can't lose each other's entry.
 //!
 //! Both CLIs key a linked worktree's trust on its main checkout, and neither lets a folder's
 //! trust reach a repository inside it (checked with 2.1.294 and codex-cli 0.160.1; see
@@ -178,12 +180,20 @@ enum Edit<T> {
 const ATTEMPTS: usize = 5;
 
 /// Reads the file (none: empty), edits its text with `change`, and writes the result in its
-/// place atomically, if it still reads the same; Claude's under its lock.
+/// place atomically, if it still reads the same. The whole read, edit and rename holds the
+/// file's lock: Claude's own for its file; for Codex's, which has none, one of Brigadier's
+/// beside it (`config.toml.brigadier.lock`), so two Brigadier writes can't lose one another.
+/// Writes of this process wait their turn before it, so they don't use up its wait.
 fn edit<T>(cli: TrustCli, file: &Path, change: impl Fn(&str) -> Result<Edit<T>>) -> Result<T> {
-    let mut lock = match cli {
-        TrustCli::Claude => Some(Lock::take(file)?),
-        TrustCli::Codex => None,
+    let turn = local_turn(file);
+    let _turn = turn
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let suffix = match cli {
+        TrustCli::Claude => ".lock",
+        TrustCli::Codex => ".brigadier.lock",
     };
+    let mut lock = Lock::take(file, suffix)?;
     let target = resolve(file)?;
     for _ in 0..ATTEMPTS {
         let text = read(&target)?;
@@ -193,7 +203,7 @@ fn edit<T>(cli: TrustCli, file: &Path, change: impl Fn(&str) -> Result<Edit<T>>)
         };
         let temp = write_temp(&target, &new)?;
         let still = read(&target).map(|now| now == text);
-        let held = lock.as_mut().map_or(Ok(()), Lock::check);
+        let held = lock.check();
         match (still, held) {
             (Ok(true), Ok(())) => {
                 if let Err(err) = fs::rename(&temp, &target) {
@@ -218,6 +228,19 @@ fn edit<T>(cli: TrustCli, file: &Path, change: impl Fn(&str) -> Result<Edit<T>>)
         "{} kept changing while Brigadier wrote to it; try again",
         target.display()
     )))
+}
+
+/// The in-process turn for writing `file`: one at a time per config path.
+fn local_turn(file: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
+    static TURNS: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<()>>>>,
+    > = std::sync::LazyLock::new(Default::default);
+    TURNS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .entry(file.to_owned())
+        .or_default()
+        .clone()
 }
 
 /// The file a config path names: where a symlink points (the CLIs write through it too).
@@ -290,8 +313,8 @@ fn failed(path: &Path, err: io::Error) -> Error {
     ))
 }
 
-/// Claude's config lock as `proper-lockfile` keeps it: the folder `<file>.lock`, made
-/// atomically, taken over once its mtime is older than [`Lock::STALE`].
+/// A config lock as `proper-lockfile` keeps it: the folder `<file><suffix>` (Claude's is
+/// `<file>.lock`), made atomically, taken over once its mtime is older than [`Lock::STALE`].
 struct Lock {
     dir: PathBuf,
     /// Its mtime as Brigadier last set it: a lock taken over since has another.
@@ -300,16 +323,16 @@ struct Lock {
 
 impl Lock {
     const STALE: Duration = Duration::from_secs(10);
-    /// How long a write waits for Claude to release it (well under [`Lock::STALE`]).
+    /// How long a write waits for its holder to release it (well under [`Lock::STALE`]).
     const WAIT: Duration = if cfg!(test) {
         Duration::from_millis(300)
     } else {
         Duration::from_secs(5)
     };
 
-    fn take(file: &Path) -> Result<Self> {
+    fn take(file: &Path, suffix: &str) -> Result<Self> {
         let mut dir = file.as_os_str().to_owned();
-        dir.push(".lock");
+        dir.push(suffix);
         let dir = PathBuf::from(dir);
         let start = Instant::now();
         let mut pause = Duration::from_millis(20);
@@ -342,9 +365,10 @@ impl Lock {
                 Err(err) => return Err(failed(&dir, err)),
             }
             if start.elapsed() > Self::WAIT {
-                return Err(Error::Invalid(
-                    "Claude is writing its settings right now; try again in a moment".into(),
-                ));
+                return Err(Error::Invalid(format!(
+                    "{} is being written right now; try again in a moment",
+                    file.display()
+                )));
             }
             std::thread::sleep(pause);
             pause = (pause * 2).min(Duration::from_millis(500));

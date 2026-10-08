@@ -887,10 +887,12 @@ async fn a_read_only_codex_terminal_folder_is_trusted_until_its_task_ends() {
         .await
         .unwrap();
     let (terminal, command) = host.started()[0].clone();
-    assert!(home.trusts(TrustCli::Codex, &command.cwd));
+    // The CLIs look up a folder's real path.
+    let cwd = std::fs::canonicalize(&command.cwd).unwrap();
+    assert!(home.trusts(TrustCli::Codex, &cwd));
     assert!(home.trusts(TrustCli::Codex, &flow.repo));
     // Claude's terminal opens in the checkout: nothing more for Claude.
-    assert!(!home.trusts(TrustCli::Claude, &command.cwd));
+    assert!(!home.trusts(TrustCli::Claude, &cwd));
     let owner = format!("task:{id}");
     assert!(
         flow.manager
@@ -902,7 +904,7 @@ async fn a_read_only_codex_terminal_folder_is_trusted_until_its_task_ends() {
     );
     flow.manager.stop_task(id.clone()).await.unwrap();
     host.exit(&terminal);
-    assert!(!home.trusts(TrustCli::Codex, &command.cwd));
+    assert!(!home.trusts(TrustCli::Codex, &cwd));
     assert!(home.trusts(TrustCli::Codex, &flow.repo));
     flow.stop().await;
 }
