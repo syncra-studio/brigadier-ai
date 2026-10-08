@@ -69,6 +69,29 @@ pub(crate) async fn values(repo: &Path, files: &[String]) -> Vec<String> {
     .unwrap_or_default()
 }
 
+impl SessionManager {
+    /// The values of the secret files of the session `id`'s project, read from its repository;
+    /// none for a Chat or a project without any.
+    pub(crate) async fn session_secret_values(
+        &self,
+        id: &crate::model::ConversationId,
+    ) -> Vec<String> {
+        let Ok(conversation) = self.core.conversation(id) else {
+            return Vec::new();
+        };
+        let Some(crate::model::Setup::Session { repo, .. }) = &conversation.setup else {
+            return Vec::new();
+        };
+        let files = conversation
+            .project_id
+            .as_ref()
+            .and_then(|project| self.core.project(project).ok())
+            .map(|project| project.prefs.secret_files)
+            .unwrap_or_default();
+        values(Path::new(repo), &files).await
+    }
+}
+
 /// A redactor for `values` (secrets and grants); None when there is nothing to hide.
 pub(crate) fn redactor(values: Vec<String>) -> Option<Arc<Redactor>> {
     let redactor = Redactor::new(values);

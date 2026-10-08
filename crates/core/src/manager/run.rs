@@ -207,10 +207,11 @@ impl SessionManager {
         )
         .await?;
         if ran.output.len() <= TRIM_ABOVE {
+            let output = self.hide_secrets(id, ran.output).await;
             return Ok(format!(
                 "[{}]\n{}",
                 ran.status,
-                String::from_utf8_lossy(&ran.output)
+                String::from_utf8_lossy(&output)
             ));
         }
         let (_, digest) = self

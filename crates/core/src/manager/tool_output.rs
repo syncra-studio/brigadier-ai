@@ -61,6 +61,20 @@ impl SessionManager {
             .await
     }
 
+    /// `output` of a command the thread of `id` ran, without the session's grants (an `env`)
+    /// or the project's secrets (a `cat .env`): neither reaches the model or the disk.
+    pub(crate) async fn hide_secrets(&self, id: &ConversationId, output: Vec<u8>) -> Vec<u8> {
+        let mut hidden = self.grants.secrets();
+        hidden.extend(self.session_secret_values(id).await);
+        match (
+            super::secrets::redactor(hidden),
+            std::str::from_utf8(&output),
+        ) {
+            (Some(redactor), Ok(text)) => redactor.redact(text).into_owned().into_bytes(),
+            _ => output,
+        }
+    }
+
     /// [`Self::store_output`], its digest sized for a model that reads it JSON-escaped when
     /// `wrapped`.
     pub(crate) async fn store_output_as(
@@ -82,14 +96,7 @@ impl SessionManager {
                 break alias;
             }
         };
-        // A command that printed the session's grants (`env`) doesn't keep them on disk.
-        let output = match (
-            super::secrets::redactor(self.grants.secrets()),
-            std::str::from_utf8(&output),
-        ) {
-            (Some(redactor), Ok(text)) => redactor.redact(text).into_owned().into_bytes(),
-            _ => output,
-        };
+        let output = self.hide_secrets(id, output).await;
         let digest = if wrapped {
             wrapped_digest(status, &output, &alias)
         } else {

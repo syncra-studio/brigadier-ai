@@ -261,12 +261,7 @@ impl SessionManager {
             }) => Base::Branch(base.clone()),
             _ => Base::Head,
         };
-        let redactor = match &conversation.setup {
-            Some(Setup::Session { repo, .. }) => super::secrets::redactor(
-                super::secrets::values(Path::new(repo), &secret_files).await,
-            ),
-            _ => None,
-        };
+        let redactor = super::secrets::redactor(self.session_secret_values(id).await);
         Ok(Caller {
             conversation_id: id.clone(),
             task_id: None,

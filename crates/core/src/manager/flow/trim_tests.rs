@@ -564,3 +564,86 @@ async fn run_unsandboxed_runs_only_what_the_user_approved_once() {
     assert!(replies[2].1, "once: {}", replies[2].0);
     flow.stop().await;
 }
+
+/// What `run` prints of the project's secret files is hidden from the thread and from the
+/// output it stores, in a short result and in a long one's digest and blob alike.
+#[tokio::test]
+async fn a_runs_output_hides_the_projects_secrets() {
+    let replies: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = replies.clone();
+    let flow = Flow::start(
+        "trim-secret",
+        Options {
+            thread: ProviderKind::Codex,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    return Reply::text("Done.");
+                }
+                for args in [
+                    // The session's worktree has no copy of the user's `.env`: read the checkout's.
+                    json!({ "command": "cat \"$(git rev-parse --git-common-dir)/../.env\"" }),
+                    json!({
+                        "command": "i=0; while [ $i -lt 3000 ]; do echo \"line $i\"; i=$((i+1)); \
+                                    done; echo \"error: TOKEN=$(cut -d= -f2 \"$(git rev-parse --git-common-dir)/../.env\")\"; \
+                                    exit 1",
+                        "timeout_secs": 60,
+                    }),
+                ] {
+                    let reply = turn.call("run", args).await;
+                    log.lock().unwrap().push(reply.text);
+                }
+                Reply::text("Ran them.")
+            }
+        }),
+    )
+    .await;
+    std::fs::write(flow.repo.join(".env"), "TOKEN=s3cret-value-123\n").unwrap();
+    let conversation = flow.manager.core.conversation(&flow.conversation).unwrap();
+    let project = conversation.project_id.unwrap();
+    let mut prefs = flow.manager.core.project(&project).unwrap().prefs;
+    prefs.secret_files = vec![".env".into()];
+    flow.manager
+        .core
+        .update_project(
+            project,
+            crate::model::ProjectPatch {
+                name: None,
+                repos: None,
+                prefs: Some(prefs),
+            },
+        )
+        .await
+        .unwrap();
+    flow.say("Show me the env file.").await;
+    flow.settled().await;
+    let replies = replies.lock().unwrap().clone();
+    assert_eq!(replies.len(), 2, "{replies:?}");
+    for reply in &replies {
+        assert!(!reply.contains("s3cret-value-123"), "{reply}");
+    }
+    assert!(replies[0].starts_with("[exit 0]\nTOKEN="), "{}", replies[0]);
+    assert!(replies[1].contains("error: TOKEN="), "{}", replies[1]);
+    let board = flow.board().await;
+    let stored = &board.outputs[&alias(&replies[1])];
+    let blob = flow
+        .manager
+        .core
+        .store()
+        .blobs()
+        .get(stored.blob.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let text = String::from_utf8(blob).unwrap();
+    assert!(
+        text.contains("error: TOKEN="),
+        "{}",
+        &text[text.len() - 100..]
+    );
+    assert!(!text.contains("s3cret-value-123"));
+    flow.stop().await;
+}

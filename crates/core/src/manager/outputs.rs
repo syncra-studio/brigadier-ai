@@ -18,7 +18,6 @@ use std::time::{Duration, UNIX_EPOCH};
 use brigadier_providers::redact::Redactor;
 
 use super::{SessionManager, blocking, secrets};
-use crate::model::Setup;
 use crate::tools::ArtifactInput;
 use crate::work::{ArtifactKind, ArtifactRef, Task};
 use crate::{Error, Result};
@@ -219,17 +218,7 @@ impl SessionManager {
         {
             return Some(redactor);
         }
-        let conversation = self.core.conversation(&task.conversation_id).ok()?;
-        let Some(Setup::Session { repo, .. }) = &conversation.setup else {
-            return None;
-        };
-        let files = conversation
-            .project_id
-            .as_ref()
-            .and_then(|id| self.core.project(id).ok())
-            .map(|project| project.prefs.secret_files)
-            .unwrap_or_default();
-        secrets::redactor(secrets::values(Path::new(repo), &files).await)
+        secrets::redactor(self.session_secret_values(&task.conversation_id).await)
     }
 
     /// Stores a file (text redacted) as an artifact.

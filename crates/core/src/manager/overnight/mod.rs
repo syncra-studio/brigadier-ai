@@ -660,6 +660,8 @@ impl SessionManager {
     /// Start's first effect: the run's branch and worktree. A run that can't have them ends
     /// before any work starts.
     async fn prepare_run(&self, run: OvernightRun) {
+        // A pre-warmed worktree is on the session's branch: the run's workers start on its own.
+        self.drop_prewarm(&run.conversation_id, "an overnight run started");
         let prepared = self.prepare_run_workspace(&run).await;
         let _held = self.overnight.changes.lock().await;
         let Ok(board) = self.core.board(&run.conversation_id).await else {
