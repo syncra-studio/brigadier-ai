@@ -1443,6 +1443,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             sessions.stop_task(task_id).await?;
             Response::StopTask
         }
+        Request::StopWorkers { conversation_id } => Response::StopWorkers {
+            task_ids: sessions.stop_workers(conversation_id).await?,
+        },
         Request::PauseTask { task_id } => {
             sessions.pause_task(task_id).await?;
             Response::PauseTask

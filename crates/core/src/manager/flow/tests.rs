@@ -641,6 +641,27 @@ async fn a_review_still_running_at_the_merge_reports_its_findings_after_it() {
         review.state,
         crate::work::ReviewState::Findings { count: 1 }
     );
+    // The thread shows it as a "Reviewed" row.
+    let reviewed: Vec<_> = flow
+        .events()
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            crate::model::DomainEvent::OrchestratorStepped { step } => matches!(
+                step.kind,
+                crate::work::OrchestratorStepKind::Reviewed { .. }
+            )
+            .then_some(step.kind),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reviewed,
+        vec![crate::work::OrchestratorStepKind::Reviewed {
+            task_ids: vec![lead.id.clone()],
+            findings: 1,
+        }]
+    );
     let checkout = checkout.lock().unwrap().clone().expect("the review ran");
     assert!(!checkout.exists(), "the review's checkout is removed");
     assert!(
@@ -2100,10 +2121,12 @@ async fn a_codex_thread_s_own_commands_and_edits_are_tool_steps() {
                         FileChange {
                             path: "src/a.rs".into(),
                             kind: FileChangeKind::Update,
+                            diff: None,
                         },
                         FileChange {
                             path: "src/b.rs".into(),
                             kind: FileChangeKind::Add,
+                            diff: None,
                         },
                     ],
                     status: ItemStatus::Completed,

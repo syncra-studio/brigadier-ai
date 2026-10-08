@@ -774,6 +774,12 @@ export async function stopTask(taskId: string): Promise<void> {
   await request({ method: "stopTask", taskId });
 }
 
+/** Stop all: stops every running or waiting worker of the conversation; the ids stopped. */
+export async function stopWorkers(conversationId: string): Promise<string[]> {
+  const { taskIds } = await request({ method: "stopWorkers", conversationId });
+  return taskIds;
+}
+
 export async function pauseTask(taskId: string): Promise<void> {
   await request({ method: "pauseTask", taskId });
 }

@@ -197,12 +197,23 @@ pub struct RouteFollowUp {
     pub joins: bool,
 }
 
-/// A task reference only (`stop_worker`, `read_report`).
+/// A task reference only (`start_verifier`).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TaskRef {
     /// The task, e.g. "task-3".
     pub task: String,
+}
+
+/// `stop_worker`: stop a worker for good, saying why.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StopWorker {
+    /// The task, e.g. "task-3".
+    pub task: String,
+    /// Why it stops, in one line the user reads, e.g. "No longer needed: the user dropped
+    /// the export".
+    pub reason: String,
 }
 
 /// `read_report`: a task of this session, or a report from another session of the project.
@@ -646,7 +657,7 @@ pub enum OrchestratorCall {
     MessageWorker(MessageWorker),
     AnswerWorker(AnswerWorker),
     RouteFollowUp(RouteFollowUp),
-    StopWorker(TaskRef),
+    StopWorker(StopWorker),
     AskUser(AskUser),
     ReadReport(ReportRef),
     ReadArtifact(ReadArtifact),

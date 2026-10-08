@@ -427,6 +427,10 @@ pub enum FileChangeKind {
 pub struct FileChange {
     pub path: String,
     pub kind: FileChangeKind,
+    /// The change as diff lines (`-` out, `+` in), when the CLI says (clipped).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub diff: Option<String>,
 }
 
 /// Lines `start..=end` of a file, counted from 1. `end: None` runs to the end of the file.

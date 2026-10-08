@@ -219,10 +219,31 @@ export function isFinal(task: Task): boolean {
   return FINAL.has(task.state);
 }
 
-/** Worker operations are represented by lifecycle sentences, never their tool calls. */
-const ON_TASK_ROW: ReadonlySet<OrchestratorStepKind["type"]> = new Set([
-  "created", "accepted", "readReport", "messaged", "answered",
-]);
+/**
+ * Steps a team sentence already says: a worker created is its "started working", an accepted
+ * change its "Landed …", a report read its "finished".
+ */
+const ON_TASK_ROW: ReadonlySet<OrchestratorStepKind["type"]> = new Set(["created", "accepted", "readReport"]);
+
+/** What a worker's lifecycle event is called; adjacent events that share a word merge into one sentence. */
+export function lifecycleWord(kind: WorkerStepKind | undefined): "started" | "waiting" | "stopped" | "failed" | "finished" {
+  switch (kind) {
+    case "started":
+    case "resumed":
+    case undefined:
+      return "started";
+    case "waiting":
+    case "paused":
+      return "waiting";
+    case "stopped":
+    case "rejected":
+      return "stopped";
+    case "failed":
+      return "failed";
+    default:
+      return "finished";
+  }
+}
 
 /** Whether a decision is a judgement call the thread shows, rather than a task's, plan's or phase's routine outcome. */
 export function judgementCall(decision: Decision): boolean {
@@ -313,8 +334,13 @@ export function buildBlocks(
         atMs: task.createdAtMs });
     }
   }
+  // A worker the lead stopped: its "Stopped …" row says so, with the reason.
+  const stoppedByLead = new Set(
+    board.orchestratorSteps.flatMap((step) => (step.kind.type === "stopped" ? [step.kind.taskId] : [])),
+  );
   for (const step of board.workerSteps ?? []) {
     if (!board.tasks[step.taskId] || ["updated", "landed"].includes(step.kind)) continue;
+    if (step.kind === "stopped" && stoppedByLead.has(step.taskId)) continue;
     placed.push({ kind: "row", position: step.position, requestId: step.requestId,
       row: { type: "task", taskId: step.taskId, kind: step.kind, position: step.position },
       atMs: step.atMs });
@@ -655,7 +681,7 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
   const merged: SequenceEntry[] = [];
   for (const entry of entries) {
     const previous = merged.at(-1);
-    if (entry.kind === "row" && previous?.kind === "row" && entry.row.kind === "started" && previous.row.kind === "started") {
+    if (entry.kind === "row" && previous?.kind === "row" && lifecycleWord(entry.row.kind) === lifecycleWord(previous.row.kind)) {
       previous.row = { ...previous.row, taskIds: [...new Set([...(previous.row.taskIds ?? [previous.row.taskId]), entry.row.taskId])] };
       continue;
     }

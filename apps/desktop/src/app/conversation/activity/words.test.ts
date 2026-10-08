@@ -4,6 +4,8 @@ import { test } from "node:test";
 import {
   type ActionItem,
   editHunks,
+  fileDiffs,
+  hunkDiff,
   isPlumbing,
   itemCall,
   stepLabel,
@@ -144,4 +146,12 @@ test("an edit's call reads as its lines out and in", () => {
   assert.deepEqual(editHunks("Write", JSON.stringify({ file_path: "n.md", content: "hi" })), [{ path: "n.md", removed: [], added: ["hi"] }]);
   assert.deepEqual(editHunks("apply_patch", "not json"), []);
   assert.deepEqual(editHunks("Read", JSON.stringify({ file_path: "f" })), []);
+});
+
+test("an edit's diff text splits back into its files", () => {
+  assert.deepEqual(fileDiffs("/r/a.ts\n-a\n+b\n/r/b.md\n@@ -1 +1 @@\n context\n+new"), [
+    { path: "/r/a.ts", diff: "-a\n+b" },
+    { path: "/r/b.md", diff: "@@ -1 +1 @@\n context\n+new" },
+  ]);
+  assert.equal(hunkDiff({ path: "f", removed: ["x"], added: ["y", "z"] }), "-x\n+y\n+z");
 });

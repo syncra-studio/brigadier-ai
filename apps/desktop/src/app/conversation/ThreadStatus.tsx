@@ -1,6 +1,6 @@
 import { type FC, memo, useMemo } from "react";
 
-import { WorkerLink } from "@/app/conversation/TaskRow";
+import { WorkerName } from "@/app/conversation/activity/TeamSentence";
 import { type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
 import { useTaskActivityLine } from "@/app/conversation/WorkerActivity";
 import { useWorkerText, WorkerGlyph } from "@/app/conversation/WorkerChip";
@@ -15,7 +15,7 @@ const WorkerStatus = memo(function WorkerStatus({ taskId }: { taskId: string }) 
   return (
     <div ref={ref} data-slot="thread-status-worker" className="text-foreground/65 flex min-w-0 items-center gap-1.5 text-sm leading-5">
       <WorkerGlyph taskId={taskId} className="size-4 shrink-0" />
-      <span className="shrink-0"><WorkerLink taskId={taskId} /></span>
+      <span className="shrink-0"><WorkerName taskId={taskId} glyph={false} /></span>
       {first && (
         <span className={cn("min-w-0 truncate", firstWorking ? "shimmer" : "text-muted-foreground")}>{first}</span>
       )}

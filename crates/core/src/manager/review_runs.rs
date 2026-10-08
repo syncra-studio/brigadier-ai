@@ -30,7 +30,8 @@ use super::{SessionManager, blocking, git_error};
 use crate::model::{ConversationId, DomainEvent};
 use crate::routing::TokenMeter;
 use crate::work::{
-    InjectionKind, ReviewFor, ReviewKind, ReviewRun, ReviewState, Task, TaskId, TaskKind, TaskState,
+    InjectionKind, OrchestratorStepKind, ReviewFor, ReviewKind, ReviewRun, ReviewState, Task,
+    TaskId, TaskKind, TaskState,
 };
 use crate::{Error, Result, now_ms};
 
@@ -62,6 +63,23 @@ struct NewReview {
 /// are counted under.
 fn review_owner(id: &str) -> String {
     format!("review:{id}")
+}
+
+/// The thread's "Reviewed {worker}'s change" row for a code review that ended with a verdict;
+/// none for a plan review, one that could not run, or one of no task's work.
+fn reviewed_step(review: &ReviewRun) -> Option<OrchestratorStepKind> {
+    if review.kind != ReviewKind::Code {
+        return None;
+    }
+    let findings = match review.state {
+        ReviewState::Clean => 0,
+        ReviewState::Findings { count } => count,
+        ReviewState::Running | ReviewState::Failed { .. } => return None,
+    };
+    Some(OrchestratorStepKind::Reviewed {
+        task_ids: vec![review.task_id.clone()?],
+        findings,
+    })
 }
 
 /// The vendor that reviews `author`'s work.
@@ -877,6 +895,17 @@ impl SessionManager {
             if let Err(err) = self.store_review(&ended).await {
                 tracing::warn!(review = %ended.id, error = %err, "could not record a review's end");
             }
+        }
+        if let Some(step) = reviewed_step(&ended) {
+            let request = match &ended.request_id {
+                Some(request) => Some(request.clone()),
+                None => {
+                    self.request_for(&ended.conversation_id, ended.task_id.as_ref())
+                        .await
+                }
+            };
+            self.orchestrator_step_in(&ended.conversation_id, request, step)
+                .await;
         }
         self.tell_review(&ended, text.as_deref()).await;
     }

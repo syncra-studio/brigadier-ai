@@ -565,6 +565,7 @@ pub fn redact_event(redactor: &Redactor, event: &mut ProviderEvent) {
         ProviderEvent::FileChanges { changes, .. } => {
             for change in changes {
                 r(&mut change.path);
+                opt(&mut change.diff);
             }
         }
         ProviderEvent::Image { path, prompt, .. } => {

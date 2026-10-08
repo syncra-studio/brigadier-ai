@@ -22,7 +22,7 @@ import { ThinkingRow } from "@/app/conversation/ThinkingRow";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { InlineImageText } from "@/app/conversation/InlineImage";
 import { MentionText } from "@/app/conversation/Mentions";
-import { StepRow } from "@/app/conversation/OrchestratorSteps";
+import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
 import { type Activity, type LeadStep, turnActivity } from "@/app/conversation/activity/group";
 import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadStep";
@@ -41,7 +41,7 @@ import {
   turnTime,
 } from "@/app/conversation/blocks";
 import { type PhaseView, phaseViewOf, splitReport } from "@/app/conversation/phaseView";
-import { TaskRow } from "@/app/conversation/TaskRow";
+import { TeamSentence } from "@/app/conversation/activity/TeamSentence";
 import { ThreadStatus } from "@/app/conversation/ThreadStatus";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
@@ -288,11 +288,11 @@ const SequenceEntry: FC<{ entry: Entry; streaming: boolean }> = ({ entry, stream
     case "steer":
       return <SteerBubble text={entry.text} atMs={entry.atMs} attachments={entry.attachments} />;
     case "orchestrator":
-      return <>{entry.steps.map((step) => <StepRow key={step.position} step={step} />)}</>;
+      return <>{entry.steps.map((step) => <ThreadStep key={step.position} step={step} />)}</>;
     case "compaction":
       return <CompactionRow compaction={entry.compaction} />;
     case "row":
-      return <TaskRow taskId={entry.row.taskId} taskIds={entry.row.taskIds} kind={entry.row.kind} />;
+      return <TeamSentence row={entry.row} />;
   }
 };
 

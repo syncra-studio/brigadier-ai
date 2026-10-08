@@ -59,8 +59,9 @@ use crate::runtime::{is_delta, merge_delta};
 use crate::tools::Role;
 use crate::work::{
     ApprovalSubject, ArtifactKind, ArtifactRef, AttachmentRef, Attempt, AttemptEnd, GateLink,
-    GateOwner, InjectionKind, QuestionKind, QuotaWait, RepoAccess, Report, Route, Task, TaskId,
-    TaskKind, TaskState, TaskWorkspace, WaitingSource, WorkerAccess, WorkerRole,
+    GateOwner, InjectionKind, OrchestratorStepKind, QuestionKind, QuotaWait, RepoAccess, Report,
+    Route, Task, TaskId, TaskKind, TaskState, TaskWorkspace, WaitingSource, WorkerAccess,
+    WorkerRole,
 };
 use crate::{Error, Result, now_ms};
 
@@ -3421,6 +3422,71 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Stops `task` for good and files a "Stopped" row saying `reason` (the orchestrator's
+    /// `stop_worker`, the user's Stop all). False when it had already ended: nothing is filed.
+    pub(crate) async fn stop_worker(
+        &self,
+        conversation_id: &ConversationId,
+        task: &Task,
+        reason: String,
+    ) -> Result<bool> {
+        if task.state.is_final() {
+            return Ok(false);
+        }
+        self.stop_task(task.id.clone()).await?;
+        self.orchestrator_step(
+            conversation_id,
+            OrchestratorStepKind::Stopped {
+                task_id: task.id.clone(),
+                reason,
+            },
+        )
+        .await;
+        Ok(true)
+    }
+
+    /// The user's Stop all: stops every worker of the conversation that runs or waits (to
+    /// start, for an answer, for quota), files a "Stopped" row for each, and leaves the
+    /// orchestrator one note naming them for its next turn. Returns the tasks stopped.
+    pub async fn stop_workers(&self, conversation_id: ConversationId) -> Result<Vec<TaskId>> {
+        let board = self.core.board(&conversation_id).await?;
+        let mut tasks: Vec<Task> = board
+            .tasks
+            .values()
+            .filter(|task| {
+                matches!(
+                    task.state,
+                    TaskState::Queued
+                        | TaskState::Starting
+                        | TaskState::Running
+                        | TaskState::Blocked
+                        | TaskState::Paused
+                )
+            })
+            .cloned()
+            .collect();
+        tasks.sort_by_key(|task| task.number);
+        let mut stopped = Vec::new();
+        for task in tasks {
+            match self
+                .stop_worker(&conversation_id, &task, USER_STOP_REASON.to_owned())
+                .await
+            {
+                Ok(true) => stopped.push(task),
+                Ok(false) => {}
+                Err(err) => {
+                    tracing::warn!(task = %task.id, error = %err, "could not stop a worker for Stop all");
+                }
+            }
+        }
+        if !stopped.is_empty()
+            && let Ok(conv) = self.conv(&conversation_id)
+        {
+            conv.note(stopped_note(&stopped)).await;
+        }
+        Ok(stopped.into_iter().map(|task| task.id).collect())
+    }
+
     /// Restores a task's kept patch as a new branch on its target branch's current tip.
     pub async fn restore_kept_work(&self, task_id: TaskId) -> Result<crate::work::RestoreOutcome> {
         use crate::work::{KeptWork, RestoreOutcome};
@@ -4046,6 +4112,26 @@ fn continues_work(subject: &Task) -> bool {
             .workspace
             .as_ref()
             .is_some_and(|w| w.worktree.is_some() && w.base.is_some())
+}
+
+/// The reason a "Stopped" row gives for the user's Stop all.
+pub(crate) const USER_STOP_REASON: &str = "Stopped by the user";
+
+/// The orchestrator's note about the workers the user's Stop all stopped.
+fn stopped_note(tasks: &[Task]) -> String {
+    let names: Vec<String> = tasks
+        .iter()
+        .map(|task| format!("task-{} \"{}\"", task.number, task.title))
+        .collect();
+    let names = match names.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    format!(
+        "[worker] The user stopped all workers: {names}. Don't start them again unless the \
+         user asks."
+    )
 }
 
 fn stopped_state(task: &Task) -> TaskState {

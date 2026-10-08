@@ -277,6 +277,25 @@ export function editHunks(name: string, input: string | null): Hunk[] {
   }
 }
 
+/** An edit's lines as diff text: `-` out, then `+` in. */
+export function hunkDiff(hunk: Hunk): string {
+  return [...hunk.removed.map((line) => `-${line}`), ...hunk.added.map((line) => `+${line}`)].join("\n");
+}
+
+/**
+ * The daemon's text of an edit's changes (`getThreadItem`): each file's path on a line of its
+ * own, then its diff lines. A line that starts a new file is one that isn't a diff line.
+ */
+export function fileDiffs(changes: string): { path: string; diff: string }[] {
+  const files: { path: string; diff: string[] }[] = [];
+  for (const line of changes.split("\n")) {
+    const last = files.at(-1);
+    if (last && /^[-+@ \\]|^$/.test(line)) last.diff.push(line);
+    else files.push({ path: line, diff: [] });
+  }
+  return files.map((file) => ({ path: file.path, diff: file.diff.join("\n") }));
+}
+
 /** A worker's file changes as the lead's `apply_patch` step names them. */
 export function changesDetail(paths: readonly string[]): string | null {
   const [first] = paths;

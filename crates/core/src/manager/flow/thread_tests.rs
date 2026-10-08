@@ -1603,3 +1603,197 @@ async fn the_effort_the_lead_picks_is_the_workers() {
     assert_eq!(worker.as_deref(), Some("medium"));
     flow.stop().await;
 }
+
+/// The orchestrator's control actions are rows: message_worker keeps the text it sent, and
+/// stop_worker needs a one-line reason, which its "Stopped" row keeps.
+#[tokio::test]
+async fn messaging_and_stopping_a_worker_are_rows_with_their_text_and_reason() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let worker_started = started.clone();
+    let flow = Flow::start(
+        "control-rows",
+        super::Options::default(),
+        script(move |turn| {
+            let started = worker_started.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    started.notify_one();
+                    std::future::pending::<()>().await;
+                    return Reply::text("");
+                }
+                if !turn.input.contains("Scout the uploads.") {
+                    return Reply::text("[quiet]");
+                }
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"title": "Fix uploads", "kind": "scout",
+                               "spec": "Find why uploads fail."}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                started.notified().await;
+                let reply = turn
+                    .call(
+                        "message_worker",
+                        json!({"task": "task-1", "text": "Look at the retry path first."}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                let reply = turn
+                    .call("stop_worker", json!({"task": "task-1", "reason": "  "}))
+                    .await;
+                assert!(reply.is_error, "{}", reply.text);
+                assert!(
+                    reply.text.contains("stop_worker needs a `reason`"),
+                    "{}",
+                    reply.text
+                );
+                let reply = turn
+                    .call(
+                        "stop_worker",
+                        json!({"task": "task-1",
+                               "reason": "No longer needed: the user dropped uploads"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("Stopped it.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Scout the uploads.").await;
+    let board = flow.settled().await;
+    let task = Flow::task(&board, 1).clone();
+    assert_eq!(task.state, crate::work::TaskState::Stopped);
+    let steps: Vec<OrchestratorStepKind> = flow
+        .events()
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            crate::model::DomainEvent::OrchestratorStepped { step } => match step.kind {
+                kind @ (OrchestratorStepKind::Messaged { .. }
+                | OrchestratorStepKind::Stopped { .. }) => Some(kind),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        steps,
+        vec![
+            OrchestratorStepKind::Messaged {
+                task_id: task.id.clone(),
+                text: Some("Look at the retry path first.".into()),
+            },
+            OrchestratorStepKind::Stopped {
+                task_id: task.id.clone(),
+                reason: "No longer needed: the user dropped uploads".into(),
+            },
+        ]
+    );
+    flow.stop().await;
+}
+
+/// The user's Stop all stops every running worker, files a "Stopped" row for each, and the
+/// orchestrator hears one note naming them all with the user's next message.
+#[tokio::test]
+async fn stop_all_stops_every_running_worker_and_tells_the_orchestrator_once() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let heard = inputs.clone();
+    let flow = Flow::start(
+        "stop-all",
+        super::Options::default(),
+        script(move |turn| {
+            let heard = heard.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    std::future::pending::<()>().await;
+                    return Reply::text("");
+                }
+                heard.lock().unwrap().push(turn.input.clone());
+                if !turn.input.contains("Scout both.") {
+                    return Reply::text("Fine.");
+                }
+                for title in ["Fix uploads", "Thread rows"] {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"title": title, "kind": "scout", "spec": "Look around."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                }
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+    flow.say("Scout both.").await;
+    let board = flow
+        .until("both workers to run", |board| {
+            board.tasks.len() == 2
+                && board
+                    .tasks
+                    .values()
+                    .all(|task| task.state == crate::work::TaskState::Running)
+        })
+        .await;
+    let (first, second) = (
+        Flow::task(&board, 1).id.clone(),
+        Flow::task(&board, 2).id.clone(),
+    );
+    let stopped = flow
+        .manager
+        .stop_workers(flow.conversation.clone())
+        .await
+        .unwrap();
+    assert_eq!(stopped, vec![first.clone(), second.clone()]);
+    let board = flow.settled().await;
+    for id in [&first, &second] {
+        assert_eq!(board.tasks[id].state, crate::work::TaskState::Stopped);
+    }
+    let steps: Vec<OrchestratorStepKind> = flow
+        .events()
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            crate::model::DomainEvent::OrchestratorStepped { step } => {
+                matches!(step.kind, OrchestratorStepKind::Stopped { .. }).then_some(step.kind)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        steps,
+        [&first, &second]
+            .into_iter()
+            .map(|id| OrchestratorStepKind::Stopped {
+                task_id: id.clone(),
+                reason: "Stopped by the user".into(),
+            })
+            .collect::<Vec<_>>()
+    );
+    // Nothing more to stop.
+    assert!(
+        flow.manager
+            .stop_workers(flow.conversation.clone())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    flow.say("What now?").await;
+    flow.settled().await;
+    let inputs = inputs.lock().unwrap().clone();
+    let last = inputs.last().unwrap();
+    assert!(last.contains("What now?"), "{last}");
+    let note = "[worker] The user stopped all workers: task-1 \"Fix uploads\" and task-2 \
+                \"Thread rows\". Don't start them again unless the user asks.";
+    assert!(last.contains(note), "{last}");
+    let told: usize = inputs
+        .iter()
+        .map(|input| input.matches("The user stopped all workers").count())
+        .sum();
+    assert_eq!(told, 1, "{inputs:?}");
+    flow.stop().await;
+}

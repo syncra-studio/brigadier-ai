@@ -245,7 +245,10 @@ impl Thread {
             if unlanded {
                 // Nothing of it landed (a handoff): what is left is said.
                 let _ = turn
-                    .call("stop_worker", json!({"task": format!("task-{task}")}))
+                    .call(
+                        "stop_worker",
+                        json!({"task": format!("task-{task}"), "reason": "No longer needed"}),
+                    )
                     .await;
             }
             let settled = turn

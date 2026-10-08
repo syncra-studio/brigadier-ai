@@ -1075,9 +1075,47 @@ fn file_changes(tool: &str, input: &Value) -> Vec<FileChange> {
         vec![FileChange {
             path: path.to_owned(),
             kind,
+            diff: edit_diff(tool, input),
         }]
     })
     .unwrap_or_default()
+}
+
+/// An edit's lines out and in, from its input: `Edit`'s old and new text, each of `MultiEdit`'s
+/// edits, `Write`'s content.
+fn edit_diff(tool: &str, input: &Value) -> Option<String> {
+    let lines = |text: &str, sign: char, out: &mut String| {
+        for line in text.strip_suffix('\n').unwrap_or(text).lines() {
+            out.push(sign);
+            out.push_str(line);
+            out.push('\n');
+        }
+    };
+    let pair = |edit: &Value, out: &mut String| {
+        lines(str_of(edit, "old_string").unwrap_or_default(), '-', out);
+        lines(str_of(edit, "new_string").unwrap_or_default(), '+', out);
+    };
+    let mut out = String::new();
+    match tool {
+        "Edit" => pair(input, &mut out),
+        "MultiEdit" => {
+            for (index, edit) in input
+                .get("edits")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                if index > 0 {
+                    out.push_str("@@\n");
+                }
+                pair(edit, &mut out);
+            }
+        }
+        "Write" => lines(str_of(input, "content").unwrap_or_default(), '+', &mut out),
+        _ => return None,
+    }
+    (!out.is_empty()).then(|| clip(&out, OUTPUT_CLIP))
 }
 
 /// Claude reports a failed command's status as `Exit code N` at the top of its output.
@@ -1316,6 +1354,26 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn an_edit_carries_its_lines_out_and_in() {
+        let edit = json!({"file_path": "/r/a.ts", "old_string": "a\nb\n", "new_string": "a\nc"});
+        let [change] = file_changes("Edit", &edit).try_into().unwrap();
+        assert_eq!(change.diff.as_deref(), Some("-a\n-b\n+a\n+c\n"));
+        let multi = json!({"file_path": "f", "edits": [
+            {"old_string": "x", "new_string": "y"},
+            {"old_string": "", "new_string": "z"},
+        ]});
+        assert_eq!(
+            edit_diff("MultiEdit", &multi).as_deref(),
+            Some("-x\n+y\n@@\n+z\n")
+        );
+        assert_eq!(
+            edit_diff("Write", &json!({"file_path": "n", "content": "hi"})).as_deref(),
+            Some("+hi\n")
+        );
+        assert_eq!(edit_diff("Read", &json!({"file_path": "n"})), None);
+    }
 
     /// The `Looked` events a recording's output makes.
     pub(crate) fn looked_in(recording: &str) -> Vec<ProviderEvent> {

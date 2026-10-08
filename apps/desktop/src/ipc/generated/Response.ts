@@ -51,6 +51,7 @@ import type { SendOutcome } from "./SendOutcome";
 import type { Settings } from "./Settings";
 import type { SourceState } from "./SourceState";
 import type { StorageReport } from "./StorageReport";
+import type { TaskId } from "./TaskId";
 import type { TerminalInfo } from "./TerminalInfo";
 import type { ThreadItem } from "./ThreadItem";
 import type { ThreadMetrics } from "./ThreadMetrics";
@@ -90,7 +91,11 @@ stat: DiffStat | null, } | { "method": "getWorkerDiffs", diffs: Array<WorkerDiff
 /**
  * Absent before the run has a branch, and for a finished run with nothing verified.
  */
-diff: DiffStat | null, } | { "method": "pendingOvernightNotifications", notifications: Array<PendingRunNotification>, } | { "method": "ackOvernightNotification" } | { "method": "failOvernightNotification" } | { "method": "stopTask" } | { "method": "pauseTask" } | { "method": "resumeTask" } | { "method": "restoreKeptWork", outcome: RestoreOutcome, } | { "method": "resolveWaiting" } | { "method": "listWorkerEvents", page: WorkerPage, } | { "method": "listOrchestratorLog", page: OrchestratorPage, } | { "method": "getThreadItem", item: ThreadItem, } | { "method": "getThreadMetrics", metrics: ThreadMetrics, } | { "method": "readArtifact", text: ArtifactText, } | { "method": "saveArtifact" } | { "method": "openArtifact", 
+diff: DiffStat | null, } | { "method": "pendingOvernightNotifications", notifications: Array<PendingRunNotification>, } | { "method": "ackOvernightNotification" } | { "method": "failOvernightNotification" } | { "method": "stopTask" } | { "method": "stopWorkers", 
+/**
+ * The tasks stopped, oldest first.
+ */
+taskIds: Array<TaskId>, } | { "method": "pauseTask" } | { "method": "resumeTask" } | { "method": "restoreKeptWork", outcome: RestoreOutcome, } | { "method": "resolveWaiting" } | { "method": "listWorkerEvents", page: WorkerPage, } | { "method": "listOrchestratorLog", page: OrchestratorPage, } | { "method": "getThreadItem", item: ThreadItem, } | { "method": "getThreadMetrics", metrics: ThreadMetrics, } | { "method": "readArtifact", text: ArtifactText, } | { "method": "saveArtifact" } | { "method": "openArtifact", 
 /**
  * The copy to open.
  */

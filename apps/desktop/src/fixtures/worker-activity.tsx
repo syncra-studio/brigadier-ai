@@ -2,7 +2,7 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { TaskRow } from "@/app/conversation/TaskRow";
+import { TeamSentence } from "@/app/conversation/activity/TeamSentence";
 import { WorkersSummary } from "@/app/conversation/WorkerSummary";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { WorkersTab } from "@/app/conversation/Agents";
@@ -30,13 +30,13 @@ function Fixture() {
       summary: document.querySelector('[data-slot="workers-summary"]')?.textContent,
       list: document.querySelector('[data-slot="worker-list"]')?.textContent,
       strip: document.querySelectorAll('[data-slot="background-workers"]').length,
-      avatars: [...document.querySelectorAll('[data-slot="task-row"] svg')].map((svg) => svg.getBoundingClientRect().width),
+      avatars: [...document.querySelectorAll('[data-slot="task-row"] span[aria-hidden] svg')].map((svg) => svg.getBoundingClientRect().width),
     })), 300);
     return () => clearTimeout(timer);
   }, []);
   return <TooltipProvider><AgentsPanelContext.Provider value={{ panel, setPanel }}>
     <main className="p-6">
-      {Object.keys(tasks).map((id) => <section key={id} data-task={id}><TaskRow taskId={id} /></section>)}
+      {Object.keys(tasks).map((id) => <section key={id} data-task={id}><TeamSentence row={{ type: "task", taskId: id, position: 0 }} /></section>)}
       <WorkersSummary conversationId={conversationId} />
       <div data-slot="worker-list"><WorkersTab conversationId={conversationId} /></div>
       <pre id="worker-activity-result">{result}</pre>

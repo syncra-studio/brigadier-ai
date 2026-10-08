@@ -17,6 +17,8 @@ use crate::{Error, Result, now_ms};
 
 /// Largest slice `read_artifact` returns.
 const ARTIFACT_PAGE_MAX: u32 = 16_000;
+/// The most bytes of a `stop_worker` reason the thread shows.
+const STOP_REASON_MAX: usize = 300;
 
 impl SessionManager {
     pub(crate) async fn orchestrator_call(
@@ -205,10 +207,17 @@ impl SessionManager {
                 let (reply, answered) = self
                     .message_worker(id, &task, args.text.clone(), "the orchestrator")
                     .await?;
+                let text = super::brains::cut(args.text.trim(), crate::work::STEP_TEXT_MAX);
                 self.update_task(id, &task.id, |task| messaged(task, args.text, answered))
                     .await?;
-                self.orchestrator_step(id, OrchestratorStepKind::Messaged { task_id: task.id })
-                    .await;
+                self.orchestrator_step(
+                    id,
+                    OrchestratorStepKind::Messaged {
+                        task_id: task.id,
+                        text: Some(text),
+                    },
+                )
+                .await;
                 Ok(reply)
             }
             OrchestratorCall::AnswerWorker(args) => {
@@ -224,8 +233,16 @@ impl SessionManager {
                 self.route_follow_up(id, &args.follow_up, args.joins).await
             }
             OrchestratorCall::StopWorker(args) => {
+                let reason = super::brains::one_line(&args.reason, STOP_REASON_MAX);
+                if reason.is_empty() {
+                    return Err(Error::Invalid(
+                        "stop_worker needs a `reason`: one line saying why the worker stops \
+                         (the user reads it)."
+                            .into(),
+                    ));
+                }
                 let task = self.find_task(id, &args.task).await?;
-                self.stop_task(task.id.clone()).await?;
+                self.stop_worker(id, &task, reason).await?;
                 Ok(format!("Stopped task-{}.", task.number))
             }
             OrchestratorCall::AskUser(args) => {
@@ -448,8 +465,19 @@ impl SessionManager {
 
     /// Files a row for the thread under the request the orchestrator serves.
     pub(crate) async fn orchestrator_step(&self, id: &ConversationId, kind: OrchestratorStepKind) {
+        let request = self.request_for(id, None).await;
+        self.orchestrator_step_in(id, request, kind).await;
+    }
+
+    /// Files a row for the thread under `request`.
+    pub(crate) async fn orchestrator_step_in(
+        &self,
+        id: &ConversationId,
+        request: Option<String>,
+        kind: OrchestratorStepKind,
+    ) {
         let step = OrchestratorStep {
-            request_id: self.request_for(id, None).await,
+            request_id: request,
             kind,
             at_ms: now_ms(),
             position: 0,

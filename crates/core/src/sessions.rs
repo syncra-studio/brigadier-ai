@@ -1193,7 +1193,18 @@ impl Core {
                 exit: exit_code,
                 ms: duration_ms.or(took),
             },
-            // The event names the files, not their diffs.
+            // An edit's diffs, file after file, when the CLI gave them.
+            ProviderEvent::FileChanges { changes, .. } => {
+                let diffs: Vec<String> = changes
+                    .into_iter()
+                    .filter_map(|change| change.diff.map(|diff| format!("{}\n{diff}", change.path)))
+                    .collect();
+                ThreadItem {
+                    output: (!diffs.is_empty()).then(|| diffs.join("\n")),
+                    ms: took,
+                    ..ThreadItem::default()
+                }
+            }
             _ => ThreadItem {
                 ms: took,
                 ..ThreadItem::default()

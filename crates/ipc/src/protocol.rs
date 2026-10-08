@@ -601,6 +601,12 @@ pub enum Request {
     StopTask {
         task_id: TaskId,
     },
+    /// Stop all: stops every worker of the conversation that runs or waits, as `stopTask`
+    /// does; the thread shows a "Stopped" row for each, and the orchestrator hears one note
+    /// naming them.
+    StopWorkers {
+        conversation_id: ConversationId,
+    },
     /// Interrupts a worker's turn; `resumeTask` continues it.
     PauseTask {
         task_id: TaskId,
@@ -1105,6 +1111,10 @@ pub enum Response {
     AckOvernightNotification,
     FailOvernightNotification,
     StopTask,
+    StopWorkers {
+        /// The tasks stopped, oldest first.
+        task_ids: Vec<TaskId>,
+    },
     PauseTask,
     ResumeTask,
     RestoreKeptWork {

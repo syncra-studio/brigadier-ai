@@ -261,7 +261,7 @@ test("a run's report shows, and copies, as its message was written", () => {
   assert.equal(shown?.text, stored);
 });
 
-test("stored lifecycle events append completions and group adjacent starts on replay", () => {
+test("stored lifecycle events merge when adjacent and of one word: starts with starts, finishes with finishes", () => {
   const user = { ...messages[0]!, id: "life", requestId: "life", seq: 1 };
   const one = { ...byNumber(1), id: "one", requestId: "life", position: 2 };
   const two = { ...byNumber(1), id: "two", requestId: "life", position: 3 };
@@ -274,8 +274,32 @@ test("stored lifecycle events append completions and group adjacent starts on re
       { taskId: "one", requestId: "life", kind: "landed", position: 6, atMs: 50 },
     ] };
   const rows = sequence(buildBlocks([user], {}, false, replay, [])[0]!).flatMap((entry) => entry.kind === "row" ? [entry.row] : []);
-  assert.equal(rows.length, 3);
+  assert.equal(rows.length, 2);
   assert.deepEqual(rows[0]?.taskIds, ["one", "two"]);
-  assert.deepEqual(rows.map((row) => row.kind), ["started", "finished", "finished"]);
-  assert.deepEqual(rows.slice(1).map((row) => row.taskId), ["two", "one"]);
+  assert.deepEqual(rows.map((row) => row.kind), ["started", "finished"]);
+  assert.deepEqual(rows[1]?.taskIds, ["two", "one"]);
+});
+
+test("the lead managing its team shows: a message, an answer, a stop with its reason, a landing; a stop isn't said twice", () => {
+  const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
+  const one = { ...byNumber(1), id: "one", requestId: "team", position: 2 };
+  const two = { ...byNumber(1), id: "two", requestId: "team", position: 3 };
+  const step = (position: number, kind: OrchestratorStep["kind"]): OrchestratorStep => ({ requestId: "team", atMs: position, position, kind });
+  const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: { one, two }, requests: {},
+    orchestratorSteps: [
+      step(4, { type: "created", taskId: "one" }),
+      step(5, { type: "messaged", taskId: "one", text: "Use the new table." }),
+      step(6, { type: "answered", taskId: "two", question: "Which file?", answer: "notes.py", why: "" }),
+      step(8, { type: "stopped", taskId: "two", reason: "The other worker covers it." }),
+      step(10, { type: "readReport", taskId: "one" }),
+      step(11, { type: "landed", taskIds: ["one"], commits: 2, branch: "b", head: "h" }),
+    ],
+    workerSteps: [
+      { taskId: "one", requestId: "team", kind: "started", position: 2, atMs: 10 },
+      { taskId: "two", requestId: "team", kind: "started", position: 3, atMs: 20 },
+      { taskId: "two", requestId: "team", kind: "stopped", position: 9, atMs: 30 },
+    ] };
+  const shown = sequence(buildBlocks([user], {}, false, replay, [])[0]!).flatMap((entry) =>
+    entry.kind === "row" ? [`row:${entry.row.kind}`] : entry.kind === "orchestrator" ? entry.steps.map((s) => s.kind.type) : []);
+  assert.deepEqual(shown, ["row:started", "messaged", "answered", "stopped", "landed"]);
 });

@@ -9,7 +9,7 @@ use brigadier_core::tools::{
     OrchestratorCall, PlanPhases, PreviewLog, ProposeOvernight, QueryBrain, ReadArtifact,
     RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCheck,
     RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, StartPreview,
-    StopPreview, SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
+    StopPreview, StopWorker, SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
@@ -42,7 +42,8 @@ your final answer covers it too. joins=false: it is a request of its own; it wai
 queue and reaches you once this work is done.";
 
 const STOP_WORKER: &str = "Stop a running worker, e.g. when its task is no longer needed or \
-went wrong. Nothing of it lands.";
+went wrong. Nothing of it lands. `reason` is required: one plain line on why, which the user \
+reads on the thread's \"Stopped\" row (e.g. \"No longer needed: the user dropped the export\").";
 
 const ASK_USER: &str = "Ask the user a question only they can answer (a product choice, an \
 unclear requirement). Returns at once; the answer arrives later as a message. Name the task that \
@@ -303,7 +304,7 @@ fn orchestrator_tools() -> Vec<Tool> {
             ROUTE_FOLLOW_UP,
             input_schema::<RouteFollowUp>(),
         ),
-        tool("stop_worker", STOP_WORKER, input_schema::<TaskRef>()),
+        tool("stop_worker", STOP_WORKER, input_schema::<StopWorker>()),
         tool("ask_user", ASK_USER, input_schema::<AskUser>()),
         tool("read_report", READ_REPORT, input_schema::<ReportRef>()),
         tool(
@@ -782,6 +783,40 @@ mod tests {
         assert!(matches!(
             parse_call(&worker(true), "ask_orchestrator", question()),
             Err(ParseError::UnknownTool(_))
+        ));
+    }
+
+    /// `stop_worker` takes a required one-line reason, which the thread's "Stopped" row shows.
+    #[test]
+    fn stop_worker_needs_a_reason() {
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::None,
+        };
+        let tool = tools_for(&thread)
+            .iter()
+            .find(|tool| tool.name == "stop_worker")
+            .unwrap();
+        let required = tool.input_schema.get("required").unwrap();
+        assert!(
+            required
+                .as_array()
+                .unwrap()
+                .contains(&Value::String("reason".into())),
+            "{required}"
+        );
+        let mut arguments = JsonObject::new();
+        arguments.insert("task".into(), Value::String("task-2".into()));
+        let err = parse_call(&thread, "stop_worker", Some(arguments.clone())).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid arguments for stop_worker: missing field `reason`"
+        );
+        arguments.insert("reason".into(), Value::String("No longer needed".into()));
+        assert!(matches!(
+            parse_call(&thread, "stop_worker", Some(arguments)),
+            Ok(ToolCall::Orchestrator(OrchestratorCall::StopWorker(args)))
+                if args.task == "task-2" && args.reason == "No longer needed"
         ));
     }
 }

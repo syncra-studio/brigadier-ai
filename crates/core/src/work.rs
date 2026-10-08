@@ -1283,6 +1283,9 @@ pub struct WorkerStep {
 
 // ----- orchestrator steps -----------------------------------------------------------------
 
+/// The most bytes of a message an orchestrator step keeps.
+pub const STEP_TEXT_MAX: usize = 2000;
+
 /// What the orchestrator (or a Chat's model) did that the thread tells as a grey row, in
 /// its own words. What already shows by itself (a worker's own row, a card) has none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -1312,7 +1315,22 @@ pub enum OrchestratorStepKind {
         exit: Option<i32>,
     },
     /// "Sent message to {worker}".
-    Messaged { task_id: TaskId },
+    Messaged {
+        task_id: TaskId,
+        /// What it sent (`message_worker`), cut to 2000 bytes; none in
+        /// steps from before it was kept.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        text: Option<String>,
+    },
+    /// "Stopped {worker}": the orchestrator's `stop_worker`, or the user's Stop all.
+    Stopped { task_id: TaskId, reason: String },
+    /// "Reviewed {worker}'s change": a one-shot code review of the tasks' work ended with a
+    /// verdict (clean, or `findings` problems found).
+    Reviewed {
+        task_ids: Vec<TaskId>,
+        findings: u32,
+    },
     /// "Read {worker}'s report".
     ReadReport { task_id: TaskId },
     /// "Read {artifact}".

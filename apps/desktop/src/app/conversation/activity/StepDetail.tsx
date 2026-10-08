@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 
 import type { LeadStep } from "@/app/conversation/activity/group";
-import { type ActionItem, editHunks, type Hunk, parsedInput, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
+import { type ActionItem, editHunks, fileDiffs, hunkDiff, parsedInput, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { searchResults, WebSearch } from "@/components/assistant-ui/elements/web-search";
 import type { ItemStatus, ThreadItem } from "@/ipc/generated";
@@ -96,32 +96,44 @@ export function ToolBox({ title, body }: { title: string; body: string }) {
   );
 }
 
-/** An edit as a small diff: the lines it took out, then the lines it put in. */
-export function DiffBox({ hunks }: { hunks: readonly Hunk[] }) {
-  const [first] = hunks;
-  if (!first) return null;
-  const added = hunks.reduce((count, hunk) => count + hunk.added.length, 0);
-  const removed = hunks.reduce((count, hunk) => count + hunk.removed.length, 0);
+/** One file's change as diff lines: `-` out, `+` in, `@@` between the places it changed. */
+function DiffBox({ path, diff }: { path: string; diff: string }) {
+  const lines = diff.replace(/\n$/, "").split("\n").filter((line) => !/^(---|\+\+\+) /.test(line));
+  const added = lines.filter((line) => line.startsWith("+")).length;
+  const removed = lines.filter((line) => line.startsWith("-")).length;
   return (
     <div data-slot="diff-card" className={BOX}>
       <span className="text-muted-foreground flex gap-2 px-3 pt-2 text-xs">
-        <span className="min-w-0 truncate">{first.path.split("/").pop()}</span>
+        <span className="min-w-0 truncate">{path.split("/").pop()}</span>
         <span className="text-success tabular-nums">+{added}</span>
         <span className="text-destructive tabular-nums">−{removed}</span>
       </span>
       <pre className={cn(BODY, "pb-2")}>
-        {hunks.map((hunk, index) => (
-          <span key={index} className="block">
-            {index > 0 && <span className="text-muted-foreground block">⋯</span>}
-            {hunk.removed.map((line, at) => (
-              <span key={`-${at}`} className="bg-destructive/10 block">{`− ${line}`}</span>
-            ))}
-            {hunk.added.map((line, at) => (
-              <span key={`+${at}`} className="bg-success/10 block">{`+ ${line}`}</span>
-            ))}
+        {lines.map((line, index) => (
+          <span
+            key={index}
+            className={cn(
+              "block",
+              line.startsWith("+") && "bg-success/10",
+              line.startsWith("-") && "bg-destructive/10",
+              line.startsWith("@@") && "text-muted-foreground",
+            )}
+          >
+            {line.startsWith("@@") ? "⋯" : line || " "}
           </span>
         ))}
       </pre>
+    </div>
+  );
+}
+
+/** Several files' changes, each its own box. */
+function Diffs({ files }: { files: readonly { path: string; diff: string }[] }) {
+  return (
+    <div className="flex flex-col gap-1">
+      {files.map((file, index) => (
+        <DiffBox key={`${file.path}:${index}`} path={file.path} diff={file.diff} />
+      ))}
     </div>
   );
 }
@@ -145,7 +157,7 @@ function callDetail(name: string, status: ItemStatus, call: { input: string | nu
   }
   if (EDITS.has(short)) {
     const hunks = editHunks(name, call.input);
-    if (hunks.length > 0) return <DiffBox hunks={hunks} />;
+    if (hunks.length > 0) return <Diffs files={hunks.map((hunk) => ({ path: hunk.path, diff: hunkDiff(hunk) }))} />;
   }
   const query = short === "WebSearch" || short === "web_search" ? searchQuery(call.input) : null;
   if (query !== null && status === "failed") {
@@ -171,8 +183,11 @@ export function actionDetail(item: ActionItem): ReactNode {
       return <ShellBox command={item.command} output={item.output} status={item.status} exit={item.exitCode} />;
     case "tool":
       return callDetail(item.name, item.status, { input: item.input, output: item.output, exit: null });
-    case "files":
+    case "files": {
+      const diffs = item.changes.flatMap((change) => (change.diff ? [{ path: change.path, diff: change.diff }] : []));
+      if (diffs.length > 0) return <Diffs files={diffs} />;
       return <ToolBox title="Files" body={item.changes.map((change) => `${change.kind} ${change.path}`).join("\n")} />;
+    }
     case "image":
       return item.path || item.prompt ? <ToolBox title="Image" body={item.path ?? item.prompt ?? ""} /> : null;
   }
@@ -201,6 +216,8 @@ function LeadToolDetail({ conversationId, kind }: { conversationId: string; kind
   const command = SHELLS.has(short) && !item.input ? kind.detail : null;
   const detail = callDetail(kind.name, kind.status, { input: item.input, output: item.output, exit: item.exit ?? kind.exit ?? null, command });
   if (detail) return <>{detail}</>;
+  // An edit the CLI reported as file changes: the daemon gives their diffs, each after its path.
+  if (EDITS.has(short) && item.output) return <Diffs files={fileDiffs(item.output)} />;
   if (EDITS.has(short) && kind.detail) return <ToolBox title="Files" body={kind.detail} />;
   return <span className="text-muted-foreground text-xs">Nothing more was kept of this step.</span>;
 }
