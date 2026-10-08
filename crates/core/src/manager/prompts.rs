@@ -77,8 +77,10 @@ Your workspace: {workspace}
 You are this session's one long-lived thread, with your own tools: you read, search, run commands and edit in your workspace. You run a team of workers as a lead engineer does: you brief them, answer them, judge their reports and land their work.
 
 How to work:
-- Delegate by default: anything beyond a tiny edit goes to a worker (delegate_task), so you stay free to talk while it runs. Independent tasks may run at once, writers only on separate files. Title each worker with a plain 2–4 word job name, unique in this chat ("Fix file uploads"), never an id, role or phase number.
-- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part, and code pointers (files and symbols you or the Brain found). Scouts look around the repository and research tasks check current docs, when that is more than a quick look of your own.
+- Delegate by default: anything beyond a tiny edit goes to a worker (delegate_task), so you stay free to talk while it runs. Delegate early: at most a quick query_brain or code_search for pointers, then delegate_task; the worker reads the code. Title each worker with a plain 2–4 word job name, unique in this chat ("Fix file uploads"), never an id, role or phase number.
+- Split independent parts into workers that run at once (separate questions, writers on separate files, a check needing no other part's result), started in one batch: several delegate_task calls in one message, usually two to four, each one job with its own "done when". Dependent parts run one after another (plan_phases). Meanwhile do your own small work: reads, searches, checks, tiny edits.
+- Effort: "medium" for small, bounded work (a file or two, a UI tweak, copy, a bug in a known place), "low" for a purely mechanical edit; leave it out otherwise.
+- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part, and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository and research tasks check current docs, when that is more than a quick look of your own.
 - Answer a worker's question ([question from task-N]) at once with answer_worker: take its recommendation when it fits, else what the brief, the plan, the user's words or the Brain settle. message_worker steers a running worker, or sends a reported one back with the exact gaps.
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
 - Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect.
@@ -294,8 +296,9 @@ pub(crate) fn short_replies_note(short: bool) -> String {
 /// they say about the note's subject; a Chat that started on an older one hears it once. From
 /// version 2 a session's are the thread's ([`thread`]): a session whose CLI started on older
 /// ones, with a role no note can replace, starts over from its transcript instead of resuming
-/// ([`role_outdated`]).
-pub(crate) const CONTRACT: u32 = 2;
+/// ([`role_outdated`]). Version 3 adds how the thread splits and starts its workers
+/// (THREAD-UX-PLAN.md §4, §4.1).
+pub(crate) const CONTRACT: u32 = 3;
 /// A Chat's contract: its instructions didn't change with the thread's.
 const CHAT_CONTRACT: u32 = 1;
 /// The first contract whose instructions say that notes replace them.
@@ -620,7 +623,7 @@ const WORKER_VOICE: &str = "
 - Code, comments, docs and files in your outputs folder follow the project's style, not these rules.";
 
 /// What a lead does besides building: its outline when the work is big, and its own review.
-const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. Once your work is committed, call review_code once: a reviewer from the other vendor reads your change while you run your checks, and its findings arrive as a message. Fix each finding you agree with and say why for those you don't, then report.";
+const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. Once your work is committed, call review_code once: a reviewer from the other vendor reads your change while you run your checks, and its findings arrive as a message. Fix each finding you agree with and say why for those you don't. Once your checks pass and the review is clean, or its findings are fixed and the checks they touch rerun, call submit_report at once: no more verifying, re-reading or screenshots after that.";
 
 /// A worker's pointer to the code index tools (PLAN.md §7).
 const WORKER_CODE_TOOLS: &str = "
@@ -1039,6 +1042,10 @@ mod tests {
         assert!(brief.contains("Task task-1: Add the flag"));
         assert!(brief.contains("Your worktree: /w/t1"));
         assert!(brief.ends_with("The task:\nAdd the flag."));
+        // A lead stops once its checks and the review are green (THREAD-UX-PLAN.md §4.1 a).
+        assert!(brief.contains(
+            "call submit_report at once: no more verifying, re-reading or screenshots after that"
+        ));
     }
 }
 
@@ -1088,6 +1095,25 @@ mod environment_tests {
         assert!(run.contains("/Users/me/project"));
         assert!(run.contains("`brigadier/abc/task-3`"));
         assert!(run.contains("don't use `nice`"));
+    }
+
+    /// The thread delegates early, fans out in one batch and picks a lower effort for small work
+    /// (THREAD-UX-PLAN.md §4.1 b–d).
+    #[test]
+    fn the_thread_delegates_early_in_batches_at_the_effort_the_work_needs() {
+        let text = thread(
+            &session("approveForMe"),
+            None,
+            &[],
+            None,
+            None,
+            ProviderKind::Claude,
+            false,
+        );
+        assert!(text.contains("Delegate early: at most a quick query_brain or code_search"));
+        assert!(text.contains("started in one batch: several delegate_task calls in one message"));
+        assert!(text.contains("Effort: \"medium\" for small, bounded work"));
+        assert!(!text.contains("you or the Brain found"));
     }
 
     #[test]
@@ -1233,7 +1259,7 @@ mod environment_tests {
     fn a_session_whose_cli_started_before_the_threads_instructions_starts_over() {
         let now = current("approveForMe", None, &[]);
         assert!(!role_outdated(&now.told()));
-        for contract in [None, Some(0), Some(1)] {
+        for contract in [None, Some(0), Some(1), Some(2)] {
             let told = Told {
                 contract,
                 ..now.told()

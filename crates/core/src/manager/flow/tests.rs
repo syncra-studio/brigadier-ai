@@ -1058,6 +1058,11 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                 turn.git(&["commit", "-q", "-m", "Add p1.txt"]);
                 let review = own_review(&turn).await;
                 assert!(review.contains("found nothing"), "{review}");
+                // A clean review: report now (THREAD-UX-PLAN.md §4.1 a).
+                assert!(
+                    review.contains("report now; don't verify again"),
+                    "{review}"
+                );
                 let reply = turn
                     .call(
                         "submit_report",

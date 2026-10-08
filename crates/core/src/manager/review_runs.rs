@@ -896,14 +896,14 @@ impl SessionManager {
         {
             let message = match (&review.state, text) {
                 (ReviewState::Findings { count }, Some(text)) => format!(
-                    "[review of your work · {reviewer} found {count}]\n{}\n[/review]\nFix each finding you agree with and commit; for one you don't, say why in your report. There are no review rounds: report once your checks are done.",
+                    "[review of your work · {reviewer} found {count}]\n{}\n[/review]\nFix each finding you agree with and commit; for one you don't, say why in your report. There are no review rounds: once your fixes are committed and the checks they touch pass, report at once; don't verify again.",
                     clipped(text)
                 ),
                 (ReviewState::Failed { reason }, _) => format!(
                     "[review of your work] The review could not run: {reason}. Review your diff yourself, carefully, and say so in your report."
                 ),
                 _ => format!(
-                    "[review of your work] {reviewer} found nothing. Report once your checks are done."
+                    "[review of your work] {reviewer} found nothing. If your checks have passed, report now; don't verify again."
                 ),
             };
             if task.blocked_reason.as_deref() == Some(WAITING_FOR_REVIEW) {

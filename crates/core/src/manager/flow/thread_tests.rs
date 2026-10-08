@@ -712,9 +712,9 @@ async fn a_merge_counts_the_review_of_the_threads_own_commit() {
     flow.stop().await;
 }
 
-/// A thread whose CLI started on the instructions from before the thread's (an older contract
-/// in its log) isn't resumed, since it would keep its old role: it starts over from the
-/// transcript with the thread's instructions.
+/// A thread whose CLI started on older instructions (the contract before this build's in its
+/// log, as a session created before the last change of the thread's rules has) isn't resumed,
+/// since it would keep its old rules: it starts over from the transcript with the current ones.
 #[tokio::test]
 async fn a_thread_started_on_older_instructions_starts_over_instead_of_resuming() {
     let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -733,7 +733,7 @@ async fn a_thread_started_on_older_instructions_starts_over_instead_of_resuming(
     .await;
     flow.say("First, remember the word teal.").await;
     flow.settled().await;
-    // What a build before the thread logged when that CLI started.
+    // What the build before logged when that CLI started.
     flow.core
         .record(vec![(
             crate::model::streams::orchestrator(&flow.conversation),
@@ -747,7 +747,7 @@ async fn a_thread_started_on_older_instructions_starts_over_instead_of_resuming(
                         label: "role instructions, short replies".into(),
                         task_id: None,
                         told: Some(crate::work::Told {
-                            contract: Some(1),
+                            contract: Some(crate::manager::prompts::CONTRACT - 1),
                             ..crate::work::Told::default()
                         }),
                     },
@@ -765,6 +765,14 @@ async fn a_thread_started_on_older_instructions_starts_over_instead_of_resuming(
     assert_eq!(specs.last().unwrap().1.origin, Origin::New, "{specs:#?}");
     let second = inputs.lock().unwrap()[1].clone();
     assert!(second.contains("remember the word teal"), "{second}");
+    let rules = specs
+        .last()
+        .unwrap()
+        .1
+        .append_system_prompt
+        .clone()
+        .unwrap();
+    assert!(rules.contains("started in one batch"), "{rules}");
     // Its new start is logged on the thread's contract: the next restart resumes it.
     flow.restart().await;
     flow.say("Third.").await;
@@ -1538,5 +1546,60 @@ async fn a_queued_message_edited_while_the_merge_is_prepared_stops_it() {
     let replies = replies.lock().unwrap().clone();
     assert!(replies[0].0.contains("wrote again"), "{replies:#?}");
     assert!(!on_main(&flow, "NOTES.md"), "nothing merged");
+    flow.stop().await;
+}
+
+/// The lead picks a worker's effort per task (THREAD-UX-PLAN.md §4.1 b): `delegate_task`'s
+/// `effort` is the worker's route, and its CLI starts at it.
+#[tokio::test]
+async fn the_effort_the_lead_picks_is_the_workers() {
+    let flow = Flow::start(
+        "thread-effort",
+        Options::default(),
+        script(|turn| async move {
+            if turn
+                .prompt
+                .contains(crate::manager::prompts::THREAD_OPENING)
+            {
+                if turn.earlier == 0 {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"title": "Rename the label", "kind": "scout",
+                                   "spec": "Find the label.", "effort": "medium"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                return Reply::text("Found it.");
+            }
+            let reply = turn
+                .call("submit_report", json!({"summary": "It is in README.md."}))
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        }),
+    )
+    .await;
+    flow.say("Rename the label.").await;
+    flow.settled().await;
+    let board = flow.board().await;
+    let task = Flow::task(&board, 1);
+    assert_eq!(task.route.choice.effort.as_deref(), Some("medium"));
+    let worker = flow
+        .specs
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(_, spec)| {
+            !spec
+                .append_system_prompt
+                .as_deref()
+                .is_some_and(|prompt| prompt.contains(crate::manager::prompts::THREAD_OPENING))
+        })
+        .map(|(_, spec)| spec.effort.clone())
+        .expect("the worker's CLI started");
+    assert_eq!(worker.as_deref(), Some("medium"));
     flow.stop().await;
 }
