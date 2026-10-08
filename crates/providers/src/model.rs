@@ -79,6 +79,14 @@ pub struct ProviderStatus {
     pub auth_method: Option<String>,
     /// Subscription plan, when the CLI reports one.
     pub plan: Option<String>,
+    /// Who is logged in (the account's email), when the CLI reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub email: Option<String>,
+    /// The organization the login belongs to, when the CLI reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub organization: Option<String>,
     /// What the user should do before this provider can be used. Absent when ready.
     pub guidance: Option<String>,
     /// Its version can compact a session's context on request
@@ -1013,14 +1021,26 @@ pub enum Artifact {
         started_at_ms: Option<f64>,
     },
     /// A Claude Code session: its transcript and per-session state under the config directory.
-    ClaudeSession { session_id: String },
+    ClaudeSession {
+        session_id: String,
+        /// The config directory of the account it ran on; absent: the user's own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        home: Option<String>,
+    },
     /// A Claude Code project directory (`projects/<encoded cwd>`) that did not exist before.
     ClaudeProjectDir { path: String },
     /// Claude Code's write-staging directory in the working directory (`.claude/.cc-writes`,
     /// or `.claude` itself when that did not exist). Removed only while it holds no files.
     ClaudeStagingDir { path: String },
     /// A Codex thread: its rollout file and state records, removed through `thread/delete`.
-    CodexThread { thread_id: String },
+    CodexThread {
+        thread_id: String,
+        /// The `CODEX_HOME` of the account it ran on; absent: the user's own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        home: Option<String>,
+    },
     /// The folder where Codex saves a thread's generated images
     /// (`$CODEX_HOME/generated_images/<thread id>`), which deleting the thread leaves behind.
     CodexGeneratedImages { path: String },

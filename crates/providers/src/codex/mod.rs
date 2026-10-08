@@ -124,6 +124,9 @@ pub struct Codex {
     platform: Arc<dyn Platform>,
     env: Arc<CliEnv>,
     binary: Option<PathBuf>,
+    /// An extra account's ([`crate::accounts`]): the user's own `CODEX_HOME`, where its
+    /// history, settings and generated images are (its own home links them).
+    main_home: Option<PathBuf>,
 }
 
 impl Codex {
@@ -133,6 +136,42 @@ impl Codex {
             platform,
             env,
             binary,
+            main_home: None,
+        }
+    }
+
+    /// The adapter for an extra account whose `CODEX_HOME` is `home` (made with
+    /// [`crate::accounts::prepare_home`]); `env` is the user's own environment.
+    pub fn for_account(platform: Arc<dyn Platform>, env: &CliEnv, home: &Path) -> Self {
+        let main_home = crate::accounts::main_home(ProviderKind::Codex, env);
+        let env = Arc::new(env.for_account(ProviderKind::Codex, home));
+        let binary = env.resolve(ProviderKind::Codex);
+        Self {
+            platform,
+            env,
+            binary,
+            main_home,
+        }
+    }
+
+    /// Who is logged in: Codex's own account record (`account/read`, which hands out no
+    /// token), as (email, plan).
+    async fn account(&self) -> Option<(Option<String>, Option<String>)> {
+        let read: p::GetAccountResponse = self
+            .control(async |rpc: &Rpc| {
+                rpc.call("account/read", &p::GetAccountParams::default())
+                    .await
+            })
+            .await
+            .ok()?;
+        match read.account? {
+            p::Account::Chatgpt { email, plan_type } => Some((
+                email.filter(|email| !email.is_empty()),
+                serde_json::to_value(plan_type)
+                    .ok()
+                    .and_then(|plan| plan.as_str().map(str::to_owned)),
+            )),
+            p::Account::ApiKey | p::Account::AmazonBedrock { .. } => Some((None, None)),
         }
     }
 
@@ -161,7 +200,19 @@ impl Codex {
     /// Where Codex saves generated images, one folder per thread: `$CODEX_HOME` (by default
     /// `~/.codex`) `/generated_images`.
     fn images_root(&self) -> Option<PathBuf> {
-        Some(self.codex_home()?.join("generated_images"))
+        Some(self.history_home()?.join("generated_images"))
+    }
+
+    /// Where the history, settings and generated images are: `$CODEX_HOME`, or an extra
+    /// account's main one (its own home links them).
+    fn history_home(&self) -> Option<PathBuf> {
+        self.main_home.clone().or_else(|| self.codex_home())
+    }
+
+    /// An extra account's own `CODEX_HOME`, recorded with its threads.
+    fn account_home(&self) -> Option<String> {
+        self.main_home.as_ref()?;
+        self.codex_home().map(|dir| dir.display().to_string())
     }
 
     /// `$CODEX_HOME`, by default `~/.codex`.
@@ -174,7 +225,7 @@ impl Codex {
 
     /// The model and effort `codex` runs with when not told, from `config.toml`.
     async fn configured(&self) -> Configured {
-        let Some(path) = self.codex_home().map(|home| home.join("config.toml")) else {
+        let Some(path) = self.history_home().map(|home| home.join("config.toml")) else {
             return Configured::default();
         };
         tokio::fs::read_to_string(path)
@@ -387,6 +438,8 @@ impl Provider for Codex {
                 logged_in: false,
                 auth_method: None,
                 plan: None,
+                email: None,
+                organization: None,
                 guidance: None,
                 compacts: false,
             };
@@ -416,6 +469,12 @@ impl Provider for Codex {
                     status.auth_method = line
                         .and_then(|line| line.split_once(" using "))
                         .map(|(_, method)| method.trim().to_owned());
+                    if status.logged_in
+                        && let Some((email, plan)) = self.account().await
+                    {
+                        status.email = email;
+                        status.plan = plan;
+                    }
                 }
                 Err(err) => status.guidance = Some(format!("Could not ask Codex: {err}")),
             }
@@ -563,6 +622,7 @@ impl Provider for Codex {
                     &cwd,
                     profile,
                     self.images_root().as_deref(),
+                    self.account_home(),
                     ledger.as_ref(),
                 ),
             )
@@ -625,7 +685,7 @@ impl Provider for Codex {
             let mut images = Vec::new();
             for artifact in artifacts {
                 match artifact {
-                    Artifact::CodexThread { thread_id } => threads.push(thread_id),
+                    Artifact::CodexThread { thread_id, .. } => threads.push(thread_id),
                     Artifact::CodexProjectTrust { path } => trusts.push(path),
                     Artifact::CodexGeneratedImages { path } => images.push(PathBuf::from(path)),
                     _ => {}
@@ -711,7 +771,7 @@ impl Provider for Codex {
     }
 
     fn past_folders(&self) -> BoxFuture<'_, Vec<crate::history::PastFolder>> {
-        let dir = self.codex_home();
+        let dir = self.history_home();
         Box::pin(async move {
             let Some(dir) = dir else {
                 return Vec::new();
@@ -738,6 +798,7 @@ async fn open_thread(
     cwd: &Path,
     profile: Option<Value>,
     images_root: Option<&Path>,
+    home: Option<String>,
     ledger: &dyn Ledger,
 ) -> Result<Opened> {
     rpc.initialize().await?;
@@ -847,6 +908,7 @@ async fn open_thread(
     ledger
         .record(Artifact::CodexThread {
             thread_id: thread.id.clone(),
+            home,
         })
         .await?;
     if let Some(root) = images_root {

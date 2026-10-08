@@ -13,6 +13,7 @@
 //! moment it is known, so it can be removed exactly when the session is disposed of, or by the
 //! crash sweep after the daemon died.
 
+pub mod accounts;
 pub mod claude;
 pub mod cli;
 pub mod codex;

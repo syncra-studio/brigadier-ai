@@ -61,7 +61,15 @@ pub(super) fn remove(config: &Path, artifacts: &[Artifact]) -> Result<()> {
     let mut failures = Vec::new();
     // Sessions first: a project directory can only go once the sessions in it are gone.
     let sessions = artifacts.iter().filter_map(|artifact| match artifact {
-        Artifact::ClaudeSession { session_id } => Some(remove_session(config, session_id)),
+        Artifact::ClaudeSession { session_id, home } => Some(
+            remove_session(config, session_id).and_then(|()| match home {
+                // An extra account's own per-session state; its transcript is in `config`.
+                Some(home) if Path::new(home) != config && Path::new(home).is_dir() => {
+                    remove_session(Path::new(home), session_id)
+                }
+                _ => Ok(()),
+            }),
+        ),
         _ => None,
     });
     let dirs = artifacts.iter().filter_map(|artifact| match artifact {

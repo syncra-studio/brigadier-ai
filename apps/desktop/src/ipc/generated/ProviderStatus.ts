@@ -18,6 +18,14 @@ authMethod: string | null,
  */
 plan: string | null, 
 /**
+ * Who is logged in (the account's email), when the CLI reports it.
+ */
+email?: string, 
+/**
+ * The organization the login belongs to, when the CLI reports one.
+ */
+organization?: string, 
+/**
  * What the user should do before this provider can be used. Absent when ready.
  */
 guidance: string | null, 

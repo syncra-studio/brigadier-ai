@@ -10,4 +10,12 @@ export type Artifact = { "type": "process", pid: number,
 /**
  * Start time, to tell it apart from a later process that reused the pid.
  */
-startedAtMs: number | null, } | { "type": "claudeSession", sessionId: string, } | { "type": "claudeProjectDir", path: string, } | { "type": "claudeStagingDir", path: string, } | { "type": "codexThread", threadId: string, } | { "type": "codexGeneratedImages", path: string, } | { "type": "codexProjectTrust", path: string, } | { "type": "processesIn", dir: string, } | { "type": "worktree", repo: string, path: string, } | { "type": "scratchDir", path: string, } | { "type": "claudeTempDir", path: string, } | { "type": "cliTrust", cli: TrustCli, file: string, folder: string, before: TrustBefore, };
+startedAtMs: number | null, } | { "type": "claudeSession", sessionId: string, 
+/**
+ * The config directory of the account it ran on; absent: the user's own.
+ */
+home?: string, } | { "type": "claudeProjectDir", path: string, } | { "type": "claudeStagingDir", path: string, } | { "type": "codexThread", threadId: string, 
+/**
+ * The `CODEX_HOME` of the account it ran on; absent: the user's own.
+ */
+home?: string, } | { "type": "codexGeneratedImages", path: string, } | { "type": "codexProjectTrust", path: string, } | { "type": "processesIn", dir: string, } | { "type": "worktree", repo: string, path: string, } | { "type": "scratchDir", path: string, } | { "type": "claudeTempDir", path: string, } | { "type": "cliTrust", cli: TrustCli, file: string, folder: string, before: TrustBefore, };

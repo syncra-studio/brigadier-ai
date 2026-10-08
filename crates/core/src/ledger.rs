@@ -252,7 +252,7 @@ impl CleanupLedger {
             .values()
             .flatten()
             .filter_map(|artifact| match artifact {
-                Artifact::CodexThread { thread_id } => Some(thread_id.clone()),
+                Artifact::CodexThread { thread_id, .. } => Some(thread_id.clone()),
                 _ => None,
             })
             .collect();
@@ -264,7 +264,7 @@ impl CleanupLedger {
             self.state().artifacts.values().any(|artifacts| {
                 artifacts.iter().any(is_process)
                     && artifacts.iter().any(|artifact| {
-                        matches!(artifact, Artifact::CodexThread { thread_id: held } if held == thread_id)
+                        matches!(artifact, Artifact::CodexThread { thread_id: held, .. } if held == thread_id)
                     })
             })
         };

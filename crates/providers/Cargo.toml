@@ -31,6 +31,9 @@ schemars = { version = "0.8.22", optional = true }
 syn = { version = "3.0.6", optional = true }
 typify = { version = "0.8.0", optional = true }
 
+[target.'cfg(windows)'.dependencies]
+junction = "1.2.0"
+
 [[bin]]
 name = "gen-codex"
 path = "src/bin/gen_codex.rs"

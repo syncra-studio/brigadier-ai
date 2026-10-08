@@ -82,6 +82,9 @@ pub struct Claude {
     platform: Arc<dyn Platform>,
     env: Arc<CliEnv>,
     binary: Option<PathBuf>,
+    /// An extra account's ([`crate::accounts`]): the user's own config directory, where its
+    /// history and settings are (its own home links them).
+    main_config: Option<PathBuf>,
 }
 
 impl Claude {
@@ -91,6 +94,21 @@ impl Claude {
             platform,
             env,
             binary,
+            main_config: None,
+        }
+    }
+
+    /// The adapter for an extra account whose config directory is `home` (made with
+    /// [`crate::accounts::prepare_home`]); `env` is the user's own environment.
+    pub fn for_account(platform: Arc<dyn Platform>, env: &CliEnv, home: &Path) -> Self {
+        let main_config = crate::accounts::main_home(ProviderKind::Claude, env);
+        let env = Arc::new(env.for_account(ProviderKind::Claude, home));
+        let binary = env.resolve(ProviderKind::Claude);
+        Self {
+            platform,
+            env,
+            binary,
+            main_config,
         }
     }
 
@@ -108,9 +126,21 @@ impl Claude {
         }
     }
 
+    /// Where the transcripts and the user's settings are: the configuration directory, or an
+    /// extra account's main one (its `projects` links there).
+    fn history_dir(&self) -> Option<PathBuf> {
+        self.main_config.clone().or_else(|| self.config_dir())
+    }
+
+    /// An extra account's own config directory, recorded with its sessions.
+    fn account_home(&self) -> Option<String> {
+        self.main_config.as_ref()?;
+        self.config_dir().map(|dir| dir.display().to_string())
+    }
+
     /// The user's `settings.json` (the model and effort `claude` runs with when not told).
     async fn settings(&self) -> Value {
-        let Some(path) = self.config_dir().map(|dir| dir.join("settings.json")) else {
+        let Some(path) = self.history_dir().map(|dir| dir.join("settings.json")) else {
             return Value::Null;
         };
         tokio::fs::read_to_string(path)
@@ -206,7 +236,14 @@ impl Claude {
         args
     }
 
-    fn session_args(spec: &SessionSpec, cwd: &Path, native_id: &str) -> Result<Vec<String>> {
+    /// `home_login`: an extra account's session, which must sign in with its home's login
+    /// only ([`settings`]).
+    fn session_args(
+        spec: &SessionSpec,
+        cwd: &Path,
+        native_id: &str,
+        home_login: bool,
+    ) -> Result<Vec<String>> {
         let mut args = Self::stream_args();
         args.extend(
             [
@@ -218,7 +255,7 @@ impl Claude {
             ]
             .map(str::to_owned),
         );
-        args.extend(Self::session_flags(spec, cwd));
+        args.extend(Self::session_flags(spec, cwd, home_login));
         if let Some(prompt) = &spec.append_system_prompt {
             args.push("--append-system-prompt".into());
             args.push(prompt.clone());
@@ -247,7 +284,7 @@ impl Claude {
 
     /// The session's flags that hold in print mode and in an interactive terminal alike (none
     /// of them is stored in the transcript, so a resume repeats them all).
-    fn session_flags(spec: &SessionSpec, cwd: &Path) -> Vec<String> {
+    fn session_flags(spec: &SessionSpec, cwd: &Path, home_login: bool) -> Vec<String> {
         // Its extra folders are writable wherever its working directory is.
         let spec = &SessionSpec {
             access: spec.access_with_dirs(),
@@ -286,7 +323,7 @@ impl Claude {
             }
         }
         args.push("--settings".into());
-        args.push(settings(spec, cwd, &sub_agents).to_string());
+        args.push(settings(spec, cwd, &sub_agents, home_login).to_string());
         args.push("--permission-mode".into());
         args.push(permission_mode(spec).into());
         // The session's own folders and the roots it may write. Both spellings of a root behind
@@ -510,7 +547,7 @@ fn rule_path(path: &Path) -> String {
 }
 
 /// Brigadier's settings layer for a session, passed with `--settings` (above project settings).
-fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents) -> Value {
+fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: bool) -> Value {
     let mut ask: Vec<String> = Vec::new();
     // Unless Claude's own reviewer decides (auto mode), leaving the sandbox always goes through
     // the permission prompt, even if a project rule would allow the command.
@@ -668,6 +705,17 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents) -> Value {
     if spec.access == Access::Full {
         settings["skipDangerousModePermissionPrompt"] = json!(true);
     }
+    // An extra account signs in with its home's login only: a key or token a project's
+    // settings set would win over it, and flag settings win over project settings. Claude
+    // takes a blank one as none (2.1.295 then says "Not logged in";
+    // docs/evidence/2026-10-09-accounts.md). The process gets none either.
+    if home_login {
+        let blank: Map<String, Value> = crate::accounts::auth_vars(ProviderKind::Claude)
+            .iter()
+            .map(|name| ((*name).to_owned(), json!("")))
+            .collect();
+        settings["env"] = Value::Object(blank);
+    }
     settings
 }
 
@@ -771,6 +819,8 @@ impl Provider for Claude {
                 logged_in: false,
                 auth_method: None,
                 plan: None,
+                email: None,
+                organization: None,
                 guidance: None,
                 compacts: false,
             };
@@ -806,6 +856,14 @@ impl Provider for Claude {
                             .get("subscriptionType")
                             .and_then(Value::as_str)
                             .map(str::to_owned);
+                        let field = |name: &str| {
+                            auth.get(name)
+                                .and_then(Value::as_str)
+                                .filter(|value| !value.is_empty())
+                                .map(str::to_owned)
+                        };
+                        status.email = field("email");
+                        status.organization = field("orgName");
                     }
                     Err(_) => {
                         status.guidance = Some(format!(
@@ -868,10 +926,10 @@ impl Provider for Claude {
                 Origin::Resume { native_id } => native_id.clone(),
                 Origin::New | Origin::Fork { .. } => uuid::Uuid::new_v4().to_string(),
             };
-            let args = Self::session_args(&spec, &cwd, &native_id)?;
+            let args = Self::session_args(&spec, &cwd, &native_id, self.main_config.is_some())?;
 
             // Recorded before the CLI can create them.
-            if let Some(config) = self.config_dir() {
+            if let Some(config) = self.history_dir() {
                 let project = files::project_dir(&config, &cwd);
                 let artifact = Artifact::ClaudeProjectDir {
                     path: project.display().to_string(),
@@ -883,6 +941,7 @@ impl Provider for Claude {
             ledger
                 .record(Artifact::ClaudeSession {
                     session_id: native_id.clone(),
+                    home: self.account_home(),
                 })
                 .await?;
             for path in files::staging_dirs(&cwd) {
@@ -1016,7 +1075,7 @@ impl Provider for Claude {
 
     fn remove(&self, artifacts: Vec<Artifact>) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
-            let Some(config) = self.config_dir() else {
+            let Some(config) = self.history_dir() else {
                 return Ok(());
             };
             tokio::task::spawn_blocking(move || files::remove(&config, &artifacts))
@@ -1041,7 +1100,7 @@ impl Provider for Claude {
             // `--input-format`, `--include-partial-messages` and `--replay-user-messages`).
             // Its instructions are in the session record (`--system-prompt-snapshot`, on by
             // default), so `--append-system-prompt` isn't repeated.
-            let mut args = Self::session_flags(&spec, &cwd);
+            let mut args = Self::session_flags(&spec, &cwd, self.main_config.is_some());
             args.push("--resume".into());
             args.push(native_id.clone());
             let mut process = self.env.spec(&program);
@@ -1063,7 +1122,7 @@ impl Provider for Claude {
     }
 
     fn past_folders(&self) -> BoxFuture<'_, Vec<crate::history::PastFolder>> {
-        let dir = self.config_dir();
+        let dir = self.history_dir();
         Box::pin(async move {
             let Some(dir) = dir else {
                 return Vec::new();
@@ -1682,6 +1741,31 @@ mod tests {
         assert_eq!(available_models(&allowed(&[], &["claude-opus-5-5"])), None);
     }
 
+    #[test]
+    fn an_extra_accounts_session_blanks_every_login_variable_in_its_flag_settings() {
+        let cwd = Temp::new();
+        let spec = spec(cwd.path(), &["claude-opus-5-5"]);
+        let models = SubAgents::Any;
+        let own = settings(&spec, cwd.path(), &models, false);
+        assert!(
+            own.get("env").is_none(),
+            "the user's own login is left alone"
+        );
+        let account = settings(&spec, cwd.path(), &models, true);
+        for name in crate::accounts::auth_vars(ProviderKind::Claude) {
+            assert_eq!(account["env"][name], json!(""), "{name}");
+        }
+        let args = Claude::session_args(
+            &spec,
+            cwd.path(),
+            "00000000-0000-4000-8000-000000000000",
+            true,
+        )
+        .unwrap();
+        let flag = &args[args.iter().position(|arg| arg == "--settings").unwrap() + 1];
+        assert!(flag.contains("\"CLAUDE_CODE_OAUTH_TOKEN\":\"\""), "{flag}");
+    }
+
     fn spec(cwd: &Path, ids: &[&str]) -> SessionSpec {
         SessionSpec {
             cwd: cwd.to_owned(),
@@ -1742,7 +1826,7 @@ mod tests {
                 ToolSet::Review,
             ] {
                 spec.tools = tools;
-                let args = Claude::session_args(&spec, dir.path(), native_id).unwrap();
+                let args = Claude::session_args(&spec, dir.path(), native_id, false).unwrap();
                 assert_thinking_args(&args);
                 assert!(args.iter().any(|arg| arg == "--include-partial-messages"));
             }
@@ -1771,7 +1855,8 @@ mod tests {
             ..spec(cwd, &["claude-sonnet-5"])
         };
         let models = SubAgents::Only(vec!["claude-sonnet-5".to_owned()]);
-        let permissions = |spec: &SessionSpec| settings(spec, cwd, &models)["permissions"].clone();
+        let permissions =
+            |spec: &SessionSpec| settings(spec, cwd, &models, false)["permissions"].clone();
 
         // Full access: no permission checks, no sandbox, nothing that asks; the model list
         // still holds.
@@ -1784,15 +1869,15 @@ mod tests {
                 .is_none()
         );
         assert_eq!(
-            settings(&full, cwd, &models)["sandbox"]["enabled"],
+            settings(&full, cwd, &models, false)["sandbox"]["enabled"],
             json!(false)
         );
         assert_eq!(
-            settings(&full, cwd, &models)["availableModels"],
+            settings(&full, cwd, &models, false)["availableModels"],
             json!(["claude-sonnet-5"])
         );
         assert_eq!(
-            settings(&full, cwd, &models)["skipDangerousModePermissionPrompt"],
+            settings(&full, cwd, &models, false)["skipDangerousModePermissionPrompt"],
             json!(true)
         );
 
@@ -1805,7 +1890,7 @@ mod tests {
             json!("disable")
         );
         assert!(
-            settings(&auto, cwd, &models)
+            settings(&auto, cwd, &models, false)
                 .get("skipDangerousModePermissionPrompt")
                 .is_none()
         );
@@ -1856,7 +1941,7 @@ mod tests {
             ..spec(cwd.path(), &["claude-opus-5-5"])
         };
         let native_id = "00000000-0000-4000-8000-000000000000";
-        let args = Claude::session_args(&review, cwd.path(), native_id).expect("args");
+        let args = Claude::session_args(&review, cwd.path(), native_id, false).expect("args");
         let after = |flag: &str| {
             args.windows(2)
                 .find(|pair| pair[0] == flag)
@@ -1870,7 +1955,7 @@ mod tests {
         assert_eq!(after("--permission-mode").as_deref(), Some("dontAsk"));
         // Other sessions get no allow list on the command line.
         let worker = spec(cwd.path(), &["claude-opus-5-5"]);
-        let args = Claude::session_args(&worker, cwd.path(), native_id).expect("args");
+        let args = Claude::session_args(&worker, cwd.path(), native_id, false).expect("args");
         assert!(!args.iter().any(|arg| arg == "--allowedTools"));
     }
 
@@ -1901,7 +1986,7 @@ mod tests {
             (scoped, false, "acceptEdits"),
         ] {
             let spec = thread(access.clone(), auto_review);
-            let args = Claude::session_args(&spec, cwd.path(), native_id).expect("args");
+            let args = Claude::session_args(&spec, cwd.path(), native_id, false).expect("args");
             let after = |flag: &str| {
                 args.windows(2)
                     .find(|pair| pair[0] == flag)
@@ -1929,6 +2014,7 @@ mod tests {
                 },
                 cwd.path(),
                 &SubAgents::Any,
+                false,
             );
             let allow = settings["permissions"]["allow"].as_array().expect("allow");
             assert!(allow.contains(&json!("WebSearch")) && allow.contains(&json!("WebFetch")));
@@ -1978,7 +2064,7 @@ mod tests {
             output_hook: Some(hook.clone()),
             ..spec(cwd.path(), &[])
         };
-        let hooks = &settings(&thread, cwd.path(), &SubAgents::Any)["hooks"];
+        let hooks = &settings(&thread, cwd.path(), &SubAgents::Any, false)["hooks"];
         let expected = json!([{
             "matcher": "Bash",
             "hooks": [{
@@ -1991,9 +2077,13 @@ mod tests {
         assert_eq!(hooks["PostToolUse"], expected);
         assert_eq!(hooks["PostToolUseFailure"], expected);
         assert_eq!(hooks.as_object().map(Map::len), Some(2));
-        let args =
-            Claude::session_args(&thread, cwd.path(), "00000000-0000-4000-8000-000000000000")
-                .expect("args");
+        let args = Claude::session_args(
+            &thread,
+            cwd.path(),
+            "00000000-0000-4000-8000-000000000000",
+            false,
+        )
+        .expect("args");
         assert!(!args.iter().any(|arg| arg.contains("brg_secret")));
         // Any other session has none, even if one was given.
         for tools in [
@@ -2007,7 +2097,7 @@ mod tests {
                 ..thread.clone()
             };
             assert!(
-                settings(&other, cwd.path(), &SubAgents::Any)
+                settings(&other, cwd.path(), &SubAgents::Any, false)
                     .get("hooks")
                     .is_none(),
                 "{tools:?}"
@@ -2033,7 +2123,7 @@ mod tests {
             ..spec(cwd.path(), &["claude-sonnet-5"])
         };
         let models = SubAgents::Only(vec!["claude-sonnet-5".to_owned()]);
-        let settings = settings(&spec, cwd.path(), &models);
+        let settings = settings(&spec, cwd.path(), &models, false);
         let filesystem = &settings["sandbox"]["filesystem"];
         let git = resolved(&git);
         let deny = settings["permissions"]["deny"]
@@ -2072,7 +2162,7 @@ mod tests {
             add_dirs: vec![checkout.clone()],
             ..spec(cwd.path(), &["claude-sonnet-5"])
         };
-        let settings = settings(&spec, cwd.path(), &SubAgents::Any);
+        let settings = settings(&spec, cwd.path(), &SubAgents::Any, false);
         let deny = settings["permissions"]["deny"]
             .as_array()
             .expect("deny rules");
@@ -2093,7 +2183,7 @@ mod tests {
         let models = sub_agents(&held, cwd);
         assert_eq!(models, SubAgents::Only(vec!["claude-sonnet-5".to_owned()]));
         assert_eq!(
-            settings(&held, cwd, &models)["availableModels"],
+            settings(&held, cwd, &models, false)["availableModels"],
             json!(["claude-sonnet-5"])
         );
         assert_eq!(
@@ -2104,7 +2194,7 @@ mod tests {
         let models = sub_agents(&leaky, cwd);
         assert_eq!(models, SubAgents::Off);
         assert!(
-            settings(&leaky, cwd, &models)
+            settings(&leaky, cwd, &models, false)
                 .get("availableModels")
                 .is_none()
         );

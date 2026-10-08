@@ -368,6 +368,8 @@ impl Provider for FakeCli {
                 logged_in: true,
                 auth_method: Some("fake".into()),
                 plan: None,
+                email: None,
+                organization: None,
                 guidance: None,
                 compacts: false,
             }
