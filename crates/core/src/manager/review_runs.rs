@@ -398,7 +398,7 @@ impl SessionManager {
         let reviewer = review.reviewer.label();
         Ok(match (&review.state, started) {
             (ReviewState::Running, true) => format!(
-                "Started a review of your committed work by {reviewer}. It returns now: keep working on your checks. Its findings arrive as a message from Brigadier; if you finish everything else first, end your turn and they start your next one. Fix what you agree with and commit, then report."
+                "Started a review of your committed work by {reviewer}. It returns now: gather your evidence and run your checks meanwhile. Its findings arrive as a message from Brigadier; if you finish everything else first, end your turn and they start your next one. Fix what you agree with and commit, then report."
             ),
             (ReviewState::Running, false) if review.notify == ReviewFor::Worker { task_id: task.id.clone() } => {
                 "This exact work is being reviewed already; the findings arrive as a message."
@@ -925,14 +925,14 @@ impl SessionManager {
         {
             let message = match (&review.state, text) {
                 (ReviewState::Findings { count }, Some(text)) => format!(
-                    "[review of your work · {reviewer} found {count}]\n{}\n[/review]\nFix each finding you agree with and commit; for one you don't, say why in your report. There are no review rounds: once your fixes are committed and the checks they touch pass, report at once; don't verify again.",
+                    "[review of your work · {reviewer} found {count}]\n{}\n[/review]\nFix each finding you agree with and commit; for one you don't, say why in your report. There are no review rounds: once your fixes are committed, your evidence is in and the checks they touch pass, report at once; don't verify again.",
                     clipped(text)
                 ),
                 (ReviewState::Failed { reason }, _) => format!(
                     "[review of your work] The review could not run: {reason}. Review your diff yourself, carefully, and say so in your report."
                 ),
                 _ => format!(
-                    "[review of your work] {reviewer} found nothing. If your checks have passed, report now; don't verify again."
+                    "[review of your work] {reviewer} found nothing. Once your checks pass and your evidence is in, report at once; don't verify again."
                 ),
             };
             if task.blocked_reason.as_deref() == Some(WAITING_FOR_REVIEW) {

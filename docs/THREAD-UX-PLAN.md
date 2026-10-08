@@ -342,6 +342,9 @@ it took the brief's screenshots only after its review), three fixes, then one mo
 - **Evidence before the review.** A lead worker does its slow done-when evidence (screenshots, manual runs) before
   `review_code`, so nothing is left once the review answers; after a clean review and green checks it reports at
   once (a).
+- **Then the review overlaps the evidence** (the user's call after run 2): a lead calls `review_code` right after
+  its commit, gathers its evidence and runs its checks while the review runs, and reports once both are done; not
+  re-measured on T1.
 
 ## 5. Other thread actions
 
