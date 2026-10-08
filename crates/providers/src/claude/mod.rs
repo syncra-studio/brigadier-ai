@@ -661,6 +661,13 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents) -> Value {
     if let Some(hooks) = output_hooks(spec) {
         settings["hooks"] = hooks;
     }
+    // Full access is the user's own choice in Brigadier, so its terminal ("Open in terminal")
+    // doesn't ask again with Claude's bypass-mode warning, whose default answer exits. Flag
+    // settings count as consent (2.1.294 reads the key from user, local, flag and policy
+    // settings; docs/evidence/2026-10-08-trust-dialog.md).
+    if spec.access == Access::Full {
+        settings["skipDangerousModePermissionPrompt"] = json!(true);
+    }
     settings
 }
 
@@ -1784,6 +1791,10 @@ mod tests {
             settings(&full, cwd, &models)["availableModels"],
             json!(["claude-sonnet-5"])
         );
+        assert_eq!(
+            settings(&full, cwd, &models)["skipDangerousModePermissionPrompt"],
+            json!(true)
+        );
 
         // Approve for me: auto mode decides what leaves the sandbox.
         let auto = with(scoped.clone(), true);
@@ -1792,6 +1803,11 @@ mod tests {
         assert_eq!(
             permissions(&auto)["disableBypassPermissionsMode"],
             json!("disable")
+        );
+        assert!(
+            settings(&auto, cwd, &models)
+                .get("skipDangerousModePermissionPrompt")
+                .is_none()
         );
 
         // Ask for approval: leaving the sandbox asks.
