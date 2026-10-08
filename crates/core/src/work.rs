@@ -301,6 +301,11 @@ pub struct Takeover {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub ending: Option<String>,
+    /// The orchestrator's messages while it is open, for the report request (kept here too,
+    /// so a restart delivers them).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(skip)]
+    pub held: Vec<String>,
 }
 
 /// Where a task works.

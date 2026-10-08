@@ -299,6 +299,10 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
 /// Every session the scripted CLIs were started with, in order.
 pub(crate) type Specs = Arc<Mutex<Vec<(ProviderKind, SessionSpec)>>>;
 
+/// Native sessions the scripted CLIs refuse to resume (a test makes a resume fail). Shared by
+/// every test in the process; each test names its own sessions.
+pub(crate) static REFUSED_RESUMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 /// A scripted stand-in for one CLI.
 struct FakeCli {
     kind: ProviderKind,
@@ -388,6 +392,13 @@ impl Provider for FakeCli {
         _ledger: Arc<dyn Ledger>,
     ) -> BoxFuture<'_, brigadier_providers::Result<Started>> {
         Box::pin(async move {
+            if let brigadier_providers::model::Origin::Resume { native_id } = &spec.origin
+                && REFUSED_RESUMES.lock().unwrap().contains(native_id)
+            {
+                return Err(brigadier_providers::Error::Spawn(format!(
+                    "no session {native_id}"
+                )));
+            }
             self.specs.lock().unwrap().push((self.kind, spec.clone()));
             let (tx, events) = mpsc::channel(256);
             let grant = spec

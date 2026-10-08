@@ -527,6 +527,10 @@ impl SessionManager {
             return String::new();
         };
         let (git, worktree) = (self.git.clone(), PathBuf::from(path));
+        if worktree_locked(&worktree) {
+            // Removing it would fail; the session would then make a new one where it still is.
+            return " The session's worktree is locked (`git worktree lock`), so it and its branch stay; unlock it, and the next merge removes both.".into();
+        }
         let dirty = blocking(move || {
             let repo = git.open(&worktree).map_err(git_error)?;
             Ok(repo.state().map_err(git_error)?.dirty_files)
@@ -952,6 +956,24 @@ fn interrupted_fix(task: &Task) -> bool {
                 | TaskState::Blocked
                 | TaskState::Paused
         )
+}
+
+/// Whether `worktree` is a linked worktree the user locked (`git worktree lock`): its admin
+/// folder, which its `.git` file names, holds a `locked` file.
+fn worktree_locked(worktree: &std::path::Path) -> bool {
+    let Ok(link) = std::fs::read_to_string(worktree.join(".git")) else {
+        return false;
+    };
+    let Some(admin) = link.trim().strip_prefix("gitdir:") else {
+        return false;
+    };
+    let admin = PathBuf::from(admin.trim());
+    let admin = if admin.is_absolute() {
+        admin
+    } else {
+        worktree.join(admin)
+    };
+    admin.join("locked").exists()
 }
 
 #[cfg(test)]

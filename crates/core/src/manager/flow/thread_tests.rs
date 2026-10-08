@@ -873,14 +873,24 @@ async fn a_merge_removes_the_session_worktree_and_the_next_message_starts_fresh(
     flow.stop().await;
 }
 
-/// Uncommitted changes in the session's worktree keep it and its branch after a merge, and the
-/// thread is told why.
+/// Uncommitted changes in the session's worktree, or a lock the user put on it, keep it and its
+/// branch after a merge, and the thread is told why.
 #[tokio::test]
 async fn a_merge_keeps_a_session_worktree_with_uncommitted_changes() {
+    for locked in [false, true] {
+        merge_keeps_the_worktree(locked).await;
+    }
+}
+
+async fn merge_keeps_the_worktree(locked: bool) {
     let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
     let log = seen.clone();
     let flow = Flow::start(
-        "thread-merge-dirty",
+        if locked {
+            "thread-merge-locked"
+        } else {
+            "thread-merge-dirty"
+        },
         Options::default(),
         script(move |turn| {
             let log = log.clone();
@@ -909,7 +919,15 @@ async fn a_merge_keeps_a_session_worktree_with_uncommitted_changes() {
         })
         .await;
     let worktree = session_worktree(&flow);
-    std::fs::write(worktree.join("DRAFT.md"), "draft\n").unwrap();
+    if locked {
+        git(
+            &flow.repo,
+            &["worktree", "lock", &worktree.display().to_string()],
+        );
+    } else {
+        std::fs::write(worktree.join("DRAFT.md"), "draft\n").unwrap();
+    }
+    let branch = git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]);
     let card = board.approvals.values().next().unwrap().id.clone();
     flow.manager
         .answer_card(flow.conversation.clone(), card, ApprovalDecision::Allow)
@@ -931,11 +949,24 @@ async fn a_merge_keeps_a_session_worktree_with_uncommitted_changes() {
         .unwrap()
         .0
         .clone();
-    assert!(
-        finished.contains("uncommitted changes (DRAFT.md)"),
-        "{finished}"
+    if locked {
+        assert!(finished.contains("is locked"), "{finished}");
+        git(
+            &flow.repo,
+            &["worktree", "unlock", &worktree.display().to_string()],
+        );
+    } else {
+        assert!(
+            finished.contains("uncommitted changes (DRAFT.md)"),
+            "{finished}"
+        );
+        assert!(worktree.join("DRAFT.md").exists());
+    }
+    assert!(worktree.exists());
+    assert_eq!(
+        git(&flow.repo, &["branch", "--list", &branch]).trim_start_matches(['*', '+', ' ']),
+        branch
     );
-    assert!(worktree.join("DRAFT.md").exists());
     assert_eq!(session_worktree(&flow), worktree);
     flow.stop().await;
 }

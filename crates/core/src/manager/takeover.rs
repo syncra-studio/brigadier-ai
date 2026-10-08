@@ -118,6 +118,10 @@ impl SessionManager {
         let _fence = self.enter(&conversation_id)?;
         let task = self.task_by_id(&conversation_id, &task_id).await?;
         let live = self.task_live(&task);
+        // A hand-off or hand-over under way finishes first; one decided for the headless
+        // session afterwards finds it superseded (the same lock order as a hand-off that
+        // disposes of the task: `reroute`, then `takeover`).
+        let handing = live.reroute.lock().await;
         let mut reservation = live.takeover.lock().await;
         let task = self.task_by_id(&conversation_id, &task_id).await?;
         let provider = task.route.choice.provider;
@@ -135,6 +139,12 @@ impl SessionManager {
                 state_words(task.state)
             )));
         }
+        if task.quota_wait.is_some() {
+            return Err(Error::Invalid(format!(
+                "task-{} can't open in a terminal while it waits for its model's usage limit",
+                task.number
+            )));
+        }
         let native_id = self.last_worker_native_id(&task).await.ok_or_else(|| {
             Error::Invalid(format!(
                 "task-{}'s worker has no session to continue yet",
@@ -143,6 +153,7 @@ impl SessionManager {
         })?;
         // Reserved before anything waits: no headless CLI registers from here on.
         live.set_taken_over(true).await;
+        live.supersede().await;
         let from = task.state;
         live.close_cli().await;
         let marked = self
@@ -156,6 +167,7 @@ impl SessionManager {
                     pid: None,
                     started_at_ms: None,
                     ending: None,
+                    held: Vec::new(),
                 });
             })
             .await;
@@ -166,6 +178,8 @@ impl SessionManager {
                 return Err(err);
             }
         };
+        // Marked: from here a hand-off leaves it to the terminal.
+        drop(handing);
         let generation = live.generation().await;
         match self
             .start_terminal(&*host, &task, &native_id, cols, rows)
@@ -339,11 +353,23 @@ impl SessionManager {
         if task.state.is_final() {
             return;
         }
-        self.hand_back_session(live, &task, takeover).await;
+        let failed = self.hand_back_session(live, &task, takeover).await;
+        // Its failure disposes of the task, which takes the reservation again.
+        drop(reservation);
+        if let Some((task, reason)) = failed {
+            self.worker_failed(&task, &reason).await;
+        }
     }
 
-    /// Resumes the session the terminal continued, headless, and asks for its report.
-    async fn hand_back_session(&self, live: &Arc<TaskLive>, task: &Task, takeover: Takeover) {
+    /// Resumes the session the terminal continued, headless, and asks for its report. A
+    /// resume that failed returns the task and why, for the caller to fail it once it holds
+    /// no reservation.
+    async fn hand_back_session(
+        &self,
+        live: &Arc<TaskLive>,
+        task: &Task,
+        takeover: Takeover,
+    ) -> Option<(Task, String)> {
         let task = match self
             .update_task(&task.conversation_id, &task.id, |t| {
                 t.takeover = None;
@@ -356,13 +382,17 @@ impl SessionManager {
             Ok(task) => task,
             Err(err) => {
                 tracing::warn!(task = %task.id, error = %err, "could not hand a worker back");
-                return;
+                return None;
             }
         };
         live.set_taken_over(false).await;
         live.allow_revival().await;
         let mut text = "[terminal] The user continued this task with you in their terminal and has closed it. Submit your report now (submit_report): what was done in the terminal, by you and by the user, and where the work stands.".to_owned();
-        let held = live.take_held_messages().await;
+        // Kept in memory while the daemon runs; after a restart, the copy kept with the task.
+        let mut held = live.take_held_messages().await;
+        if held.is_empty() {
+            held = takeover.held.clone();
+        }
         if !held.is_empty() {
             text.push_str(
                 "\n\nThe orchestrator's messages while the terminal was open, oldest first:\n",
@@ -383,13 +413,15 @@ impl SessionManager {
                 TurnInput::text(text),
             )
             .await;
-        if let Err(err) = resumed {
-            tracing::warn!(task = %task.id, error = %err, "could not resume a worker after its terminal");
-            self.worker_failed(
-                &task,
-                &format!("Its session couldn't be resumed after the terminal: {err}"),
-            )
-            .await;
+        match resumed {
+            Ok(()) => None,
+            Err(err) => {
+                tracing::warn!(task = %task.id, error = %err, "could not resume a worker after its terminal");
+                Some((
+                    task,
+                    format!("Its session couldn't be resumed after the terminal: {err}"),
+                ))
+            }
         }
     }
 
@@ -486,7 +518,26 @@ impl SessionManager {
         let live = self.task_live(task);
         let manager = self.arc();
         let task = task.clone();
-        self.spawn(async move { manager.hand_back_session(&live, &task, takeover).await });
+        self.spawn(async move {
+            if let Some((task, reason)) = manager.hand_back_session(&live, &task, takeover).await {
+                manager.worker_failed(&task, &reason).await;
+            }
+        });
+    }
+
+    /// A copy of a message held for the terminal's report request, kept with the task so a
+    /// restart still delivers it.
+    pub(crate) async fn keep_held(&self, task: &Task, message: &str) {
+        let kept = self
+            .update_task(&task.conversation_id, &task.id, |t| {
+                if let Some(takeover) = &mut t.takeover {
+                    takeover.held.push(message.to_owned());
+                }
+            })
+            .await;
+        if let Err(err) = kept {
+            tracing::warn!(task = %task.id, error = %err, "could not keep a message for the terminal's report request");
+        }
     }
 
     /// A message for a worker whose session is open in the user's terminal waits for its
@@ -496,6 +547,7 @@ impl SessionManager {
         if !live.held_for_terminal(message).await {
             return None;
         }
+        self.keep_held(task, message).await;
         Some(format!(
             "task-{} is open in the user's terminal. Your message goes to it when they close the terminal, with the request for its report.",
             task.number

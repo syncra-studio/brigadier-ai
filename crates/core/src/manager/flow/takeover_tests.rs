@@ -474,6 +474,20 @@ async fn a_restart_ends_the_terminal_and_hands_back_or_finishes_the_stop() {
             .worktree
             .clone()
             .unwrap();
+        if !ending {
+            let task = flow.board().await.tasks[&id].clone();
+            let (held, sent) = flow
+                .manager
+                .message_worker(
+                    &task.conversation_id,
+                    &task,
+                    "Also add a title.".into(),
+                    "the orchestrator",
+                )
+                .await
+                .unwrap();
+            assert!(!sent, "{held}");
+        }
         let specs = worker_specs(&flow).len();
         flow.restart().await;
         flow.manager.set_terminal_host(host.clone());
@@ -512,7 +526,84 @@ async fn a_restart_ends_the_terminal_and_hands_back_or_finishes_the_stop() {
                 after.last().unwrap().origin,
                 Origin::Resume { native_id: native }
             );
+            let last = heard.lock().unwrap().last().cloned().unwrap();
+            assert!(
+                last.contains("Also add a title."),
+                "the message held before the restart: {last}"
+            );
         }
         flow.stop().await;
     }
+}
+
+/// A hand-back whose resume fails ends the task as a failure, and nothing hangs: the failure
+/// disposes of the task, which takes the takeover's reservation again.
+#[tokio::test]
+async fn a_hand_back_that_cannot_resume_fails_the_task() {
+    let (flow, host, _, _) = start("takeover-resume-fails", ProviderKind::Claude, 1_000).await;
+    let id = task_id(&flow).await;
+    let opened = flow
+        .manager
+        .open_worker_terminal(id.clone(), 80, 24)
+        .await
+        .unwrap();
+    let native = flow.board().await.tasks[&id]
+        .native_session
+        .clone()
+        .unwrap();
+    super::REFUSED_RESUMES.lock().unwrap().push(native.clone());
+    host.exit(&opened.terminal_id);
+    let board = flow
+        .until("the task to fail", |board| {
+            board.tasks[&id].state.is_final()
+        })
+        .await;
+    assert_eq!(board.tasks[&id].state, TaskState::Failed);
+    assert!(board.tasks[&id].takeover.is_none());
+    super::REFUSED_RESUMES
+        .lock()
+        .unwrap()
+        .retain(|refused| *refused != native);
+    flow.stop().await;
+}
+
+/// A hand-off decided for the headless session before the user opened it in a terminal (an
+/// error, a usage limit), or a reroute after a wait, leaves the terminal's task alone.
+#[tokio::test]
+async fn a_hand_off_decided_before_the_open_leaves_the_terminal_alone() {
+    let (flow, host, _, _) = start("takeover-stale-handoff", ProviderKind::Claude, 1_000).await;
+    let id = task_id(&flow).await;
+    let live = flow.manager.existing_task_live(&id).unwrap();
+    let decided_for = live.generation().await;
+    flow.manager
+        .open_worker_terminal(id.clone(), 80, 24)
+        .await
+        .unwrap();
+    let specs = worker_specs(&flow).len();
+    flow.manager
+        .hand_off(
+            &live,
+            crate::work::AttemptEnd::Error {
+                kind: brigadier_providers::model::ErrorKind::Auth,
+                message: "logged out".into(),
+            },
+            decided_for,
+        )
+        .await;
+    let task = flow.board().await.tasks[&id].clone();
+    flow.manager.continue_task(&live, task).await;
+    flow.settled().await;
+    let board = flow.board().await;
+    assert_eq!(board.tasks[&id].state, TaskState::TakenOver);
+    assert!(board.tasks[&id].takeover.is_some());
+    assert!(
+        board.tasks[&id]
+            .attempts
+            .last()
+            .is_some_and(|attempt| attempt.ended_at_ms.is_none()),
+        "its attempt goes on"
+    );
+    assert_eq!(worker_specs(&flow).len(), specs, "nothing ran it headless");
+    assert!(host.terminated.lock().unwrap().is_empty());
+    flow.stop().await;
 }

@@ -300,6 +300,12 @@ impl TaskLive {
         self.state.lock().await.generation
     }
 
+    /// The session moves to the user's terminal: a hand-off or hand-over decided for the CLI
+    /// session before it finds the task moved on.
+    pub(crate) async fn supersede(&self) {
+        self.state.lock().await.generation += 1;
+    }
+
     /// Holds a fresh session's first message until the paused task is resumed.
     pub(crate) async fn hold_handover(&self, first: TurnInput) {
         self.state.lock().await.held_handover = Some(first);
@@ -1525,7 +1531,10 @@ impl SessionManager {
                 })
                 .collect();
             if !text.is_empty() {
-                live.held_for_terminal(&text.join("\n")).await;
+                let text = text.join("\n");
+                if live.held_for_terminal(&text).await {
+                    self.keep_held(task, &text).await;
+                }
             }
             return Ok(());
         }

@@ -117,7 +117,8 @@ impl SessionManager {
             .attempts
             .last()
             .is_some_and(|attempt| attempt.ended_at_ms.is_some());
-        if task.state.is_final() || ended {
+        // Open in the user's terminal: its CLI there is the user's to run.
+        if task.state.is_final() || task.state == TaskState::TakenOver || ended {
             return;
         }
         let errors = task
@@ -200,7 +201,7 @@ impl SessionManager {
                 .attempts
                 .last()
                 .is_some_and(|attempt| attempt.ended_at_ms.is_none());
-            if task.state.is_final() || running {
+            if task.state.is_final() || task.state == TaskState::TakenOver || running {
                 return;
             }
             let route = match self.reroute(&task).await {

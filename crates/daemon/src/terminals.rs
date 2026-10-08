@@ -79,6 +79,24 @@ impl Terminal {
             tracing::debug!(terminal = %self.id, error = %err, "terminal shell already ended");
         }
     }
+
+    /// Ends it: a worker's terminal with its whole process tree (what its CLI started must
+    /// not go on in the task's checkout), any other with its shell.
+    fn end(&self, platform: Option<&Arc<dyn Platform>>) {
+        let worker = self
+            .session
+            .as_deref()
+            .is_some_and(|key| key.starts_with("worker:"));
+        match (platform, self.pid) {
+            (Some(platform), Some(pid)) if worker => {
+                if let Err(err) = platform.processes().kill_tree(pid) {
+                    tracing::debug!(terminal = %self.id, error = %err, "could not kill a terminal's tree");
+                    self.kill();
+                }
+            }
+            _ => self.kill(),
+        }
+    }
 }
 
 impl Terminals {
@@ -382,7 +400,7 @@ impl Terminals {
     pub fn close(&self, id: &str) {
         let terminal = lock(&self.live).remove(id);
         if let Some(terminal) = terminal {
-            terminal.kill();
+            terminal.end(self.platform.as_ref());
         }
     }
 
@@ -405,11 +423,17 @@ impl Terminals {
         let killed = std::thread::Builder::new()
             .name("terminal close".into())
             .spawn({
-                let ended = ended.clone();
-                move || ended.iter().for_each(|terminal| terminal.kill())
+                let (ended, platform) = (ended.clone(), self.platform.clone());
+                move || {
+                    ended
+                        .iter()
+                        .for_each(|terminal| terminal.end(platform.as_ref()))
+                }
             });
         if killed.is_err() {
-            ended.iter().for_each(|terminal| terminal.kill());
+            ended
+                .iter()
+                .for_each(|terminal| terminal.end(self.platform.as_ref()));
         }
     }
 
@@ -417,7 +441,7 @@ impl Terminals {
     pub fn close_all(&self) {
         let terminals: Vec<Arc<Terminal>> = lock(&self.live).drain().map(|(_, t)| t).collect();
         for terminal in terminals {
-            terminal.kill();
+            terminal.end(self.platform.as_ref());
         }
     }
 }
@@ -502,15 +526,7 @@ impl TerminalHost for Terminals {
                 return;
             };
             let mut ended = terminal.ended.subscribe();
-            match (&platform, terminal.pid) {
-                (Some(platform), Some(pid)) => {
-                    if let Err(err) = platform.processes().kill_tree(pid) {
-                        tracing::debug!(terminal = %id, error = %err, "could not kill a terminal's tree");
-                        terminal.kill();
-                    }
-                }
-                _ => terminal.kill(),
-            }
+            terminal.end(platform.as_ref());
             if tokio::time::timeout(TERMINATE_WAIT, ended.wait_for(|ended| *ended))
                 .await
                 .is_err()
@@ -689,6 +705,79 @@ mod tests {
         )
         .await
         .unwrap();
+        let _ = std::fs::remove_dir_all(data);
+    }
+
+    /// The user closing a worker's tab ends its whole tree too, a child that ignores the
+    /// hang-up included.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn closing_a_worker_tab_ends_its_tree() {
+        use brigadier_core::manager::TerminalHost;
+        use brigadier_providers::TerminalCommand;
+        use std::time::Duration;
+
+        let data =
+            std::env::temp_dir().join(format!("brig-terminals-close-{}", std::process::id()));
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(data.clone()),
+        })
+        .unwrap();
+        let terminals = Terminals::with_platform(platform);
+        let mut feed = terminals.subscribe();
+        let command = TerminalCommand {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "(trap '' HUP; exec sleep 600) & echo \"child:$!\"; wait".into(),
+            ],
+            cwd: std::env::temp_dir(),
+            env: Vec::new(),
+        };
+        let started =
+            TerminalHost::start(&terminals, "worker-test", "worker:t2", command, 80, 24).unwrap();
+        let child = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let (info, _) = terminals.attach(&started.id, &mut feed, 100, 30).unwrap();
+                if let Some(child) = info
+                    .scrollback
+                    .split("child:")
+                    .nth(1)
+                    .and_then(|rest| rest.split_whitespace().next())
+                    .and_then(|pid| pid.parse::<u32>().ok())
+                {
+                    return child;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the command printed");
+
+        terminals.close(&started.id);
+        tokio::time::timeout(Duration::from_secs(10), started.exited)
+            .await
+            .expect("told of its end")
+            .unwrap();
+        let alive = || {
+            std::process::Command::new("kill")
+                .args(["-0", &child.to_string()])
+                .status()
+                .unwrap()
+                .success()
+        };
+        let gone = tokio::time::timeout(Duration::from_secs(5), async {
+            while alive() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        if gone.is_err() {
+            let _ = std::process::Command::new("kill")
+                .args(["-9", &child.to_string()])
+                .status();
+            panic!("its child outlived the closed tab");
+        }
         let _ = std::fs::remove_dir_all(data);
     }
 }
