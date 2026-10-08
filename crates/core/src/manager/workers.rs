@@ -1761,6 +1761,20 @@ impl SessionManager {
         .await
     }
 
+    /// Where a new-worktree session's worktree is made, each time it is: one path per session.
+    pub(crate) fn session_worktree_path(
+        &self,
+        conversation: &crate::model::Conversation,
+    ) -> PathBuf {
+        let project = conversation
+            .project_id
+            .as_ref()
+            .map(|id| id.0.clone())
+            .unwrap_or_else(|| "none".into());
+        self.owned_dir("worktrees", &project)
+            .join(format!("session-{}", conversation.id.short()))
+    }
+
     /// The branch accepted work lands on, created for a new-worktree session on first use
     /// (with the session's own worktree).
     pub(crate) async fn ensure_target(
@@ -1791,14 +1805,7 @@ impl SessionManager {
                     return Ok(branch.clone());
                 }
                 let owner = format!("session:{conversation_id}");
-                let project = conversation
-                    .project_id
-                    .as_ref()
-                    .map(|id| id.0.clone())
-                    .unwrap_or_else(|| "none".into());
-                let worktree = self
-                    .owned_dir("worktrees", &project)
-                    .join(format!("session-{}", conversation_id.short()));
+                let worktree = self.session_worktree_path(&conversation);
                 self.runtime
                     .ledger()
                     .record(

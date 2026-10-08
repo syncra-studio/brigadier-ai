@@ -129,6 +129,29 @@ impl SessionManager {
         }
     }
 
+    /// The thread's workspace as it will be, without making anything: the recorded one, or the
+    /// session worktree not made yet (after a merge removed it, THREAD-PLAN.md Q9), which the
+    /// next user message makes at that same path.
+    pub(crate) fn planned_workspace(&self, id: &ConversationId) -> Option<ThreadWorkspace> {
+        if let Some(workspace) = self.recorded_workspace(id) {
+            return Some(workspace);
+        }
+        let conversation = self.core.conversation(id).ok()?;
+        let Some(Setup::Session {
+            repo,
+            environment: Environment::NewWorktree { branch, .. },
+            ..
+        }) = &conversation.setup
+        else {
+            return None;
+        };
+        Some(ThreadWorkspace {
+            path: self.session_worktree_path(&conversation),
+            branch: branch.clone(),
+            repo: PathBuf::from(repo),
+        })
+    }
+
     /// The thread's effective workspace (THREAD-PLAN.md Q1, Q10): the overnight run's worktree
     /// while a run is active, else the session's checkout, its own worktree made first when
     /// it has none yet. `None` for a Chat.
@@ -184,15 +207,20 @@ impl SessionManager {
         )
     }
 
-    /// What the thread's CLI is started for now: its workspace (made if need be), level and
-    /// access.
+    /// What the thread's CLI is started for now: its workspace (made if need be when `make`,
+    /// else as planned), level and access.
     pub(crate) async fn thread_launch(
         &self,
         id: &ConversationId,
         scratch: &Path,
         provider: ProviderKind,
+        make: bool,
     ) -> Result<(ThreadLaunch, bool)> {
-        let workspace = self.effective_workspace(id).await?;
+        let workspace = if make {
+            self.effective_workspace(id).await?
+        } else {
+            self.planned_workspace(id)
+        };
         let permission = self.permission(id);
         let (access, auto_review) =
             self.thread_access(workspace.as_ref(), scratch, provider, permission);
@@ -220,7 +248,12 @@ impl SessionManager {
             return;
         };
         let scratch = self.owned_dir("orch", &conv.id.0);
-        let now = match self.thread_launch(&conv.id, &scratch, cli.provider).await {
+        // As planned: a merged session's next worktree is made by the user's next message,
+        // at the same path, so it moves nothing.
+        let now = match self
+            .thread_launch(&conv.id, &scratch, cli.provider, false)
+            .await
+        {
             Ok((now, _)) => now,
             Err(err) => {
                 tracing::warn!(conversation = %conv.id, error = %err, "could not look at the thread's workspace");

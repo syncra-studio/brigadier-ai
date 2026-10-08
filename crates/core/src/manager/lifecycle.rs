@@ -494,7 +494,77 @@ impl SessionManager {
         self.forget_native_session(id).await;
         self.expire_stale_cards(id).await;
         self.set_run(id, crate::work::RunState::Idle, None).await;
-        if let Some(Setup::Session {
+        if session_worktree_goes {
+            self.forget_session_worktree(conversation).await;
+        }
+    }
+
+    /// After the user merged the session (THREAD-PLAN.md Q9): its worktree and merged branch
+    /// go, and the next user message makes a fresh worktree from the base's tip, at the same
+    /// path and under the same branch name, so the thread's CLI goes on as it is. Uncommitted
+    /// changes in the worktree keep both. Returns what the thread is told about it.
+    pub(crate) async fn release_merged_session(&self, id: &ConversationId) -> String {
+        let Ok(conversation) = self.core.conversation(id) else {
+            return String::new();
+        };
+        let Some(Setup::Session {
+            environment:
+                Environment::NewWorktree {
+                    base,
+                    path: Some(path),
+                    ..
+                },
+            ..
+        }) = &conversation.setup
+        else {
+            return String::new();
+        };
+        let (git, worktree) = (self.git.clone(), PathBuf::from(path));
+        let dirty = blocking(move || {
+            let repo = git.open(&worktree).map_err(git_error)?;
+            Ok(repo.state().map_err(git_error)?.dirty_files)
+        })
+        .await;
+        match dirty {
+            Ok(dirty) if dirty.is_empty() => {}
+            Ok(dirty) => {
+                return format!(
+                    " The session's worktree has uncommitted changes ({}), so it and its branch stay; commit or drop them, and the next merge removes both.",
+                    dirty.join(", ")
+                );
+            }
+            Err(err) => {
+                tracing::warn!(conversation = %id, error = %err, "could not look at the merged session's worktree; it stays");
+                return String::new();
+            }
+        }
+        // A pre-warm was made from the branch that just went.
+        self.drop_prewarm(id, "the session was merged");
+        let owner = format!("session:{id}");
+        let leftovers = self.runtime.ledger().dispose(&owner).await;
+        if !leftovers.is_clean() {
+            tracing::warn!(
+                owner,
+                ?leftovers,
+                "some of the merged session's worktree will be retried at the next launch"
+            );
+        }
+        if self.forget_session_worktree(&conversation).await {
+            format!(
+                " Its worktree and branch are removed; the user's next message starts a fresh branch from `{base}` in the same folder."
+            )
+        } else {
+            " Its worktree is removed; the user's next message makes it again in the same folder."
+                .into()
+        }
+    }
+
+    /// A new-worktree session's worktree is gone: its branch goes too while the base has all
+    /// of its work, and the session records no worktree, so the next one is made from the base
+    /// (at the same path, under the same branch name). Returns whether the branch went.
+    async fn forget_session_worktree(&self, conversation: &Conversation) -> bool {
+        let id = &conversation.id;
+        let Some(Setup::Session {
             repo,
             environment:
                 Environment::NewWorktree {
@@ -508,57 +578,62 @@ impl SessionManager {
             workers_see_uncommitted,
             plan_mode,
         }) = conversation.setup.clone()
-            && session_worktree_goes
-        {
-            // The session worktree is gone. The branch stays while it holds work the base does
-            // not have; a restored session creates it again from the base otherwise.
-            if branch.starts_with("brigadier/") {
-                let (git, repo, branch, base) = (
-                    self.git.clone(),
-                    PathBuf::from(&repo),
-                    branch.clone(),
-                    base.clone(),
-                );
-                let deleted = blocking(move || {
-                    let repo = git.open(&repo).map_err(git_error)?;
-                    if let Some(tip) = repo.branch_tip(&branch).map_err(git_error)?
-                        && repo.is_merged(&branch, &base).map_err(git_error)?
-                    {
-                        repo.delete_branch_at(&branch, &tip).map_err(git_error)?;
-                        return Ok(true);
-                    }
-                    Ok(false)
-                })
-                .await;
-                match deleted {
-                    // Its work is in the base now: a fork's branch starts there again too.
-                    Ok(true) => start = None,
-                    Ok(false) => {}
-                    Err(err) => {
-                        tracing::warn!(conversation = %id, error = %err, "could not delete the merged session branch");
-                    }
+        else {
+            return false;
+        };
+        // The session worktree is gone. The branch stays while it holds work the base does
+        // not have; a restored session creates it again from the base otherwise.
+        let mut deleted_branch = false;
+        if branch.starts_with("brigadier/") {
+            let (git, repo, branch, base) = (
+                self.git.clone(),
+                PathBuf::from(&repo),
+                branch.clone(),
+                base.clone(),
+            );
+            let deleted = blocking(move || {
+                let repo = git.open(&repo).map_err(git_error)?;
+                if let Some(tip) = repo.branch_tip(&branch).map_err(git_error)?
+                    && repo.is_merged(&branch, &base).map_err(git_error)?
+                {
+                    repo.delete_branch_at(&branch, &tip).map_err(git_error)?;
+                    return Ok(true);
+                }
+                Ok(false)
+            })
+            .await;
+            match deleted {
+                // Its work is in the base now: a fork's branch starts there again too.
+                Ok(true) => {
+                    start = None;
+                    deleted_branch = true;
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    tracing::warn!(conversation = %id, error = %err, "could not delete the merged session branch");
                 }
             }
-            let _ = self
-                .core
-                .set_setup(
-                    id.clone(),
-                    Setup::Session {
-                        repo,
-                        environment: Environment::NewWorktree {
-                            base,
-                            branch,
-                            path: None,
-                            start,
-                        },
-                        permission,
-                        orchestrator,
-                        workers_see_uncommitted,
-                        plan_mode,
-                    },
-                )
-                .await;
         }
+        let _ = self
+            .core
+            .set_setup(
+                id.clone(),
+                Setup::Session {
+                    repo,
+                    environment: Environment::NewWorktree {
+                        base,
+                        branch,
+                        path: None,
+                        start,
+                    },
+                    permission,
+                    orchestrator,
+                    workers_see_uncommitted,
+                    plan_mode,
+                },
+            )
+            .await;
+        deleted_branch
     }
 
     /// Changes made in a new-worktree session's own worktree (by the user; landings there are

@@ -1168,14 +1168,18 @@ impl SessionManager {
                         repo.land(&request).map(Some).map_err(git_error)
                     });
                     let landing = landing.await;
-                    if let Ok(Some(LandOutcome::Landed { .. })) = &landing {
-                        // The session's work is merged: what showed it stops (THREAD-PLAN.md Q9).
+                    // The session's work is merged: what showed it stops, and its worktree
+                    // and branch go (THREAD-PLAN.md Q9).
+                    let released = if let Ok(Some(LandOutcome::Landed { .. })) = &landing {
                         manager.stop_previews(&id, "the session was merged").await;
-                    }
+                        manager.release_merged_session(&id).await
+                    } else {
+                        String::new()
+                    };
                     match landing {
                         Ok(None) => format!("[not finished] `{branch}` changed after the user was asked. Nothing was merged; call finish_session again."),
                         Ok(Some(LandOutcome::Landed { new_tip })) => format!(
-                            "[finished] The user approved: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.",
+                            "[finished] The user approved: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{released}",
                             if commits == 1 { "" } else { "s" },
                             short(&new_tip)
                         ),

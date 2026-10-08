@@ -1374,6 +1374,13 @@ impl SessionManager {
         self.settle_requests(&conv.id).await;
         self.set_run_for(&conv.id, RunState::Starting, None, request.clone())
             .await;
+        if session && !users.is_empty() {
+            // The user's message brings back the session's worktree a merge removed
+            // (THREAD-PLAN.md Q9), from the base's tip now.
+            if let Err(err) = self.effective_workspace(&conv.id).await {
+                tracing::warn!(conversation = %conv.id, error = %err, "could not make the session's worktree");
+            }
+        }
         let cli = match self.ensure_cli(&conv).await {
             Ok(cli) => cli,
             Err(err) => {
@@ -1578,8 +1585,9 @@ impl SessionManager {
             (Some(Setup::Session { orchestrator, .. }), _) => {
                 let choice = fallback.unwrap_or_else(|| orchestrator.clone());
                 // Its workspace exists before its CLI starts.
-                let (started_for, reviews) =
-                    self.thread_launch(&conv.id, &dir, choice.provider).await?;
+                let (started_for, reviews) = self
+                    .thread_launch(&conv.id, &dir, choice.provider, true)
+                    .await?;
                 auto_review = reviews;
                 let workspace = started_for.workspace.clone();
                 let permission = started_for.permission;
