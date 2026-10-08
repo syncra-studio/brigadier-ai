@@ -63,8 +63,9 @@ is a linked worktree of `R`, `P` is a plain folder holding the repository `P/rep
 
 So:
 - A folder's trust covers its plain subfolders, but not a git repository inside it.
-- Both CLIs look up the real path: `/tmp` is not `/private/tmp`. Brigadier writes the
-  canonical path of the repository's top folder.
+- Both CLIs look up the real path: `/tmp` is not `/private/tmp`. Brigadier writes the real
+  path of the repository's main checkout (`git rev-parse --git-common-dir`'s parent, through
+  `Git::find_repo`), also when the project's folder is itself a linked worktree.
 
 ## Live checks: the dev app
 
@@ -105,6 +106,28 @@ is function `B6` in the binary; the schema text reads "Whether the user has acce
 permissions mode dialog". A worker's `--settings` are flag settings. So Full access now adds
 `"skipDangerousModePermissionPrompt": true` there: the user already chose Full access in
 Brigadier. Other levels never get it (`claude::tests` asserts both).
+
+## After the code review (commit `61fb09a6`)
+
+A Codex review found four defects. All four are fixed, and each fix has a test that fails without it.
+
+| Finding | Fix | Test (fails without the fix) |
+|---|---|---|
+| The release build failed: Don't trust called `TaskLive::cli()`, which only exists in debug builds | `TaskLive::has_cli()` | `cargo check --release --locked --workspace --exclude brigadier-desktop` and `-p brigadier-desktop` both finish |
+| Overlapping Codex writes could lose entries: both passed the re-read check before either renamed | The whole read, edit and rename holds a lock: `config.toml.brigadier.lock`, made like Claude's lock and removed after. Writes in one process first wait for their turn on a mutex for each path. | `overlapping_codex_writes_keep_every_entry`: 16 threads. With the locks taken out, it failed 3 of 3 runs. |
+| A re-trust kept the stale record, so removal deleted the entry instead of restoring the user's own `untrusted` | When a write succeeds, the holder's earlier records of the same CLI, file and folder are retired | `removal_puts_back_the_value_the_user_set_since` |
+| A project whose folder is a linked worktree had trust written for that worktree, which the CLIs never look up from other worktrees | The key is the main checkout; a folder outside any repository uses its real path | `a_linked_worktree_project_trusts_its_main_checkout` |
+
+Live re-check: the dev app with the new build, scratch HOME `/private/tmp/w29/home`, and a fresh
+fixture with a Reported Claude worker.
+
+| Check | Seen |
+|---|---|
+| "Trust" clicked in the modal | Both files gained only the repo's entry. |
+| "Open in terminal" on the Claude worker | `--permission-mode bypassPermissions`, `"skipDangerousModePermissionPrompt":true`. 0 matches for trust, safety check or bypass. It went straight to "No conversation found …". |
+| A project added on the linked worktree `lt/linked-a` of `lt/main`; the modal showed it; "Trust" clicked | Both files gained `/private/tmp/w29/lt/main` and nothing for `linked-a`. |
+| The real CLIs started in another linked worktree, `lt/linked-b` (as a worker's checkout is) | Claude: no "Quick safety check". Codex: no "Trust this folder?", and it reached "Ask Codex". The control, an untrusted repo, showed each CLI's prompt. |
+| Don't trust for that project | Codex's table for `lt/main` is gone. In Claude's entry, only `hasTrustDialogAccepted` went. The keys Claude itself had added when it started in `linked-b` (`lastGracefulShutdown`, …) stay, as they should. |
 
 ## Not checked live
 
