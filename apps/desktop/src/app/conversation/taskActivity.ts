@@ -26,6 +26,7 @@ export function taskWaitWords(task: Task): string | null {
     const provider = /claude/i.test(reason) ? "Claude" : /codex/i.test(reason) ? "Codex" : null;
     return `Waiting for ${provider ? `${provider} ` : ""}quota: ${reason}`;
   }
+  if (task.state === "takenOver") return "Working in your terminal";
   if (userPaused(task)) return "Paused";
   if (task.state === "queued") {
     return task.blockedReason ? `Queued: ${task.blockedReason}` : "Queued: waiting to start";

@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { taskState, workerName } from "@/app/conversation/rowWords";
 import { taskActivityLines, taskActivityTicks, taskWaitWords } from "@/app/conversation/taskActivity";
+import { workerDone, workerPreview, workerState, workerWorking } from "@/app/conversation/workerPresentation";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
 import type { Task } from "@/ipc/generated";
 
@@ -93,4 +94,16 @@ test("a worker of a request's flow is named by its part and phase, the outline r
   assert.equal(workerName({}, task({ role: "lead", phase: 1 })), "Break down the overnight");
   assert.equal(workerName({}, task({ role: "reviewer", phase: 2 })), "Break down the overnight");
   assert.equal(workerName({}, task({ role: "reviewer", phase: null })), "Break down the overnight");
+});
+
+test("a worker in the user's terminal waits on the user, in plain words everywhere", () => {
+  const worker = task({ state: "takenOver", attempts: [{ route: base.route, startedAtMs: 11000, endedAtMs: null, end: null }] });
+  assert.deepEqual(taskState(worker), { word: "In your terminal", tone: "warning" });
+  assert.equal(taskWaitWords(worker), "Working in your terminal");
+  assert.equal(line(worker, "Editing 3 files").first, "Working in your terminal · 30s");
+  assert.equal(line(worker).firstWorking, false);
+  assert.equal(workerDone(worker), false);
+  assert.equal(workerWorking(worker), false);
+  assert.equal(workerState(worker), "is in your terminal");
+  assert.equal(workerPreview(worker), "Working in your terminal");
 });

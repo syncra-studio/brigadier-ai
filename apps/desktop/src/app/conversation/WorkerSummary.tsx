@@ -34,7 +34,7 @@ export const Changes: FC<{ insertions: number; deletions: number; monochrome?: b
  * States in which a write task's +N −N is read from its worktree: it still changes, or it
  * reported and its candidate commit isn't made yet.
  */
-const EDITING: ReadonlySet<Task["state"]> = new Set(["running", "blocked", "paused", "reported"]);
+const EDITING: ReadonlySet<Task["state"]> = new Set(["running", "blocked", "paused", "reported", "takenOver"]);
 
 function writes(task: Task): boolean {
   return task.kind === "implement" || task.kind === "merge";

@@ -17,9 +17,11 @@ import {
 import { useReveal } from "@/app/conversation/SidePanel";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { request } from "@/ipc/client";
+import type { ProviderKind, TerminalInfo } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { changedPaneSize, savedPaneSizes } from "@/state/paneSizes";
+import { type Board, boardOf, useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 import {
   addTab,
@@ -29,6 +31,7 @@ import {
   noteShellCwd,
   noteShellTitle,
   noteTabReader,
+  noteWorkerStarted,
   placeConversation,
   selectTab,
   setTerminalOpen,
@@ -36,6 +39,7 @@ import {
   forgetRestoredOutput,
   noteShellExit,
   restoredOutput,
+  tabOf,
   terminalPlace,
   useTerminalPlace,
 } from "@/state/terminalPlaces";
@@ -377,7 +381,35 @@ function TabLabel({ name, hidden }: { name: string; hidden: boolean }) {
   );
 }
 
-/** One tab's shell: started (or found again) in the daemon when the tab first shows. */
+/** How long a restored worker tab waits for its thread's board before giving up on it. */
+const BOARD_WAIT_MS = 15_000;
+
+/** Whether the worker's session is still open in a terminal, once its thread's board loads. */
+async function stillTakenOver(conversationId: string | null, taskId: string): Promise<boolean> {
+  const loaded = (): Board | null => {
+    const board = conversationId ? boardOf(conversationId) : null;
+    return board?.loaded ? board : null;
+  };
+  const board =
+    loaded() ??
+    (await new Promise<Board | null>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        stop();
+        resolve(loaded());
+      };
+      const timer = setTimeout(done, BOARD_WAIT_MS);
+      const stop = useBoard.subscribe(() => {
+        if (loaded()) done();
+      });
+    }));
+  return board?.tasks[taskId]?.state === "takenOver";
+}
+
+/**
+ * One tab's shell: started (or found again) in the daemon when the tab first shows. A worker's
+ * tab continues that worker's own session instead.
+ */
 export function TerminalTab({
   place,
   tabId,
@@ -389,9 +421,34 @@ export function TerminalTab({
   active: boolean;
 }) {
   const density = useApp((s) => s.settings.density);
+  const [provider, setProvider] = useState<ProviderKind | null>(null);
   const open = useCallback(
-    async (cols: number, rows: number) => {
+    async (cols: number, rows: number): Promise<TerminalInfo> => {
       const conversationId = placeConversation(place);
+      const tab = tabOf(place, tabId);
+      if (tab?.taskId) {
+        // Brought back from an earlier launch: it only reattaches, never takes the worker over
+        // again once the worker has its session back.
+        if (tab.started && !(await stillTakenOver(conversationId, tab.taskId))) {
+          noteShellExit(place, tabId);
+          throw new Error("Terminal closed");
+        }
+        const opened = await request({
+          method: "openWorkerTerminal",
+          taskId: tab.taskId,
+          cols,
+          rows,
+        });
+        if (!hasTab(place, tabId)) {
+          void request({ method: "closeTerminal", terminalId: opened.terminal.id }).catch(() => {});
+          throw new Error("Terminal closed");
+        }
+        noteShell(place, tabId, opened.terminal.id);
+        noteShellCwd(place, tabId, opened.terminal.cwd);
+        noteWorkerStarted(place, tabId);
+        setProvider(opened.provider);
+        return opened.terminal;
+      }
       const selection = useApp.getState().selection;
       const projectId =
         conversationId === null && selection.type === "draft" && selection.kind === "session"
@@ -426,17 +483,24 @@ export function TerminalTab({
   // What the tab showed before it was closed, when it is one brought back.
   const restored = useCallback(() => restoredOutput(tabId), [tabId]);
   return (
-    <Suspense fallback={null}>
-      <TerminalView
-        key={density}
-        open={open}
-        focus={active}
-        restored={restored}
-        onTitle={onTitle}
-        reader={reader}
-        onExit={onExit}
-        onClear={onClear}
-      />
-    </Suspense>
+    <>
+      {provider === "claude" && (
+        <p className="text-muted-foreground border-terminal-divider shrink-0 border-b px-3 py-1 text-xs">
+          Claude may ask whether you trust this folder: choose Yes.
+        </p>
+      )}
+      <Suspense fallback={null}>
+        <TerminalView
+          key={density}
+          open={open}
+          focus={active}
+          restored={restored}
+          onTitle={onTitle}
+          reader={reader}
+          onExit={onExit}
+          onClear={onClear}
+        />
+      </Suspense>
+    </>
   );
 }

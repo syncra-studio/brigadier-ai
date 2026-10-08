@@ -12,6 +12,7 @@ export function workerWorking(task: Task): boolean {
 export function workerState(task: Task): string {
   if (task.state === "failed") return "failed";
   if (task.state === "stopped" || task.state === "rejected") return "stopped";
+  if (task.state === "takenOver") return "is in your terminal";
   return workerDone(task) ? "finished" : workerWorking(task) ? "is working" : "is waiting";
 }
 
@@ -23,6 +24,7 @@ export function workerPreview(task: Task): string | null {
     const objective = task.spec.split("\n").map((line) => line.trim()).find((line) => /^(?:goal|objective):/i.test(line));
     return objective ? objective.replace(/^(?:goal|objective):\s*/i, "").replace(/task-\d+/gi, "worker").slice(0, 60) : "Working";
   }
+  if (task.state === "takenOver") return "Working in your terminal";
   if (task.quotaWait) return "Waiting for model quota";
   const reason = task.blockedReason ?? "";
   if (/code review/i.test(reason)) return "Waiting for its code review";

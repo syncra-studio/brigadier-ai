@@ -1,4 +1,4 @@
-import { Branch, BranchAlt, Pause, Play, Stop } from "@openai/apps-sdk-ui/components/Icon";
+import { Branch, BranchAlt, Pause, Play, Stop, Terminal } from "@openai/apps-sdk-ui/components/Icon";
 import { memo, type ReactNode, useState } from "react";
 
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
@@ -31,6 +31,7 @@ import { modelName, useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
 import { pauseTask, restoreKeptWork, resumeTask, stopTask } from "@/state/actions";
 import { useBoard } from "@/state/board";
+import { openWorkerTab, placeOf } from "@/state/terminalPlaces";
 
 /** What a worker is at, after its name in its row ("[Add tests] failed"). */
 const STATUS: Record<TaskState, string> = {
@@ -40,6 +41,7 @@ const STATUS: Record<TaskState, string> = {
   blocked: "is blocked",
   paused: "is paused",
   reported: "reported",
+  takenOver: "is in your terminal",
   landing: "is landing",
   readyToLand: "is ready to land",
   landed: "landed",
@@ -58,6 +60,7 @@ function statusTone(state: TaskState): string {
     case "failed":
       return "text-destructive";
     case "blocked":
+    case "takenOver":
     case "readyToLand":
       return "text-warning";
     default:
@@ -73,8 +76,18 @@ const ACTIVE: ReadonlySet<TaskState> = new Set([
   "blocked",
   "paused",
   "reported",
+  "takenOver",
   "landing",
   "readyToLand",
+]);
+
+/** States from which the user can open a worker's own session in a terminal. */
+const TAKEOVER: ReadonlySet<TaskState> = new Set([
+  "running",
+  "blocked",
+  "paused",
+  "reported",
+  "takenOver",
 ]);
 
 /** Whether a worker can still be paused or stopped. */
@@ -172,6 +185,23 @@ export function TaskActions({ task }: { task: Task }) {
             <Pause />
           </TooltipIconButton>
         )
+      )}
+      {TAKEOVER.has(task.state) && (
+        <TooltipIconButton
+          tooltip={task.state === "takenOver" ? "Show terminal" : "Open in terminal"}
+          side="top"
+          size="icon-xs"
+          className="text-muted-foreground hover:text-foreground"
+          onClick={() =>
+            openWorkerTab(
+              placeOf({ type: "conversation", id: task.conversationId }),
+              task.id,
+              task.title,
+            )
+          }
+        >
+          <Terminal />
+        </TooltipIconButton>
       )}
       <TooltipIconButton
         tooltip="Stop"

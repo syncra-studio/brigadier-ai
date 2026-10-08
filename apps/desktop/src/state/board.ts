@@ -154,6 +154,7 @@ export function useBoard<T>(selector: (state: BoardState) => T): T {
 }
 useBoard.getState = mainBoard.getState;
 useBoard.setState = mainBoard.setState;
+useBoard.subscribe = mainBoard.subscribe;
 
 /** Something about the board that changes the checkout: a landing, an Undo or Reapply. */
 export function useCheckoutChanges(conversationId: string): string {

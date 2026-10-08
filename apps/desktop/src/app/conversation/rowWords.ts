@@ -70,6 +70,8 @@ export function taskState(task: Task): RowState {
       return { word: task.quotaWait ? "Waiting for quota" : "Paused", tone: "quiet" };
     case "reported":
       return { word: writes(task) ? "Finished" : "Reported", tone: "live" };
+    case "takenOver":
+      return { word: "In your terminal", tone: "warning" };
     case "landing":
       return { word: "Landing", tone: "live" };
     case "readyToLand":

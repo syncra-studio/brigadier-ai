@@ -186,3 +186,13 @@ test("a running preview or review is no worker: over requests show nothing, the 
   assert.deepEqual(threadStatus(input(leading)), { head: { text: "Thinking", tone: "busy" }, workers: [], more: 0 });
   assert.deepEqual(head(input({ run: "starting", runRequest: "r1" })), { text: "Starting", tone: "busy" });
 });
+
+test("a worker open in the user's terminal waits on the user", () => {
+  const workers = [task({ state: "takenOver" }), task()];
+  const view = threadStatus(input({ tasks: byId(workers) }, { state: "waiting" }));
+  assert.deepEqual(view.head, { text: "Working in your terminal", tone: "needsYou" });
+  assert.deepEqual(view.workers, workers.map((worker) => worker.id));
+  // Even while the lead's own turn runs.
+  assert.deepEqual(head(input({ ...leading, tasks: byId([task({ state: "takenOver" })]) })),
+    { text: "Working in your terminal", tone: "needsYou" });
+});

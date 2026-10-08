@@ -52,6 +52,8 @@ function needsYou({ board, requestIds, state }: StatusInput, leadRunning: boolea
   const items = Object.values(board.waiting).filter((item) => ours(item.requestId));
   const [only] = items;
   if (only) return items.length === 1 ? `Waiting for you · ${only.what}` : "Waiting for you";
+  // The user works in a worker's own session: the request waits until they close it.
+  if (workers.some((task) => task.state === "takenOver")) return "Working in your terminal";
   // The lead reviews a proposed plan and lands a ready change itself while its turn runs.
   if (leadRunning) return null;
   if (Object.values(board.plans).some((plan) => ours(plan.requestId) && plan.state.type === "proposed")) {

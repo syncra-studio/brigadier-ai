@@ -27,6 +27,7 @@ export const TASK_STATE_LABELS: Record<TaskState, string> = {
   blocked: "Blocked",
   paused: "Paused",
   reported: "Reported",
+  takenOver: "In your terminal",
   landing: "Landing",
   readyToLand: "Ready to land",
   landed: "Landed",
