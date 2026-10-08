@@ -79,6 +79,8 @@ export type MachineWords = {
 export type BlockOrchestratorStep = {
   kind: OrchestratorStepKind | DecidedStep | MachineWords;
   position: number;
+  /** When the step began (a tool call: when it was first seen). */
+  atMs?: number;
 };
 
 /**
@@ -337,7 +339,7 @@ export function buildBlocks(
       kind: "orchestrator",
       position: step.position,
       requestId: step.requestId,
-      step: { kind: step.kind, position: step.position },
+      step: { kind: step.kind, position: step.position, atMs: step.atMs },
       atMs: step.atMs,
     });
   }

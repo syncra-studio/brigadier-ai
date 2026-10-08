@@ -1023,6 +1023,12 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 .list_orchestrator_log(&conversation_id, before, limit)
                 .await?,
         },
+        Request::GetThreadItem {
+            conversation_id,
+            item_id,
+        } => Response::GetThreadItem {
+            item: core.thread_item(&conversation_id, &item_id).await?,
+        },
         Request::GetThreadMetrics { conversation_id } => Response::GetThreadMetrics {
             metrics: daemon.sessions.thread_metrics(&conversation_id).await?,
         },

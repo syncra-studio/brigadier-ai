@@ -26,6 +26,7 @@ import type {
   RestoreOutcome,
   Setup,
   SetupRequest,
+  ThreadItem,
   UnlandedBranch,
 } from "@/ipc/generated";
 import { savePinnedSummary } from "@/lib/pinnedSummary";
@@ -1156,6 +1157,15 @@ export async function removeProject(
 }
 
 // ----- orchestrator log (Inspector) ------------------------------------------------------
+
+/**
+ * A thread row's tool call or command in full (`itemId`, the provider's item id): its input,
+ * output (whole, when the model got a digest), exit code and duration; all `null` when unknown.
+ */
+export async function getThreadItem(conversationId: string, itemId: string): Promise<ThreadItem> {
+  const { item } = await request({ method: "getThreadItem", conversationId, itemId });
+  return item;
+}
 
 /** Orchestrator log entries fetched per page. */
 const ORCHESTRATOR_PAGE = 1_000;

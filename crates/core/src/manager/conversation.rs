@@ -2676,13 +2676,20 @@ impl SessionManager {
                 name,
                 input,
                 status,
-                ..
+                output,
             } => {
                 let name = name.rsplit("__").next().unwrap_or(name);
                 let name = name.rsplit('.').next().unwrap_or(name);
-                if matches!(name, "Bash" | "run" | "run_unsandboxed") {
+                let shell = crate::digest::is_shell_tool(name);
+                if shell {
                     conv.running_command(item_id, *status).await;
                 }
+                let ended_at_ms = (*status != ItemStatus::InProgress).then(now_ms);
+                // A shell tool's result names its exit status on its first line.
+                let exit = output
+                    .as_deref()
+                    .filter(|_| shell && ended_at_ms.is_some())
+                    .and_then(crate::digest::exit_of);
                 let args: serde_json::Value = input
                     .as_deref()
                     .and_then(|input| serde_json::from_str(input).ok())
@@ -2710,6 +2717,8 @@ impl SessionManager {
                         detail,
                         status: *status,
                         through_position: 0,
+                        ended_at_ms,
+                        exit,
                     },
                 )
                 .await;
@@ -2726,6 +2735,7 @@ impl SessionManager {
                 item_id,
                 command,
                 status,
+                exit_code,
                 ..
             } => {
                 conv.running_command(item_id, *status).await;
@@ -2738,6 +2748,8 @@ impl SessionManager {
                         detail: Some(command.chars().take(240).collect()),
                         status: *status,
                         through_position: 0,
+                        ended_at_ms: (*status != ItemStatus::InProgress).then(now_ms),
+                        exit: *exit_code,
                     },
                 )
                 .await;
@@ -2759,6 +2771,8 @@ impl SessionManager {
                         detail,
                         status: *status,
                         through_position: 0,
+                        ended_at_ms: (*status != ItemStatus::InProgress).then(now_ms),
+                        exit: None,
                     },
                 )
                 .await;

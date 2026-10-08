@@ -2148,6 +2148,133 @@ async fn a_codex_thread_s_own_commands_and_edits_are_tool_steps() {
 }
 
 #[tokio::test]
+async fn a_finished_tool_step_says_when_it_ended_and_how_it_exited_and_opens_in_full() {
+    use crate::work::{OrchestratorStepKind, OutputSource};
+    use brigadier_providers::{ItemStatus, ProviderEvent};
+    let digest = Arc::new(std::sync::Mutex::new(String::new()));
+    let sent = digest.clone();
+    let flow = Flow::start(
+        "thread-items",
+        Options::default(),
+        script(move |turn| {
+            let digest = sent.lock().unwrap().clone();
+            async move {
+                for status in [ItemStatus::InProgress, ItemStatus::Failed] {
+                    let finished = status != ItemStatus::InProgress;
+                    turn.events
+                        .send(ProviderEvent::Command {
+                            item_id: "cmd-1".into(),
+                            command: "pnpm test".into(),
+                            cwd: None,
+                            status,
+                            exit_code: finished.then_some(1),
+                            output: finished.then(|| "1 failed".into()),
+                            duration_ms: finished.then_some(41_000),
+                        })
+                        .await
+                        .unwrap();
+                }
+                for (status, output) in [
+                    (ItemStatus::InProgress, None),
+                    (ItemStatus::Completed, Some(digest)),
+                ] {
+                    turn.events
+                        .send(ProviderEvent::ToolCall {
+                            item_id: "run-1".into(),
+                            name: "mcp__brigadier__run".into(),
+                            input: Some(json!({"command": "cargo test"}).to_string()),
+                            status,
+                            output,
+                        })
+                        .await
+                        .unwrap();
+                }
+                Reply::text("One test fails.")
+            }
+        }),
+    )
+    .await;
+    // A long `run` output the model got as a digest: its row opens to the whole output.
+    let full = (0..3000)
+        .map(|n| format!("line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (_, stored) = flow
+        .manager
+        .store_output(
+            &flow.conversation,
+            OutputSource::Run,
+            "exit 2",
+            full.clone().into_bytes(),
+            true,
+        )
+        .await
+        .unwrap();
+    assert!(stored.len() < full.len());
+    *digest.lock().unwrap() = stored;
+    flow.say("Run the tests").await;
+    let board = flow.settled().await;
+    let tools: Vec<_> = board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            OrchestratorStepKind::Tool {
+                item_id,
+                status,
+                ended_at_ms,
+                exit,
+                ..
+            } => Some((step.at_ms, item_id.clone(), *status, *ended_at_ms, *exit)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tools.len(), 2, "{tools:?}");
+    for (at_ms, item_id, status, ended_at_ms, exit) in &tools {
+        let ended = ended_at_ms.expect("a finished call says when it ended");
+        assert!(ended >= *at_ms, "{item_id} ended before it started");
+        match item_id.as_str() {
+            "cmd-1" => assert_eq!((*status, *exit), (ItemStatus::Failed, Some(1))),
+            "run-1" => assert_eq!((*status, *exit), (ItemStatus::Completed, Some(2))),
+            other => panic!("unexpected step {other}"),
+        }
+    }
+
+    let command = flow
+        .core
+        .thread_item(&flow.conversation, "cmd-1")
+        .await
+        .unwrap();
+    assert_eq!(
+        command,
+        crate::model::ThreadItem {
+            input: Some("pnpm test".into()),
+            output: Some("1 failed".into()),
+            exit: Some(1),
+            ms: Some(41_000),
+        }
+    );
+    let run = flow
+        .core
+        .thread_item(&flow.conversation, "run-1")
+        .await
+        .unwrap();
+    assert_eq!(
+        run.input.as_deref(),
+        Some(json!({"command": "cargo test"}).to_string().as_str())
+    );
+    assert_eq!(run.output.as_deref(), Some(full.as_str()));
+    assert_eq!(run.exit, Some(2));
+    assert!(run.ms.is_some_and(|ms| ms >= 0));
+    let missing = flow
+        .core
+        .thread_item(&flow.conversation, "no-such-item")
+        .await
+        .unwrap();
+    assert_eq!(missing, crate::model::ThreadItem::default());
+    flow.stop().await;
+}
+
+#[tokio::test]
 async fn orchestrator_tools_are_visible_while_running_and_keep_their_first_position() {
     use crate::work::OrchestratorStepKind;
     use brigadier_providers::{ItemStatus, ProviderEvent};

@@ -71,9 +71,19 @@ function hasSteps<S, E>(item: Activity<S, E>): boolean {
   return item.type === "group" && item.items.some((inner) => inner.type === "step");
 }
 
-/** Thought-only groups join the next group of work, else the one before. */
+/**
+ * Thought-only groups join the next group of work, else the one before. With no work at all (a
+ * turn that only delegated), its thoughts are one row, where the first was.
+ */
 function placeThoughts<S, E>(items: Activity<S, E>[]): Activity<S, E>[] {
-  if (!items.some((item) => hasSteps(item))) return items;
+  if (!items.some((item) => hasSteps(item))) {
+    const first = items.findIndex((item) => item.type === "group");
+    if (first < 0) return items;
+    const thoughts = items.flatMap((item) => (item.type === "group" ? item.items : []));
+    return items.flatMap((item, index): Activity<S, E>[] =>
+      item.type !== "group" ? [item] : index === first ? [{ ...item, items: thoughts }] : [],
+    );
+  }
   const out: Activity<S, E>[] = [];
   let carried: GroupItem<S>[] = [];
   for (const item of items) {
@@ -167,6 +177,8 @@ export function workerActivity(entries: readonly ThreadEntry[], live: boolean): 
     if (entry.kind === "action") {
       return workerPlumbing(entry.item) ? { type: "skip" } : { type: "step", key: entry.item.key, step: entry.item };
     }
+    // An answered approval leaves no trace: the action's own row tells what came of it.
+    if (entry.kind === "item" && entry.item.kind === "approval" && entry.item.resolution) return { type: "skip" };
     if (entry.kind === "item" && entry.item.kind === "reasoning") {
       const { item } = entry;
       // The thought it is thinking now is the live line's.

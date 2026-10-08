@@ -46,6 +46,8 @@ const PLUMBING = new Set([
   "ToolSearch",
   "tool_search",
   "read_report",
+  // Its authored step says what was read ("Read notes.md"), or the team sentence covers a diff.
+  "read_artifact",
   "finish_session",
   "note_for_user",
   "remember",
@@ -240,6 +242,41 @@ export function detailOf(input: string | null): string | null {
   }
 }
 
+/** An edit's lines out and in, in one file. */
+export type Hunk = { path: string; removed: string[]; added: string[] };
+
+/** A call's input as its arguments, when it is a JSON object. */
+export function parsedInput(input: string | null): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(input ?? "");
+    return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+const text = (value: unknown): string => (typeof value === "string" ? value : "");
+const linesOf = (value: string): string[] => (value ? value.replace(/\n$/, "").split("\n") : []);
+
+/** An edit's changes, read from its call: Edit's old and new text, MultiEdit's edits, Write's content. */
+export function editHunks(name: string, input: string | null): Hunk[] {
+  const args = parsedInput(input);
+  if (!args) return [];
+  const path = text(args["file_path"]) || text(args["path"]);
+  switch (toolName(name)) {
+    case "Edit":
+      return [{ path, removed: linesOf(text(args["old_string"])), added: linesOf(text(args["new_string"])) }];
+    case "MultiEdit": {
+      const edits = Array.isArray(args["edits"]) ? (args["edits"] as Record<string, unknown>[]) : [];
+      return edits.map((edit) => ({ path, removed: linesOf(text(edit["old_string"])), added: linesOf(text(edit["new_string"])) }));
+    }
+    case "Write":
+      return [{ path, removed: [], added: linesOf(text(args["content"])) }];
+    default:
+      return [];
+  }
+}
+
 /** A worker's file changes as the lead's `apply_patch` step names them. */
 export function changesDetail(paths: readonly string[]): string | null {
   const [first] = paths;
@@ -289,11 +326,15 @@ export function toolHasOwnResult(
   );
 }
 
-/** A step's row: its words for how it stands, and how it ended when that wasn't well. */
-export function stepLabel(words: StepWords, status: ItemStatus): string {
+/**
+ * A step's row: its words for how it stands, and how it ended when that wasn't well ("Ran pnpm
+ * test — failed (exit 1)"). `exit` is a command's exit code, when it says.
+ */
+export function stepLabel(words: StepWords, status: ItemStatus, exit: number | null = null): string {
   if (status === "inProgress") return words.doing;
-  if (status === "failed") return `${words.done} — failed`;
   if (status === "declined") return `${words.done} — stopped`;
+  if (exit !== null && exit !== 0) return `${words.done} — failed (exit ${exit})`;
+  if (status === "failed") return `${words.done} — failed`;
   return words.done;
 }
 

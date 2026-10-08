@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   type ActionItem,
+  editHunks,
   isPlumbing,
   itemCall,
   stepLabel,
@@ -48,7 +49,7 @@ test("a tool keeps its words across provider namespaces and never shows them", (
 });
 
 test("Brigadier's plumbing is never a row", () => {
-  for (const name of ["read_report", "finish_session", "note_for_user", "remember", "delegate_task", "message_worker", "answer_worker", "stop_worker", "land_phase", "mcp__brigadier__submit_report", "ToolSearch"]) {
+  for (const name of ["read_report", "read_artifact", "finish_session", "note_for_user", "remember", "delegate_task", "message_worker", "answer_worker", "stop_worker", "land_phase", "mcp__brigadier__submit_report", "ToolSearch"]) {
     assert.ok(isPlumbing(name), name);
   }
   for (const name of ["Read", "run", "query_brain", "review_code"]) assert.ok(!isPlumbing(name), name);
@@ -117,4 +118,30 @@ test("deduplication needs the matching authored result in this call's window", (
     false,
     "an overlapping call's result cannot hide the earlier action",
   );
+});
+
+test("a command that exited badly says how, a stopped one says so", () => {
+  const ran = toolStepWords(call("Bash", "completed", "pnpm test"));
+  assert.equal(stepLabel(ran, "completed", 0), "Ran pnpm test");
+  assert.equal(stepLabel(ran, "failed", 1), "Ran pnpm test — failed (exit 1)");
+  // A command can end "completed" with a bad exit code (Codex): still a failure.
+  assert.equal(stepLabel(ran, "completed", 2), "Ran pnpm test — failed (exit 2)");
+  assert.equal(stepLabel(ran, "failed"), "Ran pnpm test — failed");
+  assert.equal(stepLabel(ran, "declined", 130), "Ran pnpm test — stopped");
+});
+
+test("an edit's call reads as its lines out and in", () => {
+  assert.deepEqual(editHunks("Edit", JSON.stringify({ file_path: "/r/a.ts", old_string: "a\nb", new_string: "a\nc\n" })), [
+    { path: "/r/a.ts", removed: ["a", "b"], added: ["a", "c"] },
+  ]);
+  assert.deepEqual(
+    editHunks("mcp__x__MultiEdit", JSON.stringify({ file_path: "f", edits: [{ old_string: "x", new_string: "y" }, { old_string: "", new_string: "z" }] })),
+    [
+      { path: "f", removed: ["x"], added: ["y"] },
+      { path: "f", removed: [], added: ["z"] },
+    ],
+  );
+  assert.deepEqual(editHunks("Write", JSON.stringify({ file_path: "n.md", content: "hi" })), [{ path: "n.md", removed: [], added: ["hi"] }]);
+  assert.deepEqual(editHunks("apply_patch", "not json"), []);
+  assert.deepEqual(editHunks("Read", JSON.stringify({ file_path: "f" })), []);
 });

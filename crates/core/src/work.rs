@@ -1301,6 +1301,15 @@ pub enum OrchestratorStepKind {
         // Latest folded update: concurrent view replay must not regress this call.
         #[serde(default)]
         through_position: i64,
+        /// When the call finished (any status but in progress); the step's `at_ms` is when it
+        /// started.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        ended_at_ms: Option<i64>,
+        /// How a command ended, when it says: its exit code.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        exit: Option<i32>,
     },
     /// "Sent message to {worker}".
     Messaged { task_id: TaskId },

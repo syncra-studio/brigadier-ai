@@ -324,6 +324,7 @@ export type { TerminalInfo } from "./TerminalInfo";
 export type { TerminalOutput } from "./TerminalOutput";
 export type { ThinkingSegment } from "./ThinkingSegment";
 export type { ThreadEdits } from "./ThreadEdits";
+export type { ThreadItem } from "./ThreadItem";
 export type { ThreadMetrics } from "./ThreadMetrics";
 export type { ThreadRead } from "./ThreadRead";
 export type { ThreadSearch } from "./ThreadSearch";

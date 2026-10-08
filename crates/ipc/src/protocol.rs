@@ -19,8 +19,8 @@ use brigadier_core::{
     OvernightRun, OvernightRunId, ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch,
     ProposedPlan, ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals, RawPage,
     RawSession, RawSessionId, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview,
-    Settings, Setup, SetupRequest, SourceScope, SourceState, TaskId, ThreadMetrics, UpdateTarget,
-    UpdatesView, UsageView, WorkerDiff, WorkerPage,
+    Settings, Setup, SetupRequest, SourceScope, SourceState, TaskId, ThreadItem, ThreadMetrics,
+    UpdateTarget, UpdatesView, UsageView, WorkerDiff, WorkerPage,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -631,6 +631,12 @@ pub enum Request {
         before: Option<i64>,
         limit: u32,
     },
+    /// A thread row's tool call or command in full (`itemId`, the provider's item id): its
+    /// input, output, exit code and duration. All `null` when the log holds no such item.
+    GetThreadItem {
+        conversation_id: ConversationId,
+        item_id: String,
+    },
     /// A session thread's metrics (Inspector): its own commits and its context per request.
     GetThreadMetrics {
         conversation_id: ConversationId,
@@ -1110,6 +1116,9 @@ pub enum Response {
     },
     ListOrchestratorLog {
         page: OrchestratorPage,
+    },
+    GetThreadItem {
+        item: ThreadItem,
     },
     GetThreadMetrics {
         metrics: ThreadMetrics,

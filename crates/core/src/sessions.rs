@@ -14,7 +14,7 @@ use crate::model::{
     Catalog, ContextUsage, Conversation, ConversationId, ConversationKind, ConversationView,
     DomainEvent, EnvironmentKind, ForkOrigin, Lifecycle, Message, MessagePage, MessageRole,
     ModelChoice, OrchestratorLogEntry, OrchestratorPage, Project, ProjectId, ProjectPatch,
-    ProjectRepo, RawEntry, Settings, Setup, WorkerPage, streams,
+    ProjectRepo, RawEntry, Settings, Setup, ThreadItem, WorkerPage, streams,
 };
 use crate::projection::Projection;
 use crate::work::{
@@ -1095,6 +1095,132 @@ impl Core {
         })
     }
 
+    /// A thread's tool call, command or edit (`item_id`, the provider's own id) in full, from
+    /// the newest orchestrator log entry about it; all `None` when there is none. A digested
+    /// output comes back whole from the blob it was stored in, when the conversation still has
+    /// it.
+    ///
+    /// The log has no index by item: this reads the conversation's orchestrator stream
+    /// backwards a page at a time until it finds the item, then at most one page further for
+    /// where the item started (its duration, when the CLI doesn't say).
+    pub async fn thread_item(&self, id: &ConversationId, item_id: &str) -> Result<ThreadItem> {
+        self.conversation(id)?;
+        let mut before = None;
+        // The newest entry about the item and when it was logged; when the item started.
+        let mut found: Option<(ProviderEvent, i64)> = None;
+        let mut started_ms = None;
+        let mut pages_after_found = 0;
+        'pages: loop {
+            let events = self
+                .store
+                .read_stream(
+                    streams::orchestrator(id),
+                    StreamPage {
+                        before,
+                        kinds: vec!["orchestrator.logged".into()],
+                        limit: brigadier_store::MAX_PAGE,
+                    },
+                )
+                .await?;
+            let Some(oldest) = events.last() else {
+                break;
+            };
+            before = Some(oldest.stream_seq);
+            // Newest first.
+            for stored in &events {
+                let Ok(DomainEvent::OrchestratorLogged {
+                    entry: OrchestratorEntry::Provider { event, .. },
+                    ..
+                }) = decode(stored)
+                else {
+                    continue;
+                };
+                let Some((item, status)) = thread_item_of(&event) else {
+                    continue;
+                };
+                if item != item_id {
+                    continue;
+                }
+                started_ms = Some(stored.at_ms);
+                if found.is_none() {
+                    found = Some((event, stored.at_ms));
+                } else if status == brigadier_providers::ItemStatus::InProgress {
+                    break 'pages;
+                }
+            }
+            if found.is_some() {
+                pages_after_found += 1;
+            }
+            if events.len() < brigadier_store::MAX_PAGE as usize || pages_after_found > 1 {
+                break;
+            }
+        }
+        let Some((event, at_ms)) = found else {
+            return Ok(ThreadItem::default());
+        };
+        let finished = thread_item_of(&event)
+            .is_some_and(|(_, status)| status != brigadier_providers::ItemStatus::InProgress);
+        let took = started_ms
+            .filter(|_| finished)
+            .map(|started| at_ms.saturating_sub(started));
+        let mut item = match event {
+            ProviderEvent::ToolCall {
+                name,
+                input,
+                output,
+                ..
+            } => {
+                let shell = crate::digest::is_shell_tool(&name);
+                ThreadItem {
+                    exit: output
+                        .as_deref()
+                        .filter(|_| shell && finished)
+                        .and_then(crate::digest::exit_of),
+                    input,
+                    output,
+                    ms: took,
+                }
+            }
+            ProviderEvent::Command {
+                command,
+                exit_code,
+                output,
+                duration_ms,
+                ..
+            } => ThreadItem {
+                input: Some(command),
+                output,
+                exit: exit_code,
+                ms: duration_ms.or(took),
+            },
+            // The event names the files, not their diffs.
+            _ => ThreadItem {
+                ms: took,
+                ..ThreadItem::default()
+            },
+        };
+        if let Some(alias) = item.output.as_deref().and_then(crate::digest::digest_alias)
+            && let Some(full) = self.stored_output_text(id, alias).await
+        {
+            item.output = Some(full);
+        }
+        Ok(item)
+    }
+
+    /// The whole text of the conversation's stored output `alias`, while its blob is there.
+    async fn stored_output_text(&self, id: &ConversationId, alias: &str) -> Option<String> {
+        let blob = {
+            let mut boards = self.boards.lock().await;
+            if !boards.contains_key(id) {
+                let board = self.load_board(id).await.ok()?;
+                boards.insert(id.clone(), board);
+            }
+            boards.get(id)?.outputs.get(alias)?.blob.clone()
+        };
+        let bytes = self.store.blobs().get(blob.parse().ok()?).await.ok()??;
+        Some(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
     /// Up to `limit` events of `kind` before `before`, oldest first, and whether older ones
     /// exist.
     async fn read_page(
@@ -1852,6 +1978,22 @@ fn deleted_owner(deleted: &HashSet<ConversationId>, stream: &str) -> Option<Conv
 
 fn to_new_event(stream: String, event: &DomainEvent) -> Result<NewEvent> {
     Ok(NewEvent::new(stream, event.kind(), now_ms(), event)?)
+}
+
+/// The item a thread's tool call, command or edit event is about, and its status.
+fn thread_item_of(event: &ProviderEvent) -> Option<(&str, brigadier_providers::ItemStatus)> {
+    match event {
+        ProviderEvent::ToolCall {
+            item_id, status, ..
+        }
+        | ProviderEvent::Command {
+            item_id, status, ..
+        }
+        | ProviderEvent::FileChanges {
+            item_id, status, ..
+        } => Some((item_id, *status)),
+        _ => None,
+    }
 }
 
 pub(crate) fn decode(event: &brigadier_store::StoredEvent) -> Result<DomainEvent> {

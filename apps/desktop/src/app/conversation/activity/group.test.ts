@@ -22,7 +22,7 @@ const sort = (entry: Entry): Sorted<string> =>
 const shape = (activity: Activity<string, Entry>[]) =>
   activity.map((item) =>
     item.type === "group"
-      ? `[${item.items.map((inner) => (inner.type === "step" ? inner.step : inner.thought.key)).join(" ")}]`
+      ? `[${item.items.map((inner) => (inner.type === "step" ? inner.step : inner.thought.text)).join(" ")}]`
       : `"${"text" in item.entry ? item.entry.text : "?"}"`,
   );
 
@@ -51,12 +51,8 @@ test("thoughts next to each other in a group read as one", () => {
   );
 });
 
-test("a turn with thinking and no work keeps its thoughts as they are", () => {
-  assert.deepEqual(shape(groupActivity([{ thought: "t1" }, { text: "x" }, { thought: "t2" }], sort)), [
-    "[t1]",
-    '"x"',
-    "[t2]",
-  ]);
+test("a turn with thinking and no work (it only delegated) shows its thoughts as one row", () => {
+  assert.deepEqual(shape(groupActivity([{ thought: "t1" }, { text: "x" }, { thought: "t2" }], sort)), ["[t1\n\nt2]", '"x"']);
 });
 
 const reasoning = (key: string, text: string, streaming = false): TranscriptItem => ({
@@ -84,6 +80,8 @@ test("a worker's thread groups the same way, its plumbing hidden and its live th
   const entries: ThreadEntry[] = [
     { kind: "actions", key: "a", items: [command("c1", "cat notes.py") as never, tool("ts", "ToolSearch") as never] },
     { kind: "item", item: reasoning("r1", "Now the tests.") },
+    // Answered, an approval doesn't split the work.
+    { kind: "item", item: { kind: "approval", key: "ap", resolution: "approved" } as never },
     { kind: "actions", key: "b", items: [command("c2", "pnpm test") as never] },
     { kind: "item", item: message("m1", "Done.") },
     { kind: "item", item: reasoning("r2", "Thinking now", true) },
@@ -99,7 +97,7 @@ test("a worker's thread groups the same way, its plumbing hidden and its live th
   );
   assert.equal(reply?.type === "entry" && reply.entry.kind === "item" && reply.entry.item.kind, "message");
   // Done, the last thought is kept: in the group before it.
-  const done = workerActivity(entries.slice(0, 4).concat({ kind: "item", item: reasoning("r2", "Done thinking") }), false);
+  const done = workerActivity(entries.slice(0, 5).concat({ kind: "item", item: reasoning("r2", "Done thinking") }), false);
   assert.equal(done.length, 2);
 });
 

@@ -10,8 +10,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import type { ItemStatus } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 
-/** A step's words and how it stands, as a group reads them. */
-export type Described = { words: StepWords; status: ItemStatus };
+/** A step's words and how it stands, as a group reads them; a command's exit code when it says. */
+export type Described = { words: StepWords; status: ItemStatus; exit?: number | null };
 
 function StepIcon({ words }: { words: StepWords }) {
   const Icon = words.web ? Globe : WORK_ICONS[words.kind];
@@ -26,7 +26,7 @@ function Thought({ thought }: { thought: ThoughtItem }) {
  * One step as a row: "Read RequestBlock.tsx", "Ran pnpm test in 41s"; the verb shimmers while it
  * runs. It opens to `detail` when there is one.
  */
-export function StepRow({ words, status, detail, suffix, slot }: Described & {
+export function StepRow({ words, status, exit = null, detail, suffix, slot }: Described & {
   detail?: ReactNode;
   /** After the words: "in 41s". */
   suffix?: ReactNode;
@@ -35,7 +35,7 @@ export function StepRow({ words, status, detail, suffix, slot }: Described & {
   return (
     <ThreadActivity data-slot={slot} data-kind={words.kind} detail={detail}>
       <StepIcon words={words} />
-      <span className={cn("min-w-0 truncate", status === "inProgress" && "shimmer")}>{stepLabel(words, status)}</span>
+      <span className={cn("min-w-0 truncate", status === "inProgress" && "shimmer")}>{stepLabel(words, status, exit)}</span>
       {suffix && <span className="shrink-0 tabular-nums">{suffix}</span>}
     </ThreadActivity>
   );
@@ -66,7 +66,7 @@ export function ActivityGroup<S>({ items, live, describe, renderStep }: {
   const label = !current
     ? ""
     : live || described.length === 1
-      ? stepLabel(current.words, current.status)
+      ? stepLabel(current.words, current.status, current.exit)
       : summarize(described.map((step) => step.words));
   return (
     <Collapsible data-slot="work-group">

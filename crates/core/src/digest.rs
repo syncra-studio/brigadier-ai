@@ -80,6 +80,53 @@ pub fn json_len(text: &str) -> usize {
         .sum()
 }
 
+/// Whether a tool call runs a shell command (`Bash`, `run`, `run_unsandboxed`), by its name
+/// with or without its MCP server's prefix (`mcp__brigadier__run`, `brigadier.run`).
+pub(crate) fn is_shell_tool(name: &str) -> bool {
+    let name = name.rsplit("__").next().unwrap_or(name);
+    let name = name.rsplit('.').next().unwrap_or(name);
+    matches!(name, "Bash" | "run" | "run_unsandboxed")
+}
+
+/// The exit code a shell tool's result names on its first line: `[exit N]` (a short `run`
+/// result), `exit N [full output: …]` (a digest), or `Exit code N` (Claude's failed `Bash`).
+/// A result inside a JSON content array (`[{"type":"text","text":"…"}]`, a Codex MCP call's)
+/// is read from its first text block.
+pub(crate) fn exit_of(output: &str) -> Option<i32> {
+    let inner = serde_json::from_str::<serde_json::Value>(output)
+        .ok()
+        .and_then(|value| {
+            value.as_array()?.iter().find_map(|block| {
+                block
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+        });
+    let text = inner.as_deref().unwrap_or(output);
+    let first = text.lines().next()?.trim_start();
+    let rest = first
+        .strip_prefix("[exit ")
+        .or_else(|| first.strip_prefix("exit "))
+        .or_else(|| first.strip_prefix("Exit code "))?;
+    let end = rest
+        .char_indices()
+        .find(|&(at, c)| !(c.is_ascii_digit() || (at == 0 && c == '-')))
+        .map_or(rest.len(), |(at, _)| at);
+    rest[..end].parse().ok()
+}
+
+/// The alias of the full output a digest points to (`read_artifact out-…`), if it names one.
+pub(crate) fn digest_alias(output: &str) -> Option<&str> {
+    const MARK: &str = "read_artifact ";
+    let at = output.find(&format!("{MARK}out-"))? + MARK.len();
+    let rest = &output[at..];
+    let end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
 /// The digest in at most `max` bytes.
 fn digest_within(status: &str, output: &[u8], artifact: &str, max: usize) -> String {
     let text = String::from_utf8_lossy(output);
@@ -465,5 +512,20 @@ mod tests {
         let output = "\u{1}".repeat(60_000);
         let wrapped = wrapped_digest("exit 1", output.as_bytes(), "out-0000000b");
         assert!(json_len(&wrapped) + JSON_WRAPPER <= DIGEST_MAX);
+    }
+
+    #[test]
+    fn a_shell_result_names_its_exit_code_and_a_digest_its_full_output() {
+        assert_eq!(exit_of("[exit 0]\nok\n"), Some(0));
+        assert_eq!(exit_of("Exit code 101\nerror: failed"), Some(101));
+        assert_eq!(exit_of("[killed by signal 9]\n"), None);
+        assert_eq!(exit_of("hello"), None);
+        let digest = digest("exit 1", passing_log(2000).as_bytes(), "out-1a2b3c4d");
+        assert_eq!(exit_of(&digest), Some(1));
+        assert_eq!(digest_alias(&digest), Some("out-1a2b3c4d"));
+        let wrapped = serde_json::json!([{"type": "text", "text": digest}]).to_string();
+        assert_eq!(exit_of(&wrapped), Some(1));
+        assert_eq!(digest_alias(&wrapped), Some("out-1a2b3c4d"));
+        assert_eq!(digest_alias("[exit 0]\nshort"), None);
     }
 }

@@ -7,7 +7,6 @@ import {
   ShieldCheck,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
-  type ReactNode,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -19,6 +18,7 @@ import { ArtifactFiles } from "@/app/conversation/cards/TaskCardView";
 import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
 import { workerDone, workerWorking, workerPreview } from "@/app/conversation/workerPresentation";
 import { ActivityGroup, StepRow } from "@/app/conversation/activity/ActivityGroup";
+import { actionDetail } from "@/app/conversation/activity/StepDetail";
 import { workerActivity } from "@/app/conversation/activity/group";
 import { type ActionItem, itemCall, stepWords } from "@/app/conversation/activity/words";
 import { ROW } from "@/components/assistant-ui/elements/activity-row";
@@ -30,11 +30,9 @@ import {
   shownCommand,
   type ThreadEntry,
   threadEntries,
-  unwrapCommand,
 } from "@/components/transcript/activity";
 import { type TranscriptItem, TranscriptFolder } from "@/components/transcript/transcript";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
-import { searchResults, WebSearch } from "@/components/assistant-ui/elements/web-search";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
@@ -88,96 +86,8 @@ const ERROR_TITLES: Record<ErrorKind, string> = {
 
 const row = ROW;
 
-/** A command's box: "Shell", the command and what it printed, then how it ended. */
-function shellCard(item: Extract<ActionItem, { kind: "command" }>): ReactNode {
-  const output = item.output.trimEnd();
-  const ending =
-    item.status === "inProgress"
-      ? "Running"
-      : item.status === "declined"
-        ? "Stopped"
-        : item.exitCode !== null && item.exitCode !== 0
-          ? `Exit code ${item.exitCode}`
-          : item.status === "failed"
-            ? "Failed"
-            : "Success";
-  return (
-    <div data-slot="shell-card" className="border-border bg-code-surface rounded-control mt-1 flex flex-col border text-sm">
-      <span className="text-muted-foreground px-3 pt-2 text-xs">Shell</span>
-      <pre className="text-code max-h-60 overflow-auto px-3 py-1 font-mono whitespace-pre-wrap">
-        {`$ ${unwrapCommand(item.command)}`}
-        {output ? `\n${output}` : <span className="text-muted-foreground">{"\nNo output"}</span>}
-      </pre>
-      <span
-        className={cn(
-          "border-border border-t px-3 py-1.5 text-end text-xs",
-          ending === "Success" ? "text-muted-foreground" : ending === "Running" ? "shimmer" : "text-destructive",
-        )}
-      >
-        {ending}
-      </span>
-    </div>
-  );
-}
-
-function card(title: string, body: string): ReactNode {
-  return (
-    <div className="border-border bg-code-surface rounded-control mt-1 flex flex-col gap-1 border px-3 py-2">
-      <span className="text-muted-foreground text-xs">{title}</span>
-      <pre className="text-code max-h-60 overflow-auto font-mono whitespace-pre-wrap">{body}</pre>
-    </div>
-  );
-}
-
-/** A web search's query, from its call. */
-function searchQuery(input: string | null): string | null {
-  try {
-    const value: unknown = JSON.parse(input ?? "");
-    const query = value && typeof value === "object" ? (value as { query?: unknown }).query : null;
-    return typeof query === "string" ? query : null;
-  } catch {
-    return null;
-  }
-}
-
-/** What an action row opens to: a Shell box for a command, the pages a search found, the call for a tool. */
-function actionDetail(item: ActionItem): ReactNode {
-  switch (item.kind) {
-    case "command":
-      return shellCard(item);
-    case "tool": {
-      const query = item.name === "WebSearch" ? searchQuery(item.input) : null;
-      if (query !== null && item.status === "failed") {
-        // A failed search found nothing: its query, then what went wrong in full.
-        return (
-          <div className="flex flex-col gap-2 ps-6 pt-1 pb-2">
-            <WebSearch query={query} results={[]} />
-            <ErrorState title="The search failed" detail={item.output || null} />
-          </div>
-        );
-      }
-      if (query !== null) {
-        return (
-          <WebSearch
-            className="ps-6 pt-1 pb-2"
-            query={query}
-            results={searchResults(item.output)}
-            searching={item.status === "inProgress"}
-          />
-        );
-      }
-      if (!item.input && !item.output) return null;
-      return card(item.name, [item.input, item.output].filter(Boolean).join("\n\n"));
-    }
-    case "files":
-      return card(
-        "Files",
-        item.changes.map((change) => `${change.kind} ${change.path}`).join("\n"),
-      );
-    case "image":
-      return item.path || item.prompt ? card("Image", item.path ?? item.prompt ?? "") : null;
-  }
-}
+/** A worker's command's exit code, when it says. */
+const exitOf = (item: ActionItem): number | null => (item.kind === "command" ? item.exitCode : null);
 
 /** A worker's action, as the lead's same step would read; a command or call opens to what it ran. */
 function ActionRow({ item }: { item: ActionItem }) {
@@ -187,6 +97,7 @@ function ActionRow({ item }: { item: ActionItem }) {
     <StepRow
       words={stepWords(call)}
       status={call.status}
+      exit={exitOf(item)}
       detail={actionDetail(item)}
       suffix={ran && item.durationMs !== null ? `in ${formatDuration(item.durationMs)}` : undefined}
     />
@@ -321,7 +232,8 @@ export function WorkerThread({ task }: { task: Task }) {
   const previousCount = 1 + task.messages.length + previous.reduce((count, item) => count + (item.type === "group" ? item.items.length : 1), 0);
   const recent = activity.slice(previous.length);
   const last = visibleEntries.at(-1);
-  const thinking = working && last?.kind === "item" && last.item.kind === "reasoning" && last.item.streaming ? last.item : null;
+  // A thought with no words yet is the live line's "Thinking".
+  const thinking = working && last?.kind === "item" && last.item.kind === "reasoning" && last.item.streaming && last.item.text.trim() ? last.item : null;
   const show = (item: (typeof activity)[number], index: number) =>
     item.type === "group" ? (
       <ActivityGroup
@@ -330,7 +242,7 @@ export function WorkerThread({ task }: { task: Task }) {
         live={working && index === activity.length - 1}
         describe={(step) => {
           const call = itemCall(step);
-          return { words: stepWords(call), status: call.status };
+          return { words: stepWords(call), status: call.status, exit: exitOf(step) };
         }}
         renderStep={(step, key) => <ActionRow key={key} item={step} />}
       />

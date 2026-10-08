@@ -932,6 +932,18 @@ pub struct OrchestratorLogEntry {
     pub entry: OrchestratorEntry,
 }
 
+/// A thread's tool call or command in full, as its row opens to: what it was given, what it
+/// returned (the whole stored output when the model got a digest), how a command exited and
+/// how long it took. Nothing is set when the log holds no such item.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadItem {
+    pub input: Option<String>,
+    pub output: Option<String>,
+    pub exit: Option<i32>,
+    pub ms: Option<i64>,
+}
+
 /// Where a raw session's events come from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
