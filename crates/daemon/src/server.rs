@@ -953,7 +953,8 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             attachments,
             mentions,
         } => Response::EditQueued {
-            queue: core
+            // Through the sessions: a merge being prepared must see the edit.
+            queue: sessions
                 .edit_queued(&conversation_id, &item_id, text, attachments, mentions)
                 .await?,
         },

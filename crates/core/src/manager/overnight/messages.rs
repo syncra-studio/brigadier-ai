@@ -39,14 +39,13 @@ impl SessionManager {
         {
             self.steer_overnight(id.clone(), run.id.clone(), command, text.to_owned())
                 .await?;
-            let message = self
-                .core
-                .append_user_message(
+            let message = conv
+                .user_write(self.core.append_user_message(
                     id.clone(),
                     text.to_owned(),
                     attachments.to_vec(),
                     mentions.to_vec(),
-                )
+                ))
                 .await?;
             if run.state.is_active() {
                 // User words go straight to the thread; no follow-up classification wait.
@@ -69,14 +68,13 @@ impl SessionManager {
             self.propose_overnight(id.clone(), command, text.to_owned(), None)
                 .await?
         };
-        let message = self
-            .core
-            .append_user_message(
+        let message = conv
+            .user_write(self.core.append_user_message(
                 id.clone(),
                 text.to_owned(),
                 attachments.to_vec(),
                 mentions.to_vec(),
-            )
+            ))
             .await?;
         // A source/phase brief needs interpretation before the final preview. A bare goal
         // needs no pre-Start model call: the thread plans it once the user commits to the run.

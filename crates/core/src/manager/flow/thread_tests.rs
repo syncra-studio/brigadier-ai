@@ -1402,3 +1402,141 @@ async fn a_wait_sent_while_the_merge_is_prepared_stops_it() {
     assert!(!on_main(&flow, "NOTES.md"), "nothing merged");
     flow.stop().await;
 }
+
+/// A "wait" the user is still sending (its message not yet stored) when the merge takes its
+/// first look holds the merge until it is stored: the merge then sees it and refuses, instead of
+/// counting it as seen with the old message as the latest.
+#[tokio::test]
+async fn a_wait_still_being_stored_when_the_merge_looks_stops_it() {
+    let replies: MergeReplies = Arc::default();
+    let log = replies.clone();
+    let (started, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let writing = started.clone();
+    let flow = Flow::start(
+        "thread-merge-storing",
+        Options::default(),
+        script(move |turn| {
+            let (log, writing) = (log.clone(), writing.clone());
+            async move {
+                if turn.input.contains("Add notes and merge it.") {
+                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                    // The user's "wait!" is being stored now.
+                    writing.notified().await;
+                    assert!(!finish(&turn, "merge it", &log).await);
+                    return Reply::text("You wrote again, so I didn't merge.");
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add notes and merge it.").await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    let (core, id) = (flow.core.clone(), flow.conversation.clone());
+    let (signal, held) = (started.clone(), release.clone());
+    let write = tokio::spawn(async move {
+        conv.user_write(async {
+            signal.notify_one();
+            held.notified().await;
+            core.append_user_message(id.clone(), "wait!".into(), Vec::new(), Vec::new())
+                .await
+        })
+        .await
+        .unwrap();
+    });
+    // Whenever the merge's look comes, the write is under way: it waits for it.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    release.notify_one();
+    write.await.unwrap();
+    flow.until("the refused merge", |_| !replies.lock().unwrap().is_empty())
+        .await;
+    let replies = replies.lock().unwrap().clone();
+    // The merge's look saw "wait!" as the latest message: "merge it" isn't in it.
+    assert!(
+        replies[0].0.contains("is not in the user's latest message"),
+        "{replies:#?}"
+    );
+    assert!(!on_main(&flow, "NOTES.md"), "nothing merged");
+    flow.stop().await;
+}
+
+/// The user editing a queued message while the merge is being prepared stops it, as a new
+/// message would: an older queued item doesn't hold the merge, its edit does.
+#[tokio::test]
+async fn a_queued_message_edited_while_the_merge_is_prepared_stops_it() {
+    let replies: MergeReplies = Arc::default();
+    let log = replies.clone();
+    let flow = Flow::start(
+        "thread-merge-queue-edit",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if turn.input.contains("Add notes and merge it.") {
+                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                    assert!(!finish(&turn, "merge it", &log).await);
+                    return Reply::text("You wrote again, so I didn't merge.");
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    let item = flow
+        .core
+        .enqueue(
+            &flow.conversation,
+            "Later: rename the flag".into(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    *flow
+        .manager
+        .conv(&flow.conversation)
+        .unwrap()
+        .merge_pause
+        .lock()
+        .unwrap() = Some((reached.clone(), release.clone()));
+    // Sent after the item was queued: the queued item is older than the consent.
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    flow.manager
+        .send_message(
+            flow.conversation.clone(),
+            "Add notes and merge it.".into(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+    reached.notified().await;
+    flow.manager
+        .edit_queued(
+            &flow.conversation,
+            &item.id,
+            "wait, don't merge".into(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    release.notify_one();
+    flow.until("the refused merge", |_| !replies.lock().unwrap().is_empty())
+        .await;
+    let replies = replies.lock().unwrap().clone();
+    assert!(replies[0].0.contains("wrote again"), "{replies:#?}");
+    assert!(!on_main(&flow, "NOTES.md"), "nothing merged");
+    flow.stop().await;
+}

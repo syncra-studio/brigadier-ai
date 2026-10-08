@@ -4,9 +4,10 @@
 //! Consent is plain and unconditional, and anything in doubt refuses (the thread can just ask
 //! again): the words are in the latest message; that message asks no question (bar "can you
 //! merge it?"), sets no condition ("if", "once", "after", …) and says no "no", "wait" or
-//! "don't"; and either the words ask for the merge ("merge it") or the whole message is a plain
-//! yes to a reply that proposed this session's merge, as a question naming its branch or base
-//! ("Merge `brigadier/s1/session` into `main`?"). No model judges it.
+//! "don't"; and either the words ask for the merge, as a request ("merge it", "please merge",
+//! "go ahead and merge", "… then merge it into main"), or the whole message is a plain yes to a
+//! reply that offered this session's merge, as a question naming its branch or base ("Merge
+//! `brigadier/s1/session` into `main`?") with no hold or alternative in it. No model judges it.
 
 /// Words that take a yes back, or put it off: anywhere in the message, they refuse.
 const HOLDS: &[&str] = &[
@@ -67,6 +68,43 @@ const AGREEMENT: &[&str] = &[
     "this",
 ];
 
+/// What may come before a requested "merge" in its clause: "please merge", "ok, go ahead and
+/// merge", "can you merge it". Anything else ("explain the merge", "how do I merge it") isn't a
+/// request.
+const REQUEST_LEADS: &[&str] = &[
+    "please", "pls", "ok", "okay", "yes", "yeah", "yep", "sure", "great", "good", "fine",
+    "perfect", "alright", "thanks", "now", "just", "so", "go", "ahead", "you", "can", "could",
+    "would", "will", "lets", "let's", "also", "cool", "nice",
+];
+
+/// Words that start a request of their own within a clause: "… and merge it", "… then merge".
+const REQUEST_BOUNDS: &[&str] = &["and", "then"];
+
+/// What a requested "merge" may take: "merge it", "merge this", "merge everything".
+const MERGE_OBJECTS: &[&str] = &["it", "this", "that", "them", "everything", "all"];
+
+/// What "merge the …" may name: "merge the session", "merge my branch".
+const MERGE_TARGETS: &[&str] = &[
+    "session", "branch", "work", "change", "changes", "commit", "commits", "pr",
+];
+
+/// What may follow a requested "merge" directly: "merge into main", "merge now".
+const MERGE_AFTER: &[&str] = &["into", "to", "now", "please", "right"];
+
+/// Words a merge proposal may not hold: one that offers to wait, or an alternative, offers
+/// something else than the merge ("Should I wait to merge into main?", "… or keep it?").
+const PROPOSAL_HOLDS: &[&str] = &[
+    "postpone", "defer", "delay", "or", "instead", "rather", "first", "yet", "skip", "keep",
+    "leave", "until", "till", "before", "after", "if", "once", "when", "unless",
+];
+
+/// What may come before "merge" in a question that offers it: "Merge …?", "Shall I merge …?",
+/// "Do you want me to merge …?", "Ready to merge …?".
+const PROPOSAL_LEADS: &[&str] = &[
+    "shall", "should", "i", "can", "may", "want", "me", "to", "do", "you", "would", "like",
+    "ready", "ok", "okay", "now", "so", "then", "go", "ahead", "and",
+];
+
 /// Lower case, curly quotes made straight, backticks gone, runs of space made one.
 fn normalize(text: &str) -> String {
     text.to_lowercase()
@@ -86,8 +124,71 @@ fn words(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The words with the clause each is in: punctuation ends a clause.
+fn clause_words(text: &str) -> Vec<(String, usize)> {
+    let mut out = Vec::new();
+    let mut clause = 0;
+    for piece in text.split_inclusive(|c: char| ".,;:!?()\n\u{2014}\u{2013}\"".contains(c)) {
+        out.extend(words(piece).into_iter().map(|word| (word, clause)));
+        clause += 1;
+    }
+    out
+}
+
 fn says_merge(words: &[String]) -> bool {
-    words.iter().any(|word| word.starts_with("merg"))
+    words.iter().any(|word| word == "merge")
+}
+
+/// Whether `inner` is in `outer`, word for word.
+fn contains_words(outer: &[String], inner: &[String]) -> bool {
+    !inner.is_empty() && outer.windows(inner.len()).any(|window| window == inner)
+}
+
+/// Whether the "merge" at `at` is asked for: only request words before it in its clause (back
+/// to an "and" or "then"), and after it nothing, an object ("it", "the branch") or "into".
+fn requested_at(tokens: &[(String, usize)], at: usize) -> bool {
+    let clause = tokens[at].1;
+    let mut before = at;
+    let led = loop {
+        if before == 0 || tokens[before - 1].1 != clause {
+            break true;
+        }
+        let word = tokens[before - 1].0.as_str();
+        if REQUEST_BOUNDS.contains(&word) {
+            break true;
+        }
+        if !REQUEST_LEADS.contains(&word) {
+            break false;
+        }
+        before -= 1;
+    };
+    let word = |at: usize| {
+        tokens
+            .get(at)
+            .filter(|(_, of)| *of == clause)
+            .map(|(word, _)| word.as_str())
+    };
+    let followed = match word(at + 1) {
+        None => true,
+        Some(next) if MERGE_OBJECTS.contains(&next) || MERGE_AFTER.contains(&next) => true,
+        Some("the" | "my" | "our" | "your") => {
+            word(at + 2).is_some_and(|target| MERGE_TARGETS.contains(&target))
+        }
+        Some(_) => false,
+    };
+    led && followed
+}
+
+/// Whether the quoted words, where they stand in `message`, ask for the merge.
+fn requests_merge(message: &str, quoted: &[String]) -> bool {
+    let tokens = clause_words(message);
+    let words: Vec<String> = tokens.iter().map(|(word, _)| word.clone()).collect();
+    (0..words.len().saturating_sub(quoted.len() - 1))
+        .filter(|&start| words[start..start + quoted.len()] == *quoted)
+        .any(|start| {
+            (start..start + quoted.len())
+                .any(|at| words[at] == "merge" && requested_at(&tokens, at))
+        })
 }
 
 /// A hold word, or a negated one ("don't", "isn't", "shouldn't").
@@ -108,19 +209,31 @@ fn polite_request(message: &str, words: &[String]) -> bool {
         && says_merge(words)
 }
 
-/// Whether `reply` proposed merging the session: a question that says merge and names the
-/// session branch or its base.
+/// Whether `reply` offered the session's merge: a question that opens with the offer ("Merge
+/// …?", "Shall I merge …?"), names the session branch or its base, and holds no hold, negation
+/// or alternative.
 pub(super) fn proposes(reply: &str, branch: &str, base: &str) -> bool {
     let reply = normalize(reply);
-    let (branch, base) = (normalize(branch), normalize(base));
+    let (branch, base) = (words(&normalize(branch)), words(&normalize(base)));
     let mut questions: Vec<&str> = reply.split('?').collect();
     // The text after the last question mark asks nothing.
     questions.pop();
     questions.into_iter().any(|before| {
-        let sentence = before.rsplit(['.', '!', '\n']).next().unwrap_or(before);
-        says_merge(&words(sentence))
-            && ((!base.is_empty() && sentence.contains(&base))
-                || (!branch.is_empty() && sentence.contains(&branch)))
+        let sentence = before
+            .rsplit(['.', '!', ';', ':', '\n'])
+            .next()
+            .unwrap_or(before);
+        let words = words(sentence);
+        let Some(at) = words.iter().position(|word| word == "merge") else {
+            return false;
+        };
+        words[..at]
+            .iter()
+            .all(|word| PROPOSAL_LEADS.contains(&word.as_str()))
+            && !words
+                .iter()
+                .any(|word| holds(word) || PROPOSAL_HOLDS.contains(&word.as_str()))
+            && (contains_words(&words, &base) || contains_words(&words, &branch))
     })
 }
 
@@ -170,7 +283,7 @@ pub(super) fn check(
             "the user's latest message puts a condition on it (\"{word}\"); merge only on a plain yes once it is met"
         ));
     }
-    if says_merge(&quoted_words) {
+    if requests_merge(&message, &quoted_words) {
         return Ok(());
     }
     let agrees = |words: &[String]| words.iter().all(|word| AGREEMENT.contains(&word.as_str()));
@@ -274,6 +387,60 @@ mod tests {
         assert!(!ok("\"\"", "merge it", None));
         // A yes inside a longer message is not a plain yes.
         assert!(!ok("yes", "yes, and also rename the flag", Some(PROPOSAL)));
+    }
+
+    #[test]
+    fn only_a_request_for_the_merge_counts_not_the_word() {
+        for (quoted, latest) in [
+            ("merge", "Explain the merge strategy"),
+            ("merge strategy", "Explain the merge strategy"),
+            ("merged it", "I merged it"),
+            ("merger", "the merger looks fine"),
+            ("merge it", "how do I merge it"),
+            ("merge", "the merge conflict is gone"),
+            ("merge", "merge conflicts are annoying"),
+        ] {
+            assert!(!ok(quoted, latest, None), "{latest}");
+        }
+        for (quoted, latest) in [
+            ("merge this", "merge this"),
+            ("merge the session", "Merge the session."),
+            ("merge the branch into main", "merge the branch into main"),
+            ("merge into main", "Merge into main"),
+            ("go ahead and merge", "go ahead and merge"),
+            ("please merge", "please merge"),
+            ("can you merge it", "can you merge it?"),
+            ("could you merge it", "Could you merge it please"),
+            ("then merge it", "commit it then merge it"),
+            (
+                "then merge it into main",
+                "Create THIRD.md and commit it yourself, then merge it into main.",
+            ),
+            ("merge", "Add notes and merge."),
+        ] {
+            assert!(ok(quoted, latest, None), "{latest}");
+        }
+    }
+
+    #[test]
+    fn a_proposal_to_wait_or_to_choose_is_no_offer_to_merge() {
+        for reply in [
+            "Should I wait to merge into main?",
+            "Merge into `main`, or keep it on its branch?",
+            "Shall I merge it into main later?",
+            "Should I not merge into main?",
+            "Merge into main after the tests?",
+            "Do you want me to hold off and merge into main tomorrow instead?",
+        ] {
+            assert!(!ok("yes", "yes", Some(reply)), "{reply}");
+        }
+        for reply in [
+            "Do you want me to merge it into `main`?",
+            "Ready to merge into main?",
+            "All landed. Shall I merge `brigadier/s1/session` into `main`?",
+        ] {
+            assert!(ok("yes", "yes", Some(reply)), "{reply}");
+        }
     }
 
     #[test]

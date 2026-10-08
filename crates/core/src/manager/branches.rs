@@ -44,7 +44,6 @@ impl SessionManager {
             return Err(Error::Invalid("the message is empty".into()));
         }
         let conv = self.conv(&id)?;
-        conv.note_user_wrote().await;
         let messages = self.core.all_messages(&id).await?;
         let at = messages
             .iter()
@@ -74,15 +73,14 @@ impl SessionManager {
             &text,
             attachments.as_deref().unwrap_or(&original.attachments),
         );
-        let edited = self
-            .core
-            .append_user_message_under(
+        let edited = conv
+            .user_write(self.core.append_user_message_under(
                 id.clone(),
                 text,
                 attachments,
                 original.mentions.clone(),
                 Some(parent),
-            )
+            ))
             .await;
         match edited {
             Ok(message) => conv.carry(Some(message), note).await,
@@ -288,13 +286,18 @@ impl SessionManager {
     }
 }
 
-/// Whether anything a request started has landed, or is landing with the user's approval.
+/// Whether anything a request started has landed, or is landing with the user's approval, or
+/// it merged the session (the merge it asked for, or one made while it was served).
 fn landed(board: &Board, request: &str) -> bool {
     let of = |id: &Option<String>| id.as_deref() == Some(request);
     board
         .tasks
         .values()
         .any(|task| of(&task.request_id) && task.state == crate::work::TaskState::Landed)
+        || board.orchestrator_steps.iter().any(|step| {
+            matches!(&step.kind, crate::work::OrchestratorStepKind::Merged { asked_in, .. }
+                if of(asked_in) || of(&step.request_id))
+        })
         || board.approvals.values().any(|approval| {
             of(&approval.request_id)
                 && matches!(approval.state, CardState::Allowed { .. })
@@ -321,6 +324,30 @@ fn edited_attachments(text: &str, attachments: &[AttachmentRef]) -> Vec<Attachme
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_request_whose_words_merged_the_session_is_no_longer_reworkable() {
+        let merged =
+            |asked_in: Option<&str>, request_id: Option<&str>| crate::work::OrchestratorStep {
+                request_id: request_id.map(str::to_owned),
+                kind: crate::work::OrchestratorStepKind::Merged {
+                    branch: "brigadier/s1/session".into(),
+                    base: "main".into(),
+                    commits: 1,
+                    asked_in: asked_in.map(str::to_owned),
+                },
+                at_ms: 1,
+                position: 1,
+            };
+        let mut board = Board::default();
+        assert!(!landed(&board, "r2"));
+        board
+            .orchestrator_steps
+            .push(merged(Some("r2"), Some("r1")));
+        assert!(landed(&board, "r2"), "the merge its words asked for");
+        assert!(landed(&board, "r1"), "the request the merging turn served");
+        assert!(!landed(&board, "r3"));
+    }
 
     #[test]
     fn editing_keeps_rows_and_only_inline_refs_with_tokens() {

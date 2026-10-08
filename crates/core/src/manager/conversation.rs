@@ -252,9 +252,9 @@ pub(crate) struct ConvLive {
     /// Held while waiting messages are routed again, so a timer and a routing change never
     /// both start a model for them.
     retry: tokio::sync::Mutex<()>,
-    /// How many times the user wrote (sent, edited, steered a queued message). A merge holds
-    /// it from its last look at the user's consent until it lands, so a "wait" sent meanwhile
-    /// either stops it or comes after it.
+    /// How many times the user wrote: a message or a queue item stored (sent, edited, moved
+    /// from the queue). Held while each is stored, and by a merge from its last look at the
+    /// user's consent until it lands, so a "wait" sent meanwhile either stops it or comes after.
     pub(super) user_wrote: tokio::sync::Mutex<u64>,
     /// Tests: what a merge waits for once prepared, before its last look at consent.
     #[cfg(test)]
@@ -284,9 +284,17 @@ impl ConvLive {
         }
     }
 
-    /// Counts what the user wrote, waiting while a merge lands.
-    pub(super) async fn note_user_wrote(&self) {
-        *self.user_wrote.lock().await += 1;
+    /// Stores what the user wrote (`write`: a message or a queue item) and counts it, as one
+    /// step for a merge's look at their consent: a merge sees either the write or the count.
+    /// Waits while a merge lands.
+    pub(super) async fn user_write<T>(
+        &self,
+        write: impl std::future::Future<Output = Result<T>>,
+    ) -> Result<T> {
+        let mut wrote = self.user_wrote.lock().await;
+        let stored = write.await;
+        *wrote += 1;
+        stored
     }
 
     /// Holds what a tool call of the thread read or searched for the turn; the batch to record
@@ -575,7 +583,6 @@ impl SessionManager {
     ) -> Result<SendOutcome> {
         self.admit()?;
         let conversation = self.core.conversation(&id)?;
-        self.conv(&id)?.note_user_wrote().await;
         match conversation.lifecycle {
             Lifecycle::Archived => {
                 return Err(Error::Invalid(
@@ -698,17 +705,37 @@ impl SessionManager {
         self.kick(conv);
     }
 
+    /// Changes a queued message, as the user wrote it again: counted like a new message, so a
+    /// merge being prepared sees it.
+    pub async fn edit_queued(
+        &self,
+        id: &ConversationId,
+        item_id: &str,
+        text: String,
+        attachments: Vec<AttachmentRef>,
+        mentions: Vec<Mention>,
+    ) -> Result<crate::work::MessageQueue> {
+        self.conv(id)?
+            .user_write(
+                self.core
+                    .edit_queued(id, item_id, text, attachments, mentions),
+            )
+            .await
+    }
+
     /// Sends a queued message now, into the running turn or a session's working answer (or
     /// as a new turn when nothing works).
     pub async fn steer_queued(&self, id: ConversationId, item_id: String) -> Result<()> {
         self.admit()?;
         let conv = self.conv(&id)?;
-        conv.note_user_wrote().await;
         let working = self.working_request(&id).await;
-        let item = self.core.take_queued(&id, &item_id).await?;
-        let message = self
-            .core
-            .append_user_message(id.clone(), item.text, item.attachments, item.mentions)
+        let message = conv
+            .user_write(async {
+                let item = self.core.take_queued(&id, &item_id).await?;
+                self.core
+                    .append_user_message(id.clone(), item.text, item.attachments, item.mentions)
+                    .await
+            })
             .await?;
         self.join_working(&conv, message, working).await;
         Ok(())
@@ -735,17 +762,21 @@ impl SessionManager {
             state.busy
         };
         if steer && (busy || working.is_some()) {
-            let message = self
-                .core
-                .append_user_message(id.clone(), text, attachments, mentions)
+            let message = conv
+                .user_write(
+                    self.core
+                        .append_user_message(id.clone(), text, attachments, mentions),
+                )
                 .await?;
             self.join_working(conv, message.clone(), working).await;
             return Ok(SendOutcome::Sent(message));
         }
         if let Some(working) = working.filter(|_| !paused) {
-            let item = self
-                .core
-                .enqueue(id, text, attachments, mentions, queue_index, true)
+            let item = conv
+                .user_write(
+                    self.core
+                        .enqueue(id, text, attachments, mentions, queue_index, true),
+                )
                 .await?;
             self.ask_follow_up(conv, &item, working).await;
             return Ok(SendOutcome::Queued(item));
@@ -753,15 +784,19 @@ impl SessionManager {
         if busy || paused {
             // An older request's turn runs (the newest answer is done), or the queue is paused:
             // it waits for its own turn.
-            let item = self
-                .core
-                .enqueue(id, text, attachments, mentions, queue_index, false)
+            let item = conv
+                .user_write(
+                    self.core
+                        .enqueue(id, text, attachments, mentions, queue_index, false),
+                )
                 .await?;
             return Ok(SendOutcome::Queued(item));
         }
-        let message = self
-            .core
-            .append_user_message(id.clone(), text, attachments, mentions)
+        let message = conv
+            .user_write(
+                self.core
+                    .append_user_message(id.clone(), text, attachments, mentions),
+            )
             .await?;
         conv.state.lock().await.pending.push(message.clone());
         self.kick(conv);
@@ -904,10 +939,13 @@ impl SessionManager {
             );
         }
         let working = self.working_request(id).await;
-        let item = self.core.take_queued(id, item_id).await?;
-        let message = self
-            .core
-            .append_user_message(id.clone(), item.text, item.attachments, item.mentions)
+        let message = conv
+            .user_write(async {
+                let item = self.core.take_queued(id, item_id).await?;
+                self.core
+                    .append_user_message(id.clone(), item.text, item.attachments, item.mentions)
+                    .await
+            })
             .await?;
         self.join_working(&conv, message, working).await;
         Ok(
@@ -935,21 +973,33 @@ impl SessionManager {
         if !ready {
             return false;
         }
-        match self.core.pop_queued(&conv.id).await {
-            Ok(Some(item)) => match self
-                .core
-                .append_user_message(conv.id.clone(), item.text, item.attachments, item.mentions)
-                .await
-            {
-                Ok(message) => {
-                    state.pending.push(message);
-                    true
-                }
-                Err(err) => {
-                    tracing::warn!(conversation = %conv.id, error = %err, "could not send a queued message");
-                    false
-                }
-            },
+        // The queue's next item becomes the user's message in one step for a merge's look.
+        let popped = conv
+            .user_write(async {
+                let Some(item) = self.core.pop_queued(&conv.id).await? else {
+                    return Ok(None);
+                };
+                Ok(Some(
+                    self.core
+                        .append_user_message(
+                            conv.id.clone(),
+                            item.text,
+                            item.attachments,
+                            item.mentions,
+                        )
+                        .await,
+                ))
+            })
+            .await;
+        match popped {
+            Ok(Some(Ok(message))) => {
+                state.pending.push(message);
+                true
+            }
+            Ok(Some(Err(err))) => {
+                tracing::warn!(conversation = %conv.id, error = %err, "could not send a queued message");
+                false
+            }
             Ok(None) => false,
             Err(err) => {
                 tracing::warn!(conversation = %conv.id, error = %err, "could not read the queue");
