@@ -103,21 +103,38 @@ for w in workers:
     else:
         add(f"{wid} {title}", "worker", agent, "UNKNOWN-" + wid)
 
+# snap.py's hard links (<arm>/snap/): sessions a worker's dev daemon deleted afterwards.
+SNAP = arm + "/snap"
+
+
+def claude_cwd(f):
+    for i, line in enumerate(open(f, errors="replace")):
+        if i > 50: break
+        try: cwd = json.loads(line).get("cwd")
+        except ValueError: continue
+        if cwd: return cwd
+    return ""
+
+
 for d in also:
     for c in spellings(d) | {d.rstrip("/")}:
         checkouts.add(c)
         slug = re.sub(r"[^A-Za-z0-9]", "-", c)
-        for f in sorted(glob.glob(f"{H}/.claude/projects/{slug}*/*.jsonl")):
+        for f in sorted(glob.glob(f"{H}/.claude/projects/{slug}*/*.jsonl")) + sorted(glob.glob(f"{SNAP}/claude/*.jsonl")):
+            if "/snap/" in f and not (claude_cwd(f) == c or claude_cwd(f).startswith(c + "/")):
+                continue
             if os.path.getmtime(f) * 1000 >= t0 and os.path.basename(f)[:-6] not in {s["id"] for s in out}:
                 add(f"dev app {os.path.basename(os.path.dirname(f))[:60]}", "worker-dev-app", "claude",
                     os.path.basename(f)[:-6], {"dir": os.path.dirname(f)})
 
 listed = {s["id"] for s in out}
 finals = {}; elsewhere = []
-for f in glob.glob(f"{H}/.codex/sessions/*/*/*/rollout-*.jsonl"):
+for f in glob.glob(f"{H}/.codex/sessions/*/*/*/rollout-*.jsonl") + glob.glob(f"{SNAP}/codex/rollout-*.jsonl"):
     if os.path.getmtime(f) * 1000 < t0:
         continue
     p = json.loads(open(f).readline()).get("payload", {})
+    if p.get("id") in finals:
+        continue
     if not (t0 <= ts(p.get("timestamp", "1970-01-01T00:00:00Z")) <= end):
         continue
     last = None
@@ -137,7 +154,7 @@ for f in glob.glob(f"{H}/.codex/sessions/*/*/*/rollout-*.jsonl"):
 # Descendants, recursively and whatever their cwd: every Codex thread whose rollout names a counted
 # thread as its parent (a review's subagent, an auto-review "guardian", a spawned agent).
 metas = {}
-for f in glob.glob(f"{H}/.codex/sessions/*/*/*/rollout-*.jsonl"):
+for f in glob.glob(f"{H}/.codex/sessions/*/*/*/rollout-*.jsonl") + glob.glob(f"{SNAP}/codex/rollout-*.jsonl"):
     if os.path.getmtime(f) * 1000 < t0:
         continue
     try:

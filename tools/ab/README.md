@@ -42,6 +42,10 @@ Brigadier (a dev daemon built from the code under test):
     tools/ab/times.py delegator $AB/<arm> --manifest $AB/<arm>/manifest.json --tip <sha> --branch <name>
     tools/ab/tokens.py $AB/<arm>/manifest.json <t0_ms> <settled_ms> --json $AB/<arm>/tokens.json
 
+Both kinds, from before t0 to settlement (phase 6): `tools/ab/snap.py $AB/<arm> &` hard-links every
+session file written on the machine, because a worker's own dev daemon (or the arm's daemon) deletes
+its sessions at cleanup; `dlg_manifest.py`, `audit.py` and `tokens.py` (`KEEP=$AB/<arm>/snap`) read it.
+
 Both kinds, after settlement (phase 6):
 
     tools/ab/audit.py $AB/<arm> <settled_ms>      # every session started in the window: counted, or explained in audit-other.json

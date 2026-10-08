@@ -4,6 +4,7 @@ between t0 and the end, set against the arm's manifest. Each one not counted for
 explained in <arm>/audit-other.json ({"<id>": "<why it isn't the arm's>"}, e.g. the Delegator's
 own coordinator, the w24 measuring session, the evaluator's probes). An unexplained one makes the
 evidence incomplete: it is listed and the script exits 3.
+Sessions a daemon deleted are seen through snap.py's links in <arm>/snap/ (run it during the arm).
 usage: audit.py <arm-dir> <end_ms>   (reads <arm>/manifest.json, list or {"sessions": [...]})"""
 import datetime, glob, json, os, sys
 
@@ -36,16 +37,23 @@ def claude_first(f):
     return start, cwd, (text or "")[:160].replace("\n", " ")
 
 
-rows = []
-for f in glob.glob(f"{H}/.claude/projects/*/*.jsonl"):
+rows = []; done_ids = set()
+snap = os.path.join(arm, "snap")  # snap.py's hard links: sessions a daemon deleted afterwards
+claude_files = glob.glob(f"{H}/.claude/projects/*/*.jsonl") + glob.glob(f"{snap}/claude/*.jsonl")
+codex_files = glob.glob(f"{H}/.codex/sessions/*/*/*/rollout-*.jsonl") + glob.glob(f"{snap}/codex/rollout-*.jsonl")
+for f in claude_files:
+    if os.path.basename(f)[:-6] in done_ids: continue
+    done_ids.add(os.path.basename(f)[:-6])
     if os.path.getmtime(f) * 1000 < t0: continue
     start, cwd, text = claude_first(f)
     if start is None or not (t0 <= start <= end): continue
     rows.append(("claude", os.path.basename(f)[:-6], start, cwd, text))
-for f in glob.glob(f"{H}/.codex/sessions/*/*/*/rollout-*.jsonl"):
+for f in codex_files:
     if os.path.getmtime(f) * 1000 < t0: continue
     try: p = json.loads(open(f).readline())["payload"]
     except (ValueError, KeyError): continue
+    if p["id"] in done_ids: continue
+    done_ids.add(p["id"])
     start = ms(p.get("timestamp", "1970-01-01T00:00:00Z"))
     if t0 <= start <= end:
         rows.append(("codex", p["id"], start, p.get("cwd"), f"parent={p.get('parent_thread_id')} source={p.get('source')}"))
