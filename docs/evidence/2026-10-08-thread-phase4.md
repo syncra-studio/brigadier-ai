@@ -13,7 +13,7 @@ ran through the daemon's own PTY (`openWorkerTerminal`, `writeTerminal`).
 |---|---|
 | After merge, the session worktree and branch are gone; the next message gets a fresh branch from the base tip, and the thread resumes (not reborn) | **Pass**, in flow tests and live on a real Claude thread (below) |
 | "Open in terminal" round trip for a Claude worker and a Codex worker: earlier turns visible, an edit made there shows up in the headless report, no two writers | **Pass** for both vendors (below) |
-| Longest stretch with only "Thinking" in T1 ≤ 5 s | See "T1" below |
+| Longest stretch with only "Thinking" in T1 ≤ 5 s | **Pass**: 3 s (0:02–0:05), 4 s in all; no stretch over 30 s (`tools/ab/replay/run.mjs` on the recorded run, through the app code at this branch) |
 
 ## Merge cleanup (Q9)
 
@@ -88,4 +88,50 @@ the teardown fence each made a test fail.
 
 ## T1
 
-To be filled in after the run.
+One run (arm `/tmp/brig-ab-1007/t1-p4`, cloned and warmed with `clone.sh` and `warm.sh`), daemon
+built at `f2f9ff8e`, Full access, the thread on Opus 5.5 high as in phases 2 and 3. Commands:
+`send.py`, `reqdone.sh`, `times.py brigadier`, `armtokens.sh <arm> 1791424301416`,
+`check.sh <arm> tasks/t1.md 79b82f27`, `ARM=<arm> APP=apps/desktop node tools/ab/replay/run.mjs`.
+Conditions at the start: Claude 5-hour window 48% used, Codex 5%; load 2.6; no thermal warning.
+The behaviour probes P1.1–P1.4 were not run (Computer Use), as in phases 1 to 3.
+
+| | Phase 3 run 2 | Phase 4 |
+|---|---|---|
+| Landed (s) | 403.9 | **412.0** (+8.1) |
+| Final answer (s) | 419.9 | 422.7 (+2.8) |
+| Settled (s) | 419.9 | 422.7 |
+| Landed tip; frozen checks | `e63a1a98`, pass | `79b82f27`, pass (install, typecheck, lint, test: all exit 0) |
+| Longest only "Thinking" (replay) | 5 s | **3 s** |
+| Tokens raw (`turn_usage`) | 2,550,273 | **2,903,060** (1.14×) |
+| Without cache reads | 178,735 | 182,300 |
+| Claude thread, raw / without cache reads | 433,818 / 34,247 | 356,434 / 45,838 |
+| Claude worker | 1,938,023 / 99,944 | 2,380,424 / 105,684 |
+| Codex review (1) | 178,432 / 44,544 | 166,202 / 30,778 |
+| `turn_usage` against the transcripts | +0 | +0 |
+
+**Where the time went.**
+
+| Stage | Phase 3 run 2 | Phase 4 | Change |
+|---|---|---|---|
+| Thread writes the brief and delegates | 42.5 s | 29.2 s | −13.3 s |
+| `delegate_task` → worker running | 0.7 s | 0.7 s | 0 |
+| Worker running → reported | 352.5 s | 375.2 s | +22.7 s |
+| of which waiting on its own code review at the end | 39.3 s | 36.4 s (review 321.3–362.4 s) | −2.9 s |
+| Reported → landed | 8.6 s | 7.3 s | −1.3 s |
+
+**Where the tokens went** (Claude transcripts, per model call):
+
+| | Calls | First call's context | Average context | Output |
+|---|---|---|---|---|
+| Worker, phase 3 run 2 | 31 | 26,147 | 61,661 | 26,540 |
+| Worker, phase 4 | 35 | 25,234 | 67,318 | 24,300 |
+| Thread, phase 3 run 2 | 12 | 22,571 | 35,811 | 4,082 |
+| Thread, phase 4 | 11 | 22,412 | 32,099 | 3,344 |
+
+**Engine or worker behaviour.** Phase 4 doesn't change what a worker or the thread is given:
+the worker's first call is 0.9k tokens smaller than in phase 3 run 2, and the first event is the
+same 0.7 s. The +8.1 s and +0.35M raw are the worker's own choices: 4 more calls (about +0.25M at
+phase 3's average context) and larger reads (+5.7k average context per call, about +0.20M). The
+thread was faster and used fewer raw tokens (−13.3 s, −77k raw, though +11.6k without cache reads). Phase 3's two runs on nearly the same engine were
+183 s and 2.3M tokens apart, so a difference of this size between single runs is inside
+worker-behaviour variance and says nothing about phase 4's code.
