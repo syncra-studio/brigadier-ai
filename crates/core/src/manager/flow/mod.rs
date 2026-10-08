@@ -53,7 +53,12 @@ pub(crate) struct Turn {
     events: mpsc::Sender<ProviderEvent>,
     answers: Answers,
     steers: Steers,
+    stops: Stops,
 }
+
+/// The user's Stop of a session's running turn: the turn may wait for it ([`Turn::stopped`]),
+/// and then ends as interrupted.
+type Stops = Arc<(std::sync::atomic::AtomicBool, tokio::sync::Notify)>;
 
 /// What was steered into a session's running turn, for the turn to read.
 type Steers = Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<String>>>;
@@ -162,6 +167,22 @@ impl Turn {
                 window_tokens: Some(1_000_000),
             })
             .await;
+    }
+
+    /// Waits for the user's Stop of this turn (`false`: none came in time). The turn then ends
+    /// as interrupted, whatever it replies.
+    pub async fn stopped(&self) -> bool {
+        let (stopped, notify) = &*self.stops;
+        let wait = async {
+            loop {
+                let notified = notify.notified();
+                if stopped.load(std::sync::atomic::Ordering::SeqCst) {
+                    break;
+                }
+                notified.await;
+            }
+        };
+        tokio::time::timeout(PATIENCE, wait).await.is_ok()
     }
 
     /// Reports `event` as the session's CLI would, mid-turn.
@@ -409,6 +430,7 @@ impl Provider for FakeCli {
                 answers: Answers::default(),
                 brief: Mutex::new(None),
                 running: Arc::default(),
+                stops: Arc::default(),
                 steer_tx,
                 steers: Arc::new(tokio::sync::Mutex::new(steers)),
             });
@@ -457,6 +479,7 @@ struct FakeSession {
     /// Steers into a running turn, which the turn may read ([`Turn::steered`]).
     steer_tx: mpsc::UnboundedSender<String>,
     steers: Steers,
+    stops: Stops,
 }
 
 impl FakeSession {
@@ -526,10 +549,13 @@ impl ProviderSession for FakeSession {
                 events: tx.clone(),
                 answers: self.answers.clone(),
                 steers: self.steers.clone(),
+                stops: self.stops.clone(),
             };
             let script = self.script.clone();
             let running = self.running.clone();
             running.store(true, std::sync::atomic::Ordering::SeqCst);
+            let stops = self.stops.clone();
+            stops.0.store(false, std::sync::atomic::Ordering::SeqCst);
             tokio::spawn(async move {
                 let _ = tx.send(ProviderEvent::TurnStarted { turn_id: None }).await;
                 let reply = script(turn).await;
@@ -551,10 +577,15 @@ impl ProviderSession for FakeSession {
                         .await;
                 }
                 running.store(false, std::sync::atomic::Ordering::SeqCst);
+                let status = if stops.0.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    TurnStatus::Interrupted
+                } else {
+                    TurnStatus::Completed
+                };
                 let _ = tx
                     .send(ProviderEvent::TurnCompleted {
                         turn_id: None,
-                        status: TurnStatus::Completed,
+                        status,
                         duration_ms: Some(1),
                         usage: None,
                     })
@@ -575,6 +606,12 @@ impl ProviderSession for FakeSession {
     }
 
     fn interrupt(&self) -> BoxFuture<'_, brigadier_providers::Result<()>> {
+        if self.running.load(std::sync::atomic::Ordering::SeqCst) {
+            self.stops
+                .0
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.stops.1.notify_waiters();
+        }
         Box::pin(async { Ok(()) })
     }
 

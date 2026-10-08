@@ -110,6 +110,7 @@ const WORDS: Record<string, Words> = {
   Bash: words("run", "Running a command", "Ran a command"),
   run: words("run", "Running a command", "Ran a command"),
   run_unsandboxed: words("run", "Running a command", "Ran a command"),
+  run_check: words("run", "Running checks", "Ran checks"),
   start_preview: words("run", "Starting a preview", "Started a preview"),
   stop_preview: words("run", "Stopping a preview", "Stopped a preview"),
   preview_log: words(

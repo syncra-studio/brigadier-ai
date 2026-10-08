@@ -186,6 +186,14 @@ test("the thread's own steps name what they act on", () => {
     "Ran pnpm test",
   );
   assert.equal(
+    toolWords(call("mcp__brigadier__run_check", "inProgress", "cargo test")),
+    "Running cargo test",
+  );
+  assert.equal(
+    toolWords(call("mcp__brigadier__run_check", "completed")),
+    "Ran checks",
+  );
+  assert.equal(
     toolWords(call("shell", "failed", "cargo build")),
     "Ran cargo build — failed",
   );

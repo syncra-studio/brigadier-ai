@@ -166,3 +166,23 @@ test("a worker's live line says what it does in plain words, never a raw tool na
   assert.equal(live({ type: "toolCall", itemId: "y", name: "mcp__brigadier__project_map", input: null, status: "inProgress", output: null }),
     "Mapping the project");
 });
+
+test("the thread's own tool steps show as their rows, never as Thinking or a worker", () => {
+  for (const name of ["Bash", "Read", "Edit", "mcp__brigadier__run", "mcp__brigadier__run_check", "mcp__brigadier__start_preview",
+    "mcp__brigadier__preview_log", "mcp__brigadier__review_code", "shell", "apply_patch"]) {
+    assert.deepEqual(threadStatus(input({ ...leading, orchestratorSteps: [call(name)] })), { head: null, workers: [], more: 0 }, name);
+  }
+  // Once the step is done the thread thinks again.
+  const done = { ...call("Bash"), kind: { type: "tool", name: "Bash", status: "completed" } } as unknown as OrchestratorStep;
+  assert.deepEqual(head(input({ ...leading, orchestratorSteps: [done] })), { text: "Thinking", tone: "busy" });
+  // Another request's running step doesn't hide this one's line.
+  assert.deepEqual(head(input({ ...leading, orchestratorSteps: [{ ...call("Bash"), requestId: "r0" }] })), { text: "Thinking", tone: "busy" });
+});
+
+test("a running preview or review is no worker: over requests show nothing, the findings turn shows its line", () => {
+  // The answer is out (the daemon keeps the request done while a preview or review runs).
+  assert.deepEqual(threadStatus(input({}, { state: "done" })), { head: null, workers: [], more: 0 });
+  // The review's findings start a turn for the same request: it works and says so.
+  assert.deepEqual(threadStatus(input(leading)), { head: { text: "Thinking", tone: "busy" }, workers: [], more: 0 });
+  assert.deepEqual(head(input({ run: "starting", runRequest: "r1" })), { text: "Starting", tone: "busy" });
+});

@@ -289,6 +289,70 @@ async fn a_preview_that_ends_at_once_says_how() {
     flow.stop().await;
 }
 
+/// A preview the user stopped from its chip, or one that ended on its own, reaches the thread
+/// as a `[preview]` note with the user's next message, so it never answers "already running".
+#[tokio::test]
+async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
+    let replies: Replies = Arc::default();
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let inner = thread(replies);
+    let heard = inputs.clone();
+    let flow = Flow::start(
+        "preview-notes",
+        Options::default(),
+        script(move |turn| {
+            if turn.is_orchestrator() {
+                heard.lock().unwrap().push(turn.input.clone());
+            }
+            inner(turn)
+        }),
+    )
+    .await;
+    let tmp = scratch("notes");
+    let pids = tmp.join("child.pid");
+
+    // The chip's Stop.
+    let (preview, child) = start(&flow, &pids).await;
+    flow.settled().await;
+    flow.manager
+        .stop_preview(flow.conversation.clone(), Some(preview.id.clone()))
+        .await
+        .unwrap();
+    gone(&flow, child).await;
+    flow.say("Is the site up?").await;
+    flow.settled().await;
+    let last = inputs.lock().unwrap().last().cloned().unwrap();
+    assert!(last.contains("Is the site up?"), "{last}");
+    assert!(
+        last.contains(&format!(
+            "[preview] {} \"site\" was stopped by the user",
+            preview.id
+        )),
+        "{last}"
+    );
+
+    // An end on its own, after the start answered.
+    flow.say("start sleep 2; exit 4").await;
+    flow.until("the preview to exit", |board| {
+        board
+            .previews
+            .values()
+            .any(|preview| matches!(preview.state, PreviewState::Exited { .. }))
+    })
+    .await;
+    flow.settled().await;
+    flow.say("And now?").await;
+    flow.settled().await;
+    let last = inputs.lock().unwrap().last().cloned().unwrap();
+    assert!(last.contains("ended on its own (exit 4)"), "{last}");
+    assert!(
+        !last.contains("was stopped by the user"),
+        "told once: {last}"
+    );
+    flow.stop().await;
+    std::fs::remove_dir_all(&tmp).unwrap();
+}
+
 /// The user's Stop, a change of the thread's workspace, and the merge of the session branch
 /// each stop the running previews.
 #[tokio::test]

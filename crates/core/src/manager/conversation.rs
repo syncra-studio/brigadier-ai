@@ -138,6 +138,12 @@ struct ConvState {
     /// The turn was sent and its CLI hasn't begun it yet: the run shows as starting until it
     /// has (a fresh CLI takes seconds to start; the live line says so rather than "Thinking").
     awaiting_start: bool,
+    /// The thread's commands (Bash, `run`, a Codex shell item) running in this turn.
+    commands: HashSet<String>,
+    /// The user stopped the turn while a command ran: its CLI is closed when the turn ends,
+    /// which ends that command's process tree (a CLI's interrupt can leave it running); the
+    /// next turn resumes the session.
+    end_commands: bool,
     /// The CLI is being closed on purpose (hibernate, archive, fallback).
     closing: bool,
     /// Envelopes for coming turns, each with the request it belongs to.
@@ -297,6 +303,16 @@ impl ConvLive {
             return None;
         }
         state.cli.clone()
+    }
+
+    /// Tracks the thread's command `item` by its `status` (see `ConvState::commands`).
+    async fn running_command(&self, item: &str, status: ItemStatus) {
+        let mut state = self.state.lock().await;
+        if status == ItemStatus::InProgress {
+            state.commands.insert(item.to_owned());
+        } else {
+            state.commands.remove(item);
+        }
     }
 
     /// Closes `cli` between turns, if it is still the conversation's and nothing runs: the
@@ -999,8 +1015,13 @@ impl SessionManager {
         if waiting {
             self.core.set_queue_paused(&id, true).await?;
         }
-        // The thread first, so it starts nothing more; then what it runs: its previews, a
-        // start of one still under way included, even if the CLI didn't take the interrupt.
+        // The thread first, so it starts nothing more; then what it runs: its commands (when
+        // the turn ends, see `end_commands`), its previews, a start of one still under way
+        // included, even if the CLI didn't take the interrupt.
+        {
+            let mut state = conv.state.lock().await;
+            state.end_commands = !state.commands.is_empty();
+        }
         let interrupted = match cli {
             Some(cli) => cli
                 .session
@@ -2591,6 +2612,9 @@ impl SessionManager {
             } => {
                 let name = name.rsplit("__").next().unwrap_or(name);
                 let name = name.rsplit('.').next().unwrap_or(name);
+                if matches!(name, "Bash" | "run" | "run_unsandboxed") {
+                    conv.running_command(item_id, *status).await;
+                }
                 let args: serde_json::Value = input
                     .as_deref()
                     .and_then(|input| serde_json::from_str(input).ok())
@@ -2636,6 +2660,7 @@ impl SessionManager {
                 status,
                 ..
             } => {
+                conv.running_command(item_id, *status).await;
                 let command = brigadier_providers::policy::unwrapped_command(command);
                 self.orchestrator_step(
                     &conv.id,
@@ -2849,8 +2874,18 @@ impl SessionManager {
             // this CLI, past the swap threshold.
             self.consider_rebirth(conv, cli).await;
         }
-        let (limit_hit, carried, asked, served) = {
+        let (limit_hit, carried, asked, served, end_commands) = {
             let mut state = conv.state.lock().await;
+            state.commands.clear();
+            // Taken now, so no turn starts on it in between (a stand-in closes it anyway).
+            let end_commands = (std::mem::take(&mut state.end_commands)
+                && state.limit_hit.is_none()
+                && state.cli.as_ref().is_some_and(|now| Arc::ptr_eq(now, cli)))
+            .then(|| {
+                state.closing = true;
+                state.cli.take()
+            })
+            .flatten();
             state.busy = false;
             state.compacting = false;
             state.last_activity_ms = now_ms();
@@ -2886,6 +2921,7 @@ impl SessionManager {
                 std::mem::take(&mut state.in_turn),
                 std::mem::take(&mut state.asked),
                 served,
+                end_commands,
             )
         };
         // Follow-ups the turn left undecided wait in the queue for their own turn.
@@ -2926,6 +2962,18 @@ impl SessionManager {
             && let Some(request) = &served
         {
             self.remind_undecided(conv, request).await;
+        }
+        if let Some(cli) = end_commands {
+            // Not from inside the CLI's own event pump: closing the CLI waits for it. The next
+            // turn waits for the close.
+            let (manager, conv) = (self.arc(), conv.clone());
+            self.spawn(async move {
+                cli.session.close().await;
+                cli.ended.cancelled().await;
+                conv.state.lock().await.closing = false;
+                manager.kick(&conv);
+            });
+            return;
         }
         self.kick(conv);
     }

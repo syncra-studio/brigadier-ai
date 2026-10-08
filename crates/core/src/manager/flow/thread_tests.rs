@@ -939,3 +939,192 @@ async fn a_merge_keeps_a_session_worktree_with_uncommitted_changes() {
     assert_eq!(session_worktree(&flow), worktree);
     flow.stop().await;
 }
+
+/// The user's Stop while the thread runs a command closes its CLI when the turn ends, so the
+/// command's process tree ends with it (a CLI's interrupt can leave it running); the next
+/// message resumes the same session. A Stop with no command running keeps the CLI.
+#[tokio::test]
+async fn a_stop_during_a_command_ends_it_and_the_next_message_resumes() {
+    let flow = Flow::start(
+        "thread-stop-command",
+        Options::default(),
+        script(move |turn| async move {
+            if turn.input.contains("Run the long command.") {
+                turn.emit(brigadier_providers::ProviderEvent::ToolCall {
+                    item_id: "bash-1".into(),
+                    name: "Bash".into(),
+                    input: Some(json!({ "command": "sleep 45" }).to_string()),
+                    status: brigadier_providers::ItemStatus::InProgress,
+                    output: None,
+                })
+                .await;
+                assert!(turn.stopped().await, "the user stops it");
+                return Reply::text("");
+            }
+            if turn.input.contains("Think a while.") {
+                assert!(turn.stopped().await, "the user stops it");
+                return Reply::text("");
+            }
+            Reply::text("Done.")
+        }),
+    )
+    .await;
+    flow.say("Hello.").await;
+    flow.settled().await;
+    let started = flow.thread_specs().len();
+
+    // No command runs: the CLI stays.
+    flow.say("Think a while.").await;
+    flow.until("the turn to run", |board| {
+        board.run == crate::work::RunState::Running
+    })
+    .await;
+    flow.manager
+        .interrupt(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.settled().await;
+    flow.say("Hello again.").await;
+    flow.settled().await;
+    assert_eq!(flow.thread_specs().len(), started, "no restart");
+
+    // A command runs: the CLI closes with it, and the next message resumes the session.
+    flow.say("Run the long command.").await;
+    flow.until("the command to run", |board| {
+        board.orchestrator_steps.iter().any(|step| {
+            matches!(&step.kind, crate::work::OrchestratorStepKind::Tool { item_id, .. } if item_id == "bash-1")
+        })
+    })
+    .await;
+    flow.manager
+        .interrupt(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.settled().await;
+    flow.say("Hello once more.").await;
+    flow.settled().await;
+    let specs = flow.thread_specs();
+    assert_eq!(specs.len(), started + 1, "one restart");
+    let first = specs[0].1.clone();
+    match &specs[started].1.origin {
+        Origin::Resume { native_id } => {
+            assert!(!native_id.is_empty());
+            assert_eq!(specs[started].1.cwd, first.cwd);
+        }
+        other => panic!("a resume, not {other:?}"),
+    }
+    flow.stop().await;
+}
+
+/// A preview left running and a review still under way after the thread answered don't keep
+/// the request working: its block is done and "Worked for" stops, and neither shows as a
+/// worker. The review's findings start a turn for the same request, which works (and shows its
+/// live line) until that turn ends.
+#[tokio::test]
+async fn a_running_preview_or_review_leaves_the_answer_done_and_findings_work_again() {
+    let review_gate = Arc::new(tokio::sync::Notify::new());
+    let findings_gate = Arc::new(tokio::sync::Notify::new());
+    let (review_wait, findings_wait) = (review_gate.clone(), findings_gate.clone());
+    let flow = Flow::start(
+        "thread-background-work",
+        Options {
+            reviews: Some(script(move |_| {
+                let gate = review_wait.clone();
+                async move {
+                    gate.notified().await;
+                    Reply::text("- [P2] NOTES.md has no title — NOTES.md:1\n  Add one.")
+                }
+            })),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let gate = findings_wait.clone();
+            async move {
+                if turn.input.contains("Add notes.") {
+                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                    let reply = turn
+                        .call(
+                            "start_preview",
+                            json!({ "command": "echo up; sleep 600", "name": "site" }),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Added NOTES.md; the site runs.");
+                }
+                if turn.input.contains("[review of your commits") {
+                    gate.notified().await;
+                    return Reply::text("Fixed the title.");
+                }
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add notes.").await;
+    let board = flow
+        .until("the answer done, the preview and review running", |board| {
+            board
+                .requests
+                .values()
+                .all(|request| request.state == crate::work::RequestState::Done)
+                && board
+                    .previews
+                    .values()
+                    .any(|preview| preview.state.is_running())
+                && board
+                    .reviews
+                    .values()
+                    .any(|review| review.state == crate::work::ReviewState::Running)
+        })
+        .await;
+    let request = board.requests.values().next().unwrap().clone();
+    assert!(
+        request.worked.iter().all(|span| span.to_ms.is_some()),
+        "Worked for stops: {:?}",
+        request.worked
+    );
+    assert!(board.tasks.is_empty(), "no worker: {:?}", board.tasks);
+    // Still done a moment later, while both run.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let board = flow.board().await;
+    assert_eq!(
+        board.requests[&request.id].state,
+        crate::work::RequestState::Done
+    );
+    assert_eq!(board.run, crate::work::RunState::Idle);
+
+    // The findings arrive: the same request works while the thread takes them in.
+    review_gate.notify_one();
+    let board = flow
+        .until("the findings turn to work", |board| {
+            board.requests[&request.id].state == crate::work::RequestState::Working
+                && board.run == crate::work::RunState::Running
+        })
+        .await;
+    assert_eq!(board.requests.len(), 1, "the same request");
+    assert!(
+        board.requests[&request.id]
+            .worked
+            .last()
+            .is_some_and(|span| span.to_ms.is_none()),
+        "a new span: {:?}",
+        board.requests[&request.id].worked
+    );
+    findings_gate.notify_one();
+    let board = flow
+        .until("the findings turn to end", |board| {
+            board.requests[&request.id].state == crate::work::RequestState::Done
+        })
+        .await;
+    assert!(
+        board.requests[&request.id]
+            .worked
+            .iter()
+            .all(|span| span.to_ms.is_some())
+    );
+    flow.manager
+        .stop_preview(flow.conversation.clone(), None)
+        .await
+        .unwrap();
+    flow.stop().await;
+}
