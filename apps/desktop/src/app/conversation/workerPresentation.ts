@@ -9,6 +9,14 @@ export function workerWorking(task: Task): boolean {
   return ["starting", "running", "landing"].includes(task.state);
 }
 
+/**
+ * Whether Stop all stops it: it runs or waits to run. The daemon's `stop_workers` stops the same
+ * states; a worker landing or ready to land finishes that instead.
+ */
+export function workerStoppable(task: Task): boolean {
+  return ["queued", "starting", "running", "blocked", "paused"].includes(task.state);
+}
+
 export function workerState(task: Task): string {
   if (task.state === "failed") return "failed";
   if (task.state === "stopped" || task.state === "rejected") return "stopped";

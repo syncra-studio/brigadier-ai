@@ -305,8 +305,8 @@ test("the lead managing its team shows: a message, an answer, a stop with its re
   assert.deepEqual(shown, ["row:started", "messaged", "answered", "stopped", "landed"]);
 });
 
-const node = (id: string, parentId: string | null, kind: ThreadNode["kind"]): ThreadNode =>
-  ({ id, parentId, kind, block: { user: null } as unknown as Block, head: null });
+const node = (id: string, parentId: string | null, kind: ThreadNode["kind"], state: Block["state"] = "done"): ThreadNode =>
+  ({ id, parentId, kind, block: { user: kind === "user" ? {} : null, state } as unknown as Block, head: null });
 
 test("a long thread folds its oldest turns, other versions of a folded turn with it", () => {
   // Turn n is a user node and its reply; turn 2 has a second version (an edit) branching off turn 1.
@@ -322,4 +322,18 @@ test("a long thread folds its oldest turns, other versions of a folded turn with
   assert.equal(folded.tree.nodes[0]?.parentId, null);
   // Short enough: nothing folds.
   assert.deepEqual(foldTurns(tree, 5), { tree, hidden: 0 });
+});
+
+test("a turn still waiting on the user keeps itself and every later turn out of the fold", () => {
+  // A reply's block carries its user message too (buildThread): turns are counted by user nodes only.
+  const nodes: ThreadNode[] = [];
+  for (let turn = 1; turn <= 5; turn += 1) {
+    const reply = node(`r${turn}`, `u${turn}`, "block", turn === 2 ? "waiting" : "done");
+    nodes.push(node(`u${turn}`, turn === 1 ? null : `r${turn - 1}`, "user"), { ...reply, block: { ...reply.block, user: {} } as Block });
+  }
+  const tree = { nodes, headId: "r5" };
+  const folded = foldTurns(tree, 2);
+  assert.equal(folded.hidden, 1);
+  assert.deepEqual(folded.tree.nodes.map((kept) => kept.id), ["u2", "r2", "u3", "r3", "u4", "r4", "u5", "r5"]);
+  assert.equal(foldTurns({ nodes: nodes.map((kept) => ({ ...kept, block: { ...kept.block, state: "done" } as Block })), headId: "r5" }, 2).hidden, 3);
 });

@@ -966,3 +966,39 @@ async fn an_untrusted_folder_stops_workers_above_ask_and_opens_terminals_under_i
     host.exit(&terminal);
     flow.stop().await;
 }
+
+/// Stop all looks at a worker again under its settle lock: one whose report won the race since
+/// Stop all read the board keeps its reported work, and no "Stopped" row is filed.
+#[tokio::test]
+async fn stop_all_spares_a_worker_whose_report_won_the_race() {
+    let (flow, _, _, _) = start("stop-all-report-race", ProviderKind::Claude, 1_000).await;
+    let mut stale = Flow::task(&flow.board().await, 1).clone();
+    assert_eq!(stale.state, TaskState::Reported);
+    // Stop all's look at the board from before the report was recorded.
+    stale.state = TaskState::Running;
+    assert!(
+        !flow
+            .manager
+            .stop_worker_if(
+                &flow.conversation,
+                &stale,
+                "Stopped by the user".into(),
+                crate::manager::workers::user_stoppable,
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        Flow::task(&flow.board().await, 1).state,
+        TaskState::Reported
+    );
+    // Nothing runs, so Stop all itself stops nothing.
+    assert!(
+        flow.manager
+            .stop_workers(flow.conversation.clone())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    flow.stop().await;
+}

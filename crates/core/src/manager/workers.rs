@@ -3400,12 +3400,12 @@ impl SessionManager {
     /// Stops a worker for good (`stop_worker`, or the user's stop button). Unfinished changes
     /// are kept on the task branch as a WIP commit.
     pub async fn stop_task(&self, task_id: TaskId) -> Result<()> {
-        self.stop_if_unfinished(task_id).await.map(drop)
+        self.stop_if(task_id, unfinished).await.map(drop)
     }
 
-    /// [`Self::stop_task`], saying whether it stopped it: false when it had already ended,
-    /// decided under its settle lock so a report recorded meanwhile counts as ended.
-    async fn stop_if_unfinished(&self, task_id: TaskId) -> Result<bool> {
+    /// [`Self::stop_task`] if its state still passes `eligible`, saying whether it stopped it.
+    /// Decided under its settle lock, so a report recorded meanwhile is judged by its new state.
+    async fn stop_if(&self, task_id: TaskId, eligible: fn(TaskState) -> bool) -> Result<bool> {
         let conversation_id = self.conversation_of_task(&task_id).await?;
         let live = self.existing_task_live(&task_id);
         // A report being recorded right now is recorded first (or not at all).
@@ -3414,7 +3414,7 @@ impl SessionManager {
             None => None,
         };
         let task = self.task_by_id(&conversation_id, &task_id).await?;
-        if task.state.is_final() {
+        if !eligible(task.state) {
             return Ok(false);
         }
         // Until it is recorded stopped, a landing that fails as its worktree goes hands
@@ -3436,8 +3436,21 @@ impl SessionManager {
         task: &Task,
         reason: String,
     ) -> Result<bool> {
-        // It may have finished since the caller looked: only a real stop is filed.
-        if !self.stop_if_unfinished(task.id.clone()).await? {
+        self.stop_worker_if(conversation_id, task, reason, unfinished)
+            .await
+    }
+
+    /// [`Self::stop_worker`] if its state, looked at again under its settle lock, passes
+    /// `eligible`.
+    pub(crate) async fn stop_worker_if(
+        &self,
+        conversation_id: &ConversationId,
+        task: &Task,
+        reason: String,
+        eligible: fn(TaskState) -> bool,
+    ) -> Result<bool> {
+        // It may have moved on since the caller looked: only a real stop is filed.
+        if !self.stop_if(task.id.clone(), eligible).await? {
             return Ok(false);
         }
         self.orchestrator_step(
@@ -3459,23 +3472,19 @@ impl SessionManager {
         let mut tasks: Vec<Task> = board
             .tasks
             .values()
-            .filter(|task| {
-                matches!(
-                    task.state,
-                    TaskState::Queued
-                        | TaskState::Starting
-                        | TaskState::Running
-                        | TaskState::Blocked
-                        | TaskState::Paused
-                )
-            })
+            .filter(|task| user_stoppable(task.state))
             .cloned()
             .collect();
         tasks.sort_by_key(|task| task.number);
         let mut stopped = Vec::new();
         for task in tasks {
             match self
-                .stop_worker(&conversation_id, &task, USER_STOP_REASON.to_owned())
+                .stop_worker_if(
+                    &conversation_id,
+                    &task,
+                    USER_STOP_REASON.to_owned(),
+                    user_stoppable,
+                )
                 .await
             {
                 Ok(true) => stopped.push(task),
@@ -4122,6 +4131,24 @@ fn continues_work(subject: &Task) -> bool {
 
 /// The reason a "Stopped" row gives for the user's Stop all.
 pub(crate) const USER_STOP_REASON: &str = "Stopped by the user";
+
+/// Whether a plain stop still stops a worker in `state`: it hasn't ended.
+fn unfinished(state: TaskState) -> bool {
+    !state.is_final()
+}
+
+/// Whether the user's Stop all stops a worker in `state`: it runs or waits to run. A worker that
+/// reported, or is landing or ready to land, keeps its work (the desktop's `workerStoppable`).
+pub(crate) fn user_stoppable(state: TaskState) -> bool {
+    matches!(
+        state,
+        TaskState::Queued
+            | TaskState::Starting
+            | TaskState::Running
+            | TaskState::Blocked
+            | TaskState::Paused
+    )
+}
 
 /// The orchestrator's note about the workers the user's Stop all stopped.
 fn stopped_note(tasks: &[Task]) -> String {

@@ -73,14 +73,13 @@ export const WorkersStrip: FC<{ conversationId: string }> = ({ conversationId })
   const json = useBoard((s) => {
     const board = s.board;
     if (board?.conversationId !== conversationId) return null;
-    const view = workersStrip(Object.values(board.tasks), Object.values(board.requests));
+    const view = workersStrip(Object.values(board.tasks), Object.values(board.requests), board.workerSteps);
     return view ? JSON.stringify(view) : null;
   });
   const view = useMemo(() => (json ? (JSON.parse(json) as ReturnType<typeof workersStrip>) : null), [json]);
   const [open, setOpen] = useState(false);
   const stop = useAction();
   if (!view) return null;
-  const live = view.working + view.waiting;
   return (
     <ComposerRailItem label="Workers">
       <div data-slot="workers-strip" data-state={open ? "open" : "closed"} className="group flex flex-col px-1 py-1">
@@ -97,7 +96,7 @@ export const WorkersStrip: FC<{ conversationId: string }> = ({ conversationId })
             <span className="min-w-0 truncate">{stripWords(view)}</span>
             <ChevronRight aria-hidden className={cn(CHEVRON, "-rotate-90 group-data-[state=open]:rotate-90")} />
           </button>
-          {live > 0 && (
+          {view.stoppable && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -112,7 +111,7 @@ export const WorkersStrip: FC<{ conversationId: string }> = ({ conversationId })
                   Stop all
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="top">Stop every worker in this session</TooltipContent>
+              <TooltipContent side="top">Stop every worker running or waiting to run</TooltipContent>
             </Tooltip>
           )}
         </div>

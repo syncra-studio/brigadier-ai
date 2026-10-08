@@ -738,8 +738,9 @@ export const SHOWN_TURNS = 30;
 
 /**
  * The thread with only its newest `keep` turns on the branch shown, and how many older turns
- * were left out. A turn starts at a node that holds a user message; other branches go with the
- * turn they branch off, so a left-out turn takes its other versions along.
+ * were left out. A turn starts at a user node; other branches go with the turn they branch off,
+ * so a left-out turn takes its other versions along. A turn still working or waiting on the user
+ * never folds, and neither does anything after it.
  */
 export function foldTurns(tree: ThreadTree, keep: number): { tree: ThreadTree; hidden: number } {
   const byId = new Map(tree.nodes.map((node) => [node.id, node]));
@@ -747,8 +748,10 @@ export function foldTurns(tree: ThreadTree, keep: number): { tree: ThreadTree; h
   for (let node = tree.headId ? byId.get(tree.headId) : undefined; node; node = node.parentId ? byId.get(node.parentId) : undefined) {
     path.unshift(node);
   }
-  const starts = path.flatMap((node, index) => (node.kind === "user" || node.block.user ? [index] : []));
-  const hidden = starts.length - keep;
+  const starts = path.flatMap((node, index) => (node.kind === "user" ? [index] : []));
+  const open = path.findIndex((node) => node.kind === "block" && (node.block.state === "working" || node.block.state === "waiting"));
+  const openTurn = open < 0 ? starts.length : starts.filter((start) => start <= open).length - 1;
+  const hidden = Math.min(starts.length - keep, openTurn);
   const first = path[starts[hidden] ?? -1];
   if (hidden <= 0 || !first) return { tree, hidden: 0 };
   // A node stays when its line of parents reaches the first turn kept.

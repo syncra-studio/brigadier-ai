@@ -1,5 +1,5 @@
-import { workerDone, workerWorking } from "@/app/conversation/workerPresentation";
-import type { Task, UserRequest } from "@/ipc/generated";
+import { workerDone, workerStoppable, workerWorking } from "@/app/conversation/workerPresentation";
+import type { Task, UserRequest, WorkerStep } from "@/ipc/generated";
 
 /** What the Workers strip on the composer shows (THREAD-UX-PLAN.md §3.5). */
 export type StripView = {
@@ -8,17 +8,31 @@ export type StripView = {
   working: number;
   waiting: number;
   done: number;
+  /** Whether Stop all has anything to stop. */
+  stoppable: boolean;
 };
+
+const ENDINGS = new Set<WorkerStep["kind"]>(["finished", "landed", "rejected", "stopped", "failed"]);
+
+/** When a worker last finished: its last ending step, not its last update (a restore updates it). */
+function finishedAtMs(task: Task, steps: readonly WorkerStep[]): number {
+  const ends = steps.filter((step) => step.taskId === task.id && ENDINGS.has(step.kind)).map((step) => step.atMs);
+  return ends.length > 0 ? Math.max(...ends) : task.updatedAtMs;
+}
 
 /**
  * The session's workers the strip is about: every worker still running or waiting, and those
  * that finished since the user's last message. `null` when there are none, so it hides.
  */
-export function workersStrip(tasks: readonly Task[], requests: readonly UserRequest[]): StripView | null {
+export function workersStrip(
+  tasks: readonly Task[],
+  requests: readonly UserRequest[],
+  steps: readonly WorkerStep[],
+): StripView | null {
   const since = requests.reduce((latest, request) => Math.max(latest, request.startedAtMs), 0);
   const byAge = tasks.toSorted((a, b) => a.createdAtMs - b.createdAtMs || a.number - b.number);
   const live = byAge.filter((task) => !workerDone(task));
-  const finished = byAge.filter((task) => workerDone(task) && task.updatedAtMs >= since);
+  const finished = byAge.filter((task) => workerDone(task) && finishedAtMs(task, steps) >= since);
   if (live.length + finished.length === 0) return null;
   const working = live.filter(workerWorking).length;
   return {
@@ -26,6 +40,7 @@ export function workersStrip(tasks: readonly Task[], requests: readonly UserRequ
     working,
     waiting: live.length - working,
     done: finished.length,
+    stoppable: live.some(workerStoppable),
   };
 }
 
