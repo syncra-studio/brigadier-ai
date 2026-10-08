@@ -62,6 +62,7 @@ import { Button } from "@/components/ui/button";
 import type { Conversation } from "@/ipc/generated";
 import type { ComposerProps } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { whenRevealed } from "@/lib/splash";
 import { cn } from "@/lib/utils";
 import { setSetting } from "@/state/settings";
 import { useBoard } from "@/state/board";
@@ -77,7 +78,11 @@ import { useApp } from "@/state/store";
 import { folderTrust } from "@/state/trust";
 
 
-const ComposerEditor = lazy(() => import("@/app/conversation/ComposerEditor"));
+// Loaded once the startup screen has gone: the plain field stands in until then, and on a slow
+// machine loading and mounting the editor would hold up startup.
+const ComposerEditor = lazy(() =>
+  whenRevealed().then(() => import("@/app/conversation/ComposerEditor")),
+);
 
 /**
  * The composer (assistant-ui composer elements, BB parity): attachments, @-mentions of
@@ -254,7 +259,7 @@ function ComposerDraft({
 
 /**
  * The text field: assistant-ui's Lexical input with mention/command chips (its own chunk, so
- * it doesn't hold up the first paint), a plain field on the same composer text until it loads.
+ * it doesn't hold up startup), a plain field on the same composer text until it loads.
  */
 function ComposerInput(props: ComposerInputProps) {
   const { placeholder, autoFocus } = props;

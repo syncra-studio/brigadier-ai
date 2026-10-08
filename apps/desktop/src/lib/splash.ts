@@ -18,6 +18,10 @@ let mounted = false;
 let revealed = false;
 let reveal: Promise<void> | null = null;
 const listeners = new Set<() => void>();
+let finishStartup = () => {};
+const startupDone = new Promise<void>((resolve) => {
+  finishStartup = resolve;
+});
 
 function splash(): HTMLElement | null {
   return document.getElementById("splash");
@@ -86,11 +90,21 @@ async function fadeOut(): Promise<void> {
   await startupFinished().catch((error: unknown) => {
     console.error("clearing the startup backdrop failed", error);
   });
+  finishStartup();
 }
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+/**
+ * Resolves once startup is over (the splash gone, the window's startup backdrop cleared): work
+ * the app can show without waits for it. A page without a splash (the pane fixtures) has nothing
+ * to wait for.
+ */
+export function whenRevealed(): Promise<void> {
+  return document.documentElement.hasAttribute("data-splash") ? startupDone : Promise.resolve();
 }
 
 /** Whether the splash has gone: dialogs that open on their own wait for it. */
