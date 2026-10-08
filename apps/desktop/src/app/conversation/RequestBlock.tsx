@@ -22,7 +22,11 @@ import { ThinkingRow } from "@/app/conversation/ThinkingRow";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { InlineImageText } from "@/app/conversation/InlineImage";
 import { MentionText } from "@/app/conversation/Mentions";
-import { OrchestratorSteps, STEP_ROW, WorkGroup, stepSummaryKind, stepSummaryAction, isNonWorkerStep } from "@/app/conversation/OrchestratorSteps";
+import { StepRow } from "@/app/conversation/OrchestratorSteps";
+import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
+import { type Activity, type LeadStep, turnActivity } from "@/app/conversation/activity/group";
+import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadStep";
+import { ROW } from "@/components/assistant-ui/elements/activity-row";
 import {
   type BlockCard,
   type BlockCompaction,
@@ -265,10 +269,11 @@ const ReportText: FC<TextMessagePartProps> = (props) => {
 };
 
 /** A reply, card or row in the block's work. */
-const SequenceEntry: FC<{ entry: Entry; streaming: boolean; grouped?: boolean }> = ({ entry, streaming, grouped = true }) => {
+const SequenceEntry: FC<{ entry: Entry; streaming: boolean }> = ({ entry, streaming }) => {
   switch (entry.kind) {
     case "thinking":
-      return <ThinkingRow compact text={entry.segment.text} startedAtMs={entry.segment.startedAtMs} endedAtMs={entry.segment.updatedAtMs} live={entry.live} />;
+      // Only the live thought is an entry: a settled one sits in its work group.
+      return entry.live ? <ThinkingRow text={entry.segment.text} startedAtMs={entry.segment.startedAtMs} endedAtMs={entry.segment.updatedAtMs} live /> : null;
     case "text":
       return (
         <div
@@ -283,7 +288,7 @@ const SequenceEntry: FC<{ entry: Entry; streaming: boolean; grouped?: boolean }>
     case "steer":
       return <SteerBubble text={entry.text} atMs={entry.atMs} attachments={entry.attachments} />;
     case "orchestrator":
-      return <OrchestratorSteps steps={entry.steps} grouped={grouped} />;
+      return <>{entry.steps.map((step) => <StepRow key={step.position} step={step} />)}</>;
     case "compaction":
       return <CompactionRow compaction={entry.compaction} />;
     case "row":
@@ -304,8 +309,8 @@ function compactionLabel({ automatic, state }: BlockCompaction): string {
 
 /** The compaction line: "Compacting context" shimmers while it runs, then stays grey. */
 const CompactionRow: FC<{ compaction: BlockCompaction }> = ({ compaction }) => (
-  <div data-slot="compaction" data-state={compaction.state} className={STEP_ROW}>
-    <TextShorterConcise aria-hidden className="size-icon-md shrink-0" />
+  <div data-slot="compaction" data-state={compaction.state} className={ROW}>
+    <TextShorterConcise aria-hidden className="size-4 shrink-0" />
     <span className={cn("min-w-0 truncate", compaction.state === "running" && "shimmer")}>
       {compactionLabel(compaction)}
       {compaction.error && ` · ${compaction.error}`}
@@ -387,57 +392,34 @@ const WaitingOnYou: FC<{ requestIds: string[] }> = ({ requestIds }) => {
   );
 };
 
-/** One line or a run of lines of folded work. */
-type FoldItem = { kind: "entry"; entry: Entry } | { kind: "group"; key: string; entries: Entry[] };
-
-/** Lines of work (steps, workers) that fold into one summing-up line when they run together. */
-function isWorkLine(entry: Entry): boolean {
-  return entry.kind === "orchestrator";
-}
-
 /**
- * A finished turn's work, its runs of grey lines each folded into one that sums them up ("Created
- * a worker, answered a worker"): the second level of "Worked for …", whose lines open in turn.
+ * A turn's activity in order (THREAD-UX-PLAN.md §3.1): its work groups and everything else as it
+ * is. The live and the folded turn render the same items, so nothing moves when the turn ends;
+ * only its last group, while the turn is live, says the step it is on.
  */
-function foldWork(entries: readonly Entry[]): FoldItem[] {
-  const items: FoldItem[] = [];
-  for (const entry of entries) {
-    const last = items.at(-1);
-    if (isWorkLine(entry) && last?.kind === "group") last.entries.push(entry);
-    else if (isWorkLine(entry)) items.push({ kind: "group", key: entryKey(entry), entries: [entry] });
-    else items.push({ kind: "entry", entry });
-  }
-  return items;
-}
-
-/** What a run of work lines did, kind by kind; a worker its run created counts once. */
-function workKinds(entries: readonly Entry[]): Parameters<typeof WorkGroup>[0]["kinds"] {
-  const created = new Set(
-    entries.flatMap((entry) =>
-      entry.kind === "orchestrator"
-        ? entry.steps.flatMap((step) => (step.kind.type === "created" ? [step.kind.taskId] : []))
-        : [],
-    ),
+const ActivityItems: FC<{
+  activity: readonly Activity<LeadStep, Entry>[];
+  live: boolean;
+  streaming: (entry: Entry) => boolean;
+}> = ({ activity, live, streaming }) => {
+  const tasks = useBoard((s) => s.board?.tasks);
+  return (
+    <>
+      {activity.map((item, index) =>
+        item.type === "group" ? (
+          <ActivityGroup
+            key={`group:${item.key}`}
+            items={item.items}
+            live={live && index === activity.length - 1}
+            describe={(step) => describeLeadStep(step, tasks)}
+            renderStep={(step, key) => <LeadStepRow key={key} step={step} />}
+          />
+        ) : (
+          <SequenceEntry key={entryKey(item.entry)} entry={item.entry} streaming={streaming(item.entry)} />
+        ),
+      )}
+    </>
   );
-  return entries.flatMap((entry) => {
-    if (entry.kind === "orchestrator") return entry.steps.map(stepSummaryKind);
-    if (entry.kind === "row" && created.has(entry.row.taskId)) return [];
-    return ["worker" as const];
-  });
-}
-
-const FoldedWork: FC<{ item: FoldItem }> = ({ item }) => {
-  if (item.kind === "entry") return <SequenceEntry entry={item.entry} streaming={false} />;
-  const [only] = item.entries;
-  const workerGroup = item.entries.some((entry) => entry.kind === "row" || (entry.kind === "orchestrator" && entry.steps.some((step) => !isNonWorkerStep(step))));
-  if (item.entries.length === 1 && only && (!workerGroup || only.kind !== "orchestrator" || only.steps.length === 1)) return <SequenceEntry entry={only} streaming={false} grouped={!workerGroup} />;
-  const lines = item.entries.map((entry) => <SequenceEntry key={entryKey(entry)} entry={entry} streaming={false} grouped={false} />);
-  // Lifecycle rows whose creation is already counted do not add another summary segment.
-  const created = new Set(item.entries.flatMap((entry) => entry.kind === "orchestrator"
-    ? entry.steps.flatMap((step) => step.kind.type === "created" ? [step.kind.taskId] : []) : []));
-  const aligned = item.entries.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map(stepSummaryAction)
-    : entry.kind === "row" && created.has(entry.row.taskId) ? [] : [null]);
-  return <WorkGroup kinds={workKinds(item.entries)} actions={aligned}>{lines}</WorkGroup>;
 };
 
 /** The block's error: what went wrong in full, and Try again where a Chat can answer again. */
@@ -517,10 +499,13 @@ export const RequestBlock: FC = () => {
   // A run over folds to its outcome; the thread's replies during it go into the fold.
   const answer = done && last >= 0 && !phase ? last : null;
   const sequence = blockSequence(meta);
-  const folded = sequence.filter((entry) =>
-    entry.kind === "text"
-      ? entry.index !== answer
-      : entry.kind !== "card" || !entry.card.keep,
+  const activity = turnActivity(sequence);
+  // The answer and the cards that stay in view are outside the fold.
+  const folded = activity.filter((item) =>
+    item.type === "group" ||
+    (item.entry.kind === "text"
+      ? item.entry.index !== answer
+      : item.entry.kind !== "card" || !item.entry.card.keep),
   );
   const kept = meta.cards.filter((card) => card.keep);
   const foldable = done && folded.length > 0;
@@ -572,9 +557,7 @@ export const RequestBlock: FC = () => {
             >
               {/* min-w-0: a long unbroken line (a branch in code) wraps instead of widening the fold. */}
               <div className={cn("flex min-h-0 min-w-0 flex-col gap-3", fold.state !== "open" && "overflow-hidden")}>
-                {foldWork(folded).map((item) => (
-                  <FoldedWork key={item.kind === "group" ? `group:${item.key}` : entryKey(item.entry)} item={item} />
-                ))}
+                <ActivityItems activity={folded} live={false} streaming={() => false} />
               </div>
             </div>
           )}
@@ -608,16 +591,12 @@ export const RequestBlock: FC = () => {
         </>
       ) : (
         <div data-slot="request-work" data-follow-content className="flex flex-col gap-3">
-          {sequence.map((entry) => (
-            <SequenceEntry
-              key={entryKey(entry)}
-              entry={entry}
-              streaming={
-                entry.kind === "text" &&
-                meta.texts[entry.index]?.position === Number.POSITIVE_INFINITY
-              }
-            />
-          ))}
+          <ActivityItems
+            activity={activity}
+            live={live}
+            streaming={(entry) => entry.kind === "text" && meta.texts[entry.index]?.position === Number.POSITIVE_INFINITY}
+          />
+          {sequence.map((entry) => entry.kind === "thinking" && entry.live && <SequenceEntry key={entryKey(entry)} entry={entry} streaming={false} />)}
           {live && (
             <ThreadStatus
               requestIds={meta.requestIds}

@@ -1,21 +1,12 @@
 import { useWorkerText, WorkerLine } from "@/app/conversation/WorkerChip";
 import { ThinkingRow } from "@/app/conversation/ThinkingRow";
 import {
-  Book,
-  Chat,
   Check,
   ChevronRight,
   Copy,
-  EditPencil,
-  Folder,
-  Globe,
-  Search,
   ShieldCheck,
-  Terminal,
-  Tools,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
-  type FC,
   type ReactNode,
   useEffect,
   useLayoutEffect,
@@ -27,17 +18,16 @@ import {
 import { ArtifactFiles } from "@/app/conversation/cards/TaskCardView";
 import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
 import { workerDone, workerWorking, workerPreview } from "@/app/conversation/workerPresentation";
-import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
-import { ACTIVITY_ROW } from "@/components/assistant-ui/elements/activity-row";
+import { ActivityGroup, StepRow } from "@/app/conversation/activity/ActivityGroup";
+import { workerActivity } from "@/app/conversation/activity/group";
+import { type ActionItem, itemCall, stepWords } from "@/app/conversation/activity/words";
+import { ROW } from "@/components/assistant-ui/elements/activity-row";
 import { useAction } from "@/app/conversation/useAction";
 import { RateItem, RateMenu } from "@/components/assistant-ui/rate-menu";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import {
-  type ActivityKind,
-  activityOf,
   shownCommand,
-  summarize,
   type ThreadEntry,
   threadEntries,
   unwrapCommand,
@@ -77,17 +67,6 @@ class IncrementalFold {
   }
 }
 
-const ICONS: Record<ActivityKind, FC<{ className?: string }>> = {
-  read: Book,
-  list: Folder,
-  search: Search,
-  edit: EditPencil,
-  run: Terminal,
-  report: Chat,
-  tool: Tools,
-};
-
-type ActionItem = Extract<ThreadEntry, { kind: "actions" }>["items"][number];
 
 /** A worker's error in a few words, by kind; its own words follow in full. */
 const ERROR_TITLES: Record<ErrorKind, string> = {
@@ -107,7 +86,7 @@ const ERROR_TITLES: Record<ErrorKind, string> = {
   stalled: "It stopped responding",
 };
 
-const row = ACTIVITY_ROW;
+const row = ROW;
 
 /** A command's box: "Shell", the command and what it printed, then how it ended. */
 function shellCard(item: Extract<ActionItem, { kind: "command" }>): ReactNode {
@@ -200,54 +179,31 @@ function actionDetail(item: ActionItem): ReactNode {
   }
 }
 
-/** One action as a grey line; a command or tool call opens to what it ran. */
+/** A worker's action, as the lead's same step would read; a command or call opens to what it ran. */
 function ActionRow({ item }: { item: ActionItem }) {
-  const activity = activityOf(item);
-  const Icon = activity.web ? Globe : ICONS[activity.kind];
-  const running = item.status === "inProgress";
-  const label = (
-    <>
-      <Icon aria-hidden className="size-4 shrink-0" />
-      <span className="min-w-0 truncate">{running ? activity.doing : activity.done}</span>
-      {item.status === "failed" && <span className="text-destructive shrink-0">failed</span>}
-      {item.kind === "command" && !running && item.durationMs !== null && item.durationMs >= 1000 && (
-        <span className="shrink-0 tabular-nums">in {formatDuration(item.durationMs)}</span>
-      )}
-    </>
+  const call = itemCall(item);
+  const ran = item.kind === "command" && item.status !== "inProgress" && item.durationMs !== null && item.durationMs >= 1000;
+  return (
+    <StepRow
+      words={stepWords(call)}
+      status={call.status}
+      detail={actionDetail(item)}
+      suffix={ran && item.durationMs !== null ? `in ${formatDuration(item.durationMs)}` : undefined}
+    />
   );
-  return <ThreadActivity detail={actionDetail(item)}>{label}</ThreadActivity>;
-}
-
-/** A run of actions between two replies, summed up in one line; it opens to each of them. */
-function ActionRun({ items }: { items: readonly ActionItem[] }) {
-  const [first] = items;
-  if (items.length === 1 && first) return <ActionRow item={first} />;
-  const activities = items.map(activityOf);
-  const commands = items.every((item) => item.kind === "command");
-  const counts = new Map<ActivityKind, number>();
-  for (const activity of activities) counts.set(activity.kind, (counts.get(activity.kind) ?? 0) + 1);
-  // Edits win the icon; otherwise the most frequent kind does.
-  const [dominant] = counts.has("edit")
-    ? ["edit" as const]
-    : ([...counts].toSorted((a, b) => b[1] - a[1])[0] ?? ["run" as const]);
-  const Icon = commands ? Terminal : ICONS[dominant];
-  return <ThreadActivity detailClassName="max-h-action-list overflow-y-auto ps-6"
-    detail={items.map((item) => <ActionRow key={item.key} item={item} />)}>
-    <Icon aria-hidden className="size-4 shrink-0" />
-    <span className="min-w-0 truncate">{commands ? "Ran commands" : summarize(activities)}</span>
-  </ThreadActivity>;
 }
 
 function WorkerMarkdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
   return <MarkdownBlock text={useWorkerText(text)} streaming={streaming} />;
 }
 
-function EntryView({ entry, working }: { entry: ThreadEntry; working: boolean }) {
-  if (entry.kind === "actions") return <ActionRun items={entry.items} />;
+function EntryView({ entry }: { entry: ThreadEntry }) {
+  if (entry.kind === "actions") return <>{entry.items.map((item) => <ActionRow key={item.key} item={item} />)}</>;
   const { item } = entry;
   switch (item.kind) {
     case "reasoning":
-      return <ThinkingRow text={item.text} startedAtMs={item.startedAtMs} endedAtMs={item.endedAtMs} live={working && item.streaming} />;
+      // A settled thought sits in its work group; the live one is the live line.
+      return null;
     case "message":
       return item.role === "user" ? (
         <div className="bg-secondary rounded-thread ms-8 self-end px-3 py-2 text-sm whitespace-pre-wrap">
@@ -360,9 +316,27 @@ export function WorkerThread({ task }: { task: Task }) {
   const tail = entries.at(-1);
   const finalReply = workerDone(task) && tail?.kind === "item" && tail.item.kind === "message" && tail.item.role === "assistant" ? tail.item.text : undefined;
   const visibleEntries = finalReply ? entries.slice(0, -1) : entries;
-  const previous = visibleEntries.slice(0, Math.max(0, visibleEntries.length - 3));
-  const previousCount = 1 + task.messages.length + previous.reduce((count, entry) => count + (entry.kind === "actions" ? entry.items.length : 1), 0);
-  const recent = visibleEntries.slice(previous.length);
+  const activity = workerActivity(visibleEntries, working);
+  const previous = activity.slice(0, Math.max(0, activity.length - 3));
+  const previousCount = 1 + task.messages.length + previous.reduce((count, item) => count + (item.type === "group" ? item.items.length : 1), 0);
+  const recent = activity.slice(previous.length);
+  const last = visibleEntries.at(-1);
+  const thinking = working && last?.kind === "item" && last.item.kind === "reasoning" && last.item.streaming ? last.item : null;
+  const show = (item: (typeof activity)[number], index: number) =>
+    item.type === "group" ? (
+      <ActivityGroup
+        key={`group:${item.key}`}
+        items={item.items}
+        live={working && index === activity.length - 1}
+        describe={(step) => {
+          const call = itemCall(step);
+          return { words: stepWords(call), status: call.status };
+        }}
+        renderStep={(step, key) => <ActionRow key={key} item={step} />}
+      />
+    ) : (
+      <EntryView key={item.entry.kind === "actions" ? item.entry.key : item.entry.item.key} entry={item.entry} />
+    );
   const [open, setOpen] = useState(false);
 
   // Follow new output while the view is scrolled to the bottom.
@@ -397,7 +371,7 @@ export function WorkerThread({ task }: { task: Task }) {
               onClick={() => void loadEarlierWorkerEntries(task.conversationId, task.id)}>Load earlier</Button>}
             <div data-slot="worker-instructions" className="text-foreground leading-relaxed wrap-break-word"><WorkerMarkdown text={task.spec} /></div>
             {task.messages.map((text, index) => <WorkerMarkdown key={index} text={text} />)}
-            {previous.map((entry) => <EntryView key={entry.kind === "actions" ? entry.key : entry.item.key} entry={entry} working={working} />)}
+            {previous.map((item, index) => show(item, index))}
           </CollapsibleContent>
         </Collapsible>
         {error && (
@@ -405,7 +379,8 @@ export function WorkerThread({ task }: { task: Task }) {
             {error}
           </p>
         )}
-        {recent.map((entry) => <EntryView key={entry.kind === "actions" ? entry.key : entry.item.key} entry={entry} working={working} />)}
+        {recent.map((item, index) => show(item, previous.length + index))}
+        {thinking && <ThinkingRow text={thinking.text} startedAtMs={thinking.startedAtMs} endedAtMs={thinking.endedAtMs} live />}
         {now && <div className="shimmer truncate text-sm motion-reduce:animate-none">{now}</div>}
         {!working && !workerDone(task) && <p className="text-foreground/65 text-sm">{workerPreview(task)}</p>}
         <Answer task={task} text={finalReply} />

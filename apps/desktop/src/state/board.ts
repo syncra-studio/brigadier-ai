@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react";
 import { createStore, type StoreApi, useStore } from "zustand";
 
-import { liveActivity } from "@/components/transcript/activity";
+import { liveActivity } from "@/app/conversation/activity/words";
 import { showConversationNotice } from "@/state/notices";
 
 import type {

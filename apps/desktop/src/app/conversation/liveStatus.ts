@@ -1,4 +1,5 @@
-import { type BlockState, isFinal, toolHasRow } from "@/app/conversation/blocks";
+import { isPlumbing } from "@/app/conversation/activity/words";
+import { type BlockState, isFinal } from "@/app/conversation/blocks";
 import { activelyWorking } from "@/app/conversation/taskActivity";
 import type { QuotaWait, Task } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
@@ -70,9 +71,9 @@ function leadHead({ board, requestIds, thinkingLive, compacting }: StatusInput):
   // A retry stalls whatever streamed so far: say so over it.
   if (board.doing && RETRYING.has(board.doing)) return { text: board.doing, tone: "busy" };
   const runRequest = board.runRequest;
-  // A call to a worker has no row of its own: its "Delegating to a worker" shows here.
+  // A plumbing call (one to a worker) has no row of its own: its "Delegating to a worker" shows here.
   const toolRunning = board.orchestratorSteps.some((step) => step.requestId === runRequest
-    && step.kind.type === "tool" && step.kind.status === "inProgress" && toolHasRow(step.kind.name));
+    && step.kind.type === "tool" && step.kind.status === "inProgress" && !isPlumbing(step.kind.name));
   const streaming = !!board.streaming?.text && (board.streaming.requestId === null || requestIds.includes(board.streaming.requestId));
   if (toolRunning || thinkingLive || compacting || streaming) return null;
   if (board.doing) return { text: board.doing, tone: "busy" };

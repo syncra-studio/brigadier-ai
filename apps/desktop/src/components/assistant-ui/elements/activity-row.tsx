@@ -1,41 +1,39 @@
 import {
   Book,
-  Chat,
-  Commit,
-  EditPencil,
-  Folder,
-  Globe,
   CheckCircle,
-  Reply,
+  EditPencil,
+  Globe,
+  PlayCircle,
   Search,
-  ShieldCheck,
   Sparkle,
   Terminal,
   Tools,
 } from "@openai/apps-sdk-ui/components/Icon";
 import type { FC } from "react";
 
-import type { ToolKind } from "@/app/conversation/toolWords";
+import type { WorkKind } from "@/app/conversation/activity/words";
 
-/** Quiet non-worker actions in the main conversation. */
-export const ACTIVITY_ROW =
-  "text-foreground/60 flex min-h-5 min-w-0 items-center gap-1.5 text-sm leading-5";
-export const ACTIVITY_DETAIL =
-  "text-foreground/60 flex max-h-action-list min-w-0 flex-col gap-2 overflow-y-auto ps-6 pt-2 pb-1 text-sm";
-export const ACTIVITY_ICONS: Record<ToolKind, FC<{ className?: string }>> = {
+/**
+ * The one row recipe of a thread's activity (THREAD-UX-PLAN.md §3.7), the lead's and a worker's
+ * alike: work groups, their steps, team sentences and notices.
+ */
+export const ROW = "text-foreground/60 flex min-h-5 min-w-0 items-center gap-1.5 text-sm leading-5";
+
+/** What a row opens to: flush under it, in the same type. */
+export const ROW_DETAIL = "text-foreground/60 flex max-h-action-list min-w-0 flex-col gap-1 overflow-y-auto ps-5.5 pt-1 pb-1 text-sm";
+
+/** The chevron of a row that opens: always shown, turned while open. */
+export const CHEVRON =
+  "text-foreground/40 size-icon-xs shrink-0 transition-[rotate] group-data-[state=open]:rotate-90 motion-reduce:transition-none";
+
+export const WORK_ICONS: Record<WorkKind, FC<{ className?: string }>> = {
   read: Book,
-  search: Search,
-  list: Folder,
   edit: EditPencil,
   run: Terminal,
-  worker: Sparkle,
-  message: Chat,
-  memory: Book,
-  plan: CheckCircle,
-  approval: ShieldCheck,
-  land: Commit,
-  report: Reply,
+  code: Search,
   web: Globe,
-  image: Sparkle,
-  tool: Tools,
+  memory: Sparkle,
+  checks: CheckCircle,
+  preview: PlayCircle,
+  other: Tools,
 };

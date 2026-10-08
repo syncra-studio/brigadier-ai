@@ -1,4 +1,4 @@
-import { toolActivity, toolHasOwnResult } from "@/app/conversation/toolWords";
+import { isPlumbing, toolHasOwnResult } from "@/app/conversation/activity/words";
 import type { CardType } from "@/app/conversation/cards/CardBody";
 import { decisionWords } from "@/app/conversation/rowWords";
 import type {
@@ -162,13 +162,6 @@ const WORKING: ReadonlySet<Task["state"]> = new Set([
 
 const FINAL: ReadonlySet<Task["state"]> = new Set(["landed", "done", "rejected", "stopped", "failed"]);
 
-/**
- * Whether the lead's call shows as a row of its own. A phase's lead reads and messages its
- * workers all night: the workers' rows say what came of it.
- */
-export function toolHasRow(name: string): boolean {
-  return !["worker", "message", "report"].includes(toolActivity(name).kind);
-}
 
 /**
  * When a request worked. One stored before its spans were kept worked from its start to its
@@ -336,7 +329,8 @@ export function buildBlocks(
     })),
   ].toSorted((a, b) => a.position - b.position);
   for (const step of board.orchestratorSteps) {
-    if (step.kind.type === "tool" && !toolHasRow(step.kind.name)) continue;
+    // Plumbing shows by what came of it: a worker's sentence, a card, the merge.
+    if (step.kind.type === "tool" && isPlumbing(step.kind.name)) continue;
     if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "tool")) continue;
     if (step.kind.type === "tool" && toolHasOwnResult(step.kind, authoredResults, step.requestId, step.position)) continue;
     placed.push({
@@ -634,8 +628,9 @@ export type SequenceEntry =
   | { kind: "row"; row: BlockRow; position: number };
 
 /**
- * The block's replies, cards, rows and orchestrator steps in order. Adjacent orchestrator
- * steps share one line that opens to each, but a decision always stands on its own line.
+ * The block's replies, cards, rows and orchestrator steps in order, one entry each; adjacent
+ * "started working" rows share one sentence. The lead's work steps are grouped by
+ * `activity/group.ts`.
  */
 export function blockSequence(source: SequenceSource): SequenceEntry[] {
   const entries: SequenceEntry[] = [
@@ -655,9 +650,6 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
   ].toSorted((a, b) => a.position - b.position);
   const tail = entries.at(-1);
   if (tail?.kind === "thinking") tail.live = !tail.segment.complete && (source.state === undefined || source.state === "working");
-  const alone = (entry: SequenceEntry) =>
-    entry.kind === "orchestrator" &&
-    entry.steps.some((step) => step.kind.type === "decided" || step.kind.type === "machine");
   const merged: SequenceEntry[] = [];
   for (const entry of entries) {
     const previous = merged.at(-1);
@@ -665,9 +657,7 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
       previous.row = { ...previous.row, taskIds: [...new Set([...(previous.row.taskIds ?? [previous.row.taskId]), entry.row.taskId])] };
       continue;
     }
-    if (entry.kind === "orchestrator" && previous?.kind === "orchestrator" && !alone(entry) && !alone(previous)) {
-      previous.steps.push(...entry.steps);
-    } else merged.push(entry);
+    merged.push(entry);
   }
   return merged;
 }

@@ -164,7 +164,7 @@ test("a worker's live line says what it does in plain words, never a raw tool na
   assert.equal(live({ type: "command", itemId: "x", command: "/bin/zsh -lc 'git status'", cwd: null, status: "inProgress", exitCode: null }),
     "Running git status");
   assert.equal(live({ type: "toolCall", itemId: "y", name: "mcp__brigadier__project_map", input: null, status: "inProgress", output: null }),
-    "Mapping the project");
+    "Listing files");
 });
 
 test("the thread's own tool steps show as their rows, never as Thinking or a worker", () => {

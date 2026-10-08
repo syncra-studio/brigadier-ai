@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { blockSequence, buildBlocks } from "@/app/conversation/blocks";
 import type { ConversationView, DomainEvent, EventEnvelope, Message } from "@/ipc/generated";
-import { toolHasOwnResult, toolWords } from "@/app/conversation/toolWords";
+import { isPlumbing, stepLabel, toolHasOwnResult, toolStepWords } from "@/app/conversation/activity/words";
 import { replayThinking } from "@/replay/thinking";
 import { applyToBoard, boardFromView, emptyBoard } from "@/state/board";
 
@@ -112,7 +112,8 @@ test("delegation calls stay out of the parent thread while their stored events r
   assert.equal(block.orchestratorSteps.filter((step) => step.kind.type === "tool").length, 0);
   const kind = board.orchestratorSteps[0]!.kind;
   assert.ok(kind.type === "tool");
-  assert.equal(toolWords(kind), "Created a worker — failed");
+  // A call to a worker is plumbing: its worker's sentence says what came of it.
+  assert.ok(isPlumbing(kind.name));
   assert.equal(toolHasOwnResult(kind), false);
-  assert.equal(toolWords({ ...kind, name: "Read", detail: "README.md", status: "completed" }), "Read README.md");
+  assert.equal(stepLabel(toolStepWords({ ...kind, name: "Read", detail: "README.md" }), "completed"), "Read README.md");
 });
