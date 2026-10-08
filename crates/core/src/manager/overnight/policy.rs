@@ -40,6 +40,12 @@ impl ActiveRuns {
         self.lock().get(id).cloned()
     }
 
+    /// Makes `run` the session's active run, as a test sets it up.
+    #[cfg(test)]
+    pub fn insert(&self, id: ConversationId, run: ActiveRun) {
+        self.lock().insert(id, run);
+    }
+
     /// Every session's active run.
     pub fn all(&self) -> Vec<(ConversationId, ActiveRun)> {
         self.lock()

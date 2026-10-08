@@ -397,6 +397,7 @@ impl Session {
                                 scrollback: String::new(),
                             },
                             provider: opened.provider,
+                            checkout: opened.checkout.map(|path| path.display().to_string()),
                         })
                         .map_err(IpcError::from);
                     let _ = late.send((id, outcome)).await;
@@ -622,7 +623,12 @@ impl Session {
         let Some((cols, rows)) = self.worker_terminals.remove(&id) else {
             return Ok(outcome);
         };
-        let Ok(Response::OpenWorkerTerminal { terminal, provider }) = outcome else {
+        let Ok(Response::OpenWorkerTerminal {
+            terminal,
+            provider,
+            checkout,
+        }) = outcome
+        else {
             return Ok(outcome);
         };
         let Some(feed) = self.terminal_feed.as_mut() else {
@@ -648,7 +654,11 @@ impl Session {
             }
         }
         self.terminals.insert(terminal.id.clone());
-        Ok(Ok(Response::OpenWorkerTerminal { terminal, provider }))
+        Ok(Ok(Response::OpenWorkerTerminal {
+            terminal,
+            provider,
+            checkout,
+        }))
     }
 
     /// Opens (or re-attaches to) the terminal that sets up a CLI: its install or sign-in

@@ -303,6 +303,17 @@ pub(crate) type Specs = Arc<Mutex<Vec<(ProviderKind, SessionSpec)>>>;
 /// every test in the process; each test names its own sessions.
 pub(crate) static REFUSED_RESUMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+/// Terminals a test holds as they open, by native session: the open tells the first sender
+/// it got there, then waits for the receiver's answer (`true`: the terminal fails to open).
+#[allow(clippy::type_complexity)]
+pub(crate) static GATED_TERMINALS: Mutex<
+    Vec<(
+        String,
+        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Receiver<bool>,
+    )>,
+> = Mutex::new(Vec::new());
+
 /// A scripted stand-in for one CLI.
 struct FakeCli {
     kind: ProviderKind,
@@ -467,6 +478,17 @@ impl Provider for FakeCli {
             let brigadier_providers::model::Origin::Resume { native_id } = &spec.origin else {
                 return Err(brigadier_providers::Error::Invalid("not a resume".into()));
             };
+            let gate = {
+                let mut gates = GATED_TERMINALS.lock().unwrap();
+                let at = gates.iter().position(|(id, _, _)| id == native_id);
+                at.map(|at| gates.remove(at))
+            };
+            if let Some((_, reached, verdict)) = gate {
+                let _ = reached.send(());
+                if verdict.await.unwrap_or(false) {
+                    return Err(brigadier_providers::Error::Spawn("no terminal".into()));
+                }
+            }
             Ok(brigadier_providers::TerminalCommand {
                 program: PathBuf::from(format!("/fake/{}", self.kind)),
                 args: vec!["--resume".into(), native_id.clone()],

@@ -422,6 +422,7 @@ export function TerminalTab({
 }) {
   const density = useApp((s) => s.settings.density);
   const [provider, setProvider] = useState<ProviderKind | null>(null);
+  const [checkout, setCheckout] = useState<string | null>(null);
   const open = useCallback(
     async (cols: number, rows: number): Promise<TerminalInfo> => {
       const conversationId = placeConversation(place);
@@ -447,6 +448,7 @@ export function TerminalTab({
         noteShellCwd(place, tabId, opened.terminal.cwd);
         noteWorkerStarted(place, tabId);
         setProvider(opened.provider);
+        setCheckout(opened.checkout ?? null);
         return opened.terminal;
       }
       const selection = useApp.getState().selection;
@@ -487,6 +489,11 @@ export function TerminalTab({
       {provider === "claude" && (
         <p className="text-muted-foreground border-terminal-divider shrink-0 border-b px-3 py-1 text-xs">
           Claude may ask whether you trust this folder: choose Yes.
+        </p>
+      )}
+      {checkout && (
+        <p className="text-muted-foreground border-terminal-divider shrink-0 border-b px-3 py-1 text-xs">
+          This worker only reads the code. It starts in its own folder; the code is in {checkout}
         </p>
       )}
       <Suspense fallback={null}>

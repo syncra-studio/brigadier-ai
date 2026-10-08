@@ -31,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::SessionManager;
 use super::workers::{TaskLive, ToolAccess};
-use crate::work::{Takeover, Task, TaskId, TaskState};
+use crate::work::{ApprovalSubject, CardState, Takeover, Task, TaskId, TaskState};
 use crate::{Error, Result, now_ms};
 
 /// Where Brigadier's terminals run (the daemon's pseudo terminals).
@@ -69,6 +69,9 @@ pub struct WorkerTerminal {
     /// has a past to show).
     pub fresh: bool,
     pub provider: ProviderKind,
+    /// The task's checkout when the terminal starts elsewhere (a read-only Codex worker's
+    /// terminal starts in its scratch folder), for the tab to name.
+    pub checkout: Option<PathBuf>,
 }
 
 /// A task's open terminal, as its live state keeps it.
@@ -76,6 +79,8 @@ pub(crate) struct LiveTakeover {
     pub terminal_id: String,
     /// Counts the terminals opened for the task, so an old one's end hands nothing back.
     pub generation: u64,
+    /// See [`WorkerTerminal::checkout`].
+    pub checkout: Option<PathBuf>,
 }
 
 /// The owner of a terminal's grant and the ledger records it is kept under.
@@ -115,7 +120,7 @@ impl SessionManager {
             .cloned()
             .ok_or_else(|| Error::Invalid("terminals aren't available here".into()))?;
         let conversation_id = self.conversation_of_task(&task_id).await?;
-        let _fence = self.enter(&conversation_id)?;
+        let fence = self.enter(&conversation_id)?;
         let task = self.task_by_id(&conversation_id, &task_id).await?;
         let live = self.task_live(&task);
         // A hand-off or hand-over under way finishes first; one decided for the headless
@@ -130,6 +135,7 @@ impl SessionManager {
                 terminal_id: open.terminal_id.clone(),
                 fresh: false,
                 provider,
+                checkout: open.checkout.clone(),
             });
         }
         if !can_take_over(task.state) {
@@ -156,6 +162,8 @@ impl SessionManager {
         live.supersede().await;
         let from = task.state;
         live.close_cli().await;
+        // What its headless CLI asked can't be answered any more; the terminal asks itself.
+        self.expire_cli_cards(&task).await;
         let marked = self
             .update_task(&conversation_id, &task_id, |t| {
                 t.state = TaskState::TakenOver;
@@ -174,6 +182,9 @@ impl SessionManager {
         let task = match marked {
             Ok(task) => task,
             Err(err) => {
+                // A launch that gives it back may wait (for its run's worker slot): nothing
+                // waits on these meanwhile.
+                drop((handing, reservation, fence));
                 self.give_back(&live, &task, from).await;
                 return Err(err);
             }
@@ -185,7 +196,7 @@ impl SessionManager {
             .start_terminal(&*host, &task, &native_id, cols, rows)
             .await
         {
-            Ok((terminal, tools)) => {
+            Ok((terminal, tools, checkout)) => {
                 // Its tool calls (`run_check`) run with the terminal's access.
                 live.set_terminal_access(Some(tools)).await;
                 let terminal_id = terminal.id.clone();
@@ -200,6 +211,7 @@ impl SessionManager {
                 *reservation = Some(LiveTakeover {
                     terminal_id: terminal_id.clone(),
                     generation,
+                    checkout: checkout.clone(),
                 });
                 drop(reservation);
                 let manager = self.arc();
@@ -219,6 +231,7 @@ impl SessionManager {
                     terminal_id,
                     fresh: true,
                     provider,
+                    checkout,
                 })
             }
             Err(err) => {
@@ -230,14 +243,37 @@ impl SessionManager {
                     })
                     .await
                     .unwrap_or(task);
+                drop((reservation, fence));
                 self.give_back(&live, &task, from).await;
                 Err(err)
             }
         }
     }
 
+    /// Expires the pending permission cards of the task's headless CLI, which has closed.
+    async fn expire_cli_cards(&self, task: &Task) {
+        let Ok(board) = self.core.board(&task.conversation_id).await else {
+            return;
+        };
+        for approval in board.approvals.values() {
+            if approval.state == CardState::Pending
+                && approval.task_id.as_ref() == Some(&task.id)
+                && matches!(approval.subject, ApprovalSubject::Cli { .. })
+            {
+                self.settle_approval(
+                    approval,
+                    CardState::Expired {
+                        reason: "The worker went on in your terminal, which asks there.".into(),
+                    },
+                )
+                .await;
+            }
+        }
+    }
+
     /// Starts the worker's session in a terminal: the same spec as its headless process, a
-    /// fresh grant, in its worktree when it has one.
+    /// fresh grant, in its worktree when it has one. Returns the task's checkout too when the
+    /// terminal starts elsewhere.
     async fn start_terminal(
         &self,
         host: &dyn TerminalHost,
@@ -245,7 +281,7 @@ impl SessionManager {
         native_id: &str,
         cols: u16,
         rows: u16,
-    ) -> Result<(HostedTerminal, ToolAccess)> {
+    ) -> Result<(HostedTerminal, ToolAccess, Option<PathBuf>)> {
         let subject = match &task.subject {
             Some(id) => self.task_by_id(&task.conversation_id, id).await.ok(),
             None => None,
@@ -269,12 +305,15 @@ impl SessionManager {
             ended: CancellationToken::new(),
         };
         // Claude finds the session from any folder (spike, check 4), so the terminal opens in
-        // the task's worktree; a Codex thread keeps its own folder (a read-only Codex worker
-        // works from its scratch folder), where its sandbox was set up.
+        // the task's worktree; a Codex thread keeps its own folder, where its sandbox was set
+        // up: a writing worker's worktree, or a read-only one's scratch folder (Codex can't
+        // start in a folder it may not write, and `--add-dir` would make the checkout
+        // writable), whose tab then names the checkout.
         let cwd: PathBuf = match (provider, &session.worktree) {
             (ProviderKind::Claude, Some(worktree)) => worktree.clone(),
             _ => session.cwd.clone(),
         };
+        let checkout = session.worktree.clone().filter(|worktree| *worktree != cwd);
         let command = self
             .runtime
             .terminal_command(provider, session.spec, cwd)
@@ -303,19 +342,33 @@ impl SessionManager {
                 tracing::warn!(task = %task.id, error = %err, "could not record a worker's terminal");
             }
         }
-        Ok((terminal, tools))
+        Ok((terminal, tools, checkout))
     }
 
     /// An open that didn't finish: the task is as before, and a worker that was working goes
-    /// on.
+    /// on. Messages held for the terminal meanwhile still reach it. The caller holds no lock
+    /// a launch would wait under.
     async fn give_back(&self, live: &Arc<TaskLive>, task: &Task, from: TaskState) {
         live.set_taken_over(false).await;
         live.allow_revival().await;
-        if matches!(from, TaskState::Running | TaskState::Blocked) {
-            let text = "[terminal] The terminal didn't open. Carry on with your task.".to_owned();
-            if let Err(err) = self.resume_session(live, task, text).await {
-                tracing::warn!(task = %task.id, error = %err, "could not resume a worker after a failed takeover");
-            }
+        let held = live.take_held_messages().await;
+        let mut text = "[terminal] The terminal didn't open.".to_owned();
+        let given = if matches!(from, TaskState::Running | TaskState::Blocked) {
+            text.push_str(" Carry on with your task.");
+            push_held(&mut text, &held);
+            self.resume_session(live, task, text).await
+        } else if !held.is_empty() {
+            // A paused or reported worker gets them the way any message reaches it.
+            push_held(&mut text, &held);
+            self.message_worker(&task.conversation_id, task, text, "the orchestrator")
+                .await
+                .map(drop)
+        } else {
+            Ok(())
+        };
+        if let Err(err) = given {
+            tracing::warn!(task = %task.id, error = %err, "could not resume a worker after a failed takeover");
+            self.hold_again(live, task, held).await;
         }
     }
 
@@ -326,50 +379,46 @@ impl SessionManager {
         if self.admit().is_err() {
             return;
         }
-        // Its session is being archived or deleted: that cleanup ends the task (and waits for
-        // a hand-back already under way, which holds this guard).
-        let Ok(_guard) = self.enter(&live.conversation_id) else {
-            return;
+        // Handed back under the conversation's guard and the reservation, so an archive, a
+        // delete or a Stop under way ends the task instead. The launch after waits (for its
+        // run's worker slot) holding neither, so none of them waits for it.
+        let handed = {
+            let Ok(_guard) = self.enter(&live.conversation_id) else {
+                return;
+            };
+            let mut reservation = live.takeover.lock().await;
+            if reservation
+                .as_ref()
+                .is_none_or(|open| open.generation != generation)
+            {
+                return;
+            }
+            *reservation = None;
+            live.set_terminal_access(None).await;
+            self.grants.revoke_owner(&grant_owner(&live.id));
+            let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await else {
+                return;
+            };
+            self.forget_terminal(&task).await;
+            // A deliberate end took the reservation before ending the terminal: it never
+            // gets here.
+            let Some(takeover) = task.takeover.clone() else {
+                return;
+            };
+            if task.state.is_final() {
+                return;
+            }
+            self.mark_handed_back(live, &task)
+                .await
+                .map(|task| (task, takeover))
         };
-        let mut reservation = live.takeover.lock().await;
-        if reservation
-            .as_ref()
-            .is_none_or(|open| open.generation != generation)
-        {
-            return;
-        }
-        *reservation = None;
-        live.set_terminal_access(None).await;
-        self.grants.revoke_owner(&grant_owner(&live.id));
-        let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await else {
-            return;
-        };
-        self.forget_terminal(&task).await;
-        // A deliberate end took the reservation before ending the terminal: it never gets
-        // here.
-        let Some(takeover) = task.takeover.clone() else {
-            return;
-        };
-        if task.state.is_final() {
-            return;
-        }
-        let failed = self.hand_back_session(live, &task, takeover).await;
-        // Its failure disposes of the task, which takes the reservation again.
-        drop(reservation);
-        if let Some((task, reason)) = failed {
-            self.worker_failed(&task, &reason).await;
+        if let Some((task, takeover)) = handed {
+            self.hand_back_session(live, &task, takeover).await;
         }
     }
 
-    /// Resumes the session the terminal continued, headless, and asks for its report. A
-    /// resume that failed returns the task and why, for the caller to fail it once it holds
-    /// no reservation.
-    async fn hand_back_session(
-        &self,
-        live: &Arc<TaskLive>,
-        task: &Task,
-        takeover: Takeover,
-    ) -> Option<(Task, String)> {
+    /// The task is its headless worker's again: running, with nothing of the terminal on it.
+    async fn mark_handed_back(&self, live: &Arc<TaskLive>, task: &Task) -> Option<Task> {
         let task = match self
             .update_task(&task.conversation_id, &task.id, |t| {
                 t.takeover = None;
@@ -387,25 +436,24 @@ impl SessionManager {
         };
         live.set_taken_over(false).await;
         live.allow_revival().await;
+        Some(task)
+    }
+
+    /// Resumes the session the terminal continued, headless, and asks for its report. Called
+    /// holding no lock: a Stop or an archive meanwhile ends the task; a resume that failed
+    /// otherwise fails it.
+    async fn hand_back_session(&self, live: &Arc<TaskLive>, task: &Task, takeover: Takeover) {
         let mut text = "[terminal] The user continued this task with you in their terminal and has closed it. Submit your report now (submit_report): what was done in the terminal, by you and by the user, and where the work stands.".to_owned();
         // Kept in memory while the daemon runs; after a restart, the copy kept with the task.
         let mut held = live.take_held_messages().await;
         if held.is_empty() {
             held = takeover.held.clone();
         }
-        if !held.is_empty() {
-            text.push_str(
-                "\n\nThe orchestrator's messages while the terminal was open, oldest first:\n",
-            );
-            for message in held {
-                text.push_str("\n- ");
-                text.push_str(&message.replace('\n', "\n  "));
-            }
-        }
+        push_held(&mut text, &held);
         let resumed = self
             .launch_worker(
                 live,
-                &task,
+                task,
                 None,
                 Origin::Resume {
                     native_id: takeover.native_id,
@@ -413,14 +461,37 @@ impl SessionManager {
                 TurnInput::text(text),
             )
             .await;
-        match resumed {
-            Ok(()) => None,
-            Err(err) => {
-                tracing::warn!(task = %task.id, error = %err, "could not resume a worker after its terminal");
-                Some((
-                    task,
-                    format!("Its session couldn't be resumed after the terminal: {err}"),
-                ))
+        let Err(err) = resumed else {
+            return;
+        };
+        tracing::warn!(task = %task.id, error = %err, "could not resume a worker after its terminal");
+        let Ok(now) = self.task_by_id(&task.conversation_id, &task.id).await else {
+            return;
+        };
+        // Opened in a terminal again meanwhile: the messages wait for that one's report.
+        if now.state == TaskState::TakenOver {
+            self.hold_again(live, &now, held).await;
+            return;
+        }
+        // Ended meanwhile (a Stop, an archive, a delete): nothing to fail.
+        if now.state.is_final() || self.enter(&now.conversation_id).is_err() {
+            return;
+        }
+        self.worker_failed(
+            &now,
+            &format!("Its session couldn't be resumed after the terminal: {err}"),
+        )
+        .await;
+    }
+
+    /// Messages a launch that didn't happen was to carry: held again while the session is open
+    /// in a terminal (else they are lost, and said so).
+    async fn hold_again(&self, live: &Arc<TaskLive>, task: &Task, held: Vec<String>) {
+        for message in held {
+            if live.held_for_terminal(&message).await {
+                self.keep_held(task, &message).await;
+            } else {
+                tracing::warn!(task = %task.id, "a message held for a worker's terminal could not be delivered");
             }
         }
     }
@@ -519,8 +590,8 @@ impl SessionManager {
         let manager = self.arc();
         let task = task.clone();
         self.spawn(async move {
-            if let Some((task, reason)) = manager.hand_back_session(&live, &task, takeover).await {
-                manager.worker_failed(&task, &reason).await;
+            if let Some(task) = manager.mark_handed_back(&live, &task).await {
+                manager.hand_back_session(&live, &task, takeover).await;
             }
         });
     }
@@ -564,5 +635,17 @@ fn state_words(state: TaskState) -> &'static str {
         TaskState::ReadyToLand => "ready to land",
         TaskState::TakenOver => "open in a terminal",
         _ => "over",
+    }
+}
+
+/// Appends the orchestrator's messages held for the terminal to `text`.
+fn push_held(text: &mut String, held: &[String]) {
+    if held.is_empty() {
+        return;
+    }
+    text.push_str("\n\nThe orchestrator's messages while the terminal was open, oldest first:\n");
+    for message in held {
+        text.push_str("\n- ");
+        text.push_str(&message.replace('\n', "\n  "));
     }
 }

@@ -953,6 +953,11 @@ pub enum Response {
         terminal: TerminalInfo,
         /// The worker's CLI (Claude asks whether to trust a folder it never saw).
         provider: ProviderKind,
+        /// The task's checkout when the terminal starts elsewhere (a read-only Codex worker
+        /// starts in its scratch folder).
+        #[ts(optional)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checkout: Option<String>,
     },
     OpenSideChat {
         conversation: Box<Conversation>,

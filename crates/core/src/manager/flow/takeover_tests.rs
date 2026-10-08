@@ -90,6 +90,17 @@ async fn start(
     provider: ProviderKind,
     context: i64,
 ) -> (Flow, Arc<FakeHost>, Heard, Heard) {
+    start_as(name, provider, "implement", context, TaskState::Reported).await
+}
+
+/// [`start`] with a task of `kind`, waiting for task-1 to be in `state`.
+async fn start_as(
+    name: &str,
+    provider: ProviderKind,
+    kind: &'static str,
+    context: i64,
+    state: TaskState,
+) -> (Flow, Arc<FakeHost>, Heard, Heard) {
     let worker_heard: Heard = Arc::default();
     let thread_heard: Heard = Arc::default();
     let (worker_log, thread_log) = (worker_heard.clone(), thread_heard.clone());
@@ -112,7 +123,7 @@ async fn start(
                         let reply = turn
                             .call(
                                 "delegate_task",
-                                json!({"title": "Add notes", "kind": "implement",
+                                json!({"title": "Add notes", "kind": kind,
                                        "spec": "Create notes.txt.", "provider": provider.to_string()}),
                             )
                             .await;
@@ -121,7 +132,7 @@ async fn start(
                     return Reply::text("[quiet]");
                 }
                 worker_log.lock().unwrap().push(turn.input.clone());
-                if worker_log.lock().unwrap().len() == 1 {
+                if worker_log.lock().unwrap().len() == 1 && kind == "implement" {
                     turn.write("notes.txt", "notes\n");
                     turn.git(&["add", "notes.txt"]);
                     turn.git(&["commit", "-q", "-m", "Add notes"]);
@@ -129,6 +140,10 @@ async fn start(
                 // A session grows to its size: one that started there isn't handed off.
                 turn.report_context(1_000).await;
                 turn.report_context(context).await;
+                if kind != "implement" {
+                    // Still at work when it is opened (a reader's report would end its task).
+                    std::future::pending::<()>().await;
+                }
                 let reply = turn
                     .call("submit_report", json!({"summary": "notes.txt is in."}))
                     .await;
@@ -145,10 +160,13 @@ async fn start(
         board
             .tasks
             .values()
-            .any(|task| task.number == 1 && task.state == TaskState::Reported)
+            .any(|task| task.number == 1 && task.state == state)
     })
     .await;
-    flow.settled().await;
+    // A worker still at work holds its request open.
+    if state == TaskState::Reported {
+        flow.settled().await;
+    }
     (flow, host, worker_heard, thread_heard)
 }
 
@@ -229,6 +247,7 @@ async fn a_worker_opens_in_a_terminal_and_reports_what_was_done_there() {
             .unwrap();
         assert!(opened.fresh);
         assert_eq!(opened.provider, provider);
+        assert_eq!(opened.checkout, None, "it starts in the checkout");
         let task = &flow.board().await.tasks[&id];
         assert_eq!(task.state, TaskState::TakenOver);
         assert_eq!(task.takeover.as_ref().unwrap().native_id, native);
@@ -605,5 +624,234 @@ async fn a_hand_off_decided_before_the_open_leaves_the_terminal_alone() {
     );
     assert_eq!(worker_specs(&flow).len(), specs, "nothing ran it headless");
     assert!(host.terminated.lock().unwrap().is_empty());
+    flow.stop().await;
+}
+
+/// A read-only Codex worker can't start in a folder it may not write: its terminal starts in
+/// its scratch folder, where its session was set up, keeps it read-only, and names the
+/// checkout for the tab.
+#[tokio::test]
+async fn a_read_only_codex_terminal_starts_in_its_folder_and_names_the_checkout() {
+    let (flow, host, _, _) = start_as(
+        "takeover-read-only",
+        ProviderKind::Codex,
+        "scout",
+        1_000,
+        TaskState::Running,
+    )
+    .await;
+    let id = task_id(&flow).await;
+    let opened = flow
+        .manager
+        .open_worker_terminal(id.clone(), 80, 24)
+        .await
+        .unwrap();
+    let task = flow.board().await.tasks[&id].clone();
+    let workspace = task.workspace.as_ref().unwrap();
+    let worktree = std::path::PathBuf::from(workspace.worktree.clone().unwrap());
+    assert_eq!(opened.checkout.as_ref(), Some(&worktree));
+    let (terminal, command) = host.started()[0].clone();
+    assert_ne!(command.cwd, worktree);
+    assert_eq!(command.cwd, std::path::PathBuf::from(&workspace.scratch));
+    let again = flow
+        .manager
+        .open_worker_terminal(id.clone(), 80, 24)
+        .await
+        .unwrap();
+    assert_eq!(
+        again.checkout, opened.checkout,
+        "a reattached tab names it too"
+    );
+    host.exit(&terminal);
+    flow.stop().await;
+}
+
+/// Messages held for a terminal that then fails to open still reach the worker: a reported
+/// one gets them as a message.
+#[tokio::test]
+async fn messages_held_while_a_terminal_fails_to_open_reach_the_worker() {
+    let (flow, _host, heard, _) = start("takeover-failed-open", ProviderKind::Claude, 1_000).await;
+    let id = task_id(&flow).await;
+    let native = flow.board().await.tasks[&id]
+        .native_session
+        .clone()
+        .unwrap();
+    let (reached_tx, reached) = oneshot::channel();
+    let (verdict, verdict_rx) = oneshot::channel();
+    super::GATED_TERMINALS
+        .lock()
+        .unwrap()
+        .push((native, reached_tx, verdict_rx));
+    let manager = flow.manager.clone();
+    let opening = {
+        let id = id.clone();
+        tokio::spawn(async move { manager.open_worker_terminal(id, 80, 24).await })
+    };
+    reached.await.unwrap();
+    let task = flow.board().await.tasks[&id].clone();
+    let (held, sent) = flow
+        .manager
+        .message_worker(
+            &task.conversation_id,
+            &task,
+            "Also add a title.".into(),
+            "the orchestrator",
+        )
+        .await
+        .unwrap();
+    assert!(!sent);
+    assert!(held.contains("open in the user's terminal"), "{held}");
+    verdict.send(true).unwrap();
+    assert!(opening.await.unwrap().is_err());
+    flow.until("the held message", |_| {
+        heard
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|input| input.contains("Also add a title."))
+    })
+    .await;
+    let board = flow.settled().await;
+    assert!(board.tasks[&id].takeover.is_none());
+    assert_ne!(board.tasks[&id].state, TaskState::TakenOver);
+    flow.stop().await;
+}
+
+/// A Stop while the hand-back waits for its overnight run's worker slot ends the task at once,
+/// and nothing starts when the slot frees.
+#[tokio::test]
+async fn a_stop_while_the_hand_back_waits_for_a_worker_slot_ends_it() {
+    use crate::manager::overnight::policy::ActiveRun;
+    use crate::model::OvernightRunId;
+    use crate::overnight::{RunRole, RunTaskContext};
+
+    let (flow, host, _, _) = start("takeover-slot", ProviderKind::Claude, 1_000).await;
+    let id = task_id(&flow).await;
+    let run_id = OvernightRunId("takeover-slot-run".into());
+    flow.manager.overnight.active.insert(
+        flow.conversation.clone(),
+        ActiveRun {
+            id: run_id.clone(),
+            segment: 0,
+            generation: 0,
+            rules_hash: String::new(),
+            workspace: None,
+            max_workers: Some(1),
+            winding_down: false,
+            wind_down_at_ms: None,
+        },
+    );
+    let task = flow
+        .manager
+        .update_task(&flow.conversation, &id, |t| {
+            t.run = Some(RunTaskContext {
+                run_id: run_id.clone(),
+                segment: 0,
+                generation: 0,
+                role: RunRole::Worker,
+                rules_hash: String::new(),
+            });
+        })
+        .await
+        .unwrap();
+    let opened = flow
+        .manager
+        .open_worker_terminal(id.clone(), 80, 24)
+        .await
+        .unwrap();
+    // Another task of the run works meanwhile and holds its one slot.
+    let mut other = task.clone();
+    other.id = TaskId("takeover-slot-other".into());
+    assert_eq!(
+        flow.manager.try_admit_run_task(&other).unwrap(),
+        crate::manager::overnight::admission::Slot::Admitted
+    );
+    let specs = worker_specs(&flow).len();
+    host.exit(&opened.terminal_id);
+    flow.until("the hand-back waiting for a slot", |board| {
+        board.tasks[&id]
+            .blocked_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("Waiting for a free worker"))
+    })
+    .await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        flow.manager.stop_task(id.clone()),
+    )
+    .await
+    .expect("the Stop doesn't wait for the slot")
+    .unwrap();
+    assert_eq!(flow.board().await.tasks[&id].state, TaskState::Stopped);
+    flow.manager.release_run_task(&other.id);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(worker_specs(&flow).len(), specs, "nothing started");
+    assert_eq!(flow.board().await.tasks[&id].state, TaskState::Stopped);
+    flow.stop().await;
+}
+
+/// The headless CLI's pending permission card expires when its session opens in a terminal:
+/// nothing could answer it, and the terminal asks for itself.
+#[tokio::test]
+async fn a_takeover_expires_the_workers_pending_permission_card() {
+    use crate::work::{ApprovalSubject, CardState};
+
+    let flow = Flow::start(
+        "takeover-card",
+        Options {
+            permission: crate::model::PermissionLevel::AskForApproval,
+            ..Options::default()
+        },
+        script(move |turn| async move {
+            if turn.is_orchestrator() {
+                if turn.input.contains("Fetch it.") {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"title": "Fetch", "kind": "implement",
+                                   "spec": "Fetch example.com.", "provider": "claude"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                }
+                return Reply::text("[quiet]");
+            }
+            turn.ask_approval("curl https://example.com", "curl").await;
+            Reply::text("Asked.")
+        }),
+    )
+    .await;
+    let host = Arc::new(FakeHost::default());
+    flow.manager.set_terminal_host(host.clone());
+    flow.say("Fetch it.").await;
+    let board = flow
+        .until("the worker's card", |board| {
+            board.approvals.values().any(|card| {
+                card.state == CardState::Pending
+                    && card.task_id.is_some()
+                    && matches!(card.subject, ApprovalSubject::Cli { .. })
+            })
+        })
+        .await;
+    let card = board
+        .approvals
+        .values()
+        .find(|card| card.task_id.is_some())
+        .unwrap()
+        .clone();
+    let id = card.task_id.clone().unwrap();
+    flow.manager
+        .open_worker_terminal(id.clone(), 80, 24)
+        .await
+        .unwrap();
+    let board = flow.board().await;
+    assert!(
+        matches!(board.approvals[&card.id].state, CardState::Expired { .. }),
+        "{:?}",
+        board.approvals[&card.id].state
+    );
+    assert_eq!(board.tasks[&id].state, TaskState::TakenOver);
+    let terminal = host.started()[0].0.clone();
+    host.exit(&terminal);
     flow.stop().await;
 }
