@@ -126,9 +126,10 @@ pub struct DelegateTask {
     /// Optional model id override (from that provider's model list).
     #[serde(default)]
     pub model: Option<String>,
-    /// Optional reasoning effort override: "low", "medium" or "high".
-    #[serde(default)]
-    pub effort: Option<String>,
+    /// The worker's reasoning effort, picked per task: "medium" for small, bounded work (one or
+    /// two files, a UI tweak or small UI feature, copy), "low" for a mechanical edit, "high" for
+    /// cross-area, risky or unclear work.
+    pub effort: String,
     /// For `review` tasks: the task whose candidate commit is reviewed, e.g. "task-2". For
     /// `merge` tasks: the task whose work conflicts with the branch it lands on. For a `fix`:
     /// the task whose work it fixes (the phase's verifier); it continues from that work and

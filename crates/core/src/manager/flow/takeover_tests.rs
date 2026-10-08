@@ -123,7 +123,7 @@ async fn start_as(
                         let reply = turn
                             .call(
                                 "delegate_task",
-                                json!({"title": "Add notes", "kind": kind,
+                                json!({"effort": "high", "title": "Add notes", "kind": kind,
                                        "spec": "Create notes.txt.", "provider": provider.to_string()}),
                             )
                             .await;
@@ -808,7 +808,7 @@ async fn a_takeover_expires_the_workers_pending_permission_card() {
                     let reply = turn
                         .call(
                             "delegate_task",
-                            json!({"title": "Fetch", "kind": "implement",
+                            json!({"effort": "high", "title": "Fetch", "kind": "implement",
                                    "spec": "Fetch example.com.", "provider": "claude"}),
                         )
                         .await;

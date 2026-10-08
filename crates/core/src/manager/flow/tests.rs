@@ -26,7 +26,7 @@ async fn a_scout_reports_and_the_answer_ends_the_request() {
                 let reply = turn
                     .call(
                         "delegate_task",
-                        json!({"title": "Look around", "kind": "scout", "spec": "List the files."}),
+                        json!({"effort": "high", "title": "Look around", "kind": "scout", "spec": "List the files."}),
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
@@ -166,7 +166,7 @@ async fn an_outline_gets_its_go_ahead_at_once_and_a_plan_review_in_the_backgroun
                     let reply = turn
                         .call(
                             "delegate_task",
-                            json!({"title": "Rework the parser", "kind": "implement",
+                            json!({"effort": "high", "title": "Rework the parser", "kind": "implement",
                                    "spec": "Rework the parser.", "provider": "claude"}),
                         )
                         .await;
@@ -301,7 +301,7 @@ async fn reported_work_lands_with_its_own_commits_and_a_self_check_after_a_rebas
                         let reply = turn
                             .call(
                                 "delegate_task",
-                                json!({"title": title, "kind": "implement",
+                                json!({"effort": "high", "title": title, "kind": "implement",
                                        "spec": format!("Create {file}.")}),
                             )
                             .await;
@@ -454,7 +454,7 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
                 let reply = turn
                     .call(
                         "delegate_task",
-                        json!({"title": "Add a greeting", "kind": "implement",
+                        json!({"effort": "high", "title": "Add a greeting", "kind": "implement",
                                "spec": "Create hello.txt.", "provider": "codex"}),
                     )
                     .await;
@@ -578,7 +578,7 @@ async fn a_review_still_running_at_the_merge_reports_its_findings_after_it() {
                     let reply = turn
                         .call(
                             "delegate_task",
-                            json!({"title": "Add a greeting", "kind": "implement",
+                            json!({"effort": "high", "title": "Add a greeting", "kind": "implement",
                                    "spec": "Create hello.txt.", "provider": "codex"}),
                         )
                         .await;
@@ -715,7 +715,7 @@ async fn a_verifier_the_orchestrator_started_triages_its_review_and_reports() {
                 let reply = turn
                     .call(
                         "delegate_task",
-                        json!({"title": "Add a greeting", "kind": "implement",
+                        json!({"effort": "high", "title": "Add a greeting", "kind": "implement",
                                "spec": "Create hello.txt.", "provider": "claude"}),
                     )
                     .await;
@@ -848,7 +848,7 @@ async fn a_verifier_takes_over_its_leads_review_still_running() {
                     let reply = turn
                         .call(
                             "delegate_task",
-                            json!({"title": "Add a greeting", "kind": "implement",
+                            json!({"effort": "high", "title": "Add a greeting", "kind": "implement",
                                    "spec": "Create hello.txt.", "provider": "claude"}),
                         )
                         .await;
@@ -985,7 +985,7 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                                 let reply = turn
                                     .call(
                                         "delegate_task",
-                                        json!({"title": "Phase two", "kind": "implement",
+                                        json!({"effort": "high", "title": "Phase two", "kind": "implement",
                                                "spec": "Build phase two: create p2.txt.",
                                                "phase": 2, "provider": "codex"}),
                                     )
@@ -1010,7 +1010,7 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                     let reply = turn
                         .call(
                             "delegate_task",
-                            json!({"title": "Phase one", "kind": "implement",
+                            json!({"effort": "high", "title": "Phase one", "kind": "implement",
                                    "spec": "Build phase one.", "phase": 1,
                                    "provider": "claude"}),
                         )
@@ -1246,7 +1246,7 @@ async fn the_orchestrator_answers_a_workers_questions_and_logs_each_answer() {
                 let reply = turn
                     .call(
                         "delegate_task",
-                        json!({"title": "Pick a greeting", "kind": "scout",
+                        json!({"effort": "high", "title": "Pick a greeting", "kind": "scout",
                                "spec": "Pick the greeting."}),
                     )
                     .await;
@@ -1354,7 +1354,7 @@ async fn archiving_a_session_ends_its_running_review() {
                 let reply = turn
                     .call(
                         "delegate_task",
-                        json!({"title": "Add a greeting", "kind": "implement",
+                        json!({"effort": "high", "title": "Add a greeting", "kind": "implement",
                                "spec": "Create hello.txt.", "provider": "codex"}),
                     )
                     .await;
@@ -1423,7 +1423,7 @@ async fn a_reviews_news_leaves_a_workers_question_open() {
                     let reply = turn
                         .call(
                             "delegate_task",
-                            json!({"title": "Pick a greeting", "kind": "scout",
+                            json!({"effort": "high", "title": "Pick a greeting", "kind": "scout",
                                    "spec": "Pick the greeting."}),
                         )
                         .await;
@@ -1517,7 +1517,7 @@ async fn a_worker_past_the_handoff_size_continues_in_a_fresh_session_that_keeps_
                     let reply = turn
                         .call(
                             "delegate_task",
-                            json!({"title": "Add two files", "kind": "implement",
+                            json!({"effort": "high", "title": "Add two files", "kind": "implement",
                                    "spec": "Create a.txt and b.txt.", "provider": "claude"}),
                         )
                         .await;
@@ -1670,7 +1670,7 @@ async fn an_outlined_request_of_one_phase_keeps_its_phase_and_pill() {
                 let reply = turn
                     .call(
                         "delegate_task",
-                        json!({"title": "Add the file", "kind": "implement",
+                        json!({"effort": "high", "title": "Add the file", "kind": "implement",
                                "spec": "Create one.txt.", "provider": "claude"}),
                     )
                     .await;
@@ -1732,7 +1732,7 @@ async fn in_plan_mode_a_lead_outlines_and_builds_nothing() {
                     let reply = turn
                         .call(
                             "delegate_task",
-                            json!({"title": "Add a file", "kind": "implement",
+                            json!({"effort": "high", "title": "Add a file", "kind": "implement",
                                    "spec": "Create one.txt.", "provider": "claude"}),
                         )
                         .await;
@@ -1790,7 +1790,7 @@ async fn a_report_whose_work_cannot_be_committed_is_refused() {
                 let reply = turn
                     .call(
                         "delegate_task",
-                        json!({"title": "Add a file", "kind": "implement",
+                        json!({"effort": "high", "title": "Add a file", "kind": "implement",
                                "spec": "Create one.txt.", "provider": "codex"}),
                     )
                     .await;
@@ -1870,7 +1870,7 @@ async fn a_fix_continues_the_unlanded_work_it_fixes_and_lands_both() {
                     let reply = turn
                         .call(
                             "delegate_task",
-                            json!({"title": "Fix it", "kind": "implement", "role": "fix",
+                            json!({"effort": "high", "title": "Fix it", "kind": "implement", "role": "fix",
                                    "subject": "task-1", "spec": "Fix: add b.txt.",
                                    "provider": "claude"}),
                         )
@@ -1881,7 +1881,7 @@ async fn a_fix_continues_the_unlanded_work_it_fixes_and_lands_both() {
                 let reply = turn
                     .call(
                         "delegate_task",
-                        json!({"title": "Add a.txt", "kind": "implement",
+                        json!({"effort": "high", "title": "Add a.txt", "kind": "implement",
                                "spec": "Create a.txt.", "provider": "claude"}),
                     )
                     .await;
@@ -1952,7 +1952,7 @@ async fn in_plan_mode_a_phase_lead_outlines_and_builds_nothing() {
                     let reply = turn
                         .call(
                             "delegate_task",
-                            json!({"title": "Phase one", "kind": "implement",
+                            json!({"effort": "high", "title": "Phase one", "kind": "implement",
                                    "spec": "Build phase one.", "phase": 1,
                                    "provider": "claude"}),
                         )
@@ -2025,7 +2025,7 @@ async fn a_phase_with_only_litter_ends_its_lead_with_its_verifier() {
                 let reply = turn
                     .call(
                         "delegate_task",
-                        json!({"title": "Look into it", "kind": "implement",
+                        json!({"effort": "high", "title": "Look into it", "kind": "implement",
                                "spec": "Look into the logs.", "provider": "claude"}),
                     )
                     .await;

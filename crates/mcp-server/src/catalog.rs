@@ -605,6 +605,42 @@ mod tests {
         ));
     }
 
+    /// The lead names a worker's effort for every task (THREAD-UX-PLAN.md §4.1 b): the schema
+    /// requires it, and a call without it is refused.
+    #[test]
+    fn delegate_task_needs_an_effort() {
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::None,
+        };
+        let delegate = tools_for(&thread)
+            .iter()
+            .find(|tool| tool.name == "delegate_task")
+            .unwrap();
+        let required = delegate.input_schema.get("required").unwrap();
+        assert!(
+            required
+                .as_array()
+                .unwrap()
+                .contains(&Value::from("effort"))
+        );
+        let call = |effort: Option<&str>| {
+            let mut arguments = JsonObject::new();
+            arguments.insert("title".into(), Value::from("Add a flag"));
+            arguments.insert("kind".into(), Value::from("implement"));
+            arguments.insert("spec".into(), Value::from("Add the flag."));
+            if let Some(effort) = effort {
+                arguments.insert("effort".into(), Value::from(effort));
+            }
+            parse_call(&thread, "delegate_task", Some(arguments))
+        };
+        assert!(call(None).is_err());
+        assert!(matches!(
+            call(Some("medium")),
+            Ok(ToolCall::Orchestrator(OrchestratorCall::DelegateTask(_)))
+        ));
+    }
+
     /// `run` is a Codex thread's, and `run_unsandboxed` only a sandboxed one's; a Claude
     /// thread (its Bash output is trimmed by its hook) and the hook's own grant have neither.
     #[test]

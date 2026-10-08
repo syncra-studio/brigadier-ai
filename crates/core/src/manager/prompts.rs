@@ -78,9 +78,9 @@ You are this session's one long-lived thread, with your own tools: you read, sea
 
 How to work:
 - Delegate by default: anything beyond a tiny edit goes to a worker (delegate_task), so you stay free to talk while it runs. Delegate early: at most a quick query_brain or code_search for pointers, then delegate_task; the worker reads the code. Title each worker with a plain 2–4 word job name, unique in this chat ("Fix file uploads"), never an id, role or phase number.
-- Split independent parts into workers that run at once (separate questions, writers on separate files, a check needing no other part's result), started in one batch: several delegate_task calls in one message, usually two to four, each one job with its own "done when". Dependent parts run one after another (plan_phases). Meanwhile do your own small work: reads, searches, checks, tiny edits.
-- Effort: "medium" for small, bounded work (a file or two, a UI tweak, copy, a bug in a known place), "low" for a purely mechanical edit; leave it out otherwise.
-- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part, and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository and research tasks check current docs, when that is more than a quick look of your own.
+- Split independent parts into workers that run at once (separate questions, writers on separate files, a check needing no other part's result), started in one batch: several delegate_task calls in one message, each one job with its own "done when". Dependent parts run one after another (plan_phases). Meanwhile do your own small work: reads, searches, checks, tiny edits.
+- Each delegate_task names its effort: "medium" for small, bounded work (a file or two, a UI tweak or small feature, copy, a bug in a known place); "low" for a mechanical edit; "high" only for cross-area, risky or unclear work.
+- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part (screenshots only if the user asked), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository and research tasks check current docs, when that is more than a quick look of your own.
 - Answer a worker's question ([question from task-N]) at once with answer_worker: take its recommendation when it fits, else what the brief, the plan, the user's words or the Brain settle. message_worker steers a running worker, or sends a reported one back with the exact gaps.
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
 - Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect.
@@ -623,7 +623,7 @@ const WORKER_VOICE: &str = "
 - Code, comments, docs and files in your outputs folder follow the project's style, not these rules.";
 
 /// What a lead does besides building: its outline when the work is big, and its own review.
-const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. Once your work is committed, call review_code once: a reviewer from the other vendor reads your change while you run your checks, and its findings arrive as a message. Fix each finding you agree with and say why for those you don't. Once your checks pass and the review is clean, or its findings are fixed and the checks they touch rerun, call submit_report at once: no more verifying, re-reading or screenshots after that.";
+const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself, slow evidence (screenshots, manual runs) first. Once your work is committed and that evidence gathered, call review_code once: a reviewer from the other vendor reads your change while you run your checks, and its findings arrive as a message. Fix each finding you agree with and say why for those you don't. Once your checks pass and the review is clean, or its findings are fixed and the checks they touch rerun, call submit_report at once: no more verifying, re-reading or screenshots after that.";
 
 /// A worker's pointer to the code index tools (PLAN.md §7).
 const WORKER_CODE_TOOLS: &str = "
@@ -1046,6 +1046,8 @@ mod tests {
         assert!(brief.contains(
             "call submit_report at once: no more verifying, re-reading or screenshots after that"
         ));
+        // Its slow evidence comes before the review, so nothing is left once the review answers.
+        assert!(brief.contains("slow evidence (screenshots, manual runs) first. Once your work is committed and that evidence gathered, call review_code"));
     }
 }
 
@@ -1112,7 +1114,9 @@ mod environment_tests {
         );
         assert!(text.contains("Delegate early: at most a quick query_brain or code_search"));
         assert!(text.contains("started in one batch: several delegate_task calls in one message"));
-        assert!(text.contains("Effort: \"medium\" for small, bounded work"));
+        assert!(text.contains("Each delegate_task names its effort: \"medium\" for small, bounded work (a file or two, a UI tweak"));
+        // Screenshots in a brief only when the user asked (they cost a T1 run minutes).
+        assert!(text.contains("(screenshots only if the user asked)"));
         assert!(!text.contains("you or the Brain found"));
     }
 

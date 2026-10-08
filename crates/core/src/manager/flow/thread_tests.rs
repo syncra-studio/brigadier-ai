@@ -543,7 +543,7 @@ async fn a_thread_commit_before_a_landing_in_the_same_turn_is_reviewed_on_its_ow
                         let reply = turn
                             .call(
                                 "delegate_task",
-                                json!({"title": "Add a greeting", "kind": "implement",
+                                json!({"effort": "high", "title": "Add a greeting", "kind": "implement",
                                        "spec": "Create hello.txt.", "provider": "codex"}),
                             )
                             .await;
@@ -1566,6 +1566,15 @@ async fn the_effort_the_lead_picks_is_the_workers() {
                         .call(
                             "delegate_task",
                             json!({"title": "Rename the label", "kind": "scout",
+                                   "spec": "Find the label.", "effort": "lots"}),
+                        )
+                        .await;
+                    assert!(reply.is_error, "{}", reply.text);
+                    assert!(reply.text.contains("unknown effort"), "{}", reply.text);
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"title": "Rename the label", "kind": "scout",
                                    "spec": "Find the label.", "effort": "medium"}),
                         )
                         .await;
@@ -1627,7 +1636,7 @@ async fn messaging_and_stopping_a_worker_are_rows_with_their_text_and_reason() {
                 let reply = turn
                     .call(
                         "delegate_task",
-                        json!({"title": "Fix uploads", "kind": "scout",
+                        json!({"effort": "high", "title": "Fix uploads", "kind": "scout",
                                "spec": "Find why uploads fail."}),
                     )
                     .await;
@@ -1719,7 +1728,7 @@ async fn stop_all_stops_every_running_worker_and_tells_the_orchestrator_once() {
                     let reply = turn
                         .call(
                             "delegate_task",
-                            json!({"title": title, "kind": "scout", "spec": "Look around."}),
+                            json!({"effort": "high", "title": title, "kind": "scout", "spec": "Look around."}),
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);

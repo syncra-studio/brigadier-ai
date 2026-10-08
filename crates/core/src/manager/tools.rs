@@ -109,7 +109,15 @@ impl SessionManager {
                     let request = self.request_for(id, None).await;
                     self.phase_step(id, request, phase).await?;
                 }
-                let pin = pin(args.provider.as_deref(), args.model, args.effort)?;
+                let effort = match args.effort.trim().to_lowercase().as_str() {
+                    effort @ ("low" | "medium" | "high") => effort.to_owned(),
+                    other => {
+                        return Err(Error::Invalid(format!(
+                            "unknown effort \"{other}\": use \"low\", \"medium\" or \"high\""
+                        )));
+                    }
+                };
+                let pin = pin(args.provider.as_deref(), args.model, Some(effort))?;
                 let areas = task_areas(&args.areas)?;
                 let floor = match args.quality.as_deref().map(str::trim) {
                     None | Some("" | "normal") => None,

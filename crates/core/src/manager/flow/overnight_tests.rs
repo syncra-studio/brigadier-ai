@@ -90,7 +90,7 @@ impl Thread {
         let reply = turn
             .call(
                 "delegate_task",
-                json!({"title": format!("Phase {phase}"), "kind": "implement",
+                json!({"effort": "high", "title": format!("Phase {phase}"), "kind": "implement",
                        "spec": format!("Build phase {phase}: create p{phase}.txt."),
                        "provider": "claude", "phase": phase}),
             )
@@ -126,7 +126,7 @@ impl Thread {
                 let reply = turn
                     .call(
                         "delegate_task",
-                        json!({"title": "No", "kind": "implement",
+                        json!({"effort": "high", "title": "No", "kind": "implement",
                                "spec": format!("Build phase {phase}."), "phase": phase}),
                     )
                     .await;
@@ -282,7 +282,7 @@ impl Thread {
                 let reply = turn
                     .call(
                         "delegate_task",
-                        json!({"title": "No", "kind": "implement",
+                        json!({"effort": "high", "title": "No", "kind": "implement",
                                "spec": format!("Build phase {phase}."), "phase": phase}),
                     )
                     .await;

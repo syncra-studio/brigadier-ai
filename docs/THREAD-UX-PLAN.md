@@ -328,6 +328,21 @@ quality knobs):
 `tools/ab` recorder and normal routing, and comparing the same four stages. One run, so the numbers carry its
 variance; a miss is reported as it is.
 
+**After the first measurement** (9m 45s, a miss: the worker ran at high effort because the lead passed none, and
+it took the brief's screenshots only after its review), three fixes, then one more T1 run:
+
+- **(b) made reliable.** `delegate_task`'s `effort` is required (`"low"`, `"medium"` or `"high"`), so the lead
+  picks it for every task instead of falling back to the model's default. The instructions give the rule with
+  examples: `"medium"` for small, bounded work (one or two files, a UI tweak or a small UI feature in one area,
+  copy, a style fix, a bug in a known place), `"low"` for a mechanical edit, `"high"` only for cross-area, risky or
+  unclear work. A daemon default from the brief's size was rejected: a guess from text length
+  would misjudge short briefs for hard work.
+- **No screenshots unless asked.** A brief's "done when" asks for screenshots or browser evidence only when the
+  user asked for them.
+- **Evidence before the review.** A lead worker does its slow done-when evidence (screenshots, manual runs) before
+  `review_code`, so nothing is left once the review answers; after a clean review and green checks it reports at
+  once (a).
+
 ## 5. Other thread actions
 
 Brigadier already has several actions: fork from a message (`C/ForkMenu.tsx`), edit a message, @-mention workers

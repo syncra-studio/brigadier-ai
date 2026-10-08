@@ -169,7 +169,7 @@ async fn the_thread_s_reads_and_searches_fill_thread_reads_and_a_worker_s_do_not
                             let reply = turn
                                 .call(
                                     "delegate_task",
-                                    json!({"title": "Add a greeting", "kind": "implement",
+                                    json!({"effort": "high", "title": "Add a greeting", "kind": "implement",
                                            "spec": "Create hello.txt."}),
                                 )
                                 .await;

@@ -56,7 +56,7 @@ async fn a_check_runs_once_per_tree_for_workers_and_the_thread() {
                     let reply = turn
                         .call(
                             "delegate_task",
-                            json!({"title": "Run the check", "kind": "scout",
+                            json!({"effort": "high", "title": "Run the check", "kind": "scout",
                                    "spec": "Run the check."}),
                         )
                         .await;

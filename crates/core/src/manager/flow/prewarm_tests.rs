@@ -31,7 +31,7 @@ fn delegating(seen: Arc<Mutex<Vec<PathBuf>>>) -> Script {
                     let reply = turn
                         .call(
                             "delegate_task",
-                            json!({"title": "Add a greeting", "kind": "implement",
+                            json!({"effort": "high", "title": "Add a greeting", "kind": "implement",
                                    "spec": "Create hello.txt."}),
                         )
                         .await;
