@@ -205,7 +205,7 @@ const WorkHeader: FC<{
         aria-hidden
         className={cn(
           "text-muted-foreground size-icon-xs transition-[rotate] duration-150 ease-in-out motion-reduce:transition-none",
-          open ? "rotate-90" : "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100",
+          open && "rotate-90",
         )}
       />
     </button>

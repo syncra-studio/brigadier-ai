@@ -147,7 +147,8 @@ const searchedCode = (pattern: string | null): StepWords => {
 /** A command, told as what it does: a read, a listing, a search, or a run of its first line. */
 function commandWords(raw: string, kind: "run" | "checks" = "run"): StepWords {
   const command = unwrapCommand(raw);
-  const firstLine = command.split("\n")[0] ?? command;
+  const [head = command, ...rest] = command.trim().split("\n");
+  const firstLine = rest.length > 0 ? `${head} …` : head;
   const words = wordsOf(command);
   const program = basename(words[0] ?? "");
   const web = NETWORK.has(program) || (program === "git" && NETWORK_GIT.has(words[1] ?? ""));
