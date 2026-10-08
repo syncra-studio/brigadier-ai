@@ -1,9 +1,10 @@
 # Thread UX plan: one calm thread for the lead and its workers
 
-> Status: proposal, 2026-10-08. Base: `thread-build` at `fef7b14a` (all six phases of docs/THREAD-PLAN.md).
-> Nothing here is built yet. The user approves it first, then a build run follows §7.
+> Status: approved 2026-10-08 ("Do as you recommend": §8 records the rulings). Built on branch `thread-ux2` from
+> `main` at `246761fd` (the thread build, merge in words and the trust dialog), in the order of §7.
+> Evidence (§2) is from `fef7b14a`, all six phases of docs/THREAD-PLAN.md.
 > Paths: `C/` = `apps/desktop/src/app/conversation/`, `E/` = `apps/desktop/src/components/assistant-ui/elements/`,
-> `T/` = `apps/desktop/src/components/transcript/`. File:line references are to `fef7b14a`.
+> `T/` = `apps/desktop/src/components/transcript/`. File:line references are to `246761fd`.
 
 ## 1. What the user asked for
 
@@ -43,7 +44,7 @@ the answer, the action bar and the summary card. The trouble starts once the wor
 6. **Internal tool names leak** as rows: "Read Diff of task-1", "Finished the session", "Read {worker}'s report".
 7. **Worker progress lives in three places at once.** It shows as lifecycle rows in the thread, as up to three lines
    under the live status (`C/ThreadStatus.tsx:50-67`), and in the Workers tab and the summary card. "Waiting on you"
-   shows in the block (`C/RequestBlock.tsx:366`), the summary (`C/PinnedSummary.tsx:272`) and the status head
+   shows in the block (`C/RequestBlock.tsx:366`), the summary (`C/PinnedSummary.tsx:288`) and the status head
    (`C/liveStatus.ts:52-54`).
 8. **Worker lifecycle rows only half merge.** Adjacent "started" rows merge ("A, B and C started working",
    `C/blocks.ts:640-673`), but "finished", "stopped" and "is waiting" never do. Messages, answers and stops sent to
@@ -141,7 +142,7 @@ fold just closes over the same groups (this fixes §2.4).
 | Read Diff of task-1 | hidden (the team sentence "Reviewed Sidebar hide mode's change" covers it, §3.4) |
 | Read {worker}'s report | hidden |
 | Landed 1 commit on brigadier/…/session | team sentence: "Landed Sidebar hide mode's change" with "1 commit" in its detail |
-| Finished the session | hidden: the merge card is the visible result |
+| Finished the session | hidden: the `Merged` step the user asked for in words says it ("Merged {branch} into {base}") |
 | Called note_for_user / remember | hidden; their effect shows in "Waiting on you" or the Brain |
 
 ### 3.3 Thinking
@@ -171,7 +172,7 @@ Workers show as **sentences**, never cards, in the same row recipe as everything
 - `Fix uploads finished with problems` (a report that names gaps)
 
 **The lead's control actions** are rows now. Today they are dropped (§2.8). The board already has these steps
-(`crates/core/src/work.rs:1293-1337`):
+(`crates/core/src/work.rs:1294-1343`):
 
 | Step | Sentence | Detail when expanded |
 | --- | --- | --- |
@@ -294,6 +295,39 @@ messages.
 **Collecting.** The lead judges each report as it arrives, as today. Nothing changes in the voice: it stays quiet
 while work runs, and the user sees the team sentences and the live line instead of narration.
 
+### 4.1 Speed
+
+The user's live T1 demo ("Sidebar hide mode", a small one-file UI change) took 8m 35s, and they weren't happy with
+it:
+
+| Stage | Time |
+| --- | --- |
+| Submit → the lead's `delegate_task` | 47 s |
+| The worker, start → report | 7m 20s |
+| … of which after a clean review: more self-checking | 3m 41s |
+| Report → landed → the answer | 31 s |
+
+Four levers, all in the lead's and the workers' instructions plus one daemon message. None is a user setting (no
+quality knobs):
+
+- **(a) A worker stops once it is green.** It runs its checks while the review runs. Once its checks pass and the
+  review is clean, or its findings are fixed and those checks rerun, it calls `submit_report` at once: no further
+  verification, re-reading or screenshots. `LEAD_STEPS` (`crates/core/src/manager/prompts.rs:623`) says so, and the
+  clean-review message (`crates/core/src/manager/review_runs.rs:906`, today "Report once your checks are done.") says
+  "If your checks have passed, report now; don't verify again."
+- **(b) The lead picks a lower effort for small, bounded work.** `delegate_task` already takes `effort`
+  (`crates/core/src/tools.rs:129-131`). The thread's instructions tell the lead to pass `"medium"` for small,
+  bounded work (one or two files, a UI tweak, copy, a bug in a known place) and to leave it out for anything larger
+  or risky. It is the lead's choice per task.
+- **(c) The thread delegates sooner.** For work it will delegate, the lead finds the pointers with at most a quick
+  `query_brain` or `code_search` and then calls `delegate_task`; the worker reads the code. The brief's "code
+  pointers" line asks only for what the lead already has.
+- **(d) Fan out readily** on work that splits (§4 above).
+
+**Measured** by re-running T1 (`tools/ab/tasks/t1.md`) on a dev daemon built from the finished branch, with the
+`tools/ab` recorder and normal routing, and comparing the same four stages. One run, so the numbers carry its
+variance; a miss is reported as it is.
+
 ## 5. Other thread actions
 
 Brigadier already has several actions: fork from a message (`C/ForkMenu.tsx`), edit a message, @-mention workers
@@ -312,15 +346,15 @@ This plan adds:
 ## 6. Change list by file
 
 **Contracts and the daemon**
-- `crates/core/src/work.rs:1293-1337` `OrchestratorStepKind`:
+- `crates/core/src/work.rs:1294-1343` `OrchestratorStepKind`:
   - add `Stopped { task_id, reason }` and `Reviewed { task_ids, findings }` (if the review result isn't already a
     step; check `review.updated` first);
   - add `ended_at_ms: Option<i64>` and `exit: Option<i32>` to `Tool`, so rows can say "in 41s" and "failed (exit 1)".
 - A new IPC method, `getThreadItem(conversationId, itemId)` → `{ input, output, exit, ms }`:
   - it reads the matching provider `toolCall`/`command` entry from the conversation's orchestrator log
-    (`crates/core/src/sessions.rs:1019`, which already holds full input and output);
+    (`crates/core/src/sessions.rs:1049`, which already holds full input and output);
   - it uses the blob store for output that was digested (`crates/core/src/digest.rs:48`);
-  - wire it in `crates/daemon/src/server.rs` next to `listOrchestratorLog` (`:1019`), then run `gen-ts`.
+  - wire it in `crates/daemon/src/server.rs` next to `listOrchestratorLog` (`:1017`), then run `gen-ts`.
 - `crates/mcp-server/src/catalog.rs` `stop_worker`: add a required `reason`.
 - `crates/core/src/manager/prompts.rs:80-93`: the fan-out, batch and "own small work while they run" lines (§4).
 
@@ -346,9 +380,9 @@ This plan adds:
 - `C/ThinkingRow.tsx`: drop the compact main-thread form; the expanded group uses the regular form.
 - `C/TaskRow.tsx`: becomes `TeamSentence`; `WorkerLink` goes.
 - `C/OrchestratorSteps.tsx`: emptied into `C/activity/`; the dead renderers go (`:156-204`).
-- `C/ThreadStatus.tsx`, `C/liveStatus.ts:86-115`: a single line in the order of §3.5; the worker lines move out.
-- `C/WorkersStrip.tsx` (new): the composer-attached strip with Stop all. It is mounted in `C/Composer.tsx` next to
-  `ComposerCapsule`.
+- `C/ThreadStatus.tsx`, `C/liveStatus.ts:86-120`: a single line in the order of §3.5; the worker lines move out.
+- `C/WorkersStrip.tsx` (new): the composer-attached strip with Stop all. It is mounted with the composer, next to
+  `ComposerCapsule` (`C/PaneComposer.tsx:164`).
 - `C/WorkerThread.tsx`: renders through the shared turn parts and `C/activity/`. The brief is folded; files are a
   compact list; it opens at the report.
 - `C/Agents.tsx`: Working and Done sections, a live preview, waiting and failed states.
@@ -365,9 +399,16 @@ This plan adds:
 
 ## 7. Phases
 
-Each phase lands on its own branch from the previous tip. It gets the usual checks (`tools/full-checks.sh`,
+The phases land one after another on `thread-ux2`. Each gets the usual checks (`tools/full-checks.sh`,
 `cargo fmt`, `clippy`, `gen-ts`, `pnpm` checks) and one Codex review. Screenshots are taken from a dev build under
 its own identity and data dir, never the installed app.
+
+**Phase S: the speed levers (§4.1).** Instructions and the clean-review message only, so it goes first; it is
+measured at the end, on the finished branch.
+- Done when:
+  - tests pin the new `LEAD_STEPS` and clean-review wording, and that a `delegate_task` `effort` reaches the
+    worker's route;
+  - the T1 re-run's stage times are in the report next to the 8m 35s breakdown of §4.1.
 
 **Phase A: one row recipe and one vocabulary (desktop only).**
 - `C/activity/` with `words.ts`, `group.ts`, `ActivityRow` and `ActivityGroup`. The main thread and the worker thread
@@ -412,18 +453,18 @@ its own identity and data dir, never the installed app.
     report;
   - `rg` finds no `ACTIVITY_ROW`, `STEP_ROW` or second `PLURALS` table.
 
-Phases A and B are sequential. C and D can run in parallel after B, because they touch different files (C:
+Phase S comes first. Phases A and B are sequential. C and D can run in parallel after B, because they touch different files (C:
 `blocks.ts`, `TeamSentence`, prompts and catalog; D: `ThreadStatus`, `liveStatus`, `WorkersStrip`, `Agents` and
 `WorkerThread`). They are integrated one after the other. E comes last.
 
-## 8. Decisions for the user
+## 8. Decisions (settled 2026-10-08)
 
-1. **A one-line plan before delegating.** Today the lead stays silent until it is done (Q1 voice rules, the `[quiet]`
-   filter). A short opening line ("I'll study the three areas in parallel, then write the summary") makes the team
-   sentences easier to follow.
-   - Recommendation: keep the rule as it is. The team sentences and the live line already say what runs.
-   - Revisit after phase C if the thread still feels opaque.
-2. **The Workers strip on top of the composer.** It replaces the worker lines under the live status. Recommendation:
-   yes. The same progress then never shows twice in the thread column, and Stop all has a home.
-3. **Deleting the unreachable `TaskCardView` component and `C/WorkerTranscript.tsx`.** Recommendation: yes, in
-   phase E, after moving `TaskDetails` out of that file.
+The user's ruling: "Do as you recommend".
+
+1. **No one-line plan before delegating.** The Q1 voice rules and the `[quiet]` filter stay as they are: the team
+   sentences and the live line already say what runs. Revisit after phase C only if the thread still feels opaque.
+2. **Yes to the Workers strip on top of the composer.** It replaces the worker lines under the live status, so the
+   same progress never shows twice in the thread column, and Stop all has a home.
+3. **Yes to deleting the unreachable `TaskCardView` component and `C/WorkerTranscript.tsx`**, in phase E, after
+   `TaskDetails` moves out of that file.
+4. **The speed levers of §4.1 are in scope** (from the user's live demo), built as phase S and measured on T1.
