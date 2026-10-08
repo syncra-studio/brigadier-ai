@@ -40,7 +40,17 @@ corrections from the outline review: the takeover reservation is taken under a l
 records its intent and awaits the terminal's end; the takeover's owner, pid and start time are
 stored, and a restart recovers it; the terminal gets a fresh worker grant, revoked at exit; the
 hand-back resumes the exact native session before any size hand-off; the terminal's cwd is the
-task worktree (resume found the session there for both vendors).
+task worktree for every worker that writes (resume found the session there for both vendors).
+
+One exception to the worktree cwd: a **read-only Codex worker** (a scout, a review). Codex can't
+start in a folder it may not write, so such a worker runs from its scratch folder, and its
+terminal opens there too, where its sandbox was set up. The fallback in correction 6 puts the
+worktree first in `--add-dir`, but `codex resume --help` (0.160.1) says `--add-dir` means
+"Additional directories that should be writable alongside the primary workspace", which would
+lift the worker's read-only restriction. So the worktree isn't added; the tab names it instead
+("This worker only reads the code. It starts in its own folder; the code is in …"), from the
+`checkout` field of `openWorkerTerminal`'s answer
+(`takeover_tests::a_read_only_codex_terminal_starts_in_its_folder_and_names_the_checkout`).
 
 Driver `drive.py <vendor>`: a session whose thread delegates one implement task to that vendor
 (spec: create `notes.txt` with `from headless`, commit `Add notes`, remember codeword
@@ -157,6 +167,51 @@ with a test each (each mutation-checked: removing the fix makes its test fail or
 - **P2:** a merge whose worktree removal failed still forgot the worktree, so the next message
   failed to make it again. The concrete case, a locked worktree, now keeps it like a dirty one.
   Other removal failures still forget it; the next launch's sweep retries the removal.
+
+### Second review (verifier)
+
+`dlg review code --base 763cb90e` on `73573db6`: 1 P1 and 3 P2, all valid, fixed in `ecf14d7c`
+and `7f397a97` with a test each. Each fix was mutation-checked: with the fix removed, its test
+fails.
+
+- **P1:** the hand-back after a terminal waited for its overnight run's worker slot while holding
+  the takeover reservation and the conversation's guard, so a Stop or an archive hung behind
+  unrelated work. Now the task is marked handed back under both, then launched holding neither. A
+  Stop during the wait ends it, and nothing starts when the slot frees
+  (`a_stop_while_the_hand_back_waits_for_a_worker_slot_ends_it`; with the old order the Stop
+  times out).
+- **P2:** messages held while a terminal failed to open were dropped. They now reach the worker:
+  with its resume, or as a message to a paused or reported worker
+  (`messages_held_while_a_terminal_fails_to_open_reach_the_worker`).
+- **P2:** the headless CLI's pending permission card stayed open after the takeover. Clicking it
+  failed with "the worker has ended", and the card held the request. It now expires at the open
+  (`a_takeover_expires_the_workers_pending_permission_card`).
+- **P2:** a merge whose worktree removal failed for another reason (not a lock) forgot the
+  worktree, and the next message failed until the next launch, whose sweep would also have
+  removed a worktree made in between. The suggested fix, keeping the path, would leave that sweep
+  hazard. Instead, the next message finishes the removal and the merged branch first, then starts
+  fresh from the base's tip at the same path. The thread is told the removal is still to come
+  (`a_merge_whose_worktree_removal_failed_retries_it_at_the_next_message`, with a folder it may
+  not empty).
+
+The verifier also found that command output that isn't UTF-8 skipped the redactor, while the
+thread was shown it lossily, secret included (`printf '\377'` after `cat .env`). Fixed in
+`b1b454ba` (`a_runs_output_hides_the_projects_secrets` now runs that command too;
+mutation-checked).
+
+**Live re-check by the verifier** (dev daemon at `ecf14d7c`, scratch data dir and repo, Claude
+Sonnet thread). Merge: after the user allowed the card, `main` = `df83284 Add merge note`, the
+session worktree folder and `brigadier/cb07d90d/session` were gone, and the recorded path was
+cleared. After `e1ad3db Later on main` and the next message, the worktree was back at the same
+path on the same branch at `e1ad3db`. The thread's CLI was still pid 76106 with
+`--session-id 34144ab1…`, and its answer quoted `e1ad3db Later on main` / `later`. Open in
+terminal, Claude worker (task told not to land): `openWorkerTerminal` showed the task
+`takenOver` with cwd = the task worktree. After the trust prompt, it answered
+`PELICAN-42 CONFIRMED` and committed `7567c7d Terminal edit`. `project_map` was answered (an
+empty map: the scratch repo has no index), and only pid 5645, the PTY `claude`, carried the
+native id `e7f37317…`. After `/exit` (code 0), the same native session reported: "In the
+terminal, the user asked three things … appended the line 'from terminal' … committed it as
+'Terminal edit' …". Codex was not re-run live; the evidence above stands for it.
 
 `tools/full-checks.sh` on `33b4c30c`: exit 0 (Rust 476 passed, 1 ignored; app 148 passed). A first
 run failed with "No space left on device" while the disk was full, not on a check; the re-run on
