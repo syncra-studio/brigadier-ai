@@ -30,8 +30,8 @@ ran through the daemon's own PTY (`openWorkerTerminal`, `writeTerminal`).
 | A commit lands on `main` (`12a66aa1 Later on main`), then the next message | the worktree is back at the same path, on `brigadier/7fd5e9de/session`, at `12a66aa1` (= main's tip) |
 | The thread | still pid 17647 with the same session id: no restart, no rebirth. Its Bash in the new worktree answered `Later on main` / `later` |
 
-A worktree with uncommitted changes keeps the worktree and branch, and the `[finished]` text says
-why (second flow test).
+A worktree with uncommitted changes, or one the user locked (`git worktree lock`), keeps the
+worktree and branch, and the `[finished]` text says why (second flow test, both cases).
 
 ## Open in terminal
 
@@ -69,11 +69,12 @@ notes.txt belongs to no package." The rest of the round trip passed again: commi
 `eb04673 Terminal edit`, same thread id after the quit, one writer (0 app-servers, 1 process with
 the thread id).
 
-**Tests.** `flow/takeover_tests.rs` (4: `a_worker_opens_in_a_terminal_and_reports_what_was_done_there`,
+**Tests.** `flow/takeover_tests.rs` (6 after the review fixes below; first 4: `a_worker_opens_in_a_terminal_and_reports_what_was_done_there`,
 `racing_opens_resumes_and_landings_leave_one_writer`,
 `stop_archive_and_delete_end_the_terminal_without_handing_back`,
 `a_restart_ends_the_terminal_and_hands_back_or_finishes_the_stop`) and
-`terminals::tests::a_worker_terminal_runs_its_command_and_ends_with_its_tree` in the daemon.
+`terminals::tests::a_worker_terminal_runs_its_command_and_ends_with_its_tree` and
+`closing_a_worker_tab_ends_its_tree` in the daemon.
 Mutation checks: removing the launch refusal, replacing Resume with `revive_worker`, and removing
 the teardown fence each made a test fail.
 
@@ -135,3 +136,28 @@ phase 3's average context) and larger reads (+5.7k average context per call, abo
 thread was faster and used fewer raw tokens (−13.3 s, −77k raw, though +11.6k without cache reads). Phase 3's two runs on nearly the same engine were
 183 s and 2.3M tokens apart, so a difference of this size between single runs is inside
 worker-behaviour variance and says nothing about phase 4's code.
+
+## Codex review
+
+`dlg review code --base 763cb90e` on `697c6ee4`: 2 P1 and 3 P2, all valid, fixed in `33b4c30c`
+with a test each (each mutation-checked: removing the fix makes its test fail or hang).
+
+- **P1:** a hand-back whose resume failed disposed of the task while still holding the takeover's
+  reservation, which the disposal takes again: a deadlock. The failure now comes after the
+  reservation is released (`a_hand_back_that_cannot_resume_fails_the_task`).
+- **P1:** an error or limit hand-off decided for the headless session just before the open could
+  overwrite `TakenOver` and end the terminal. The open now waits for a hand-off under way and
+  supersedes the headless session; hand-offs and reroutes leave a task open in a terminal alone;
+  a task waiting for its usage limit can't be opened
+  (`a_hand_off_decided_before_the_open_leaves_the_terminal_alone`).
+- **P2:** closing a worker's tab ended only its CLI; now its whole tree
+  (`closing_a_worker_tab_ends_its_tree`, with a child that ignores the hang-up).
+- **P2:** messages held for the terminal were lost on a restart; they are kept with the task too
+  (the restart test holds one).
+- **P2:** a merge whose worktree removal failed still forgot the worktree, so the next message
+  failed to make it again. The concrete case, a locked worktree, now keeps it like a dirty one.
+  Other removal failures still forget it; the next launch's sweep retries the removal.
+
+`tools/full-checks.sh` on `33b4c30c`: exit 0 (Rust 476 passed, 1 ignored; app 148 passed). A first
+run failed with "No space left on device" while the disk was full, not on a check; the re-run on
+the same tree passed.
