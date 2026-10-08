@@ -19,7 +19,7 @@ import {
 } from "react";
 
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
-import { useCheckoutRoot } from "@/components/assistant-ui/markdown-text";
+import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { request, RequestError, revealPath } from "@/ipc/client";

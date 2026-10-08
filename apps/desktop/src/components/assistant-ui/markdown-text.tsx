@@ -5,7 +5,6 @@ import {
 } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  createContext,
   type FC,
   memo,
   type ReactNode,
@@ -18,6 +17,7 @@ import type { TextMessagePartProps } from "@assistant-ui/react";
 import { Check, Copy, ExpandLg } from "@openai/apps-sdk-ui/components/Icon";
 
 import { CodeBlock, CodeHeader } from "@/components/assistant-ui/code-block";
+import { OpenFileContext, useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { createWordFade } from "@/components/assistant-ui/word-fade";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -26,7 +26,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { openUrl, revealPath } from "@/ipc/client";
 import { cn } from "@/lib/utils";
-import { selectedConversation, useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
 type MarkdownTextProps = Partial<TextMessagePartProps> & {
@@ -106,17 +105,6 @@ function failed(error: unknown): void {
   toast(error instanceof Error ? error.message : String(error), { tone: "error" });
 }
 
-/** The root of the open session's checkout, for resolving file links. */
-export function useCheckoutRoot(): string | null {
-  return useApp((s) => {
-    const setup = selectedConversation(s)?.setup;
-    if (setup?.type !== "session") return null;
-    return setup.environment.type === "newWorktree"
-      ? (setup.environment.path ?? setup.repo)
-      : setup.repo;
-  });
-}
-
 /** A link to a file: its absolute path and line, from `path`, `path:36`, `path#L36`, `file://…`. */
 function fileTarget(href: string, root: string | null): { path: string; line: number | null } {
   let path = href.startsWith("file://") ? href.slice("file://".length) : href;
@@ -131,14 +119,6 @@ function fileTarget(href: string, root: string | null): { path: string; line: nu
   if (!path.startsWith("/") && root) path = `${root.replace(/\/$/, "")}/${path.replace(/^\.\//, "")}`;
   return { path, line };
 }
-
-/**
- * Shows a file (absolute path) at a line in the open session's Files tab; false when it isn't
- * one of the session's files.
- */
-export const OpenFileContext = createContext<(path: string, line: number | null) => boolean>(
-  () => false,
-);
 
 /**
  * The file-link chip: the file's type icon and its name in link blue, "(line 36)"

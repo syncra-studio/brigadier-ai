@@ -73,7 +73,7 @@ import {
   type AttachmentReader,
   AttachmentReaderContext,
 } from "@/components/assistant-ui/elements/attachment-tile";
-import { OpenFileContext } from "@/components/assistant-ui/markdown-text";
+import { OpenFileContext } from "@/components/assistant-ui/file-links";
 import { Thread, type ThreadComponents } from "@/components/assistant-ui/thread";
 import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
 import { Button } from "@/components/ui/button";

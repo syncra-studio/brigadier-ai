@@ -32,7 +32,7 @@ import {
 
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
-import { useCheckoutRoot } from "@/components/assistant-ui/markdown-text";
+import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
