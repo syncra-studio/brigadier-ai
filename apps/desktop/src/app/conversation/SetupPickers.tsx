@@ -1,4 +1,5 @@
 import {
+  AvatarProfile,
   Check,
   Clock,
   Folder,
@@ -31,6 +32,7 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
@@ -58,7 +60,9 @@ import {
   withChoice,
 } from "@/lib/setup";
 import { choiceName, formatResetAt, VENDOR_LABELS, withResetTime } from "@/lib/routing";
+import { percentLeft } from "@/lib/quota";
 import { cn } from "@/lib/utils";
+import { accountLabel, accountsOf, choiceAccount } from "@/state/accounts";
 import { openSettings, updateSetup } from "@/state/actions";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
@@ -354,6 +358,20 @@ export function ConversationModelPicker({
         <StandInPill fallback={conversation.fallback} groups={all} />
       )}
       {conversation.quotaWait && <WaitingPill wait={conversation.quotaWait} />}
+      <AccountPicker
+        choice={current}
+        disabled={fixed || action.busy}
+        onChange={(account) =>
+          action.run(() =>
+            updateSetup(
+              conversation.id,
+              setup?.type === "session"
+                ? { ...setup, orchestrator: { ...current, account } }
+                : { type: "chat", model: { ...current, account } },
+            ),
+          )
+        }
+      />
       <ModelSelector
         groups={shown}
         value={current}
@@ -374,6 +392,66 @@ export function ConversationModelPicker({
         }
       />
     </>
+  );
+}
+
+/**
+ * The account a model choice runs on, shown when its agent has more than one: its name, and in
+ * the menu each account with how much it has left. Picking one moves the chat there at once; it
+ * carries on from where it was.
+ */
+export function AccountPicker({
+  choice,
+  disabled,
+  onChange,
+}: {
+  choice: ModelChoice;
+  disabled?: boolean;
+  onChange: (account: string) => void;
+}) {
+  const views = useApp((s) => s.accounts?.accounts);
+  const accounts = accountsOf(views, choice.provider);
+  if (accounts.length < 2) return null;
+  const chosen =
+    accounts.find((view) => choiceAccount(view) === choice.account) ??
+    accounts.find((view) => view.default) ??
+    accounts[0]!;
+  const name = accountLabel(chosen);
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Account: ${name}`}
+          data-slot="account-picker"
+          disabled={disabled}
+          className={cn(composerPill, "text-muted-foreground max-w-48")}
+        >
+          <AvatarProfile />
+          <span className="truncate @max-md/composer:hidden">{name}</span>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align="end" className="min-w-56">
+        <DropdownMenuLabel>{VENDOR_LABELS[choice.provider]} account</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={choiceAccount(chosen)} onValueChange={onChange}>
+          {accounts.map((view) => {
+            const left = percentLeft(view.quota);
+            return (
+              <DropdownMenuRadioItem key={choiceAccount(view)} value={choiceAccount(view)}>
+                <span className="min-w-0 flex-1 truncate">{accountLabel(view)}</span>
+                <span className="text-muted-foreground text-xs tabular-nums">
+                  {view.status && !view.status.loggedIn
+                    ? "Not signed in"
+                    : left === null
+                      ? ""
+                      : `${left}% left`}
+                </span>
+              </DropdownMenuRadioItem>
+            );
+          })}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

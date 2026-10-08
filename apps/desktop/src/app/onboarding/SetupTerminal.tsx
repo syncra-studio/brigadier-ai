@@ -1,10 +1,10 @@
 import { ExclamationMarkCircle } from "@openai/apps-sdk-ui/components/Icon";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
-import type { ProviderKind, ProviderOverview } from "@/ipc/generated";
+import type { ProviderKind, ProviderOverview, TerminalInfo } from "@/ipc/generated";
 import { loadProviders, refreshProviders } from "@/state/actions";
 import { closeSetupTerminal, openSetupTerminal } from "@/state/onboarding";
 import { useApp } from "@/state/store";
@@ -53,10 +53,19 @@ export function SetupTerminal({
   provider,
   install,
   onClose,
+  openTerminal,
+  check,
+  onExited,
 }: {
   provider: ProviderKind;
   install: boolean;
   onClose: () => void;
+  /** Opens the terminal; by default with the agent's own install or sign-in command. */
+  openTerminal?: (cols: number, rows: number) => Promise<TerminalInfo>;
+  /** Checks whether it is set up yet; by default the agent's check. `null`: never. */
+  check?: (() => Promise<void>) | null;
+  /** The command finished, with its exit code. */
+  onExited?: (code: number | null) => void;
 }) {
   const terminalId = useRef<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -68,28 +77,40 @@ export function SetupTerminal({
 
   const open = useCallback(
     async (cols: number, rows: number) => {
-      const terminal = await openSetupTerminal(provider, install, cols, rows);
+      const terminal = openTerminal
+        ? await openTerminal(cols, rows)
+        : await openSetupTerminal(provider, install, cols, rows);
       terminalId.current = terminal.id;
       return terminal;
     },
-    [provider, install],
+    [provider, install, openTerminal],
   );
+  const recheck = useMemo(
+    () => (check === undefined ? () => refreshProviders(provider) : check),
+    [check, provider],
+  );
+  const exited = useRef(onExited);
+  useLayoutEffect(() => {
+    exited.current = onExited;
+  }, [onExited]);
   const onExit = useCallback(
     (code: number | null) => {
       terminalId.current = null;
       setExit({ code });
-      void refreshProviders(provider).catch(() => {});
+      exited.current?.(code);
+      void recheck?.().catch(() => {});
     },
-    [provider],
+    [recheck],
   );
 
   // Notices the sign-in (or install) soon after it finishes.
   useEffect(() => {
+    if (!recheck) return;
     const timer = window.setInterval(() => {
-      void refreshProviders(provider).catch(() => {});
+      void recheck().catch(() => {});
     }, RECHECK_MS);
     return () => window.clearInterval(timer);
-  }, [provider]);
+  }, [recheck]);
   // Succeeded, but the agent still isn't set up a while later: the output may say why.
   useEffect(() => {
     if (exit?.code !== 0) return;

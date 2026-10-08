@@ -5,6 +5,7 @@ import { errorText } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { Segmented } from "@/app/settings/parts";
 import { FootButton, footMenuPlacement } from "@/app/sidebar/nav";
+import { WindowBar } from "@/app/usage/WindowBar";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import {
   DropdownMenu,
@@ -20,11 +21,12 @@ import { Switch } from "@/components/ui/switch";
 import type {
   ProviderOverview,
   QuotaSnapshot,
-  QuotaWindow,
 } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";
+import { glance, tone, used } from "@/lib/quota";
 import { HEAT_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";
+import { loadAccounts } from "@/state/accounts";
 import { loadProviders, openSettings, refreshProviders } from "@/state/actions";
 import {
   keepAwakeOptions,
@@ -68,39 +70,6 @@ function useNow(): number {
   return now;
 }
 
-function used(window: QuotaWindow): number {
-  return Math.round(Math.min(100, Math.max(0, window.usedPercent)));
-}
-
-/** Shortest window first (the session, then the week). */
-function ordered(quota: QuotaSnapshot): QuotaWindow[] {
-  return quota.windows.toSorted(
-    (a, b) =>
-      (a.windowMinutes ?? Number.MAX_SAFE_INTEGER) - (b.windowMinutes ?? Number.MAX_SAFE_INTEGER),
-  );
-}
-
-/** A window worth showing in the menu however long it is. */
-const GLANCE_FROM_PERCENT = 50;
-
-/**
- * What the menu shows: the fixed-length windows (the session, the week) and any other window
- * filling up; the rest is on the Usage page.
- */
-function glance(quota: QuotaSnapshot): QuotaWindow[] {
-  const windows = ordered(quota);
-  const shown = windows.filter(
-    (window) => window.windowMinutes !== null || used(window) >= GLANCE_FROM_PERCENT,
-  );
-  return shown.length > 0 ? shown : windows.slice(0, 1);
-}
-
-function tone(percent: number): { text: string; fill: string } {
-  if (percent >= 80) return { text: "text-destructive", fill: "bg-destructive" };
-  if (percent >= 60) return { text: "text-warning", fill: "bg-warning" };
-  return { text: "text-foreground", fill: "bg-muted-foreground/60" };
-}
-
 function withQuota(
   overview: ProviderOverview,
 ): overview is ProviderOverview & { quota: QuotaSnapshot } {
@@ -114,6 +83,10 @@ function useUsageRefresh(): void {
     if (!connected) return;
     if (!useApp.getState().providers.view) {
       loadProviders().catch((error: unknown) => console.error("loading usage failed", error));
+    }
+    // The chat's account pill needs them too.
+    if (!useApp.getState().accounts) {
+      loadAccounts().catch((error: unknown) => console.error("reading the accounts failed", error));
     }
     const inFront = () => document.hasFocus() && useApp.getState().windowVisible;
     const timer = window.setInterval(() => {
@@ -247,28 +220,9 @@ function ProviderUsage({
           )
         )}
       </div>
-      {windows.map((window) => {
-        const percent = used(window);
-        return (
-          <div key={window.id} className="flex flex-col gap-1 text-xs">
-            <div className="flex items-center gap-2 tabular-nums">
-              <span className="text-muted-foreground min-w-0 flex-1 truncate">{window.label}</span>
-              <span className={tone(percent).text}>{percent}% used</span>
-              {window.resetsAtMs !== null && (
-                <span className="text-muted-foreground">
-                  {formatCountdown(window.resetsAtMs, now)}
-                </span>
-              )}
-            </div>
-            <span aria-hidden className="bg-muted rounded-capsule h-1 overflow-hidden">
-              <span
-                className={cn("block h-full", tone(percent).fill)}
-                style={{ width: `${percent}%` }}
-              />
-            </span>
-          </div>
-        );
-      })}
+      {windows.map((window) => (
+        <WindowBar key={window.id} window={window} now={now} />
+      ))}
     </div>
   );
 }

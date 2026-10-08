@@ -171,6 +171,8 @@ export function ModelSelector({
       effort: effortFor(model, provider === value.provider ? value.effort : null),
       // Fast carries over to a model that has a fast tier too.
       ...(model.fast && value.fast ? { fast: true } : {}),
+      // So does the account, to a model of the same agent.
+      ...(provider === value.provider && value.account ? { account: value.account } : {}),
     });
   const models = (group: ModelGroup) => {
     const chosen = group.provider === value.provider ? current?.id : undefined;

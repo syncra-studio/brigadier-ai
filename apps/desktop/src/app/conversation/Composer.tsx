@@ -21,6 +21,7 @@ import {
 import { type ResolvedDraft, updateDraft } from "@/app/conversation/draftSetup";
 import { BranchPopover, ProjectCombobox, WorkInMenu } from "@/app/conversation/RailPickers";
 import {
+  AccountPicker,
   ConversationModelPicker,
   ConversationPermissionPicker,
   openPermissionsHelp,
@@ -223,15 +224,25 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
                   onOpenChange={setModelOpen}
                 />
               ) : (
-                <ModelSelector
-                  groups={resolved.groups}
-                  value={resolved.model}
-                  defaultChoice={resolved.defaultModel}
-                  label={resolved.kind === "session" ? "Orchestrator model" : "Model"}
-                  onChange={(model) => updateDraft(resolved.project?.id ?? null, { model })}
-                  open={modelOpen}
-                  onOpenChange={setModelOpen}
-                />
+                <>
+                  <AccountPicker
+                    choice={resolved.model}
+                    onChange={(account) =>
+                      updateDraft(resolved.project?.id ?? null, {
+                        model: { ...resolved.model, account },
+                      })
+                    }
+                  />
+                  <ModelSelector
+                    groups={resolved.groups}
+                    value={resolved.model}
+                    defaultChoice={resolved.defaultModel}
+                    label={resolved.kind === "session" ? "Orchestrator model" : "Model"}
+                    onChange={(model) => updateDraft(resolved.project?.id ?? null, { model })}
+                    open={modelOpen}
+                    onOpenChange={setModelOpen}
+                  />
+                </>
               )}
               <SendControls running={target.running} onResume={target.onResume} />
             </ComposerFooter>

@@ -1,5 +1,6 @@
 import {
   Archive,
+  AvatarProfile,
   Branch,
   Chats,
   MemoryOnRemember,
@@ -12,6 +13,7 @@ import {
 } from "@openai/apps-sdk-ui/components/Icon";
 import { lazy, type ComponentType, type SVGProps } from "react";
 
+import { ACCOUNTS_ROWS, AccountsPage } from "@/app/settings/AccountsPage";
 import { ARCHIVED_ROWS, ArchivedPage } from "@/app/settings/ArchivedPage";
 import { CONVERSATIONS_ROWS, ConversationsPage } from "@/app/settings/ConversationsPage";
 import { GENERAL_ROWS, GeneralPage } from "@/app/settings/GeneralPage";
@@ -109,6 +111,14 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "Agents",
     component: ProvidersPage,
     rows: Object.values(PROVIDERS_ROWS),
+  },
+  {
+    id: "accounts",
+    label: "Accounts",
+    icon: AvatarProfile,
+    group: "Agents",
+    component: AccountsPage,
+    rows: Object.values(ACCOUNTS_ROWS),
   },
   {
     id: "routing",
