@@ -18,6 +18,7 @@ import { useReveal } from "@/app/conversation/SidePanel";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { request } from "@/ipc/client";
 import type { ProviderKind, TerminalInfo } from "@/ipc/generated";
+import { whenRevealed } from "@/lib/splash";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { changedPaneSize, savedPaneSizes } from "@/state/paneSizes";
@@ -44,9 +45,13 @@ import {
   useTerminalPlace,
 } from "@/state/terminalPlaces";
 
-// The terminal itself (xterm) loads when a shell first shows, not with the app.
+// The terminal itself (xterm) loads when a shell first shows, not with the app: a tab brought
+// back from the last launch loads it once startup is over, so it doesn't run while the startup
+// screen fades out.
 const TerminalView = lazy(() =>
-  import("@/app/conversation/TerminalView").then((module) => ({ default: module.TerminalView })),
+  whenRevealed()
+    .then(() => import("@/app/conversation/TerminalView"))
+    .then((module) => ({ default: module.TerminalView })),
 );
 
 /**
