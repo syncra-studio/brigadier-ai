@@ -1263,3 +1263,62 @@ async fn a_runs_start_drops_the_sessions_pre_warm() {
     finished(&flow, &run.id).await;
     flow.stop().await;
 }
+
+/// An overnight run approves for the user under Ask for approval, but not in a folder the user
+/// doesn't trust: there it stays Ask for approval, so its steps outside the sandbox wait for
+/// the user.
+#[tokio::test]
+async fn a_run_in_an_untrusted_folder_stays_under_ask_for_approval() {
+    use crate::model::PermissionLevel;
+    let thread = Arc::new(Thread {
+        order: vec![1],
+        ..Default::default()
+    });
+    let flow = flow_with("overnight-untrusted", thread.clone()).await;
+    let conversation = flow.core.conversation(&flow.conversation).unwrap();
+    let Some(Setup::Session {
+        repo,
+        environment,
+        orchestrator,
+        workers_see_uncommitted,
+        plan_mode,
+        ..
+    }) = conversation.setup
+    else {
+        panic!("a session");
+    };
+    flow.core
+        .set_setup(
+            flow.conversation.clone(),
+            Setup::Session {
+                repo,
+                environment,
+                permission: PermissionLevel::AskForApproval,
+                orchestrator,
+                workers_see_uncommitted,
+                plan_mode,
+            },
+        )
+        .await
+        .unwrap();
+    flow.say("Hello.").await;
+    flow.until("the first turn", |_| {
+        !thread.turns.lock().unwrap().is_empty()
+    })
+    .await;
+    flow.settled().await;
+    start_run(&flow, "/overnight Make a file.", 1).await;
+    assert_eq!(
+        flow.manager.permission(&flow.conversation),
+        PermissionLevel::ApproveForMe
+    );
+    flow.manager
+        .set_folder_trust(conversation.project_id.clone().unwrap(), None, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        flow.manager.permission(&flow.conversation),
+        PermissionLevel::AskForApproval
+    );
+    flow.stop().await;
+}

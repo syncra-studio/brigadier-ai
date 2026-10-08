@@ -896,6 +896,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 project: Box::new(project),
             }
         }
+        Request::SetFolderTrust { id, path, trusted } => Response::SetFolderTrust {
+            report: Box::new(sessions.set_folder_trust(id, path, trusted).await?),
+        },
         Request::CreateConversation {
             kind,
             project_id,

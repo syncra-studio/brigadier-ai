@@ -364,6 +364,29 @@ impl CleanupLedger {
             .await
     }
 
+    /// Removes these of `owner`'s artifacts now (the rest stay recorded); what can't be removed
+    /// stays recorded too.
+    pub async fn release(&self, owner: &str, artifacts: Vec<Artifact>) -> Leftovers {
+        self.remove(owner, artifacts).await
+    }
+
+    /// Forgets a recorded artifact that was never created after all: nothing is touched.
+    pub async fn unrecord(&self, owner: &str, artifact: Artifact) -> Result<()> {
+        self.append(DomainEvent::CleanupRemoved {
+            owner: owner.to_owned(),
+            artifacts: vec![artifact.clone()],
+        })
+        .await?;
+        let mut state = self.state();
+        if let Some(known) = state.artifacts.get_mut(owner) {
+            known.retain(|held| *held != artifact);
+            if known.is_empty() {
+                state.artifacts.remove(owner);
+            }
+        }
+        Ok(())
+    }
+
     /// Owners marked for disposal.
     pub fn disposing(&self) -> Vec<String> {
         self.state().disposing.iter().cloned().collect()
@@ -422,6 +445,26 @@ impl CleanupLedger {
                     match result {
                         Ok(()) => removed.push(artifact),
                         Err(err) => leftovers.failures.push(format!("worktree {path}: {err}")),
+                    }
+                }
+                Artifact::CliTrust {
+                    cli,
+                    file,
+                    folder,
+                    before,
+                } => {
+                    let (cli, file, folder, before) =
+                        (*cli, PathBuf::from(file), folder.clone(), before.clone());
+                    match tokio::task::spawn_blocking(move || {
+                        brigadier_providers::trust::undo(cli, &file, &folder, &before)
+                    })
+                    .await
+                    {
+                        Ok(Ok(())) => removed.push(artifact),
+                        Ok(Err(err)) => leftovers
+                            .failures
+                            .push(format!("{} folder trust: {err}", cli.label())),
+                        Err(err) => leftovers.failures.push(err.to_string()),
                     }
                 }
                 Artifact::ScratchDir { path } => {

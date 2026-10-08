@@ -572,6 +572,7 @@ dependencies = [
  "syn 3.0.6",
  "thiserror 2.0.21",
  "tokio",
+ "toml_edit 0.25.15+spec-1.1.0",
  "tracing",
  "ts-rs",
  "typify",

@@ -855,3 +855,112 @@ async fn a_takeover_expires_the_workers_pending_permission_card() {
     host.exit(&terminal);
     flow.stop().await;
 }
+
+/// In a trusted folder, a read-only Codex worker's terminal folder (its scratch folder,
+/// outside the checkout) is trusted for Codex too, under the task, until the task ends.
+#[tokio::test]
+async fn a_read_only_codex_terminal_folder_is_trusted_until_its_task_ends() {
+    use brigadier_providers::trust::TrustCli;
+    let (flow, host, _, _) = start_as(
+        "takeover-trust-scratch",
+        ProviderKind::Codex,
+        "scout",
+        1_000,
+        TaskState::Running,
+    )
+    .await;
+    let home = super::trust_tests::Home::new();
+    home.serve(&flow);
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id
+        .unwrap();
+    flow.manager
+        .set_folder_trust(project, None, true)
+        .await
+        .unwrap();
+    let id = task_id(&flow).await;
+    flow.manager
+        .open_worker_terminal(id.clone(), 80, 24)
+        .await
+        .unwrap();
+    let (terminal, command) = host.started()[0].clone();
+    assert!(home.trusts(TrustCli::Codex, &command.cwd));
+    assert!(home.trusts(TrustCli::Codex, &flow.repo));
+    // Claude's terminal opens in the checkout: nothing more for Claude.
+    assert!(!home.trusts(TrustCli::Claude, &command.cwd));
+    let owner = format!("task:{id}");
+    assert!(
+        flow.manager
+            .runtime
+            .ledger()
+            .artifacts(&owner)
+            .iter()
+            .any(|artifact| matches!(artifact, brigadier_providers::Artifact::CliTrust { .. }))
+    );
+    flow.manager.stop_task(id.clone()).await.unwrap();
+    host.exit(&terminal);
+    assert!(!home.trusts(TrustCli::Codex, &command.cwd));
+    assert!(home.trusts(TrustCli::Codex, &flow.repo));
+    flow.stop().await;
+}
+
+/// Don't trust: a worker running above Ask for approval is stopped and its thread told why;
+/// a worker opened in a terminal afterwards gets Ask's access (no network, no reviewer).
+#[tokio::test]
+async fn an_untrusted_folder_stops_workers_above_ask_and_opens_terminals_under_it() {
+    let (flow, _host, _, _) = start_as(
+        "takeover-untrusted-running",
+        ProviderKind::Claude,
+        "scout",
+        1_000,
+        TaskState::Running,
+    )
+    .await;
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id
+        .unwrap();
+    flow.manager
+        .set_folder_trust(project, None, false)
+        .await
+        .unwrap();
+    let id = task_id(&flow).await;
+    let task = flow.board().await.tasks[&id].clone();
+    assert!(task.state.is_final(), "{:?}", task.state);
+    flow.stop().await;
+
+    let (flow, host, _, _) = start("takeover-untrusted-open", ProviderKind::Codex, 1_000).await;
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id
+        .unwrap();
+    let id = task_id(&flow).await;
+    let before = flow.board().await.tasks[&id].clone();
+    assert!(before.access.network);
+    flow.manager
+        .set_folder_trust(project, None, false)
+        .await
+        .unwrap();
+    flow.manager
+        .open_worker_terminal(id.clone(), 80, 24)
+        .await
+        .unwrap();
+    let (terminal, command) = host.started()[0].clone();
+    let access = command
+        .env
+        .iter()
+        .find(|(name, _)| name == "FAKE_ACCESS")
+        .map(|(_, value)| value.to_string_lossy().into_owned())
+        .unwrap();
+    assert!(access.contains("network: false"), "{access}");
+    assert!(access.contains("auto_review=false"), "{access}");
+    host.exit(&terminal);
+    flow.stop().await;
+}

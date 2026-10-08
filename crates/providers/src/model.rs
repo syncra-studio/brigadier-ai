@@ -1034,6 +1034,16 @@ pub enum Artifact {
     /// A short temp folder of a Claude session's own (`/tmp/brigadier-<id>`), for Claude's
     /// temp files and its sandboxed commands' TMPDIR.
     ClaudeTempDir { path: String },
+    /// Folder trust Brigadier wrote in a CLI's settings `file` for `folder` (the user trusted
+    /// it in Brigadier), recorded before the write with what it replaced: removed by putting
+    /// that back, only while the folder is still trusted as Brigadier left it
+    /// ([`crate::trust::undo`]).
+    CliTrust {
+        cli: crate::trust::TrustCli,
+        file: String,
+        folder: String,
+        before: crate::trust::TrustBefore,
+    },
 }
 
 #[cfg(test)]

@@ -68,6 +68,7 @@ mod thread;
 mod thread_metrics;
 mod tool_output;
 mod tools;
+mod trust;
 mod undo;
 mod uninstall;
 mod usage;
@@ -171,6 +172,10 @@ pub struct SessionManager {
     closing: closing::Closing,
     /// Where "Open in terminal" runs a worker's session (the daemon's terminals).
     terminal_host: std::sync::OnceLock<Arc<dyn takeover::TerminalHost>>,
+    /// Tests: the home whose CLI settings folder trust is written to. Without it, tests write
+    /// none (never the real `~/.claude.json` or `~/.codex/config.toml`).
+    #[cfg(test)]
+    pub(crate) trust_home: std::sync::OnceLock<PathBuf>,
     /// Background model turns, for maintenance's idle check.
     activity: Arc<quiet::Activity>,
 }
@@ -243,6 +248,8 @@ impl SessionManager {
             machine,
             closing: closing::Closing::default(),
             terminal_host: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            trust_home: std::sync::OnceLock::new(),
             activity: Arc::default(),
         });
         manager.install_worktree_remover();

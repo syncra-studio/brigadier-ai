@@ -14,13 +14,13 @@ use brigadier_core::storage::{
 use brigadier_core::{
     AttachmentRef, BrainJobKind, BrainOverview, CardId, Catalog, CheckoutFile, CommitOutcome,
     ConventionsExport, Conversation, ConversationActivity, ConversationId, ConversationKind,
-    ConversationStatus, ConversationView, DiffStat, FolderCheck, FolderListing, ForkPlace,
-    GitState, Mention, Message, MessagePage, MessageQueue, OrchestratorPage, OvernightRun,
-    OvernightRunId, ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan,
-    ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession,
-    RawSessionId, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, Settings, Setup,
-    SetupRequest, SourceScope, SourceState, TaskId, ThreadMetrics, UpdateTarget, UpdatesView,
-    UsageView, WorkerDiff, WorkerPage,
+    ConversationStatus, ConversationView, DiffStat, FolderCheck, FolderListing, FolderTrustReport,
+    ForkPlace, GitState, Mention, Message, MessagePage, MessageQueue, OrchestratorPage,
+    OvernightRun, OvernightRunId, ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch,
+    ProposedPlan, ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals, RawPage,
+    RawSession, RawSessionId, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview,
+    Settings, Setup, SetupRequest, SourceScope, SourceState, TaskId, ThreadMetrics, UpdateTarget,
+    UpdatesView, UsageView, WorkerDiff, WorkerPage,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -31,7 +31,7 @@ use ts_rs::TS;
 use crate::metrics::{DaemonMetrics, Diagnostics};
 
 /// Bumped on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 
 /// What a development build's injected limit applies to.
 #[cfg(debug_assertions)]
@@ -140,6 +140,13 @@ pub enum Request {
     UpdateProject {
         id: ProjectId,
         patch: ProjectPatch,
+    },
+    /// The user's answer to "Do you trust this folder?" for the project's repository folder
+    /// `path` (its first one when absent).
+    SetFolderTrust {
+        id: ProjectId,
+        path: Option<String>,
+        trusted: bool,
     },
     /// A project's Brain at a glance, or the Personal Brain's without `projectId`.
     GetBrain {
@@ -895,6 +902,9 @@ pub enum Response {
     },
     UpdateProject {
         project: Box<Project>,
+    },
+    SetFolderTrust {
+        report: Box<FolderTrustReport>,
     },
     GetBrain {
         overview: Box<BrainOverview>,

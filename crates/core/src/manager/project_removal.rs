@@ -104,6 +104,13 @@ impl SessionManager {
                 }
             }
         };
+        // The CLIs' folder trust its answers wrote: what can't be put back now stays recorded,
+        // and the next start tries again.
+        for failure in self.forget_project_trust(&id).await {
+            failures.push(format!(
+                "Brigadier could not undo its folder trust ({failure}); it tries again at the next start."
+            ));
+        }
         // Its task worktrees lived here; they went with its conversations.
         let worktrees = self.owned_dir("worktrees", &id.0);
         let _ = blocking(move || {

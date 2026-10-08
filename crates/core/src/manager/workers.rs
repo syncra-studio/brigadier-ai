@@ -638,8 +638,12 @@ impl SessionManager {
 
     /// The session's permission level. While an overnight run is active nobody is there to
     /// ask: the run keeps the session's access and approves for the user, so Ask for approval
-    /// counts as Approve for me until the run ends (PLAN.md §10.8).
+    /// counts as Approve for me until the run ends (PLAN.md §10.8). In a folder the user
+    /// doesn't trust it is Ask for approval, overnight too.
     pub(crate) fn permission(&self, id: &ConversationId) -> PermissionLevel {
+        if self.repo_trust(id) == Some(false) {
+            return PermissionLevel::AskForApproval;
+        }
         let saved = match self.core.conversation(id).map(|c| c.setup) {
             Ok(Some(Setup::Session { permission, .. })) => permission,
             _ => PermissionLevel::ApproveForMe,
@@ -1637,8 +1641,9 @@ impl SessionManager {
 
     /// B12: what the worker may touch.
     fn worker_access(&self, task: &Task, workspace: &Workspace, cwd: &Path) -> Access {
+        let access = self.effective_access(task);
         // Full access: like the user's own terminal.
-        if task.access.unsandboxed {
+        if access.unsandboxed {
             return Access::Full;
         }
         // A worker working from its scratch folder writes there (Codex needs a writable cwd);
@@ -1665,7 +1670,7 @@ impl SessionManager {
         {
             writable_roots.extend(commit_roots(&repo, task.route.choice.provider));
         }
-        self.sandboxed(write_cwd, writable_roots, task.access.network)
+        self.sandboxed(write_cwd, writable_roots, access.network)
     }
 
     /// The OS sandbox of a worker or thread below Full access: it writes its working

@@ -94,6 +94,42 @@ pub struct Project {
     /// Choices remembered for the project's next session.
     #[serde(default)]
     pub prefs: ProjectPrefs,
+    /// The user's answers to "Do you trust this folder?", one per repository folder asked
+    /// about. A folder with none is asked about.
+    #[serde(default)]
+    pub trust: Vec<FolderTrust>,
+}
+
+impl Project {
+    /// Whether the user trusts the folder `path` (one of the project's repositories), if they
+    /// were asked.
+    pub fn trusts(&self, path: &str) -> Option<bool> {
+        self.trust
+            .iter()
+            .find(|folder| folder.path == path)
+            .map(|folder| folder.trusted)
+    }
+}
+
+/// What answering "Do you trust this folder?" did: the project as it is now, and what could
+/// not be written in (or removed from) a CLI's settings, by CLI.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderTrustReport {
+    pub project: Project,
+    pub failures: Vec<String>,
+}
+
+/// The user's answer for one folder. Trusted: agents work there as the session's permission
+/// level allows, and the CLIs' own trust prompts are answered for it. Not trusted: every
+/// session there runs under Ask for approval.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderTrust {
+    /// The repository's top folder, as the project names it.
+    pub path: String,
+    pub trusted: bool,
+    pub decided_at_ms: i64,
 }
 
 /// A git repository in a project.

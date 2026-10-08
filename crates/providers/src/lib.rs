@@ -27,6 +27,7 @@ pub mod record;
 pub mod redact;
 pub mod simulate;
 mod time;
+pub mod trust;
 
 use std::future::Future;
 use std::path::PathBuf;

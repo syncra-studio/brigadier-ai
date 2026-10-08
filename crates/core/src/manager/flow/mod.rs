@@ -493,11 +493,16 @@ impl Provider for FakeCli {
                 program: PathBuf::from(format!("/fake/{}", self.kind)),
                 args: vec!["--resume".into(), native_id.clone()],
                 cwd,
+                // What the CLI would be started with, for tests to read.
                 env: spec
                     .mcp_servers
                     .iter()
                     .flat_map(|server| server.env.iter())
                     .map(|(name, value)| (name.into(), value.into()))
+                    .chain([(
+                        "FAKE_ACCESS".into(),
+                        format!("{:?} auto_review={}", spec.access, spec.auto_review).into(),
+                    )])
                     .collect(),
             })
         })
@@ -1044,3 +1049,5 @@ mod tests;
 mod thread_tests;
 #[cfg(test)]
 mod trim_tests;
+#[cfg(test)]
+mod trust_tests;

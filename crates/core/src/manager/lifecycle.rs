@@ -77,6 +77,7 @@ impl SessionManager {
     /// cleanups that could not finish before (worktrees need the git engine) finish now.
     pub(super) async fn recover(&self) {
         self.runtime.ledger().sweep().await;
+        self.reconcile_trust().await;
         for conversation in self.core.catalog().conversations {
             // One still being deleted (a delete that failed at launch) gets nothing new.
             if conversation.deleting {

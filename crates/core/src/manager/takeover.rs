@@ -314,6 +314,14 @@ impl SessionManager {
             _ => session.cwd.clone(),
         };
         let checkout = session.worktree.clone().filter(|worktree| *worktree != cwd);
+        // Outside the checkout, the folder's trust doesn't reach the terminal's folder.
+        if session.worktree.as_ref() != Some(&cwd) {
+            let cli = match provider {
+                ProviderKind::Claude => brigadier_providers::trust::TrustCli::Claude,
+                _ => brigadier_providers::trust::TrustCli::Codex,
+            };
+            self.trust_terminal_folder(task, cli, &cwd).await;
+        }
         let command = self
             .runtime
             .terminal_command(provider, session.spec, cwd)

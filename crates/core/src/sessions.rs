@@ -186,6 +186,7 @@ impl Core {
             created_at_ms: now_ms(),
             repos,
             prefs: Default::default(),
+            trust: Vec::new(),
         };
         self.record(vec![(
             streams::CATALOG.into(),
@@ -215,6 +216,35 @@ impl Core {
             }
             project.prefs = prefs;
         }
+        self.record(vec![(
+            streams::CATALOG.into(),
+            DomainEvent::ProjectUpdated {
+                project: project.clone(),
+            },
+        )])
+        .await?;
+        Ok(project)
+    }
+
+    /// Records the user's answer for the project's repository folder `path`.
+    pub async fn set_folder_trust(
+        &self,
+        id: &ProjectId,
+        path: &str,
+        trusted: bool,
+    ) -> Result<Project> {
+        let mut project = self.project(id)?;
+        if !project.repos.iter().any(|repo| repo.path == path) {
+            return Err(Error::Invalid(format!(
+                "{path} is not one of the project's folders"
+            )));
+        }
+        project.trust.retain(|folder| folder.path != path);
+        project.trust.push(crate::model::FolderTrust {
+            path: path.to_owned(),
+            trusted,
+            decided_at_ms: now_ms(),
+        });
         self.record(vec![(
             streams::CATALOG.into(),
             DomainEvent::ProjectUpdated {
