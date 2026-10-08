@@ -84,3 +84,11 @@ close threshold. Check the strip with many sessions and narrow widths. Cmd+J,
 Ctrl+backquote, Cmd+T, Cmd+W, Cmd+Shift+[ / ], and arrow-key tab navigation use the
 production handlers. `window.terminalFixture` exposes the place, the terminal store, live
 mock shells, and recorded IPC requests for browser assertions.
+
+# A recorded thread session
+
+`http://localhost:1426/fixtures/thread-session.html` replays a recorded session (T1's request on a
+dev daemon, 2026-10-08) through the board reducer from its stored events
+(`src/fixtures/boards/thread-t1-2026-10-08.events.json`). `?at=<ms>` stops at a live moment.
+Unfold "Worked for" and its groups to compare the activity rows; `activity/group.test.ts` reads the
+same events.

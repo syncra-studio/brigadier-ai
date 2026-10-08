@@ -49,7 +49,22 @@ export function groupActivity<S, E>(entries: readonly E[], sort: (entry: E) => S
     }
     open.items.push(sorted.type === "step" ? { type: "step", key: sorted.key, step: sorted.step } : sorted);
   }
-  return placeThoughts(out);
+  return placeThoughts(out).map((item) => (item.type === "group" ? { ...item, items: joinThoughts(item.items) } : item));
+}
+
+/** Thoughts next to each other in a group read as one. */
+function joinThoughts<S>(items: GroupItem<S>[]): GroupItem<S>[] {
+  const out: GroupItem<S>[] = [];
+  for (const item of items) {
+    const last = out.at(-1);
+    if (item.type === "thought" && last?.type === "thought") {
+      const text = [last.thought.text, item.thought.text].filter((part) => part.trim()).join("\n\n");
+      out[out.length - 1] = { type: "thought", thought: { ...last.thought, text, endedAtMs: item.thought.endedAtMs } };
+      continue;
+    }
+    out.push(item);
+  }
+  return out;
 }
 
 function hasSteps<S, E>(item: Activity<S, E>): boolean {
