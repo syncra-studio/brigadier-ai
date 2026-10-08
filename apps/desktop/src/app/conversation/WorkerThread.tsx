@@ -268,7 +268,8 @@ export function WorkerThread({ task }: { task: Task }) {
   const working = workerWorking(task);
   // The prompt and early steps belong to the same previous-messages disclosure.
   const tail = entries.at(-1);
-  const finalReply = workerDone(task) && tail?.kind === "item" && tail.item.kind === "message" && tail.item.role === "assistant" ? tail.item.text : undefined;
+  // The report is the answer when there is one; a message after it ("Reported.") stays a message.
+  const finalReply = workerDone(task) && !task.report?.summary && tail?.kind === "item" && tail.item.kind === "message" && tail.item.role === "assistant" ? tail.item.text : undefined;
   const visibleEntries = finalReply ? entries.slice(0, -1) : entries;
   const activity = workerActivity(visibleEntries, working);
   const previous = activity.slice(0, Math.max(0, activity.length - 3));
