@@ -153,8 +153,9 @@ pub async fn save_document(
 }
 
 #[tauri::command]
-pub async fn forget_document(documents: State<'_, Documents>, id: String) {
+pub async fn forget_document(documents: State<'_, Documents>, id: String) -> Result<(), String> {
     documents.0.lock().await.remove(&id);
+    Ok(())
 }
 
 #[cfg(test)]
