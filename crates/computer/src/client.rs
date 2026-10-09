@@ -136,10 +136,12 @@ impl Client {
         let sent = serde_json::to_vec(&req)
             .map_err(std::io::Error::from)
             .and_then(|b| write_frame(&mut *lock(&self.writer), &b));
-        if sent.is_err() || !self.is_alive() {
-            if let Some(w) = lock(&self.pending).remove(&id) {
-                w(Err(Gone));
-            }
+        // The waiter is taken out before it runs, so the lock isn't held while it does.
+        let gone = (sent.is_err() || !self.is_alive())
+            .then(|| lock(&self.pending).remove(&id))
+            .flatten();
+        if let Some(w) = gone {
+            w(Err(Gone));
         }
     }
 
