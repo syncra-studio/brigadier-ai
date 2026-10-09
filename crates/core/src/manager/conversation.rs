@@ -162,6 +162,10 @@ struct ConvState {
     announcing: HashMap<TaskId, Option<String>>,
     /// User messages already in the transcript that the next turn carries.
     pending: Vec<Message>,
+    /// The request of a turn cut short by a limit while its messages move to another account
+    /// or a stand-in: it still works until they are back in `pending` (closing the CLI on the
+    /// way settles the requests).
+    moving: Option<String>,
     /// The request the running turn serves.
     request: Option<String>,
     /// How the last turn for a request ended, when it was stopped or failed.
@@ -556,6 +560,7 @@ impl ConvLive {
                         .iter()
                         .filter_map(|message| message.request_id.clone()),
                 )
+                .chain(state.moving.clone())
                 .chain(state.announcing.values().flatten().cloned())
                 .collect(),
             outcomes: state.outcomes.clone(),
@@ -3055,7 +3060,9 @@ impl SessionManager {
             {
                 // The request isn't over: its turn goes on there.
                 if let Some(request) = &served {
-                    conv.state.lock().await.outcomes.remove(request);
+                    let mut state = conv.state.lock().await;
+                    state.outcomes.remove(request);
+                    state.moving = Some(request.clone());
                 }
                 // Not from inside the CLI's own event pump: closing the CLI waits for it.
                 let (manager, conv, cli) = (self.arc(), conv.clone(), cli.clone());
@@ -3068,6 +3075,12 @@ impl SessionManager {
             }
             match self.stand_in_choice(conv, &cli.model).await {
                 Ok(next) => {
+                    // The request isn't over either: its turn goes on there.
+                    if let Some(request) = &served {
+                        let mut state = conv.state.lock().await;
+                        state.outcomes.remove(request);
+                        state.moving = Some(request.clone());
+                    }
                     // Not from inside the CLI's own event pump: closing the CLI waits for it.
                     let (manager, conv, from) = (self.arc(), conv.clone(), cli.model.clone());
                     let until = limit.resets_at_ms;
@@ -3378,6 +3391,7 @@ impl SessionManager {
             let mut pending = carried;
             pending.append(&mut state.pending);
             state.pending = pending;
+            state.moving = None;
         }
         self.kick(conv);
     }
@@ -3419,6 +3433,7 @@ impl SessionManager {
             let mut pending = carried;
             pending.append(&mut state.pending);
             state.pending = pending;
+            state.moving = None;
         }
         self.kick(conv);
     }
