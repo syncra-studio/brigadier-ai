@@ -3,6 +3,7 @@ use std::sync::Arc;
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
+use crate::manager::workers::test_data_dir;
 use crate::work::{CardState, RequestState, TaskState};
 
 fn script<F, Fut>(f: F) -> Script
@@ -32,6 +33,14 @@ async fn a_scout_reports_and_the_answer_ends_the_request() {
                 assert!(!reply.is_error, "{}", reply.text);
                 return Reply::text("[quiet]");
             }
+            // Its test data folder is there while it works.
+            let brief = format!("{}\n{}", turn.prompt, turn.input);
+            let (_, rest) = brief
+                .split_once("Your test data folder, ")
+                .expect("the test data folder is named");
+            let (_, rest) = rest.split_once("): ").unwrap();
+            let (folder, _) = rest.split_once(". Never").unwrap();
+            assert!(std::path::Path::new(folder).is_dir(), "{folder}");
             let reply = turn
                 .call(
                     "submit_report",
@@ -53,6 +62,15 @@ async fn a_scout_reports_and_the_answer_ends_the_request() {
             .values()
             .all(|request| request.state == RequestState::Done)
     );
+    // The task is over: its test data folder went with it.
+    let folder = test_data_dir(&task.id);
+    flow.until("the test data folder to go", |_| !folder.exists())
+        .await;
+    // One a crash left behind goes at the next launch.
+    std::fs::create_dir_all(folder.join("data")).unwrap();
+    let mut flow = flow;
+    flow.restart().await;
+    assert!(!folder.exists());
     flow.stop().await;
 }
 
@@ -1768,7 +1786,10 @@ async fn in_plan_mode_a_lead_outlines_and_builds_nothing() {
             })
         })
         .await;
-    assert!(Flow::task(&board, 1).report.is_none());
+    let task = Flow::task(&board, 1);
+    assert!(task.report.is_none());
+    // A task still waiting keeps its test data folder.
+    assert!(test_data_dir(&task.id).is_dir());
     flow.stop().await;
 }
 

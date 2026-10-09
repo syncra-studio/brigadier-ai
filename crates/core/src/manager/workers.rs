@@ -4119,10 +4119,15 @@ fn start_note(cwd: &Path, scratch: &Path) -> &'static str {
 /// never the app's own data folder (a smoke run of a debug build must not touch it).
 pub(crate) fn test_data_dir(id: &TaskId) -> PathBuf {
     let name = format!("brigadier-test-{}", &id.0[id.0.len().saturating_sub(8)..]);
+    test_data_root().join(name)
+}
+
+/// The folder every task's test data folder is made in.
+pub(crate) fn test_data_root() -> PathBuf {
     if cfg!(unix) {
-        PathBuf::from("/tmp").join(name)
+        PathBuf::from("/tmp")
     } else {
-        std::env::temp_dir().join(name)
+        std::env::temp_dir()
     }
 }
 

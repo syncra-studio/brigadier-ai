@@ -15,13 +15,16 @@
 //! - **Recovery**: after a restart, work that was running has lost its CLI: tasks end (their
 //!   work kept), cards nobody waits for expire, and the ledger finishes every cleanup.
 
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
+
+use brigadier_providers::Artifact;
 
 use super::conversation::Envelope;
 use super::prompts;
-use super::workers::route_label;
+use super::workers::{route_label, test_data_dir, test_data_root};
 use super::{SessionManager, blocking, git_error};
 use crate::model::{
     Conversation, ConversationId, ConversationKind, Environment, Lifecycle, Setup, streams,
@@ -32,6 +35,11 @@ use crate::{Error, Result, now_ms};
 
 /// How often idle conversations are checked for hibernation.
 const HIBERNATE_CHECK: Duration = Duration::from_secs(60);
+
+/// How long nothing in a test data folder no task of this data folder claims has changed
+/// before the launch sweep removes it. Another data folder's task that sat that long loses
+/// only its test data: its worker's next start makes the folder again.
+const UNCLAIMED_TEST_DATA_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 impl SessionManager {
     /// Lets the cleanup ledger remove the worktrees it records.
@@ -165,6 +173,52 @@ impl SessionManager {
             self.reconcile_waiting(&conversation.id).await;
             // Nothing runs any more: what was working is over or waits for the user.
             self.settle_requests(&conversation.id).await;
+        }
+        self.sweep_test_data().await;
+    }
+
+    /// Removes the test data folders no task needs any more (PLAN.md §10.13): a task's own
+    /// goes when it ends, but a crash, an older build or a deleted data folder leaves them
+    /// behind. Several data folders (dev builds, smoke runs) share the temp directory, so a
+    /// folder goes only if this data folder's task for it is over, or if no task here claims
+    /// it and nothing in it changed for `UNCLAIMED_TEST_DATA_AGE`.
+    async fn sweep_test_data(&self) {
+        let mut tasks = HashMap::new();
+        for conversation in self.core.catalog().conversations {
+            let Ok(list) = self.core.tasks(&conversation.id).await else {
+                continue;
+            };
+            for task in list {
+                let over = task.state.is_final();
+                // Two tasks whose ids end alike share a folder: it stays while either runs.
+                tasks
+                    .entry(test_data_dir(&task.id))
+                    .and_modify(|both: &mut bool| *both &= over)
+                    .or_insert(over);
+            }
+        }
+        let claimed: HashSet<PathBuf> = self
+            .runtime
+            .ledger()
+            .owners()
+            .into_iter()
+            .filter(|(_, _, disposing)| !disposing)
+            .flat_map(|(_, artifacts, _)| artifacts)
+            .filter_map(|artifact| match artifact {
+                Artifact::ScratchDir { path } => Some(PathBuf::from(path)),
+                _ => None,
+            })
+            .collect();
+        let cutoff = SystemTime::now() - UNCLAIMED_TEST_DATA_AGE;
+        let swept = blocking(move || {
+            let folders = test_folders(&test_data_root());
+            Ok(sweep_test_folders(folders, &tasks, &claimed, cutoff))
+        })
+        .await;
+        match swept {
+            Ok(0) => {}
+            Ok(removed) => tracing::info!(removed, "removed test data folders no task needs"),
+            Err(err) => tracing::warn!(error = %err, "could not sweep the test data folders"),
         }
     }
 
@@ -981,9 +1035,154 @@ fn worktree_locked(worktree: &std::path::Path) -> bool {
     admin.join("locked").exists()
 }
 
+/// The task test data folders in `root`.
+fn test_folders(root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("brigadier-test-"))
+                && entry.file_type().is_ok_and(|kind| kind.is_dir())
+        })
+        .map(|entry| entry.path())
+        .collect()
+}
+
+/// Removes those of `folders` no task needs (see `sweep_test_data`), through the ledger's
+/// guard; `tasks` says, for the folders this data folder's tasks have, whether the task is
+/// over, and `claimed` holds those its ledger still records for an owner it isn't disposing
+/// of. A folder that can't be removed stays for the next launch. Returns how many went.
+fn sweep_test_folders(
+    folders: Vec<PathBuf>,
+    tasks: &HashMap<PathBuf, bool>,
+    claimed: &HashSet<PathBuf>,
+    cutoff: SystemTime,
+) -> usize {
+    let mut removed = 0;
+    for folder in folders {
+        // What the ledger still holds goes with its owner.
+        let stale = !claimed.contains(&folder)
+            && match tasks.get(&folder) {
+                Some(over) => *over,
+                None => !changed_since(&folder, cutoff),
+            };
+        if !stale {
+            continue;
+        }
+        match crate::ledger::remove_test_data_folder(&folder) {
+            Ok(()) => removed += 1,
+            Err(err) => {
+                tracing::warn!(folder = %folder.display(), error = %err, "could not remove a test data folder");
+            }
+        }
+    }
+    removed
+}
+
+/// Whether `path`, or anything in it, changed at or after `cutoff` (or can't be read).
+fn changed_since(path: &Path, cutoff: SystemTime) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return true;
+    };
+    if meta.modified().map_or(true, |modified| modified >= cutoff) {
+        return true;
+    }
+    if !meta.is_dir() {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return true;
+    };
+    entries
+        .into_iter()
+        .any(|entry| entry.map_or(true, |entry| changed_since(&entry.path(), cutoff)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test data folder in the temp directory, named for a new task, with a file in it,
+    /// all last changed `age` ago.
+    fn test_folder(age: Duration) -> PathBuf {
+        let folder = test_data_dir(&crate::work::TaskId::generate());
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("data.txt");
+        std::fs::write(&file, "test data").unwrap();
+        let then = SystemTime::now() - age;
+        for path in [&file, &folder] {
+            set_changed(path, then);
+        }
+        folder
+    }
+
+    fn set_changed(path: &Path, at: SystemTime) {
+        #[cfg(windows)]
+        let file = {
+            use std::os::windows::fs::OpenOptionsExt;
+            // FILE_FLAG_BACKUP_SEMANTICS, which opens a folder too.
+            std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(0x0200_0000)
+                .open(path)
+        };
+        #[cfg(not(windows))]
+        let file = std::fs::File::open(path);
+        file.unwrap().set_modified(at).unwrap();
+    }
+
+    #[test]
+    fn the_launch_sweep_removes_test_data_no_task_needs_and_keeps_the_rest() {
+        let day = Duration::from_secs(24 * 60 * 60);
+        let ended = test_folder(Duration::ZERO);
+        let live = test_folder(2 * day);
+        let recent = test_folder(Duration::from_secs(60));
+        let stale = test_folder(2 * day);
+        let claimed = test_folder(2 * day);
+        let held_after_end = test_folder(Duration::ZERO);
+        // Another data folder's task wrote into its folder a minute ago.
+        let in_use = test_folder(2 * day);
+        set_changed(
+            &in_use.join("data.txt"),
+            SystemTime::now() - Duration::from_secs(60),
+        );
+        let tasks = HashMap::from([
+            (ended.clone(), true),
+            (live.clone(), false),
+            (held_after_end.clone(), true),
+        ]);
+        let held = HashSet::from([claimed.clone(), held_after_end.clone()]);
+        let folders = vec![
+            ended.clone(),
+            live.clone(),
+            recent.clone(),
+            stale.clone(),
+            claimed.clone(),
+            held_after_end.clone(),
+            in_use.clone(),
+        ];
+        let removed = sweep_test_folders(folders, &tasks, &held, SystemTime::now() - day);
+        assert_eq!(removed, 2);
+        assert!(!ended.exists());
+        assert!(!stale.exists());
+        for kept in [&live, &recent, &claimed, &held_after_end, &in_use] {
+            assert!(kept.exists(), "{}", kept.display());
+            std::fs::remove_dir_all(kept).unwrap();
+        }
+        // Only test data folders are listed.
+        let folders = test_folders(&test_data_root());
+        assert!(folders.iter().all(|folder| {
+            folder
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("brigadier-test-"))
+        }));
+    }
 
     fn task(state: TaskState, landing: bool) -> Task {
         let mut task: Task = serde_json::from_value(serde_json::json!({

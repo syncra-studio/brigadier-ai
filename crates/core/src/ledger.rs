@@ -632,7 +632,18 @@ fn end_in_dir(platform: &dyn Platform, dir: &Path) -> std::result::Result<(), St
 /// folder in the temp directory.
 fn remove_scratch(data_dir: &Path, dir: &Path) -> std::io::Result<()> {
     let inside = dir.starts_with(data_dir) && dir != data_dir;
-    if !inside && !test_data_folder(dir) {
+    if !inside {
+        return remove_test_data_folder(dir);
+    }
+    match std::fs::remove_dir_all(dir) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
+/// Removes a task's test data folder, and nothing else.
+pub(crate) fn remove_test_data_folder(dir: &Path) -> std::io::Result<()> {
+    if !test_data_folder(dir) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "not a folder in Brigadier's data directory",
