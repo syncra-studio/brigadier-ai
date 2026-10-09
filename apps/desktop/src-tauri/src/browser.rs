@@ -143,6 +143,7 @@ mod embedded {
         let builder = builder
             .with_url(&url)
             .with_bounds(rect(bounds))
+            .with_visible(false)
             .with_incognito(true)
             .with_initialization_script_for_main_only(NO_CAPTURE, false)
             .with_back_forward_navigation_gestures(true)
@@ -201,7 +202,6 @@ mod embedded {
                 .webview;
             webview
                 .set_bounds(rect(bounds))
-                .and_then(|()| webview.set_visible(true))
                 .and_then(|()| webview.load_url(url))
                 .map_err(|err| failed(format!("could not open it: {err}")))
         })

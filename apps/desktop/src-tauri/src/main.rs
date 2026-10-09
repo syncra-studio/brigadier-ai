@@ -8,6 +8,7 @@
 
 mod bridge;
 mod browser;
+mod documents;
 // WebKit's narrow unsafe boundary (the workspace denies it): see its header and the README.
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
@@ -600,6 +601,7 @@ fn main() {
                 launcher,
                 notifier(app.handle().clone()),
             );
+            app.manage(documents::Documents::default());
             app.manage(AppState {
                 bridge,
                 info,
@@ -659,6 +661,7 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            documents::save_document,
             app_info,
             uninstall_app,
             quit_app,
