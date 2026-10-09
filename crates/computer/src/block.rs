@@ -44,14 +44,31 @@ const TERMINALS: &[&str] = &[
     "com.github.wez.wezterm",
 ];
 
-/// System Settings panes that are off limits, matched on the window title.
+/// System Settings panes that are off limits, matched on the window title. A Privacy &
+/// Security list is titled with its own name: these are macOS 27's, from the pane's
+/// `Localizable.loctable` (`ACCESSIBILITY` = "Device Control and Data Access", ...), and the
+/// names some had before.
 const SETTINGS_PANES: &[&str] = &[
     "Privacy & Security",
     "Users & Groups",
     "Passwords",
     "Login Items",
+    "Device Control and Data Access",
+    "Accessibility",
+    "Screen & System Audio Recording",
+    "Screen Recording",
+    "System Audio Recording",
+    "Input Monitoring",
+    "Full Disk Access",
+    "Files & Folders",
+    "Automation",
+    "Developer Tools",
+    "App Management",
+    "Passkeys Access for Web Browsers",
 ];
 const SETTINGS_BUNDLE: &str = "com.apple.systempreferences";
+/// The process that draws Privacy & Security's lists and switches inside System Settings.
+const PRIVACY_PANE_BUNDLE: &str = "com.apple.settings.PrivacySecurity.extension";
 
 /// Why a terminal is refused; a terminal the session launches itself is allowed.
 pub const TERMINAL_NOT_LAUNCHED: &str = "a terminal the session didn't launch";
@@ -85,6 +102,9 @@ impl BlockList {
         {
             return Some("a System Settings security pane");
         }
+        if bundle == PRIVACY_PANE_BUNDLE {
+            return Some("a System Settings security pane");
+        }
         if TERMINALS.contains(&bundle) {
             let launched = self.launched_pids.contains(&t.pid)
                 && t.window.is_none_or(|w| self.launched_windows.contains(&w));
@@ -97,8 +117,11 @@ impl BlockList {
         }
         if let Some(path) = t.bundle_path {
             let path = path.trim_end_matches('/');
-            if path == INSTALLED_BRIGADIER || self.host_bundle_path.as_deref() == Some(path) {
+            if path == INSTALLED_BRIGADIER {
                 return Some("the installed Brigadier app");
+            }
+            if self.host_bundle_path.as_deref() == Some(path) {
+                return Some("the Brigadier app running this session");
             }
         }
         None
@@ -138,8 +161,19 @@ mod tests {
         let mut f = facts(SETTINGS_BUNDLE, "System Settings");
         f.window_title = Some("Privacy & Security");
         assert!(b.check(&f).is_some());
+        // macOS 27 titles a privacy list with its own name.
+        for pane in [
+            "Device Control and Data Access",
+            "Screen & System Audio Recording",
+            "Full Disk Access",
+        ] {
+            f.window_title = Some(pane);
+            assert!(b.check(&f).is_some(), "{pane}");
+        }
         f.window_title = Some("Appearance");
         assert!(b.check(&f).is_none());
+        let pane = facts(PRIVACY_PANE_BUNDLE, "Privacy & Security (System Settings)");
+        assert_eq!(b.check(&pane), Some("a System Settings security pane"));
     }
 
     #[test]
