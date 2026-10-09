@@ -527,8 +527,7 @@ async fn a_thread_commit_before_a_landing_in_the_same_turn_is_reviewed_on_its_ow
                         let landed = turn.call("land_phase", json!({"task": "task-1"})).await;
                         assert!(!landed.is_error, "{}", landed.text);
                         assert!(landed.text.contains("rebased"), "{}", landed.text);
-                        let deadline =
-                            std::time::Instant::now() + std::time::Duration::from_secs(30);
+                        let deadline = std::time::Instant::now() + super::PATIENCE;
                         loop {
                             let tasks = turn.call("list_tasks", json!({})).await;
                             if tasks.text.contains("Landed") {

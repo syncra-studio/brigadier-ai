@@ -206,7 +206,7 @@ fn the_folders_of_a_killed_test_process_are_removed() {
         .build()
         .unwrap()
         .block_on(async {
-            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+            let deadline = tokio::time::Instant::now() + super::PATIENCE;
             while orphan.try_wait().unwrap().is_none() && tokio::time::Instant::now() < deadline {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }

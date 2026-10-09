@@ -88,7 +88,7 @@ fn chat(id: &str) -> Value {
 
 /// Waits until none of `ids` is in the catalog any more.
 async fn gone(flow: &Flow, ids: &[&str]) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + super::PATIENCE;
     loop {
         let left: Vec<_> = flow
             .core
@@ -362,7 +362,7 @@ async fn an_old_conversation_whose_delete_fails_resumes_nothing() {
     let session = ConversationId(OLD[0].into());
     let landing = crate::work::TaskId("01a10888-d9e7-764b-9843-72f98b3b7d1d".into());
     // Its delete stopped the task, then failed on the branches.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + super::PATIENCE;
     while flow.core.board(&session).await.unwrap().tasks[&landing].state
         != crate::work::TaskState::Stopped
     {

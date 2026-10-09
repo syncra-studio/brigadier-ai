@@ -1256,13 +1256,10 @@ async fn a_runs_start_drops_the_sessions_pre_warm() {
     .await;
     assert!(flow.manager.prewarm_id(&flow.conversation).is_none());
     let owner = format!("task:{reserved}");
-    for _ in 0..100 {
-        if flow.manager.runtime.ledger().artifacts(&owner).is_empty() && !worktree.exists() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    assert!(!worktree.exists(), "{}", worktree.display());
+    super::eventually(&format!("{} to go", worktree.display()), || {
+        flow.manager.runtime.ledger().artifacts(&owner).is_empty() && !worktree.exists()
+    })
+    .await;
     finished(&flow, &run.id).await;
     flow.stop().await;
 }

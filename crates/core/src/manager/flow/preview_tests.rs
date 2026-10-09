@@ -96,16 +96,10 @@ fn alive(flow: &Flow, pid: u32) -> bool {
     flow.manager.runtime.platform().processes().is_alive(pid)
 }
 
-/// Waits until `pid` is gone (a killed process outside the daemon's children is reaped by the
-/// system a moment later).
+/// Waits until `pid`, already killed, is gone (one outside the daemon's children is reaped by
+/// the system a moment later).
 async fn gone(flow: &Flow, pid: u32) {
-    for _ in 0..100 {
-        if !alive(flow, pid) {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("process {pid} still runs");
+    super::eventually(&format!("process {pid} to go"), || !alive(flow, pid)).await;
 }
 
 fn child_pid(pids: &Path) -> u32 {
@@ -446,13 +440,14 @@ async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
     super::git(&worktree, &["add", "page.html"]);
     super::git(&worktree, &["commit", "-q", "-m", "Add the page"]);
     flow.say("Please merge.").await;
-    gone(&flow, preview.pid.unwrap()).await;
-    gone(&flow, child).await;
+    // The merge takes the thread's turns: its stop is recorded once it has killed the preview.
     let board = flow
         .until("the merge's stop recorded", |board| {
             !board.previews[&preview.id].state.is_running()
         })
         .await;
+    gone(&flow, preview.pid.unwrap()).await;
+    gone(&flow, child).await;
     assert_eq!(
         board.previews[&preview.id].state,
         PreviewState::Stopped {
@@ -550,13 +545,10 @@ async fn archive_and_delete_stop_previews() {
         }
         gone(&flow, preview.pid.unwrap()).await;
         gone(&flow, child).await;
-        for _ in 0..100 {
-            if !logs.exists() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        assert!(!logs.exists(), "the log folder goes (delete: {delete})");
+        super::eventually(&format!("the log folder to go (delete: {delete})"), || {
+            !logs.exists()
+        })
+        .await;
         if !delete {
             assert_eq!(
                 flow.board().await.previews[&preview.id].state,
@@ -602,12 +594,10 @@ async fn quit_stops_previews_and_the_launch_sweep_ends_a_crashs_leftovers() {
         .stderr(std::process::Stdio::null());
     let leftover = command.spawn().unwrap();
     let pid = leftover.id();
-    for _ in 0..100 {
-        if pids.exists() && !std::fs::read_to_string(&pids).unwrap().trim().is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    super::eventually("the leftover's pid", || {
+        std::fs::read_to_string(&pids).is_ok_and(|pid| !pid.trim().is_empty())
+    })
+    .await;
     let child = child_pid(&pids);
     let owner = format!("preview:{}", flow.conversation);
     flow.manager

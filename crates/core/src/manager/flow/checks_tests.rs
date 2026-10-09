@@ -4,7 +4,6 @@
 //! the project's Brain.
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use brigadier_brain::NodeKind;
 use serde_json::json;
@@ -148,17 +147,15 @@ async fn a_check_runs_once_per_tree_for_workers_and_the_thread() {
         .unwrap();
     let brain = flow.manager.project_brain(&project).await.unwrap();
     let mut learned = None;
-    for _ in 0..100 {
+    super::eventually("the pass to be learned", || {
         learned = brain
             .brain
             .node_by_key(NodeKind::Convention, "checks:.")
             .unwrap();
-        if learned.is_some() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    let learned = learned.expect("the pass was learned");
+        learned.is_some()
+    })
+    .await;
+    let learned = learned.unwrap();
     assert_eq!(
         learned.body.matches("`echo checked`").count(),
         1,

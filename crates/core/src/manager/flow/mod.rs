@@ -30,8 +30,12 @@ use crate::runtime::{Runtime, Spawner};
 use crate::tools::{OrchestratorCall, ToolCall, ToolHost, ToolReply, WorkerCall};
 use crate::work::{RequestState, Task};
 
-/// How long a scripted run may take before the test fails.
-const PATIENCE: Duration = Duration::from_secs(60);
+/// How long a scripted run may take before the test fails: only a hang takes this long. Every
+/// wait under it is for the condition the test needs, so this only turns a hang into a failure.
+/// A scripted run is CPU-bound, and the machine running the tests may be loaded far past its
+/// cores: the longest flows take 5 to 10 s on a calm 14-core Mac, and took 66 to 81 s (and
+/// then passed) with six suites and sixty busy loops running beside them (load ~200).
+const PATIENCE: Duration = Duration::from_secs(300);
 
 /// One turn a scripted CLI is asked to take.
 pub(crate) struct Turn {
@@ -949,6 +953,18 @@ async fn boot(
     (manager, core)
 }
 
+/// Waits until `done` holds, failing after [`PATIENCE`] with `what`.
+pub(crate) async fn eventually(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    while !done() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 // ----- what a test leaves -----------------------------------------------------------------
 
 /// How a test's folders are named: `brigadier-flow-<name>-<pid>-<uuid>`.
@@ -1210,6 +1226,8 @@ impl Flow {
     /// folder: what was recorded carries on.
     pub async fn restart(&mut self) {
         self.manager.shutdown().await;
+        // The daemon's quit: nothing more of the old one is written, as its process ends.
+        self.core.store().shutdown().await.unwrap();
         let data = self.dir.join("data");
         let store = open_store(&data).await;
         let (manager, core) = boot(

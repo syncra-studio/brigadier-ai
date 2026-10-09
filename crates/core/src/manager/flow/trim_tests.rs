@@ -264,7 +264,7 @@ async fn a_trimmed_output_is_read_back_whole_by_its_own_session_only() {
         .delete(flow.conversation.clone())
         .await
         .unwrap();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + super::PATIENCE;
     while blobs.get(hash.clone()).await.unwrap().is_some() {
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -451,16 +451,10 @@ async fn a_run_is_killed_at_its_timeout_and_when_the_thread_ends() {
         .parse()
         .unwrap();
     // Killed, its orphan is gone once launchd reaps it (a zombie still answers a signal).
-    for _ in 0..50 {
-        if !platform.processes().is_alive(child) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(
-        !platform.processes().is_alive(child),
-        "its sleep was killed too"
-    );
+    super::eventually("its sleep, killed too, to go", || {
+        !platform.processes().is_alive(child)
+    })
+    .await;
     assert!(flow.manager.runtime.ledger().artifacts(owner).is_empty());
 
     // The thread's CLI ends: the command goes with it.
