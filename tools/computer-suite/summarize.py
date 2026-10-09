@@ -7,9 +7,8 @@ batches the scripted solver needed), wall time, the model the attempts actually 
 usage of the worker and of the thread's relay turns.
 
 F1, from each run's focus monitor (`suite watch`, from the first setup to the last teardown): a
-change is the suite's when the user's frontmost app became one of the trials' targets, or when the
-real cursor moved within 300 ms of one of the trials' actions. Every other change is listed as
-the user's or another program's, and counted apart."""
+change is the suite's only with a cause of the suite's just before it (see `focus`). The user may
+be at the Mac; every other change is listed as the user's or another program's, and counted apart."""
 import glob, json, os, sys
 
 TOKENS = ("input_uncached", "cache_read", "cache_write", "output")
@@ -29,27 +28,54 @@ def tokens(rows):
 
 
 def focus(run, results):
+    """Splits the focus monitor's changes into the suite's and everyone else's. The user may be at
+    the Mac, so a change is the suite's only with a cause of the suite's just before it:
+    - the frontmost app became a trial's target within 2 s after one of the trials' actions, or
+      while its fixture was being opened (up to 2 s after the target was ready);
+    - the real cursor moved once within 300 ms after an action, still for 1 s before it and after
+      (a person's moves come in a stream, 50 ms apart; the engine never moves the cursor at all).
+    A target that came to the front with no such cause (a click on its Dock icon) is listed apart."""
     pids = {r["pid"] for r in results if "pid" in r}
     acts = []
+    launches = []
     for r in results:
-        d = os.path.join(run, r["task"].replace(" ", "-"), "actions.json")
-        if os.path.exists(d):
-            acts += [a["atMs"] for a in json.load(open(d))]
-    ours, others = [], []
+        d = os.path.join(run, r["task"].replace(" ", "-"))
+        if os.path.exists(os.path.join(d, "actions.json")):
+            acts += [a["atMs"] for a in json.load(open(os.path.join(d, "actions.json")))]
+        setup = os.path.join(d, "target", "setup.json")
+        if os.path.exists(setup) and r.get("t0_ms"):
+            s = json.load(open(setup))
+            launches.append((s.get("pid"), r["t0_ms"] - 30000, s.get("ready_ms", 0) + 2000))
+    events = []
     for f in glob.glob(os.path.join(run, "focus-*.jsonl")):
-        for line in open(f):
-            e = json.loads(line)
-            if "changed" not in e:
-                continue
-            frm, to = e["from"], e["to"]
-            why = []
-            if "frontmost_app" in e["changed"] and to.get("frontmost_pid") in pids:
-                why.append(f"frontmost became target pid {to['frontmost_pid']}")
-            if "cursor" in e["changed"] and any(abs(e["at_ms"] - a) < 300 for a in acts):
-                why.append("cursor moved during an action")
-            (ours if why else others).append({"at_ms": e["at_ms"], "changed": e["changed"], "why": why,
-                                              "to_pid": to.get("frontmost_pid")})
-    return {"suite": ours, "other": len(others), "other_changes": others[:20]}
+        events += [e for e in map(json.loads, open(f)) if "changed" in e]
+    events.sort(key=lambda e: e["at_ms"])
+    moves = [e["at_ms"] for e in events if "cursor" in e["changed"]]
+    ours, unexplained, others = [], [], []
+    for e in events:
+        to, t = e["to"], e["at_ms"]
+        why, front_target = [], False
+        if "frontmost_app" in e["changed"] and to.get("frontmost_pid") in pids:
+            front_target = True
+            if any(0 <= t - a <= 2000 for a in acts):
+                why.append(f"frontmost became target pid {to['frontmost_pid']} after an action")
+            if any(p == to.get("frontmost_pid") and lo <= t <= hi for p, lo, hi in launches):
+                why.append(f"frontmost became target pid {to['frontmost_pid']} as it opened")
+        if "cursor" in e["changed"]:
+            for a in acts:
+                if (0 <= t - a <= 300 and not any(a - 1000 <= m < a for m in moves)
+                        and not any(t < m <= t + 1000 for m in moves)):
+                    why.append("cursor moved right after an action, still before it")
+                    break
+        row = {"at_ms": t, "changed": e["changed"], "why": why, "to_pid": to.get("frontmost_pid")}
+        if why:
+            ours.append(row)
+        elif front_target:
+            unexplained.append(row)
+        else:
+            others.append(row)
+    return {"suite": ours, "target_front_without_cause": unexplained, "other": len(others),
+            "other_changes": others[:20]}
 
 
 def main():
@@ -95,7 +121,8 @@ def main():
         open(sys.argv[sys.argv.index("--json") + 1], "w").write(js)
     for name, r in out["runs"].items():
         print(f"## {name}: {r['passed']}/{r['trials']} passed, E1 median {r['e1_median']}, "
-              f"F1 suite changes {len(r['focus']['suite'])} (other {r['focus']['other']})")
+              f"F1 suite changes {len(r['focus']['suite'])} (target to front with no suite cause "
+              f"{len(r['focus']['target_front_without_cause'])}, other {r['focus']['other']})")
         print("| task | pass | batches | ref | calls | E1 | wall s | model | worker in/cache/out | thread in/cache/out | notes |")
         print("|---|---|---|---|---|---|---|---|---|---|---|")
         for x in r["rows"]:
