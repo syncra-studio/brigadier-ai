@@ -357,7 +357,9 @@ impl<D: Desktop> Engine<D> {
             tree::text_tokens(&text)
         );
         if !filtered {
-            self.set_base(worker, w.id, obs, &lines);
+            // The base holds what the worker was shown: lines out of view come back as additions.
+            let shown: Vec<Line> = lines.iter().filter(|l| !l.hidden).cloned().collect();
+            self.set_base(worker, w.id, obs, &shown);
         }
         Ok(Reply {
             text,
@@ -434,12 +436,13 @@ impl<D: Desktop> Engine<D> {
             .ok_or_else(|| CuError::new(ErrorCode::BadRequest, format!("bad ref {s}")))
     }
 
-    /// A window point for a target, and the element when it names one.
+    /// A window point for a target, the element when it names one, and whether the point can
+    /// be seen (an element scrolled out of view can still be pressed, never clicked).
     fn point_of(
         &mut self,
         w: &WindowInfo,
         t: &Target,
-    ) -> CuResult<(Point, Option<RefTarget<D::Element>>)> {
+    ) -> CuResult<(Point, Option<RefTarget<D::Element>>, bool)> {
         if let Some(r) = t.r#ref.as_deref() {
             let r = Self::ref_of(r)?;
             let el = self.resolve_ref(w, r, true)?;
@@ -447,7 +450,18 @@ impl<D: Desktop> Engine<D> {
             let frame = node.frame.ok_or_else(|| {
                 CuError::new(ErrorCode::NoSuchTarget, format!("e{r} has no frame"))
             })?;
-            return Ok((frame.center(), Some((r, el))));
+            // Aim at the part that can be seen: a table's centre may be far below its scroll view.
+            let clip = self
+                .windows
+                .get(&w.id)
+                .and_then(|x| x.get(r))
+                .and_then(|rec| rec.clip)
+                .unwrap_or(Rect::new(0.0, 0.0, w.frame.w, w.frame.h));
+            let seen = frame.intersect(&clip);
+            if seen.is_empty() {
+                return Ok((frame.center(), Some((r, el)), false));
+            }
+            return Ok((seen.center(), Some((r, el)), true));
         }
         let (Some(img), Some(x), Some(y)) = (t.image.as_deref(), t.x, t.y) else {
             return err(
@@ -460,7 +474,7 @@ impl<D: Desktop> Engine<D> {
             return err(ErrorCode::BadRequest, format!("{img} shows another window"));
         }
         match tr.to_window(x, y, w.frame) {
-            Ok(p) => Ok((p, None)),
+            Ok(p) => Ok((p, None, true)),
             Err(MapError::StaleGeometry) => err(
                 ErrorCode::StaleGeometry,
                 format!("{img} is older than the window's size"),
@@ -660,6 +674,8 @@ impl<D: Desktop> Engine<D> {
         };
         let mut before_node: Option<RawNode<D::Element>> = None;
         let mut set_text: Option<(D::Element, String)> = None;
+        // The action read its own effect back (text inserted and seen in the value).
+        let mut read_back = false;
         let start = Instant::now();
         let rung = match action {
             Action::Click {
@@ -669,7 +685,7 @@ impl<D: Desktop> Engine<D> {
                 modifiers,
                 ..
             } => {
-                let (p, el) = self.point_of(&w, target)?;
+                let (p, el, visible) = self.point_of(&w, target)?;
                 let mods = parse_mods(modifiers)?;
                 let pressable = el.as_ref().is_some_and(|(r, _)| {
                     self.windows
@@ -690,6 +706,7 @@ impl<D: Desktop> Engine<D> {
                     if w.minimized {
                         return err(ErrorCode::BackgroundUnavailable, "the window is minimised");
                     }
+                    out_of_view(visible)?;
                     self.desktop
                         .click(&w, p, *button, *count, mods, activate, guard)?;
                     pointer_rung
@@ -706,7 +723,9 @@ impl<D: Desktop> Engine<D> {
                 Rung::Element
             }
             Action::Type { text, r#ref, .. } => {
-                self.type_into(&w, r#ref.as_deref(), text, cancel)?
+                let rung = self.type_into(&w, r#ref.as_deref(), text, cancel)?;
+                read_back = rung == Rung::Element;
+                rung
             }
             Action::Key { key, repeat, .. } => {
                 let chord = Chord::parse(key)
@@ -719,19 +738,21 @@ impl<D: Desktop> Engine<D> {
                 Rung::Background
             }
             Action::Scroll { target, dx, dy, .. } => {
-                let (p, _) = self.point_of(&w, target)?;
+                let (p, _, visible) = self.point_of(&w, target)?;
                 if w.minimized {
                     return err(ErrorCode::BackgroundUnavailable, "the window is minimised");
                 }
+                out_of_view(visible)?;
                 self.desktop.scroll(&w, p, *dx, *dy)?;
                 Rung::Background
             }
             Action::Drag { from, to, .. } => {
-                let (a, _) = self.point_of(&w, from)?;
-                let (b, _) = self.point_of(&w, to)?;
+                let (a, _, seen_a) = self.point_of(&w, from)?;
+                let (b, _, seen_b) = self.point_of(&w, to)?;
                 if w.minimized {
                     return err(ErrorCode::BackgroundUnavailable, "the window is minimised");
                 }
+                out_of_view(seen_a && seen_b)?;
                 self.desktop.drag(&w, a, b, activate, guard, cancel)?;
                 pointer_rung
             }
@@ -795,6 +816,8 @@ impl<D: Desktop> Engine<D> {
                 ));
                 Effect::NoChange
             }
+        } else if read_back {
+            Effect::Confirmed
         } else if let Some(before) = before_node {
             let after = self.desktop.read(&w, &before.element).ok();
             match after {
@@ -976,6 +999,17 @@ impl<D: Desktop> Engine<D> {
 
 fn ms(d: Duration) -> f64 {
     (d.as_secs_f64() * 1e5).round() / 100.0
+}
+
+fn out_of_view(visible: bool) -> CuResult<()> {
+    if visible {
+        Ok(())
+    } else {
+        err(
+            ErrorCode::NoSuchTarget,
+            "it is scrolled out of view: scroll it into view first",
+        )
+    }
 }
 
 fn parse_mods(m: &[String]) -> CuResult<Mods> {

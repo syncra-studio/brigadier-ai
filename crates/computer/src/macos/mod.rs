@@ -545,22 +545,49 @@ fn norm(s: &str) -> String {
     s.trim().replace("...", "…").to_lowercase()
 }
 
-/// Picks a pop-up button's item by title through its menu, without opening it on screen.
+/// Picks a pop-up button's item by title through its menu. The menu's items only exist while
+/// it is open, so it is opened first and the item pressed at once; a background app's menu
+/// doesn't take the user's focus. AppKit blinks the chosen item (≈350 ms) before it sends the
+/// action, so this waits for the menu to close: the pick has happened when it returns.
 fn pick_popup(el: &AxEl, title: &str) -> CuResult<()> {
     let want = norm(title);
-    let items: Vec<AxEl> = el
-        .elements("AXChildren")
-        .into_iter()
-        .flat_map(|m| m.elements("AXChildren"))
-        .collect();
-    match items
+    let items = |el: &AxEl| -> Vec<AxEl> {
+        el.elements("AXChildren")
+            .into_iter()
+            .flat_map(|m| m.elements("AXChildren"))
+            .collect()
+    };
+    let mut found = items(el);
+    let opened = found.is_empty();
+    if opened {
+        el.perform("AXPress")?;
+        found = items(el);
+    }
+    match found
         .into_iter()
         .find(|i| i.string("AXTitle").is_some_and(|t| norm(&t) == want))
     {
-        Some(item) => item.perform("AXPress"),
-        None => err(
-            ErrorCode::NotSettable,
-            format!("the pop-up has no item {title:?}"),
-        ),
+        Some(item) => {
+            item.perform("AXPress")?;
+            let until = Instant::now() + Duration::from_secs(2);
+            while opened && !el.elements("AXChildren").is_empty() {
+                if Instant::now() > until {
+                    return err(ErrorCode::Failed, "the pop-up's menu didn't close");
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Ok(())
+        }
+        None => {
+            if opened {
+                for menu in el.elements("AXChildren") {
+                    let _ = menu.perform("AXCancel");
+                }
+            }
+            err(
+                ErrorCode::NotSettable,
+                format!("the pop-up has no item {title:?}"),
+            )
+        }
     }
 }

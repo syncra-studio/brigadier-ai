@@ -208,6 +208,8 @@ pub struct RefRecord<E> {
     pub enabled: bool,
     pub frame: Option<Rect>,
     pub secure: bool,
+    /// The visible area around it when it was seen: the window narrowed by its scroll views.
+    pub clip: Option<Rect>,
     /// The window's content generation when the ref was last seen.
     pub generation: u64,
 }
@@ -311,6 +313,7 @@ impl<E: Clone + Eq + Hash> WindowRefs<E> {
                     enabled: n.enabled,
                     frame: n.frame,
                     secure: n.secure,
+                    clip,
                     generation: self.generation,
                 },
             );
