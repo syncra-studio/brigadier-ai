@@ -14,7 +14,10 @@ export async function openMainTerminal(conversationId: string, tabId: string, co
   let entry = shells.get(tab.id);
   if (!entry) {
     const terminal = request({ method: "openTerminal", conversationId, sessionId: tab.id, fresh: true,
-      ...(tab.cwd ? { cwd: tab.cwd } : {}), cols, rows }).then((opened) => opened.terminal);
+      ...(tab.cwd ? { cwd: tab.cwd } : {}), cols, rows }).then((opened) => {
+        changeSessionTab(conversationId, tab.id, (current) => current.kind === "terminal" ? { ...current, cwd: opened.terminal.cwd } : current);
+        return opened.terminal;
+      });
     entry = { terminal, closed: false };
     shells.set(tab.id, entry);
     terminal.catch(() => { if (shells.get(tab.id) === entry) shells.delete(tab.id); });
@@ -30,7 +33,6 @@ export async function openMainTerminal(conversationId: string, tabId: string, co
     await request({ method: "closeTerminal", terminalId: attached.terminal.id });
     throw new Error("Terminal tab closed");
   }
-  changeSessionTab(conversationId, tab.id, (current) => current.kind === "terminal" ? { ...current, cwd: attached.terminal.cwd } : current);
   return attached.terminal;
 }
 
