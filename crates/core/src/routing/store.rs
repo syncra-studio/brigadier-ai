@@ -813,8 +813,9 @@ mod tests {
 
     #[tokio::test]
     async fn samples_stored_before_accounts_read_back_as_the_users_own() {
-        let dir = std::env::temp_dir().join(format!("brigadier-routing-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-routing-{}", uuid::Uuid::new_v4())));
+        std::fs::create_dir_all(&*dir).unwrap();
         let path = dir.join("routing.sqlite");
         {
             let mut conn = Connection::open(&path).unwrap();
@@ -840,7 +841,6 @@ mod tests {
             .await
             .unwrap();
         let samples = store.samples_since(0).await.unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
         let accounts: Vec<_> = samples
             .iter()
             .map(|stored| stored.account.clone())

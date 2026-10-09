@@ -196,14 +196,34 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
 
-    fn scratch(name: &str) -> PathBuf {
+    /// A fresh folder, removed after the test however it ends.
+    #[cfg(unix)]
+    struct Temp(PathBuf);
+
+    #[cfg(unix)]
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(unix)]
+    fn scratch(name: &str) -> Temp {
         let dir = std::env::temp_dir().join(format!(
             "brigadier-accounts-{name}-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4().simple()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        dir
+        Temp(dir)
     }
 
     #[test]
@@ -349,7 +369,6 @@ mod tests {
         assert!(main.join("skills").is_dir());
         // Already gone: fine.
         remove_home(&home).unwrap();
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[cfg(unix)]
@@ -372,6 +391,5 @@ mod tests {
             std::fs::read_to_string(home.join("config.toml")).unwrap(),
             "model = \"x\"\n"
         );
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }
