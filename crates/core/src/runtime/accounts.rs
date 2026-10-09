@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use brigadier_providers::claude::Claude;
 use brigadier_providers::codex::Codex;
-use brigadier_providers::{Provider, ProviderKind, ProviderStatus};
+use brigadier_providers::{Provider, ProviderKind, ProviderStatus, QuotaSnapshot};
 use brigadier_store::Retention;
 
 use super::{Runtime, new_event};
@@ -325,7 +325,30 @@ impl Runtime {
         if !settings.switch_accounts {
             return None;
         }
-        let candidates = self.account_candidates(from.provider);
+        let mut candidates = self.account_candidates(from.provider);
+        if model.is_none() {
+            // The CLI's own default model, unnamed here: a model's window that is used up on
+            // `from` may be what stopped it, so an account with that window used up as well
+            // can't take the work either (else two such accounts would hand it back and forth).
+            let used_up = |quota: &QuotaSnapshot| -> Vec<String> {
+                quota
+                    .windows
+                    .iter()
+                    .filter(|window| window.model.is_some() && window.used_percent >= 100.0)
+                    .map(|window| window.id.clone())
+                    .collect()
+            };
+            let stopped = self
+                .monitor
+                .current_for(from, now_ms())
+                .map(|quota| used_up(&quota))
+                .unwrap_or_default();
+            candidates.retain(|candidate| {
+                candidate.quota.as_ref().is_none_or(|quota| {
+                    !used_up(quota).iter().any(|window| stopped.contains(window))
+                })
+            });
+        }
         let next = crate::accounts::select(
             &settings,
             from.provider,

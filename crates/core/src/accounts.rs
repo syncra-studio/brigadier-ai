@@ -148,11 +148,31 @@ pub fn headroom(quota: &QuotaSnapshot, model: Option<&str>) -> Option<f64> {
             window
                 .model
                 .as_deref()
-                .is_none_or(|only| model.is_some_and(|model| model == only))
+                .is_none_or(|scope| model.is_some_and(|model| limits(scope, model)))
         })
         .map(|window| 100.0 - window.used_percent)
         .fold(100.0_f64, f64::min);
     (left > 0.0).then_some(left)
+}
+
+/// Whether a window scoped to `scope` limits `model` as a choice names it: by the same name,
+/// or by the family word the name carries (Claude's `opus` window limits `opus[1m]` and
+/// `claude-opus-5-5`), as `brigadier_router::window_applies` matches a catalog model.
+fn limits(scope: &str, model: &str) -> bool {
+    let words = |id: &str| -> Vec<String> {
+        id.split(|c: char| !(c.is_ascii_alphanumeric() || c == '.'))
+            .filter(|word| !word.is_empty())
+            .map(str::to_ascii_lowercase)
+            .collect()
+    };
+    let scope = scope.trim();
+    if scope.is_empty() || scope.eq_ignore_ascii_case(model) {
+        return true;
+    }
+    match words(scope).as_slice() {
+        [word] => words(model).contains(word),
+        _ => false,
+    }
 }
 
 /// Where an account stands in the list: the user's own login first, then the extra ones as
@@ -329,6 +349,25 @@ mod tests {
         );
         assert_eq!(
             select(&settings, ProviderKind::Claude, Some("sonnet"), &all, &[]).account,
+            None
+        );
+        // The same window limits the family under its other names.
+        for name in ["opus[1m]", "claude-opus-5-5", "Opus"] {
+            assert_eq!(
+                select(&settings, ProviderKind::Claude, Some(name), &all, &[]).account,
+                Some("work".into()),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            select(
+                &settings,
+                ProviderKind::Claude,
+                Some("claude-sonnet-5-5"),
+                &all,
+                &[]
+            )
+            .account,
             None
         );
     }
