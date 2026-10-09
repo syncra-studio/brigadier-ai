@@ -20,6 +20,9 @@ pub mod launch;
 pub mod record;
 pub mod redact;
 pub mod suite;
+pub mod suite_quirks;
+#[cfg(all(target_os = "macos", feature = "engine"))]
+pub mod suite_quirks_run;
 #[cfg(all(target_os = "macos", feature = "engine"))]
 pub mod suite_run;
 pub mod tree;

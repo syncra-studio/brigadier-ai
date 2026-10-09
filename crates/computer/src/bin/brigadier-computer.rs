@@ -56,9 +56,7 @@ fn main() -> anyhow::Result<()> {
         use brigadier_computer::suite;
         match args.get(1).map(String::as_str) {
             Some("tasks") => {
-                let all: Vec<_> = suite::TASKS
-                    .iter()
-                    .chain(suite::GROUNDING.iter())
+                let all: Vec<_> = suite::all_tasks()
                     .map(|t| {
                         let mut v = serde_json::to_value(t).unwrap_or_default();
                         v["brief"] = serde_json::json!(t.brief());

@@ -50,6 +50,7 @@ pub fn fixture_app(name: &str) -> Result<PathBuf> {
     if stale {
         let st = Command::new("swiftc")
             .arg("-O")
+            .args(crate::suite_quirks_run::swiftc_args(name)?)
             .arg(&src)
             .arg("-o")
             .arg(&bin)
@@ -68,9 +69,9 @@ pub fn fixture_app(name: &str) -> Result<PathBuf> {
 <key>CFBundleIdentifier</key><string>dev.brigadier.fixture.{name}</string>
 <key>CFBundleName</key><string>{name}</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>NSPrincipalClass</key><string>NSApplication</string>
-</dict></plist>
-"#
+{}</dict></plist>
+"#,
+                crate::suite_quirks_run::plist_extra(name)
             ),
         )?;
         let _ = Command::new("/usr/bin/codesign")
@@ -107,13 +108,18 @@ pub fn launch_fixture(name: &str, args: &[&std::ffi::OsStr]) -> Result<i32> {
     if !st.success() {
         bail!("open couldn't start the {name} fixture");
     }
+    wait_pid_file(&pid_file, name)
+}
+
+/// Waits for a fixture to write its pid to `pid_file`, and removes the file.
+pub(crate) fn wait_pid_file(pid_file: &Path, name: &str) -> Result<i32> {
     let end = Instant::now() + Duration::from_secs(15);
     loop {
-        if let Some(pid) = std::fs::read_to_string(&pid_file)
+        if let Some(pid) = std::fs::read_to_string(pid_file)
             .ok()
             .and_then(|s| s.trim().parse::<i32>().ok())
         {
-            let _ = std::fs::remove_file(&pid_file);
+            let _ = std::fs::remove_file(pid_file);
             return Ok(pid);
         }
         if Instant::now() > end {
@@ -123,8 +129,23 @@ pub fn launch_fixture(name: &str, args: &[&std::ffi::OsStr]) -> Result<i32> {
     }
 }
 
+/// The executable a process runs, as `ps` names it.
+pub(crate) fn executable(pid: i32) -> Option<String> {
+    let out = Command::new("/bin/ps")
+        .args(["-o", "comm=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let comm = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    (!comm.is_empty()).then_some(comm)
+}
+
 /// The app's window titled `title`; the app is ended when it doesn't show one in time.
-fn wait_window(desktop: &mut MacDesktop, prep: &Prepared, title: &str, secs: u64) -> Result<u32> {
+pub(crate) fn wait_window(
+    desktop: &mut MacDesktop,
+    prep: &Prepared,
+    title: &str,
+    secs: u64,
+) -> Result<u32> {
     let pid = prep.pid;
     let end = Instant::now() + Duration::from_secs(secs);
     loop {
@@ -180,6 +201,7 @@ pub fn setup(desktop: &mut MacDesktop, task: &Task, dir: &Path, seed: u64) -> Re
             let args: Vec<&std::ffi::OsStr> = args.iter().map(|a| a.as_os_str()).collect();
             prep.pid = launch_fixture("target-range", &args)?;
             prep.pid_start_us = crate::macos::process_start_us(prep.pid).unwrap_or(0);
+            prep.exe = executable(prep.pid).unwrap_or_default();
             prep.window = wait_window(desktop, &prep, &title, 15)?;
             prep.window_title = title;
             prep.log = Some(log.display().to_string());
@@ -192,10 +214,12 @@ pub fn setup(desktop: &mut MacDesktop, task: &Task, dir: &Path, seed: u64) -> Re
             prep.files.insert(name.to_owned(), p.display().to_string());
             prep.pid = launch_fixture("scratch-pad", &[p.as_os_str()])?;
             prep.pid_start_us = crate::macos::process_start_us(prep.pid).unwrap_or(0);
+            prep.exe = executable(prep.pid).unwrap_or_default();
             prep.window = wait_window(desktop, &prep, name, 15)?;
             prep.window_title = name.to_owned();
         }
         Setup::DevApp => bail!("the runner sets the dev build up (tools/computer-suite)"),
+        Setup::Quirk { .. } => crate::suite_quirks_run::setup(desktop, task, &dir, &mut prep)?,
     }
     // The app's own window notices settle first.
     std::thread::sleep(Duration::from_millis(400));
@@ -206,11 +230,19 @@ pub fn setup(desktop: &mut MacDesktop, task: &Task, dir: &Path, seed: u64) -> Re
 
 /// Ends what `setup` started, by its own pid, while that pid is still the fixture it started.
 pub fn teardown(prep: &Prepared) {
-    if is_ours(prep) {
+    // Asked to quit first (a fixture with a scratch profile writes it out), then ended.
+    for (signal, wait) in [("-TERM", Duration::from_secs(2)), ("-KILL", Duration::ZERO)] {
+        if !is_ours(prep) {
+            return;
+        }
         let _ = Command::new("/bin/kill")
-            .args(["-9", &prep.pid.to_string()])
+            .args([signal, &prep.pid.to_string()])
             .stderr(Stdio::null())
             .status();
+        let end = Instant::now() + wait;
+        while Instant::now() < end && is_ours(prep) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 }
 
@@ -223,11 +255,11 @@ fn is_ours(prep: &Prepared) -> bool {
     {
         return false;
     }
-    let comm = Command::new("/bin/ps")
-        .args(["-o", "comm=", "-p", &prep.pid.to_string()])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-        .unwrap_or_default();
+    let comm = executable(prep.pid).unwrap_or_default();
+    // The exact executable recorded at setup; older setups recorded none.
+    if !prep.exe.is_empty() {
+        return comm == prep.exe;
+    }
     comm.ends_with("/target-range") || comm.ends_with("/scratch-pad")
 }
 
@@ -299,7 +331,7 @@ pub fn check_dir(
 }
 
 /// The line on an observation that contains `needle`, and its ref.
-fn ref_on(text: &str, needle: &str) -> Result<String> {
+pub(crate) fn ref_on(text: &str, needle: &str) -> Result<String> {
     text.lines()
         .find(|l| l.contains(needle))
         .and_then(|l| l.split_whitespace().find(|w| tree::parse_ref(w).is_some()))
@@ -307,16 +339,16 @@ fn ref_on(text: &str, needle: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("no element {needle:?} in:\n{text}"))
 }
 
-struct Script<'a> {
+pub(crate) struct Script<'a> {
     engine: &'a mut Engine<MacDesktop>,
     window: u32,
     batches: u32,
     calls: u32,
-    transcript: String,
+    pub(crate) transcript: String,
 }
 
 impl Script<'_> {
-    fn observe(&mut self, find: Option<&str>, shot: Screenshot) -> Result<Reply> {
+    pub(crate) fn observe(&mut self, find: Option<&str>, shot: Screenshot) -> Result<Reply> {
         self.calls += 1;
         let r = self
             .engine
@@ -337,12 +369,12 @@ impl Script<'_> {
         Ok(r)
     }
 
-    fn find(&mut self, needle: &str) -> Result<String> {
+    pub(crate) fn find(&mut self, needle: &str) -> Result<String> {
         let r = self.observe(Some(needle), Screenshot::Never)?;
         ref_on(&r.text, needle)
     }
 
-    fn act(&mut self, actions: Vec<Action>) -> Result<Reply> {
+    pub(crate) fn act(&mut self, actions: Vec<Action>) -> Result<Reply> {
         self.batches += 1;
         self.calls += 1;
         let r = self
@@ -383,7 +415,7 @@ impl Script<'_> {
     }
 }
 
-fn click(r: &str) -> Action {
+pub(crate) fn click(r: &str) -> Action {
     Action::Click {
         target: Target {
             r#ref: Some(r.to_owned()),
@@ -406,7 +438,7 @@ fn click_at(t: Target) -> Action {
     }
 }
 
-fn set(r: &str, text: &str) -> Action {
+pub(crate) fn set(r: &str, text: &str) -> Action {
     Action::SetValue {
         r#ref: r.to_owned(),
         text: text.to_owned(),
@@ -620,7 +652,10 @@ fn solve(s: &mut Script, task: &Task, prep: &Prepared) -> Result<()> {
                 let _ = board;
             }
         }
-        other => bail!("no scripted solution for {other}"),
+        other => match crate::suite_quirks_run::solve(s, task) {
+            Some(r) => r?,
+            None => bail!("no scripted solution for {other}"),
+        },
     }
     Ok(())
 }
@@ -646,9 +681,7 @@ pub fn scripted(desktop: MacDesktop, out: &Path, only: &[String]) -> Result<bool
     std::fs::create_dir_all(out)?;
     let out = out.canonicalize()?;
     let mut engine = Engine::new(desktop, crate::harness::dev_block_list(), Provider::Claude);
-    let tasks: Vec<&Task> = suite::TASKS
-        .iter()
-        .chain(suite::GROUNDING.iter())
+    let tasks: Vec<&Task> = suite::all_tasks()
         .filter(|t| !matches!(t.setup, Setup::DevApp))
         .filter(|t| {
             only.is_empty()

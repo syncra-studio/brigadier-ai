@@ -100,6 +100,15 @@ impl AxEl {
             .collect()
     }
 
+    /// The element's top left in global points, as accessibility reports it.
+    pub fn position(&self) -> Option<Point> {
+        let p: CGPoint = self
+            .attr("AXPosition")
+            .ok()
+            .and_then(|v| ax_value(v, AXValueType::CGPoint))?;
+        Some(Point::new(p.x, p.y))
+    }
+
     pub fn bool(&self, name: &'static str) -> Option<bool> {
         self.attr(name).ok().and_then(as_bool)
     }

@@ -31,6 +31,11 @@ pub enum Setup {
     DevApp,
     /// The fixture's grounding boards, markers of this size.
     Grounding { size: u32 },
+    /// A hard-surface fixture (`suite_quirks`): its name, and the title of the task's window.
+    Quirk {
+        fixture: &'static str,
+        window: &'static str,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -194,11 +199,16 @@ const fn grounding(size: u32, id: &'static str) -> Task {
 pub const BOARDS: u32 = 10;
 pub const MARKERS: u32 = 5;
 
-pub fn task(id: &str) -> Option<&'static Task> {
+/// Every task: the Phase 4 tasks, the grounding boards and the hard-surface tasks.
+pub fn all_tasks() -> impl Iterator<Item = &'static Task> {
     TASKS
         .iter()
         .chain(GROUNDING.iter())
-        .find(|t| t.id == id || t.id.replace(' ', "-").eq_ignore_ascii_case(id))
+        .chain(crate::suite_quirks::QUIRKS.iter())
+}
+
+pub fn task(id: &str) -> Option<&'static Task> {
+    all_tasks().find(|t| t.id == id || t.id.replace(' ', "-").eq_ignore_ascii_case(id))
 }
 
 impl Task {
@@ -228,6 +238,10 @@ pub struct Prepared {
     /// Milliseconds since the epoch when the target was ready.
     #[serde(default)]
     pub ready_ms: u64,
+    /// The fixture's executable, as `ps` names it: a pid is signalled only while it still runs
+    /// this. Empty in setups written before it was recorded.
+    #[serde(default)]
+    pub exe: String,
 }
 
 /// One line of the fixture's log.
@@ -352,6 +366,11 @@ pub fn check(
     files: &BTreeMap<String, String>,
     report: Option<&str>,
 ) -> Verdict {
+    if let Some(v) =
+        crate::suite_quirks::check(prep, events, records, files, snapshot(events).as_ref())
+    {
+        return v;
+    }
     let mut v = Verdict {
         task: prep.task.clone(),
         pass: true,

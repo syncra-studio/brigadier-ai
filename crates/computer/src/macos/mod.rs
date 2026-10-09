@@ -192,6 +192,14 @@ impl MacDesktop {
         if let Some(el) = self.ax_windows.get(&w.id) {
             return Ok(el.clone());
         }
+        if self.quirks.first_contact(w.pid) {
+            // Waking it makes it key inside its app, which would end an activation the batch
+            // holds on another of its windows.
+            if self.held.as_ref().is_some_and(|(pid, _)| *pid == w.pid) {
+                self.release_activation();
+            }
+            self.quirks.wake(w, front_pid());
+        }
         let app = AxEl::app(w.pid);
         // The window list holds only the current Space's windows. The app's main and focused
         // windows are given wherever they are (measured 2026-10-09 with the user on a full-screen
@@ -205,7 +213,6 @@ impl MacDesktop {
                 self.ax_windows.insert(id, el);
             }
         }
-        self.quirks.first_contact(w.pid);
         if !self.ax_windows.contains_key(&w.id) && !w.on_screen {
             // Revealing makes the window key inside its app, which would end an activation
             // the batch holds on another of its windows.
@@ -476,7 +483,7 @@ impl Desktop for MacDesktop {
 
     fn tree(&mut self, w: &WindowInfo, all: bool) -> CuResult<Vec<RawNode<AxEl>>> {
         let el = self.ax_window(w)?;
-        let nodes = ax::tree(&el, Point::new(w.frame.x, w.frame.y), all);
+        let nodes = ax::tree(&el, quirks::origin(w, Some(&el)), all);
         if nodes.len() <= 1 && el.attr("AXRole").is_err() {
             self.ax_windows.remove(&w.id);
             return err(
@@ -488,7 +495,8 @@ impl Desktop for MacDesktop {
     }
 
     fn read(&mut self, w: &WindowInfo, el: &AxEl) -> CuResult<RawNode<AxEl>> {
-        ax::read(el, Point::new(w.frame.x, w.frame.y))
+        let window = self.ax_window(w).ok();
+        ax::read(el, quirks::origin(w, window.as_ref()))
     }
 
     fn backing_scale(&mut self, w: &WindowInfo) -> f64 {

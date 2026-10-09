@@ -15,7 +15,7 @@
 //! Browsers (Chromium-family apps by bundle id, `AXEnhancedUserInterface`) are the browser
 //! stream's (`web.rs`), not this module's.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -25,6 +25,7 @@ use objc2_core_foundation::CFBoolean;
 use super::ax::AxEl;
 use super::input::Activation;
 use crate::desktop::{Structure, WindowInfo};
+use crate::geom::Point;
 
 /// How long an observe waits for a first-contact app to build its tree: Electron starts it about
 /// 2 s after the attribute is set.
@@ -42,9 +43,13 @@ struct Contact {
     at: Instant,
 }
 
+/// Windows of Electron apps that have been key once (see `Quirks::wake`).
+type Woken = HashSet<(i32, u64, u32)>;
+
 #[derive(Default)]
 pub struct Quirks {
     contacts: HashMap<i32, Contact>,
+    woken: Woken,
 }
 
 impl Quirks {
@@ -70,6 +75,22 @@ impl Quirks {
             },
         );
         electron
+    }
+
+    /// Makes an Electron window key inside its app once, by synthetic activation, then lets it go.
+    /// Until a window has been key, Electron serves no page tree for it or leaves its presses
+    /// unanswered (measured 2026-10-09: an untouched fixture window gave no web area for 8 s, or
+    /// a tree whose presses did nothing; after one activation, both worked from then on). Not
+    /// done to the user's own front app, which is active already.
+    pub fn wake(&mut self, w: &WindowInfo, user_front: Option<i32>) {
+        if !self.first_contact(w.pid) || user_front == Some(w.pid) {
+            return;
+        }
+        let start_us = self.contacts.get(&w.pid).map_or(0, |c| c.start_us);
+        if !self.woken.insert((w.pid, start_us, w.id)) {
+            return;
+        }
+        drop(Activation::begin(w.pid, w.id, true));
     }
 
     /// Whether `w`'s structure is complete: an Electron window is pending while its web area is
@@ -128,6 +149,17 @@ fn web_area_filled(window: &AxEl) -> bool {
         level = next;
     }
     false
+}
+
+/// The point element frames are made relative to: the window's top left as accessibility gives
+/// it, so they are window points wherever the window is. Accessibility places a window on
+/// another Space whole display widths away from where the window server has it (measured
+/// 2026-10-09: x 3528 for a window the window server had at 72, on a 1728 pt display), so the
+/// window server's origin would put every element of such a window thousands of points off.
+pub fn origin(w: &WindowInfo, window: Option<&AxEl>) -> Point {
+    window
+        .and_then(AxEl::position)
+        .unwrap_or(Point::new(w.frame.x, w.frame.y))
 }
 
 /// A window on another Space that accessibility doesn't list: made key inside its app, read as
