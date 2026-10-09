@@ -58,7 +58,7 @@ pub fn tools() -> Vec<Tool> {
     });
     let action = json!({
         "type": "object",
-        "description": "do: click (ref or image+x+y; button, count, modifiers) | set_value (ref, text) | type (text, ref to focus first) | key (key like cmd+s, repeat) | select (ref, start, length: a text range to type over) | scroll (ref or point; dx, dy lines) | drag (from, to) | perform (ref, action it lists) | menu (path in the menu bar) | wait (expect, timeout_ms). Any action may carry expect.",
+        "description": "do: click (ref or image+x+y; button, count, modifiers) | set_value (ref, text) | type (text, ref to focus first) | key (key like cmd+s, repeat) | select (ref, start, length: a text range to type over) | scroll (ref or point; dx, dy lines) | drag (from, to) | perform (ref, action it lists) | menu (path in the menu bar) | navigate (url, in a browser page launch opened) | wait (expect, timeout_ms). Any action may carry expect.",
         "properties": {
             "do": {"type": "string"},
             "ref": {"type": "string"},

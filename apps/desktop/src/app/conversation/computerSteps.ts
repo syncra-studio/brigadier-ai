@@ -107,6 +107,8 @@ export function actionWords(action: ComputerAction): string {
       return action.target ? `Chose ${action.target}` : "Chose a menu item";
     case "select":
       return on("Selected text in", "Selected text");
+    case "navigate":
+      return action.target ? `Went to ${action.target}` : "Went to a page";
     case "wait":
       return "Waited for a change";
     default:
@@ -144,6 +146,8 @@ export function routeWords(action: ComputerAction): string {
         return "In the background";
       case "foreground":
         return "Brought the window to the front while you were away";
+      case "page":
+        return "Inside the page, through the browser";
       default:
         return null;
     }

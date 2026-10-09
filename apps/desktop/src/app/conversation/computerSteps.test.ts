@@ -76,6 +76,9 @@ test("actions group by batch and read in plain words, outcome first, route and t
   assert.deepEqual(outcomeWords(b2!.actions[2]!), { text: "skipped", failed: false });
   assert.equal(routeWords(b1!.actions[0]!), "Directly, through the app's accessibility · Target Range, “Target Range” · 2 ms");
   assert.equal(routeWords(b1!.actions[1]!).startsWith("In the background"), true);
+  const page = action({ kind: "navigate", target: "http://localhost:8080/", rung: "page" });
+  assert.equal(actionWords(page), "Went to http://localhost:8080/");
+  assert.equal(routeWords(page).startsWith("Inside the page, through the browser"), true);
   assert.equal(summaryWords(b1!.actions, false), "Used the computer · 2 steps in Target Range");
   assert.equal(summaryWords(b1!.actions, true), "Using the computer · Typed into the text field in Target Range");
 });
