@@ -1117,6 +1117,16 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => Response::ListWorkerEvents {
             page: core.list_worker_events(&task_id, before, limit).await?,
         },
+        Request::ListComputerActions {
+            conversation_id,
+            task_id,
+            before,
+            limit,
+        } => Response::ListComputerActions {
+            page: core
+                .list_computer_actions(&conversation_id, &task_id, before, limit)
+                .await?,
+        },
         Request::ListOrchestratorLog {
             conversation_id,
             before,

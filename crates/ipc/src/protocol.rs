@@ -13,10 +13,10 @@ use brigadier_core::storage::{
 };
 use brigadier_core::{
     AccountEntry, AccountsView, AttachmentRef, BrainJobKind, BrainOverview, CardId, Catalog,
-    CheckoutFile, CommitOutcome, ConventionsExport, Conversation, ConversationActivity,
-    ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat, FolderCheck,
-    FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, Message, MessagePage,
-    MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, ProbeBurst, Project,
+    CheckoutFile, CommitOutcome, ComputerPage, ConventionsExport, Conversation,
+    ConversationActivity, ConversationId, ConversationKind, ConversationStatus, ConversationView,
+    DiffStat, FolderCheck, FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, Message,
+    MessagePage, MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, ProbeBurst, Project,
     ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView, PullRequest,
     QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId, RepoInfo,
     RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, Settings, Setup, SetupRequest,
@@ -639,6 +639,14 @@ pub enum Request {
         before: Option<i64>,
         limit: u32,
     },
+    /// A page of a worker's computer actions, oldest first (its computer timeline).
+    ListComputerActions {
+        conversation_id: ConversationId,
+        task_id: TaskId,
+        /// Only actions with a smaller `streamSeq` (for paging backwards).
+        before: Option<i64>,
+        limit: u32,
+    },
     /// A page of the orchestrator log (Inspector): CLI events and context injections.
     ListOrchestratorLog {
         conversation_id: ConversationId,
@@ -1161,6 +1169,9 @@ pub enum Response {
     ResolveWaiting,
     ListWorkerEvents {
         page: WorkerPage,
+    },
+    ListComputerActions {
+        page: ComputerPage,
     },
     ListOrchestratorLog {
         page: OrchestratorPage,

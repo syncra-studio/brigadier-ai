@@ -62,6 +62,7 @@ export type { CompactionState } from "./CompactionState";
 export type { ComputerAccess } from "./ComputerAccess";
 export type { ComputerAction } from "./ComputerAction";
 export type { ComputerGrant } from "./ComputerGrant";
+export type { ComputerPage } from "./ComputerPage";
 export type { ContextInjection } from "./ContextInjection";
 export type { ContextUsage } from "./ContextUsage";
 export type { ConventionsExport } from "./ConventionsExport";

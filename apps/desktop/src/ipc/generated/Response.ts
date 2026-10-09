@@ -11,6 +11,7 @@ import type { CheckoutFile } from "./CheckoutFile";
 import type { CleanReport } from "./CleanReport";
 import type { CommitOutcome } from "./CommitOutcome";
 import type { ComputerAccess } from "./ComputerAccess";
+import type { ComputerPage } from "./ComputerPage";
 import type { ConventionsExport } from "./ConventionsExport";
 import type { Conversation } from "./Conversation";
 import type { ConversationActivity } from "./ConversationActivity";
@@ -98,7 +99,7 @@ diff: DiffStat | null, } | { "method": "pendingOvernightNotifications", notifica
 /**
  * The tasks stopped, oldest first.
  */
-taskIds: Array<TaskId>, } | { "method": "pauseTask" } | { "method": "resumeTask" } | { "method": "restoreKeptWork", outcome: RestoreOutcome, } | { "method": "resolveWaiting" } | { "method": "listWorkerEvents", page: WorkerPage, } | { "method": "listOrchestratorLog", page: OrchestratorPage, } | { "method": "getThreadItem", item: ThreadItem, } | { "method": "getThreadMetrics", metrics: ThreadMetrics, } | { "method": "readArtifact", text: ArtifactText, } | { "method": "saveArtifact" } | { "method": "openArtifact", 
+taskIds: Array<TaskId>, } | { "method": "pauseTask" } | { "method": "resumeTask" } | { "method": "restoreKeptWork", outcome: RestoreOutcome, } | { "method": "resolveWaiting" } | { "method": "listWorkerEvents", page: WorkerPage, } | { "method": "listComputerActions", page: ComputerPage, } | { "method": "listOrchestratorLog", page: OrchestratorPage, } | { "method": "getThreadItem", item: ThreadItem, } | { "method": "getThreadMetrics", metrics: ThreadMetrics, } | { "method": "readArtifact", text: ArtifactText, } | { "method": "saveArtifact" } | { "method": "openArtifact", 
 /**
  * The copy to open.
  */

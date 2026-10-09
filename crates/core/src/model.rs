@@ -994,6 +994,15 @@ pub struct WorkerPage {
     pub has_more: bool,
 }
 
+/// A page of a worker's computer actions (its action log), oldest first.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerPage {
+    pub actions: Vec<crate::work::ComputerAction>,
+    /// Where the next older page starts (`before`), when there is one.
+    pub earlier: Option<i64>,
+}
+
 /// A page of the orchestrator log, oldest first.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
