@@ -234,9 +234,24 @@ impl<D: Desktop> Engine<D> {
             .find(|(i, _)| i == id)
             .map(|(_, t)| t.clone())
             .ok_or_else(|| {
+                // The ids that do exist, newest first: a worker once took an obs number (obs 29)
+                // for an image id (i29).
+                let known: Vec<String> = self
+                    .images
+                    .iter()
+                    .rev()
+                    .take(3)
+                    .map(|(i, t)| format!("{i} (window w{})", t.window))
+                    .collect();
                 CuError::new(
                     ErrorCode::NoSuchTarget,
-                    format!("no image {id}; observe again"),
+                    match known.as_slice() {
+                        [] => format!("no image {id}; observe with screenshot \"always\" for one"),
+                        known => format!(
+                            "no image {id}: image ids are on an \"image i…\" line, not the obs number; the newest are {}, or observe with screenshot \"always\"",
+                            known.join(", ")
+                        ),
+                    },
                 )
             })
     }
@@ -2332,6 +2347,28 @@ mod tests {
         let r = act(&mut e, vec![click(&other)]);
         assert_eq!(code(&r[0]), Some(ErrorCode::StaleRef));
         assert!(e.desktop.log.is_empty(), "{:?}", e.desktop.log);
+    }
+
+    #[test]
+    fn an_unknown_image_names_the_ones_there_are() {
+        let mut e = engine(Fake::new(basic()));
+        let img = observe(&mut e, Screenshot::Always, None).image.unwrap();
+        let err = e
+            .zoom(
+                "w",
+                &ZoomRequest {
+                    image: "i29".into(),
+                    region: [0.0, 0.0, 10.0, 10.0],
+                },
+            )
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::NoSuchTarget);
+        assert!(
+            err.detail
+                .contains(&format!("the newest are {} (window w1)", img.id)),
+            "{}",
+            err.detail
+        );
     }
 
     #[test]
