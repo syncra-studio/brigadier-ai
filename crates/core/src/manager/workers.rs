@@ -110,6 +110,8 @@ pub(crate) struct WorkerSession {
     pub allowed_models: AllowedModels,
     /// The task's worktree, if it has one.
     pub worktree: Option<PathBuf>,
+    /// The grant its Brigadier tools run under.
+    pub grant: String,
 }
 
 #[derive(Default)]
@@ -1419,7 +1421,11 @@ impl SessionManager {
             origin,
             access: access.clone(),
             append_system_prompt: Some(prompt),
-            mcp_servers: vec![self.brigadier_server(worker_grant, WORKER_TOOL_TIMEOUT_SECS, true)],
+            mcp_servers: vec![self.brigadier_server(
+                worker_grant.clone(),
+                WORKER_TOOL_TIMEOUT_SECS,
+                true,
+            )],
             tools: ToolSet::Lean,
             add_dirs: match (&home, &workspace.worktree) {
                 (Some(_), Some(worktree)) => vec![worktree.clone()],
@@ -1446,6 +1452,7 @@ impl SessionManager {
             redactor,
             allowed_models,
             worktree,
+            grant: worker_grant,
         })
     }
 
@@ -1478,6 +1485,7 @@ impl SessionManager {
             outputs,
             redactor,
             allowed_models,
+            grant,
             ..
         } = self
             .worker_session(task, subject, origin, Some(&mut first), &owner)
@@ -1493,11 +1501,12 @@ impl SessionManager {
                 }
             };
         // A cleanup that stopped waiting for this start has already ended the task (its
-        // session may have been restored since): this session ends unused, and goes.
+        // session may have been restored since, and the task launched again): this session
+        // ends unused, and only what it made goes.
         if fence.cut_off() {
             let native_id = session.native_id();
             session.close().await;
-            self.grants.revoke_owner(&owner);
+            self.grants.revoke(&[grant]);
             self.release_session_files(&owner, &native_id).await;
             return Err(super::closing::closing_error());
         }

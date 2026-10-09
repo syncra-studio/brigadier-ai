@@ -1404,6 +1404,139 @@ async fn a_start_cut_off_by_an_archive_ends_even_after_a_restore() {
     flow.stop().await;
 }
 
+/// A restored chat that started its own CLI while a start cut off by the archive was still
+/// going keeps its tools when that start ends: only what the late start made goes.
+#[tokio::test]
+async fn a_start_cut_off_by_an_archive_leaves_the_restored_chats_cli_alone() {
+    // Each turn's input and the grant its CLI's tools run under.
+    let turns: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let script: Script = {
+        let turns = turns.clone();
+        Arc::new(move |turn: Turn| {
+            turns
+                .lock()
+                .unwrap()
+                .push((turn.input.clone(), turn.grant.clone()));
+            Box::pin(async { Reply::text("Done.") })
+        })
+    };
+    let flow = Flow::start(
+        "late-start-restored-cli",
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                cleanup: true,
+                ..Default::default()
+            }),
+            ..Options::default()
+        },
+        script,
+    )
+    .await;
+    let chat = chat_on(&flow, ProviderKind::Claude, None).await;
+    say_to(&flow, &chat, "Hello.").await;
+    flow.manager.conv(&chat).unwrap().close_cli().await;
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    *flow.behavior.hold_start.lock().unwrap() = Some((reached.clone(), release.clone()));
+    *flow.manager.closing.drain_wait.lock().unwrap() = Some(std::time::Duration::ZERO);
+    send(&flow, &chat, "Again.").await;
+    reached.notified().await;
+    flow.manager.archive(chat.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&chat).await;
+    flow.manager.restore(chat.clone()).await.unwrap();
+    // The restored chat's own CLI, while the late start still goes.
+    say_to(&flow, &chat, "After.").await;
+    let grant = {
+        let turns = turns.lock().unwrap();
+        let (input, grant) = turns.last().unwrap();
+        assert!(input.ends_with("After."), "{turns:#?}");
+        grant.clone()
+    };
+    release.notify_one();
+    flow.manager.drained(&chat).await;
+    super::eventually_async("the archive's mark to clear", || async {
+        !flow.core.conversation(&chat).unwrap().cleanup_pending
+    })
+    .await;
+    assert!(
+        flow.manager.grants().resolve(&grant).is_some(),
+        "the restored chat's CLI keeps its tools"
+    );
+    let live = native_artifacts(&flow, &chat);
+    assert_eq!(live.len(), 1, "the restored chat's session stays: {live:?}");
+    assert!(
+        turns
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(input, _)| !input.ends_with("Again.")),
+        "the late start's turn never ran"
+    );
+    flow.stop().await;
+}
+
+/// A side chat going with its parent while a start of its own outlasts the wait is marked as
+/// being deleted, so a quit before that start ends leaves the delete to the next launch; it
+/// goes once the start has ended.
+#[tokio::test]
+async fn a_side_chat_whose_start_outlasts_its_parents_delete_stays_marked_until_it_goes() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "late-start-side-chat",
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                cleanup: true,
+                ..Default::default()
+            }),
+            ..Options::default()
+        },
+        logging(&log, |_| Reply::text("Done.")),
+    )
+    .await;
+    let parent = chat_on(&flow, ProviderKind::Claude, None).await;
+    say_to(&flow, &parent, "Hello.").await;
+    let side = flow.manager.open_side_chat(&parent).await.unwrap().id;
+    say_to(&flow, &side, "Side hello.").await;
+    flow.manager.conv(&side).unwrap().close_cli().await;
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    *flow.behavior.hold_start.lock().unwrap() = Some((reached.clone(), release.clone()));
+    *flow.manager.closing.drain_wait.lock().unwrap() = Some(std::time::Duration::ZERO);
+    send(&flow, &side, "Side again.").await;
+    reached.notified().await;
+    flow.manager.delete(parent.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&parent).await;
+    assert!(flow.core.conversation(&parent).is_err(), "the parent went");
+    assert!(
+        flow.core.conversation(&side).is_ok_and(|now| now.deleting),
+        "still there, marked, while its start goes on"
+    );
+    release.notify_one();
+    flow.manager.drained(&side).await;
+    super::eventually("the side chat to go", || {
+        flow.core.conversation(&side).is_err()
+    })
+    .await;
+    flow.manager.cleanup_finished(&side).await;
+    assert!(
+        flow.manager
+            .runtime
+            .ledger()
+            .artifacts(&format!("chat:{side}"))
+            .is_empty()
+    );
+    assert!(
+        seen(&log)
+            .iter()
+            .all(|turn| !turn.input.contains("Side again."))
+    );
+    flow.stop().await;
+}
+
 /// A delete that stopped waiting for a start deletes the chat only once that start has
 /// ended, so nothing it recorded outlives the chat.
 #[tokio::test]

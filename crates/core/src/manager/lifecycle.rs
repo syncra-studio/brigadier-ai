@@ -891,10 +891,20 @@ impl SessionManager {
                 return Ok(());
             };
             self.close_fence(&id);
+            // Only a session has branches of its own: a chat's delete is the same whatever was
+            // asked of them.
+            let has_branches = matches!(conversation.setup, Some(Setup::Session { .. }));
             let deleted = self
                 .delete_closed(conversation, delete_branches, record_kept)
                 .await;
             if let Ok(false) = deleted {
+                // A chat (a side chat going with its parent) is marked, so a quit before that
+                // work ends leaves its delete to the next launch. A session isn't: that delete
+                // would take its branches whatever was asked (a project removal stops instead,
+                // and can be done again).
+                if !has_branches && let Err(err) = self.core.mark_deleting(id.clone()).await {
+                    tracing::warn!(conversation = %id, error = %err, "could not mark a delete that waits for late work");
+                }
                 // Its fence stays closed until it is done.
                 let again = id.clone();
                 self.again_after_late_work(&id, move |manager| async move {

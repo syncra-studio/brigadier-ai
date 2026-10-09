@@ -1862,7 +1862,7 @@ impl SessionManager {
             }
         };
 
-        let grant_redactor = super::secrets::redactor(grant_values);
+        let grant_redactor = super::secrets::redactor(grant_values.clone());
         let fresh = std::mem::take(&mut conv.state.lock().await.fresh);
         let mut resume = if fresh {
             None
@@ -1942,13 +1942,14 @@ impl SessionManager {
                 match self.runtime.start_hosted(&owner, &account, spec).await {
                     Ok(started) => started,
                     Err(err) => {
-                        self.grants.revoke_owner(&owner);
+                        // Its own grants only: a restored conversation's live CLI keeps its.
+                        self.grants.revoke(&grant_values);
                         return Err(err);
                     }
                 }
             }
             Err(err) => {
-                self.grants.revoke_owner(&owner);
+                self.grants.revoke(&grant_values);
                 // A reborn CLI that could not start is still owed its fresh start: the next
                 // try must not resume the old, nearly full session.
                 if fresh {
@@ -1957,6 +1958,16 @@ impl SessionManager {
                 return Err(err);
             }
         };
+        // A cleanup that stopped waiting for this start has already passed this conversation,
+        // and it may have been restored since, with a CLI of its own: this one ends unused,
+        // before anything of it is logged, and only what it made goes.
+        if fence.cut_off() {
+            let native_id = started.session.native_id();
+            started.session.close().await;
+            self.grants.revoke(&grant_values);
+            self.release_session_files(&owner, &native_id).await;
+            return Err(super::closing::closing_error());
+        }
         if reseed_needed {
             conv.state.lock().await.reseed = true;
         }
@@ -1993,18 +2004,6 @@ impl SessionManager {
         let pumped = cli.clone();
         let pumping = conv.clone();
         self.spawn(async move { manager.pump_conversation(pumping, pumped, events).await });
-        // A cleanup that stopped waiting for this start has already passed this conversation,
-        // and it may have been restored since: this start ends, and what it made goes.
-        if fence.cut_off() {
-            let native_id = cli.session.native_id();
-            conv.close_cli().await;
-            self.release_session_files(&cli.owner, &native_id).await;
-            // The pump logged its start before the CLI ended: the next start must not resume it.
-            if self.last_native_id(&conv.id, cli.provider).await.as_deref() == Some(&*native_id) {
-                self.forget_native_session(&conv.id).await;
-            }
-            return Err(super::closing::closing_error());
-        }
         Ok(cli)
     }
 

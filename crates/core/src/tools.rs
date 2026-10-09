@@ -94,6 +94,14 @@ impl Grants {
         self.lock().retain(|_, (held_by, _)| held_by != owner);
     }
 
+    /// Revokes `grants` alone: another session of their owner keeps its own.
+    pub fn revoke(&self, grants: &[String]) {
+        let mut live = self.lock();
+        for grant in grants {
+            live.remove(grant);
+        }
+    }
+
     /// Every live grant value, for scrubbing them out of logs and recordings.
     pub fn secrets(&self) -> Vec<String> {
         self.lock().keys().cloned().collect()
