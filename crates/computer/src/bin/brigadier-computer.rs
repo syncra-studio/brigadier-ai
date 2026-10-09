@@ -5,6 +5,8 @@
 //!   brigadier-computer run <script.json> [--out <dir>]
 //!   brigadier-computer serve --socket <path> --token-file <path> [--parent <pid>]
 //!   brigadier-computer bench [--out <dir>] [--quick] [--cursor] [--replay <dir>]
+//!   brigadier-computer suite tasks | setup <task> <dir> [--seed n] | check <dir> [--records f] [--report f]
+//!                            | teardown <dir> | scripted <out> [task…] | watch <out.jsonl>
 //!
 //! `serve` is the long-lived helper the daemon talks to; the rest is a development and fixture
 //! harness. `bench --cursor` draws the agent cursor over the bench's actions, and the unlisted
@@ -48,6 +50,43 @@ fn main() -> anyhow::Result<()> {
         brigadier_computer::macos::overlay::run_with_overlay(mtm, |overlay| {
             brigadier_computer::macos::overlay::demo(&*overlay)
         });
+    }
+    // Listing and checking read files only.
+    if args.first().map(String::as_str) == Some("suite") {
+        use brigadier_computer::suite;
+        match args.get(1).map(String::as_str) {
+            Some("tasks") => {
+                let all: Vec<_> = suite::TASKS
+                    .iter()
+                    .chain(suite::GROUNDING.iter())
+                    .map(|t| {
+                        let mut v = serde_json::to_value(t).unwrap_or_default();
+                        v["brief"] = serde_json::json!(t.brief());
+                        v
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&all)?);
+                return Ok(());
+            }
+            Some("check") => {
+                let dir = PathBuf::from(args.get(2).context("check <dir>")?);
+                let v = brigadier_computer::suite_run::check_dir(
+                    &dir,
+                    flag("--records").as_deref(),
+                    flag("--report").as_deref(),
+                )?;
+                println!("{}", serde_json::to_string_pretty(&v)?);
+                std::process::exit(if v.pass { 0 } else { 1 });
+            }
+            Some("teardown") => {
+                let dir = PathBuf::from(args.get(2).context("teardown <dir>")?);
+                let prep: suite::Prepared =
+                    serde_json::from_slice(&std::fs::read(dir.join("setup.json"))?)?;
+                brigadier_computer::suite_run::teardown(&prep);
+                return Ok(());
+            }
+            _ => {}
+        }
     }
     let (ax, screen) = brigadier_computer::macos::permissions();
     if !ax || !screen {
@@ -110,6 +149,34 @@ fn main() -> anyhow::Result<()> {
             let ok = bench::run(desktop()?, &out, quick, None, replay.as_deref())?;
             if !ok {
                 std::process::exit(1);
+            }
+        }
+        Some("suite") => {
+            use brigadier_computer::{suite, suite_run};
+            match args.get(1).map(String::as_str) {
+                Some("setup") => {
+                    let task = args
+                        .get(2)
+                        .and_then(|t| suite::task(t))
+                        .context("setup <task> <dir>")?;
+                    let dir = PathBuf::from(args.get(3).context("setup <task> <dir>")?);
+                    let seed = flag("--seed")
+                        .and_then(|s| s.to_str()?.parse().ok())
+                        .unwrap_or(1);
+                    let prep = suite_run::setup(&mut desktop()?, task, &dir, seed)?;
+                    println!("{}", serde_json::to_string(&prep)?);
+                }
+                Some("scripted") => {
+                    let out = PathBuf::from(args.get(2).context("scripted <out> [task…]")?);
+                    if !suite_run::scripted(desktop()?, &out, &args[3..])? {
+                        std::process::exit(1);
+                    }
+                }
+                Some("watch") => {
+                    let out = PathBuf::from(args.get(2).context("watch <out.jsonl>")?);
+                    suite_run::watch(desktop()?, &out)?;
+                }
+                _ => bail!("suite tasks | setup | check | teardown | scripted | watch"),
             }
         }
         _ => {

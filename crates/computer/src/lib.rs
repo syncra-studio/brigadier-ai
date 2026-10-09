@@ -19,6 +19,9 @@ pub mod helper;
 pub mod launch;
 pub mod record;
 pub mod redact;
+pub mod suite;
+#[cfg(all(target_os = "macos", feature = "engine"))]
+pub mod suite_run;
 pub mod tree;
 
 #[cfg(unix)]

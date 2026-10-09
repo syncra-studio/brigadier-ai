@@ -81,8 +81,119 @@ final class Handler: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTab
   @objc func scrolled(_ n: Notification) { log("table-scroll", "scroll", v: String(Int((n.object as! NSClipView).bounds.origin.y))) }
 }
 
+// Grounding boards (the P3 trials): `target-range <log> --grounding <size> [--seed n] [--boards n]`.
+// Each board draws five numbered markers and five lettered decoys of one size, at seeded random
+// places, on a canvas with no accessibility that refuses the first click. A click is logged with
+// the marker it hit (`m3`, `dC`) or `canvas`, and the board it was on. "Next board" deals the next.
+struct Rng {
+  var s: UInt64
+  mutating func next() -> UInt64 { s ^= s << 13; s ^= s >> 7; s ^= s << 17; return s }
+  mutating func unit() -> CGFloat { CGFloat(next() % 1_000_000) / 1_000_000 }
+}
+
+final class GroundingCanvas: NSView {
+  struct Marker { let id: String; let label: String; let rect: NSRect; let color: NSColor }
+  var markers: [Marker] = []
+  var board = 0
+  override var isFlipped: Bool { true }
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { false }
+  override func isAccessibilityElement() -> Bool { false }
+  override func accessibilityChildren() -> [Any]? { [] }
+  override func draw(_ r: NSRect) {
+    NSColor(white: 0.97, alpha: 1).setFill(); bounds.fill()
+    let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+    for m in markers {
+      m.color.setFill(); NSBezierPath(ovalIn: m.rect).fill()
+      (m.label as NSString).draw(at: NSPoint(x: m.rect.maxX + 3, y: m.rect.midY - 8), withAttributes: [.font: font, .foregroundColor: NSColor.black])
+    }
+  }
+  func deal(size: CGFloat, rng: inout Rng) {
+    let colors: [NSColor] = [.systemRed, .systemBlue, .systemGreen, .systemOrange, .systemPurple]
+    var placed: [NSRect] = []
+    var out: [Marker] = []
+    let labels = ["1", "2", "3", "4", "5", "A", "B", "C", "D", "E"]
+    for (i, label) in labels.enumerated() {
+      // Apart enough that a label never sits on another marker; near enough to need care.
+      var rect = NSRect.zero
+      for _ in 0..<500 {
+        let x = 20 + rng.unit() * (bounds.width - 60 - size)
+        let y = 20 + rng.unit() * (bounds.height - 40 - size)
+        rect = NSRect(x: x, y: y, width: size, height: size)
+        if !placed.contains(where: { $0.insetBy(dx: -28, dy: -14).intersects(rect.insetBy(dx: -4, dy: -4)) }) { break }
+      }
+      placed.append(rect)
+      out.append(.init(id: i < 5 ? "m\(label)" : "d\(label)", label: label, rect: rect, color: colors[Int(rng.next() % 5)]))
+    }
+    markers = out
+    board += 1
+    let layout = out.map { "\($0.id):\(Int($0.rect.midX)),\(Int($0.rect.midY))" }.joined(separator: " ")
+    log("board", "layout", v: "\(board) \(layout)")
+    needsDisplay = true
+  }
+  func report(_ ev: String, _ e: NSEvent) {
+    let p = convert(e.locationInWindow, from: nil)
+    let hit = markers.first { NSBezierPath(ovalIn: $0.rect).contains(p) }?.id ?? "canvas"
+    log(hit, ev, x: Double(p.x), y: Double(p.y), v: String(board))
+  }
+  override func mouseDown(with e: NSEvent) { report("down", e) }
+  override func mouseUp(with e: NSEvent) { report("up", e) }
+}
+
+final class GroundingHandler: NSObject {
+  let canvas: GroundingCanvas
+  let size: CGFloat
+  let boards: Int
+  var rng: Rng
+  let status: NSTextField
+  init(canvas: GroundingCanvas, size: CGFloat, seed: UInt64, boards: Int, status: NSTextField) {
+    self.canvas = canvas; self.size = size; self.boards = boards; self.status = status
+    rng = Rng(s: seed == 0 ? 0x9E37_79B9_7F4A_7C15 : seed)
+  }
+  func showBoard() { status.stringValue = "Board \(canvas.board) of \(boards)" }
+  @objc func next(_ b: NSButton) {
+    log("next-board", "press", v: String(canvas.board))
+    if canvas.board >= boards {
+      canvas.markers = []; canvas.needsDisplay = true
+      status.stringValue = "All boards done"
+      log("board", "done")
+      return
+    }
+    canvas.deal(size: size, rng: &rng); showBoard()
+  }
+}
+
+func argValue(_ name: String) -> String? {
+  guard let i = CommandLine.arguments.firstIndex(of: name), i + 1 < CommandLine.arguments.count else { return nil }
+  return CommandLine.arguments[i + 1]
+}
+
+func runGrounding(size: CGFloat) -> Never {
+  let gw = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 700, height: 520), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+  gw.title = "Grounding \(Int(size)) pt"
+  gw.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+  let groot = Flipped(frame: NSRect(x: 0, y: 0, width: 700, height: 520))
+  gw.contentView = groot
+  let canvas = GroundingCanvas(frame: NSRect(x: 10, y: 50, width: 680, height: 460))
+  groot.addSubview(canvas)
+  let status = NSTextField(labelWithString: "")
+  status.frame = NSRect(x: 150, y: 16, width: 300, height: 18)
+  status.identifier = NSUserInterfaceItemIdentifier("board-status")
+  groot.addSubview(status)
+  let gh = GroundingHandler(canvas: canvas, size: size, seed: UInt64(argValue("--seed") ?? "1") ?? 1, boards: Int(argValue("--boards") ?? "10") ?? 10, status: status)
+  let next = NSButton(title: "Next board", target: gh, action: #selector(GroundingHandler.next(_:)))
+  next.identifier = NSUserInterfaceItemIdentifier("next-board")
+  next.frame = NSRect(x: 10, y: 10, width: 120, height: 30)
+  groot.addSubview(next)
+  canvas.deal(size: size, rng: &gh.rng); gh.showBoard()
+  gw.orderFront(nil)
+  log("app", "ready", v: String(ProcessInfo.processInfo.processIdentifier))
+  withExtendedLifetime(gh) { NSApplication.shared.run() }
+  exit(0)
+}
+
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
+if let s = argValue("--grounding"), let size = Double(s) { runGrounding(size: CGFloat(size)) }
 let h = Handler()
 
 // Menu bar: Targets › Level 1 › Level 2 › Pick Me 1–3, and Targets › Plain Item.
@@ -101,6 +212,8 @@ app.mainMenu = mainMenu
 
 let w = NSWindow(contentRect: NSRect(x: 80, y: 120, width: 900, height: 600), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
 w.title = "Target Range"
+// On whichever Space the user is on, so its windows are always the current Space's.
+w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 h.window = w
 let root = Flipped(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
 w.contentView = root
@@ -113,6 +226,7 @@ func label(_ s: String, _ x: CGFloat, _ y: CGFloat) {
 label("Buttons", 20, 12)
 label("Checkboxes", 20, 62)
 var x: CGFloat = 110
+var checks: [NSButton] = []
 for size in [8, 12, 16, 24] {
   let s = CGFloat(size)
   let b = NSButton(title: "", target: h, action: #selector(Handler.pressed(_:)))
@@ -126,6 +240,7 @@ for size in [8, 12, 16, 24] {
   c.identifier = NSUserInterfaceItemIdentifier("check-\(size)")
   c.setAccessibilityLabel("Check \(size) pt")
   root.addSubview(c)
+  checks.append(c)
   x += 60
 }
 
@@ -195,6 +310,23 @@ miniCanvas.dots = [.init(id: "mini-dot", rect: NSRect(x: 140, y: 90, width: 20, 
 mini.contentView = miniCanvas
 mini.orderFront(nil)
 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { mini.miniaturize(nil) }
+
+// SIGUSR1 logs every control's state: the end state a checker reads, since a value set through
+// accessibility sends a control no action or change notice to log.
+signal(SIGUSR1, SIG_IGN)
+let snapshot = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+snapshot.setEventHandler {
+  var state: [String: String] = [
+    "name": name.stringValue, "notes": notes.stringValue, "password": String(pw.stringValue.count),
+    "slider": String(slider.integerValue), "stepper": String(stepper.integerValue),
+    "popup": popup.titleOfSelectedItem ?? "", "tabs": tabs.selectedTabViewItem?.label ?? "",
+    "table": String(table.selectedRow), "sheet": h.sheet?.isVisible == true ? "open" : "closed",
+  ]
+  for c in checks { state[c.identifier!.rawValue] = c.state == .on ? "on" : "off" }
+  let data = try! JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
+  log("state", "snapshot", v: String(data: data, encoding: .utf8)!)
+}
+snapshot.resume()
 
 NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: nil) { _ in log("app", "active") }
 NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: nil) { _ in log("app", "inactive") }
