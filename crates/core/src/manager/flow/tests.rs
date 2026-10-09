@@ -1427,6 +1427,78 @@ async fn archiving_a_session_ends_its_running_review() {
     flow.stop().await;
 }
 
+/// A worker's launch that outlasted an archive's wait ends once it gets through, and what it
+/// recorded after the archive ended its task goes with it.
+#[tokio::test]
+async fn a_workers_launch_cut_off_by_an_archive_leaves_nothing_behind() {
+    let behavior = Arc::new(super::FakeBehavior {
+        cleanup: true,
+        ..Default::default()
+    });
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let hold = (behavior.clone(), reached.clone(), release.clone());
+    let flow = Flow::start(
+        "archived-mid-launch",
+        Options {
+            behavior: behavior.clone(),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let hold = hold.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    return Reply::text("Reported.");
+                }
+                // The worker's start is held.
+                *hold.0.hold_start.lock().unwrap() = Some((hold.1.clone(), hold.2.clone()));
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"effort": "high", "title": "Look around", "kind": "scout", "spec": "List the files."}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+    *flow.manager.closing.drain_wait.lock().unwrap() = Some(std::time::Duration::ZERO);
+    flow.say("Look around.").await;
+    reached.notified().await;
+    let task = flow.board().await.tasks.keys().next().unwrap().clone();
+    flow.manager
+        .archive(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.manager.cleanup_finished(&flow.conversation).await;
+    assert!(flow.board().await.tasks[&task].state.is_final());
+    release.notify_one();
+    flow.manager.drained(&flow.conversation).await;
+    let owner = format!("task:{task}");
+    assert_eq!(
+        flow.manager.runtime.ledger().artifacts(&owner),
+        vec![],
+        "the late launch's session went"
+    );
+    assert!(
+        flow.board().await.tasks[&task].state.is_final(),
+        "the archive's end of the task stands"
+    );
+    super::eventually("the archive's cleanup to finish", || {
+        !flow
+            .core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .cleanup_pending
+    })
+    .await;
+    flow.stop().await;
+}
+
 /// A review's outcome reaching a worker that waits on a question answers nothing: the
 /// question stays open until the orchestrator answers it.
 #[tokio::test]

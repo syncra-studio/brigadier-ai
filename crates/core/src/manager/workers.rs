@@ -1209,19 +1209,19 @@ impl SessionManager {
         }
         // Held until its CLI session is registered, where the session's cleanup finds it.
         let launched = match self.enter(&task.conversation_id) {
-            Ok(_fence) => {
-                self.launch_admitted(live, task, subject, origin, first)
-                    .await
+            Ok(fence) => {
+                let launched = self
+                    .launch_admitted(live, task, subject, origin, first, &fence)
+                    .await;
+                // A cleanup that stopped waiting for it has already passed this task.
+                if launched.is_ok() && fence.cut_off() {
+                    live.close_cli().await;
+                    Err(super::closing::closing_error())
+                } else {
+                    launched
+                }
             }
             Err(err) => Err(err),
-        };
-        // A cleanup that stopped waiting for this launch has already passed this task.
-        let launched = match launched {
-            Ok(()) if self.is_closing(&task.conversation_id) => {
-                live.close_cli().await;
-                Err(super::closing::closing_error())
-            }
-            launched => launched,
         };
         if launched.is_err() {
             self.release_run_task(&task.id);
@@ -1449,6 +1449,7 @@ impl SessionManager {
         subject: Option<&Task>,
         origin: Origin,
         first: TurnInput,
+        fence: &super::closing::WorkGuard,
     ) -> Result<()> {
         let conversation_id = task.conversation_id.clone();
         let owner = format!("task:{}", task.id);
@@ -1483,6 +1484,15 @@ impl SessionManager {
                     return Err(err);
                 }
             };
+        // A cleanup that stopped waiting for this start has already ended the task (its
+        // session may have been restored since): this session ends unused, and goes.
+        if fence.cut_off() {
+            let native_id = session.native_id();
+            session.close().await;
+            self.grants.revoke_owner(&owner);
+            self.release_session_files(&owner, &native_id).await;
+            return Err(super::closing::closing_error());
+        }
         let cli = Arc::new(Cli {
             provider,
             meter: TokenMeter::new(continues).on_account(account.account.clone()),

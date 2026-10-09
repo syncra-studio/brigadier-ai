@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use brigadier_providers::Artifact;
+use brigadier_providers::{Artifact, BoxFuture};
 
 use super::conversation::Envelope;
 use super::prompts;
@@ -451,9 +451,7 @@ impl SessionManager {
     /// chats go, everything it runs stops, and what it created is removed. The cleanup mark
     /// goes last, so a restart finishes a cleanup cut off at any step.
     pub(super) async fn finish_archive(&self, id: &ConversationId, runs: Vec<OvernightRun>) {
-        if !self.drain(id).await {
-            tracing::warn!(conversation = %id, "work of an archived session is still going; cleaning up anyway");
-        }
+        let drained = self.drain(id).await;
         self.delete_side_chats(id).await;
         let Ok(conversation) = self.core.conversation(id) else {
             return;
@@ -461,6 +459,15 @@ impl SessionManager {
         self.wind_down(&conversation).await;
         self.close_runs(runs, true).await;
         self.release_conversation_runs(id).await;
+        if !drained {
+            // What that work makes after this is removed once it has finished: the mark stays
+            // until then.
+            tracing::warn!(conversation = %id, "work of an archived session is still going; cleaning up again once it ends");
+            self.again_after_late_work(id, |manager| async move {
+                manager.finish_cleanup_of(&conversation.id).await;
+            });
+            return;
+        }
         if let Err(err) = self.core.finish_cleanup(id.clone()).await {
             tracing::warn!(conversation = %id, error = %err, "could not record the end of an archive's cleanup; the next launch looks again");
         }
@@ -471,31 +478,43 @@ impl SessionManager {
     /// streams are not).
     pub(super) async fn finish_cut_off_cleanups(&self) {
         for conversation in self.core.catalog().conversations {
-            let id = conversation.id;
+            self.finish_cleanup_of(&conversation.id).await;
+        }
+    }
+
+    /// Finishes conversation `id`'s delete or archive cleanup, if one is marked as not done (a
+    /// quit cut it off, or work it stopped waiting for went on).
+    fn finish_cleanup_of<'a>(&'a self, id: &'a ConversationId) -> BoxFuture<'a, ()> {
+        // Boxed: an archive's cleanup comes back here once late work has ended.
+        Box::pin(async move {
+            let Ok(conversation) = self.core.conversation(id) else {
+                return;
+            };
             if conversation.deleting {
-                tracing::info!(conversation = %id, "finishing a delete cut off by a quit");
-                self.close_fence(&id);
-                self.finish_delete(&id).await;
-                continue;
+                tracing::info!(conversation = %id, "finishing a delete");
+                self.close_fence(id);
+                self.finish_delete(id).await;
+                return;
             }
             if !conversation.cleanup_pending {
-                continue;
+                return;
             }
+            // Restored meanwhile: what it has is its own again.
             if conversation.lifecycle != Lifecycle::Archived {
-                let _ = self.core.finish_cleanup(id).await;
-                continue;
+                let _ = self.core.finish_cleanup(id.clone()).await;
+                return;
             }
-            tracing::info!(conversation = %id, "finishing an archive's cleanup cut off by a quit");
-            self.close_fence(&id);
-            let runs = match self.fence_runs(&id).await {
+            tracing::info!(conversation = %id, "finishing an archive's cleanup");
+            self.close_fence(id);
+            let runs = match self.fence_runs(id).await {
                 Ok(runs) => runs,
                 Err(err) => {
                     tracing::warn!(conversation = %id, error = %err, "could not fence the archived session's runs");
                     Vec::new()
                 }
             };
-            self.finish_archive(&id, runs).await;
-        }
+            self.finish_archive(id, runs).await;
+        })
     }
 
     /// Stops everything a conversation runs and removes what it created.
@@ -825,9 +844,16 @@ impl SessionManager {
             return;
         };
         match self.delete_closed(conversation, true, false).await {
-            Ok(()) => {
+            Ok(true) => {
                 self.open_fence(id);
                 self.note_space_freed();
+            }
+            // The mark stays, and the fence closed, until it is done.
+            Ok(false) => {
+                let id = id.clone();
+                self.again_after_late_work(&id.clone(), |manager| async move {
+                    manager.finish_cleanup_of(&id).await;
+                });
             }
             Err(err) => {
                 tracing::warn!(conversation = %id, error = %err, "could not finish deleting a conversation; the next launch tries again")
@@ -848,41 +874,70 @@ impl SessionManager {
         self.core.conversation(&id)?;
         // An archive's or a delete's cleanup under way finishes first.
         self.cleanup_finished(&id).await;
-        let Ok(conversation) = self.core.conversation(&id) else {
-            // That cleanup was a delete.
-            return Ok(());
-        };
-        self.close_fence(&id);
-        let deleted = self
-            .delete_closed(conversation, delete_branches, record_kept)
-            .await;
-        // Deleted, or still there and working: either way its fence has no more to hold.
-        if deleted.is_ok()
-            || self
-                .core
-                .conversation(&id)
-                .is_ok_and(|now| now.lifecycle != Lifecycle::Archived && !now.deleting)
-        {
-            self.open_fence(&id);
-        }
-        deleted
+        self.delete_now(id, delete_branches, record_kept).await
+    }
+
+    /// [`Self::delete_conversation`] once no cleanup of it is under way.
+    fn delete_now(
+        &self,
+        id: ConversationId,
+        delete_branches: bool,
+        record_kept: bool,
+    ) -> BoxFuture<'_, Result<()>> {
+        // Boxed: it comes back here once late work has ended.
+        Box::pin(async move {
+            let Ok(conversation) = self.core.conversation(&id) else {
+                // That cleanup was a delete.
+                return Ok(());
+            };
+            self.close_fence(&id);
+            let deleted = self
+                .delete_closed(conversation, delete_branches, record_kept)
+                .await;
+            if let Ok(false) = deleted {
+                // Its fence stays closed until it is done.
+                let again = id.clone();
+                self.again_after_late_work(&id, move |manager| async move {
+                    if let Err(err) = manager.delete_now(again.clone(), delete_branches, record_kept).await {
+                        tracing::warn!(conversation = %again, error = %err, "could not finish deleting a conversation");
+                    }
+                });
+                return Err(Error::Invalid(
+                    "Its work is still going: it is deleted once that ends.".into(),
+                ));
+            }
+            // Deleted, or still there and working: either way its fence has no more to hold.
+            if deleted.is_ok()
+                || self
+                    .core
+                    .conversation(&id)
+                    .is_ok_and(|now| now.lifecycle != Lifecycle::Archived && !now.deleting)
+            {
+                self.open_fence(&id);
+            }
+            deleted.map(|_| ())
+        })
     }
 
     /// Deletes a conversation once nothing new of it starts. It leaves the catalog last, after
-    /// its streams are purged, so one cut off at any step is still there to finish.
+    /// its streams are purged, so one cut off at any step is still there to finish. `false`
+    /// when work that passed its fence is still going: everything it ran has stopped, and the
+    /// rest waits until that work has ended, so nothing it makes then is left behind.
     async fn delete_closed(
         &self,
         conversation: Conversation,
         delete_branches: bool,
         record_kept: bool,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let id = conversation.id.clone();
-        if !self.drain(&id).await {
-            tracing::warn!(conversation = %id, "work of a deleted conversation is still going; deleting anyway");
-        }
+        let drained = self.drain(&id).await;
         self.delete_side_chats(&id).await;
         let runs = self.fence_runs(&id).await?;
         self.wind_down(&conversation).await;
+        if !drained {
+            tracing::warn!(conversation = %id, "work of a deleted conversation is still going; deleting it once that ends");
+            return Ok(false);
+        }
         self.close_runs(runs, false).await;
         let runs = self.release_conversation_runs(&id).await;
         let tasks = self.core.tasks(&id).await.unwrap_or_default();
@@ -954,7 +1009,7 @@ impl SessionManager {
             }
             Err(err) => tracing::warn!(conversation = %id, error = %err, "could not collect blobs"),
         }
-        Ok(())
+        Ok(true)
     }
 }
 

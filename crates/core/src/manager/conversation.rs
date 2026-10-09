@@ -1554,6 +1554,9 @@ impl SessionManager {
         }
         let cli = match self.ensure_cli(&conv).await {
             Ok(cli) => cli,
+            // Archived or deleted meanwhile: its cleanup took this turn's work along (a
+            // restored one starts over from what is in its log).
+            Err(_) if !self.is_attached(&conv) => return,
             Err(err) => {
                 let message = err.to_string();
                 self.fail_turn(&conv, users, envelopes, &message).await;
@@ -1736,12 +1739,20 @@ impl SessionManager {
         }
     }
 
+    /// Whether `conv` is still the conversation's live state: an archive or delete lets go of
+    /// it.
+    fn is_attached(&self, conv: &Arc<ConvLive>) -> bool {
+        self.convs_lock()
+            .get(&conv.id)
+            .is_some_and(|live| Arc::ptr_eq(live, conv))
+    }
+
     /// The conversation's live CLI session, started (or resumed) when there is none.
     async fn ensure_cli(&self, conv: &Arc<ConvLive>) -> Result<Arc<Cli>> {
         if let Some(cli) = conv.state.lock().await.cli.clone() {
             return Ok(cli);
         }
-        let _fence = self.enter(&conv.id)?;
+        let fence = self.enter(&conv.id)?;
         let conversation = self.core.conversation(&conv.id)?;
         let (owner, area) = match conv.kind {
             ConversationKind::Session => (format!("orch:{}", conv.id), "orch"),
@@ -1982,12 +1993,43 @@ impl SessionManager {
         let pumped = cli.clone();
         let pumping = conv.clone();
         self.spawn(async move { manager.pump_conversation(pumping, pumped, events).await });
-        // A cleanup that stopped waiting for this start has already passed this conversation.
-        if self.is_closing(&conv.id) {
+        // A cleanup that stopped waiting for this start has already passed this conversation,
+        // and it may have been restored since: this start ends, and what it made goes.
+        if fence.cut_off() {
+            let native_id = cli.session.native_id();
             conv.close_cli().await;
+            self.release_session_files(&cli.owner, &native_id).await;
+            // The pump logged its start before the CLI ended: the next start must not resume it.
+            if self.last_native_id(&conv.id, cli.provider).await.as_deref() == Some(&*native_id) {
+                self.forget_native_session(&conv.id).await;
+            }
             return Err(super::closing::closing_error());
         }
         Ok(cli)
+    }
+
+    /// Removes the files of `owner`'s CLI session `native_id` (one that started after its
+    /// cleanup passed), leaving the rest of what it has.
+    pub(super) async fn release_session_files(&self, owner: &str, native_id: &str) {
+        let made: Vec<Artifact> = self
+            .runtime
+            .ledger()
+            .artifacts(owner)
+            .into_iter()
+            .filter(|artifact| match artifact {
+                Artifact::ClaudeSession { session_id, .. } => session_id == native_id,
+                Artifact::CodexThread { thread_id, .. } => thread_id == native_id,
+                _ => false,
+            })
+            .collect();
+        let leftovers = self.runtime.ledger().release(owner, made).await;
+        if !leftovers.is_clean() {
+            tracing::warn!(
+                owner,
+                ?leftovers,
+                "some leftovers of a cut-off start will be retried at the next launch"
+            );
+        }
     }
 
     /// The Brigadier MCP server entry a CLI session gets; `always_load` for a session that
@@ -3661,10 +3703,7 @@ impl SessionManager {
                 state.waited_model.clone()
             };
             // An archived (or deleted) conversation's messages never go.
-            let attached = self
-                .convs_lock()
-                .get(&conv.id)
-                .is_some_and(|live| Arc::ptr_eq(live, conv));
+            let attached = self.is_attached(conv);
             let Ok(conversation) = self.core.conversation(&conv.id) else {
                 return;
             };

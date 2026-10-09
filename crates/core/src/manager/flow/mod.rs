@@ -348,6 +348,9 @@ pub(crate) struct FakeBehavior {
     pub cleanup: bool,
     pub fail_cleanup: std::sync::atomic::AtomicBool,
     pub removals: Mutex<Vec<Removal>>,
+    /// The next CLI start signals the first and waits for the second before it records
+    /// anything.
+    pub hold_start: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
 /// Files a scripted CLI keeps in its own home, even when a session is shared.
@@ -462,6 +465,11 @@ impl Provider for FakeCli {
                 return Err(brigadier_providers::Error::Spawn(format!(
                     "no session {native_id}"
                 )));
+            }
+            let held = self.behavior.hold_start.lock().unwrap().take();
+            if let Some((reached, release)) = held {
+                reached.notify_one();
+                release.notified().await;
             }
             self.specs.lock().unwrap().push((self.kind, spec.clone()));
             let (tx, events) = mpsc::channel(256);

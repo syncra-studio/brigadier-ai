@@ -1195,3 +1195,154 @@ async fn a_stop_during_a_hand_over_ends_the_request_and_nothing_goes_on_its_own(
     assert_eq!(turns[1].account.as_deref(), Some("acct-b"));
     flow.stop().await;
 }
+
+/// A chat whose next CLI start is held after "Again." passed its fence, with its cleanups
+/// waiting for nothing: what a start that hangs past the drain wait looks like. The second
+/// notify lets the start go on.
+async fn held_late_start(
+    name: &str,
+    log: &Log,
+) -> (Flow, ConversationId, Arc<tokio::sync::Notify>) {
+    let flow = Flow::start(
+        name,
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                cleanup: true,
+                ..Default::default()
+            }),
+            ..Options::default()
+        },
+        logging(log, |_| Reply::text("Done.")),
+    )
+    .await;
+    let chat = chat_on(&flow, ProviderKind::Claude, None).await;
+    say_to(&flow, &chat, "Hello.").await;
+    // The next message starts a CLI.
+    flow.manager.conv(&chat).unwrap().close_cli().await;
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    *flow.behavior.hold_start.lock().unwrap() = Some((reached.clone(), release.clone()));
+    *flow.manager.closing.drain_wait.lock().unwrap() = Some(std::time::Duration::ZERO);
+    send(&flow, &chat, "Again.").await;
+    reached.notified().await;
+    (flow, chat, release)
+}
+
+fn native_artifacts(flow: &Flow, chat: &ConversationId) -> Vec<brigadier_providers::Artifact> {
+    flow.manager
+        .runtime
+        .ledger()
+        .artifacts(&format!("chat:{chat}"))
+        .into_iter()
+        .filter(|artifact| {
+            matches!(
+                artifact,
+                brigadier_providers::Artifact::ClaudeSession { .. }
+            )
+        })
+        .collect()
+}
+
+/// An archive that stopped waiting for a start keeps its cleanup marked as not done, and
+/// cleans again once that start has ended: nothing it recorded is left behind, and its turn
+/// never runs.
+#[tokio::test]
+async fn an_archive_cleans_up_after_a_start_that_outlasted_it() {
+    let log = Log::default();
+    let (flow, chat, release) = held_late_start("late-start-archive", &log).await;
+    flow.manager.archive(chat.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&chat).await;
+    assert!(
+        flow.core.conversation(&chat).unwrap().cleanup_pending,
+        "the cleanup is not done while the start goes on"
+    );
+    release.notify_one();
+    flow.manager.drained(&chat).await;
+    super::eventually_async("the archive's cleanup to finish", || async {
+        !flow.core.conversation(&chat).unwrap().cleanup_pending
+    })
+    .await;
+    assert_eq!(native_artifacts(&flow, &chat), vec![]);
+    assert!(
+        flow.manager
+            .runtime
+            .ledger()
+            .artifacts(&format!("chat:{chat}"))
+            .is_empty()
+    );
+    assert!(seen(&log).iter().all(|turn| !turn.input.contains("Again.")));
+    flow.stop().await;
+}
+
+/// A start admitted before an archive ends, with what it recorded, even when the chat was
+/// restored before it got through: its turn never resumes, and the restored chat's own next
+/// session stays.
+#[tokio::test]
+async fn a_start_cut_off_by_an_archive_ends_even_after_a_restore() {
+    let log = Log::default();
+    let (flow, chat, release) = held_late_start("late-start-restore", &log).await;
+    flow.manager.archive(chat.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&chat).await;
+    flow.manager.restore(chat.clone()).await.unwrap();
+    release.notify_one();
+    flow.manager.drained(&chat).await;
+    assert_eq!(
+        native_artifacts(&flow, &chat),
+        vec![],
+        "the late session went"
+    );
+    super::eventually_async("the archive's mark to clear", || async {
+        !flow.core.conversation(&chat).unwrap().cleanup_pending
+    })
+    .await;
+    assert!(seen(&log).iter().all(|turn| !turn.input.contains("Again.")));
+    send(&flow, &chat, "After.").await;
+    super::eventually_async("the restored chat to answer", || async {
+        request_states(&flow, &chat)
+            .await
+            .contains(&("After.".to_owned(), RequestState::Done))
+    })
+    .await;
+    // "Again." is in the transcript the new session starts from, never a turn of its own.
+    let turns = seen(&log);
+    assert_eq!(turns.len(), 2, "{turns:#?}");
+    let after = &turns[1];
+    assert!(after.input.ends_with("After."), "{turns:#?}");
+    assert_eq!(
+        native_artifacts(&flow, &chat),
+        vec![brigadier_providers::Artifact::ClaudeSession {
+            session_id: after.native_id.clone(),
+            home: None,
+        }]
+    );
+    flow.stop().await;
+}
+
+/// A delete that stopped waiting for a start deletes the chat only once that start has
+/// ended, so nothing it recorded outlives the chat.
+#[tokio::test]
+async fn a_delete_waits_for_a_start_that_outlasted_it() {
+    let log = Log::default();
+    let (flow, chat, release) = held_late_start("late-start-delete", &log).await;
+    flow.manager.delete(chat.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&chat).await;
+    assert!(
+        flow.core.conversation(&chat).is_ok_and(|now| now.deleting),
+        "still there, marked, while the start goes on"
+    );
+    release.notify_one();
+    flow.manager.drained(&chat).await;
+    super::eventually("the chat to go", || flow.core.conversation(&chat).is_err()).await;
+    flow.manager.cleanup_finished(&chat).await;
+    assert!(
+        flow.manager
+            .runtime
+            .ledger()
+            .artifacts(&format!("chat:{chat}"))
+            .is_empty()
+    );
+    assert!(seen(&log).iter().all(|turn| !turn.input.contains("Again.")));
+    flow.stop().await;
+}
