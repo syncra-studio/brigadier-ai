@@ -777,6 +777,7 @@ impl<D: Desktop> Engine<D> {
             }
             self.complete_record(worker, req.window, action, before, target, &results);
         }
+        self.desktop.end_batch();
         drop(guard);
         self.name_apps(first_record);
         let mut text = render_results(&results);
@@ -1676,7 +1677,7 @@ mod tests {
         documents: HashMap<u32, String>,
         /// The app the system would run for a launch.
         resolves_to: Option<AppInfo>,
-        /// Tree reads and captures, in order.
+        /// Tree reads, captures and batch ends, in order.
         reads: Vec<&'static str>,
     }
 
@@ -1893,6 +1894,9 @@ mod tests {
             self.log.push(format!("click {},{}", at.x, at.y));
             Ok(())
         }
+        fn end_batch(&mut self) {
+            self.reads.push("end batch");
+        }
         fn scroll(&mut self, _: &WindowInfo, _: Point, _: i32, _: i32) -> CuResult<()> {
             self.log.push("scroll".into());
             if let Some(pid) = self.user_takes_front {
@@ -2102,6 +2106,33 @@ mod tests {
         e.desktop.reads.clear();
         assert!(observe(&mut e, Screenshot::Never, None).image.is_none());
         assert_eq!(e.desktop.reads, ["tree"]);
+    }
+
+    #[test]
+    fn a_batch_ends_once_after_all_its_actions_and_before_its_closing_look() {
+        let mut e = engine(Fake::new(basic()));
+        let img = observe(&mut e, Screenshot::Always, None).image.unwrap();
+        let at = |x, y| Action::Click {
+            target: Target {
+                image: Some(img.id.clone()),
+                x: Some(x),
+                y: Some(y),
+                ..Default::default()
+            },
+            button: Button::Left,
+            count: 1,
+            modifiers: Vec::new(),
+            expect: None,
+        };
+        e.desktop.reads.clear();
+        let r = act(&mut e, vec![at(200.0, 150.0), at(300.0, 150.0)]);
+        assert!(
+            r.iter()
+                .all(|r| r.delivered == Some(Rung::BackgroundActivated))
+        );
+        assert_eq!(e.desktop.log, vec!["click 200,150", "click 300,150"]);
+        // Then the closing look and the batch's marked image.
+        assert_eq!(e.desktop.reads, ["end batch", "tree", "capture"]);
     }
 
     #[test]

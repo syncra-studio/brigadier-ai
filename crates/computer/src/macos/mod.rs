@@ -144,6 +144,8 @@ pub struct MacDesktop {
     watches: HashMap<i32, Watch>,
     /// Accessibility windows by window-server id.
     ax_windows: HashMap<u32, AxEl>,
+    /// The synthetic activation the batch's actions share, with its app (`end_batch` ends it).
+    held: Option<(i32, input::Activation)>,
 }
 
 impl MacDesktop {
@@ -159,6 +161,7 @@ impl MacDesktop {
             shareable: capture::Shareable::default(),
             watches: HashMap::new(),
             ax_windows: HashMap::new(),
+            held: None,
         })
     }
 
@@ -318,6 +321,29 @@ impl MacDesktop {
                 .map(|p| p.to_string()),
             frontmost: front == Some(pid),
             windows: Vec::new(),
+        }
+    }
+}
+
+impl MacDesktop {
+    /// Makes `w`'s app believe it is active with `w` key until the batch ends. Activating it
+    /// once a batch, not once an action, keeps its window from flashing its active look with
+    /// every click.
+    fn hold_activation(&mut self, w: &WindowInfo) -> CuResult<()> {
+        if self.held.as_ref().is_some_and(|(_, a)| a.window() == w.id) {
+            return Ok(());
+        }
+        self.release_activation();
+        self.held = Some((w.pid, input::Activation::begin(w.pid, w.id, true)?));
+        Ok(())
+    }
+
+    fn release_activation(&mut self) {
+        // Dropped otherwise, which sends the defocus.
+        if let Some((pid, act)) = self.held.take()
+            && self.user_focus().frontmost_pid == pid
+        {
+            act.forget();
         }
     }
 }
@@ -599,7 +625,10 @@ impl Desktop for MacDesktop {
         activate: bool,
         guard: &mut InputGuard<'_>,
     ) -> CuResult<()> {
-        input::click(w, at, button, count, mods, activate, guard)
+        if activate {
+            self.hold_activation(w)?;
+        }
+        input::click(w, at, button, count, mods, false, guard)
     }
 
     fn scroll(&mut self, w: &WindowInfo, at: Point, dx: i32, dy: i32) -> CuResult<()> {
@@ -615,7 +644,10 @@ impl Desktop for MacDesktop {
         guard: &mut InputGuard<'_>,
         cancel: &CancelToken,
     ) -> CuResult<()> {
-        input::drag(w, from, to, activate, guard, cancel)
+        if activate {
+            self.hold_activation(w)?;
+        }
+        input::drag(w, from, to, false, guard, cancel)
     }
 
     fn key(&mut self, pid: i32, chord: &Chord, guard: &mut InputGuard<'_>) -> CuResult<()> {
@@ -641,7 +673,7 @@ impl Desktop for MacDesktop {
                 let Some(chord) = menu_item(w.pid, path).ok().as_ref().and_then(shortcut_of) else {
                     return Err(e);
                 };
-                let _act = input::Activation::begin(w.pid, w.id, true)?;
+                self.hold_activation(w)?;
                 input::key(w.pid, &chord, guard)?;
                 Ok(crate::action::Rung::BackgroundActivated)
             }
@@ -655,7 +687,7 @@ impl Desktop for MacDesktop {
         chord: &Chord,
         guard: &mut InputGuard<'_>,
     ) -> CuResult<crate::action::Rung> {
-        let _act = input::Activation::begin(w.pid, w.id, true)?;
+        self.hold_activation(w)?;
         input::key(w.pid, chord, guard)?;
         Ok(crate::action::Rung::BackgroundActivated)
     }
@@ -710,6 +742,10 @@ impl Desktop for MacDesktop {
 
     fn last_notification(&self, pid: i32) -> Option<Instant> {
         self.watches.get(&pid).and_then(|w| w.last.get())
+    }
+
+    fn end_batch(&mut self) {
+        self.release_activation();
     }
 
     fn user_focus(&mut self) -> UserFocus {

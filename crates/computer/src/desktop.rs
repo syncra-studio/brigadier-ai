@@ -203,7 +203,8 @@ pub trait Desktop {
     fn menu(&mut self, pid: i32, path: &[String]) -> CuResult<()>;
     fn focus(&mut self, pid: i32) -> CuResult<Focus<Self::Element>>;
 
-    /// A click at a window point. `activate` wraps it in synthetic activation.
+    /// A click at a window point. `activate` wraps it in synthetic activation, which may last
+    /// until `end_batch`.
     #[allow(clippy::too_many_arguments)]
     fn click(
         &mut self,
@@ -261,6 +262,9 @@ pub trait Desktop {
     fn last_notification(&self, pid: i32) -> Option<Instant>;
 
     fn user_focus(&mut self) -> UserFocus;
+    /// The end of a batch: a backend that kept an app believing it is active across the batch's
+    /// actions lets it go, so the window shows its active look once a batch, not once an action.
+    fn end_batch(&mut self) {}
 
     /// Reads, from any thread, how many seconds ago the user last used a mouse, trackpad or
     /// keyboard. Input this crate posts doesn't count. Zero when the backend can't tell, which

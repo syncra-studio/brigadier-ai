@@ -129,6 +129,16 @@ impl Activation {
             window,
         })
     }
+
+    pub fn window(&self) -> u32 {
+        self.window
+    }
+
+    /// Ends it without the defocus: the app has become the user's own front app since, and a
+    /// defocus would deactivate it under them.
+    pub fn forget(mut self) {
+        self.psn = None;
+    }
 }
 
 impl Drop for Activation {
