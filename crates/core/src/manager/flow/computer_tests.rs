@@ -678,9 +678,20 @@ async fn an_operate_task_brings_its_batches_and_last_screenshot_with_its_report(
                         .await
                         .unwrap();
                 }
+                // An operate worker names the document it saved through the app, in a temp
+                // folder: that is the job's result, not a lost output.
+                let saved = std::env::temp_dir()
+                    .join(format!("brigadier-operate-{}-note.txt", std::process::id()));
+                let summary = if kind == "operate" {
+                    std::fs::write(&saved, "saved").unwrap();
+                    format!("Done. {} holds the note.", saved.display())
+                } else {
+                    "Done.".to_owned()
+                };
                 let reply = turn
-                    .call("submit_report", json!({"summary": "Done."}))
+                    .call("submit_report", json!({"summary": summary}))
                     .await;
+                let _ = std::fs::remove_file(&saved);
                 assert!(!reply.is_error, "{}", reply.text);
                 Reply::text("Reported.")
             })

@@ -779,9 +779,15 @@ fn operate_rules(task: &Task) -> String {
         ""
     };
     format!(
-        "\n\nTarget: {target}\nEnd state: {end_state}\n\nHow to operate (every model call counts, so use few):{tools}\n- Use only the computer tools and the files and apps this task names. Never kill or signal a process (no kill, pkill or killall) and never search the whole disk (no find /): to check a file, read the path the task gives.\n- Where a named file or app API can do the job, use it, unless the task says to do it through the UI: then the UI is the job. Read structure (observe's refs) before pixels.\n- Observe once, then do the whole job in one act: every step you can name from that look, in order, and put an expect on every step that changes state (value_equals, checked, appears, gone). Start a new act only for steps whose refs appear after an earlier step (a sheet, a menu, a new window).\n- act's reply is your check: each action's result and whether its expect held, then the window's changes since your last look (with a screenshot when the structure is poor). Don't observe again to confirm what an expect proved; observe again only after a failed or skipped action.\n- Zoom before clicking a small target by its pixels.\n- Never act on a window the task didn't name or you didn't launch.\n- As soon as the end state is proven (expects that held, or the one file read the task names), call submit_report: what you did, whether the end state is verified and how, and anything refused or blocked. Then end with one line.",
+        "\n\nTarget: {target}\nEnd state: {end_state}\n\nHow to operate (every model call counts, so use few):{tools}\n- Use only the computer tools and the files and apps this task names. Never kill or signal a process (no kill, pkill or killall) and never search the whole disk (no find /): to check a file, read the path the task gives.\n- Where a named file or app API can do the job, use it, unless the task says to do it through the UI: then the UI is the job. Read structure (observe's refs) before pixels.\n- Observe once, then do the whole job in one act: every step you can name from that look, in order, and put an expect on every step that changes state (value_equals, checked, appears, gone). Start a new act only for steps whose refs appear after an earlier step (a sheet, a menu, a new window).\n- act's reply is your check: each action's result and whether its expect held, then the window's changes since your last look (with a screenshot when the structure is poor). Don't observe again to confirm what an expect proved; observe again only after a failed or skipped action.\n- Zoom before clicking a small target by its pixels.\n- Never act on a window the task didn't name or you didn't launch.\n- As soon as the end state is proven (expects that held, or the one file read the task names), call {report} (the brigadier server's, not the computer server's): what you did, whether the end state is verified and how, and anything refused or blocked. Then end with one line.",
         target = task.target.as_deref().unwrap_or("(named in the task)"),
         end_state = task.end_state.as_deref().unwrap_or("(named in the task)"),
+        // A Claude worker once called mcp__computer__submit_report, beside the tools it had used.
+        report = if task.route.choice.provider == ProviderKind::Codex {
+            "tools.mcp__brigadier__submit_report"
+        } else {
+            "mcp__brigadier__submit_report"
+        },
     )
 }
 
@@ -1092,6 +1098,7 @@ mod tests {
         assert!(brief.contains("Observe once, then do the whole job in one act"));
         assert!(brief.contains("Don't observe again to confirm what an expect proved"));
         assert!(brief.contains("As soon as the end state is proven"));
+        assert!(brief.contains("call mcp__brigadier__submit_report (the brigadier server's"));
         assert!(brief.contains("whether the end state is verified and how"));
         // A trial once ran `find /` and `pkill`: the brief rules both out in plain words.
         assert!(
