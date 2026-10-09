@@ -16,11 +16,12 @@
 //! (see [`schema`]).
 
 mod catalog;
+mod computer;
 pub mod schema;
 
 use std::sync::Arc;
 
-use brigadier_core::tools::{Role, ToolHost};
+use brigadier_core::tools::{Role, ToolHost, ToolReply};
 use rmcp::model::{
     CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
     Implementation, InitializeRequestParams, InitializeResult, ListToolsResult,
@@ -38,6 +39,8 @@ const TOOLS_TTL_MS: u64 = 24 * 60 * 60 * 1000;
 
 /// The name the CLIs know the server by (their tools show up as `mcp__brigadier__<tool>`).
 pub const SERVER_NAME: &str = "brigadier";
+/// The name of the computer-use server a worker's computer grant gets (`mcp__computer__<tool>`).
+pub const COMPUTER_SERVER_NAME: &str = "computer";
 
 /// Why a connection ended other than by the client closing it.
 #[derive(Debug, thiserror::Error)]
@@ -98,7 +101,28 @@ fn refused() -> ErrorData {
 }
 
 fn text_result(text: String, is_error: bool) -> CallToolResult {
-    let content = vec![ContentBlock::text(text)];
+    reply_result(ToolReply {
+        text,
+        is_error,
+        images: Vec::new(),
+    })
+}
+
+/// A reply as MCP content: its images first, as base64 image blocks, then its text.
+fn reply_result(reply: ToolReply) -> CallToolResult {
+    use base64::Engine as _;
+    let mut content: Vec<ContentBlock> = reply
+        .images
+        .iter()
+        .map(|image| {
+            ContentBlock::image(
+                base64::engine::general_purpose::STANDARD.encode(&image.data),
+                image.mime.clone(),
+            )
+        })
+        .collect();
+    content.push(ContentBlock::text(reply.text));
+    let is_error = reply.is_error;
     if is_error {
         CallToolResult::error(content)
     } else {
@@ -108,8 +132,15 @@ fn text_result(text: String, is_error: bool) -> CallToolResult {
 
 impl ServerHandler for BrigadierServer {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new(SERVER_NAME, env!("CARGO_PKG_VERSION")))
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
+            Implementation::new(
+                match self.role {
+                    Some(Role::Computer { .. }) => COMPUTER_SERVER_NAME,
+                    _ => SERVER_NAME,
+                },
+                env!("CARGO_PKG_VERSION"),
+            ),
+        )
     }
 
     async fn initialize(
@@ -150,12 +181,30 @@ impl ServerHandler for BrigadierServer {
         tracing::debug!(tool = %request.name, "brigadier tool call");
         tokio::select! {
             reply = self.host.call(&self.grant, call) => {
-                Ok(text_result(reply.text, reply.is_error).into())
+                Ok(reply_result(reply).into())
             }
             _ = context.ct.cancelled() => {
                 tracing::debug!(tool = %request.name, "brigadier tool call cancelled");
                 Err(ErrorData::internal_error("the call was cancelled", None))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_reply_with_an_image_puts_it_first_as_base64() {
+        let reply = ToolReply::ok("window w2 · image i1").with_image("image/png", vec![1, 2, 3]);
+        let result = serde_json::to_value(reply_result(reply)).unwrap();
+        let content = result["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "image");
+        assert_eq!(content[0]["data"], "AQID");
+        assert_eq!(content[0]["mimeType"], "image/png");
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(content[1]["text"], "window w2 · image i1");
     }
 }

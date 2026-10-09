@@ -50,6 +50,13 @@ pub enum Role {
     /// A Claude thread's output hook (`brigadierd hook post-tool-use`): it may only store the
     /// thread's command output, and calls no tools.
     OutputHook { conversation_id: ConversationId },
+    /// A worker's computer use (COMPUTER-USE-PLAN.md §4.6): the `computer` MCP server and
+    /// `brigadierd computer`. It can call the computer tools and nothing else; the worker's
+    /// own grant stays with the Brigadier server.
+    Computer {
+        conversation_id: ConversationId,
+        task_id: TaskId,
+    },
 }
 
 /// The command tools a thread has besides the orchestrator tools (THREAD-PLAN.md Q4): a Codex
@@ -952,6 +959,28 @@ pub enum ChatCall {
     SaveMemory(SaveMemory),
 }
 
+/// A computer-use call (COMPUTER-USE-PLAN.md §4.6).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ComputerCall {
+    Apps,
+    Launch(brigadier_computer::wire::LaunchRequest),
+    Observe(brigadier_computer::action::ObserveRequest),
+    Act(brigadier_computer::action::ActRequest),
+    Zoom(brigadier_computer::action::ZoomRequest),
+}
+
+impl ComputerCall {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Apps => "apps",
+            Self::Launch(_) => "launch",
+            Self::Observe(_) => "observe",
+            Self::Act(_) => "act",
+            Self::Zoom(_) => "zoom",
+        }
+    }
+}
+
 /// A tool call, for any role.
 #[derive(Debug, Clone)]
 pub enum ToolCall {
@@ -959,14 +988,24 @@ pub enum ToolCall {
     Worker(WorkerCall),
     Job(JobCall),
     Chat(ChatCall),
+    Computer(ComputerCall),
 }
 
-/// What a tool call returns to the model.
+/// An image in a tool's reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplyImage {
+    pub mime: String,
+    pub data: Vec<u8>,
+}
+
+/// What a tool call returns to the model: its images, then its text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolReply {
     pub text: String,
     /// The call failed or was refused; `text` says why.
     pub is_error: bool,
+    /// Shown to the model before the text (a screenshot reads best ahead of what it shows).
+    pub images: Vec<ReplyImage>,
 }
 
 impl ToolReply {
@@ -974,6 +1013,7 @@ impl ToolReply {
         Self {
             text: text.into(),
             is_error: false,
+            images: Vec::new(),
         }
     }
 
@@ -981,7 +1021,16 @@ impl ToolReply {
         Self {
             text: text.into(),
             is_error: true,
+            images: Vec::new(),
         }
+    }
+
+    pub fn with_image(mut self, mime: impl Into<String>, data: Vec<u8>) -> Self {
+        self.images.push(ReplyImage {
+            mime: mime.into(),
+            data,
+        });
+        self
     }
 }
 

@@ -245,6 +245,7 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
     static CHECKER: OnceLock<Vec<Tool>> = OnceLock::new();
     static JOB: OnceLock<Vec<Tool>> = OnceLock::new();
     static CHAT: OnceLock<Vec<Tool>> = OnceLock::new();
+    static COMPUTER: OnceLock<Vec<Tool>> = OnceLock::new();
     match role {
         Role::Orchestrator { run, .. } => match run {
             RunTools::None => ORCHESTRATOR.get_or_init(orchestrator_tools),
@@ -279,6 +280,7 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
         Role::BrainJob { .. } => JOB.get_or_init(job_tools),
         Role::Chat { .. } => CHAT.get_or_init(chat_tools),
         Role::OutputHook { .. } => &[],
+        Role::Computer { .. } => COMPUTER.get_or_init(crate::computer::tools),
     }
 }
 
@@ -526,6 +528,7 @@ pub fn parse_call(
             _ => Err(unknown()),
         },
         Role::OutputHook { .. } => Err(unknown()),
+        Role::Computer { .. } => crate::computer::parse(name, arguments),
     }
 }
 
