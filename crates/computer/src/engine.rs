@@ -1651,8 +1651,10 @@ impl<D: Desktop> Engine<D> {
 /// The role of a document's text view: edited only with typed keys.
 const DOCUMENT_TEXT: &str = "text-area";
 
-/// Fields whose value is replaced as an edit (`Engine::replace_as_edit`).
-const EDITED_FIELDS: [&str; 3] = ["textfield", "search-field", "combo"];
+/// Fields whose value is replaced as an edit (`Engine::replace_as_edit`). Not a search field:
+/// it searches on every edit, so the edit ran the search again and its found-text highlight
+/// windows ended the batch as if it had navigated (measured 2026-10-09 in a find bar).
+const EDITED_FIELDS: [&str; 2] = ["textfield", "combo"];
 
 /// A filtered observation can show what is out of view, so it reads everything.
 fn filtered_read(req: &ObserveRequest) -> bool {
