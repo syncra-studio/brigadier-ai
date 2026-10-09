@@ -199,13 +199,25 @@ pub fn hit(
     })
 }
 
+/// The node at a point of a frame's viewport, in CSS pixels. The protocol takes document
+/// points, so the frame's scroll is added; a point off the document hits nothing.
 fn node_at(conn: &mut Conn, session: &str, x: f64, y: f64) -> CuResult<Option<i64>> {
+    let m = conn.call(Some(session), "Page.getLayoutMetrics", json!({}))?;
+    let v = &m["cssLayoutViewport"];
+    let (sx, sy) = (
+        v["pageX"].as_f64().unwrap_or(0.0),
+        v["pageY"].as_f64().unwrap_or(0.0),
+    );
     let r = conn.call(
         Some(session),
         "DOM.getNodeForLocation",
-        json!({"x": x.round() as i64, "y": y.round() as i64, "includeUserAgentShadowDOM": true}),
-    )?;
-    Ok(r["backendNodeId"].as_i64())
+        json!({"x": (x + sx).round() as i64, "y": (y + sy).round() as i64, "includeUserAgentShadowDOM": true}),
+    );
+    match r {
+        Ok(r) => Ok(r["backendNodeId"].as_i64()),
+        Err(e) if e.detail.contains("No node found") => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// Whether `inner` is `el` or inside it, through shadow roots.

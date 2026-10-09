@@ -700,6 +700,7 @@ impl<D: Desktop> Engine<D> {
             navigated = true;
             notes.push(format!("the page opened {} new tab(s)", opened.len()));
         }
+        let dialog_closed = dialog_before && dialog_after.is_none();
         if let Some(d) = dialog_after.filter(|_| !dialog_before) {
             navigated = true;
             notes.push(format!(
@@ -708,7 +709,8 @@ impl<D: Desktop> Engine<D> {
                 tree::quote(&d.message, tree::VALUE_CLIP)
             ));
         }
-        if dialog_before && out.answered {
+        // The page behind it runs again; a prompt's text only filled the field.
+        if dialog_closed {
             navigated = true;
         }
         let user_after = self.desktop.user_focus();
