@@ -348,12 +348,20 @@ same secure-field check as typing.
 
 ### 4.5 Agent cursor
 
-- The helper draws one overlay per display: a borderless, transparent panel above all windows, ignoring mouse events,
-  on every Space, and left out of every capture.
-- Each session gets its own color (hashed from the session id) and a small label with the worker's name.
-- The cursor glides to each target in 120–180 ms and pulses on a click. For an element action it outlines the
-  element's frame. It never moves the real cursor.
-- It fades out after 5 s without actions and disappears when the session ends.
+- The helper draws one overlay per display: a borderless, transparent, non-activating panel above all windows, on
+  every Space, that mouse events go through. It never takes focus or a click, and never posts an event.
+- **Never in Brigadier's own captures.** Every capture the engine makes is of one window
+  (`SCContentFilter(desktopIndependentWindow:)`), so a panel of another window is never in it. If a whole display is
+  ever captured, its content filter leaves the helper's own windows out. We don't rely on `sharingType = none`:
+  Apple calls it legacy, and other apps' screenshots and recordings may show the cursor. That is fine: it is what
+  the user is meant to see.
+- Each worker's cursor has its avatar's colour (the app's `glyphFor` on the task id, the same shape-to-colour
+  mapping), so it is stable and matches the worker's row. Two workers whose avatars share a colour share it here
+  too; their name pills tell them apart. The pill carries the worker's name.
+- The cursor glides to each target in 150 ms, beside the action rather than before it, so it never delays one
+  (ruled in §10.2). It pulses on a click and outlines the element an element action names. It never moves the real
+  cursor.
+- It fades out 5 s after its last action and goes when the session ends; the user's Stop clears every cursor.
 
 ### 4.6 The tool surface
 
@@ -740,6 +748,78 @@ files); terminal windows were sent requests that had to be refused, never input.
 - The cursor never appears in a capture.
 - The timeline replays a bench run.
 - UI tests pass.
+
+**How it is built** (outline reviewed by Codex and ruled by the Delegator, 2026-10-09; the five corrections in
+`msgs/w09-reply-1.md` all accepted)
+- **The action log first.** Every action of a batch gets an event, also the ones that failed before acting and the
+  ones skipped after a failure. Each carries its batch (one `act` call), its index in it, the app's name and the
+  target in words. Batch and index are its identity, so a history read and live events dedupe. The batch's marked
+  screenshot rides on its first action.
+- **The cursor contract.** The engine tells a `CursorSink` where each action aims, in global points, right before
+  it is delivered, and never waits for the drawing. The broker sends the worker's name with each request. The helper
+  hub labels the cursor before each job, ends it on the session's end and clears every cursor on Stop.
+- **The overlay.** A pure `CursorScene` (fade, end, clear, updates still queued, tested without AppKit) drives Core
+  Animation layers on the main queue: an arrow in the worker's colour, the name pill, the glide, the click pulse and
+  the element outline.
+- **The timeline.** A worker's computer calls (Claude's `mcp__computer__*`, Codex's `computer/*`, the CLI through
+  `$BRIGADIER_COMPUTER_CLI`) fold out of its activity into one "Used the computer" disclosure after its recent
+  activity. Its line says what it did, or what it does now while live. Open, it shows the shown batch's marked
+  screenshot (full size on click), a player (Previous, Play, Next, "Step i of n"; ←/→, Home, End and Space on its
+  toolbar) and the steps: action and outcome in words on every step, the route and its time only on the shown
+  batch's. History is read in pages (`listComputerActions`) and kept up by live `computerActed` events. Screenshots
+  are read with the existing `readAttachment`.
+- **The permission item.** A missing grant raises one "Waiting on you" item per conversation. It holds up no request:
+  the worker has its error and goes on. It has one Allow button per missing grant and no Done button. It closes by
+  itself when a read finds both grants in, or on the worker's next working call, and is found again after a
+  restart.
+- **`bench --replay <dir>`** writes the bench's action log the way the daemon keeps it (`actions.json`, one
+  `ComputerAction` per action) with each batch's marked PNG beside it.
+
+**Results** (2026-10-09; all on this Mac with the helper spawned from a terminal, so with **the terminal's
+inherited grants**, not the helper bundle's own)
+- **Two workers at once, two cursors: PASS (live).** `cargo run --release -p brigadier-computer --example
+  cursor-proof` starts the helper as the daemon does, and two workers over its connection act together on their own
+  copy of the fixture: one presses buttons through accessibility, the other clicks dots by pixel. 12/12 and 12/12
+  actions done in 7.8 s. A screen capture midway shows both cursors: purple "Fix the login page" and teal "Check the
+  release notes". The helper runs one engine thread, so the two workers' requests interleave; both cursors are
+  shown together.
+- **Never in a capture: PASS (live), byte for byte.** With a worker's cursor parked over its window (a screen
+  capture at that moment shows it there), the engine's `observe` screenshot of that window and one taken after the
+  worker's session ended are the same 91,973 bytes. The action log's marked image of the same click with the cursor
+  on its point and after it faded: the same 91,967 bytes.
+- **The cursor changes no result: PASS.** The quick bench with the cursor drawn (`bench --quick --cursor`) passed
+  every gate in five runs, P4 0 and F1 0. One earlier run failed with "no app with pid" (fixed, below).
+- **Bench:** the full §7 bench with the cursor drawn (`bench --cursor`, release build on `24323b5c`, 200 repetitions,
+  1052 s) passes every gate with no regression from Phase 2: S1 6.2/7.9 ms, S2 56.8/61.4 ms, S3 set value 2.4/5.0,
+  menu-bar pick 3.7/6.0, pop-up 362.2/369.7, press 2.5/5.3 ms, S4 21.3/48.0 ms, S5 2.6/7.5 ms, SEL 20/20, P1
+  1600/1600, P2 1600/1600 (worst 0.00 pt), P2r 200/200, P2f 1/1, P4 0, F1 0.
+- **The timeline replays a bench run: PASS (test).** `bench --quick --replay` wrote 456 actions in 451 batches.
+  One batch of each kind (9 actions in 8 batches: element press, a confirmed checkbox, a slider set, a menu pick
+  with no image, a pixel click, a refusal, select and type in one batch, the foreground rung) is the fixture
+  `computer-bench-run.json`. `src/replay/computer.ts` feeds it as live events through the board reducer; the test
+  checks each frame's batch count, words and outcome, and that history overlapping live events shows once.
+- **UI tests: PASS.** SSR tests render the timeline (one disclosure; action and outcome on every step; route only on
+  the shown batch; the toolbar's buttons; a failure in red; live, looked-only and Load earlier) and the permission
+  item (an Allow per missing grant, the System Settings hint after a click, closed once both are in). A headless
+  Chromium test drives the real `WorkerThread`: the computer calls leave no rows of their own (an unfolded run reads
+  "Used apps, used observe, used act"; folded, only "Read a file" and the timeline), ←, Home, End and Play step
+  through the batches and stop at the end, and each shown batch reads its screenshot.
+- **On a dev build: PASS (live).** One Claude scout (effort low) through a dev `brigadierd` on a scratch data dir
+  pressed "Button 8 pt", ticked "Check 8 pt", set "Level" to 75 and clicked the red dot by pixel. The fixture's log
+  shows exactly those four events, the dot at its centre (60, 30). The dev app's worker thread shows one "Used the
+  computer · 4 steps in target-range" line, and open, the batch's marked screenshot, the player and the steps. The
+  dev app was driven with our own engine (`brigadier-computer run`, its window only). The permission item was
+  captured in the recorded-session fixture (`thread-session.html?computer=1`), because a missing grant can't be
+  produced on this Mac tonight without changing privacy settings.
+- **Found on the way, fixed:** with AppKit running on the main thread, a just-launched app could be missing from the
+  running apps for a moment ("no app with pid", once in five runs); a live process is now waited for, up to 1 s. A
+  panic in the overlay's work thread now ends the process instead of leaving it drawing forever.
+- **Found on the way, open:** while one of these terminal-attributed processes (the helper, a bench) holds
+  ScreenCaptureKit, every capture from another of them times out until the first exits; the system `screencapture`
+  isn't affected. All of them run under the terminal's identity tonight, so this may be a per-client limit that a
+  signed helper with its own grant never hits. The case that matters is the installed app's helper and a dev
+  build's at the same time. To check once the helper bundle has its own grant: start one helper, have it capture a
+  window, then capture from a second helper.
 
 ### Phase 4: The GUI specialist, the model-in-the-loop suite and macOS comparisons
 
