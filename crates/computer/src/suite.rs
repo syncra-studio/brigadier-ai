@@ -213,6 +213,10 @@ impl Task {
 pub struct Prepared {
     pub task: String,
     pub pid: i32,
+    /// The process's start time (µs since the epoch): a pid is signalled only while it still
+    /// names this process, never a later one that reused it.
+    #[serde(default)]
+    pub pid_start_us: u64,
     pub window: u32,
     pub window_title: String,
     /// The fixture's log, when the task runs on the fixture.

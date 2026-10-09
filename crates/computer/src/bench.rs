@@ -1131,11 +1131,15 @@ impl Bench {
     }
 }
 
-/// The fixture process: killed (by its own pid) when dropped.
-struct Fixture(i32);
+/// The fixture process (pid, start time): killed by its own pid when dropped, while that pid
+/// is still the fixture.
+struct Fixture(i32, Option<u64>);
 
 impl Drop for Fixture {
     fn drop(&mut self) {
+        if self.1.is_none() || crate::macos::process_start_us(self.0) != self.1 {
+            return;
+        }
         let _ = Command::new("/bin/kill")
             .args(["-9", &self.0.to_string()])
             .stderr(Stdio::null())
@@ -1183,7 +1187,7 @@ pub fn run(
     let log_path = out.join("fixture-log.jsonl");
     let user = desktop.user_focus();
     let pid = crate::suite_run::launch_fixture("target-range", &[log_path.as_os_str()])?;
-    let fixture = Fixture(pid);
+    let fixture = Fixture(pid, crate::macos::process_start_us(pid));
     let (win, mini) = wait_windows(&mut desktop, pid)?;
     // The fixture's own window notices settle before the clock starts.
     std::thread::sleep(Duration::from_millis(500));

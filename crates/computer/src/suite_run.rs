@@ -179,6 +179,7 @@ pub fn setup(desktop: &mut MacDesktop, task: &Task, dir: &Path, seed: u64) -> Re
             };
             let args: Vec<&std::ffi::OsStr> = args.iter().map(|a| a.as_os_str()).collect();
             prep.pid = launch_fixture("target-range", &args)?;
+            prep.pid_start_us = crate::macos::process_start_us(prep.pid).unwrap_or(0);
             prep.window = wait_window(desktop, &prep, &title, 15)?;
             prep.window_title = title;
             prep.log = Some(log.display().to_string());
@@ -190,6 +191,7 @@ pub fn setup(desktop: &mut MacDesktop, task: &Task, dir: &Path, seed: u64) -> Re
             std::fs::write(&p, text)?;
             prep.files.insert(name.to_owned(), p.display().to_string());
             prep.pid = launch_fixture("scratch-pad", &[p.as_os_str()])?;
+            prep.pid_start_us = crate::macos::process_start_us(prep.pid).unwrap_or(0);
             prep.window = wait_window(desktop, &prep, name, 15)?;
             prep.window_title = name.to_owned();
         }
@@ -202,14 +204,31 @@ pub fn setup(desktop: &mut MacDesktop, task: &Task, dir: &Path, seed: u64) -> Re
     Ok(prep)
 }
 
-/// Ends what `setup` started, by its own pid.
+/// Ends what `setup` started, by its own pid, while that pid is still the fixture it started.
 pub fn teardown(prep: &Prepared) {
-    if prep.pid > 0 {
+    if is_ours(prep) {
         let _ = Command::new("/bin/kill")
             .args(["-9", &prep.pid.to_string()])
             .stderr(Stdio::null())
             .status();
     }
+}
+
+/// Whether `prep.pid` is still the fixture `setup` started: the same start time and a fixture's
+/// binary. After the fixture ends, its pid may name another process, which a signal would hit.
+fn is_ours(prep: &Prepared) -> bool {
+    if prep.pid <= 0
+        || prep.pid_start_us == 0
+        || crate::macos::process_start_us(prep.pid) != Some(prep.pid_start_us)
+    {
+        return false;
+    }
+    let comm = Command::new("/bin/ps")
+        .args(["-o", "comm=", "-p", &prep.pid.to_string()])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .unwrap_or_default();
+    comm.ends_with("/target-range") || comm.ends_with("/scratch-pad")
 }
 
 /// The scratch files' contents as they are on disk now.
@@ -224,15 +243,7 @@ pub fn read_files(prep: &Prepared) -> BTreeMap<String, String> {
 /// fixture itself is signalled: after teardown its pid may belong to another process, which
 /// SIGUSR1 would end.
 fn snapshot(prep: &Prepared, log: &Path) {
-    if prep.pid <= 0 || prep.task.starts_with("Grounding") {
-        return;
-    }
-    let comm = Command::new("/bin/ps")
-        .args(["-o", "comm=", "-p", &prep.pid.to_string()])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-        .unwrap_or_default();
-    if !comm.ends_with("/target-range") {
+    if prep.task.starts_with("Grounding") || prep.log.is_none() || !is_ours(prep) {
         return;
     }
     let before = suite::read_events(log).map(|e| e.len()).unwrap_or(0);

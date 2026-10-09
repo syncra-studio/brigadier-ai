@@ -80,7 +80,8 @@ def start(d, bundle):
         time.sleep(0.5)
     if win is None:
         raise SystemExit(f"target: the dev app {pid} shows no window")
-    json.dump({"pid": pid, "window": win["id"], "title": win["title"], "conversation": conv, "bundle": bundle},
+    json.dump({"pid": pid, "started": started(pid), "binary": binary, "window": win["id"], "title": win["title"],
+               "conversation": conv, "bundle": bundle},
               open(os.path.join(d, "target.json"), "w"), indent=1)
     print(json.dumps({"pid": pid, "window": win, "conversation": conv}))
 
@@ -127,12 +128,21 @@ def check(d, task, trial):
     print(json.dumps(out))
 
 
+def started(pid):
+    """The process's start time and command as ps prints them, or None when it is gone."""
+    r = subprocess.run(["ps", "-o", "lstart=,command=", "-p", str(pid)], capture_output=True, text=True)
+    return r.stdout.strip() or None
+
+
 def stop(d):
+    """Ends the dev app this script opened: only while its pid is still that process (the same
+    start time and command), never a later process that reused the pid."""
     t = json.load(open(os.path.join(d, "target.json")))
-    try:
-        os.kill(t["pid"], 15)
-    except ProcessLookupError:
-        pass
+    now = started(t["pid"])
+    if not t.get("started") or now != t["started"] or not now.split(None, 5)[-1].startswith(t["binary"]):
+        print(f"target: pid {t['pid']} is no longer the dev app; nothing stopped")
+        return
+    os.kill(t["pid"], 15)
 
 
 if __name__ == "__main__":
