@@ -1,3 +1,5 @@
+import { SidebarToggle } from "@/app/SidebarToggle";
+import { RightSidebar, RightSidebarContext, RightSidebarToggle } from "@/app/conversation/RightSidebar";
 // oxlint-disable react/refs, brigadier/no-raw-design-values -- Browser fixtures emulate external page styling; the probe exposes pane callbacks for automation.
 /** Production pane components with synthetic shell, webview and worker data. No daemon. */
 import {
@@ -7,12 +9,11 @@ import {
 } from "@assistant-ui/react";
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import {
-  PanelButtons,
-  PanelButtonsRoom,
+  TerminalButton,
   SidePanel,
   SidePanelContext,
   useSidePanel,
@@ -24,10 +25,10 @@ import {
 import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
-import { SidebarProvider } from "@/components/ui/sidebar";
+import { SidebarPanel, SidebarProvider, useSidebar } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
-import type { BrowserBounds, Request, Task } from "@/ipc/generated";
+import type { BrowserBounds, Conversation, Request, Task } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 import { useBrowsers } from "@/state/browsers";
@@ -84,7 +85,14 @@ useBoard.setState({
     },
   },
 });
+const conversation: Conversation = {
+  id, kind: "session", projectId: "fixture-project", title: "Independent panes",
+  pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active",
+  forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+};
 useApp.setState({
+  conversations: { [id]: conversation },
+  selection: { type: "conversation", id },
   info: {
     platform: "macos",
     version: "fixture",
@@ -214,6 +222,13 @@ mockIPC(
     if (req.method === "closeTerminal")
       for (const [key, terminalId] of shells)
         if (terminalId === req.terminalId) shells.delete(key);
+    if (req.method === "listFiles")
+      return { method: req.method, files: ["README.md", "package.json", "src/app.tsx", "src/styles.css"], truncated: false };
+    if (req.method === "getSourceState")
+      return { method: req.method, state: {
+        branch: "sidebar-redesign", remote: null, upstream: null, ahead: 0, staged: [],
+        changes: [{ path: "src/app.tsx", oldPath: null, status: "modified" }],
+      } };
     if (req.method === "listWorkerEvents")
       return { method: req.method, page: { entries: [], hasMore: false } };
     return { method: req.method };
@@ -222,7 +237,10 @@ mockIPC(
 );
 
 function Fixture() {
-  const { panel, agents } = useSidePanel(id, "session");
+  const [kind, setKind] = useState<"session" | "chat" | null>("session");
+  const [conversationId, setConversationId] = useState(id);
+  const sidebar = useSidebar();
+  const { panel, agents } = useSidePanel(kind === null ? null : conversationId, kind);
   usePaneShortcuts();
   const runtime = useExternalStoreRuntime<ThreadMessage>({
     messages: [],
@@ -233,6 +251,9 @@ function Fixture() {
       panes: {
         panel,
         agents,
+        setKind,
+        setConversationId,
+        sidebar,
         calls,
         shells,
         useBrowsers,
@@ -241,21 +262,22 @@ function Fixture() {
         emitPaneShortcut: (shortcut: string) => emit("pane-shortcut", shortcut),
       },
     });
-  }, [panel, agents]);
+  }, [panel, agents, sidebar]);
   const full = panel.visible && panel.state.fullscreen;
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <SidePanelContext.Provider value={panel}>
+      <RightSidebarContext.Provider value={panel.rightSidebar}>
+        <SidePanelContext.Provider value={panel}>
         <AgentsPanelContext.Provider value={agents}>
           <div className="flex h-screen w-full min-w-0">
-            <aside className="border-border flex w-80 shrink-0 flex-col gap-5 border-r px-6 py-8">
-              <h1 className="text-lg font-medium">Brigadier</h1>
-              <p className="text-muted-foreground text-sm">Projects</p>
-              <p className="text-sm">brigadier-ai</p>
-              <p className="rounded-control bg-muted px-3 py-2 text-sm">
-                Independent panes
-              </p>
-            </aside>
+            <SidebarPanel strip={<span className="p-3 text-sm">B</span>}>
+              <div className="flex flex-col gap-5 px-4 py-6">
+                <h1 className="text-lg font-medium">Brigadier</h1>
+                <p className="text-muted-foreground text-sm">Projects</p>
+                <p className="text-sm">brigadier-ai</p>
+                <p className="rounded-control bg-muted px-3 py-2 text-sm">Independent panes</p>
+              </div>
+            </SidebarPanel>
             <main
               ref={panel.workspace}
               data-slot="pane-workspace"
@@ -269,14 +291,14 @@ function Fixture() {
                     <h2 className="min-w-0 flex-1 truncate text-sm font-medium">
                       Independent panes
                     </h2>
-                    <PanelButtonsRoom besidePanel />
+                    <SidebarToggle open={sidebar.open} onToggle={sidebar.toggleSidebar} /><TerminalButton />{kind === "session" && <RightSidebarToggle />}
                   </header>
                   <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-auto px-5 py-8 text-sm">
                     <p className="self-end rounded-control bg-muted px-4 py-2">
                       Give each tool its own pane.
                     </p>
                     <p>
-                      The browser, workers and files share one right-side slot.
+                      Files, Source and Workers live in the right sidebar.
                       The terminal stays at the bottom.
                     </p>
                     <button
@@ -309,20 +331,21 @@ function Fixture() {
                   </div>
                   <TerminalPane place={`conv:${id}`} />
                 </div>
-                <SidePanel conversationId={id} />
-                <PanelButtons />
+                <SidePanel conversationId={kind === null ? null : conversationId} />
                 <FloatingComposerSlot capsule={false} />
               </div>
             </main>
+            {kind === "session" && <RightSidebar conversationId={conversationId} />}
           </div>
         </AgentsPanelContext.Provider>
       </SidePanelContext.Provider>
+        </RightSidebarContext.Provider>
     </AssistantRuntimeProvider>
   );
 }
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>
-    <SidebarProvider defaultOpen={false}>
+    <SidebarProvider>
       <Fixture />
     </SidebarProvider>
   </TooltipProvider>,

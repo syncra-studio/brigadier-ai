@@ -183,6 +183,8 @@
   --spacing-rail-tuck: 0.25rem;
   /* The sidebar panel: its width, and how far it resizes. */
   --spacing-sidebar: 18rem;
+  --spacing-sidebar-thread-min: 20rem;
+  --sidebar-other-width: 0px;
   --spacing-sidebar-min: 11.75rem;
   --spacing-sidebar-max: 29.25rem;
   /* The sidebar panel collapsed to a strip of icons: each icon where it sits in the expanded
@@ -265,7 +267,6 @@
   --color-terminal-tab-active: var(--terminal-tab-active);
   --color-terminal-tab-inactive: var(--terminal-tab-inactive);
   --shadow-terminal-tab: inset 0 0 0 0.5px oklch(1 0 0 / 5%);
-  --spacing-workers-pane: 26.25rem;
   --spacing-side-panel-min: 20rem;
   --spacing-side-panel-chat-min: 20rem;
   --spacing-side-panel-preferred: 40rem;

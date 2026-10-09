@@ -5,7 +5,7 @@ import {
   FolderOpen,
   Search,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCheckoutFiles } from "@/app/conversation/Mentions";
 import { useShowMain } from "@/app/conversation/SidePanel";
@@ -85,11 +85,17 @@ function visibleRows(root: Folder, open: ReadonlySet<string>): Row[] {
 }
 
 /** The side panel's Files tab: the tree. */
-export function FilesTab({ conversationId }: { conversationId: string }) {
+export function FilesTab({ conversationId, searchRequest = 0, onSearchHandled }: {
+  conversationId: string;
+  searchRequest?: number;
+  onSearchHandled?: (() => void) | undefined;
+}) {
   const showMain = useShowMain();
   return (
     <FileBrowser
       conversationId={conversationId}
+      searchRequest={searchRequest}
+      onSearchHandled={onSearchHandled}
       onOpen={(path, keep) => {
         openFileTab(conversationId, path, { preview: !keep });
         showMain();
@@ -101,10 +107,21 @@ export function FilesTab({ conversationId }: { conversationId: string }) {
 function FileBrowser({
   conversationId,
   onOpen,
+  searchRequest,
+  onSearchHandled,
 }: {
   conversationId: string;
   onOpen: OnOpen;
+  searchRequest: number;
+  onSearchHandled?: (() => void) | undefined;
 }) {
+  const search = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (searchRequest > 0) {
+      search.current?.focus({ preventScroll: true });
+      onSearchHandled?.();
+    }
+  }, [searchRequest, onSearchHandled]);
   const conversation = useApp((s) => s.conversations[conversationId]);
   const list = useCheckoutFiles(conversation ?? null);
   const [query, setQuery] = useState("");
@@ -145,9 +162,7 @@ function FileBrowser({
         <label className="border-border rounded-control flex h-control-md items-center gap-1.5 border px-2">
           <Search className="text-muted-foreground size-icon-sm shrink-0" />
           <input
-            // ⌘P opens the tab to type in it at once.
-            // oxlint-disable-next-line jsx-a11y/no-autofocus
-            autoFocus
+            ref={search}
             value={query}
             placeholder="Search files"
             aria-label="Search files"

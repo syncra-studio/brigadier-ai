@@ -6,7 +6,7 @@ import { useApp } from "@/state/store";
 import { HOME_PLACE, toggleTerminal, undoTabClose } from "@/state/terminalPlaces";
 
 /** The Panes and View menus' items (macOS), as the key presses the views listen for. */
-const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?: boolean }> = {
+const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?: boolean; alt?: boolean }> = {
   terminal: { code: "KeyJ" },
   "terminal-alternate": { code: "Backquote", control: true },
   new: { code: "KeyT" },
@@ -20,6 +20,7 @@ const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?: boole
   back: { code: "BracketLeft" },
   forward: { code: "BracketRight" },
   sidebar: { code: "KeyB" },
+  "right-sidebar": { code: "KeyB", alt: true },
 };
 
 /**
@@ -47,6 +48,7 @@ export function usePaneShortcuts(): void {
           metaKey: !key.control,
           ctrlKey: key.control ?? false,
           shiftKey: key.shift ?? false,
+          altKey: key.alt ?? false,
         }),
       );
     })

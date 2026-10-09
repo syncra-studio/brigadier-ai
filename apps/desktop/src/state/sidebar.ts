@@ -34,3 +34,22 @@ export function saveCollapseMode(mode: SidebarCollapseMode): void {
     // Storage can be unavailable; the mode then lasts until the app quits.
   }
 }
+
+export function cachedWidth(key: string): number | null {
+  try {
+    const width = Number(localStorage.getItem(key));
+    return Number.isFinite(width) && width > 0 ? width : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveWidth(key: string, width: number | null): void {
+  try {
+    if (width === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, String(Math.round(width)));
+  } catch {
+    // Storage can be unavailable; the width then lasts until the app quits.
+  }
+}
+

@@ -137,7 +137,16 @@
   width: clamp(
     var(--spacing-sidebar-min),
     var(--sidebar-width, var(--spacing-sidebar)),
-    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - 20rem))
+    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min) - var(--right-sidebar-shown, var(--sidebar-other-width))))
+  );
+}
+
+/* The right column owns its width variable and leaves room for the left column too. */
+@utility right-sidebar-panel-width {
+  width: clamp(
+    var(--spacing-sidebar-min),
+    var(--right-sidebar-width, var(--spacing-sidebar)),
+    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min) - var(--sidebar-shown)))
   );
 }
 
@@ -150,7 +159,7 @@
   --sidebar-shown: clamp(
     var(--spacing-sidebar-min),
     var(--sidebar-width, var(--spacing-sidebar)),
-    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - 20rem))
+    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min) - var(--right-sidebar-shown, var(--sidebar-other-width))))
   );
 }
 

@@ -196,6 +196,7 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
             view.append(&tauri::menu::PredefinedMenuItem::separator(app)?)?;
             for (id, title, accelerator) in [
                 ("sidebar", "Toggle Sidebar", "CmdOrCtrl+B"),
+                ("right-sidebar", "Toggle Right Sidebar", "Alt+CmdOrCtrl+B"),
                 ("back", "Back", "CmdOrCtrl+["),
                 ("forward", "Forward", "CmdOrCtrl+]"),
             ] {

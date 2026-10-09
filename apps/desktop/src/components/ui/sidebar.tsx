@@ -1,7 +1,7 @@
 import * as React from "react";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { tokenPx } from "@/lib/tokens";
+import { SidebarReveal, SidebarResizeHandle, useSidebarChoice, useSidebarWidth } from "@/components/ui/sidebar-layout";
 import { cn } from "@/lib/utils";
 import {
   cachedCollapseMode,
@@ -59,34 +59,6 @@ function useSidebar() {
     throw new Error("useSidebar must be used within a SidebarProvider.");
   }
   return context;
-}
-
-function cachedWidth(): number | null {
-  try {
-    const width = Number(localStorage.getItem(WIDTH_KEY));
-    return Number.isFinite(width) && width > 0 ? width : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveWidth(width: number | null): void {
-  try {
-    if (width === null) localStorage.removeItem(WIDTH_KEY);
-    else localStorage.setItem(WIDTH_KEY, String(Math.round(width)));
-  } catch {
-    // Storage can be unavailable; the width then lasts until the app quits.
-  }
-}
-
-function subscribeNarrow(onChange: () => void) {
-  window.addEventListener("resize", onChange);
-  return () => window.removeEventListener("resize", onChange);
-}
-
-/** Whether the window is too narrow for the expanded panel beside the content. */
-function isNarrow() {
-  return window.innerWidth < tokenPx("--spacing-narrow-window");
 }
 
 /** A menu, popover or dialog is open: the peek neither opens nor closes under it. */
@@ -203,7 +175,6 @@ function SidebarProvider({
   children,
   ...props
 }: React.ComponentProps<"div"> & { defaultOpen?: boolean; keepOpen?: boolean; navigationKey?: string }) {
-  const narrow = React.useSyncExternalStore(subscribeNarrow, isNarrow);
   // The user's choice while the window has room (remembered), and while it is narrow
   // (collapsed on becoming narrow, so the panel doesn't crowd the content).
   const [wideOpen, setWideOpen] = React.useState(() => defaultOpen ?? cachedOpen());
@@ -212,34 +183,11 @@ function SidebarProvider({
     setCollapseModeState(mode);
     saveCollapseMode(mode);
   }, []);
-  const [narrowOpen, setNarrowOpen] = React.useState(false);
-  const [seenNarrow, setSeenNarrow] = React.useState(narrow);
-  if (seenNarrow !== narrow) {
-    setSeenNarrow(narrow);
-    setNarrowOpen(false);
-  }
   React.useEffect(() => {
     if (defaultOpen === undefined) saveOpen(wideOpen);
   }, [defaultOpen, wideOpen]);
-  const open = keepOpen || (narrow ? narrowOpen : wideOpen);
-  const setChoice = narrow ? setNarrowOpen : setWideOpen;
-  // Held open, the choice is left alone for when it lets go.
-  const setOpen = React.useCallback(
-    (next: boolean) => {
-      if (!keepOpen) setChoice(next);
-    },
-    [keepOpen, setChoice],
-  );
-  const toggleSidebar = React.useCallback(() => {
-    if (!keepOpen) setChoice((value) => !value);
-  }, [keepOpen, setChoice]);
-
-  const [width, setWidthState] = React.useState(cachedWidth);
-  const setWidth = React.useCallback((next: number | null) => {
-    setWidthState(next);
-    saveWidth(next);
-  }, []);
-  const [resizing, setResizing] = React.useState(false);
+  const { open, setOpen, toggleSidebar } = useSidebarChoice(wideOpen, setWideOpen, keepOpen);
+  const { width, setWidth, resizing, setResizing } = useSidebarWidth(WIDTH_KEY);
   const peekBlocked = React.useCallback(() => open || resizing, [open, resizing]);
   const peek = usePeek(peekBlocked, open, navigationKey);
 
@@ -276,7 +224,7 @@ function SidebarProvider({
     }),
     [
       state, open, collapseMode, setCollapseMode, hidden, setOpen, toggleSidebar,
-      width, setWidth, resizing, keepOpen, peek,
+      width, setWidth, resizing, setResizing, keepOpen, peek,
     ],
   );
 
@@ -315,21 +263,14 @@ function SidebarPanel({
   children,
   ...props
 }: React.ComponentProps<"div"> & { strip?: React.ReactNode; foot?: React.ReactNode }) {
-  const { open, hidden, resizing, peek } = useSidebar();
+  const { open, hidden, resizing, peek, setWidth, setOpen, setResizing } = useSidebar();
   return (
     <div
       data-slot="sidebar-panel"
       data-state={open ? "expanded" : "collapsed"}
       className="relative flex h-full shrink-0"
     >
-      <div
-        inert={hidden}
-        className={cn(
-          "h-full overflow-hidden transition-[width] duration-300 ease-sidebar motion-reduce:transition-none",
-          open ? "sidebar-panel-width" : hidden ? "w-0" : "w-sidebar-strip",
-          resizing && "transition-none",
-        )}
-      >
+      <SidebarReveal open={open} hidden={hidden} resizing={resizing}>
         <div className="flex h-full flex-col">
           <div data-tauri-drag-region className="h-titlebar shrink-0" />
           <div
@@ -363,8 +304,8 @@ function SidebarPanel({
             {foot}
           </div>
         </div>
-      </div>
-      {open && <SidebarResizeHandle />}
+      </SidebarReveal>
+      {open && <SidebarResizeHandle setWidth={setWidth} setOpen={setOpen} resizing={resizing} setResizing={setResizing} />}
       {peek !== "closed" && (
         <SidebarPeek closing={peek === "closing"} hidden={hidden} foot={hidden ? foot : null}>
           {children}
@@ -426,69 +367,6 @@ function SidebarPeek({
         {foot}
       </div>
     </SidebarContext.Provider>
-  );
-}
-
-/** The grab area straddling the panel's edge: drag to resize, below half the minimum to close. */
-function SidebarResizeHandle() {
-  const { setWidth, setOpen, resizing, setResizing } = useSidebar();
-  const start = React.useRef<{ x: number; width: number } | null>(null);
-  const latest = React.useRef<number | null>(null);
-
-  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    const panel = event.currentTarget.parentElement?.firstElementChild;
-    if (!panel) return;
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    start.current = { x: event.clientX, width: panel.getBoundingClientRect().width };
-    latest.current = null;
-    setResizing(true);
-  };
-
-  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!start.current) return;
-    const rtl = getComputedStyle(event.currentTarget).direction === "rtl";
-    const moved = (event.clientX - start.current.x) * (rtl ? -1 : 1);
-    const wanted = start.current.width + moved;
-    const min = tokenPx("--spacing-sidebar-min");
-    const max = tokenPx("--spacing-sidebar-max");
-    if (wanted < min / 2) {
-      end(event);
-      setOpen(false);
-      return;
-    }
-    latest.current = Math.min(Math.max(wanted, min), max);
-    event.currentTarget.parentElement
-      ?.closest<HTMLElement>("[data-slot=sidebar-wrapper]")
-      ?.style.setProperty("--sidebar-width", `${latest.current}px`);
-  };
-
-  const end = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!start.current) return;
-    start.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    setResizing(false);
-    if (latest.current !== null) setWidth(latest.current);
-  };
-
-  return (
-    <div
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize sidebar"
-      data-slot="sidebar-resize-handle"
-      data-resizing={resizing || undefined}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={end}
-      onPointerCancel={end}
-      className="group/resize w-resize-handle top-titlebar absolute bottom-0 end-0 z-10 flex translate-x-1/2 cursor-col-resize justify-center rtl:-translate-x-1/2"
-    >
-      <span className="bg-input w-px opacity-0 transition-opacity duration-150 group-hover/resize:opacity-100 group-data-resizing/resize:opacity-100" />
-    </div>
   );
 }
 

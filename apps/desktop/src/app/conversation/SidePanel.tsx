@@ -1,18 +1,11 @@
 import {
-  Branch,
-  Folders,
-  Globe,
-  PlusCircle,
   Terminal,
   X,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
   createContext,
   type CSSProperties,
-  type FC,
-  Fragment,
   type PointerEvent as ReactPointerEvent,
-  type ReactNode,
   lazy,
   Suspense,
   useCallback,
@@ -24,7 +17,8 @@ import {
 } from "react";
 
 import { BarItem } from "@/app/BarItem";
-import { WORKERS_LABEL, WorkersTab } from "@/app/conversation/Agents";
+import { RightSidebarToggle, useRightSidebar } from "@/app/conversation/RightSidebar";
+import { isRightSidebarTab, type RightSidebarTab } from "@/state/rightSidebar";
 import type { AgentsPanelState } from "@/app/conversation/WorkerChip";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { useSidebar } from "@/components/ui/sidebar";
@@ -54,43 +48,12 @@ const BrowserTab = lazy(() =>
     default: module.BrowserTab,
   })),
 );
-const SourcePanel = lazy(() =>
-  import("@/app/conversation/SourcePanel").then((module) => ({
-    default: module.SourcePanel,
-  })),
-);
-const FilesTab = lazy(() =>
-  import("@/app/conversation/FilesTab").then((module) => ({
-    default: module.FilesTab,
-  })),
-);
-
-/** Independent tools share one right-side slot; the terminal is a separate bottom pane
- * (`TerminalPane`). */
+/** Browser and Side chat keep this temporary slot until they move into the main tabs. */
 
 /** The kinds of tab the side panel opens. */
-export type SideTab =
-  | "workers"
-  | "browser"
-  | "files"
-  | "source"
-  | "sideChat";
+export type SideTab = RightSidebarTab | "browser" | "sideChat";
 
-/** Each tab's title, icon and shortcut (macOS keys; Ctrl for ⌘ elsewhere). */
-const TABS: Record<
-  SideTab,
-  { title: string; icon: ReactNode; keys: string | null }
-> = {
-  workers: { title: WORKERS_LABEL, icon: null, keys: null },
-  browser: { title: "Browser", icon: <Globe />, keys: "⌘T" },
-  files: { title: "Files", icon: <Folders />, keys: "⌘P" },
-  source: { title: "Source", icon: <Branch />, keys: null },
-  sideChat: { title: "Side chat", icon: <PlusCircle />, keys: "⌥⌘S" },
-};
-
-/** The tabs the titlebar has a button for, in order; Terminal comes before Browser. Review is
- * one of a session's main tabs. */
-const TOOLS: readonly SideTab[] = ["files", "source", "sideChat", "browser"];
+const TITLES = { browser: "Browser", sideChat: "Side chat" };
 
 /** The panel's own shortcuts: show or hide it, and full view. */
 
@@ -126,7 +89,7 @@ export function shortcutLabel(keys: string, mac: boolean): string {
 
 type PanelState = {
   open: boolean;
-  active: SideTab | null;
+  active: "browser" | "sideChat" | null;
   fullscreen: boolean;
 };
 
@@ -205,8 +168,7 @@ export type SidePanelApi = {
   closeTab: (tab: SideTab) => void;
   setFullscreen: (fullscreen: boolean) => void;
   reveal: Reveal;
-  buttonsWidth: number;
-  setButtonsWidth: (width: number) => void;
+  rightSidebar: ReturnType<typeof useRightSidebar> | null;
 };
 
 export const SidePanelContext = createContext<SidePanelApi>({
@@ -227,8 +189,7 @@ export const SidePanelContext = createContext<SidePanelApi>({
   closeTab: () => {},
   setFullscreen: () => {},
   reveal: { mounted: false, out: false, moving: false },
-  buttonsWidth: 0,
-  setButtonsWidth: () => {},
+  rightSidebar: null,
 });
 
 /** Brings the main area back from under the panel's full view, for a tab opened from it. */
@@ -293,7 +254,7 @@ export function useSidePanel(
   const [state, setState] = useState<PanelState>(CLOSED);
   const [worker, setWorker] = useState<string | null>(null);
   const [sizes, setSizes] = useState(savedPaneSizes);
-  const [buttonsWidth, setButtonsWidth] = useState(0);
+  const rightSidebar = useRightSidebar(conversationId, kind === "session" && conversationId !== null);
   const mac = useApp((s) => s.info?.platform === "macos");
   const { open: sidebarOpen } = useSidebar();
   const { room, workspace } = useRoom();
@@ -307,11 +268,7 @@ export function useSidePanel(
   const limits = useMemo(() => widthLimits(room.workspace), [room.workspace]);
   const preferred = state.active
     ? (sizes[state.active] ??
-      tokenPx(
-        state.active === "workers"
-          ? "--spacing-workers-pane"
-          : "--spacing-browser-pane",
-      ))
+      tokenPx("--spacing-browser-pane"))
     : undefined;
   const width =
     preferred === undefined
@@ -330,60 +287,44 @@ export function useSidePanel(
       conversationId !== null &&
       s.conversations[conversationId]?.lifecycle === "archived",
   );
-  // A session's tools need its checkout; a draft, like Home, has the Browser only. An archived
-  // thread takes no side chat, as it takes no terminal.
+  // Only actual sessions have tools; plain chats keep their context and terminal controls.
   const available = useMemo<SideTab[]>(() => {
-    const tabs: SideTab[] =
-      kind === "session" && conversationId
-        ? ["workers", "browser", "files", "source", "sideChat"]
-        : kind === "chat"
-          ? ["sideChat", "browser"]
-          : kind === "sideChat"
-            ? []
-            : ["browser"];
-    return archived ? tabs.filter((tab) => tab !== "sideChat") : tabs;
+    if (kind === null) return ["browser"];
+    if (kind !== "session" || !conversationId) return [];
+    return archived ? ["workers", "browser", "files", "source"]
+      : ["workers", "browser", "files", "source", "sideChat"];
   }, [kind, conversationId, archived]);
   // Archiving the thread closes its open side chat.
   if (archived && state.open && state.active === "sideChat")
     setState((current) => ({ ...current, open: false, fullscreen: false }));
   // Home's and the drafts' pages are Home's, as their terminals are.
   const browserId = conversationId ?? HOME_PLACE;
+  const { openTab: openRightTab, setOpen: setRightOpen, open: rightOpen, active: rightActive } = rightSidebar;
   const openTab = useCallback((tab: SideTab) => {
-    setState((current) => ({
-      ...current,
-      open: true,
-      active: tab,
-      fullscreen: !fitsNow.current,
-    }));
-  }, []);
+    if (!available.includes(tab)) return;
+    if (isRightSidebarTab(tab)) {
+      openRightTab(tab, tab === "files");
+      return;
+    }
+    setState((current) => ({ ...current, open: true, active: tab, fullscreen: !fitsNow.current }));
+  }, [available, openRightTab]);
   const hide = useCallback(
-    () =>
-      setState((current) => ({ ...current, open: false, fullscreen: false })),
-    [],
+    () => setState((current) => ({ ...current, open: false, fullscreen: false })), [],
   );
-  const closeTab = useCallback(
-    (tab: SideTab) =>
-      setState((current) =>
-        current.active === tab
-          ? { ...current, open: false, fullscreen: false }
-          : current,
-      ),
-    [],
-  );
-  const toggleTab = useCallback(
-    (tab: SideTab) =>
-      setState((current) =>
-        current.open && current.active === tab
-          ? { ...current, open: false, fullscreen: false }
-          : {
-              ...current,
-              open: true,
-              active: tab,
-              fullscreen: !fitsNow.current,
-            },
-      ),
-    [],
-  );
+  const closeTab = useCallback((tab: SideTab) => {
+    if (isRightSidebarTab(tab)) {
+      if (rightActive === tab) setRightOpen(false);
+      return;
+    }
+    setState((current) => current.active === tab ? { ...current, open: false, fullscreen: false } : current);
+  }, [rightActive, setRightOpen]);
+  const toggleTab = useCallback((tab: SideTab) => {
+    if (isRightSidebarTab(tab)) {
+      if (rightOpen && rightActive === tab) setRightOpen(false);
+      else openTab(tab);
+    } else if (state.open && state.active === tab) hide();
+    else openTab(tab);
+  }, [rightOpen, rightActive, setRightOpen, openTab, state.open, state.active, hide]);
   // A mounted view can change conversation without carrying its selected worker/file over.
   const [scope, setScope] = useState(conversationId);
   if (scope !== conversationId) {
@@ -394,7 +335,7 @@ export function useSidePanel(
   useEffect(() => {
     if (kind === "sideChat") return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      if (event.defaultPrevented || event.isComposing) return;
       const command = mac ? event.metaKey : event.ctrlKey;
       if (command && event.shiftKey && !event.altKey && event.code === "KeyT") {
         const closed = takePaneClose(browserId);
@@ -403,7 +344,7 @@ export function useSidePanel(
           event.preventDefault();
           return;
         }
-        if (closed === "browser" && reopenBrowserTab(browserId)) {
+        if (closed === "browser" && available.includes("browser") && reopenBrowserTab(browserId)) {
           event.preventDefault();
           openTab("browser");
           return;
@@ -444,7 +385,8 @@ export function useSidePanel(
       if (tab === "browser") {
         newBrowserTab(browserId);
         openTab(tab);
-      } else toggleTab(tab);
+      } else if (tab === "files") openTab(tab);
+      else toggleTab(tab);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -477,8 +419,7 @@ export function useSidePanel(
       setFullscreen: (fullscreen) =>
         setState((current) => ({ ...current, fullscreen })),
       reveal,
-      buttonsWidth,
-      setButtonsWidth,
+      rightSidebar,
     }),
     [
       state,
@@ -495,10 +436,10 @@ export function useSidePanel(
       toggleTab,
       closeTab,
       reveal,
-      buttonsWidth,
+      rightSidebar,
     ],
   );
-  const workersOpen = state.open && state.active === "workers";
+  const workersOpen = rightOpen && rightActive === "workers";
   const agents = useMemo(
     () => ({
       // Keep the detail selection while another pane takes the slot.
@@ -603,63 +544,8 @@ function Splitter() {
   );
 }
 
-/** Each tool toggles its own pane. Split view keeps these beside the conversation title;
- * full view keeps them at the window's end, with room in the browser header. */
-export const PanelButtons: FC = () => {
-  const { state, visible, width, available, toggleTab, setButtonsWidth } =
-    useContext(SidePanelContext);
-  const mac = useApp((s) => s.info?.platform === "macos");
-  const keys = (value: string | null) =>
-    value ? shortcutLabel(value, mac) : undefined;
-  const group = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const element = group.current;
-    if (!element) return;
-    const observer = new ResizeObserver(() =>
-      setButtonsWidth(element.offsetWidth),
-    );
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [setButtonsWidth]);
-  return (
-    <TitlebarTips>
-      <div
-        ref={group}
-        data-slot="panel-buttons"
-        data-tauri-drag-region
-        className="h-titlebar absolute top-0 z-20 flex items-center gap-1.5"
-        style={{ insetInlineEnd: visible && !state.fullscreen ? width + 4 : 4 }}
-      >
-        {TOOLS.map((tab) => {
-          const button = (
-            <TitlebarButton
-              tooltip={TABS[tab].title}
-              shortcut={keys(TABS[tab].keys)}
-              aria-pressed={visible && state.active === tab}
-              onClick={() => toggleTab(tab)}
-            >
-              {TABS[tab].icon}
-            </TitlebarButton>
-          );
-          return (
-            <Fragment key={tab}>
-              {tab === "browser" && <TerminalButton covered={visible && state.fullscreen} />}
-              {/* Side chat comes and goes with where it works; the others stay with the view. */}
-              {tab === "sideChat" ? (
-                <BarItem show={available.includes(tab)}>{button}</BarItem>
-              ) : (
-                available.includes(tab) && button
-              )}
-            </Fragment>
-          );
-        })}
-      </div>
-    </TitlebarTips>
-  );
-};
-
 /**
- * Terminal, beside the panel's tools: there wherever a terminal works (not in an archived
+ * Terminal in the titlebar: there wherever a terminal works (not in an archived
  * thread), pressed while the place's terminal shows. Full view hides it (`covered`); pressing
  * Terminal then leaves full view.
  */
@@ -679,28 +565,6 @@ export function TerminalButton({ covered = false }: { covered?: boolean }) {
         <Terminal />
       </TitlebarButton>
     </BarItem>
-  );
-}
-
-/** Room for tools in the conversation titlebar, or the full-view pane header. */
-export function PanelButtonsRoom({
-  besidePanel = false,
-}: {
-  besidePanel?: boolean;
-}) {
-  const { buttonsWidth, reveal, state } = useContext(SidePanelContext);
-  const width = besidePanel || state.fullscreen ? buttonsWidth : 0;
-  return (
-    <div
-      aria-hidden
-      className={cn(
-        "shrink-0",
-        besidePanel &&
-          reveal.moving &&
-          "ease-panel transition-[width] duration-500 motion-reduce:transition-none",
-      )}
-      style={{ width: `${width}px` }}
-    />
   );
 }
 
@@ -772,7 +636,7 @@ export function SidePanel({
         style={full ? undefined : out ? size : { width: 0 }}
       >
         <aside
-          aria-label={TABS[state.active].title}
+          aria-label={TITLES[state.active]}
           data-pane={state.active}
           className={cn(
             "flex h-full shrink-0 flex-col",
@@ -789,37 +653,27 @@ export function SidePanel({
               )}
             >
               <h2 className="min-w-0 flex-1 truncate text-sm font-medium">
-                {TABS[state.active].title}
+                {TITLES[state.active]}
               </h2>
               <TitlebarTips>
                 <TitlebarButton
-                  tooltip={`Close ${TABS[state.active].title}`}
+                  tooltip={`Close ${TITLES[state.active]}`}
                   onClick={hide}
                 >
                   <X />
                 </TitlebarButton>
               </TitlebarTips>
-              <PanelButtonsRoom />
+              {full && <><TerminalButton covered /><RightSidebarToggle /></>}
             </header>
           )}
           <div className="flex min-h-0 flex-1 flex-col">
-            {state.active === "workers" && conversationId ? (
-              <WorkersTab conversationId={conversationId} />
-            ) : state.active === "browser" ? (
+            {state.active === "browser" ? (
               <Suspense fallback={null}>
                 <BrowserTab conversationId={conversationId ?? HOME_PLACE} />
               </Suspense>
             ) : state.active === "sideChat" && conversationId ? (
               <Suspense fallback={null}>
                 <SideChatTab conversationId={conversationId} />
-              </Suspense>
-            ) : state.active === "files" && conversationId ? (
-              <Suspense fallback={null}>
-                <FilesTab conversationId={conversationId} />
-              </Suspense>
-            ) : state.active === "source" && conversationId ? (
-              <Suspense fallback={null}>
-                <SourcePanel conversationId={conversationId} />
               </Suspense>
             ) : null}
           </div>

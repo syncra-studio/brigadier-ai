@@ -1,3 +1,4 @@
+import { RightSidebarToggle } from "@/app/conversation/RightSidebar";
 import {
   ArrowLeft,
   ArrowRight,
@@ -13,7 +14,7 @@ import {
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import {
-  PanelButtonsRoom,
+  TerminalButton,
   SidePanelContext,
 } from "@/app/conversation/SidePanel";
 import {
@@ -278,7 +279,7 @@ export function BrowserTab({ conversationId }: { conversationId: string }) {
             <X />
           </TitlebarButton>
         </TitlebarTips>
-        <PanelButtonsRoom />
+        {state.fullscreen && <><TerminalButton covered /><RightSidebarToggle /></>}
       </div>
       {tabs?.active && (
         <BrowserPageView

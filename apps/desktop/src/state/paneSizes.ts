@@ -1,23 +1,17 @@
 /** Dragged dimensions belong to the app, so every chat uses the same pane sizes. */
 export const PANE_SIZE_KEY = "brigadier.paneSizes";
 export type PaneKind =
-  | "workers"
   | "review"
   | "terminal"
   | "browser"
   | "browserComposer"
-  | "files"
-  | "source"
   | "sideChat";
 export type PaneSizes = Partial<Record<PaneKind, number>>;
 const PANES: readonly string[] = [
-  "workers",
   "review",
   "terminal",
   "browser",
   "browserComposer",
-  "files",
-  "source",
   "sideChat",
 ];
 

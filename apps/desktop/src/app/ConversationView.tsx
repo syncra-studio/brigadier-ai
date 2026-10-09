@@ -1,3 +1,4 @@
+import { RightSidebar, RightSidebarContext, RightSidebarToggle } from "@/app/conversation/RightSidebar";
 import {
   type AppendMessage,
   AssistantRuntimeProvider,
@@ -34,8 +35,7 @@ import { latestRequest, reworkableRequest } from "@/app/conversation/rework";
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
 import {
   SidePanel,
-  PanelButtons,
-  PanelButtonsRoom,
+  TerminalButton,
   SidePanelContext,
   useSidePanel,
 } from "@/app/conversation/SidePanel";
@@ -755,17 +755,19 @@ export function ConversationView({
     <ViewContext.Provider value={{ selection, conversation, embedded }}>
       <EarlierTurnsContext.Provider value={earlier}>
       <ComposerTargetContext.Provider value={target}>
+        <RightSidebarContext.Provider value={sidePanel.rightSidebar}>
         <SidePanelContext.Provider value={sidePanel}>
           <AgentsPanelContext.Provider value={agents}>
             <StatusCardContext.Provider value={statusCard}>
               <AssistantRuntimeProvider runtime={runtime}>
                 <AttachmentReaderContext.Provider value={reader}>
                   <OpenFileContext.Provider value={openFileAt}>
+                    <div className="flex h-full min-h-0 min-w-0">
                     <div
                       ref={embedded ? undefined : sidePanel.workspace}
                       data-embedded-view={embedded || undefined}
                       data-slot="pane-workspace"
-                      className="relative flex h-full min-h-0 flex-col"
+                      className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col"
                     >
                       <div className="relative flex min-h-0 flex-1">
                       <div className={cn("flex h-full min-w-0 flex-1 flex-col", fullscreen && "hidden")}>
@@ -782,7 +784,8 @@ export function ConversationView({
                                   <PinnedSummaryToggle />
                                 </span>
                               )}
-                              <PanelButtonsRoom besidePanel />
+                              <TerminalButton />
+                              <RightSidebarToggle />
                             </SessionTabBar>
                           ) : (
                             !embedded && (
@@ -791,7 +794,7 @@ export function ConversationView({
                                   <ChatActions conversation={conversation} onRename={() => setRenaming(true)} />
                                 )}
                                 {conversation && summary && <PinnedSummaryToggle />}
-                                <PanelButtonsRoom besidePanel />
+                                <TerminalButton />
                               </TopBar>
                             )
                           )}
@@ -837,9 +840,10 @@ export function ConversationView({
                         {!embedded && <TerminalPane place={placeOf(selection)} />}
                       </div>
                       {!embedded && <SidePanel conversationId={conversationId} />}
-                      {!embedded && <PanelButtons />}
                       {!embedded && <FloatingComposerSlot />}
                       </div>
+                    </div>
+                    {tabbed && conversationId && <RightSidebar conversationId={conversationId} />}
                     </div>
                   </OpenFileContext.Provider>
                   {conversation && (
@@ -854,6 +858,7 @@ export function ConversationView({
             </StatusCardContext.Provider>
           </AgentsPanelContext.Provider>
         </SidePanelContext.Provider>
+        </RightSidebarContext.Provider>
       </ComposerTargetContext.Provider>
       </EarlierTurnsContext.Provider>
     </ViewContext.Provider>
