@@ -126,6 +126,7 @@ impl Desktop for Unsupported {
         UserFocus {
             frontmost_pid: 0,
             frontmost_window: None,
+            frontmost_window_id: None,
             cursor: Point::new(0.0, 0.0),
             server_front: None,
         }

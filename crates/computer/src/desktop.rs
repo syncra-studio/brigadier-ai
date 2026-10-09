@@ -113,6 +113,8 @@ pub struct UserFocus {
     pub frontmost_pid: i32,
     /// The frontmost app's focused window, by title.
     pub frontmost_window: Option<String>,
+    /// The same window's id, when the system can tell.
+    pub frontmost_window_id: Option<u32>,
     pub cursor: Point,
     /// The window server's own front process, when the system exposes it.
     pub server_front: Option<u64>,

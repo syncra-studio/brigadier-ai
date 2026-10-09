@@ -602,10 +602,11 @@ impl Desktop for MacDesktop {
 
     fn user_focus(&mut self) -> UserFocus {
         let front = front_pid().unwrap_or(0);
-        let frontmost_window = (front != 0)
+        let focused = (front != 0)
             .then(|| AxEl::app(front).element("AXFocusedWindow"))
-            .flatten()
-            .and_then(|w| w.string("AXTitle"));
+            .flatten();
+        let frontmost_window = focused.as_ref().and_then(|w| w.string("AXTitle"));
+        let frontmost_window_id = focused.as_ref().and_then(AxEl::window_id);
         let cursor = CGEvent::new(None)
             .map(|e| CGEvent::location(Some(&e)))
             .map(|p| Point::new(p.x, p.y))
@@ -616,6 +617,7 @@ impl Desktop for MacDesktop {
         UserFocus {
             frontmost_pid: front,
             frontmost_window,
+            frontmost_window_id,
             cursor,
             server_front,
         }

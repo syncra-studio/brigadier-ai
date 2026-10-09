@@ -203,6 +203,7 @@ impl Desktop for Fake {
         UserFocus {
             frontmost_pid: 99,
             frontmost_window: Some("The user's own window".into()),
+            frontmost_window_id: None,
             cursor: Point::new(5.0, 5.0),
             server_front: None,
         }

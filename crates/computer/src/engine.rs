@@ -1076,24 +1076,40 @@ impl<D: Desktop> Engine<D> {
         self.raised = true;
         let r = raised.and_then(|()| self.act_one(worker, window, index, action, &fg, guard));
         self.raised = false;
-        // Put things back, unless the user moved on to another app meanwhile: the front to
-        // their app, the window back to the Dock. A failed raise may have done half of it.
+        // Put things back, unless the user moved on meanwhile (to another app, or another
+        // window of the target's app): the front to their app and their window, the window
+        // back to the Dock. A failed raise may have done half of it.
         let now = self.desktop.user_focus();
-        let user_moved =
-            now.frontmost_pid != w.pid && now.frontmost_pid != user_before.frontmost_pid;
+        let in_target = now.frontmost_pid == w.pid;
+        let as_rung_left = in_target && now.frontmost_window_id.is_none_or(|id| id == w.id);
+        let user_moved = if in_target {
+            !as_rung_left && now.frontmost_window_id != user_before.frontmost_window_id
+        } else {
+            now.frontmost_pid != user_before.frontmost_pid
+        };
         let mut gave_back = false;
         if !user_moved {
-            if now.frontmost_pid == w.pid
-                && user_before.frontmost_pid != w.pid
-                && user_before.frontmost_pid != 0
-            {
-                gave_back = self.desktop.activate(user_before.frontmost_pid).is_ok();
+            // The user's own window of the same app, focused again once the target is put away.
+            let mut their_window = None;
+            if as_rung_left && user_before.frontmost_pid != 0 {
+                if user_before.frontmost_pid != w.pid {
+                    gave_back = self.desktop.activate(user_before.frontmost_pid).is_ok();
+                } else {
+                    their_window = user_before.frontmost_window_id.filter(|id| *id != w.id);
+                }
             }
             if w.minimized
                 && let Ok(again) = self.desktop.window(window)
                 && !again.minimized
             {
                 let _ = self.desktop.minimize(&again);
+            }
+            if let Some(id) = their_window {
+                gave_back = self
+                    .desktop
+                    .window(id)
+                    .and_then(|theirs| self.desktop.raise(&theirs))
+                    .is_ok();
             }
         }
         let (mut result, navigated) = r?;
@@ -1381,10 +1397,14 @@ mod tests {
         idle: Arc<std::sync::Mutex<f64>>,
         /// The user's frontmost app.
         front: i32,
+        /// Its focused window.
+        front_window: Option<u32>,
         /// The user moves the mouse halfway through a drag.
         user_moves_mid_drag: bool,
         /// The user brings this app to the front during a scroll.
         user_takes_front: Option<i32>,
+        /// The user focuses this window of the frontmost app during a scroll.
+        user_takes_window: Option<u32>,
         /// Other apps, and what a launch opens.
         others: Vec<AppInfo>,
         on_open: Option<AppInfo>,
@@ -1423,8 +1443,10 @@ mod tests {
                 log: Vec::new(),
                 idle: Arc::new(std::sync::Mutex::new(0.0)),
                 front: 99,
+                front_window: None,
                 user_moves_mid_drag: false,
                 user_takes_front: None,
+                user_takes_window: None,
                 others: Vec::new(),
                 on_open: None,
                 open_takes_front: false,
@@ -1473,10 +1495,14 @@ mod tests {
         }
         fn window(&mut self, id: u32) -> CuResult<WindowInfo> {
             if id == self.window.id {
-                Ok(self.window.clone())
-            } else {
-                err(ErrorCode::NoSuchTarget, "no window")
+                return Ok(self.window.clone());
             }
+            self.others
+                .iter()
+                .flat_map(|a| &a.windows)
+                .find(|w| w.id == id)
+                .cloned()
+                .ok_or_else(|| CuError::new(ErrorCode::NoSuchTarget, "no window"))
         }
         fn app(&mut self, pid: i32) -> CuResult<AppInfo> {
             Ok(AppInfo {
@@ -1601,6 +1627,9 @@ mod tests {
             if let Some(pid) = self.user_takes_front {
                 self.front = pid;
             }
+            if let Some(id) = self.user_takes_window {
+                self.front_window = Some(id);
+            }
             Ok(())
         }
         fn drag(
@@ -1641,6 +1670,7 @@ mod tests {
                 } else {
                     "The user's own window".into()
                 }),
+                frontmost_window_id: self.front_window,
                 cursor: Point::new(5.0, 5.0),
                 server_front: None,
             }
@@ -1650,9 +1680,12 @@ mod tests {
             Arc::new(move || *idle.lock().unwrap())
         }
         fn raise(&mut self, w: &WindowInfo) -> CuResult<()> {
-            self.log.push("raise".into());
-            self.window.minimized = false;
+            self.log.push(format!("raise {}", w.id));
+            if w.id == self.window.id {
+                self.window.minimized = false;
+            }
             self.front = w.pid;
+            self.front_window = Some(w.id);
             Ok(())
         }
         fn activate(&mut self, pid: i32) -> CuResult<()> {
@@ -2200,7 +2233,7 @@ mod tests {
         assert_eq!(r[0].delivered, Some(Rung::Foreground));
         assert_eq!(
             e.desktop.log,
-            vec!["raise", "scroll", "activate 99", "minimize"]
+            vec!["raise 1", "scroll", "activate 99", "minimize"]
         );
         assert_eq!(e.desktop.front, 99);
         assert_eq!(e.records.last().unwrap().rung, Some(Rung::Foreground));
@@ -2216,8 +2249,52 @@ mod tests {
         let text = observe(&mut e, Screenshot::Never, None).text;
         let r = act(&mut e, vec![scroll_on(&ref_of(&text, "Name"))]);
         assert_eq!(r[0].delivered, Some(Rung::Foreground));
-        assert_eq!(e.desktop.log, vec!["raise", "scroll"]);
+        assert_eq!(e.desktop.log, vec!["raise 1", "scroll"]);
         assert_eq!(e.desktop.front, 77);
+    }
+
+    /// The user's window of the target's own app: the target is put away and theirs gets
+    /// the focus back.
+    fn same_app_user_window(fake: &mut Fake) {
+        let mut theirs = other_app(10, "Fake", "dev.example.fake", 2);
+        theirs.windows[0].title = "The user's own window".into();
+        fake.others.push(theirs);
+        fake.front = 10;
+        fake.front_window = Some(2);
+    }
+
+    #[test]
+    fn the_foreground_rung_gives_the_focus_back_to_the_users_window_of_the_same_app() {
+        let mut fake = Fake::new(basic());
+        fake.window.minimized = true;
+        fake.set_idle(120.0);
+        same_app_user_window(&mut fake);
+        let mut e = engine(fake);
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let r = act(&mut e, vec![scroll_on(&ref_of(&text, "Name"))]);
+        assert_eq!(r[0].delivered, Some(Rung::Foreground));
+        assert_eq!(
+            e.desktop.log,
+            vec!["raise 1", "scroll", "minimize", "raise 2"]
+        );
+        assert_eq!((e.desktop.front, e.desktop.front_window), (10, Some(2)));
+        assert!(r[0].notes.iter().any(|n| n.contains("gave the front back")));
+    }
+
+    #[test]
+    fn the_foreground_rung_keeps_another_window_the_user_picked_in_the_same_app() {
+        let mut fake = Fake::new(basic());
+        fake.window.minimized = true;
+        fake.set_idle(120.0);
+        same_app_user_window(&mut fake);
+        // Mid-action the user picks a third window of the same app.
+        fake.user_takes_window = Some(3);
+        let mut e = engine(fake);
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let r = act(&mut e, vec![scroll_on(&ref_of(&text, "Name"))]);
+        assert_eq!(r[0].delivered, Some(Rung::Foreground));
+        assert_eq!(e.desktop.log, vec!["raise 1", "scroll"]);
+        assert_eq!(e.desktop.front_window, Some(3));
     }
 
     #[test]
@@ -2245,7 +2322,7 @@ mod tests {
         // Stopped after the first event; the front still went back.
         assert_eq!(
             e.desktop.log,
-            vec!["raise", "drag start", "activate 99", "minimize"]
+            vec!["raise 1", "drag start", "activate 99", "minimize"]
         );
     }
 
