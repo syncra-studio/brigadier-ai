@@ -142,9 +142,10 @@ struct ConvState {
     awaiting_start: bool,
     /// The CLI began the running turn: it holds the turn's messages in its session.
     landed: bool,
-    /// The next turn carries on a turn cut short by an account's limit on another account:
-    /// its messages are already in the resumed session, so it says to carry on instead.
-    continuing: bool,
+    /// The messages of a turn cut short by an account's limit, which the CLI had already begun:
+    /// they are in the session the next turn resumes on another account, so that turn says to
+    /// carry on instead of sending them again (any others still go).
+    continuing: HashSet<String>,
     /// The thread's commands (Bash, `run`, a Codex shell item) running in this turn.
     commands: HashSet<String>,
     /// The user stopped the turn while a command ran: its CLI is closed when the turn ends,
@@ -1514,17 +1515,18 @@ impl SessionManager {
         let notes = self
             .request_notes(&conv.id, &envelopes, request.as_deref())
             .await;
-        let continuing = std::mem::take(&mut conv.state.lock().await.continuing);
-        let mut input = if continuing {
-            let mut input = self
-                .turn_input(&conv, &[], &[user_notes, notes.clone()].concat())
-                .await;
+        let landed = std::mem::take(&mut conv.state.lock().await.continuing);
+        let unsent: Vec<Message> = users
+            .iter()
+            .filter(|message| !landed.contains(&message.id))
+            .cloned()
+            .collect();
+        let mut input = self
+            .turn_input(&conv, &unsent, &[user_notes, notes.clone()].concat())
+            .await;
+        if unsent.len() < users.len() {
             input.prepend_text(prompts::CONTINUE_ON_ACCOUNT);
-            input
-        } else {
-            self.turn_input(&conv, &users, &[user_notes, notes.clone()].concat())
-                .await
-        };
+        }
         let mut reborn = None;
         if let Some(plan) = briefing {
             let (text, mut record) = self
@@ -1573,7 +1575,7 @@ impl SessionManager {
                 .join("\n\n");
             input.prepend_text(&text);
         }
-        for message in &users {
+        for message in &unsent {
             self.log_user_injection(&conv, message).await;
         }
         for ((envelope, _), note) in envelopes.iter().zip(&notes) {
@@ -3411,7 +3413,9 @@ impl SessionManager {
         }
         {
             let mut state = conv.state.lock().await;
-            state.continuing = landed && !carried.is_empty();
+            if landed {
+                state.continuing = carried.iter().map(|message| message.id.clone()).collect();
+            }
             let mut pending = carried;
             pending.append(&mut state.pending);
             state.pending = pending;
