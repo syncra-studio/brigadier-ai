@@ -6,7 +6,7 @@
 //
 //   target-range <log path>
 //
-// It never activates itself: the benchmark drives it in the background.
+// It never activates itself: it is opened in the background (`open -n -g`) and driven there.
 
 import AppKit
 
@@ -189,7 +189,6 @@ func argValue(_ name: String) -> String? {
 func runGrounding(size: CGFloat) -> Never {
   let gw = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 700, height: 520), styleMask: [.titled, .closable], backing: .buffered, defer: false)
   gw.title = "Grounding \(Int(size)) pt"
-  gw.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
   let groot = Flipped(frame: NSRect(x: 0, y: 0, width: 700, height: 520))
   gw.contentView = groot
   let canvas = GroundingCanvas(frame: NSRect(x: 10, y: 50, width: 680, height: 460))
@@ -206,12 +205,16 @@ func runGrounding(size: CGFloat) -> Never {
   canvas.deal(size: size, rng: &gh.rng); gh.showBoard()
   gw.orderFront(nil)
   log("app", "ready", v: String(ProcessInfo.processInfo.processIdentifier))
-  withExtendedLifetime(gh) { NSApplication.shared.run() }
+    withExtendedLifetime(gh) { NSApplication.shared.run() }
   exit(0)
 }
 
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
+// The suite opens it through LaunchServices and learns its pid from this file.
+if let p = ProcessInfo.processInfo.environment["FIXTURE_PID_FILE"] {
+  try? String(ProcessInfo.processInfo.processIdentifier).write(toFile: p, atomically: true, encoding: .utf8)
+}
 if let s = argValue("--grounding"), let size = Double(s) { runGrounding(size: CGFloat(size)) }
 let h = Handler()
 
@@ -231,8 +234,6 @@ app.mainMenu = mainMenu
 
 let w = NSWindow(contentRect: NSRect(x: 80, y: 120, width: 900, height: 600), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
 w.title = "Target Range"
-// On whichever Space the user is on, so its windows are always the current Space's.
-w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 h.window = w
 let root = Flipped(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
 w.contentView = root

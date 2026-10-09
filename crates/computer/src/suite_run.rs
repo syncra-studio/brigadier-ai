@@ -7,7 +7,6 @@
 
 use std::collections::BTreeMap;
 use std::io::Read as _;
-use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -33,14 +32,17 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// A fixture app (`fixtures/<name>/main.swift`), built once per source change into
-/// `target/computer-suite`.
-pub fn fixture_bin(name: &str) -> Result<PathBuf> {
+/// A fixture app (`fixtures/<name>/main.swift`), built once per source change into a minimal
+/// bundle, `target/computer-suite/<name>.app`, so LaunchServices can open it in the background.
+pub fn fixture_app(name: &str) -> Result<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let src = root.join("fixtures").join(name).join("main.swift");
-    let dir = root.join("../../target/computer-suite");
-    std::fs::create_dir_all(&dir)?;
-    let bin = dir.join(name);
+    let app = root
+        .join("../../target/computer-suite")
+        .join(format!("{name}.app"));
+    let macos = app.join("Contents/MacOS");
+    std::fs::create_dir_all(&macos)?;
+    let bin = macos.join(name);
     let stale = match (std::fs::metadata(&bin), std::fs::metadata(&src)) {
         (Ok(b), Ok(s)) => b.modified()? < s.modified()?,
         _ => true,
@@ -56,33 +58,81 @@ pub fn fixture_bin(name: &str) -> Result<PathBuf> {
         if !st.success() {
             bail!("the {name} fixture didn't build");
         }
+        std::fs::write(
+            app.join("Contents/Info.plist"),
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>{name}</string>
+<key>CFBundleIdentifier</key><string>dev.brigadier.fixture.{name}</string>
+<key>CFBundleName</key><string>{name}</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>NSPrincipalClass</key><string>NSApplication</string>
+</dict></plist>
+"#
+            ),
+        )?;
+        let _ = Command::new("/usr/bin/codesign")
+            .args(["--force", "--sign", "-"])
+            .arg(&app)
+            .stderr(Stdio::null())
+            .status();
     }
-    Ok(bin)
+    Ok(app)
 }
 
-/// Starts a fixture in its own process group, so it outlives this command and nothing else
-/// signals it.
-fn spawn(cmd: &mut Command) -> Result<i32> {
-    let child = cmd
+/// Opens a fixture through LaunchServices in the background (`open -n -g`, a new instance that
+/// isn't brought forward) and returns its pid. Started straight from the terminal the user is
+/// in, a new app takes the front on launch, and the system switches to the Space that shows it.
+/// Launched by LaunchServices, it outlives this command and nothing else signals it.
+pub fn launch_fixture(name: &str, args: &[&std::ffi::OsStr]) -> Result<i32> {
+    let app = fixture_app(name)?;
+    let pid_file = std::env::temp_dir().join(format!(
+        "brigadier-fixture-{}-{}.pid",
+        std::process::id(),
+        now_ms()
+    ));
+    let _ = std::fs::remove_file(&pid_file);
+    let st = Command::new("/usr/bin/open")
+        .args(["-n", "-g", "--env"])
+        .arg(format!("FIXTURE_PID_FILE={}", pid_file.display()))
+        .arg(&app)
+        .arg("--args")
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()
-        .context("launching a fixture")?;
-    Ok(child.id() as i32)
+        .status()
+        .context("open")?;
+    if !st.success() {
+        bail!("open couldn't start the {name} fixture");
+    }
+    let end = Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(pid) = std::fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|s| s.trim().parse::<i32>().ok())
+        {
+            let _ = std::fs::remove_file(&pid_file);
+            return Ok(pid);
+        }
+        if Instant::now() > end {
+            bail!("the {name} fixture didn't start");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn wait_window(desktop: &mut MacDesktop, pid: i32, title: &str, secs: u64) -> Result<u32> {
     let end = Instant::now() + Duration::from_secs(secs);
     loop {
-        // On screen, and its accessibility tree readable: an app registers the window with
-        // accessibility a little after the window server shows it.
+        // Its accessibility tree readable: an app registers the window with accessibility a
+        // little after the window server shows it. It may be on another Space than the user's.
         if let Some(w) = desktop
             .windows(pid)
             .unwrap_or_default()
             .into_iter()
-            .find(|w| w.title == title && w.on_screen)
+            .find(|w| w.title == title)
             && desktop.tree(&w, false).is_ok_and(|t| !t.is_empty())
         {
             return Ok(w.id);
@@ -107,18 +157,25 @@ pub fn setup(desktop: &mut MacDesktop, task: &Task, dir: &Path, seed: u64) -> Re
     match task.setup {
         Setup::Fixture | Setup::Grounding { .. } => {
             let log = dir.join("fixture-log.jsonl");
-            let mut cmd = Command::new(fixture_bin("target-range")?);
-            cmd.arg(&log);
+            let mut args: Vec<std::ffi::OsString> = vec![log.clone().into()];
             let title = match task.setup {
                 Setup::Grounding { size } => {
-                    cmd.args(["--grounding", &size.to_string()])
-                        .args(["--seed", &seed.to_string()])
-                        .args(["--boards", &BOARDS.to_string()]);
+                    for a in [
+                        "--grounding".to_owned(),
+                        size.to_string(),
+                        "--seed".to_owned(),
+                        seed.to_string(),
+                        "--boards".to_owned(),
+                        BOARDS.to_string(),
+                    ] {
+                        args.push(a.into());
+                    }
                     format!("Grounding {size} pt")
                 }
                 _ => "Target Range".to_owned(),
             };
-            prep.pid = spawn(&mut cmd)?;
+            let args: Vec<&std::ffi::OsStr> = args.iter().map(|a| a.as_os_str()).collect();
+            prep.pid = launch_fixture("target-range", &args)?;
             prep.window = wait_window(desktop, prep.pid, &title, 15)?;
             prep.window_title = title;
             prep.log = Some(log.display().to_string());
@@ -129,7 +186,7 @@ pub fn setup(desktop: &mut MacDesktop, task: &Task, dir: &Path, seed: u64) -> Re
             let p = fdir.join(name);
             std::fs::write(&p, text)?;
             prep.files.insert(name.to_owned(), p.display().to_string());
-            prep.pid = spawn(Command::new(fixture_bin("scratch-pad")?).arg(&p))?;
+            prep.pid = launch_fixture("scratch-pad", &[p.as_os_str()])?;
             prep.window = wait_window(desktop, prep.pid, name, 15)?;
             prep.window_title = name.to_owned();
         }

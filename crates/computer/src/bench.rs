@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -1131,30 +1131,15 @@ impl Bench {
     }
 }
 
-/// Builds the fixture with `swiftc` into `dir`.
-fn build_fixture(dir: &Path) -> Result<PathBuf> {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/target-range/main.swift");
-    let bin = dir.join("target-range");
-    let st = Command::new("swiftc")
-        .arg("-O")
-        .arg(&src)
-        .arg("-o")
-        .arg(&bin)
-        .status()
-        .context("swiftc (the Xcode command line tools) is needed to build the fixture")?;
-    if !st.success() {
-        bail!("the fixture didn't build");
-    }
-    Ok(bin)
-}
-
 /// The fixture process: killed (by its own pid) when dropped.
-struct Fixture(Child);
+struct Fixture(i32);
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        let _ = Command::new("/bin/kill")
+            .args(["-9", &self.0.to_string()])
+            .stderr(Stdio::null())
+            .status();
     }
 }
 
@@ -1195,18 +1180,10 @@ pub fn run(
     let reps = if quick { 20 } else { 200 };
     std::fs::create_dir_all(out)?;
     let out = out.canonicalize()?;
-    let bin = build_fixture(&out)?;
     let log_path = out.join("fixture-log.jsonl");
     let user = desktop.user_focus();
-    let child = Command::new(&bin)
-        .arg(&log_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("launching the fixture")?;
-    let fixture = Fixture(child);
-    let pid = fixture.0.id() as i32;
+    let pid = crate::suite_run::launch_fixture("target-range", &[log_path.as_os_str()])?;
+    let fixture = Fixture(pid);
     let (win, mini) = wait_windows(&mut desktop, pid)?;
     // The fixture's own window notices settle before the clock starts.
     std::thread::sleep(Duration::from_millis(500));

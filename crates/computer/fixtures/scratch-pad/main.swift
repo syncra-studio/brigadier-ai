@@ -7,7 +7,7 @@
 //
 //   scratch-pad <file>
 //
-// It never activates itself.
+// It never activates itself: it is opened in the background (`open -n -g`) and driven there.
 
 import AppKit
 
@@ -29,6 +29,10 @@ final class Editor: NSObject, NSTextViewDelegate, NSMenuItemValidation {
 
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
+// The suite opens it through LaunchServices and learns its pid from this file.
+if let p = ProcessInfo.processInfo.environment["FIXTURE_PID_FILE"] {
+  try? String(ProcessInfo.processInfo.processIdentifier).write(toFile: p, atomically: true, encoding: .utf8)
+}
 let ed = Editor()
 
 let mainMenu = NSMenu()
@@ -61,8 +65,6 @@ app.mainMenu = mainMenu
 let w = NSWindow(contentRect: NSRect(x: 160, y: 160, width: 640, height: 420), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
 w.title = url.lastPathComponent
 w.representedURL = url
-// On whichever Space the user is on, so its window is always the current Space's.
-w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 ed.window = w
 let scroll = NSTextView.scrollableTextView()
 scroll.frame = w.contentView!.bounds
