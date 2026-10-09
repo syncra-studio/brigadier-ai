@@ -19,20 +19,22 @@ use super::workers::relanding_pending;
 use crate::board::Board;
 use crate::model::{ConversationId, ConversationKind};
 use crate::overnight::{OvernightRun, OvernightState};
-use crate::work::{CardState, PlanState, RequestState, Task, TaskId, TaskState};
+use crate::work::{CardState, PlanState, QuestionKind, RequestState, Task, TaskId, TaskState};
 
 impl SessionManager {
-    /// Whether a request waits: `Some(true)` for the user, `Some(false)` only for quota (its
-    /// workers paused until a model is free). The orchestrator's question about a change it
+    /// What a request waits for, if anything. The orchestrator's question about a change it
     /// has not decided on is the user's to answer (an offer at the end of a finished answer
     /// is not).
-    async fn waiting_on(&self, board: &Board, request: &str, asked_user: bool) -> Option<bool> {
+    async fn waiting_on(&self, board: &Board, request: &str, asked_user: bool) -> Option<Wait> {
         if waits_on_user(board, request)
             || (asked_user && !self.undecided(board, request).await.is_empty())
         {
-            return Some(true);
+            return Some(Wait::User);
         }
-        tasks_waiting_for_quota(board, request).then_some(false)
+        if open_question_cards(board, request) {
+            return Some(Wait::Card);
+        }
+        tasks_waiting_for_quota(board, request).then_some(Wait::Quota)
     }
 
     /// The request new work is filed under: the task's, else the running turn's, else the
@@ -148,7 +150,7 @@ impl SessionManager {
         for request in board.requests.values() {
             let id = request.id.as_str();
             let outcome = activity.outcomes.get(id);
-            let mut quota_wait = false;
+            let mut wait = None;
             let state = if let Some(state) = ended_run_state(&board, request) {
                 // An overnight run's request is over with the run: its report is the answer,
                 // and nothing that comes later works or waits for it again.
@@ -168,11 +170,11 @@ impl SessionManager {
             {
                 // A fix Brigadier checks and lands once its worker's turn is over still works.
                 RequestState::Working
-            } else if let Some(on_user) = self
+            } else if let Some(on) = self
                 .waiting_on(&board, id, activity.asked_user.contains(id))
                 .await
             {
-                quota_wait = !on_user;
+                wait = Some(on);
                 RequestState::Waiting
             } else if tasks_in(&board, id, |state| state == TaskState::Blocked) {
                 // Blocked on the orchestrator's answer (a gate's card makes it Waiting).
@@ -191,7 +193,13 @@ impl SessionManager {
             let done = state == RequestState::Done;
             if let Err(err) = self
                 .core
-                .update_request(conversation_id, id, state, quota_wait)
+                .update_request(
+                    conversation_id,
+                    id,
+                    state,
+                    wait == Some(Wait::Quota),
+                    wait == Some(Wait::Card),
+                )
                 .await
             {
                 tracing::debug!(conversation = %conversation_id, error = %err, "could not update a request");
@@ -396,8 +404,32 @@ fn tasks_waiting_for_quota(board: &Board, request: &str) -> bool {
     })
 }
 
-/// What only the user can do holds the request up (a card, a question, a paused or held
-/// worker), quota aside.
+/// What a waiting request waits for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wait {
+    /// The user, with the request's work paused (an approval, a plan, a held worker).
+    User,
+    /// The user's answer to the request's own question card: the request goes on with it, so
+    /// its time keeps counting.
+    Card,
+    /// Quota only: its workers paused until a model is free.
+    Quota,
+}
+
+/// The request's thread asked the user on a card (its questions, or the merge) that is open.
+fn open_question_cards(board: &Board, request: &str) -> bool {
+    board.questions.values().any(|q| {
+        q.request_id.as_deref() == Some(request)
+            && q.is_open()
+            && matches!(
+                q.kind,
+                QuestionKind::Orchestrator | QuestionKind::Merge { .. }
+            )
+    })
+}
+
+/// What only the user can do holds the request up (a card, a worker's question, a paused or
+/// held worker), quota and the thread's own question cards aside.
 fn waits_on_user(board: &Board, request: &str) -> bool {
     let of = |id: &Option<String>| id.as_deref() == Some(request);
     board.waiting.values().any(|item| of(&item.request_id))
@@ -405,10 +437,11 @@ fn waits_on_user(board: &Board, request: &str) -> bool {
             .approvals
             .values()
             .any(|a| of(&a.request_id) && a.state == CardState::Pending)
-        || board
-            .questions
-            .values()
-            .any(|q| of(&q.request_id) && q.answer.is_none() && q.answered_at_ms.is_none())
+        || board.questions.values().any(|q| {
+            of(&q.request_id)
+                && q.is_open()
+                && matches!(q.kind, QuestionKind::UncommittedChanges { .. })
+        })
         || board
             .plans
             .values()
@@ -453,13 +486,13 @@ mod tests {
     #[test]
     fn a_request_works_in_spans_that_leave_out_waits_for_the_user_and_stops() {
         let mut stored = request("r", RequestState::Working);
-        stored.moved_to(RequestState::Working, false, 0);
-        stored.moved_to(RequestState::Waiting, false, 10);
+        stored.moved_to(RequestState::Working, false, false, 0);
+        stored.moved_to(RequestState::Waiting, false, false, 10);
         assert_eq!(stored.ended_at_ms, Some(10));
-        stored.moved_to(RequestState::Working, false, 30);
-        stored.moved_to(RequestState::Stopped, false, 40);
-        stored.moved_to(RequestState::Working, false, 100);
-        stored.moved_to(RequestState::Done, false, 110);
+        stored.moved_to(RequestState::Working, false, false, 30);
+        stored.moved_to(RequestState::Stopped, false, false, 40);
+        stored.moved_to(RequestState::Working, false, false, 100);
+        stored.moved_to(RequestState::Done, false, false, 110);
         assert_eq!(
             spans(&stored),
             [(0, Some(10)), (30, Some(40)), (100, Some(110))]
@@ -470,26 +503,45 @@ mod tests {
     #[test]
     fn waiting_for_quota_is_work_until_the_wait_turns_to_the_user() {
         let mut stored = request("r", RequestState::Working);
-        stored.moved_to(RequestState::Working, false, 0);
-        stored.moved_to(RequestState::Waiting, true, 10);
+        stored.moved_to(RequestState::Working, false, false, 0);
+        stored.moved_to(RequestState::Waiting, true, false, 10);
         assert!(stored.quota_wait);
         assert_eq!(spans(&stored), [(0, None)]);
         // Still waiting, now for the user: the span closes there.
-        stored.moved_to(RequestState::Waiting, false, 20);
+        stored.moved_to(RequestState::Waiting, false, false, 20);
         assert!(!stored.quota_wait);
         assert_eq!(stored.ended_at_ms, Some(10));
-        stored.moved_to(RequestState::Done, false, 40);
+        stored.moved_to(RequestState::Done, false, false, 40);
         assert_eq!(spans(&stored), [(0, Some(20))]);
+    }
+
+    #[test]
+    fn waiting_on_its_question_card_is_work_so_the_time_runs_on() {
+        // 10 s of work, 30 s on the card, 5 s more: it worked for 45 s.
+        let mut stored = request("r", RequestState::Working);
+        stored.moved_to(RequestState::Working, false, false, 0);
+        stored.moved_to(RequestState::Waiting, false, true, 10_000);
+        assert_eq!(spans(&stored), [(0, None)]);
+        assert!(!stored.quota_wait);
+        stored.moved_to(RequestState::Working, false, false, 40_000);
+        stored.moved_to(RequestState::Done, false, false, 45_000);
+        assert_eq!(spans(&stored), [(0, Some(45_000))]);
+        // A wait for anything else of the user's closes the span, as before.
+        stored.moved_to(RequestState::Working, false, false, 50_000);
+        stored.moved_to(RequestState::Waiting, false, true, 55_000);
+        stored.moved_to(RequestState::Waiting, false, false, 60_000);
+        stored.moved_to(RequestState::Done, false, false, 90_000);
+        assert_eq!(spans(&stored), [(0, Some(45_000)), (50_000, Some(60_000))]);
     }
 
     #[test]
     fn a_request_stored_before_spans_counts_from_its_start() {
         let mut waiting = request("r", RequestState::Waiting);
         waiting.ended_at_ms = Some(10);
-        waiting.moved_to(RequestState::Done, false, 20);
+        waiting.moved_to(RequestState::Done, false, false, 20);
         assert_eq!(spans(&waiting), [(0, Some(10))]);
         let mut working = request("r", RequestState::Working);
-        working.moved_to(RequestState::Done, false, 50);
+        working.moved_to(RequestState::Done, false, false, 50);
         assert_eq!(spans(&working), [(0, Some(50))]);
     }
 

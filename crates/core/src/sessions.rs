@@ -1470,6 +1470,7 @@ impl Core {
         request_id: &str,
         state: RequestState,
         quota_wait: bool,
+        card_wait: bool,
     ) -> Result<bool> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
@@ -1483,10 +1484,11 @@ impl Core {
         else {
             return Ok(false);
         };
-        if request.state == state && request.quota_wait == quota_wait {
+        let before = request.clone();
+        request.moved_to(state, quota_wait, card_wait, now_ms());
+        if request == before {
             return Ok(false);
         }
-        request.moved_to(state, quota_wait, now_ms());
         let event = DomainEvent::RequestUpdated { request };
         let stored = self
             .record(vec![(streams::conversation(id), event.clone())])

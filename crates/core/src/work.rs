@@ -1729,8 +1729,9 @@ pub struct UserRequest {
     /// The user's Undo of what its workers landed, once they used it.
     #[serde(default)]
     pub undo: Option<RequestUndo>,
-    /// When it worked, oldest first; the last is open while it works. Waiting for quota is
-    /// work, waiting for the user is not. Absent on requests stored before it was kept.
+    /// When it worked, oldest first; the last is open while it works. Waiting for quota, or
+    /// for the user's answer to its question card, is work; other waits for the user are
+    /// not. Absent on requests stored before it was kept.
     #[serde(default)]
     pub worked: Vec<WorkSpan>,
     /// It is `Waiting` only for quota (a worker paused until a model is free), not for the
@@ -1750,8 +1751,9 @@ pub struct WorkSpan {
 
 impl UserRequest {
     /// Moves it to `state` at `now`: a span opens when it starts working (or waits only for
-    /// quota) and closes when it waits for the user or is over.
-    pub fn moved_to(&mut self, state: RequestState, quota_wait: bool, now: i64) {
+    /// quota, or for the user's answer to its question card, `card_wait`) and closes when it
+    /// waits for the user otherwise or is over.
+    pub fn moved_to(&mut self, state: RequestState, quota_wait: bool, card_wait: bool, now: i64) {
         if self.worked.is_empty() {
             // Stored before spans were kept: what it did so far counts from its start.
             let working = self.state == RequestState::Working || self.quota_wait;
@@ -1765,7 +1767,9 @@ impl UserRequest {
             });
         }
         let quota_wait = quota_wait && state == RequestState::Waiting;
-        let works = state == RequestState::Working || quota_wait;
+        let works = state == RequestState::Working
+            || quota_wait
+            || (card_wait && state == RequestState::Waiting);
         let open = self.worked.last_mut().filter(|span| span.to_ms.is_none());
         match open {
             Some(span) if !works => span.to_ms = Some(now.max(span.from_ms)),
