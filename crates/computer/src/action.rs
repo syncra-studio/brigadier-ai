@@ -211,7 +211,7 @@ pub enum Screenshot {
     Never,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObserveRequest {
     pub window: u32,
     #[serde(default)]
@@ -230,7 +230,7 @@ pub struct ObserveRequest {
     pub value_page: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActRequest {
     pub window: u32,
     pub actions: Vec<Action>,
@@ -238,7 +238,7 @@ pub struct ActRequest {
     pub screenshot: Screenshot,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZoomRequest {
     /// The image the region is read from.
     pub image: String,

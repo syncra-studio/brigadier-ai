@@ -3,7 +3,7 @@
 //! The design is docs/COMPUTER-USE-PLAN.md; section numbers in comments point there.
 
 pub mod action;
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "engine"))]
 pub mod bench;
 pub mod block;
 pub mod cancel;
@@ -17,12 +17,15 @@ pub mod record;
 pub mod redact;
 pub mod tree;
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
+pub mod client;
+#[cfg(all(target_os = "macos", feature = "engine"))]
 pub mod macos;
 pub mod unsupported;
+pub mod wire;
 
 /// This system's backend.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "engine"))]
 pub fn system_desktop() -> error::CuResult<macos::MacDesktop> {
     macos::MacDesktop::new()
 }

@@ -2,13 +2,13 @@
 //! Phase 1 the development harness writes them as JSON lines; from Phase 2 they become
 //! session events in the event store.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::action::{Action, ActionResult, Effect, Expect, Rung, Status, Timings};
 use crate::desktop::WindowInfo;
 use crate::error::ErrorCode;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionRecord {
     /// Milliseconds since the Unix epoch.
     pub at_ms: u64,
