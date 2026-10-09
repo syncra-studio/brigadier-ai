@@ -239,6 +239,20 @@ pub trait Desktop {
     ) -> CuResult<()>;
     fn key(&mut self, pid: i32, chord: &Chord, guard: &mut InputGuard<'_>) -> CuResult<()>;
     fn type_text(&mut self, pid: i32, text: &str, cancel: &CancelToken) -> CuResult<()>;
+    /// The frame, in window points, of a sheet on `w` that another process draws, as the system
+    /// draws a save or open panel: its buttons stay disabled while the window is off screen, and
+    /// a background pixel click into it can bring its app to the front.
+    fn served_panel(&mut self, w: &WindowInfo) -> Option<Rect> {
+        let _ = w;
+        None
+    }
+    /// Readies window `w`'s app for plain keys (`key`, `type_text`). An app that hears them
+    /// only while it believes it is active, a Chromium browser's page, is made to believe so
+    /// until the batch ends; true when it was.
+    fn keys_to(&mut self, w: &WindowInfo) -> CuResult<bool> {
+        let _ = w;
+        Ok(false)
+    }
     /// Picks a menu-bar item for window `w`. A background app checks its menu items against
     /// no key window, so some read as disabled; a backend that can make the app believe it is
     /// active with `w` key sends such an item's shortcut that way.

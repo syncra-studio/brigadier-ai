@@ -41,6 +41,21 @@ pub const FOREGROUND_IDLE: Duration = Duration::from_secs(60);
 pub const USER_BUSY: Duration = Duration::from_secs(1);
 /// The action log's image: one point per pixel, at most this many pixels a side.
 const TRAJECTORY_SIDE: u32 = 1280;
+/// A save or open panel the system's panel service draws on a window off screen: its Save (or
+/// Open) stays disabled until the window is in view, whatever is typed (measured 2026-10-10:
+/// enabled within a second once the sheet was on a display, never while it wasn't).
+const PANEL_OFF_SCREEN: &str = "this window's save or open panel is drawn by macOS, which keeps \
+     its Save (or Open) button disabled while the window is off screen (on another Space, or its \
+     app hidden), so nothing can finish it in the background. Ask the orchestrator to have the \
+     person bring the window into view, then set the name and click Save by their refs; or click \
+     Cancel by its ref to back out";
+/// Neither capture of a window holds the panel, a window of its own the system draws.
+const PANEL_IMAGE: &str = "the screenshot leaves out this window's save or open panel, which \
+     macOS draws apart; its elements are in the tree: act on their refs";
+/// A background pixel click into such a panel brought its app to the front once (2026-10-10).
+const PANEL_PIXEL: &str = "a pixel click into a save or open panel drawn by macOS can bring its \
+     app to the front, so it wasn't sent. Use the panel's refs instead: set_value on its name \
+     field, then click Save (or Cancel) by its ref; observe the window first if you have no refs";
 /// Characters per page of an element's full value.
 const VALUE_PAGE: usize = 4_000;
 /// Images kept for coordinate mapping and zoom, per engine.
@@ -498,14 +513,26 @@ impl<D: Desktop> Engine<D> {
             );
             if !w.on_screen && !w.minimized {
                 // Chrome built no page for a window on another Space for 20 s and more
-                // (2026-10-09), and a worker's blind keys submitted a form early.
+                // (2026-10-09), nor for a hidden one whatever it was sent, activated clicks
+                // included (2026-10-10); a WebKit view built its page hidden. A worker's blind
+                // keys once submitted a form early.
                 let _ = writeln!(
                     text,
-                    "this window is off screen: a browser may not build or redraw its page until \
-                     it is in view. If the wait doesn't bring it, ask the orchestrator to have \
-                     the person bring the window into view; don't click or press keys into a page \
-                     you can't read (Return submits a form)"
+                    "this window is off screen: a Chromium browser (Chrome, Edge, Arc…) builds no \
+                     page until its window is in view, so waiting won't bring it there; another \
+                     app's page may come with one wait. If it doesn't, ask the orchestrator to \
+                     have the person bring the window into view; don't click or press keys into \
+                     a page you can't read (Return submits a form)"
                 );
+            }
+        }
+        let off_screen = !w.on_screen && !w.minimized;
+        if (off_screen || image.is_some()) && self.desktop.served_panel(w).is_some() {
+            if image.is_some() {
+                let _ = writeln!(text, "{PANEL_IMAGE}");
+            }
+            if off_screen {
+                let _ = writeln!(text, "{PANEL_OFF_SCREEN}");
             }
         }
         let _ = writeln!(
@@ -607,6 +634,13 @@ impl<D: Desktop> Engine<D> {
             );
         }
         if need_enabled && !now.enabled {
+            let in_panel = |p: Rect| now.frame.is_some_and(|f| p.contains(f.center()));
+            if !w.on_screen && self.desktop.served_panel(w).is_some_and(in_panel) {
+                return err(
+                    ErrorCode::BackgroundUnavailable,
+                    format!("e{r} is disabled: {PANEL_OFF_SCREEN}"),
+                );
+            }
             return err(ErrorCode::StaleRef, format!("e{r} is disabled"));
         }
         Ok(el)
@@ -1039,6 +1073,9 @@ impl<D: Desktop> Engine<D> {
                     Rung::Element
                 } else {
                     pointer_reach(&w)?;
+                    if activate && self.desktop.served_panel(&w).is_some_and(|f| f.contains(p)) {
+                        return err(ErrorCode::BackgroundUnavailable, PANEL_PIXEL);
+                    }
                     // An element scrolled out of view is brought into view by its own scroll
                     // view first, as a person scrolls to it, so the click needs no batch of
                     // its own.
@@ -1111,7 +1148,11 @@ impl<D: Desktop> Engine<D> {
                     .ok_or_else(|| CuError::new(ErrorCode::BadRequest, format!("bad key {key}")))?;
                 self.check_recipient(&w)?;
                 let menu_shortcut = chord.mods.cmd || chord.mods.ctrl;
-                let mut rung = Rung::Background;
+                let mut rung = if menu_shortcut {
+                    Rung::Background
+                } else {
+                    self.keys_rung(&w)?
+                };
                 for _ in 0..(*repeat).max(1) {
                     cancel.check()?;
                     if menu_shortcut {
@@ -1633,12 +1674,13 @@ impl<D: Desktop> Engine<D> {
         if role == "popup" {
             // A closed list picks by type-ahead, one key per character: Chrome ignored a
             // choice's whole name sent as one key event, and took "T" alone (2026-10-09).
+            let rung = self.keys_rung(w)?;
             for c in text.chars() {
                 cancel.check()?;
                 self.desktop
                     .type_text(w.pid, c.encode_utf8(&mut [0; 4]), cancel)?;
             }
-            return Ok((Rung::Background, false));
+            return Ok((rung, false));
         }
         // The cheapest checkable route: insert at the selection, read it back. Not in a
         // document's text, where only typed keys count as an edit (undo, unsaved changes, save).
@@ -1666,8 +1708,18 @@ impl<D: Desktop> Engine<D> {
                 }
             }
         }
+        let rung = self.keys_rung(w)?;
         self.desktop.type_text(w.pid, text, cancel)?;
-        Ok((Rung::Background, false))
+        Ok((rung, false))
+    }
+
+    /// Readies `w`'s app for plain keys, and the rung they go by.
+    fn keys_rung(&mut self, w: &WindowInfo) -> CuResult<Rung> {
+        Ok(if self.desktop.keys_to(w)? {
+            Rung::BackgroundActivated
+        } else {
+            Rung::Background
+        })
     }
 
     /// Picks `text` in a pop-up whose menu didn't give it, by type-ahead into the focused list
@@ -2015,6 +2067,10 @@ mod tests {
         /// into it pick by type-ahead, one character per key event.
         list_items: Option<Vec<String>>,
         typed: String,
+        /// A save panel the system draws on the window, at this frame.
+        served: Option<Rect>,
+        /// The app hears plain keys only while it believes it is active (a Chromium page).
+        keys_need_activation: bool,
     }
 
     fn node(id: u32, depth: u16, role: &str, label: &str, frame: Rect) -> RawNode<u32> {
@@ -2060,6 +2116,8 @@ mod tests {
                 reads: Vec::new(),
                 list_items: None,
                 typed: String::new(),
+                served: None,
+                keys_need_activation: false,
             }
         }
 
@@ -2284,6 +2342,12 @@ mod tests {
         fn key(&mut self, _: i32, c: &Chord, _: &mut InputGuard<'_>) -> CuResult<()> {
             self.log.push(format!("key {}", c.key));
             Ok(())
+        }
+        fn served_panel(&mut self, _: &WindowInfo) -> Option<Rect> {
+            self.served
+        }
+        fn keys_to(&mut self, _: &WindowInfo) -> CuResult<bool> {
+            Ok(self.keys_need_activation)
         }
         fn type_text(&mut self, _: i32, text: &str, _: &CancelToken) -> CuResult<()> {
             self.log.push("type_text".into());
@@ -3659,6 +3723,116 @@ mod tests {
         assert!(r.text.contains("this window is off screen"), "{}", r.text);
         assert!(r.text.contains("bring the window into view"), "{}", r.text);
         assert!(r.text.contains("Return submits a form"), "{}", r.text);
+    }
+
+    /// The pad's save panel (fixtures/quirk-pad), as the system draws it on the window.
+    fn with_save_panel() -> Fake {
+        let mut nodes = basic();
+        nodes.push(node(
+            5,
+            1,
+            "sheet",
+            "save",
+            Rect::new(45.0, 75.0, 300.0, 182.0),
+        ));
+        let mut save = node(6, 2, "button", "Save", Rect::new(250.0, 212.0, 81.0, 26.0));
+        save.enabled = false;
+        nodes.push(save);
+        let mut fake = Fake::new(nodes);
+        fake.served = Some(Rect::new(45.0, 75.0, 300.0, 182.0));
+        fake
+    }
+
+    #[test]
+    fn a_save_panel_off_screen_is_named_and_its_disabled_save_says_what_to_do() {
+        let mut fake = with_save_panel();
+        fake.window.on_screen = false;
+        let mut e = engine(fake);
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        assert!(
+            text.contains("keeps its Save (or Open) button disabled"),
+            "{text}"
+        );
+        let r = act(&mut e, vec![click(&ref_of(&text, "Save"))]);
+        assert_eq!(code(&r[0]), Some(ErrorCode::BackgroundUnavailable));
+        let why = &r[0].error.as_ref().unwrap().detail;
+        assert!(why.contains("bring the window into view"), "{why}");
+        assert!(why.contains("Cancel by its ref"), "{why}");
+        // On screen, a disabled Save is only disabled: the name may be what's missing.
+        let mut e = engine(with_save_panel());
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        assert!(!text.contains("keeps its Save"), "{text}");
+        let r = act(&mut e, vec![click(&ref_of(&text, "Save"))]);
+        assert_eq!(code(&r[0]), Some(ErrorCode::StaleRef));
+    }
+
+    #[test]
+    fn a_background_pixel_click_into_a_save_panel_is_refused_with_its_refs_named() {
+        let mut e = engine(with_save_panel());
+        let shot = observe(&mut e, Screenshot::Always, None);
+        assert!(
+            shot.text
+                .contains("leaves out this window's save or open panel"),
+            "{}",
+            shot.text
+        );
+        let img = shot.image.unwrap();
+        let at = |x, y| Action::Click {
+            target: Target {
+                image: Some(img.id.clone()),
+                x: Some(x),
+                y: Some(y),
+                ..Default::default()
+            },
+            button: Button::Left,
+            count: 1,
+            modifiers: Vec::new(),
+            expect: None,
+        };
+        let r = act(&mut e, vec![at(200.0, 150.0)]);
+        assert_eq!(code(&r[0]), Some(ErrorCode::BackgroundUnavailable));
+        let why = &r[0].error.as_ref().unwrap().detail;
+        assert!(why.contains("set_value on its name field"), "{why}");
+        assert!(
+            e.desktop.log.iter().all(|l| !l.starts_with("click")),
+            "{:?}",
+            e.desktop.log
+        );
+        // Outside the panel, the window still takes it.
+        let r = act(&mut e, vec![at(20.0, 280.0)]);
+        assert_eq!(r[0].delivered, Some(Rung::BackgroundActivated));
+    }
+
+    #[test]
+    fn keys_go_with_activation_to_an_app_that_hears_them_only_when_active() {
+        let key = || Action::Key {
+            key: "backspace".into(),
+            repeat: 1,
+            expect: None,
+        };
+        let mut e = engine(Fake::new(basic()));
+        observe(&mut e, Screenshot::Never, None);
+        assert_eq!(
+            act(&mut e, vec![key()])[0].delivered,
+            Some(Rung::Background)
+        );
+        let mut fake = Fake::new(basic());
+        fake.keys_need_activation = true;
+        let mut e = engine(fake);
+        observe(&mut e, Screenshot::Never, None);
+        assert_eq!(
+            act(&mut e, vec![key()])[0].delivered,
+            Some(Rung::BackgroundActivated)
+        );
+        let typing = Action::Type {
+            text: "hi".into(),
+            r#ref: None,
+            expect: None,
+        };
+        assert_eq!(
+            act(&mut e, vec![typing])[0].delivered,
+            Some(Rung::BackgroundActivated)
+        );
     }
 
     #[test]

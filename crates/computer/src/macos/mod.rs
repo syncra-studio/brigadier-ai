@@ -548,7 +548,8 @@ impl Desktop for MacDesktop {
     ) -> CuResult<Capture> {
         let (image, transform) = if w.on_screen {
             self.shareable
-                .capture(w.id, w.frame, crop, pixels_per_point, max_side)?
+                .capture(w.id, w.frame, crop, pixels_per_point, max_side)
+                .or_else(|e| on_screen_fallback(e, w, crop, pixels_per_point, max_side))?
         } else {
             capture::capture_offscreen(w.id, w.frame, crop, pixels_per_point, max_side)?
         };
@@ -569,8 +570,10 @@ impl Desktop for MacDesktop {
         let wait = self
             .shareable
             .begin(w.id, w.frame, crop, pixels_per_point, max_side)?;
+        let w = w.clone();
         Ok(PendingCapture::new(move || {
-            let (image, transform) = wait()?;
+            let (image, transform) =
+                wait().or_else(|e| on_screen_fallback(e, &w, crop, pixels_per_point, max_side))?;
             Ok(Capture { image, transform })
         }))
     }
@@ -726,6 +729,38 @@ impl Desktop for MacDesktop {
 
     fn type_text(&mut self, pid: i32, text: &str, cancel: &CancelToken) -> CuResult<()> {
         input::type_text(pid, text, cancel)
+    }
+
+    fn served_panel(&mut self, w: &WindowInfo) -> Option<Rect> {
+        // A save panel is a sheet whose views the panel service draws: their elements answer
+        // with its pid (measured 2026-10-10: the panel's split view, two levels down).
+        fn served(el: &AxEl, pid: i32, depth: u8) -> bool {
+            el.elements("AXChildren").iter().any(|c| {
+                c.pid().is_some_and(|p| p != pid) || (depth > 1 && served(c, pid, depth - 1))
+            })
+        }
+        let win = self.ax_window(w).ok()?;
+        let origin = quirks::origin(w, Some(&win));
+        win.elements("AXChildren")
+            .into_iter()
+            .filter(|c| c.string("AXRole").as_deref() == Some("AXSheet"))
+            .find(|s| served(s, w.pid, 3))
+            .and_then(|s| ax::read(&s, origin).ok()?.frame)
+    }
+
+    fn keys_to(&mut self, w: &WindowInfo) -> CuResult<bool> {
+        // A Chromium page drops keys posted to a background browser, on screen or not; with
+        // the browser believing it is active they land (measured 2026-10-10, Chrome for
+        // Testing 156: "XY" typed into a page's field, the front unchanged). Never for the
+        // user's own front app, whose defocus would deactivate it under them.
+        if self.quirks.first_contact(w.pid) != quirks::Kind::Chromium
+            || front_pid() == Some(w.pid)
+            || !Private::get().has_activation()
+        {
+            return Ok(false);
+        }
+        self.hold_activation(w)?;
+        Ok(true)
     }
 
     fn menu_for(
@@ -1072,6 +1107,22 @@ fn displays() -> Vec<(Rect, f64)> {
             )
         })
         .collect()
+}
+
+/// The window server's copy of an on-screen window that ScreenCaptureKit won't capture: one
+/// with a save panel attached failed every try ("Failed to start stream due to audio/video
+/// capture failure", 2026-10-10). The copy lacks the panel, which the window's tree holds.
+fn on_screen_fallback(
+    e: CuError,
+    w: &WindowInfo,
+    crop: Rect,
+    pixels_per_point: f64,
+    max_side: u32,
+) -> CuResult<(crate::redact::Rgba, geom::ImageTransform)> {
+    if e.code != ErrorCode::Failed {
+        return Err(e);
+    }
+    capture::capture_offscreen(w.id, w.frame, crop, pixels_per_point, max_side).map_err(|_| e)
 }
 
 fn display_bounds() -> Vec<Rect> {

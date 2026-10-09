@@ -109,6 +109,15 @@ impl AxEl {
         Some(Point::new(p.x, p.y))
     }
 
+    /// The process the element belongs to. A view another process draws, as the system's panel
+    /// service draws a save panel's, answers with that process.
+    pub fn pid(&self) -> Option<i32> {
+        let mut pid: libc::pid_t = 0;
+        // SAFETY: `pid` is a valid out pointer.
+        (unsafe { self.0.pid(NonNull::from(&mut pid)) } == AXError::Success && pid > 0)
+            .then_some(pid)
+    }
+
     pub fn bool(&self, name: &'static str) -> Option<bool> {
         self.attr(name).ok().and_then(as_bool)
     }
