@@ -637,6 +637,80 @@ background route avoids it. Ruled by the Delegator on 2026-10-09: pop-up picks h
   Computer Use", not Brigadier or a terminal; a missing or revoked grant gives `permission_missing` with the fix;
   the grant survives a helper restart and an app update; the daemon-launched helper works.
 
+**Results (2026-10-09, macOS 27, Apple Silicon).** What proves what: everything below ran with the helper binary
+spawned directly (`BRIGADIER_COMPUTER_HELPER`) from a terminal, so it used **the terminal's grants**, not its own.
+The helper-bundle gate is still open. Live runs touched only what the test launched (fixtures, TextEdit on scratch
+files); terminal windows were sent requests that had to be refused, never input.
+- **Both models, through a dev build on a scratch `BRIGADIER_DATA_DIR`** (`brigadierd` from
+  `pnpm tauri:debug-app`, Full access, one `scout` each, effort medium):
+  - The Claude worker observed with a screenshot (its transcript shows the MCP image as `[Image: …]`). It clicked
+    the 8 pt dot and the 8 pt checkbox by pixel in one `act`. It zoomed and clicked the 8 pt purple dot from the
+    zoomed image (`i3`, 60,43). Then `"$BRIGADIER_COMPUTER_CLI" computer observe`, Read on the saved PNG, and a
+    CLI click on the 12 pt dot.
+  - The Codex worker did the same: the MCP image as content, `view_image` on the CLI's PNG, zoom click `i5` 60,54.
+    Codex's sandbox allowed the CLI's socket connect.
+  - Both fixture logs show `dot-8`, `check-8`, `dot-8-b` and `dot-12` hit, nothing else.
+  - Eight `ComputerActed` events went in the store, each batch with its marked image as a blob in `blob_refs` (the
+    predicted points sit on the targets; the password field is painted over).
+  - Deleting the conversation removed its events and all 7 images. A blob another conversation shares stays: the
+    store's own deletion test covers it. The CLI images went with each worker's scratch folder.
+- **S6** (tool overhead, MCP → daemon → helper → reply, minus the helper's `engine_ms`): **0.32 ms p50,
+  0.47 ms p95**. That's 200 `apps` calls (after 20 warm-up) through `brigadierd mcp --grant-env
+  BRIGADIER_COMPUTER_GRANT`, run by a worker holding a live grant. The round trip was 12.5 ms p50, of which the
+  engine took 12.1 ms.
+- **S7** (helper start to its first served request): **6.6 ms p50** over 10 starts, all 10 within 6.6–6.9 ms; to
+  the first engine answer (`apps`) 67.8 ms p50. The lazy engine starts on the first engine request.
+- **Lifecycle:**
+  - Two helpers ran side by side, each answering on its own socket. A connection with the other helper's token is
+    closed without an answer.
+  - Parent death: the helper exited in 0.29 s and removed its socket and token.
+  - Idle exit (shortened to 3 s by the test override): the helper stayed up 6 s while a session was open and
+    exited 3.08 s after the session ended.
+  - A crash fails the running call, and the next call starts a new helper without replaying it. This is the broker
+    unit test with a fake link, not a live kill.
+- **Stop:**
+  - `stop_all` mid-drag ×3 and the menu's Stop item ×3 (AXPress on our own status item) each ended the drag between
+    two events: 6–12 of 31 drag events, `stopped_by_user`, the mouse-up always delivered.
+  - The menu Stop was pushed to the client as `Stopped{by: "menu"}`, and a click after the stops ran normally.
+  - A connection dropped mid-drag ×3 released the button (3–10 drag events, then the up) and left the helper up.
+  - A queued click cancelled by id while a drag ran answered `cancelled` and never reached the fixture.
+  - The hotkey's path (`hub.stop("hotkey")`) is unit-tested; pressing the real keys needs real input.
+  - Lease revocation on Stop is in the broker tests.
+- **Block list:**
+  - The fixture as one session's host was refused for that session and allowed for another.
+  - `apps` marks cmux "blocked (a terminal the session didn't launch)", and an `observe` of a cmux window is
+    refused with `blocked` and no image.
+  - `launch` of Keychain Access is refused before anything opens.
+- **Launch and ownership:**
+  - TextEdit (not running) on `a.txt`: a new process and one new window. `b.txt` then reused that process with a
+    new window (`new_process: false`).
+  - Neither launch took the front (`open -g`), so nothing needed giving back.
+  - A worker's launched TextEdit was quit by the ledger when the worker ended.
+- **Approve for me, live:** a Claude worker ran `launch` TextEdit on `c.txt`, a click in that window, then two
+  presses on the fixture window. That took exactly **two cards**: one for the launch, which then covered its
+  window, and one for the fixture window ("only this window of this target-range process (pid 11971)"). The second
+  press didn't ask. Another window of the same process, a denial, pid reuse and Stop while a card is pending are
+  the flow tests (`flow::computer_tests`), not live.
+- **Foreground rung:**
+  - Live on an idle machine: raised, clicked and gave the front back (P2f in the quick bench; the full bench below).
+  - Refusing while the user is active, aborting between events, and keeping a front the user changed are tested
+    with the injectable idle source. Real hardware input wasn't possible tonight.
+  - Idle is read from the combined session state; our own pid-posted events reset HID idle but not that.
+- **Codex's built-ins:** `computer_use` and `browser_use` stay disabled. The adapter passes `--disable` for both,
+  and `codex --disable computer_use --disable browser_use features list` (codex-cli 0.161.0) shows both `false`.
+  Codex workers use ours.
+- **Transcripts:** a Codex MCP result is shown as its text with `[image image/png]` for each image. Before this, the
+  base64 filled the clipped output and hid the text after it.
+- **Bench:** the full §7 bench, re-run on `14273968` (release build, 200 repetitions, 1052 s), passes every gate with no regression from Phase 1: S1 6.2/7.6 ms, S2 61.5/66.3 ms, S3 set value 2.3/3.1, menu-bar pick 4.1/5.7, pop-up 361.5/368.9, press 2.4/3.0 ms, S4 16.8/40.3 ms, S5 2.5/10.4 ms, SEL 20/20, P1 1600/1600, P2 1600/1600 (worst 0.00 pt), P2r 200/200, P2f 1/1 (live, idle machine), P4 0, F1 0.
+- **Not done or open:**
+  - The helper-bundle gate needs the user's one-time grants.
+  - A new-process launch counts every window the app restores (TextEdit reopening earlier documents) among its new
+    windows. `open -F` avoids that but erases the app's saved state, so it isn't used.
+  - The ledger quits an owned app with its windows open, so the app may restore them at the user's next launch.
+- **Deviation:** the action log writes the blob first and the event that mentions it second. There's no separate
+  ledger artifact: the store keeps any blob an event mentions, and collects one no event mentions after its grace.
+  It's the same model as stored tool output.
+
 ### Phase 3: Agent cursor and the action log in the UI
 
 **Scope**
