@@ -146,8 +146,11 @@ def trial(root, out, t, provider, model, seed, conv):
     os.makedirs(d, exist_ok=True)
     scratch = os.path.join(d, "target")
     if t["setup"]["kind"] == "dev_app":
-        subprocess.run([sys.executable, os.path.join(HERE, "target.py"), "prepare", os.path.join(root, "target"),
-                        t["id"], scratch], check=True)
+        # The dev app's window may have been closed by the person at the Mac: that trial isn't run.
+        s = subprocess.run([sys.executable, os.path.join(HERE, "target.py"), "prepare", os.path.join(root, "target"),
+                            t["id"], scratch], capture_output=True, text=True)
+        if s.returncode != 0:
+            return {"task": t["id"], "error": "setup failed: " + s.stderr[-600:]}
     else:
         s = suite("setup", t["id"], scratch, "--seed", str(seed))
         if s.returncode != 0:
