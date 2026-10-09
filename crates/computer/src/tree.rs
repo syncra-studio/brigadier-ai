@@ -368,15 +368,6 @@ impl<E: Clone + Eq + Hash> WindowRefs<E> {
         self.records.get(&r)
     }
 
-    /// The frames of the password fields seen last, to paint over in images.
-    pub fn secure_frames(&self) -> Vec<Rect> {
-        self.records
-            .values()
-            .filter(|r| r.secure)
-            .filter_map(|r| r.frame)
-            .collect()
-    }
-
     /// The window navigated: every ref handed out so far is stale.
     pub fn navigate(&mut self) {
         self.generation += 1;

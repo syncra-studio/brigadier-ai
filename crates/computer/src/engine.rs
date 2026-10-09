@@ -768,10 +768,8 @@ impl<D: Desktop> Engine<D> {
                 Rung::Element
             }
             Action::Menu { path, .. } => {
-                let f = self.desktop.focus(w.pid)?;
-                if f.secure {
-                    return err(ErrorCode::SecureField, "a password field has focus");
-                }
+                // A menu command acts on the app's focused window, so that must be this one.
+                self.check_recipient(&w)?;
                 self.desktop.menu(w.pid, path)?;
                 Rung::Element
             }
@@ -894,16 +892,17 @@ impl<D: Desktop> Engine<D> {
         Ok((result, navigated))
     }
 
-    /// Keys only go to the leased window's focused element, and never into a password field.
+    /// Keys and menu commands only go to the leased window's focused element, and never into a
+    /// password field. A focus accessibility can't place is refused like another window's.
     fn check_recipient(&mut self, w: &WindowInfo) -> CuResult<Option<D::Element>> {
         let f = self.desktop.focus(w.pid)?;
         if f.secure {
             return err(ErrorCode::SecureField, "a password field has focus");
         }
-        if f.window.is_some_and(|id| id != w.id) {
+        if f.window != Some(w.id) {
             return err(
                 ErrorCode::BackgroundUnavailable,
-                "keys would go to another window of the app",
+                "the app's focus isn't in this window: keys or a menu command could go elsewhere",
             );
         }
         Ok(f.element)
@@ -982,11 +981,9 @@ impl<D: Desktop> Engine<D> {
         if crop.is_empty() {
             return err(ErrorCode::BadRequest, "the region is outside the image");
         }
-        let secure: Vec<Rect> = self
-            .windows
-            .get(&w.id)
-            .map(WindowRefs::secure_frames)
-            .unwrap_or_default();
+        // Password fields are read now, not taken from the last observation: one may have
+        // appeared or moved since, and the capture shows the window as it is now.
+        let secure = Self::secure_frames(&self.desktop.tree(&w, false)?);
         let scale = self.desktop.backing_scale(&w);
         let img = self.capture(&w, crop, scale, geom::MAX_ZOOM_SIDE, &secure)?;
         let t2 = self.image(&img.id)?;
@@ -1109,6 +1106,8 @@ mod tests {
         nodes: Vec<RawNode<u32>>,
         focus_secure: bool,
         focused: Option<u32>,
+        /// The window accessibility places the focus in; `None` when it can't tell.
+        focus_window: Option<u32>,
         /// A press on this element retitles the window, as a navigation would.
         retitle_on_press: Option<(u32, String)>,
         log: Vec<String>,
@@ -1135,6 +1134,7 @@ mod tests {
                 nodes,
                 focus_secure: false,
                 focused: None,
+                focus_window: Some(1),
                 retitle_on_press: None,
                 log: Vec::new(),
             }
@@ -1247,7 +1247,7 @@ mod tests {
         fn focus(&mut self, _: i32) -> CuResult<Focus<u32>> {
             Ok(Focus {
                 element: self.focused,
-                window: Some(self.window.id),
+                window: self.focus_window,
                 secure: self.focus_secure,
                 role: None,
             })
@@ -1475,6 +1475,91 @@ mod tests {
         assert_eq!(code(&r[0]), Some(ErrorCode::SecureField));
         assert_eq!(r[1].status, Status::Skipped);
         assert!(e.desktop.log.is_empty(), "{:?}", e.desktop.log);
+    }
+
+    #[test]
+    fn keys_typing_and_menus_need_the_focus_in_this_window() {
+        let mut e = engine(Fake::new(basic()));
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let name = ref_of(&text, "Name");
+        let menu = || Action::Menu {
+            path: vec!["File".into(), "Close".into()],
+            expect: None,
+        };
+        let key = || Action::Key {
+            key: "return".into(),
+            repeat: 1,
+            expect: None,
+        };
+        let typing = |r: Option<String>| Action::Type {
+            text: "hello".into(),
+            r#ref: r,
+            expect: None,
+        };
+        // Accessibility can't place the focus, or places it in another window of the app.
+        for elsewhere in [None, Some(2)] {
+            e.desktop.focus_window = elsewhere;
+            for a in [menu(), key(), typing(None), typing(Some(name.clone()))] {
+                let r = act(&mut e, vec![a]);
+                assert_eq!(code(&r[0]), Some(ErrorCode::BackgroundUnavailable));
+            }
+        }
+        assert!(e.desktop.log.is_empty(), "{:?}", e.desktop.log);
+        e.desktop.focus_window = Some(1);
+        let r = act(&mut e, vec![menu()]);
+        assert_eq!(r[0].status, Status::Done);
+        assert_eq!(e.desktop.log, vec!["menu File > Close"]);
+    }
+
+    #[test]
+    fn records_keep_no_typed_text() {
+        let mut e = engine(Fake::new(basic()));
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let name = ref_of(&text, "Name");
+        act(
+            &mut e,
+            vec![Action::Type {
+                text: "s3cret words".into(),
+                r#ref: Some(name.clone()),
+                expect: Some(Expect::ValueContains {
+                    r#ref: name,
+                    text: "s3cret words".into(),
+                }),
+            }],
+        );
+        let record = serde_json::to_string(&e.records).unwrap();
+        assert!(!record.contains("s3cret"), "{record}");
+        assert!(record.contains("<12 chars>"), "{record}");
+    }
+
+    #[test]
+    fn a_zoom_paints_over_a_password_field_that_appeared_since_the_observation() {
+        let mut e = engine(Fake::new(basic()));
+        let shot = observe(&mut e, Screenshot::Always, None).image.unwrap();
+        let field = Rect::new(10.0, 70.0, 100.0, 20.0);
+        let mut pw = node(5, 1, "secure-field", "Password", field);
+        pw.secure = true;
+        e.desktop.nodes.push(pw);
+        let zoom = e
+            .zoom(
+                "w",
+                &ZoomRequest {
+                    image: shot.id.clone(),
+                    region: [0.0, 0.0, f64::from(shot.width), f64::from(shot.height)],
+                },
+            )
+            .unwrap()
+            .image
+            .unwrap();
+        let t = e.image_transform(&zoom.id).unwrap();
+        let mut png = png::Decoder::new(std::io::Cursor::new(&zoom.png))
+            .read_info()
+            .unwrap();
+        let mut buf = vec![0; png.output_buffer_size().unwrap()];
+        let info = png.next_frame(&mut buf).unwrap();
+        let at = t.to_image(field.center());
+        let i = ((at.y as usize) * info.width as usize + at.x as usize) * 4;
+        assert_ne!(&buf[i..i + 3], &[255, 255, 255], "the field shows through");
     }
 
     #[test]

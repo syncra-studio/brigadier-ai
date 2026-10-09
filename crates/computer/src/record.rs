@@ -4,7 +4,7 @@
 
 use serde::Serialize;
 
-use crate::action::{Action, ActionResult, Effect, Rung, Status, Timings};
+use crate::action::{Action, ActionResult, Effect, Expect, Rung, Status, Timings};
 use crate::desktop::WindowInfo;
 use crate::error::ErrorCode;
 
@@ -38,28 +38,17 @@ impl ActionRecord {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        // Typed text is not kept in the record: it may be anything the worker was given.
-        let action = match action {
-            Action::Type {
-                r#ref,
-                expect,
-                text,
-            } => Action::Type {
-                text: format!("<{} chars>", text.chars().count()),
-                r#ref: r#ref.clone(),
-                expect: expect.clone(),
-            },
-            Action::SetValue {
-                r#ref,
-                expect,
-                text,
-            } => Action::SetValue {
-                text: format!("<{} chars>", text.chars().count()),
-                r#ref: r#ref.clone(),
-                expect: expect.clone(),
-            },
-            other => other.clone(),
-        };
+        // Typed text is not kept in the record: it may be anything the worker was given. A
+        // value predicate usually repeats it, so its text goes too.
+        let mut action = action.clone();
+        if let Action::Type { text, .. } | Action::SetValue { text, .. } = &mut action {
+            *text = chars(text);
+        }
+        if let Some(Expect::ValueEquals { text, .. } | Expect::ValueContains { text, .. }) =
+            action.expect_mut()
+        {
+            *text = chars(text);
+        }
         Self {
             at_ms,
             worker: worker.to_owned(),
@@ -75,4 +64,8 @@ impl ActionRecord {
             user_focus_kept,
         }
     }
+}
+
+fn chars(text: &str) -> String {
+    format!("<{} chars>", text.chars().count())
 }

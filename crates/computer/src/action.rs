@@ -167,6 +167,20 @@ impl Action {
         }
     }
 
+    pub fn expect_mut(&mut self) -> Option<&mut Expect> {
+        match self {
+            Self::Click { expect, .. }
+            | Self::SetValue { expect, .. }
+            | Self::Type { expect, .. }
+            | Self::Key { expect, .. }
+            | Self::Scroll { expect, .. }
+            | Self::Drag { expect, .. }
+            | Self::Perform { expect, .. }
+            | Self::Menu { expect, .. } => expect.as_mut(),
+            Self::Wait { expect, .. } => Some(expect),
+        }
+    }
+
     /// Keyboard, menu and focus work: it needs the app's focus, so it is serialized per app.
     pub fn uses_app_focus(&self) -> bool {
         matches!(
