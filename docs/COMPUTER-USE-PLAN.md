@@ -28,7 +28,8 @@ accessibility notification for 50 ms after the effect).
 |---|---|---|
 | S1 | `observe`, structure only, window ≤ 300 elements | ≤ 15 ms / ≤ 40 ms |
 | S2 | `observe` with screenshot, window ≤ 1600×1000 pt | ≤ 70 ms / ≤ 120 ms |
-| S3 | element action (press, set value, pick): dispatch / effect | ≤ 10 / ≤ 40 ms p50, ≤ 150 ms p95 effect |
+| S3 | element action (press, set value, menu-bar pick): dispatch / effect | ≤ 10 / ≤ 40 ms p50, ≤ 150 ms p95 effect |
+| S3p | pop-up pick: effect (AppKit blinks the chosen item ≈350 ms before it acts, a platform limit, §4.4) | ≤ 400 ms p50 and p95 |
 | S4 | background pixel click: dispatch / effect | ≤ 15 / ≤ 60 ms p50, ≤ 200 ms p95 effect |
 | S5 | type 100 characters (set-value path / key-event path) | ≤ 20 ms / ≤ 250 ms |
 | S6 | tool overhead: MCP call → daemon → helper → reply, excluding the action (measured from Phase 2) | ≤ 5 ms p50 |
@@ -519,7 +520,8 @@ for coverage. Nothing merges to main until the user says so.
 - §2.1's table is filled from the spike.
 - Tests pass for mapping (1×, 2×, scaled, zoom), generations and stale refs, cancellation and input release,
   redaction, and the block list.
-- `bench` on this Mac meets S1–S5, P1, P2, P2r, P4 and F1, with the sample counts of §1. A miss keeps the phase open.
+- `bench` on this Mac meets S1–S5 (S3p included), P1, P2, P2r, P4 and F1, with the sample counts of §1. A miss
+  keeps the phase open.
 - A real run against the fixture is shown by its action records and an annotated screenshot: observe, click an 8 pt
   checkbox by ref, click a canvas dot by pixel, type into the text field, pick a menu item. The user's frontmost app
   and cursor don't change.
@@ -535,7 +537,8 @@ evidence)**
 | S2 observe with screenshot | 62.6 / 67.1 ms | ≤ 70 / ≤ 120 ms | pass |
 | S3 press, all P1 targets | dispatch 6.5 · effect 3.8 / 4.9 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | pass |
 | S3 set value (slider) | dispatch 3.6 · effect 3.6 / 4.7 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | pass |
-| S3 pick (pop-up) | dispatch 376.6 · effect 368.3 / 373.1 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | **miss** |
+| S3 menu-bar pick (20 repetitions, `--quick`, after the ruling) | dispatch 3.5 · effect 3.5 / 4.8 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | pass |
+| S3p pop-up pick | effect 368.3 / 373.1 ms (dispatch 376.6, it waits for the menu to close) | ≤ 400 / ≤ 400 ms | pass |
 | S4 background pixel click | dispatch 8.4 · effect 18.6 / 43.5 ms | ≤ 15 · ≤ 60 / ≤ 200 ms | pass |
 | S5 100 characters, set value / key events | 3.8 / 13.8 ms | ≤ 20 / ≤ 250 ms | pass |
 | P1 element-path success | 1600/1600 | 100% | pass |
@@ -547,9 +550,9 @@ evidence)**
 | T2 fixture window image | 900×632 px, ≈759 Claude visual tokens | ≤ 4,784 | (Phase 4 gate) |
 
 The dots are round, so P2's inset points are the four diagonals 1 pt inside the edge rather than a box's corners.
-The pop-up pick misses because AppKit blinks the chosen item for ≈350 ms before it sends the action (§4.4); the
-press, set-value and pick of menu-bar items are not affected. Recommendation: hold pop-up picks to their own
-target (≤ 400 ms effect) and gate S3 on the rest.
+A pop-up pick can't meet S3: AppKit blinks the chosen item for ≈350 ms before it sends the action (§4.4), and no
+background route avoids it. Ruled by the Delegator on 2026-10-09: pop-up picks have their own target, S3p (effect
+≤ 400 ms), and S3 is gated on press, set value and menu-bar picks.
 
 ### Phase 2: Helper app, broker and the tool surface
 
