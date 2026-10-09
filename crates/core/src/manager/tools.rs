@@ -875,26 +875,30 @@ fn ask_round(questions: Vec<crate::tools::AskQuestion>) -> Result<Vec<QuestionIt
             if text.is_empty() {
                 return Err(Error::Invalid("a question of the round is empty".into()));
             }
-            let options: Vec<QuestionOption> = question
-                .options
-                .into_iter()
-                .filter(|option| !option.label.trim().is_empty())
-                .map(|option| QuestionOption {
-                    label: option.label.trim().to_owned(),
+            // A blank option goes; the recommendation keeps pointing at the option it named.
+            let mut recommended = None;
+            let mut options: Vec<QuestionOption> = Vec::new();
+            for (index, option) in question.options.into_iter().enumerate() {
+                let label = option.label.trim();
+                if label.is_empty() {
+                    continue;
+                }
+                if question.recommended == Some(index as u32) {
+                    recommended = Some(options.len() as u32);
+                }
+                options.push(QuestionOption {
+                    label: label.to_owned(),
                     description: option
                         .description
                         .map(|line| line.trim().to_owned())
                         .filter(|line| !line.is_empty()),
-                })
-                .collect();
+                });
+            }
             if options.len() == 1 || options.len() > OPTIONS_MAX {
                 return Err(Error::Invalid(format!(
                     "\"{text}\": give 2 to {OPTIONS_MAX} options (or none, for a free answer)."
                 )));
             }
-            let recommended = question
-                .recommended
-                .filter(|&index| (index as usize) < options.len());
             if !options.is_empty() && recommended.is_none() {
                 return Err(Error::Invalid(format!(
                     "\"{text}\": say which option you recommend in `recommended` (its 0-based index)."
@@ -942,5 +946,30 @@ mod tests {
         messaged(&mut task, "Stop and use the old API instead.".into(), false);
         assert_eq!(task.landing, None);
         assert_eq!(task.messages.len(), 2);
+    }
+
+    #[test]
+    fn a_blank_option_leaves_the_recommendation_on_the_option_it_named() {
+        let round = |options: serde_json::Value, recommended: u32| {
+            ask_round(vec![
+                serde_json::from_value(serde_json::json!({
+                    "question": "Which format?",
+                    "options": options,
+                    "recommended": recommended,
+                }))
+                .unwrap(),
+            ])
+        };
+        let options =
+            serde_json::json!([{ "label": " " }, { "label": "CSV" }, { "label": "JSON" }]);
+        let [item] = &round(options.clone(), 1).unwrap()[..] else {
+            panic!("one question")
+        };
+        assert_eq!(item.options.len(), 2);
+        assert_eq!(item.recommended, Some(0));
+        assert_eq!(item.options[0].label, "CSV");
+        // Recommending the blank one recommends nothing: the thread is asked to say which.
+        let blank = round(options, 0).unwrap_err().to_string();
+        assert!(blank.contains("recommend"), "{blank}");
     }
 }
