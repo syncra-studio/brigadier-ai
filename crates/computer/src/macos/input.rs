@@ -227,8 +227,8 @@ pub fn scroll(w: &WindowInfo, at: Point, dx: i32, dy: i32) -> CuResult<()> {
     ) else {
         return err(ErrorCode::Failed, "couldn't make a scroll event");
     };
-    let at = geom::to_global(w.frame, at);
-    CGEvent::set_location(Some(&e), CGPoint::new(at.x, at.y));
+    let global = geom::to_global(w.frame, at);
+    CGEvent::set_location(Some(&e), CGPoint::new(global.x, global.y));
     CGEvent::set_integer_value_field(Some(&e), CGEventField(FIELD_MOUSE_WINDOW), i64::from(w.id));
     if !Private::get().set_window_location(&e, CGPoint::new(at.x, at.y)) {
         return err(
