@@ -564,13 +564,34 @@ mod tests {
         }
     }
 
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    #[cfg(unix)]
+    struct Temp(PathBuf);
+
+    #[cfg(unix)]
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// A `codex` that runs `body` (a shell script) whatever it is asked, in a folder of its own
     /// that is also its HOME.
     #[cfg(unix)]
-    fn fake_codex(name: &str, body: &str) -> (PathBuf, CliEnv) {
+    fn fake_codex(name: &str, body: &str) -> (Temp, CliEnv) {
         use std::os::unix::fs::PermissionsExt;
-        let dir =
-            std::env::temp_dir().join(format!("brigadier-review-{name}-{}", std::process::id()));
+        let dir = Temp(
+            std::env::temp_dir().join(format!("brigadier-review-{name}-{}", std::process::id())),
+        );
         let bin = dir.join("bin");
         fs::create_dir_all(&bin).unwrap();
         let codex = bin.join("codex");
@@ -581,7 +602,7 @@ mod tests {
                 "PATH".into(),
                 format!("{}:/bin:/usr/bin", bin.display()).into(),
             ),
-            ("HOME".into(), dir.clone().into()),
+            ("HOME".into(), dir.0.clone().into()),
         ]);
         (dir, env)
     }
@@ -621,7 +642,8 @@ mod tests {
         let ledger = Arc::new(Recorded::default());
         let stop = CancellationToken::new();
         let review = tokio::spawn({
-            let (dir, env, ledger, stop) = (dir.clone(), env.clone(), ledger.clone(), stop.clone());
+            let (dir, env, ledger, stop) =
+                (dir.to_path_buf(), env.clone(), ledger.clone(), stop.clone());
             async move { review_with(&dir, &env, ledger, stop).await }
         });
         let thread = Artifact::CodexThread {
@@ -642,7 +664,6 @@ mod tests {
             .await
             .expect("a stopped review ends at once")
             .unwrap();
-        fs::remove_dir_all(&dir).unwrap();
         assert_eq!(ended.outcome, Err(STOPPED.to_owned()));
         assert!(ledger.holds(&thread));
     }
@@ -666,7 +687,6 @@ exit 1"#
             CancellationToken::new(),
         )
         .await;
-        fs::remove_dir_all(&dir).unwrap();
         assert_eq!(ended.outcome, Err("usage limit reached".to_owned()));
         assert_eq!(
             ended.usage,

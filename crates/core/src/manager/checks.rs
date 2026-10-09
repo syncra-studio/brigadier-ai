@@ -1679,12 +1679,35 @@ mod tests {
         assert!(status.status.success(), "git {args:?}: {status:?}");
     }
 
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl Temp {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("brigadier-checks-{name}-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir.canonicalize().unwrap())
+        }
+    }
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// A repository that ignores logs, `.env*` files and a secret file.
-    fn repo(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("brigadier-checks-{name}-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let dir = dir.canonicalize().unwrap();
+    fn repo(name: &str) -> Temp {
+        let dir = Temp::new(name);
         git_in(&dir, &["init", "-q", "-b", "main"]);
         std::fs::write(dir.join("README.md"), "# Checks\n").unwrap();
         std::fs::write(dir.join(".gitignore"), "*.log\n.env*\nsecret.json\n").unwrap();
@@ -1747,19 +1770,15 @@ mod tests {
         assert_ne!(env.1, package.1, "a package's env file is");
         std::fs::write(root.join("apps/web/.env.production"), "API=2\n").unwrap();
         assert_ne!(material(&root).1, env.1, "and its content");
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn a_folder_outside_git_has_no_root() {
-        let dir =
-            std::env::temp_dir().join(format!("brigadier-checks-none-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = Temp::new("none");
         assert_eq!(repo_root(&dir), None);
-        std::fs::remove_dir_all(&dir).unwrap();
         let root = repo("root");
         std::fs::create_dir_all(root.join("crates/a")).unwrap();
-        assert_eq!(repo_root(&root.join("crates/a")), Some(root.clone()));
+        assert_eq!(repo_root(&root.join("crates/a")), Some(root.to_path_buf()));
         std::fs::write(
             root.join("crates/a/Cargo.toml"),
             "[package]\nname = \"a\"\n",
@@ -1767,7 +1786,6 @@ mod tests {
         .unwrap();
         assert_eq!(package_folder(&root, &root.join("crates/a")), "crates/a");
         assert_eq!(package_folder(&root, &root), ".");
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -1805,7 +1823,6 @@ mod tests {
             assert_eq!(check_root(Some(&tree), None, &tree.join("sub")), tree);
         }
         assert_eq!(class_of(&Access::Full, Some(&tree), false), "full");
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -2017,7 +2034,6 @@ mod tests {
                 "{crate_name}: {commands:?}"
             );
         }
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

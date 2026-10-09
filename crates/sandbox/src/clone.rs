@@ -317,7 +317,24 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    fn temp(name: &str) -> PathBuf {
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp(name: &str) -> Temp {
         let dir = std::env::temp_dir().join(format!(
             "brigadier-clone-{name}-{}-{}",
             std::process::id(),
@@ -327,7 +344,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::canonicalize(dir).unwrap()
+        Temp(std::fs::canonicalize(dir).unwrap())
     }
 
     fn later() -> Instant {
@@ -365,7 +382,6 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
         assert!(!root.join("late").exists());
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -383,7 +399,6 @@ mod tests {
             .rename_new(OsStr::new("from"), OsStr::new("fresh"))
             .unwrap();
         assert!(root.join("fresh/inner").is_dir());
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -391,7 +406,7 @@ mod tests {
         let root = temp("folders");
         let outside = temp("outside");
         std::fs::create_dir_all(root.join("a/b")).unwrap();
-        std::os::unix::fs::symlink(&outside, root.join("a/link")).unwrap();
+        std::os::unix::fs::symlink(&*outside, root.join("a/link")).unwrap();
         assert_eq!(
             Folder::open(&root, Path::new("a/b"), false).unwrap().path(),
             root.join("a/b")
@@ -406,7 +421,5 @@ mod tests {
         Folder::open(&root, Path::new("a/c/d"), true).unwrap();
         assert!(root.join("a/c/d").is_dir());
         assert!(Folder::open(&root, Path::new("a/e"), false).is_err());
-        std::fs::remove_dir_all(&root).unwrap();
-        std::fs::remove_dir_all(&outside).unwrap();
     }
 }

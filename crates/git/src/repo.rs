@@ -1484,8 +1484,25 @@ mod tests {
     use crate::{Git, Oid};
     use std::{ffi::OsString, fs, path::PathBuf};
 
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = std::path::Path;
+
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// Git in a fresh temp folder, kept from the user's own config; the folder too.
-    fn test_git(name: &str) -> (PathBuf, Git) {
+    fn test_git(name: &str) -> (Temp, Git) {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| since.as_nanos());
@@ -1493,7 +1510,8 @@ mod tests {
             "brigadier-git-{name}-{}-{nanos}",
             std::process::id()
         ));
-        fs::create_dir_all(&dir).expect("a temp folder");
+        let dir = Temp(dir);
+        fs::create_dir_all(&*dir).expect("a temp folder");
         // The user's own git config (signing, hooks, identity) stays out of it.
         let config = dir.join("gitconfig");
         fs::write(&config, "").expect("an empty config");
@@ -1535,7 +1553,6 @@ mod tests {
         assert_ne!(tree(&first), tree(&changed));
         // A tree is not a commit.
         assert!(repo.tree_of(&tree(&first).0).is_err());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1575,7 +1592,6 @@ mod tests {
                 .has_trailer(&marked, &marked, "Brigadier-Author", "thread")
                 .unwrap()
         );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1620,6 +1636,5 @@ mod tests {
                 .unwrap(),
             crate::TrailerStat::default()
         );
-        let _ = fs::remove_dir_all(&dir);
     }
 }
