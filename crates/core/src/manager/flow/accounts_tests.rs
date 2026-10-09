@@ -117,8 +117,23 @@ async fn a_limit_moves_the_chat_to_another_account_and_its_work_is_done_once() {
     let notices = notices(&flow).await;
     assert!(
         notices.iter().any(|text| text
-            == "Claude Code hit its usage limit on your own login; continuing on Account acct-b."),
+            == "Claude Code hit its usage limit on this computer's login; continuing on Account acct-b."),
         "{notices:#?}"
+    );
+    // Only that note: the CLI's own limit message is not shown once the chat went on.
+    assert!(
+        !notices
+            .iter()
+            .any(|text| text.contains("hit your usage limit")),
+        "{notices:#?}"
+    );
+    // The note to carry on is the CLI's input only, never a message of the chat's.
+    let messages = flow.core.all_messages(&flow.conversation).await.unwrap();
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.text.contains(CONTINUE_ON_ACCOUNT)),
+        "{messages:#?}"
     );
     flow.stop().await;
 }
@@ -165,6 +180,16 @@ async fn with_every_account_at_its_limit_the_chat_falls_back_to_the_other_provid
         .fallback
         .expect("Codex stands in");
     assert_eq!(fallback.choice.provider, ProviderKind::Codex);
+    // The last account's limit is shown as before, since no account took the chat over.
+    let notices = notices(&flow).await;
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|text| *text == "You've hit your usage limit.")
+            .count(),
+        1,
+        "{notices:#?}"
+    );
     flow.stop().await;
 }
 
@@ -422,9 +447,8 @@ async fn a_workers_task_carries_on_with_another_account_of_its_provider() {
     assert!(turns[1].account.is_some(), "{turns:#?}");
     let notices = notices(&flow).await;
     assert!(
-        notices
-            .iter()
-            .any(|text| text.contains("hit its usage limit on your own login; task 1 continues on")),
+        notices.iter().any(|text| text
+            .contains("hit its usage limit on this computer's login; task 1 continues on")),
         "{notices:#?}"
     );
     flow.stop().await;

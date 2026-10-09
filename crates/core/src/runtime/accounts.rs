@@ -300,26 +300,21 @@ impl Runtime {
         }
     }
 
-    /// How the app names `account` to the user: its name, else its email, else (the user's own
-    /// login) "your own login".
+    /// How the app names `account` to the user, as Settings → Accounts does: the user's own
+    /// login is "this computer's login"; an extra account its name, else its email.
     pub fn account_label(&self, account: &AccountRef) -> String {
-        let (name, status) = match &account.account {
-            None => (
-                String::new(),
-                self.overview(account.provider)
-                    .and_then(|overview| overview.status),
-            ),
-            Some(id) => match self.accounts().get(id) {
-                Some(live) => (live.entry.name.clone(), live.status.clone()),
-                None => (String::new(), None),
-            },
+        let Some(id) = &account.account else {
+            return "this computer's login".into();
+        };
+        let (name, status) = match self.accounts().get(id) {
+            Some(live) => (live.entry.name.clone(), live.status.clone()),
+            None => (String::new(), None),
         };
         let email = status.and_then(|status| status.email);
         match (name.trim(), email) {
             (name, _) if !name.is_empty() => name.to_owned(),
             (_, Some(email)) if !email.is_empty() => email,
-            _ if account.account.is_none() => "your own login".into(),
-            _ => "an extra account".into(),
+            _ => "a new account".into(),
         }
     }
 
