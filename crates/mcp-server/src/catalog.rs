@@ -536,9 +536,25 @@ pub fn parse_call(
 fn args<T: DeserializeOwned>(tool: &str, arguments: Value) -> Result<T, ParseError> {
     serde_json::from_value(arguments).map_err(|err| ParseError::BadArguments {
         tool: tool.to_owned(),
-        reason: err.to_string(),
+        reason: match example(tool) {
+            Some(call) => format!("{err}. A well-formed call: {call}"),
+            None => err.to_string(),
+        },
     })
 }
+
+/// A well-formed call, added to an argument error where models guessed the shape: a Codex
+/// worker calling tools from code sees no schema, and spent 2–3 rejected calls a report
+/// (COMPUTER-USE-PLAN.md §8, Phase 4).
+fn example(tool: &str) -> Option<&'static str> {
+    match tool {
+        "submit_report" => Some(SUBMIT_REPORT_EXAMPLE),
+        _ => None,
+    }
+}
+
+/// A complete `submit_report` call: the list fields are text, one item per line.
+pub const SUBMIT_REPORT_EXAMPLE: &str = r#"{"summary": "Set Level to 37 through the slider.", "verification": "act's expect value_equals 37 held", "done_when": "[met] Level reads 37: the expect held", "risks": ""}"#;
 
 #[cfg(test)]
 mod tests {
@@ -550,6 +566,26 @@ mod tests {
             task_id: brigadier_core::model::TaskId("t1".into()),
             checks,
         }
+    }
+
+    #[test]
+    fn a_report_argument_error_shows_a_call_that_parses() {
+        let bad = serde_json::json!({"done_when": "[met] it works"});
+        let Err(err) = parse_call(&worker(false), "submit_report", bad.as_object().cloned()) else {
+            panic!("a report without a summary was taken");
+        };
+        let text = err.to_string();
+        let shown = text.split("A well-formed call: ").nth(1).expect(&text);
+        let example: Value = serde_json::from_str(shown).unwrap();
+        assert!(
+            parse_call(
+                &worker(false),
+                "submit_report",
+                example.as_object().cloned()
+            )
+            .is_ok(),
+            "{shown}"
+        );
     }
 
     #[test]

@@ -834,38 +834,121 @@ pub struct SubmitReport {
 
 /// A report list given as one text, one item per line, or as a list. The schema asks for text:
 /// a model writing long items full of quotes and backticks sometimes emits a list as bare text,
-/// which breaks the call's JSON, while it writes a text field reliably.
+/// which breaks the call's JSON, while it writes a text field reliably. A list may hold objects
+/// too (`{"criterion", "status", "evidence"}`): a Codex worker spent 2–3 rejected calls a report
+/// guessing the shape (COMPUTER-USE-PLAN.md §8, Phase 4), so every item becomes a line.
 fn lines<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum Lines {
         Text(String),
-        List(Vec<String>),
+        List(Vec<serde_json::Value>),
     }
     Ok(match Option::<Lines>::deserialize(deserializer)? {
         None => Vec::new(),
-        Some(Lines::List(items)) => items.into_iter().filter(|item| !empty_item(item)).collect(),
-        Some(Lines::Text(text)) => text
-            .lines()
-            .map(|line| {
-                let line = line.trim();
-                line.strip_prefix("- ")
-                    .or_else(|| line.strip_prefix("* "))
-                    .unwrap_or(line)
-            })
-            .filter(|line| !empty_item(line))
-            .map(str::to_owned)
+        Some(Lines::List(items)) => items
+            .iter()
+            .map(item_line)
+            .filter(|item| !empty_item(item))
             .collect(),
+        Some(Lines::Text(text)) => text_lines(&text),
     })
 }
 
-/// The changed paths, without a placeholder that says there are none.
+fn text_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|line| {
+            let line = line.trim();
+            line.strip_prefix("- ")
+                .or_else(|| line.strip_prefix("* "))
+                .unwrap_or(line)
+        })
+        .filter(|line| !empty_item(line))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// One report line from a list item: a text as it is; an object as its status in brackets, its
+/// criterion, then its evidence ("[met] Name reads Grace: the expect held"), with any other
+/// fields after them; anything else as JSON.
+fn item_line(item: &serde_json::Value) -> String {
+    use serde_json::Value;
+    let text = |v: &Value| match v {
+        Value::String(s) => s.trim().to_owned(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    };
+    let Value::Object(fields) = item else {
+        return text(item);
+    };
+    let pick = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|k| fields.get(*k).map(text))
+            .filter(|s| !s.is_empty())
+    };
+    const STATUS: [&str; 3] = ["status", "state", "met"];
+    const WHAT: [&str; 6] = ["criterion", "item", "text", "name", "title", "check"];
+    const WHY: [&str; 5] = ["evidence", "detail", "details", "how", "result"];
+    let mut line = String::new();
+    if let Some(status) = pick(&STATUS) {
+        let status = match status.as_str() {
+            "true" => "met".to_owned(),
+            "false" => "not met".to_owned(),
+            _ => status.trim_matches(['[', ']']).to_lowercase(),
+        };
+        line.push_str(&format!("[{status}] "));
+    }
+    if let Some(what) = pick(&WHAT) {
+        line.push_str(&what);
+    }
+    if let Some(why) = pick(&WHY) {
+        if !line.is_empty() && !line.ends_with("] ") {
+            line.push_str(": ");
+        }
+        line.push_str(&why);
+    }
+    for (key, value) in fields {
+        if STATUS.contains(&key.as_str())
+            || WHAT.contains(&key.as_str())
+            || WHY.contains(&key.as_str())
+        {
+            continue;
+        }
+        let value = text(value);
+        if !value.is_empty() {
+            line.push_str(&format!(
+                "{}{key}: {value}",
+                if line.is_empty() { "" } else { "; " }
+            ));
+        }
+    }
+    line.trim().to_owned()
+}
+
+/// The changed paths, without a placeholder that says there are none. One text, a path a line
+/// or comma-separated, is taken too.
 fn paths<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
-    Ok(Option::<Vec<String>>::deserialize(deserializer)?
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|path| !empty_item(path))
-        .collect())
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Paths {
+        Text(String),
+        List(Vec<serde_json::Value>),
+    }
+    Ok(match Option::<Paths>::deserialize(deserializer)? {
+        None => Vec::new(),
+        Some(Paths::List(items)) => items
+            .iter()
+            .map(|item| match item {
+                serde_json::Value::Object(o) => o
+                    .get("path")
+                    .or_else(|| o.get("file"))
+                    .map_or_else(|| item_line(item), item_line),
+                other => item_line(other),
+            })
+            .filter(|path| !empty_item(path))
+            .collect(),
+        Some(Paths::Text(text)) => text.split([',', '\n']).flat_map(text_lines).collect(),
+    })
 }
 
 /// Whether a report line only says the list is empty ("None.", "N/A", "-", "None for
@@ -1107,6 +1190,39 @@ mod tests {
         );
         assert_eq!(report.risks, ["Assumes Node 22."]);
         assert_eq!(report.needs_user, ["Set STRIPE_KEY in .env"]);
+    }
+
+    #[test]
+    fn a_report_takes_the_shapes_a_codex_worker_sends() {
+        // Measured 2026-10-09: objects for done_when and a string for changes were rejected,
+        // 2–3 calls a report.
+        let report = report(serde_json::json!({
+            "summary": "Done.",
+            "changes": "src/a.ts, src/b.ts\nnotes/c.md",
+            "done_when": [
+                {"criterion": "Name reads Grace", "status": "met", "evidence": "the expect held"},
+                {"criterion": "Nothing else changed", "met": false},
+                {"status": "[not checked]", "evidence": "no screenshot"}
+            ],
+            "verification": [{"check": "observe", "result": "Level 37"}, 3, "Saved."],
+            "risks": [{"risk": "the window may move"}],
+        }));
+        assert_eq!(report.changes, ["src/a.ts", "src/b.ts", "notes/c.md"]);
+        assert_eq!(
+            report.done_when,
+            [
+                "[met] Name reads Grace: the expect held",
+                "[not met] Nothing else changed",
+                "[not checked] no screenshot"
+            ]
+        );
+        assert_eq!(report.verification, ["observe: Level 37", "3", "Saved."]);
+        assert_eq!(report.risks, ["risk: the window may move"]);
+        let listed = self::report(serde_json::json!({
+            "summary": "Done.",
+            "changes": [{"path": "src/a.ts", "change": "edited"}],
+        }));
+        assert_eq!(listed.changes, ["src/a.ts"]);
     }
 
     #[test]
