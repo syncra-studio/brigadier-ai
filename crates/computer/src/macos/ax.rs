@@ -50,6 +50,14 @@ impl AxEl {
         Self(el)
     }
 
+    /// Element `id` of `pid` by remote token (see `Private::ax_remote_element`).
+    pub fn remote(pid: i32, id: u64) -> Option<Self> {
+        let el = super::private::Private::get().ax_remote_element(pid, id)?;
+        // SAFETY: `el` is a live element.
+        unsafe { el.set_messaging_timeout(1.0) };
+        Some(Self(el))
+    }
+
     pub fn attr(&self, name: &'static str) -> Result<CFRetained<CFType>, AXError> {
         let key = CFString::from_static_str(name);
         let mut out: *const CFType = std::ptr::null();

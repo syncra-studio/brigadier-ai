@@ -1,4 +1,5 @@
-//! One window's pixels through ScreenCaptureKit, at an exact scale, covered or not.
+//! One window's pixels through ScreenCaptureKit, at an exact scale, covered or not; a window on
+//! another Space through the window server's own capture.
 
 use std::ptr::NonNull;
 use std::sync::mpsc;
@@ -8,7 +9,10 @@ use block2::RcBlock;
 use objc2::AnyThread;
 use objc2::rc::Retained;
 use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
-use objc2_core_graphics::{CGDataProvider, CGImage};
+use objc2_core_graphics::{
+    CGBitmapContextCreate, CGColorSpace, CGContext, CGDataProvider, CGImage, CGImageAlphaInfo,
+    CGImageByteOrderInfo, CGInterpolationQuality,
+};
 use objc2_foundation::NSError;
 use objc2_screen_capture_kit::{
     SCContentFilter, SCScreenshotManager, SCShareableContent, SCStreamConfiguration, SCWindow,
@@ -17,6 +21,8 @@ use objc2_screen_capture_kit::{
 use crate::error::{CuResult, ErrorCode, err};
 use crate::geom::{ImageTransform, Rect};
 use crate::redact::Rgba;
+
+use super::private::Private;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -125,6 +131,67 @@ impl Shareable {
         };
         Ok((to_rgba(&img, t.width, t.height)?, t))
     }
+}
+
+/// Captures `crop` (window points) of a window that isn't on screen, as `Shareable::capture` does
+/// for one that is: the window server's copy of it, cropped and scaled to the transform's size.
+pub fn capture_offscreen(
+    id: u32,
+    frame: Rect,
+    crop: Rect,
+    scale: f64,
+    max_side: u32,
+) -> CuResult<(Rgba, ImageTransform)> {
+    let t = ImageTransform::fit(id, frame, crop, scale, max_side);
+    let Some(img) = Private::get().capture_window(id) else {
+        return err(ErrorCode::Failed, "the capture failed");
+    };
+    let k = CGImage::width(Some(&img)) as f64 / frame.w.max(1.0);
+    let src = CGRect::new(
+        CGPoint::new(crop.x * k, crop.y * k),
+        CGSize::new(crop.w * k, crop.h * k),
+    );
+    let Some(part) = CGImage::with_image_in_rect(Some(&img), src) else {
+        return err(ErrorCode::Failed, "the capture had no pixels");
+    };
+    let (w, h) = (t.width as usize, t.height as usize);
+    let mut data = vec![0u8; w * h * 4];
+    let space = CGColorSpace::new_device_rgb();
+    // BGRA in memory, as ScreenCaptureKit's captures are.
+    let info = CGImageAlphaInfo::PremultipliedFirst.0 | CGImageByteOrderInfo::Order32Little.0;
+    // SAFETY: `data` holds `h` rows of `w * 4` bytes and outlives the context.
+    let ctx = unsafe {
+        CGBitmapContextCreate(
+            data.as_mut_ptr().cast(),
+            w,
+            h,
+            8,
+            w * 4,
+            space.as_deref(),
+            info,
+        )
+    };
+    let Some(ctx) = ctx else {
+        return err(ErrorCode::Failed, "the capture couldn't be scaled");
+    };
+    CGContext::set_interpolation_quality(Some(&ctx), CGInterpolationQuality::High);
+    CGContext::draw_image(
+        Some(&ctx),
+        CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(w as f64, h as f64)),
+        Some(&part),
+    );
+    drop(ctx);
+    for px in data.as_chunks_mut::<4>().0 {
+        px.swap(0, 2);
+    }
+    Ok((
+        Rgba {
+            width: t.width,
+            height: t.height,
+            data,
+        },
+        t,
+    ))
 }
 
 /// Copies a BGRA capture into packed RGBA of exactly `w`×`h`.

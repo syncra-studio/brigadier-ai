@@ -123,7 +123,9 @@ pub fn launch_fixture(name: &str, args: &[&std::ffi::OsStr]) -> Result<i32> {
     }
 }
 
-fn wait_window(desktop: &mut MacDesktop, pid: i32, title: &str, secs: u64) -> Result<u32> {
+/// The app's window titled `title`; the app is ended when it doesn't show one in time.
+fn wait_window(desktop: &mut MacDesktop, prep: &Prepared, title: &str, secs: u64) -> Result<u32> {
+    let pid = prep.pid;
     let end = Instant::now() + Duration::from_secs(secs);
     loop {
         // Its accessibility tree readable: an app registers the window with accessibility a
@@ -138,6 +140,7 @@ fn wait_window(desktop: &mut MacDesktop, pid: i32, title: &str, secs: u64) -> Re
             return Ok(w.id);
         }
         if Instant::now() > end {
+            teardown(prep);
             bail!("no window {title:?} from pid {pid}");
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -176,7 +179,7 @@ pub fn setup(desktop: &mut MacDesktop, task: &Task, dir: &Path, seed: u64) -> Re
             };
             let args: Vec<&std::ffi::OsStr> = args.iter().map(|a| a.as_os_str()).collect();
             prep.pid = launch_fixture("target-range", &args)?;
-            prep.window = wait_window(desktop, prep.pid, &title, 15)?;
+            prep.window = wait_window(desktop, &prep, &title, 15)?;
             prep.window_title = title;
             prep.log = Some(log.display().to_string());
         }
@@ -187,7 +190,7 @@ pub fn setup(desktop: &mut MacDesktop, task: &Task, dir: &Path, seed: u64) -> Re
             std::fs::write(&p, text)?;
             prep.files.insert(name.to_owned(), p.display().to_string());
             prep.pid = launch_fixture("scratch-pad", &[p.as_os_str()])?;
-            prep.window = wait_window(desktop, prep.pid, name, 15)?;
+            prep.window = wait_window(desktop, &prep, name, 15)?;
             prep.window_title = name.to_owned();
         }
         Setup::DevApp => bail!("the runner sets the dev build up (tools/computer-suite)"),

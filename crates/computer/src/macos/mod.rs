@@ -44,6 +44,10 @@ use crate::geom::{Point, Rect};
 use crate::tree::RawNode;
 
 /// Whether this process may use accessibility and capture the screen.
+/// How many element ids, and how long, a search for a window on another Space tries.
+const REMOTE_SCAN_IDS: u64 = 20_000;
+const REMOTE_SCAN_TIME: Duration = Duration::from_millis(1500);
+
 pub fn permissions() -> (bool, bool) {
     // SAFETY: both are plain queries.
     unsafe {
@@ -181,10 +185,21 @@ impl MacDesktop {
         if let Some(el) = self.ax_windows.get(&w.id) {
             return Ok(el.clone());
         }
-        for el in AxEl::app(w.pid).elements("AXWindows") {
+        let app = AxEl::app(w.pid);
+        // The window list holds only the current Space's windows. The app's main and focused
+        // windows are given wherever they are (measured 2026-10-09 with the user on a full-screen
+        // Space); any other window on another Space is found by remote token.
+        let listed = app.elements("AXWindows").into_iter();
+        let named = ["AXMainWindow", "AXFocusedWindow"]
+            .into_iter()
+            .filter_map(|a| app.element(a));
+        for el in listed.chain(named) {
             if let Some(id) = el.window_id() {
                 self.ax_windows.insert(id, el);
             }
+        }
+        if !self.ax_windows.contains_key(&w.id) {
+            self.remote_windows(w);
         }
         self.ax_windows.get(&w.id).cloned().ok_or_else(|| {
             CuError::new(
@@ -192,6 +207,31 @@ impl MacDesktop {
                 format!("window w{} has no accessibility element", w.id),
             )
         })
+    }
+
+    /// A window on another Space that is neither the app's main nor its focused window, found
+    /// among the app's elements by remote token: ids from 0 up until it turns up (measured
+    /// 2026-10-09: windows sat at ids 42–43 of fresh apps; 2,000 ids took 28–73 ms). Only an
+    /// element some accessibility client already reached has an id.
+    fn remote_windows(&mut self, w: &WindowInfo) {
+        let deadline = Instant::now() + REMOTE_SCAN_TIME;
+        for id in 0..REMOTE_SCAN_IDS {
+            if id % 64 == 0 && Instant::now() > deadline {
+                return;
+            }
+            let Some(el) = AxEl::remote(w.pid, id) else {
+                continue;
+            };
+            if el.string("AXRole").as_deref() != Some("AXWindow") {
+                continue;
+            }
+            if let Some(found) = el.window_id() {
+                self.ax_windows.insert(found, el);
+                if found == w.id {
+                    return;
+                }
+            }
+        }
     }
 
     fn window_list(option: CGWindowListOption, relative_to: u32) -> Vec<WindowInfo> {
@@ -412,9 +452,12 @@ impl Desktop for MacDesktop {
         pixels_per_point: f64,
         max_side: u32,
     ) -> CuResult<Capture> {
-        let (image, transform) =
+        let (image, transform) = if w.on_screen {
             self.shareable
-                .capture(w.id, w.frame, crop, pixels_per_point, max_side)?;
+                .capture(w.id, w.frame, crop, pixels_per_point, max_side)?
+        } else {
+            capture::capture_offscreen(w.id, w.frame, crop, pixels_per_point, max_side)?
+        };
         Ok(Capture { image, transform })
     }
 

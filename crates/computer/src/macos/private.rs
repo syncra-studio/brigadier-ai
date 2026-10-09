@@ -3,11 +3,12 @@
 //! off only the capability that needs it.
 
 use std::ffi::{CStr, c_void};
+use std::ptr::NonNull;
 use std::sync::OnceLock;
 
 use objc2_application_services::AXUIElement;
-use objc2_core_foundation::CGPoint;
-use objc2_core_graphics::CGEvent;
+use objc2_core_foundation::{CFArray, CFData, CFRetained, CGPoint};
+use objc2_core_graphics::{CGEvent, CGImage};
 
 /// A Process Manager serial number.
 #[repr(C)]
@@ -26,18 +27,26 @@ type PostRecord = unsafe extern "C" fn(*const Psn, *const u8) -> i32;
 type GetFront = unsafe extern "C" fn(*mut Psn) -> i32;
 type SetWindowLocation = unsafe extern "C" fn(*const c_void, CGPoint);
 type AxGetWindow = unsafe extern "C" fn(*const c_void, *mut u32) -> i32;
+type MainConnection = unsafe extern "C" fn() -> i32;
+type HwCapture = unsafe extern "C" fn(i32, *const u32, i32, u32) -> *const c_void;
+type AxCreateRemote = unsafe extern "C" fn(*const c_void) -> *mut c_void;
 type GetProcessForPid = unsafe extern "C" fn(libc::pid_t, *mut Psn) -> i32;
 type SetFront = unsafe extern "C" fn(*const Psn, u32, u32) -> i32;
 type GetProcessPid = unsafe extern "C" fn(*const Psn, *mut libc::pid_t) -> i32;
 
 /// `_SLPSSetFrontProcessWithOptions`'s mode for a front change the user asked for.
 const FRONT_USER_GENERATED: u32 = 0x200;
+/// `SLSHWCaptureWindowList`'s options: ignore the global clip shape, nominal and best resolution.
+const HW_CAPTURE_OPTIONS: u32 = 1 << 11 | 1 << 9 | 1 << 8;
 
 pub struct Private {
     post_record: Option<PostRecord>,
     get_front: Option<GetFront>,
     set_window_location: Option<SetWindowLocation>,
     ax_get_window: Option<AxGetWindow>,
+    ax_create_remote: Option<AxCreateRemote>,
+    main_connection: Option<MainConnection>,
+    hw_capture: Option<HwCapture>,
     get_process_for_pid: Option<GetProcessForPid>,
     set_front: Option<SetFront>,
     get_process_pid: Option<GetProcessPid>,
@@ -94,6 +103,18 @@ impl Private {
                         std::mem::transmute::<*mut c_void, SetWindowLocation>(p)
                     })
                 },
+                main_connection: {
+                    let p = from_sky(sym(sky, c"SLSMainConnectionID"));
+                    // SAFETY: as in `bind!`.
+                    (!p.is_null())
+                        .then(|| unsafe { std::mem::transmute::<*mut c_void, MainConnection>(p) })
+                },
+                hw_capture: {
+                    let p = from_sky(sym(sky, c"SLSHWCaptureWindowList"));
+                    // SAFETY: as in `bind!`.
+                    (!p.is_null())
+                        .then(|| unsafe { std::mem::transmute::<*mut c_void, HwCapture>(p) })
+                },
                 set_front: {
                     let p = from_sky(sym(sky, c"_SLPSSetFrontProcessWithOptions"));
                     // SAFETY: as in `bind!`.
@@ -101,6 +122,7 @@ impl Private {
                         .then(|| unsafe { std::mem::transmute::<*mut c_void, SetFront>(p) })
                 },
                 ax_get_window: bind!(any, c"_AXUIElementGetWindow", AxGetWindow),
+                ax_create_remote: bind!(any, c"_AXUIElementCreateWithRemoteToken", AxCreateRemote),
                 get_process_pid: bind!(any, c"GetProcessPID", GetProcessPid),
                 get_process_for_pid: bind!(any, c"GetProcessForPID", GetProcessForPid),
             }
@@ -123,6 +145,36 @@ impl Private {
         let el: *const AXUIElement = el;
         // SAFETY: `el` is a live AXUIElementRef; `id` is a valid out pointer.
         (unsafe { f(el.cast(), &mut id) } == 0 && id != 0).then_some(id)
+    }
+
+    /// The accessibility element `id` of `pid`, made from its remote token: the pid (i32), 0,
+    /// the tag `coco` (i32), then the element id (u64). It reaches a window on another Space,
+    /// which the app's window list leaves out.
+    pub fn ax_remote_element(&self, pid: i32, id: u64) -> Option<CFRetained<AXUIElement>> {
+        let f = self.ax_create_remote?;
+        let mut token = [0u8; 20];
+        token[0..4].copy_from_slice(&pid.to_ne_bytes());
+        token[8..12].copy_from_slice(&0x636f_636f_i32.to_ne_bytes());
+        token[12..20].copy_from_slice(&id.to_ne_bytes());
+        let data = CFData::from_bytes(&token);
+        // SAFETY: `data` is a live CFDataRef for the call; a non-null result is +1 retained
+        // (a Create call).
+        let p = unsafe { f(CFRetained::as_ptr(&data).as_ptr().cast_const().cast()) };
+        NonNull::new(p.cast::<AXUIElement>()).map(|p| unsafe { CFRetained::from_raw(p) })
+    }
+
+    /// The window's backing store at its full resolution, from the window server: it has one
+    /// for a window on another Space, which ScreenCaptureKit waits on for a frame that never
+    /// comes (measured 2026-10-09: about 100 ms for a 900×632 pt window at 2×).
+    pub fn capture_window(&self, window: u32) -> Option<CFRetained<CGImage>> {
+        let (conn, f) = (self.main_connection?, self.hw_capture?);
+        // SAFETY: one valid window id; a non-null result is a +1 retained array of images.
+        let p = unsafe { f(conn(), &window, 1, HW_CAPTURE_OPTIONS) };
+        let arr = NonNull::new(p.cast_mut().cast::<CFArray>())
+            .map(|p| unsafe { CFRetained::from_raw(p) })?;
+        // SAFETY: the array holds CGImages.
+        let arr: CFRetained<CFArray<CGImage>> = unsafe { CFRetained::cast_unchecked(arr) };
+        arr.iter().next()
     }
 
     /// Sets a mouse or scroll event's location inside its target window (top left of the frame).
