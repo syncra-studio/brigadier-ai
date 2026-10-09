@@ -719,6 +719,9 @@ files); terminal windows were sent requests that had to be refused, never input.
     pressed again). On this Mac TextEdit restored no windows after a kill or a clean quit with a window open, so
     telling the file's window from restored ones is proven by the engine tests, not live.
   - The quick bench passes every gate, P2f included (`bench --quick`, 20 reps, 107 s).
+  - The full §7 bench on `5c4f3628` (200 reps, 1055 s) passes every gate with no regression: S1 6.3/7.9 ms, S2
+    61.6/66.0 ms, S3 set value 2.4/3.1, menu-bar pick 4.2/6.5, pop-up 361.4/368.2, press 2.4/3.0 ms, S4 17.2/41.7 ms,
+    S5 2.4/9.8 ms, SEL 20/20, P1 1600/1600, P2 1600/1600 (worst 0.00 pt), P2r 200/200, P2f 1/1, P4 0, F1 0.
 - **Not done or open:**
   - The helper-bundle gate needs the user's one-time grants.
 - **Deviation:** the action log writes the blob first and the event that mentions it second. There's no separate
