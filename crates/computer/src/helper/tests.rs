@@ -52,6 +52,7 @@ fn window() -> WindowInfo {
         frame: Rect::new(0.0, 0.0, 200.0, 100.0),
         on_screen: true,
         minimized: false,
+        hidden: false,
     }
 }
 

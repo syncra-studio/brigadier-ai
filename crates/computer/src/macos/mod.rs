@@ -296,6 +296,7 @@ impl MacDesktop {
                 frame,
                 on_screen,
                 minimized: false,
+                hidden: false,
             });
         }
         out
@@ -349,10 +350,15 @@ impl Desktop for MacDesktop {
         let mut out = Vec::new();
         for app in ws.runningApplications().iter() {
             let mut info = Self::app_info(&app, front);
+            // A listing hint only, with no accessibility call per app: an action reads it again.
+            let hidden = app.isHidden();
             info.windows = windows
                 .iter()
                 .filter(|w| w.pid == info.pid)
-                .cloned()
+                .map(|w| WindowInfo {
+                    hidden: hidden && !w.on_screen,
+                    ..w.clone()
+                })
                 .collect();
             if info.windows.is_empty()
                 && app.activationPolicy() != NSApplicationActivationPolicy::Regular
@@ -369,7 +375,13 @@ impl Desktop for MacDesktop {
             CGWindowListOption::OptionAll | CGWindowListOption::ExcludeDesktopElements,
             0,
         );
-        Ok(all.into_iter().filter(|w| w.pid == pid).collect())
+        let mut mine: Vec<WindowInfo> = all.into_iter().filter(|w| w.pid == pid).collect();
+        if mine.iter().any(|w| !w.on_screen) && AxEl::app(pid).bool("AXHidden") == Some(true) {
+            for w in &mut mine {
+                w.hidden = true;
+            }
+        }
+        Ok(mine)
     }
 
     fn window(&mut self, id: u32) -> CuResult<WindowInfo> {
@@ -383,10 +395,11 @@ impl Desktop for MacDesktop {
                     .find(|w| w.id == id)
             })
             .ok_or_else(|| CuError::new(ErrorCode::NoSuchTarget, format!("no window w{id}")))?;
-        if !w.on_screen
-            && let Ok(el) = self.ax_window(&w)
-        {
-            w.minimized = el.bool("AXMinimized").unwrap_or(false);
+        if !w.on_screen {
+            w.hidden = AxEl::app(w.pid).bool("AXHidden") == Some(true);
+            if let Ok(el) = self.ax_window(&w) {
+                w.minimized = el.bool("AXMinimized").unwrap_or(false);
+            }
         }
         Ok(w)
     }
@@ -748,6 +761,10 @@ impl Desktop for MacDesktop {
         self.ax_window(w)?.set("AXMinimized", CFBoolean::new(true))
     }
 
+    fn hide(&mut self, pid: i32) -> CuResult<()> {
+        AxEl::app(pid).set("AXHidden", CFBoolean::new(true))
+    }
+
     fn document(&mut self, w: &WindowInfo) -> Option<String> {
         self.ax_window(w).ok()?.string("AXDocument")
     }
@@ -938,7 +955,10 @@ fn menu_item(pid: i32, path: &[String]) -> CuResult<AxEl> {
             };
             return err(
                 ErrorCode::NoSuchTarget,
-                format!("no menu item {name:?} in {place}; it has: {}", titles.join(", ")),
+                format!(
+                    "no menu item {name:?} in {place}; it has: {}",
+                    titles.join(", ")
+                ),
             );
         };
         if i + 1 == path.len() {

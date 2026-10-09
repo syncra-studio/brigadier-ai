@@ -64,7 +64,9 @@ fn print_reply(reply: &Reply, out: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-/// Runs a script: `{"worker": "...", "steps": [{"observe": {...}} | {"act": {...}} | {"zoom": {...}}]}`.
+/// Runs a script: `{"worker": "...", "foreground": false, "steps": [{"observe": {...}} | {"act": {...}} | {"zoom": {...}}]}`.
+/// `foreground: false` keeps the foreground rung off, so the script never raises a window or
+/// takes the front, however long the user has been idle.
 /// Writes images, the action records and an annotated copy of the last full screenshot with every
 /// predicted point to `out`.
 pub fn run_script<D: Desktop>(engine: &mut Engine<D>, script: &Value, out: &Path) -> Result<()> {
@@ -78,6 +80,9 @@ pub fn run_script<D: Desktop>(engine: &mut Engine<D>, script: &Value, out: &Path
         .get("steps")
         .and_then(Value::as_array)
         .context("steps")?;
+    if let Some(on) = script.get("foreground").and_then(Value::as_bool) {
+        engine.foreground = on;
+    }
     let mut last_full: Option<(String, Rgba)> = None;
     let mut annotated: Option<Rgba> = None;
     for (i, step) in steps.iter().enumerate() {

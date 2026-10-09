@@ -168,13 +168,14 @@ impl<D: Desktop> Engine<D> {
             for w in &a.windows {
                 let _ = writeln!(
                     out,
-                    "  w{} {:?} {}x{}{}{}",
+                    "  w{} {:?} {}x{}{}{}{}",
                     w.id,
                     w.title,
                     w.frame.w.round() as i64,
                     w.frame.h.round() as i64,
                     if w.on_screen { "" } else { " · off screen" },
-                    if w.minimized { " · minimised" } else { "" }
+                    if w.minimized { " · minimised" } else { "" },
+                    if w.hidden { " · app hidden" } else { "" }
                 );
             }
         }
@@ -896,9 +897,7 @@ impl<D: Desktop> Engine<D> {
                     self.desktop.perform(e, "press")?;
                     Rung::Element
                 } else {
-                    if w.minimized {
-                        return err(ErrorCode::BackgroundUnavailable, "the window is minimised");
-                    }
+                    pointer_reach(&w)?;
                     // An element scrolled out of view is brought into view by its own scroll
                     // view first, as a person scrolls to it, so the click needs no batch of
                     // its own.
@@ -968,9 +967,7 @@ impl<D: Desktop> Engine<D> {
                 let (p, _, visible) = self.point_of(&w, target)?;
                 aim = Some((p, None));
                 self.show_cursor(worker, &w, aim, Gesture::Scroll);
-                if w.minimized {
-                    return err(ErrorCode::BackgroundUnavailable, "the window is minimised");
-                }
+                pointer_reach(&w)?;
                 out_of_view(visible)?;
                 self.desktop.scroll(&w, p, *dx, *dy)?;
                 Rung::Background
@@ -978,9 +975,7 @@ impl<D: Desktop> Engine<D> {
             Action::Drag { from, to, .. } => {
                 let (a, _, seen_a) = self.point_of(&w, from)?;
                 let (b, _, seen_b) = self.point_of(&w, to)?;
-                if w.minimized {
-                    return err(ErrorCode::BackgroundUnavailable, "the window is minimised");
-                }
+                pointer_reach(&w)?;
                 aim = Some((a, None));
                 out_of_view(seen_a && seen_b)?;
                 let to = Point::new(w.frame.x + b.x, w.frame.y + b.y);
@@ -1196,6 +1191,7 @@ impl<D: Desktop> Engine<D> {
                     frame: Rect::default(),
                     on_screen: true,
                     minimized: false,
+                    hidden: false,
                 })
                 .or_else(|| self.desktop.window(window).ok())
                 .unwrap_or(WindowInfo {
@@ -1205,6 +1201,7 @@ impl<D: Desktop> Engine<D> {
                     frame: Rect::default(),
                     on_screen: false,
                     minimized: false,
+                    hidden: false,
                 });
             self.records
                 .push(ActionRecord::new(worker, &w, action, result, true));
@@ -1327,6 +1324,9 @@ impl<D: Desktop> Engine<D> {
                 && !again.minimized
             {
                 let _ = self.desktop.minimize(&again);
+            }
+            if w.hidden {
+                let _ = self.desktop.hide(w.pid);
             }
             if let Some(id) = their_window {
                 gave_back = self
@@ -1603,6 +1603,18 @@ pub fn render_results(results: &[ActionResult]) -> String {
     out
 }
 
+/// Pointer events reach a window only while it is ordered in: not minimised, its app not
+/// hidden. Elsewhere they would be lost with no error, so they are refused instead.
+fn pointer_reach(w: &WindowInfo) -> CuResult<()> {
+    if w.minimized {
+        return err(ErrorCode::BackgroundUnavailable, "the window is minimised");
+    }
+    if w.hidden {
+        return err(ErrorCode::BackgroundUnavailable, "the app is hidden");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1672,6 +1684,7 @@ mod tests {
                     frame: Rect::new(100.0, 100.0, 400.0, 300.0),
                     on_screen: true,
                     minimized: false,
+                    hidden: false,
                 },
                 nodes,
                 focus_secure: false,
@@ -1925,6 +1938,7 @@ mod tests {
             self.log.push(format!("raise {}", w.id));
             if w.id == self.window.id {
                 self.window.minimized = false;
+                self.window.hidden = false;
             }
             self.front = w.pid;
             self.front_window = Some(w.id);
@@ -1938,6 +1952,11 @@ mod tests {
         fn minimize(&mut self, _: &WindowInfo) -> CuResult<()> {
             self.log.push("minimize".into());
             self.window.minimized = true;
+            Ok(())
+        }
+        fn hide(&mut self, pid: i32) -> CuResult<()> {
+            self.log.push(format!("hide {pid}"));
+            self.window.hidden = true;
             Ok(())
         }
         fn document(&mut self, w: &WindowInfo) -> Option<String> {
@@ -2403,9 +2422,13 @@ mod tests {
     fn a_value_expect_on_a_label_reads_its_text() {
         let mut e = engine(Fake::new(basic()));
         let label = "Last action: picked Pick Me 3";
-        e.desktop
-            .nodes
-            .push(node(6, 1, "text", label, Rect::new(10.0, 100.0, 200.0, 18.0)));
+        e.desktop.nodes.push(node(
+            6,
+            1,
+            "text",
+            label,
+            Rect::new(10.0, 100.0, 200.0, 18.0),
+        ));
         let text = observe(&mut e, Screenshot::Never, None).text;
         let r = ref_of(&text, label);
         let wait = |expect| Action::Wait {
@@ -2609,6 +2632,34 @@ mod tests {
     }
 
     #[test]
+    fn a_hidden_apps_window_takes_elements_and_refuses_pointers_until_the_foreground_rung() {
+        let mut fake = Fake::new(basic());
+        fake.window.on_screen = false;
+        fake.window.hidden = true;
+        fake.set_idle(5.0);
+        let mut e = engine(fake);
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let r = act(&mut e, vec![click(&ref_of(&text, "Next"))]);
+        assert_eq!(r[0].delivered, Some(Rung::Element));
+        let r = act(&mut e, vec![scroll_on(&ref_of(&text, "Name"))]);
+        assert_eq!(code(&r[0]), Some(ErrorCode::BackgroundUnavailable));
+        assert!(
+            r[0].error.as_ref().unwrap().detail.contains("hidden"),
+            "{:?}",
+            r[0].error
+        );
+        // Idle, the foreground rung shows it, acts, and hides the app again.
+        e.desktop.set_idle(120.0);
+        let r = act(&mut e, vec![scroll_on(&ref_of(&text, "Name"))]);
+        assert_eq!(r[0].delivered, Some(Rung::Foreground), "{:?}", r[0].error);
+        assert_eq!(
+            e.desktop.log[e.desktop.log.len() - 4..],
+            ["raise 1", "scroll", "activate 99", "hide 10"]
+        );
+        assert!(e.desktop.window.hidden);
+    }
+
+    #[test]
     fn the_foreground_rung_keeps_a_front_the_user_changed() {
         let mut fake = Fake::new(basic());
         fake.window.minimized = true;
@@ -2809,6 +2860,7 @@ mod tests {
                 frame: Rect::new(0.0, 0.0, 300.0, 200.0),
                 on_screen: true,
                 minimized: false,
+                hidden: false,
             }],
         }
     }

@@ -24,6 +24,10 @@ pub struct WindowInfo {
     pub frame: Rect,
     pub on_screen: bool,
     pub minimized: bool,
+    /// Its app is hidden (⌘H): the window is ordered out, so pointer events can't reach it;
+    /// accessibility still can.
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -254,6 +258,11 @@ pub trait Desktop {
     fn minimize(&mut self, w: &WindowInfo) -> CuResult<()> {
         let _ = w;
         err(ErrorCode::UnsupportedCapability, "minimising a window")
+    }
+    /// Hides an app again after the foreground rung showed it.
+    fn hide(&mut self, pid: i32) -> CuResult<()> {
+        let _ = pid;
+        err(ErrorCode::UnsupportedCapability, "hiding an app")
     }
     /// The file or URL the window shows, as the app reports it (a `file:` URL for a file);
     /// `None` when it doesn't say.
