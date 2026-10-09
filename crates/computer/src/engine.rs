@@ -395,7 +395,9 @@ impl<D: Desktop> Engine<D> {
             Some(shot) => Some(self.image_out(shot.wait()?, &secure)),
             None => None,
         };
-        self.render_observation(worker, req, &w, element, &lines, "", selected, image, incomplete)
+        self.render_observation(
+            worker, req, &w, element, &lines, "", selected, image, incomplete,
+        )
     }
 
     /// An observation's text from its lines, full or as a diff against what this worker saw
@@ -904,21 +906,10 @@ impl<D: Desktop> Engine<D> {
         cancel.check()?;
         let w = self.desktop.window(window)?;
         self.check_block(&w)?;
-        // A page of a browser the session launched takes everything but the browser's own menus
-        // through the browser.
-        if !matches!(action, Action::Menu { .. })
-            && let Some(page) = self.web_page(&w)
-        {
-            return self.web_act_one(worker, &w, page, index, action, cancel, entered);
-        }
-        // Settling waits for the app's notifications to stop, so listen before acting.
-        self.desktop.watch(w.pid);
-        let before_windows: HashSet<u32> =
-            self.desktop.windows(w.pid)?.iter().map(|x| x.id).collect();
+        // A change in the window the user is typing or clicking in waits until they pause,
+        // whichever way it is sent.
         let mut user_before = self.desktop.user_focus();
-        let target_is_front = user_before.frontmost_pid == w.pid;
-        // A change in the window the user is typing or clicking in waits until they pause.
-        if target_is_front
+        if user_before.frontmost_pid == w.pid
             && !matches!(action, Action::Wait { .. })
             && user_before.frontmost_window.as_deref() == Some(w.title.as_str())
         {
@@ -931,6 +922,18 @@ impl<D: Desktop> Engine<D> {
                 user_before = self.desktop.user_focus();
             }
         }
+        // A page of a browser the session launched takes everything but the browser's own menus
+        // through the browser.
+        if !matches!(action, Action::Menu { .. })
+            && let Some(page) = self.web_page(&w)
+        {
+            return self.web_act_one(worker, &w, page, index, action, cancel, entered);
+        }
+        // Settling waits for the app's notifications to stop, so listen before acting.
+        self.desktop.watch(w.pid);
+        let before_windows: HashSet<u32> =
+            self.desktop.windows(w.pid)?.iter().map(|x| x.id).collect();
+        let target_is_front = user_before.frontmost_pid == w.pid;
         let caps = self.desktop.capabilities();
         // Activation only for a background app: a defocus afterwards would otherwise
         // deactivate the user's own frontmost app.
