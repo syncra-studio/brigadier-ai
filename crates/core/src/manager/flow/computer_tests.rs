@@ -410,6 +410,12 @@ async fn a_missing_permission_lists_one_item_until_both_are_granted() {
         let reply = turn.computer(call).await;
         assert!(reply.is_error);
         assert!(reply.text.contains("permission_missing"), "{}", reply.text);
+        // The worker is told the user is already asked, so neither it nor the thread asks again.
+        assert!(
+            reply.text.contains("don't ask them again"),
+            "{}",
+            reply.text
+        );
     }
     let board = flow.board().await;
     let items = permission_items(&board);

@@ -69,7 +69,7 @@ const conversation = {
 const computer = query.get("computer") === "1";
 if (computer) {
   board = { ...board, waiting: { ...board.waiting, "computer-access": { id: "computer-access", requestId: null, source: { type: "computer" },
-    key: "computer", what: "Allow computer use: workers need to see and control apps on this Mac.", createdAtMs: events.at(-1)?.atMs ?? 0 } } };
+    key: "computer", what: "Let workers use apps on this Mac", createdAtMs: events.at(-1)?.atMs ?? 0 } } };
 }
 useBoard.setState({ board: { ...board, loaded: true, head: messages.at(-1)?.id ?? null } });
 useApp.setState({

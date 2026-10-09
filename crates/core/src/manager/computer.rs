@@ -52,10 +52,11 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 /// What the model is told when a permission is missing.
 /// The "Waiting on you" line for missing permissions.
-const PERMISSION_ASK: &str =
-    "Allow computer use: workers need to see and control apps on this Mac.";
-const PERMISSION_FIX: &str =
-    "Ask the user to open Brigadier's Settings, Computer use, and allow what's missing.";
+const PERMISSION_ASK: &str = "Let workers use apps on this Mac";
+/// The user is asked once, under "Waiting on you", before the worker hears this: it must not
+/// ask again.
+const PERMISSION_FIX: &str = "The user has already been asked to allow it, under Waiting on you; \
+     don't ask them again. Go on without the computer, or say in your report that it's needed.";
 
 /// The broker's view of a helper connection; a fake in tests.
 pub(crate) trait HelperLink: Send + Sync {
