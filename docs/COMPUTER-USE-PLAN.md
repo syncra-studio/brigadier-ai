@@ -531,13 +531,13 @@ evidence)**
 
 | Gate | Measured | Target | |
 |---|---|---|---|
-| S1 observe, structure | 6.2 / 8.2 ms | ≤ 15 / ≤ 40 ms | pass |
-| S2 observe with screenshot | 61.3 / 66.3 ms | ≤ 70 / ≤ 120 ms | pass |
-| S3 press, all P1 targets | dispatch 5.9 · effect 3.3 / 5.9 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | pass |
-| S3 set value (slider) | dispatch 3.2 · effect 3.1 / 4.0 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | pass |
-| S3 pick (pop-up) | dispatch 370.6 · effect 363.0 / 371.0 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | **miss** |
-| S4 background pixel click | dispatch 6.5 · effect 16.4 / 41.5 ms | ≤ 15 · ≤ 60 / ≤ 200 ms | pass |
-| S5 100 characters, set value / key events | 2.9 / 13.3 ms | ≤ 20 / ≤ 250 ms | pass |
+| S1 observe, structure | 6.5 / 8.3 ms | ≤ 15 / ≤ 40 ms | pass |
+| S2 observe with screenshot | 62.6 / 67.1 ms | ≤ 70 / ≤ 120 ms | pass |
+| S3 press, all P1 targets | dispatch 6.5 · effect 3.8 / 4.9 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | pass |
+| S3 set value (slider) | dispatch 3.6 · effect 3.6 / 4.7 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | pass |
+| S3 pick (pop-up) | dispatch 376.6 · effect 368.3 / 373.1 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | **miss** |
+| S4 background pixel click | dispatch 8.4 · effect 18.6 / 43.5 ms | ≤ 15 · ≤ 60 / ≤ 200 ms | pass |
+| S5 100 characters, set value / key events | 3.8 / 13.8 ms | ≤ 20 / ≤ 250 ms | pass |
 | P1 element-path success | 1600/1600 | 100% | pass |
 | P2 pixel mapping, 1× and 2×, centre and 1 pt-inset points | 1600/1600 inside, worst error 0.00 pt | 100%, ≤ 0.5 pt | pass |
 | P2r refusals (minimised window) | 200/200 `background_unavailable` | 100% | pass |
