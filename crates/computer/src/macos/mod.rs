@@ -450,11 +450,19 @@ impl Desktop for MacDesktop {
         if !el.settable("AXSelectedTextRange") {
             return err(ErrorCode::NotSettable, "that element has no text selection");
         }
+        let (start, length) = match el.string("AXValue") {
+            Some(text) => to_utf16(&text, start, length),
+            None => (start, length),
+        };
         el.set_range("AXSelectedTextRange", start, length)
     }
 
     fn selection(&mut self, el: &AxEl) -> Option<(usize, usize)> {
-        el.range("AXSelectedTextRange")
+        let (start, length) = el.range("AXSelectedTextRange")?;
+        Some(match el.string("AXValue") {
+            Some(text) => to_chars(&text, start, length),
+            None => (start, length),
+        })
     }
 
     fn menu(&mut self, pid: i32, path: &[String]) -> CuResult<()> {
@@ -716,6 +724,30 @@ impl Desktop for MacDesktop {
     }
 }
 
+/// A range in characters as accessibility counts it, in UTF-16 units: an emoji is two.
+fn to_utf16(text: &str, start: usize, length: usize) -> (usize, usize) {
+    let units = |chars: usize| text.chars().take(chars).map(char::len_utf16).sum::<usize>();
+    let (from, to) = (units(start), units(start.saturating_add(length)));
+    (from, to - from)
+}
+
+/// An accessibility range, in UTF-16 units, in characters; a unit inside a character counts
+/// that whole character.
+fn to_chars(text: &str, start: usize, length: usize) -> (usize, usize) {
+    let chars = |units: usize| {
+        let mut seen = 0;
+        text.chars()
+            .take_while(|c| {
+                let inside = seen < units;
+                seen += c.len_utf16();
+                inside
+            })
+            .count()
+    };
+    let (from, to) = (chars(start), chars(start.saturating_add(length)));
+    (from, to - from)
+}
+
 /// The frontmost app's pid: the window server's, else AppKit's.
 fn front_pid() -> Option<i32> {
     Private::get().front_pid().or_else(|| {
@@ -818,6 +850,21 @@ fn pick_popup(el: &AxEl, title: &str) -> CuResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selections_count_characters_where_accessibility_counts_utf16_units() {
+        let text = "a😀b";
+        assert_eq!(to_utf16(text, 1, 1), (1, 2));
+        assert_eq!(to_utf16(text, 2, 1), (3, 1));
+        assert_eq!(to_utf16(text, 0, 9), (0, 4));
+        assert_eq!(to_chars(text, 1, 2), (1, 1));
+        assert_eq!(to_chars(text, 3, 1), (2, 1));
+        assert_eq!(to_chars(text, 4, 0), (3, 0));
+        for (start, length) in [(0, 3), (1, 1), (2, 0)] {
+            let (s, l) = to_utf16(text, start, length);
+            assert_eq!(to_chars(text, s, l), (start, length));
+        }
+    }
 
     #[test]
     fn a_process_start_time_is_read_and_stays_the_same() {
