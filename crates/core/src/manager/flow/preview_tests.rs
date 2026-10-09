@@ -5,7 +5,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use brigadier_providers::Artifact;
 use serde_json::json;
@@ -481,10 +480,18 @@ async fn a_stop_during_a_start_refuses_it_and_a_late_log_snapshot_keeps_the_end(
         };
         manager.start_preview(&id, args).await
     });
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // It waits for the numbering (its own handle on the lock is the third).
+    super::eventually("the late start to wait for the numbering", || {
+        Arc::strong_count(&flow.manager.previews.starting) == 3
+    })
+    .await;
+    let stops = flow.manager.previews.stops_of(&flow.conversation);
     let (manager, id) = (flow.manager.clone(), flow.conversation.clone());
     let stop = tokio::spawn(async move { manager.stop_previews(&id, "stopped by the user").await });
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    super::eventually("the stop to be counted", || {
+        flow.manager.previews.stops_of(&flow.conversation) != stops
+    })
+    .await;
     drop(held);
     let refused = late.await.unwrap().expect_err("the late start is refused");
     assert!(

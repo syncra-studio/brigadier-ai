@@ -142,7 +142,7 @@ impl Previews {
         self.lock().values().cloned().collect()
     }
 
-    fn stops_of(&self, id: &ConversationId) -> u64 {
+    pub(super) fn stops_of(&self, id: &ConversationId) -> u64 {
         let stops = self.stops.lock().unwrap_or_else(|p| p.into_inner());
         stops.get(id).copied().unwrap_or_default()
     }
