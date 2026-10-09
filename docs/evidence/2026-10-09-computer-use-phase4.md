@@ -195,6 +195,22 @@ The full bench needs a quiet Mac.
 `8f7f8a3d` and `392f100b` ask again after 100, 250, 500 and 1000 ms, and the error names the system's reason. After
 that, the scripted suite passed 22/22, and the grounding boards 12/12.
 
+## The signed build
+
+`APPLE_SIGNING_IDENTITY="Developer ID Application: …" pnpm tauri:debug-app` signed the dev app and its helper with
+the user's Developer ID, with no Keychain prompt. `codesign -dv --verbose=2` on `Brigadier Dev.app` and on
+`Contents/Helpers/Brigadier Computer Use.app`: the same TeamIdentifier, the hardened runtime, valid on disk, and
+each satisfies a designated requirement anchored on the team (`… and certificate leaf[subject.OU] = "<team>"`).
+
+The same-team peer check: the signed helper serving on a scratch socket (`serve --socket … --token-file …`). One
+C client sends the hello, signed two ways:
+
+| client | result | the helper's log |
+|---|---|---|
+| signed by the team, right token | admitted (the connection stays open) | none |
+| signed ad hoc, right token | refused (closed) | `refused a connection: pid … isn't signed by team …` |
+| signed by the team, wrong token | refused (closed) | `refused a connection: wrong token` |
+
 ## Reproduce
 
 - `cargo test -p brigadier-computer --lib`, `cargo test -p brigadier-mcp-server`, `cargo test -p brigadier-core --lib

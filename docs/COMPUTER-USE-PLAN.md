@@ -992,6 +992,17 @@ helper bundle's own; a person was using the Mac during every run from about 11:3
     apart at first, were 200–800 ms apart by then, so any timing it gave would measure that load. The full bench
     needs a quiet Mac.
 
+- **Signed build: PASS (live).** The dev app was built with `APPLE_SIGNING_IDENTITY` set to the user's Developer
+  ID (`pnpm tauri:debug-app`; no Keychain prompt). `codesign -dv` shows the app and `Contents/Helpers/Brigadier
+  Computer Use.app` both with that team's identifier and the hardened runtime. Each satisfies a designated
+  requirement anchored on the team (`certificate leaf[subject.OU]`), so the helper's privacy grants survive
+  rebuilds signed the same way. The helper's own signature carries no timestamp (`--timestamp=none` in
+  `stage-sidecar.mjs`), which a notarized release needs. The same-team peer check, with the signed helper serving
+  and one test client in two signings:
+  - signed by the team, right token: admitted;
+  - signed ad hoc: refused, "isn't signed by team …";
+  - signed by the team, wrong token: refused, "wrong token".
+
 **Not done or open**
 - **Codex's E1.** The fixes, in order of calls saved:
   - `submit_report` accepts what Codex sends: a list of objects or a string wherever a list of lines is asked for.
