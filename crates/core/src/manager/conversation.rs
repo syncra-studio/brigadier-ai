@@ -2666,7 +2666,8 @@ impl SessionManager {
                 .await;
             }
             ProviderEvent::Error { error } => {
-                if error.kind == ErrorKind::UsageLimit && !error.will_retry {
+                let limited = error.kind == ErrorKind::UsageLimit && !error.will_retry;
+                if limited {
                     conv.state.lock().await.limit_hit =
                         Some(error.limit.clone().unwrap_or(LimitHit {
                             window: None,
@@ -2674,8 +2675,17 @@ impl SessionManager {
                             kind: brigadier_providers::LimitKind::UsageWindow,
                         }));
                 }
+                // A limit another account of the provider takes over from: the chat goes on
+                // there, and only the note saying so is shown (see `switch_account`).
+                let switching = limited
+                    && self
+                        .runtime
+                        .switch_target(&cli.account, cli.model.model.as_deref())
+                        .is_some();
                 if !error.will_retry {
                     conv.state.lock().await.turn_error = Some(error.message.clone());
+                }
+                if !error.will_retry && !switching {
                     self.notice(
                         &conv.id,
                         brigadier_providers::NoticeLevel::Warning,
