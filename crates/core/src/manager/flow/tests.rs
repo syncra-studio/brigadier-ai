@@ -618,16 +618,23 @@ async fn a_review_still_running_at_the_merge_reports_its_findings_after_it() {
     )
     .await;
     flow.say("Add a greeting file and merge it.").await;
-    let repo = flow.repo.clone();
+    // The merge's step, recorded once its answer has read the review's state (the merge is in
+    // `main` a moment before that).
     let board = flow
-        .until("the merge", |_| {
-            std::process::Command::new("git")
-                .args(["cat-file", "-e", "main:hello.txt"])
-                .current_dir(&repo)
-                .status()
-                .is_ok_and(|status| status.success())
+        .until("the merge", |board| {
+            board
+                .orchestrator_steps
+                .iter()
+                .any(|step| matches!(step.kind, crate::work::OrchestratorStepKind::Merged { .. }))
         })
         .await;
+    assert!(
+        std::process::Command::new("git")
+            .args(["cat-file", "-e", "main:hello.txt"])
+            .current_dir(&flow.repo)
+            .status()
+            .is_ok_and(|status| status.success())
+    );
     assert_eq!(board.reviews.len(), 1);
     assert_eq!(
         board.reviews.values().next().unwrap().state,
