@@ -54,7 +54,8 @@ use crate::sessions::{inline_image_tokens, push_block};
 use crate::tools::{Role, RunTools};
 use crate::work::{
     AttachmentRef, Compaction, CompactionState, ContextInjection, InjectionKind, OrchestratorEntry,
-    OrchestratorStepKind, QueuedMessage, QuotaWait, RequestState, RunState, Task, TaskId,
+    OrchestratorStepKind, QuestionKind, QueuedMessage, QuotaWait, RequestState, RunState, Task,
+    TaskId,
 };
 use crate::{Error, Result, now_ms};
 
@@ -207,6 +208,9 @@ struct ConvState {
     /// writes again, no reminder pushes the orchestrator past its question, and one with a
     /// reported change still undecided waits on the user.
     asked_user: HashSet<String>,
+    /// Requests whose thread was told once to ask its text question on a card instead (see
+    /// [`ASK_ON_A_CARD`]).
+    told_to_ask_on_card: HashSet<String>,
     /// The next CLI session starts fresh and must be given the transcript so far.
     reseed: bool,
     /// The running turn failed on a usage limit (which window, and its reset, when the CLI
@@ -2439,8 +2443,12 @@ impl SessionManager {
                                 // never sees it (the orchestrator log keeps it).
                                 Some(true) => {
                                     if let Some(reply) = held.take() {
-                                        self.hide_narration(&conv, &cli, &reply).await;
-                                        self.log_provider(&conv.id, cli.provider, reply).await;
+                                        if self.opening_line(&conv, &reply).await {
+                                            self.on_conversation_event(&conv, &cli, reply).await;
+                                        } else {
+                                            self.hide_narration(&conv, &cli, &reply).await;
+                                            self.log_provider(&conv.id, cli.provider, reply).await;
+                                        }
                                     }
                                 }
                                 Some(false) => {
@@ -2543,6 +2551,22 @@ impl SessionManager {
         if let Err(err) = self.core.record_conversation(id, events).await {
             tracing::debug!(conversation = %id, error = %err, "could not store streamed text");
         }
+    }
+
+    /// Whether a reply that announces work is the request's one short opening line, which the
+    /// user sees: the first reply of the turn that carries their message, with nothing said or
+    /// hidden for the request before it.
+    async fn opening_line(&self, conv: &ConvLive, reply: &ProviderEvent) -> bool {
+        let ProviderEvent::Message { item_id, .. } = reply else {
+            return false;
+        };
+        let state = conv.state.lock().await;
+        let Some(request) = state.replying_for.get(item_id).or(state.request.as_ref()) else {
+            return false;
+        };
+        !state.in_turn.is_empty()
+            && !state.spoke.contains(request)
+            && !state.narration.contains_key(request)
     }
 
     /// Keeps a reply the narration filter hid, under its request, in case the request ends
@@ -3118,6 +3142,19 @@ impl SessionManager {
             // this CLI, past the swap threshold.
             self.consider_rebirth(conv, cli).await;
         }
+        // A card the thread opened is what the user answers; a question in its text alongside
+        // one asks nothing more.
+        let card_open = conv.kind == ConversationKind::Session
+            && self.core.board(&conv.id).await.is_ok_and(|board| {
+                board.questions.values().any(|question| {
+                    question.is_open()
+                        && matches!(
+                            question.kind,
+                            QuestionKind::Orchestrator | QuestionKind::Merge { .. }
+                        )
+                })
+            });
+        let in_run = self.overnight.active.get(&conv.id).is_some();
         let (limit_hit, ended, landed, carried, asked, served, end_commands) = {
             let mut state = conv.state.lock().await;
             state.commands.clear();
@@ -3162,15 +3199,29 @@ impl SessionManager {
             {
                 state.outcomes.insert(request.clone(), ended);
             }
-            // A session's turn that ended on a question to the user: nothing pushes the
-            // orchestrator past it before the user answers (see `asked_user`).
+            // A session's turn that ended on a question to the user in its text: the thread is
+            // told once to ask it on a card, and the request goes on. After that, nothing
+            // pushes the orchestrator past it before the user answers (see `asked_user`).
             let reply = state.last_reply.take();
             if conv.kind == ConversationKind::Session
                 && status == TurnStatus::Completed
                 && let Some(request) = &served
                 && reply.as_deref().is_some_and(asks_user)
             {
-                state.asked_user.insert(request.clone());
+                if card_open || in_run || state.told_to_ask_on_card.contains(request) {
+                    state.asked_user.insert(request.clone());
+                } else {
+                    state.told_to_ask_on_card.insert(request.clone());
+                    state.inbox.push((
+                        Envelope {
+                            kind: InjectionKind::Reminder,
+                            label: "ask on a card".into(),
+                            task_id: None,
+                            text: ASK_ON_A_CARD.to_owned(),
+                        },
+                        Some(request.clone()),
+                    ));
+                }
             }
             (
                 limited,
@@ -4403,6 +4454,9 @@ impl Quiet {
         }
     }
 }
+
+/// What the thread is told when its reply asked the user something in text, with no card open.
+const ASK_ON_A_CARD: &str = "[Your reply asked the user a question in text. Ask it with ask_user instead (a card, with options and the one you recommend), then reply [quiet]. Don't repeat the question in text.]";
 
 /// Replies shorter than this are held back until the turn shows whether they were narration.
 const NARRATION_BYTES: usize = 400;

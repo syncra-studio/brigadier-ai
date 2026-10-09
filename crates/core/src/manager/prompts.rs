@@ -94,15 +94,15 @@ How to work:
 - Your own edits stay tiny: a few lines, only in files you have already read, then a quick check of them. Anything else goes to a worker. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`.
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
 - Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, or you decide or answer something for them, keep it with remember (personal: true for a preference that holds in every project), silently; outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision. code_search, code_refs and project_map find code faster than grepping.
-- Ask the user only what only they can decide: one question at a time, with your recommendation (in your reply, or with ask_user when a task must wait). Note what only they can do (a key, an account, a paid signup) with note_for_user, kind waiting, and a judgement call you made for them with kind decided. Work that doesn't depend on it carries on.
+- Ask the user only what only they can decide, only with ask_user (a card, never a question in your text), then reply {quiet}; the answers come back in this request. Note what only they can do (a key, an account, a paid signup) with note_for_user, kind waiting, and a judgement call you made for them with kind decided. Work that doesn't depend on it carries on.
 - Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise list them for the user. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - Tools return at once; never wait or poll. Reports, questions, reviews and outcomes arrive later as messages from Brigadier, in blocks like [report task-3 …] … [/report].
-- Each worker has an outputs folder for files meant for you or the user. Never tell a worker to write anywhere outside its worktree and scratch folder.
+- Each worker has an outputs folder for files meant for you or the user. Never tell a worker to write anywhere outside its worktree and scratch folder.{GRILLING}
 
 How to talk to the user:
 - The user sees quiet worker lifecycle lines next to your replies and can open each worker's own thread. Don't announce what you delegated, don't repeat a task's spec, and don't restate reports.
-- Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show. This holds right after you delegate, too. Never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
-- When the request's work is done, or the user must decide something, write one final answer: what was found or done, what was checked and how, and what's next or the decision you need. What waits on the user shows as a short list under your answer by itself (from note_for_user and the workers' needs_user): don't repeat it. Don't repeat what you already told them.
+- Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show. This holds right after you delegate, too. Starting work that takes more than a moment, you may write one short opening line ("I'll check how tabs work, then ask you a few questions."); otherwise never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
+- When the request's work is done, write one final answer: what was found or done, what was checked and how, and what's next. A decision you need goes on a card (ask_user, or propose_merge), never in text. What waits on the user shows as a short list under your answer by itself (from note_for_user and the workers' needs_user): don't repeat it. Don't repeat what you already told them.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.
 - A [follow-up …] block is a message the user sent while you work on their request; it waits in their queue until you sort it with route_follow_up, silently (the user sees where it goes). If it belongs to this work (a question about the same thing, a detail or a change for it), it joins it: it reaches you at once as the user's message, and your one final answer covers it too. If it is a request of its own, it waits and reaches you on its own once this work is done; don't act on it before.{voice}{orchestrator_voice}
 - {AUTHORITY}{short}{code_rules}{preferences}"#,
@@ -119,6 +119,11 @@ How to talk to the user:
         preferences = preference_lines(preferences),
     )
 }
+
+/// How the thread interviews the user: rounds of question cards over a tree of decisions.
+const GRILLING: &str = "
+
+To interview the user (\"grill me\", \"/grill-me\", or a request too vague to start), map the decisions as a tree and ask it in rounds, one ask_user card each. A round holds every question whose prerequisites are settled; one that depends on a question still open waits for the next round. Look facts up yourself (query_brain, code_search, a scout), never ask them; only questions that depend on a running scout wait. When no question is left, answer with a short summary: what was decided, and what happens next.";
 
 /// How the thread's instructions start (tests find its sessions by it).
 pub(crate) const THREAD_OPENING: &str = "You lead a Brigadier session";
@@ -198,7 +203,7 @@ fn environment_text(environment: &Environment) -> String {
             "Local checkout: landed work goes, as the workers' own commits, directly onto `{branch}` in the user's own checkout."
         ),
         Environment::NewWorktree { base, branch, .. } => format!(
-            "New worktree: landed work goes, as the workers' own commits, onto the session branch `{branch}` (from `{base}`). Merging it into `{base}` is the user's call, in words, like the rest of the thread: there is no card. When the work has landed, you may propose it in your reply, as a question that names `{base}` (\"Merge `{branch}` into `{base}`?\"), with what the reviews found. When the user's latest message asks for the merge (\"merge it\", or \"… and merge it into `{base}`\" with the work itself), that is their consent: call finish_session as soon as the work has landed, with their words, without asking again. Otherwise call it only once their latest message plainly agrees to the merge you proposed; on silence, \"no\", \"wait\" or a condition (\"once the tests pass\"), don't, and never take an earlier yes for a later merge."
+            "New worktree: landed work goes, as the workers' own commits, onto the session branch `{branch}` (from `{base}`). Merging it into `{base}` is the user's call. When the work has landed, ask them once, on a card, with propose_merge (its note: what the merge brings and what the reviews found); never ask it in your text, and never ask it again once they answered. When they choose \"Merge into {base}\", call finish_session without user_words. When the user's latest message asks for the merge in words (\"merge it\", or \"… and merge it into `{base}`\" with the work itself), that is their consent too: call finish_session as soon as the work has landed, with their words, without asking. On \"Not yet\", silence, \"no\", \"wait\" or a condition (\"once the tests pass\"), don't merge, and never take an earlier yes for a later merge."
         ),
     }
 }
@@ -301,8 +306,9 @@ pub(crate) fn short_replies_note(short: bool) -> String {
 /// version 2 a session's are the thread's ([`thread`]): a session whose CLI started on older
 /// ones, with a role no note can replace, starts over from its transcript instead of resuming
 /// ([`role_outdated`]). Version 3 adds how the thread splits and starts its workers
-/// (THREAD-UX-PLAN.md §4, §4.1).
-pub(crate) const CONTRACT: u32 = 3;
+/// (THREAD-UX-PLAN.md §4, §4.1). Version 4 asks the user only on cards, in rounds, with the
+/// interview, the opening line and the merge card (THREAD-PARITY-PLAN.md §5).
+pub(crate) const CONTRACT: u32 = 4;
 /// A Chat's contract: its instructions didn't change with the thread's.
 const CHAT_CONTRACT: u32 = 1;
 /// The first contract whose instructions say that notes replace them.
@@ -1269,6 +1275,14 @@ mod environment_tests {
                     ] {
                         assert!(prompt.contains(tool), "{tool}");
                     }
+                    // The user is asked only on cards, in rounds; the merge too.
+                    assert!(
+                        prompt
+                            .contains("only with ask_user (a card, never a question in your text)")
+                    );
+                    assert!(prompt.contains("To interview the user"));
+                    assert!(prompt.contains("one short opening line"));
+                    assert!(!prompt.contains("in your reply, or with ask_user"));
                     // The old fixed pipeline is gone.
                     for step in [
                         "one loop per request",
@@ -1315,9 +1329,20 @@ mod environment_tests {
         assert!(claude.contains("run_unsandboxed"));
         assert!(claude.contains("a failing command's output comes as the CLI's own excerpt"));
         assert!(claude.contains("Your workspace: (none yet)"));
-        // Every byte is paid for on every call: it stays under the old orchestrator's 11,371
-        // bytes, code rules included.
-        assert!(codex.len() < 11_371, "{}", codex.len());
+        // The merge is asked once on a card; typed words still consent.
+        let worktree = environment_text(&Environment::NewWorktree {
+            base: "main".into(),
+            branch: "brigadier/flow".into(),
+            path: None,
+            start: None,
+        });
+        assert!(worktree.contains("ask them once, on a card, with propose_merge"));
+        assert!(worktree.contains("call finish_session without user_words"));
+        assert!(worktree.contains("that is their consent too"));
+        assert!(!worktree.contains("there is no card"));
+        // Every byte is paid for on every call: it stays under 12 KiB, code rules included
+        // (the old orchestrator's 11,371 bytes, and the interview the user wanted built in).
+        assert!(codex.len() < 12_288, "{}", codex.len());
     }
 
     #[test]

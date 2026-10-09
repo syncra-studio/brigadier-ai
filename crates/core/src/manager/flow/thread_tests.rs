@@ -403,7 +403,7 @@ async fn the_threads_plan_review_runs_in_the_background() {
 }
 
 /// Commits a file in the thread's workspace, as the thread's own tiny edit would.
-fn commit_in_workspace(turn: &Turn, file: &str, text: &str, message: &str) -> String {
+pub(super) fn commit_in_workspace(turn: &Turn, file: &str, text: &str, message: &str) -> String {
     let workspace = &turn.add_dirs[0];
     std::fs::write(workspace.join(file), text).unwrap();
     git(workspace, &["add", file]);
@@ -716,11 +716,23 @@ async fn a_merge_counts_the_review_of_the_threads_own_commit() {
 /// since it would keep its old rules: it starts over from the transcript with the current ones.
 #[tokio::test]
 async fn a_thread_started_on_older_instructions_starts_over_instead_of_resuming() {
+    starts_over_on_older_instructions(ProviderKind::Claude).await;
+}
+
+#[tokio::test]
+async fn a_codex_thread_started_on_older_instructions_starts_over_instead_of_resuming() {
+    starts_over_on_older_instructions(ProviderKind::Codex).await;
+}
+
+async fn starts_over_on_older_instructions(thread: ProviderKind) {
     let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
     let log = inputs.clone();
     let mut flow = Flow::start(
-        "thread-old-role",
-        Options::default(),
+        &format!("thread-old-role-{thread:?}"),
+        Options {
+            thread,
+            ..Options::default()
+        },
         script(move |turn| {
             let log = log.clone();
             async move {
@@ -772,6 +784,11 @@ async fn a_thread_started_on_older_instructions_starts_over_instead_of_resuming(
         .clone()
         .unwrap();
     assert!(rules.contains("started in one batch"), "{rules}");
+    assert!(rules.contains("To interview the user"), "{rules}");
+    assert!(
+        specs.iter().all(|(provider, _)| *provider == thread),
+        "{specs:#?}"
+    );
     // Its new start is logged on the thread's contract: the next restart resumes it.
     flow.restart().await;
     flow.say("Third.").await;
@@ -1269,7 +1286,7 @@ async fn finish(turn: &Turn, words: &str, replies: &MergeReplies) -> bool {
     !reply.is_error
 }
 
-fn on_main(flow: &Flow, path: &str) -> bool {
+pub(super) fn on_main(flow: &Flow, path: &str) -> bool {
     std::process::Command::new("git")
         .args(["cat-file", "-e", &format!("main:{path}")])
         .current_dir(&flow.repo)

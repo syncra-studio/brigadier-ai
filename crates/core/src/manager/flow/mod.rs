@@ -1441,6 +1441,8 @@ impl Flow {
 #[cfg(test)]
 mod accounts_tests;
 #[cfg(test)]
+mod card_tests;
+#[cfg(test)]
 mod checks_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod computer_tests;
