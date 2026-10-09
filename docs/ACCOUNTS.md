@@ -30,14 +30,18 @@ Evidence for every CLI behaviour relied on here: `docs/evidence/2026-10-09-accou
   are keyed by account. Every signed-in account is polled through free reads only (Claude's
   `get_usage` control request, Codex's `account/rateLimits/read`); no model turn is spent on it.
   Routing and the Usage page show each agent's *lead* account: the one new work would start on.
+  A model's own window (Claude's weekly Opus) used up on the lead is shown to routing as the
+  window of the signed-in account with the most room in it, since work on that model starts
+  there. An agent counts as signed in when its lead account is.
 - **Which account work starts on** (`brigadier_core::accounts::select`): the agent's default
   account while it can take work; otherwise, with switching on, the signed-in account with the
-  most left (per-model windows respected); otherwise the default (which then reads as limited,
+  most left (per-model windows respected, under any of the model's names); otherwise the default (which then reads as limited,
   and routing moves the work to the other agent, as before).
 - **When a chat hits a limit** with switching on and another account of the same agent left,
   the chat closes its CLI, records the new account in its setup and resumes the same session
   there. If the CLI had already begun the turn, it is told to continue rather than sent the
-  message again, so nothing runs twice. A note in the chat says what happened. Only when every
+  message again, so nothing runs twice (a message that never reached the old CLI still goes).
+  A note in the chat says what happened, in place of the CLI's own limit message. Only when every
   account of the agent is used up does the cross-agent fallback run. With switching off, the
   fallback runs at once. A worker hands its task to the next route as before, which now starts
   on the lead account; "Open in terminal" reopens a worker on the account its session ran on.
