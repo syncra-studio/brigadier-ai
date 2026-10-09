@@ -235,7 +235,26 @@ fn send(data_dir: Option<PathBuf>, header: &HookOutput, output: &[u8]) -> Option
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
+
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     fn success(response: Value) -> String {
         json!({
@@ -300,8 +319,9 @@ mod tests {
 
     #[test]
     fn the_clis_own_copy_of_a_long_output_is_read_whole() {
-        let dir = std::env::temp_dir().join(format!("brigadier-hook-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-hook-{}", uuid::Uuid::new_v4())));
+        std::fs::create_dir_all(&*dir).unwrap();
         let file = dir.join("b1.txt");
         let whole: String = (1..=20_000).map(|n| format!("{n}\n")).collect();
         std::fs::write(&file, &whole).unwrap();
@@ -332,7 +352,6 @@ mod tests {
         assert!(replaced.get("persistedOutputPath").is_none());
         assert!(replaced.get("persistedOutputSize").is_none());
         assert_eq!(replaced["returnCodeInterpretation"], "No matches found");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

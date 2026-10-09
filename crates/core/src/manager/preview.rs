@@ -999,9 +999,27 @@ fn io_error(path: &Path, err: &std::io::Error) -> Error {
 mod tests {
     use super::*;
 
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn a_preview_runs_inside_the_workspace_only() {
-        let root = std::env::temp_dir().join(format!("brigadier-preview-{}", uuid::Uuid::new_v4()));
+        let root =
+            Temp(std::env::temp_dir().join(format!("brigadier-preview-{}", uuid::Uuid::new_v4())));
         let workspace = root.join("ws");
         std::fs::create_dir_all(workspace.join("web")).unwrap();
         std::fs::create_dir_all(root.join("orch")).unwrap();
@@ -1018,7 +1036,6 @@ mod tests {
                 "{outside}"
             );
         }
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -1049,7 +1066,8 @@ mod tests {
             );
         }
         // A folder not made yet inside a protected one, written through a symbolic link.
-        let root = std::env::temp_dir().join(format!("brigadier-own-{}", uuid::Uuid::new_v4()));
+        let root =
+            Temp(std::env::temp_dir().join(format!("brigadier-own-{}", uuid::Uuid::new_v4())));
         let own = root.join("data");
         std::fs::create_dir_all(&own).unwrap();
         std::os::unix::fs::symlink(&own, root.join("link")).unwrap();
@@ -1075,14 +1093,14 @@ mod tests {
             )
             .is_err()
         );
-        std::fs::remove_dir_all(&root).unwrap();
         assert!(check_env(&env("1BAD", "x"), workdir, &protected).is_err());
         assert!(check_env(&env("A B", "x"), workdir, &protected).is_err());
     }
 
     #[test]
     fn brigadiers_own_repository_needs_a_scratch_data_folder_and_a_dev_identity() {
-        let root = std::env::temp_dir().join(format!("brigadier-own-{}", uuid::Uuid::new_v4()));
+        let root =
+            Temp(std::env::temp_dir().join(format!("brigadier-own-{}", uuid::Uuid::new_v4())));
         std::fs::create_dir_all(root.join("crates/daemon")).unwrap();
         std::fs::create_dir_all(root.join("apps/desktop/src-tauri")).unwrap();
         let none = BTreeMap::new();
@@ -1099,7 +1117,6 @@ mod tests {
         );
         // Any other repository needs neither.
         assert!(check_own_repo(&root.join("crates"), &none, "npm run dev").is_ok());
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

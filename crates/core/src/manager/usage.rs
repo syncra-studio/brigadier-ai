@@ -244,8 +244,27 @@ pub(crate) fn context_of(usage: &TokenUsage) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use super::*;
     use crate::routing::RoutingStore;
+
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     fn token_count(input: i64, cached: i64, output: i64) -> String {
         format!(
@@ -255,7 +274,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_workers_auto_review_is_metered_once_across_its_turn_ends() {
-        let dir = std::env::temp_dir().join(format!("brigadier-guardian-{}", uuid::Uuid::new_v4()));
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-guardian-{}", uuid::Uuid::new_v4())));
         let day = dir.join("sessions/2026/10/07");
         std::fs::create_dir_all(&day).unwrap();
         let store = RoutingStore::open(&dir.join("routing.sqlite")).unwrap();
@@ -305,7 +325,6 @@ mod tests {
         std::fs::write(&guardian, lines.join("\n")).unwrap();
         turn_end().await;
         let turns = store.turns_since(ProviderKind::Codex, 0).await.unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
         let shown: Vec<_> = turns
             .iter()
             .map(|turn| {

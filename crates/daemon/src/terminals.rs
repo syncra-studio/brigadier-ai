@@ -618,7 +618,26 @@ impl Utf8Stream {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use super::Terminals;
+
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn independent_sessions_reattach_and_close_with_their_conversation() {
@@ -656,9 +675,10 @@ mod tests {
         use brigadier_providers::TerminalCommand;
         use std::time::Duration;
 
-        let data = std::env::temp_dir().join(format!("brig-terminals-{}", std::process::id()));
+        let data =
+            Temp(std::env::temp_dir().join(format!("brig-terminals-{}", std::process::id())));
         let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
-            data_dir: Some(data.clone()),
+            data_dir: Some(data.to_path_buf()),
         })
         .unwrap();
         let terminals = Terminals::with_platform(platform);
@@ -716,7 +736,6 @@ mod tests {
         )
         .await
         .unwrap();
-        let _ = std::fs::remove_dir_all(data);
     }
 
     /// The user closing a worker's tab ends its whole tree too, a child that ignores the
@@ -729,9 +748,9 @@ mod tests {
         use std::time::Duration;
 
         let data =
-            std::env::temp_dir().join(format!("brig-terminals-close-{}", std::process::id()));
+            Temp(std::env::temp_dir().join(format!("brig-terminals-close-{}", std::process::id())));
         let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
-            data_dir: Some(data.clone()),
+            data_dir: Some(data.to_path_buf()),
         })
         .unwrap();
         let terminals = Terminals::with_platform(platform);
@@ -789,6 +808,5 @@ mod tests {
                 .status();
             panic!("its child outlived the closed tab");
         }
-        let _ = std::fs::remove_dir_all(data);
     }
 }

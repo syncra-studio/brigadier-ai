@@ -728,7 +728,26 @@ pub const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
+
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     fn now_ms() -> i64 {
         SystemTime::now()
@@ -738,7 +757,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_check_result_is_stored_and_replaced_under_its_key() {
-        let dir = std::env::temp_dir().join(format!("brigadier-store-{}", uuid::Uuid::new_v4()));
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-store-{}", uuid::Uuid::new_v4())));
         let store = Store::open(StoreConfig {
             db_path: dir.join("db.sqlite"),
             blobs_dir: dir.join("blobs"),
@@ -759,12 +779,12 @@ mod tests {
         assert!(at_ms > 0);
         assert!(store.check_result("other".into()).await.unwrap().is_none());
         store.shutdown().await.unwrap();
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
     async fn deleting_streams_takes_only_the_blobs_that_came_from_them() {
-        let dir = std::env::temp_dir().join(format!("brigadier-store-{}", uuid::Uuid::new_v4()));
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-store-{}", uuid::Uuid::new_v4())));
         let store = Store::open(StoreConfig {
             db_path: dir.join("db.sqlite"),
             blobs_dir: dir.join("blobs"),
@@ -822,6 +842,5 @@ mod tests {
         assert!(blobs.get(shared).await.unwrap().is_some());
         assert!(blobs.get(put_since).await.unwrap().is_some());
         assert!(blobs.get(soon).await.unwrap().is_some());
-        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -2291,6 +2291,23 @@ fn prefix(text: &str, bytes: usize) -> &str {
 mod tests {
     use super::*;
 
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     fn image(id: &str, inline: bool, mime: &str) -> AttachmentRef {
         AttachmentRef {
             id: id.into(),
@@ -2332,7 +2349,8 @@ mod tests {
 
     #[tokio::test]
     async fn auto_titles_and_request_previews_hide_image_ids_without_changing_messages() {
-        let dir = std::env::temp_dir().join(format!("brigadier-title-{}", uuid::Uuid::now_v7()));
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-title-{}", uuid::Uuid::now_v7())));
         let store = Store::open(brigadier_store::StoreConfig {
             db_path: dir.join("test.db"),
             blobs_dir: dir.join("blobs"),
@@ -2487,6 +2505,5 @@ mod tests {
         store.shutdown().await.unwrap();
         drop(core);
         drop(store);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }

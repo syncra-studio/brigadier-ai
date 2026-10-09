@@ -140,7 +140,26 @@ pub(crate) fn memory_tight_from_load(percent: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn strained_means_serious_heat_or_tight_memory() {
@@ -196,6 +215,7 @@ mod tests {
     fn thermal_zones_are_judged_by_their_own_trip_points() {
         let root = std::env::temp_dir().join(format!("brigadier-thermal-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
+        let root = Temp(root);
         let zone = |name: &str, temp: i64, trips: &[(&str, i64)]| {
             let dir = root.join(name);
             std::fs::create_dir_all(&dir).unwrap();
@@ -226,6 +246,5 @@ mod tests {
             &[("passive", 85_000), ("critical", 105_000)],
         );
         assert_eq!(heat_from_thermal_zones(&root), Heat::Critical);
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }

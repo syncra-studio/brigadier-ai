@@ -191,6 +191,23 @@ pub fn parse_version(output: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     fn vars(pairs: &[(&str, &OsStr)]) -> BTreeMap<OsString, OsString> {
         pairs
             .iter()
@@ -200,7 +217,8 @@ mod tests {
 
     #[test]
     fn a_toolchain_the_login_path_misses_is_added_at_the_end_once() {
-        let home = std::env::temp_dir().join(format!("brigadier-cli-env-{}", std::process::id()));
+        let home =
+            Temp(std::env::temp_dir().join(format!("brigadier-cli-env-{}", std::process::id())));
         let bin = home.join(".cargo/bin");
         std::fs::create_dir_all(&bin).unwrap();
         let mut env = vars(&[
@@ -221,6 +239,5 @@ mod tests {
         ]);
         add_toolchain_bins(&mut moved);
         assert_eq!(moved[OsStr::new("PATH")], OsString::from("/usr/bin"));
-        std::fs::remove_dir_all(&home).unwrap();
     }
 }

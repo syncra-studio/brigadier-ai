@@ -4480,14 +4480,31 @@ fn is_late_findings(summary: &str, message: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn a_workers_temporary_files_and_here_documents_go_to_its_scratch() {
         let scratch =
-            std::env::temp_dir().join(format!("brigadier-worker-env-{}", std::process::id()));
-        std::fs::create_dir_all(&scratch).unwrap();
+            Temp(std::env::temp_dir().join(format!("brigadier-worker-env-{}", std::process::id())));
+        std::fs::create_dir_all(&*scratch).unwrap();
         let env = worker_env(&scratch);
         for (name, value) in &env {
-            assert!(Path::new(value).starts_with(&scratch), "{name}={value}");
+            assert!(Path::new(value).starts_with(&*scratch), "{name}={value}");
         }
         assert!(env.iter().any(|(name, _)| name == "TMPPREFIX"));
         // zsh, the shell Codex runs commands in, writes a here-document under TMPPREFIX.
@@ -4512,12 +4529,12 @@ mod tests {
                 .unwrap();
             assert!(!out.status.success());
         }
-        std::fs::remove_dir_all(&scratch).unwrap();
     }
 
     #[test]
     fn a_linked_worktree_commits_into_its_own_git_folder_and_the_shared_store() {
-        let dir = std::env::temp_dir().join(format!("brigadier-roots-{}", uuid::Uuid::new_v4()));
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-roots-{}", uuid::Uuid::new_v4())));
         let main = dir.join("main");
         std::fs::create_dir_all(&main).unwrap();
         let git = |cwd: &Path, args: &[&str]| {
@@ -4567,7 +4584,6 @@ mod tests {
                 .contains(&PathBuf::from("packed-refs.lock"))
         );
         assert_eq!(roots(&main, ProviderKind::Codex), vec![PathBuf::new()]);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -4744,9 +4760,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_long_workers_session_is_found_behind_a_thousand_later_events() {
-        let dir = std::env::temp_dir().join(format!("brigadier-resume-{}", uuid::Uuid::new_v4()));
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-resume-{}", uuid::Uuid::new_v4())));
         let store = tokio::task::spawn_blocking({
-            let dir = dir.clone();
+            let dir = dir.to_path_buf();
             move || {
                 brigadier_store::Store::open(brigadier_store::StoreConfig {
                     db_path: dir.join("db.sqlite"),
@@ -4799,7 +4816,6 @@ mod tests {
             None
         );
         let _ = store.shutdown().await;
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

@@ -718,7 +718,26 @@ impl RoutingStore {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     fn turn(conversation: Option<&str>, task: Option<&str>) -> TurnUsage {
         TurnUsage {
@@ -765,8 +784,9 @@ mod tests {
 
     #[test]
     fn turns_stored_before_the_steps_were_kept_read_back_without_them() {
-        let dir = std::env::temp_dir().join(format!("brigadier-routing-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-routing-{}", uuid::Uuid::new_v4())));
+        std::fs::create_dir_all(&*dir).unwrap();
         let path = dir.join("routing.sqlite");
         {
             // The store as its first version left it, with a turn in it.
@@ -786,7 +806,6 @@ mod tests {
         let turns = runtime
             .block_on(store.turns_since(ProviderKind::Claude, 0))
             .unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
         let mut old = turn(Some("c1"), None);
         (old.input, old.cached_input, old.cache_write, old.output) = (1, 2, 3, 4);
         assert_eq!(turns, [old]);
@@ -831,8 +850,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_deleted_conversation_leaves_no_turns_or_outcomes() {
-        let dir = std::env::temp_dir().join(format!("brigadier-routing-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-routing-{}", uuid::Uuid::new_v4())));
+        std::fs::create_dir_all(&*dir).unwrap();
         let store = RoutingStore::open(&dir.join("routing.sqlite")).unwrap();
         // Its orchestrator's turn, a worker's turn, and a turn known only by its task.
         store.add_turn(turn(Some("c1"), None)).await.unwrap();
@@ -863,6 +883,5 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["t3"]
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

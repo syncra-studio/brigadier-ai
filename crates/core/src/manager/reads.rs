@@ -390,6 +390,23 @@ mod tests {
 
     use super::*;
 
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     fn range(start: u64, end: Option<u64>) -> LineRange {
         LineRange { start, end }
     }
@@ -474,8 +491,9 @@ mod tests {
 
     #[test]
     fn paths_are_resolved_and_checked_against_the_workspace() {
-        let dir = std::env::temp_dir().join(format!("brigadier-reads-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-reads-{}", uuid::Uuid::new_v4())));
+        std::fs::create_dir_all(&*dir).unwrap();
         let root = real_path(&dir).unwrap();
         let workspace = root.join("repo");
         std::fs::create_dir_all(workspace.join("src")).unwrap();
@@ -537,16 +555,16 @@ mod tests {
         assert_eq!(searches[0].scope, at(&workspace));
         assert_eq!(searches[1].hits, [at(&workspace.join("src/a.rs"))]);
         assert!(!searches[1].outside);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// `link/..` is the parent of the link's target, not the folder the link is in.
     #[cfg(unix)]
     #[test]
     fn a_parent_after_a_symlink_is_the_targets_parent() {
-        let dir = std::env::temp_dir().join(format!("brigadier-reads-{}", uuid::Uuid::new_v4()));
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-reads-{}", uuid::Uuid::new_v4())));
         let root = {
-            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::create_dir_all(&*dir).unwrap();
             real_path(&dir).unwrap()
         };
         let workspace = root.join("repo");
@@ -573,6 +591,5 @@ mod tests {
                 outside: true
             }]
         );
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

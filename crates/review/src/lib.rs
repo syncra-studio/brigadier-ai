@@ -565,10 +565,8 @@ mod tests {
     }
 
     /// A folder in the temp directory, removed when dropped however the test ends.
-    #[cfg(unix)]
     struct Temp(PathBuf);
 
-    #[cfg(unix)]
     impl std::ops::Deref for Temp {
         type Target = Path;
 
@@ -577,7 +575,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     impl Drop for Temp {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
@@ -755,8 +752,9 @@ exit 1"#
 
     #[test]
     fn a_range_reviews_use_is_read_from_its_child_threads_rollout() {
-        let sessions =
-            std::env::temp_dir().join(format!("brigadier-review-usage-{}", std::process::id()));
+        let sessions = Temp(
+            std::env::temp_dir().join(format!("brigadier-review-usage-{}", std::process::id())),
+        );
         let day = sessions.join("2026/10/07");
         fs::create_dir_all(&day).unwrap();
         let parent = "01a116c2-7168-7023-a3d9-75ca70387e74";
@@ -802,7 +800,6 @@ exit 1"#
         )
         .unwrap();
         let children = child_threads(&sessions, parent);
-        fs::remove_dir_all(&sessions).unwrap();
         assert_eq!(
             children
                 .iter()
@@ -829,8 +826,9 @@ exit 1"#
 
     #[test]
     fn a_long_lived_threads_auto_review_is_found_on_a_later_day() {
-        let sessions =
-            std::env::temp_dir().join(format!("brigadier-review-later-{}", std::process::id()));
+        let sessions = Temp(
+            std::env::temp_dir().join(format!("brigadier-review-later-{}", std::process::id())),
+        );
         let (first, next, before) = (
             sessions.join("2026/10/07"),
             sessions.join("2026/10/08"),
@@ -871,7 +869,6 @@ exit 1"#
             parent,
             Some(std::time::SystemTime::now() + Duration::from_secs(60)),
         );
-        fs::remove_dir_all(&sessions).unwrap();
         assert_eq!(
             children,
             [ChildThread {

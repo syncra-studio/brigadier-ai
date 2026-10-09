@@ -176,9 +176,27 @@ fn find(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
 mod tests {
     use super::*;
 
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[tokio::test]
     async fn the_thread_gets_every_instruction_file_once_a_codex_worker_what_codex_misses() {
-        let dir = std::env::temp_dir().join(format!("brigadier-instr-{}", uuid::Uuid::new_v4()));
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-instr-{}", uuid::Uuid::new_v4())));
         std::fs::create_dir_all(dir.join("app")).unwrap();
         std::fs::write(dir.join("AGENTS.md"), "Use pnpm.\n").unwrap();
         // A copy of the root AGENTS.md, and a nested file.
@@ -205,6 +223,5 @@ mod tests {
         assert_eq!(claude.matches("Use pnpm.").count(), 1, "{claude}");
         assert!(claude.contains("Keep components small."));
         assert!(claude.contains("The task spec wins over them"));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

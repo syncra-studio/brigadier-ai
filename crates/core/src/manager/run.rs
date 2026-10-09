@@ -487,6 +487,23 @@ pub(super) fn exit_status(status: std::process::ExitStatus) -> String {
 mod tests {
     use super::*;
 
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn every_thread_runs_and_leaves_its_sandbox_where_something_decides() {
         if cfg!(windows) {
@@ -522,7 +539,8 @@ mod tests {
 
     #[test]
     fn a_command_runs_in_the_workspace_or_the_scratch_folder_only() {
-        let root = std::env::temp_dir().join(format!("brigadier-workdir-{}", uuid::Uuid::new_v4()));
+        let root =
+            Temp(std::env::temp_dir().join(format!("brigadier-workdir-{}", uuid::Uuid::new_v4())));
         let (workspace, scratch) = (root.join("ws"), root.join("orch"));
         std::fs::create_dir_all(workspace.join("crate")).unwrap();
         std::fs::create_dir_all(&scratch).unwrap();
@@ -547,7 +565,6 @@ mod tests {
             );
         }
         assert!(run_workdir(Some("missing"), Some(&workspace), &scratch).is_err());
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

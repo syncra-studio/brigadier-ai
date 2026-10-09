@@ -660,9 +660,26 @@ impl Sandbox for Seatbelt {
 mod tests {
     use super::*;
 
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn seatbelt_denies_reading_a_denied_folder_and_reads_the_rest() {
-        let dir = std::env::temp_dir().join(format!("brig-deny-read-{}", std::process::id()));
+        let dir = Temp(std::env::temp_dir().join(format!("brig-deny-read-{}", std::process::id())));
         let secret = dir.join("run");
         std::fs::create_dir_all(&secret).unwrap();
         std::fs::write(secret.join("ipc.token"), "secret").unwrap();
@@ -689,7 +706,6 @@ mod tests {
         let denied = read("run/ipc.token");
         assert!(!denied.status.success(), "{denied:?}");
         assert!(denied.stdout.is_empty());
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -1110,9 +1110,26 @@ fn changed_since(path: &Path, cutoff: SystemTime) -> bool {
 mod tests {
     use super::*;
 
+    /// A folder in the temp directory, removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl std::ops::Deref for Temp {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// A test data folder in the temp directory, named for a new task, with a file in it,
     /// all last changed `then`.
-    fn test_folder(then: SystemTime) -> PathBuf {
+    fn test_folder(then: SystemTime) -> Temp {
         let folder = test_data_dir(&crate::work::TaskId::generate());
         std::fs::create_dir_all(&folder).unwrap();
         let file = folder.join("data.txt");
@@ -1120,7 +1137,7 @@ mod tests {
         for path in [&file, &folder] {
             set_changed(path, then);
         }
-        folder
+        Temp(folder)
     }
 
     fn set_changed(path: &Path, at: SystemTime) {
@@ -1156,19 +1173,19 @@ mod tests {
         let in_use = test_folder(now);
         set_changed(&in_use.join("data.txt"), minute_before);
         let tasks = HashMap::from([
-            (ended.clone(), true),
-            (live.clone(), false),
-            (held_after_end.clone(), true),
+            (ended.to_path_buf(), true),
+            (live.to_path_buf(), false),
+            (held_after_end.to_path_buf(), true),
         ]);
-        let held = HashSet::from([claimed.clone(), held_after_end.clone()]);
+        let held = HashSet::from([claimed.to_path_buf(), held_after_end.to_path_buf()]);
         let folders = vec![
-            ended.clone(),
-            live.clone(),
-            recent.clone(),
-            stale.clone(),
-            claimed.clone(),
-            held_after_end.clone(),
-            in_use.clone(),
+            ended.to_path_buf(),
+            live.to_path_buf(),
+            recent.to_path_buf(),
+            stale.to_path_buf(),
+            claimed.to_path_buf(),
+            held_after_end.to_path_buf(),
+            in_use.to_path_buf(),
         ];
         let removed = sweep_test_folders(folders, &tasks, &held, later - day);
         assert_eq!(removed, 2);
@@ -1176,7 +1193,6 @@ mod tests {
         assert!(!stale.exists());
         for kept in [&live, &recent, &claimed, &held_after_end, &in_use] {
             assert!(kept.exists(), "{}", kept.display());
-            std::fs::remove_dir_all(kept).unwrap();
         }
         // Only test data folders are listed.
         let folders = test_folders(&test_data_root());
