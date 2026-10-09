@@ -431,7 +431,7 @@ const CommitBox: FC<{
           onClick={() => {
             setReviewScope(conversationId, { type: "uncommitted" });
             openReviewTab(conversationId, { type: "all" });
-                  }}
+          }}
         >
           Review all
         </Button>

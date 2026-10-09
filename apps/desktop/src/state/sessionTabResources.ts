@@ -28,7 +28,7 @@ export async function openMainTerminal(conversationId: string, tabId: string, co
     throw new Error("Terminal tab closed");
   }
   // Attach this connection and get current scrollback when its session becomes visible again.
-  const attached = await request({ method: "openTerminal", conversationId, sessionId: tab.id, cols, rows });
+  const attached = await request({ method: "openTerminal", conversationId, sessionId: tab.id, ...(tab.cwd ? { cwd: tab.cwd } : {}), cols, rows });
   if (entry.closed || !sessionTabs(conversationId).tabs.some((current) => current.id === tab.id)) {
     await request({ method: "closeTerminal", terminalId: attached.terminal.id });
     throw new Error("Terminal tab closed");
