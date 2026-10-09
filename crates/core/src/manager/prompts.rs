@@ -770,8 +770,14 @@ The task:
 /// An operate worker's target, end state and habits (COMPUTER-USE-PLAN.md §4.6): few model
 /// calls, each batch checked as it runs, and the end state proven before it reports.
 fn operate_rules(task: &Task) -> String {
+    // Codex calls tools from code; told their names, it skips a model call listing them.
+    let tools = if task.route.choice.provider == ProviderKind::Codex {
+        "\n- In code, call tools.mcp__computer__observe, tools.mcp__computer__act and tools.mcp__computer__zoom, and report with tools.mcp__brigadier__submit_report: no need to list the tools first."
+    } else {
+        ""
+    };
     format!(
-        "\n\nTarget: {target}\nEnd state: {end_state}\n\nHow to operate:\n- Use code, files and app APIs when they can do the job, unless the task says to do it through the UI: then the UI is the job. Read structure (observe's refs) before pixels.\n- Batch the steps you are sure of in one act, and put an expect on every step that changes state. Read the changes act returns instead of observing again.\n- Zoom before clicking a small target by its pixels.\n- Never act on a window the task didn't name or you didn't launch.\n- Finish by checking the end state: an expect that held, or an observe. Report what you did, whether the end state is verified and how, and anything refused or blocked.",
+        "\n\nTarget: {target}\nEnd state: {end_state}\n\nHow to operate:{tools}\n- Use code, files and app APIs when they can do the job, unless the task says to do it through the UI: then the UI is the job. Read structure (observe's refs) before pixels.\n- Batch the steps you are sure of in one act, and put an expect on every step that changes state. Read the changes act returns instead of observing again.\n- Zoom before clicking a small target by its pixels.\n- Never act on a window the task didn't name or you didn't launch.\n- Finish by checking the end state: an expect that held, or an observe. Report what you did, whether the end state is verified and how, and anything refused or blocked.",
         target = task.target.as_deref().unwrap_or("(named in the task)"),
         end_state = task.end_state.as_deref().unwrap_or("(named in the task)"),
     )
@@ -1083,6 +1089,9 @@ mod tests {
         assert!(brief.contains("whether the end state is verified and how"));
         assert!(brief.contains("Don't change files in the repository"));
         assert!(!brief.contains("How to write code"));
+        assert!(!brief.contains("tools.mcp__computer__act"));
+        operator.route.choice.provider = ProviderKind::Codex;
+        assert!(worker_brief(&operator, "", "").contains("call tools.mcp__computer__observe"));
         // Other kinds hear none of it.
         let lead = worker_brief(&task("claude", Some("lead")), "", "");
         assert!(!lead.contains("How to operate"));
