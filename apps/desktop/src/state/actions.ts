@@ -59,6 +59,7 @@ import {
   upsertRawSession,
   useApp,
 } from "@/state/store";
+import { pruneSideChats } from "@/state/sessionTabResources";
 import { forgetDraft } from "@/state/drafts";
 import { forgetRightSidebarTabs, pruneRightSidebarTabs } from "@/state/rightSidebar";
 import { dismissToast, toast, useToasts } from "@/state/toasts";
@@ -79,6 +80,7 @@ export async function loadCatalog(): Promise<void> {
   const { catalog } = await request({ method: "getCatalog" });
   replaceCatalog(catalog.projects, catalog.conversations, catalog.settings);
   pruneRightSidebarTabs(catalog.conversations.map((conversation) => conversation.id));
+  pruneSideChats(catalog.conversations);
 }
 
 /**

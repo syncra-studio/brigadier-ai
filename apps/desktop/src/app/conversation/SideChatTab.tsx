@@ -9,28 +9,31 @@ import {
   createSideBoard,
   disposeSideBoard,
 } from "@/state/board";
-import { noteSideChat } from "@/state/sideChats";
+import { changeSessionTab, type SideChatTabState } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 /**
  * The Side chat tab (⌥⌘S): a temporary chat beside the conversation, for questions about it
- * that stay out of its thread. Its own thread and composer, on its own board; each of its
- * turns carries the conversation's latest messages. Closing the tab deletes it.
+ * that stay out of its thread. Each tab keeps its own conversation across closes and restarts.
  */
-export function SideChatTab({ conversationId }: { conversationId: string }) {
+export function SideChatTab({ conversationId, tab }: { conversationId: string; tab: SideChatTabState }) {
+  const firstMessage = useApp((state) => tab.conversationId ? state.threads[tab.conversationId]?.items.find((item) => item.role === "user")?.text : undefined);
+  useEffect(() => {
+    if (!tab.title && firstMessage) changeSessionTab(conversationId, tab.id, (current) => current.kind === "sideChat" ? { ...current, title: firstMessage.trim().split("\n")[0]!.slice(0, 120) } : current);
+  }, [conversationId, tab.id, tab.title, firstMessage]);
   const [side, setSide] = useState<{ id: string; store: BoardStore } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
     let store: BoardStore | null = null;
-    request({ method: "openSideChat", conversationId })
+    request({ method: "openSideChat", conversationId, ...(tab.conversationId ? { sideChatId: tab.conversationId } : {}) })
       .then(({ conversation }) => {
         if (!live) return;
         useApp.setState((state) => ({
           conversations: { ...state.conversations, [conversation.id]: conversation },
         }));
-        noteSideChat(conversationId, conversation.id);
+        changeSessionTab(conversationId, tab.id, (current) => current.kind === "sideChat" ? { ...current, conversationId: conversation.id } : current);
         store = createSideBoard(conversation.id);
         setSide({ id: conversation.id, store });
         setError(null);
@@ -45,7 +48,7 @@ export function SideChatTab({ conversationId }: { conversationId: string }) {
       live = false;
       if (store) disposeSideBoard(store);
     };
-  }, [conversationId]);
+  }, [conversationId, tab.id, tab.conversationId]);
 
   if (error) {
     return (

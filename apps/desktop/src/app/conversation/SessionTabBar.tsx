@@ -1,13 +1,21 @@
-import { Chat, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Chat, Globe, Terminal, Plus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  useCallback,
   lazy,
   Suspense,
   useEffect,
   useRef,
 } from "react";
 
+import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
+import { TitlebarButton } from "@/components/titlebar-button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuShortcut, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { NEW_TAB_MENU, sessionTabKey } from "@/state/sessionTabKeys";
+import { shortcutLabel } from "@/app/conversation/SidePanel";
+import { takePaneClose } from "@/state/closedPanes";
+import { undoTabClose } from "@/state/terminalPlaces";
 import { ChatActions } from "@/app/conversation/ChatActions";
 import { PreviewChip } from "@/app/conversation/PreviewChip";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
@@ -25,6 +33,9 @@ import type { Conversation } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import {
   CHAT_TAB,
+  newSessionTab,
+  reopenTab,
+  type NewTabKind,
   closeOtherTabs,
   closeTab,
   closeTabsToTheRight,
@@ -51,6 +62,10 @@ export function tabTitle(tab: SessionTab): string {
   if (tab.kind === "review") {
     return tab.target.type === "all" ? "Review" : `${baseName(tab.target.path)} (diff)`;
   }
+  if (tab.kind === "browser") return tab.title || tab.url || "New browser";
+  if (tab.kind === "terminal") return tab.title || (tab.cwd ? baseName(tab.cwd) : "Terminal");
+  if (tab.kind === "sideChat") return tab.title || "Side chat";
+  if (tab.kind === "document") return tab.name;
   return baseName(tab.path);
 }
 
@@ -63,55 +78,35 @@ function noAutoscroll(event: ReactMouseEvent): void {
   if (event.button === 1) event.preventDefault();
 }
 
-/** Where focus is in a pane that keeps its own tab keys (a terminal, a browser page). */
-function inOwnPane(target: EventTarget | null): boolean {
-  return (
-    target instanceof Element &&
-    target.closest('[data-slot="terminal-pane"], [data-terminal-menu], [data-pane="browser"]') !==
-      null
-  );
-}
-
-/**
- * The tab keys while a session shows: ⌘1 Chat and ⌘2–⌘9 the others, ⌘W closes the tab in
- * front (never Chat), ⌃Tab or ⌘⇧] the next and ⌃⇧Tab or ⌘⇧[ the previous (Ctrl for ⌘ off
- * macOS). A terminal or browser page with focus keeps them for its own tabs.
- */
-function useTabKeys(conversationId: string): void {
+/** Session keys own main tabs. The bottom pane keeps Cmd+W; off macOS a focused
+ * terminal keeps its shell Ctrl keys. Cmd+T always creates a main tab on macOS. */
+function useTabKeys(conversationId: string, create: (kind: NewTabKind) => void): void {
   const mac = useApp((s) => s.info?.platform === "macos");
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || inOwnPane(event.target)) return;
-      const command = mac ? event.metaKey : event.ctrlKey;
-      const other = mac ? event.ctrlKey : event.metaKey;
-      if (event.ctrlKey && !event.metaKey && !event.altKey && event.code === "Tab") {
-        event.preventDefault();
-        stepTab(conversationId, event.shiftKey ? -1 : 1);
+      if (event.defaultPrevented || event.isComposing) return;
+      const target = event.target instanceof Element ? event.target : document.activeElement;
+      if (!mac && target?.closest('[data-slot="terminal-pane"], [data-main-terminal]')) return;
+      if (target?.closest('[data-slot="terminal-pane"]') && event.code === "KeyW") return;
+      const command = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+      if (command && !event.altKey && event.shiftKey && event.code === "KeyT") {
+        event.preventDefault(); event.stopPropagation();
+        const closed = takePaneClose(conversationId);
+        if (closed === "tab") reopenTab(conversationId, useApp.getState().conversations[conversationId]?.lifecycle !== "archived");
+        else if (closed === "terminal") undoTabClose(`conv:${conversationId}`);
         return;
       }
-      if (!command || other || event.altKey) return;
-      if (event.shiftKey && (event.code === "BracketLeft" || event.code === "BracketRight")) {
-        event.preventDefault();
-        stepTab(conversationId, event.code === "BracketLeft" ? -1 : 1);
-        return;
-      }
-      if (event.shiftKey) return;
-      const digit = /^Digit([1-9])$/.exec(event.code);
-      if (digit) {
-        event.preventDefault();
-        selectTabNumber(conversationId, Number(digit[1]));
-        return;
-      }
-      if (event.code === "KeyW") {
-        const { active } = sessionTabs(conversationId);
-        if (active === CHAT_TAB) return;
-        event.preventDefault();
-        closeTab(conversationId, active);
-      }
+      const action = sessionTabKey(event, mac);
+      if (!action) return;
+      event.preventDefault(); event.stopPropagation();
+      if (action.type === "new") create(action.kind);
+      if (action.type === "close") closeTab(conversationId, sessionTabs(conversationId).active);
+      if (action.type === "number") selectTabNumber(conversationId, action.number);
+      if (action.type === "step") stepTab(conversationId, action.step);
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [conversationId, mac]);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [conversationId, mac, create]);
 }
 
 /** A tab's right-click menu: Keep open (a preview), Close, Close others, Close to the right. */
@@ -180,7 +175,13 @@ export function SessionTabBar({
   const connection = useApp((s) => s.connection.status);
   const archived = conversation.lifecycle === "archived";
   const strip = useRef<HTMLDivElement>(null);
-  useTabKeys(id);
+  const mac = useApp((s) => s.info?.platform === "macos");
+  const cwd = useCheckoutRoot();
+  const create = useCallback((kind: NewTabKind) => {
+    if (archived && (kind === "terminal" || kind === "sideChat")) return;
+    newSessionTab(id, kind, cwd);
+  }, [id, archived, cwd]);
+  useTabKeys(id, create);
   const { listRef, shown, dragging, grip } = useDragReorder<SessionTab, HTMLDivElement>({
     items: tabs,
     idOf: (tab) => tab.id,
@@ -217,6 +218,21 @@ export function SessionTabBar({
       data-slot="session-tabs"
       className="h-titlebar ease-sidebar ps-clear-2 flex shrink-0 items-center gap-1 pe-1 transition-[padding] duration-300 motion-reduce:transition-none"
     >
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <button type="button" data-chat-title aria-pressed={active === CHAT_TAB}
+            title={conversation.title} onClick={() => selectTab(id, CHAT_TAB)}
+            onDoubleClick={archived ? undefined : onRename}
+            className={cn("max-w-session-title shrink-0 truncate px-1 text-sm font-medium", active !== CHAT_TAB && "text-muted-foreground")}>
+            {title}
+          </button>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem disabled={archived} onSelect={onRename}>Rename</ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      {archived && <Badge variant="outline">Archived</Badge>}
+      <ChatActions conversation={conversation} onRename={onRename} compact />
       <div
         ref={strip}
         role="tablist"
@@ -243,56 +259,12 @@ export function SessionTabBar({
                 : (at + (forward ? 1 : -1) + order.length) % order.length;
           const target = order[next]!;
           selectTab(id, target);
-          requestAnimationFrame(() =>
-            strip.current
-              ?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(target)}"] [role="tab"]`)
-              ?.focus(),
-          );
+          requestAnimationFrame(() => {
+            if (target === CHAT_TAB) strip.current?.parentElement?.querySelector<HTMLElement>("[data-chat-title]")?.focus();
+            else strip.current?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(target)}"] [role="tab"]`)?.focus();
+          });
         }}
       >
-        <TabMenu conversationId={id} tab={null}>
-          <div
-            data-tab-id={CHAT_TAB}
-            data-active={active === CHAT_TAB || undefined}
-            className={cn(
-              TAB,
-              active === CHAT_TAB
-                ? "bg-panel-tab shadow-panel-tab"
-                : "text-toolbar-foreground hover:bg-toolbar-hover",
-            )}
-          >
-            <button
-              type="button"
-              role="tab"
-              onClick={() => selectTab(id, CHAT_TAB)}
-              aria-selected={active === CHAT_TAB}
-              tabIndex={active === CHAT_TAB ? 0 : -1}
-              title={conversation.title}
-              className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
-            >
-              <Chat aria-hidden className="size-icon-sm shrink-0" />
-              <span className="min-w-0 truncate">{title}</span>
-            </button>
-            {archived && (
-              <Badge
-                variant="outline"
-                className="shrink-0"
-                title="Archived: restore it from Settings → Archived chats to continue."
-              >
-                Archived
-              </Badge>
-            )}
-            <ChatActions
-              conversation={conversation}
-              onRename={onRename}
-              compact
-              className={cn(
-                "shrink-0 opacity-0 transition-opacity group-hover/tab:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100",
-                active === CHAT_TAB && "opacity-100",
-              )}
-            />
-          </div>
-        </TabMenu>
         <div ref={listRef} className="contents">
           {shown.map((tab) => {
             const index = tabs.findIndex((entry) => entry.id === tab.id);
@@ -336,7 +308,10 @@ export function SessionTabBar({
                   >
                     {tab.kind === "file" ? (
                       <FileTypeIcon name={tab.path} className="size-icon-sm shrink-0" />
-                    ) : (
+                    ) : tab.kind === "browser" ? <Globe className="size-icon-sm shrink-0" />
+                      : tab.kind === "terminal" ? <Terminal className="size-icon-sm shrink-0" />
+                      : tab.kind === "sideChat" ? <Chat className="size-icon-sm shrink-0" />
+                      : tab.kind === "document" ? <Document className="size-icon-sm shrink-0" /> : (
                       <DiffGlyph className="size-icon-sm shrink-0" />
                     )}
                     <span className={cn("min-w-0 truncate", tab.kind === "file" && tab.preview && "italic")}>
@@ -363,6 +338,18 @@ export function SessionTabBar({
           })}
         </div>
       </div>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <TitlebarButton tooltip="New tab" aria-label="New tab"><Plus /></TitlebarButton>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {NEW_TAB_MENU.filter((item) => !archived || (item.kind !== "terminal" && item.kind !== "sideChat")).map((item) => (
+            <DropdownMenuItem key={item.kind} onSelect={() => create(item.kind)}>
+              {item.label}<DropdownMenuShortcut>{shortcutLabel(item.shortcut, mac)}</DropdownMenuShortcut>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
       {connection !== "connected" && (
         <Badge variant="warning" role="status" className="shrink-0">
           {connection === "connecting" ? "Connecting to core…" : "Reconnecting to core…"}
@@ -380,6 +367,11 @@ const FileTabView = lazy(() =>
 const ReviewTab = lazy(() =>
   import("@/app/conversation/ReviewTab").then((module) => ({ default: module.ReviewTab })),
 );
+
+const BrowserTab = lazy(() => import("./BrowserTab").then((module) => ({ default: module.BrowserTab })));
+const SideChatTab = lazy(() => import("./SideChatTab").then((module) => ({ default: module.SideChatTab })));
+const MainTerminalTab = lazy(() => import("./MainTerminalTab").then((module) => ({ default: module.MainTerminalTab })));
+const DocumentTabView = lazy(() => import("./DocumentTabView").then((module) => ({ default: module.DocumentTabView })));
 
 /**
  * The session's open tabs over its conversation, which stays as it was (scrolled, its draft
@@ -403,9 +395,15 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
             <Suspense fallback={null}>
               {tab.kind === "file" ? (
                 <FileTabView conversationId={conversationId} tab={tab} active={shown} />
-              ) : (
+              ) : tab.kind === "review" ? (
                 <ReviewTab conversationId={conversationId} target={tab.target} active={shown} />
-              )}
+              ) : tab.kind === "browser" ? (
+                <BrowserTab conversationId={tab.id} initialUrl={tab.url} active={shown} />
+              ) : tab.kind === "sideChat" ? (
+                <SideChatTab conversationId={conversationId} tab={tab} />
+              ) : tab.kind === "terminal" ? (
+                <div data-main-terminal className="flex min-h-0 flex-1 flex-col"><MainTerminalTab conversationId={conversationId} tab={tab} active={shown} /></div>
+              ) : <DocumentTabView conversationId={conversationId} tab={tab} active={shown} />}
             </Suspense>
           </div>
         );

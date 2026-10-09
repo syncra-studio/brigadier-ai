@@ -227,3 +227,8 @@ export function notificationPermission(): Promise<NotificationPermission> {
 export function openNotificationSettings(): Promise<void> {
   return invoke<void>("open_notification_settings");
 }
+
+/** Rust chooses and remembers the destination; this call never accepts a write path. */
+export function saveDocument(id: string, text: string, directory: string | null, name: string): Promise<string | null> {
+  return invoke("save_document", { id, text, directory, name });
+}

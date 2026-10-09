@@ -41,7 +41,8 @@ import { useReviewLines } from "@/app/conversation/reviewStatus";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
 import { useAction } from "@/app/conversation/useAction";
-import { SidePanelContext } from "@/app/conversation/SidePanel";
+import { RightSidebarContext } from "@/app/conversation/RightSidebar";
+import { useSessionTabsOf } from "@/state/sessionTabs";
 import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
 import { GitActions } from "@/app/conversation/GitActions";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
@@ -689,9 +690,10 @@ function FloatingSummary({ conversation }: { conversation: Conversation }) {
   const { ref, onScroll } = useKeptScroll(`${conversation.id}/column`, true);
   // A row that opens the side panel (the workers, a worker) moves on to it: the summary closes
   // rather than stay where it opened, over the panel, and focus stays off the top bar's button.
-  const { visible, state, rightSidebar } = useContext(SidePanelContext);
+  const rightSidebar = useContext(RightSidebarContext);
+  const { active: mainTab } = useSessionTabsOf(conversation.id);
   const { panel: worker } = useContext(AgentsPanelContext);
-  const panel = rightSidebar?.open ? `${rightSidebar.active}/${worker}` : visible ? state.active : null;
+  const panel = `${rightSidebar?.open}/${rightSidebar?.active}/${worker}/${mainTab}`;
   const shownPanel = useRef(panel);
   const movedOn = useRef(false);
   useEffect(() => {

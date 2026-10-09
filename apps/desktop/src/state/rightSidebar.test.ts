@@ -57,6 +57,9 @@ test("open is app-wide, tabs belong to sessions, and both survive rehydration", 
     assert.equal(data.has("brigadier.sidebarWidth"), false);
     selectRightSidebarTab("a", "files");
     assert.equal(state.getState().tabs.a, undefined);
+    data.set("brigadier.rightSidebar", JSON.stringify({ version: 1, state: { open: 1, tabs: { a: "browser", b: "source", c: 5 } } }));
+    await state.persist.rehydrate();
+    assert.deepEqual(state.getState(), { open: true, tabs: { b: "source" } });
     selectRightSidebarTab("c", "workers");
     forgetRightSidebarTabs(["b"]);
     assert.deepEqual(state.getState().tabs, { c: "workers" });

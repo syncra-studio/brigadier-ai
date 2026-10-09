@@ -6,13 +6,21 @@ import { useApp } from "@/state/store";
 import { HOME_PLACE, toggleTerminal, undoTabClose } from "@/state/terminalPlaces";
 
 /** The Panes and View menus' items (macOS), as the key presses the views listen for. */
-const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?: boolean; alt?: boolean }> = {
+export const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?: boolean; alt?: boolean }> = {
   terminal: { code: "KeyJ" },
   "terminal-alternate": { code: "Backquote", control: true },
   new: { code: "KeyT" },
   reopen: { code: "KeyT", shift: true },
   address: { code: "KeyL" },
-  full: { code: "KeyF", shift: true },
+  "new-browser": { code: "KeyB", shift: true },
+  "new-side-chat": { code: "KeyS", alt: true },
+  "new-file": { code: "KeyN", alt: true },
+  save: { code: "KeyS" },
+  files: { code: "KeyP" },
+  review: { code: "KeyG", control: true, shift: true },
+  "cycle-next": { code: "Tab", control: true },
+  "cycle-previous": { code: "Tab", control: true, shift: true },
+  ...Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`tab-${index + 1}`, { code: `Digit${index + 1}` }])),
   close: { code: "KeyW" },
   previous: { code: "BracketLeft", shift: true },
   next: { code: "BracketRight", shift: true },
@@ -38,7 +46,7 @@ export function usePaneShortcuts(): void {
     void listen<string>("pane-shortcut", ({ payload }) => {
       const key = MENU_KEYS[payload];
       if (!key) return;
-      const browser = document.querySelector('[data-pane="browser"]');
+      const browser = document.querySelector('[data-pane="browser"][data-active="true"]');
       const target = (!document.hasFocus() && browser) || document.activeElement || window;
       target.dispatchEvent(
         new KeyboardEvent("keydown", {

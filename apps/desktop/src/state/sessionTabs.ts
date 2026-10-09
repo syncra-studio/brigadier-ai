@@ -38,7 +38,22 @@ export type ReviewTabState = {
   opener: string | null;
 };
 
-export type SessionTab = FileTab | ReviewTabState;
+export type BrowserTabState = {
+  kind: "browser"; id: string; opener: string | null; url: string; title: string;
+};
+export type TerminalTabState = {
+  kind: "terminal"; id: string; opener: string | null; cwd: string | null; title: string;
+};
+export type SideChatTabState = {
+  kind: "sideChat"; id: string; opener: string | null; conversationId: string | null; title: string;
+};
+export type DocumentTab = {
+  kind: "document"; id: string; opener: string | null; name: string;
+  /** Display only. Rust owns the authority to save to this path. */
+  savedPath: string | null; relativePath: string | null;
+};
+export type SessionTab = FileTab | ReviewTabState | BrowserTabState | TerminalTabState | SideChatTabState | DocumentTab;
+export type NewTabKind = "terminal" | "browser" | "sideChat" | "document";
 
 export type SessionTabs = {
   /** The tabs after Chat, in order. */
@@ -53,6 +68,7 @@ export const useSessionTabs = create<{ sessions: Record<string, SessionTabs> }>(
     name: "brigadier.sessionTabs",
     version: 1,
     partialize: ({ sessions }) => ({ sessions }),
+    merge: (saved) => ({ sessions: restoreSessionTabs((saved as { sessions?: Record<string, SessionTabs> })?.sessions ?? {}) }),
   }),
 );
 
@@ -76,11 +92,30 @@ function update(conversationId: string, change: (current: SessionTabs) => Sessio
 }
 
 /** A new tab goes right after the one in front. */
-function insertAfterActive(current: SessionTabs, tab: SessionTab): SessionTab[] {
+export function insertAfterActive(current: SessionTabs, tab: SessionTab): SessionTab[] {
   const at = current.tabs.findIndex((entry) => entry.id === current.active);
   const tabs = [...current.tabs];
   tabs.splice(at + 1, 0, tab);
   return tabs;
+}
+
+export function newSessionTab(conversationId: string, kind: NewTabKind, cwd: string | null = null): string {
+  const id = `${kind}:${crypto.randomUUID()}`;
+  update(conversationId, (current) => {
+    const base = { id, opener: current.active };
+    const tab: SessionTab = kind === "browser" ? { ...base, kind, url: "", title: "" }
+      : kind === "terminal" ? { ...base, kind, cwd, title: "" }
+      : kind === "sideChat" ? { ...base, kind, conversationId: crypto.randomUUID(), title: "" }
+      : { ...base, kind, name: "Untitled", savedPath: null, relativePath: null };
+    return { tabs: insertAfterActive(current, tab), active: id };
+  });
+  return id;
+}
+
+export function changeSessionTab(conversationId: string, id: string, change: (tab: SessionTab) => SessionTab): void {
+  update(conversationId, (current) => ({
+    ...current, tabs: current.tabs.map((tab) => tab.id === id ? change(tab) : tab),
+  }));
 }
 
 function fileId(path: string): string {
@@ -167,10 +202,12 @@ export function selectTab(conversationId: string, id: string): void {
 }
 
 /** The tabs closed in each session, newest last, for ⌘⇧T. */
-const closed = new Map<string, SessionTab[]>();
+const closed = new Map<string, { tab: SessionTab; index: number }[]>();
+const discarded = new Set<(tab: SessionTab) => void>();
+export function onDiscardTab(listener: (tab: SessionTab) => void): () => void { discarded.add(listener); return () => { discarded.delete(listener); }; }
 
 /** Where the window goes when `tab` closes: its opener, else its right, else its left. */
-function afterClose(current: SessionTabs, tabs: SessionTab[], tab: SessionTab): string {
+export function afterClose(current: SessionTabs, tabs: SessionTab[], tab: SessionTab): string {
   if (current.active !== tab.id) return current.active;
   if (tab.opener && (tab.opener === CHAT_TAB || tabs.some((entry) => entry.id === tab.opener)))
     return tab.opener;
@@ -182,7 +219,8 @@ function remember(conversationId: string, gone: SessionTab[]): void {
   if (!gone.length) return;
   const list = closed.get(conversationId) ?? [];
   for (const tab of gone) {
-    list.push(tab);
+    list.push({ tab, index: sessionTabs(conversationId).tabs.findIndex((entry) => entry.id === tab.id) });
+    if (list.length > 20) { const expired = list.shift()!; for (const listener of discarded) listener(expired.tab); }
     notePaneClose(conversationId, "tab");
   }
   closed.set(conversationId, list);
@@ -224,9 +262,14 @@ export function closeTabsToTheRight(conversationId: string, id: string): void {
 }
 
 /** Brings back the last closed tab, if any; true when it did. */
-export function reopenTab(conversationId: string): boolean {
-  const tab = closed.get(conversationId)?.pop();
-  if (!tab) return false;
+export function reopenTab(conversationId: string, allowTools = true): boolean {
+  const saved = closed.get(conversationId)?.pop();
+  if (!saved) return false;
+  const { tab, index } = saved;
+  if (!allowTools && (tab.kind === "terminal" || tab.kind === "sideChat")) {
+    for (const listener of discarded) listener(tab);
+    return false;
+  }
   update(conversationId, (current) => {
     const others = current.tabs.filter(
       (entry) =>
@@ -234,7 +277,8 @@ export function reopenTab(conversationId: string): boolean {
         // A reopened preview takes the place of the one open now.
         !(tab.kind === "file" && tab.preview && entry.kind === "file" && entry.preview),
     );
-    return { tabs: [...others, tab], active: tab.id };
+    others.splice(Math.min(index, others.length), 0, tab);
+    return { tabs: others, active: tab.id };
   });
   return true;
 }
@@ -268,4 +312,22 @@ export function selectTabNumber(conversationId: string, number: number): void {
   const order = tabOrder(sessionTabs(conversationId));
   const id = number === 9 ? order.at(-1) : order[number - 1];
   if (id) selectTab(conversationId, id);
+}
+
+/** Saved documents return as ordinary checkout files; unsaved drafts keep their own text key. */
+export function restoreSessionTabs(sessions: Record<string, SessionTabs>): Record<string, SessionTabs> {
+  return Object.fromEntries(Object.entries(sessions).map(([id, session]) => {
+    const remapped = new Map<string, string>();
+    const tabs = session.tabs.flatMap((tab): SessionTab[] => {
+      if (tab.kind === "terminal") return [{ ...tab, title: "" }];
+      if (tab.kind !== "document" || !tab.savedPath) return [tab];
+      if (!tab.relativePath) return [];
+      const file = { kind: "file" as const, id: fileId(tab.relativePath), path: tab.relativePath, preview: false, line: null, reveal: 0, opener: tab.opener };
+      remapped.set(tab.id, file.id);
+      return [file];
+    }).filter((tab, index, list) => list.findIndex((entry) => entry.id === tab.id) === index)
+      .map((tab) => ({ ...tab, opener: tab.opener ? remapped.get(tab.opener) ?? tab.opener : null }));
+    const active = remapped.get(session.active) ?? session.active;
+    return [id, { tabs, active: tabs.some((tab) => tab.id === active) ? active : CHAT_TAB }];
+  }));
 }

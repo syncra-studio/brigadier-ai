@@ -149,7 +149,7 @@ export function TerminalPane({ place }: { place: string }) {
   useEffect(() => {
     if (!open) return;
     const key = (event: KeyboardEvent) => {
-      if (!pane.current?.contains(document.activeElement)) return;
+      if (event.defaultPrevented || !pane.current?.contains(document.activeElement)) return;
       if (!event.metaKey || event.ctrlKey || event.altKey) return;
       const { tabs, active } = terminalPlace(place);
       if (event.shiftKey && ["BracketLeft", "BracketRight"].includes(event.code) && tabs.length) {

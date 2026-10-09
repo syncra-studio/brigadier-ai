@@ -13,6 +13,13 @@ export const useRightSidebarState = create<RightSidebarState>()(
   persist((): RightSidebarState => ({ open: false, tabs: {} }), {
     name: "brigadier.rightSidebar",
     version: 1,
+    merge: (persisted, current) => {
+      const saved = persisted as Partial<RightSidebarState> | null;
+      return { ...current, open: Boolean(saved?.open), tabs: Object.fromEntries(
+        Object.entries(saved?.tabs && typeof saved.tabs === "object" ? saved.tabs : {})
+          .filter(([, tab]) => isRightSidebarTab(tab)),
+      ) };
+    },
   }),
 );
 

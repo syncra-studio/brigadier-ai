@@ -1,4 +1,3 @@
-import { notePaneClose } from "@/state/closedPanes";
 import { create } from "zustand";
 
 import { browserClose, browserNavigate, browserOpen } from "@/ipc/client";
@@ -13,6 +12,7 @@ export type BrowserPage = {
   url: string;
   title: string;
   loading: boolean;
+  ready?: boolean;
   /** The last navigation or download the tab refused, offered to the system browser. */
   blocked: string | null;
 };
@@ -43,7 +43,7 @@ export async function openPage(
   useBrowsers.setState(({ pages }) => ({
     pages: {
       ...pages,
-      [id]: { url, title: page?.title ?? "", loading: true, blocked: null },
+      [id]: { url, title: page?.title ?? "", loading: true, blocked: null, ready: made.has(id) },
     },
   }));
   try {
@@ -57,7 +57,9 @@ export async function openPage(
       else if (event.type === "title") update(id, { title: event.title });
       else update(id, { blocked: event.url, loading: false });
     });
+    if (!useBrowsers.getState().pages[id]) { await browserClose(id); return; }
     made.add(id);
+    update(id, { ready: true });
   } catch (error) {
     update(id, { loading: false });
     throw error;
@@ -81,81 +83,3 @@ export function closePage(id: string): void {
   );
 }
 
-export type BrowserTabs = {
-  ids: string[];
-  active: string;
-  restoredUrls?: Record<string, string>;
-};
-const closedTabs = new Map<string, { url: string | null }[]>();
-export const useBrowserTabs = create<{
-  conversations: Record<string, BrowserTabs>;
-}>(() => ({ conversations: {} }));
-
-export function newBrowserTab(conversationId: string): string {
-  const id = `page-${crypto.randomUUID()}`;
-  useBrowserTabs.setState(({ conversations }) => ({
-    conversations: {
-      ...conversations,
-      [conversationId]: {
-        ids: [...(conversations[conversationId]?.ids ?? []), id],
-        active: id,
-      },
-    },
-  }));
-  return id;
-}
-export function selectBrowserTab(conversationId: string, id: string): void {
-  useBrowserTabs.setState(({ conversations }) => {
-    const tabs = conversations[conversationId];
-    return tabs
-      ? {
-          conversations: {
-            ...conversations,
-            [conversationId]: { ...tabs, active: id },
-          },
-        }
-      : { conversations };
-  });
-}
-export function closeBrowserTab(conversationId: string, id: string): void {
-  const url = useBrowsers.getState().pages[id]?.url ?? null;
-  closedTabs.set(conversationId, [
-    ...(closedTabs.get(conversationId) ?? []),
-    { url },
-  ]);
-  notePaneClose(conversationId, "browser");
-  closePage(id);
-  useBrowserTabs.setState(({ conversations }) => {
-    const tabs = conversations[conversationId];
-    if (!tabs) return { conversations };
-    const index = tabs.ids.indexOf(id);
-    const ids = tabs.ids.filter((tab) => tab !== id);
-    const active =
-      tabs.active === id
-        ? (ids[Math.min(index, ids.length - 1)] ?? "")
-        : tabs.active;
-    return {
-      conversations: { ...conversations, [conversationId]: { ids, active } },
-    };
-  });
-}
-
-export function reopenBrowserTab(conversationId: string): boolean {
-  const saved = closedTabs.get(conversationId)?.pop();
-  if (!saved) return false;
-  const id = newBrowserTab(conversationId);
-  if (saved.url)
-    useBrowserTabs.setState(({ conversations }) => ({
-      conversations: {
-        ...conversations,
-        [conversationId]: {
-          ...conversations[conversationId]!,
-          restoredUrls: {
-            ...conversations[conversationId]?.restoredUrls,
-            [id]: saved.url!,
-          },
-        },
-      },
-    }));
-  return true;
-}

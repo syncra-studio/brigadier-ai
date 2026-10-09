@@ -10,18 +10,16 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { SidebarToggle } from "@/app/SidebarToggle";
+import { TitlebarNav } from "@/app/AppSidebar";
+import { revealApp } from "@/lib/splash";
 import { RightSidebar, RightSidebarContext, RightSidebarToggle } from "@/app/conversation/RightSidebar";
 import {
   TerminalButton,
-  SidePanel,
-  SidePanelContext,
   useSidePanel,
 } from "@/app/conversation/SidePanel";
-import {
-  ComposerPlacement,
-  FloatingComposerSlot,
-} from "@/app/conversation/PaneComposer";
+import { SessionTabBar, SessionTabViews } from "@/app/conversation/SessionTabBar";
+import { newSessionTab, useSessionTabs, useSessionTabsOf, selectTab, closeTab } from "@/state/sessionTabs";
+import { editDocument, documentText } from "@/state/documentDrafts";
 import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
@@ -196,6 +194,12 @@ mockIPC(
       nativePages.get(values.id as string)?.remove();
       nativePages.delete(values.id as string);
     }
+    if (command === "save_document") {
+      const error = (window as unknown as { saveError?: string }).saveError;
+      if (error) throw new Error(error);
+      const response = (window as unknown as { saveResult?: string | null }).saveResult;
+      return response === undefined ? `/tmp/brigadier-test-7301f8c4/${String(values.name) === "Untitled" ? "notes.txt" : String(values.name)}` : response;
+    }
     if (command !== "ipc_request") return null;
     const req = values.request as Request;
     if (req.method === "openTerminal") {
@@ -207,7 +211,7 @@ mockIPC(
         terminal: {
           id: terminalId,
           shell: "/bin/zsh",
-          cwd: "/tmp/brigadier/panes",
+          cwd: "/tmp/brigadier-test-7301f8c4",
           scrollback:
             "stephen@workstation panes % pnpm dev\r\n\r\n  VITE v8.3.0  ready in 142 ms\r\n\r\n  ➜  Local:   http://localhost:3000/\r\n\r\nstephen@workstation panes % ",
         },
@@ -222,6 +226,14 @@ mockIPC(
     if (req.method === "closeTerminal")
       for (const [key, terminalId] of shells)
         if (terminalId === req.terminalId) shells.delete(key);
+    if (req.method === "getConversation") return { method: req.method, view: {
+      conversation: useApp.getState().conversations[req.id], messages: { messages: [], hasMore: false },
+      tasks: [], approvals: [], questions: [], plans: [], overnight: [], requests: [], workerSteps: [], orchestratorSteps: [],
+      machineSteps: [], decisions: [], waiting: [], compactions: [], ratings: {}, queue: emptyBoard(req.id).queue,
+      run: "idle", runRequest: null, head: null, context: null, streaming: null, thinking: [], notices: [], memories: [], reviews: [], previews: [],
+    } };
+    if (req.method === "readFile") return { method: req.method, file: { text: "# Fixture file\n", size: 15, truncated: false } };
+    if (req.method === "openSideChat") return { method: req.method, conversation: { ...conversation, id: req.sideChatId, kind: "chat", title: "Side chat", sideOf: req.conversationId } };
     if (req.method === "listFiles")
       return { method: req.method, files: ["README.md", "package.json", "src/app.tsx", "src/styles.css"], truncated: false };
     if (req.method === "getSourceState")
@@ -237,10 +249,11 @@ mockIPC(
 );
 
 function Fixture() {
+  useEffect(() => { void revealApp(); }, []);
   const [kind, setKind] = useState<"session" | "chat" | null>("session");
   const [conversationId, setConversationId] = useState(id);
   const sidebar = useSidebar();
-  const { panel, agents } = useSidePanel(kind === null ? null : conversationId, kind);
+  const { panel, agents } = useSidePanel(kind === null ? null : conversationId, kind === "session");
   usePaneShortcuts();
   const runtime = useExternalStoreRuntime<ThreadMessage>({
     messages: [],
@@ -249,7 +262,8 @@ function Fixture() {
   useEffect(() => {
     Object.assign(window, {
       panes: {
-        panel,
+        panel, useApp,
+        useSessionTabs, newSessionTab, selectTab, closeTab, editDocument, documentText,
         agents,
         setKind,
         setConversationId,
@@ -263,13 +277,16 @@ function Fixture() {
       },
     });
   }, [panel, agents, sidebar]);
-  const full = panel.visible && panel.state.fullscreen;
+  const { active } = useSessionTabsOf(conversationId);
+  const [renaming, setRenaming] = useState(false);
+  const [title, setTitle] = useState("Independent panes");
+  useEffect(() => { useApp.setState({ selection: kind === null ? { type: "none" } : { type: "conversation", id: conversationId }, conversations: { ...useApp.getState().conversations, [conversationId]: { ...conversation, id: conversationId, kind: kind ?? "session" } } }); }, [kind, conversationId]);
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <RightSidebarContext.Provider value={panel.rightSidebar}>
-        <SidePanelContext.Provider value={panel}>
+      <RightSidebarContext.Provider value={panel}>
         <AgentsPanelContext.Provider value={agents}>
-          <div className="flex h-screen w-full min-w-0">
+          <div className="relative flex h-screen w-full min-w-0">
+            <TitlebarNav />
             <SidebarPanel strip={<span className="p-3 text-sm">B</span>}>
               <div className="flex flex-col gap-5 px-4 py-6">
                 <h1 className="text-lg font-medium">Brigadier</h1>
@@ -279,21 +296,19 @@ function Fixture() {
               </div>
             </SidebarPanel>
             <main
-              ref={panel.workspace}
               data-slot="pane-workspace"
               className="relative flex min-w-0 flex-1 flex-col"
             >
               <div className="relative flex min-h-0 flex-1">
                 <div
-                  className={full ? "hidden" : "flex min-w-0 flex-1 flex-col"}
+                  className="flex min-w-0 flex-1 flex-col"
                 >
-                  <header className="h-titlebar flex shrink-0 items-center px-4">
-                    <h2 className="min-w-0 flex-1 truncate text-sm font-medium">
-                      Independent panes
-                    </h2>
-                    <SidebarToggle open={sidebar.open} onToggle={sidebar.toggleSidebar} /><TerminalButton />{kind === "session" && <RightSidebarToggle />}
-                  </header>
-                  <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-auto px-5 py-8 text-sm">
+                  {kind === "session" ? <SessionTabBar conversation={{ ...conversation, id: conversationId, title }} onRename={() => setRenaming(true)}>
+                    <TerminalButton /><RightSidebarToggle />
+                  </SessionTabBar> : <header className="h-titlebar ps-clear-3 flex items-center"><span className="flex-1">{kind === "chat" ? "Plain chat" : "Home"}</span><TerminalButton /></header>}
+                  {renaming && <div role="dialog" aria-label="Rename session" className="bg-background absolute inset-8 z-50 p-4"><input aria-label="Session title" value={title} onChange={(event) => setTitle(event.target.value)} /><button onClick={() => setRenaming(false)}>Done</button></div>}
+                  <div className="relative flex min-h-0 flex-1 flex-col">
+                  <div inert={kind === "session" && active !== "chat"} className={`flex min-h-0 flex-1 flex-col gap-5 overflow-auto px-5 py-8 text-sm ${kind === "session" && active !== "chat" ? "invisible" : ""}`}>
                     <p className="self-end rounded-control bg-muted px-4 py-2">
                       Give each tool its own pane.
                     </p>
@@ -314,7 +329,6 @@ function Fixture() {
                       Context · 1 worker
                     </button>
                     <div className="flex-1" />
-                    <ComposerPlacement>
                       <div className="bg-background border-border rounded-capsule border p-3 shadow-menu">
                         <textarea
                           aria-label="Message"
@@ -327,18 +341,16 @@ function Fixture() {
                           <button aria-label="Send message">↑</button>
                         </div>
                       </div>
-                    </ComposerPlacement>
                   </div>
-                  <TerminalPane place={`conv:${id}`} />
+                  {kind === "session" && <SessionTabViews key={conversationId} conversationId={conversationId} />}
+                  </div>
+                  <TerminalPane place={`conv:${conversationId}`} />
                 </div>
-                <SidePanel conversationId={kind === null ? null : conversationId} />
-                <FloatingComposerSlot capsule={false} />
               </div>
             </main>
             {kind === "session" && <RightSidebar conversationId={conversationId} />}
           </div>
         </AgentsPanelContext.Provider>
-      </SidePanelContext.Provider>
         </RightSidebarContext.Provider>
     </AssistantRuntimeProvider>
   );

@@ -88,6 +88,7 @@ export function TerminalView({
   restored,
   onClear,
   onTitle,
+  onCwd,
   reader,
   focus = true,
   className,
@@ -97,6 +98,7 @@ export function TerminalView({
   restored?: () => string | null;
   onClear?: () => void;
   onTitle?: (title: string) => void;
+  onCwd?: (cwd: string) => void;
   reader?: (read: () => string) => () => void;
   /** Takes the keyboard once it is open. */
   focus?: boolean;
@@ -153,6 +155,13 @@ export function TerminalView({
     const before = restored?.();
     if (before) terminal.write(`${before}${RESET}\r\n`);
     const title = onTitle ? terminal.onTitleChange(onTitle) : null;
+    const cwd = onCwd ? terminal.parser.registerOscHandler(7, (value) => {
+      try {
+        const url = new URL(value);
+        if (url.protocol === "file:") onCwd(decodeURIComponent(url.pathname));
+      } catch { /* A shell may emit a title that is not a folder URL. */ }
+      return false;
+    }) : null;
     const unread = reader?.(() => serialize.serialize({ scrollback: 5000 }));
 
     let id: string | null = null;
@@ -299,11 +308,12 @@ export function TerminalView({
       resize.dispose();
       stop();
       title?.dispose();
+      cwd?.dispose();
       unread?.();
       liveTerminal.current = null;
       terminal.dispose();
     };
-  }, [open, connected, onExit, mac, restored, onClear, onTitle, reader]);
+  }, [open, connected, onExit, mac, restored, onClear, onTitle, onCwd, reader]);
 
   return (
     <div

@@ -8,7 +8,6 @@ import {
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCheckoutFiles } from "@/app/conversation/Mentions";
-import { useShowMain } from "@/app/conversation/SidePanel";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { fuzzyMatch } from "@/components/assistant-ui/elements/fuzzy-match";
 import { listFiles } from "@/state/actions";
@@ -90,7 +89,6 @@ export function FilesTab({ conversationId, searchRequest = 0, onSearchHandled }:
   searchRequest?: number;
   onSearchHandled?: (() => void) | undefined;
 }) {
-  const showMain = useShowMain();
   return (
     <FileBrowser
       conversationId={conversationId}
@@ -98,8 +96,7 @@ export function FilesTab({ conversationId, searchRequest = 0, onSearchHandled }:
       onSearchHandled={onSearchHandled}
       onOpen={(path, keep) => {
         openFileTab(conversationId, path, { preview: !keep });
-        showMain();
-      }}
+          }}
     />
   );
 }

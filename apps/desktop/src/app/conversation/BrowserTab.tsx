@@ -1,22 +1,14 @@
 import {
   ArrowLeft,
   ArrowRight,
-  CollapseLg,
-  ExpandLg,
   ExternalLink,
   DotsHorizontal,
   Globe,
   Reload,
-  Plus,
   X,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { RightSidebarToggle } from "@/app/conversation/RightSidebar";
-import {
-  TerminalButton,
-  SidePanelContext,
-} from "@/app/conversation/SidePanel";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,25 +21,20 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { browserGo, browserPlace, openUrl } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
 import {
-  closeBrowserTab,
   dismissBlocked,
-  newBrowserTab,
   openPage,
-  selectBrowserTab,
   useBrowsers,
-  useBrowserTabs,
 } from "@/state/browsers";
 import { useApp } from "@/state/store";
 import { cn } from "@/lib/utils";
 import { toast } from "@/state/toasts";
 
 /**
- * The Browser tab (⌘T): web pages beside the conversation, such as the app a worker is
+ * A browser main tab (⌘⇧B): one page, such as the app a worker is
  * running on localhost. The page is a system webview the shell lays over this tab's area (see
  * `src-tauri/src/browser.rs`); it is made on the first address entered and hidden whenever the
  * tab is, or something of the app's (a menu, a dialog) opens over it.
@@ -127,177 +114,14 @@ function openOutside(url: string) {
   openUrl(url).catch(failed);
 }
 
-/** Only this pane has tabs. Each page owns a distinct native webview. */
-export function BrowserTab({ conversationId }: { conversationId: string }) {
-  const tabs = useBrowserTabs((s) => s.conversations[conversationId]);
-  const pages = useBrowsers((s) => s.pages);
-  const { hide, state, setFullscreen } = useContext(SidePanelContext);
-  const host = useRef<HTMLDivElement>(null);
-  const [stripWidth, setStripWidth] = useState(0);
-  useEffect(() => {
-    const strip = host.current;
-    if (!strip) return;
-    const observer = new ResizeObserver(() => setStripWidth(strip.clientWidth));
-    observer.observe(strip);
-    return () => observer.disconnect();
-  }, []);
-  const compactTabs = stripWidth / Math.max(1, tabs?.ids.length ?? 1) < 96;
-  const mac = useApp((s) => s.info?.platform === "macos");
-  const create = useCallback(
-    () => newBrowserTab(conversationId),
-    [conversationId],
-  );
-  useEffect(() => {
-    if (!useBrowserTabs.getState().conversations[conversationId]?.ids.length)
-      create();
-  }, [conversationId, create]);
-  useEffect(() => {
-    const key = (event: KeyboardEvent) => {
-      if (
-        !(event.target instanceof Element) ||
-        !event.target.closest('[data-pane="browser"]')
-      )
-        return;
-      const command = mac ? event.metaKey : event.ctrlKey;
-      if (!command || event.altKey) return;
-      if (
-        event.shiftKey &&
-        ["BracketLeft", "BracketRight"].includes(event.code) &&
-        tabs?.ids.length
-      ) {
-        event.preventDefault();
-        const index = tabs.ids.indexOf(tabs.active);
-        const next =
-          (index + (event.code === "BracketLeft" ? -1 : 1) + tabs.ids.length) %
-          tabs.ids.length;
-        selectBrowserTab(conversationId, tabs.ids[next]!);
-        return;
-      }
-      if (event.shiftKey) return;
-      if (event.code === "KeyT") {
-        event.preventDefault();
-        create();
-      }
-      if (event.code === "KeyW" && tabs?.active) {
-        event.preventDefault();
-        closeBrowserTab(conversationId, tabs.active);
-        if (tabs.ids.length === 1) hide();
-      }
-    };
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [conversationId, create, hide, mac, tabs]);
-  useEffect(() => {
-    const selected = host.current?.querySelector<HTMLElement>(
-      `[data-page="${tabs?.active}"]`,
-    );
-    if (!selected) return;
-    const strip = host.current!;
-    if (selected.offsetLeft < strip.scrollLeft)
-      strip.scrollLeft = selected.offsetLeft;
-    else if (
-      selected.offsetLeft + selected.offsetWidth >
-      strip.scrollLeft + strip.clientWidth
-    )
-      strip.scrollLeft =
-        selected.offsetLeft + selected.offsetWidth - strip.clientWidth;
-  }, [tabs?.active]);
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-titlebar shrink-0 items-center gap-1 px-2">
-        <div
-          ref={host}
-          role="tablist"
-          aria-label="Browser pages"
-          className="hide-scrollbar flex min-w-0 flex-1 overflow-x-auto scroll-px-1"
-        >
-          {tabs?.ids.map((id) => (
-            <div
-              key={id}
-              className={cn(
-                "group/tab flex h-8 min-w-browser-tab-min max-w-browser-tab-max flex-1 items-center rounded-lg p-1 text-sm",
-                id === tabs.active
-                  ? "bg-panel-tab shadow-panel-tab"
-                  : "text-toolbar-foreground hover:bg-toolbar-hover",
-              )}
-            >
-              <button
-                role="tab"
-                data-page={id}
-                type="button"
-                aria-selected={id === tabs.active}
-                aria-label={pages[id]?.title || pages[id]?.url || "New tab"}
-                onClick={() => selectBrowserTab(conversationId, id)}
-                className="flex min-w-0 flex-1 items-center justify-center gap-1.5 px-0.5"
-              >
-                <Globe className="size-icon-sm shrink-0" />
-                <span
-                  className={cn(
-                    "min-w-0 flex-1 truncate",
-                    compactTabs && "hidden",
-                  )}
-                >
-                  {pages[id]?.title || pages[id]?.url || "New tab"}
-                </span>
-              </button>
-              <button
-                type="button"
-                aria-label={`Close ${pages[id]?.title || "browser"} tab`}
-                onClick={() => {
-                  closeBrowserTab(conversationId, id);
-                  if (tabs.ids.length === 1) hide();
-                }}
-                className={cn(
-                  "hover:bg-toolbar-hover flex size-5 shrink-0 items-center justify-center rounded-full opacity-60 hover:opacity-100",
-                  compactTabs &&
-                    id !== tabs.active &&
-                    "hidden group-hover/tab:flex group-focus-within/tab:flex",
-                )}
-              >
-                <X className="size-icon-xs" />
-              </button>
-            </div>
-          ))}
-        </div>
-        <TitlebarTips>
-          <TitlebarButton
-            tooltip="New browser tab"
-            shortcut="⌘T"
-            onClick={create}
-          >
-            <Plus />
-          </TitlebarButton>
-          <TitlebarButton
-            tooltip={state.fullscreen ? "Exit full view" : "Enter full view"}
-            shortcut="⌘⇧F"
-            aria-pressed={state.fullscreen}
-            onClick={() => setFullscreen(!state.fullscreen)}
-          >
-            {state.fullscreen ? <CollapseLg /> : <ExpandLg />}
-          </TitlebarButton>
-          <TitlebarButton tooltip="Close Browser" onClick={hide}>
-            <X />
-          </TitlebarButton>
-        </TitlebarTips>
-        {state.fullscreen && <><TerminalButton covered /><RightSidebarToggle /></>}
-      </div>
-      {tabs?.active && (
-        <BrowserPageView
-          key={tabs.active}
-          conversationId={tabs.active}
-          initialUrl={tabs.restoredUrls?.[tabs.active]}
-        />
-      )}
-    </div>
-  );
-}
-
-function BrowserPageView({
+export function BrowserTab({
   conversationId,
   initialUrl,
+  active,
 }: {
   conversationId: string;
   initialUrl?: string | undefined;
+  active: boolean;
 }) {
   const page = useBrowsers((s) => s.pages[conversationId]);
   const embedded = useApp((s) => s.info?.platform !== "linux");
@@ -307,18 +131,18 @@ function BrowserPageView({
   const [typed, setTyped] = useState<string | null>(null);
   const made = page !== undefined;
   const site = siteAddress(page?.url);
-  const { state } = useContext(SidePanelContext);
   useEffect(() => {
-    if (!initialUrl || made || !area.current) return;
+    if (!active || !initialUrl || made || !area.current) return;
     void openPage(conversationId, initialUrl, pageBounds(area.current)).catch(
       failed,
     );
-  }, [conversationId, initialUrl, made]);
+  }, [conversationId, initialUrl, made, active]);
 
   // Keep the page over this tab's area, and hide it when the tab goes or is covered.
   useEffect(() => {
     const element = area.current;
-    if (!made || !element) return;
+    if (!page?.ready || !element) return;
+    if (!active) { void browserPlace(conversationId, null).catch(() => {}); return; }
     let layers: Element[] = [];
     const collect = () => {
       layers = [...document.querySelectorAll(COVERS)];
@@ -326,17 +150,14 @@ function BrowserPageView({
     collect();
     // Menus, popovers and dialogs mount in portals at the end of the body.
     const observer = new MutationObserver(collect);
-    observer.observe(document.body, { childList: true });
+    observer.observe(document.body, { childList: true, subtree: true });
     let placed = "";
     let frame = 0;
     // The side panel clips its contents while it opens, closes or hides; the page, drawn over
     // the window rather than in it, shows only once the tab is wholly in view.
-    const clip = element.closest("[data-slot=side-panel-clip]");
+
     const place = () => {
       const rect = element.getBoundingClientRect();
-      const box = clip?.getBoundingClientRect();
-      const whole =
-        !box || (rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5);
       const placedBounds = pageBounds(element, rect);
       const rendered = new DOMRect(
         placedBounds.x,
@@ -345,7 +166,7 @@ function BrowserPageView({
         placedBounds.height,
       );
       const bounds: BrowserBounds | null =
-        whole &&
+        !element.closest("[inert]") &&
         placedBounds.width > 0 &&
         placedBounds.height > 0 &&
         !covered(rendered, layers)
@@ -364,10 +185,11 @@ function BrowserPageView({
       observer.disconnect();
       browserPlace(conversationId, null).catch(() => {});
     };
-  }, [conversationId, made]);
+  }, [conversationId, page?.ready, active]);
 
   // ⌘L (Ctrl+L) puts the cursor in the address field, as in a browser.
   useEffect(() => {
+    if (!active) return;
     const onKeyDown = (event: KeyboardEvent) => {
       const command = mac ? event.metaKey : event.ctrlKey;
       if (!command || event.shiftKey || event.altKey) return;
@@ -378,7 +200,7 @@ function BrowserPageView({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mac]);
+  }, [mac, active]);
 
   const go = (text: string) => {
     const url = webAddress(text);
@@ -402,7 +224,7 @@ function BrowserPageView({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div data-pane="browser" data-active={active || undefined} className="flex min-h-0 flex-1 flex-col">
       <div className="border-border flex shrink-0 items-center gap-1 border-b p-2">
         {embedded && (
           <div className="flex shrink-0 items-center gap-0.5">
@@ -505,7 +327,7 @@ function BrowserPageView({
             />
           </label>
         </form>
-        {state.fullscreen && page?.url && (
+        {page?.url && (
           <TooltipIconButton
             tooltip="Open in external browser"
             onClick={() => openOutside(page.url)}
