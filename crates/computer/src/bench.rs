@@ -1178,6 +1178,7 @@ pub fn run(
     mut desktop: MacDesktop,
     out: &Path,
     quick: bool,
+    foreground: bool,
     cursor: Cursor,
     replay: Option<&Path>,
 ) -> Result<bool> {
@@ -1232,7 +1233,14 @@ pub fn run(
     b.selection((reps / 10).max(5))?;
     let start_focus = b.user.clone();
     b.check_focus("the whole run", &start_focus);
-    b.foreground_rung()?;
+    if foreground {
+        b.foreground_rung()?;
+    } else {
+        b.report.coverage.insert(
+            "foreground rung".into(),
+            vec!["not run: --no-foreground".into()],
+        );
+    }
     drop(fixture);
     b.gates();
     let table = b.table();

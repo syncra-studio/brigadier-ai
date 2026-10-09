@@ -4,7 +4,7 @@
 //!   brigadier-computer observe <window id or title> [always|never|auto]
 //!   brigadier-computer run <script.json> [--out <dir>]
 //!   brigadier-computer serve --socket <path> --token-file <path> [--parent <pid>]
-//!   brigadier-computer bench [--out <dir>] [--quick] [--cursor] [--replay <dir>]
+//!   brigadier-computer bench [--out <dir>] [--quick] [--no-foreground] [--cursor] [--replay <dir>]
 //!   brigadier-computer suite tasks | setup <task> <dir> [--seed n] | check <dir> [--records f] [--report f] [--offline]
 //!                            | teardown <dir> | scripted <out> [task…] | watch <out.jsonl>
 //!
@@ -130,13 +130,16 @@ fn main() -> anyhow::Result<()> {
         Some("bench") => {
             let out = flag("--out").unwrap_or_else(|| PathBuf::from("target/computer-bench"));
             let quick = args.iter().any(|a| a == "--quick");
+            // P2f raises a window and takes the front; off while someone uses the Mac.
+            let foreground = !args.iter().any(|a| a == "--no-foreground");
             let replay = flag("--replay");
             if args.iter().any(|a| a == "--cursor") {
                 // AppKit on this thread draws the cursor; the bench runs on another.
                 let mtm = objc2::MainThreadMarker::new().context("the main thread")?;
                 brigadier_computer::macos::overlay::run_with_overlay(mtm, move |overlay| {
-                    let run = desktop()
-                        .and_then(|d| bench::run(d, &out, quick, Some(overlay), replay.as_deref()));
+                    let run = desktop().and_then(|d| {
+                        bench::run(d, &out, quick, foreground, Some(overlay), replay.as_deref())
+                    });
                     match run {
                         Ok(true) => 0,
                         Ok(false) => 1,
@@ -147,7 +150,7 @@ fn main() -> anyhow::Result<()> {
                     }
                 });
             }
-            let ok = bench::run(desktop()?, &out, quick, None, replay.as_deref())?;
+            let ok = bench::run(desktop()?, &out, quick, foreground, None, replay.as_deref())?;
             if !ok {
                 std::process::exit(1);
             }
@@ -182,7 +185,7 @@ fn main() -> anyhow::Result<()> {
         }
         _ => {
             eprintln!(
-                "usage: brigadier-computer apps | observe <window> [always|never|auto] | run <script> | serve --socket <p> --token-file <p> [--parent <pid>] | bench [--out <dir>] [--quick] [--cursor] [--replay <dir>]"
+                "usage: brigadier-computer apps | observe <window> [always|never|auto] | run <script> | serve --socket <p> --token-file <p> [--parent <pid>] | bench [--out <dir>] [--quick] [--no-foreground] [--cursor] [--replay <dir>]"
             );
             std::process::exit(2);
         }
