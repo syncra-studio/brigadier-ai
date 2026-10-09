@@ -151,7 +151,9 @@ pub fn launch<D: Desktop>(
     let started = Instant::now();
     let mut first_window: Option<Instant> = None;
     let found = loop {
-        cancel.check()?;
+        // Ended after `open` ran: an app it started is still reported, so it's owned and
+        // cleaned up; anything else ends here.
+        let stopped = cancel.check().err();
         let apps = engine.desktop.apps()?;
         let fresh = |a: &AppInfo| {
             before
@@ -179,6 +181,11 @@ pub fn launch<D: Desktop>(
                 .cloned(),
         };
         let waited = started.elapsed();
+        if let Some(e) = &stopped
+            && pick.as_ref().is_none_or(|a| before.contains_key(&a.pid))
+        {
+            return Err(e.clone());
+        }
         if let Some(a) = pick {
             let new_process = !before.contains_key(&a.pid);
             let mut appeared: Vec<u32> = match before.get(&a.pid) {
@@ -187,7 +194,7 @@ pub fn launch<D: Desktop>(
             };
             appeared.sort_unstable();
             let reused_done = !new_process && req.open.is_none() && waited >= REUSED_GRACE;
-            if !appeared.is_empty() || reused_done || waited >= WINDOW_WAIT {
+            if !appeared.is_empty() || reused_done || waited >= WINDOW_WAIT || stopped.is_some() {
                 // A file's own window among them; the rest the app restored.
                 let (mut new_windows, mut restored_windows) = (appeared.clone(), Vec::new());
                 if let Some(file) = &file {
@@ -205,7 +212,10 @@ pub fn launch<D: Desktop>(
                         restored_windows = rest.iter().map(|w| w.id).collect();
                     } else if !appeared.is_empty() {
                         let since = *first_window.get_or_insert_with(Instant::now);
-                        if since.elapsed() < DOCUMENT_GRACE && waited < WINDOW_WAIT {
+                        if since.elapsed() < DOCUMENT_GRACE
+                            && waited < WINDOW_WAIT
+                            && stopped.is_none()
+                        {
                             std::thread::sleep(Duration::from_millis(50));
                             continue;
                         }

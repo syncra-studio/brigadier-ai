@@ -2420,6 +2420,30 @@ mod tests {
     }
 
     #[test]
+    fn a_launch_stopped_after_it_opened_still_reports_the_app_it_started() {
+        let mut fake = Fake::new(basic());
+        let mut app = other_app(20, "Notes", "dev.example.notes", 5);
+        app.windows.clear();
+        fake.on_open = Some(app);
+        let mut e = engine(fake);
+        let req = crate::wire::LaunchRequest {
+            app: Some("Notes".into()),
+            open: None,
+        };
+        let token = e.gens.token("w", Duration::from_secs(5));
+        e.gens.stop_all();
+        // Stopped before its window showed: the new process is reported, so it's owned.
+        let o = crate::launch::launch(&mut e, &req, &token).unwrap();
+        assert_eq!(o.app.pid, 20);
+        assert!(o.new_process && o.new_windows.is_empty());
+        // The same app again, already running: the stop ends it.
+        let token = e.gens.token("w", Duration::from_secs(5));
+        e.gens.stop_all();
+        let r = crate::launch::launch(&mut e, &req, &token);
+        assert_eq!(r.unwrap_err().code, ErrorCode::StoppedByUser);
+    }
+
+    #[test]
     fn a_launch_of_a_blocked_app_is_refused_before_it_opens() {
         let mut e = engine(Fake::new(basic()));
         let r = launch(&mut e, Some("com.apple.keychainaccess"), None);

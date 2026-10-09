@@ -226,6 +226,8 @@ impl SessionManager {
                         .await?;
                 }
             },
+            // The call waiting on it gets the answer.
+            ApprovalSubject::Action { live: true, .. } => {}
             ApprovalSubject::Action { action, .. } => {
                 let text = match &decision {
                     ApprovalDecision::Allow | ApprovalDecision::AllowSimilar => {
@@ -518,7 +520,7 @@ impl SessionManager {
             }
             match &approval.subject {
                 // Answering it delivers the decision itself; nothing needs to wait.
-                ApprovalSubject::Action { .. } => continue,
+                ApprovalSubject::Action { live: false, .. } => continue,
                 // The landing that asked is gone; `recover` tells the orchestrator to accept
                 // the task again.
                 ApprovalSubject::Landing { .. } => {}

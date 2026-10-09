@@ -134,8 +134,8 @@ pub(crate) struct Computer {
     state: Arc<Mutex<State>>,
     /// The bundle of the Brigadier app that hosts this daemon, blocked for its workers.
     host_bundle: Option<String>,
-    /// Bumped by the user's Stop and by any worker's end, so a call waiting on a card
-    /// looks again.
+    /// How many times the user stopped computer use; a worker's end also wakes the calls
+    /// waiting on a card, without counting, so each checks its own grant.
     changes: watch::Sender<u64>,
     /// How long the last helper took from its start to its first answer (S7).
     cold_start_ms: Mutex<Option<f64>>,
@@ -267,7 +267,7 @@ impl Computer {
             state.approved.remove(task_id);
             state.launched.remove(task_id).unwrap_or_default()
         };
-        self.changes.send_modify(|n| *n += 1);
+        self.changes.send_modify(|_| {});
         let link = self.link.lock().await.clone();
         let Some(link) = link.filter(|l| l.is_alive()) else {
             return;
@@ -448,6 +448,39 @@ impl SessionManager {
     }
 }
 
+/// A computer-use card whose call is still waiting; a dropped call expires it.
+struct PendingCard<'a> {
+    manager: &'a SessionManager,
+    card: Option<crate::work::Approval>,
+}
+
+impl Drop for PendingCard<'_> {
+    fn drop(&mut self) {
+        if let Some(card) = self.card.take() {
+            let manager = self.manager.arc();
+            self.manager.spawn(async move {
+                let reason = "The call that asked was cancelled.".to_owned();
+                manager
+                    .settle_approval(&card, CardState::Expired { reason })
+                    .await;
+            });
+        }
+    }
+}
+
+/// A batch's leases, released when it ends or is dropped.
+struct HeldLeases<'a> {
+    computer: &'a Computer,
+    task_id: &'a TaskId,
+    keys: &'a [LeaseKey],
+}
+
+impl Drop for HeldLeases<'_> {
+    fn drop(&mut self) {
+        self.computer.release_leases(self.task_id, self.keys);
+    }
+}
+
 /// Cancels a request in the helper unless its answer came.
 struct CancelOnDrop {
     link: Option<Arc<dyn HelperLink>>,
@@ -589,12 +622,23 @@ impl SessionManager {
                     )
                     .await?;
                 }
-                let a = computer
-                    .request(task_id, provider, policy, Op::Launch(req))
-                    .await?;
-                if let Some(l) = &a.reply.launched {
-                    self.own_launch(task_id, l).await;
-                }
+                // Runs to its end even if the caller goes, so what it starts is always owned
+                // and cleaned up; it's bounded by the launch's own window wait.
+                let (tx, rx) = oneshot::channel();
+                let (manager, task) = (self.arc(), task_id.clone());
+                self.spawn(async move {
+                    let a = manager
+                        .computer
+                        .request(&task, provider, policy, Op::Launch(req))
+                        .await;
+                    if let Ok(Some(l)) = a.as_ref().map(|a| &a.reply.launched) {
+                        manager.own_launch(&task, l).await;
+                    }
+                    let _ = tx.send(a);
+                });
+                let a = rx.await.map_err(|_| {
+                    CuError::new(ErrorCode::Cancelled, "Brigadier is shutting down")
+                })??;
                 Ok(reply_of(a))
             }
             ComputerCall::Act(act) => {
@@ -652,10 +696,16 @@ impl SessionManager {
                 }
                 let keys = lease_keys(&d, &act);
                 computer.take_leases(task_id, &label, &keys)?;
+                // Released however the call ends, a dropped one included.
+                let leases = HeldLeases {
+                    computer,
+                    task_id,
+                    keys: &keys,
+                };
                 let answer = computer
                     .request(task_id, provider, computer.policy(task_id), Op::Act(act))
                     .await;
-                computer.release_leases(task_id, &keys);
+                drop(leases);
                 let mut a = answer?;
                 self.log_actions(conversation_id, task_id, &mut a).await;
                 Ok(reply_of(a))
@@ -678,13 +728,24 @@ impl SessionManager {
             .open_approval(
                 conversation_id,
                 Some(task_id.clone()),
-                ApprovalSubject::Action { action, details },
+                ApprovalSubject::Action {
+                    action,
+                    details,
+                    live: true,
+                },
             )
             .await
             .map_err(|e| CuError::new(ErrorCode::Failed, e.to_string()))?;
+        // A call dropped while it waits takes its card with it.
+        let mut pending = PendingCard {
+            manager: self,
+            card: Some(card.clone()),
+        };
         loop {
             tokio::select! {
                 answer = &mut rx => {
+                    // Answered, or settled elsewhere: nothing is left to settle.
+                    pending.card = None;
                     return match answer {
                         Ok(CardAnswer::Decision(ApprovalDecision::Allow | ApprovalDecision::AllowSimilar))
                             if self.grants.resolve(grant).is_some() => Ok(()),
@@ -700,14 +761,23 @@ impl SessionManager {
                     };
                 }
                 changed = changes.changed() => {
-                    let gone = changed.is_err() || self.grants.resolve(grant).is_none();
-                    if gone || *changes.borrow_and_update() != seen {
-                        self.settle_approval(&card, CardState::Denied {
-                            by: Decider::Policy,
-                            message: Some("computer use was stopped".into()),
-                        }).await;
-                        return Err(CuError::new(ErrorCode::StoppedByUser, "computer use was stopped while the card waited"));
+                    // Only the user's Stop ends every card; another worker's end leaves
+                    // this one waiting, unless it was this card's worker.
+                    let stopped = changed.is_err() || *changes.borrow_and_update() != seen;
+                    if !stopped && self.grants.resolve(grant).is_some() {
+                        continue;
                     }
+                    pending.card = None;
+                    let (why, error) = if stopped {
+                        ("computer use was stopped", CuError::new(ErrorCode::StoppedByUser, "computer use was stopped while the card waited"))
+                    } else {
+                        ("the worker ended", CuError::new(ErrorCode::Cancelled, "the worker ended while the card waited"))
+                    };
+                    self.settle_approval(&card, CardState::Denied {
+                        by: Decider::Policy,
+                        message: Some(why.into()),
+                    }).await;
+                    return Err(error);
                 }
             }
         }
@@ -1206,6 +1276,25 @@ mod tests {
             .unwrap()
             .block_on(r.computer.end_worker(&a));
         r.computer.take_leases(&b, "task-2", &keys).unwrap();
+    }
+
+    #[test]
+    fn a_dropped_batch_releases_its_leases() {
+        let r = rig();
+        let a = task("a");
+        let keys = [LeaseKey::Window(3)];
+        r.computer.take_leases(&a, "task-1", &keys).unwrap();
+        let held = HeldLeases {
+            computer: &r.computer,
+            task_id: &a,
+            keys: &keys,
+        };
+        // The batch's future is dropped mid-call.
+        drop(held);
+        let state = lock(&r.computer.state);
+        let lease = &state.leases[&LeaseKey::Window(3)];
+        assert!(!lease.running, "released, so its tail runs out");
+        assert!(lease.until <= Instant::now() + LEASE_TAIL);
     }
 
     #[tokio::test]

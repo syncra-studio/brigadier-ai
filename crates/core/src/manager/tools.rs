@@ -359,6 +359,7 @@ impl SessionManager {
                     ApprovalSubject::Action {
                         action: args.action,
                         details: args.details,
+                        live: false,
                     },
                 )
                 .await?;

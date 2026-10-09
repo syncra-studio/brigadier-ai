@@ -331,3 +331,48 @@ async fn full_access_never_asks() {
     );
     finish(flow, worker).await;
 }
+
+/// Another worker's end leaves a card waiting; only the user's Stop ends every card.
+#[tokio::test]
+async fn another_workers_end_leaves_a_card_waiting() {
+    let (flow, worker, helper) = start("computer-other-end", PermissionLevel::AskForApproval).await;
+    let other_ends = async {
+        flow.until("a computer card", |board| pending(board).is_some())
+            .await;
+        flow.manager
+            .computer
+            .end_worker(&crate::work::TaskId("someone-else".into()))
+            .await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(pending(&flow.board().await).is_some(), "still waiting");
+        let card = pending(&flow.board().await).unwrap().id.clone();
+        flow.manager
+            .answer_card(flow.conversation.clone(), card, ApprovalDecision::Allow)
+            .await
+            .unwrap();
+    };
+    let reply = tokio::join!(worker.turn.computer(act(5)), other_ends).0;
+    assert!(!reply.is_error, "{}", reply.text);
+    assert_eq!(ops(&helper), ["describe 5", "describe 5", "act 5"]);
+    finish(flow, worker).await;
+}
+
+/// A call dropped while its card waits (the CLI cancelled it) expires the card.
+#[tokio::test]
+async fn a_dropped_call_expires_its_card() {
+    let (flow, worker, helper) = start("computer-drop", PermissionLevel::AskForApproval).await;
+    tokio::select! {
+        _ = worker.turn.computer(act(5)) => panic!("the call ended on its own"),
+        _ = flow.until("a computer card", |board| pending(board).is_some()) => {}
+    }
+    let board = flow
+        .until("the card expired", |board| {
+            cards(board)
+                .iter()
+                .any(|c| matches!(c.state, CardState::Expired { .. }))
+        })
+        .await;
+    assert!(pending(&board).is_none());
+    assert_eq!(ops(&helper), ["describe 5"]);
+    finish(flow, worker).await;
+}

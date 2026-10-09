@@ -857,7 +857,15 @@ pub enum ApprovalSubject {
         diff_stat: DiffStat,
     },
     /// An action the orchestrator asked the user to approve.
-    Action { action: String, details: String },
+    Action {
+        action: String,
+        details: String,
+        /// A running computer-use call waits on it: the answer goes to that call, and the
+        /// card expires with it.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[ts(skip)]
+        live: bool,
+    },
     /// Ask for approval: start a phase from its lead's outline ("Start this plan?").
     Outline {
         task_id: TaskId,
