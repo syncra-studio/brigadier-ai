@@ -167,3 +167,39 @@ fn a_write_after_the_drop_is_removed_as_the_thread_ends() {
     assert!(passed);
     assert!(!folders[0].exists(), "{} is left", folders[0].display());
 }
+
+/// A test process killed before it dropped its folders leaves them to the next one, which
+/// removes them; those of a process still running stay.
+#[cfg(unix)]
+#[test]
+fn the_folders_of_a_killed_test_process_are_removed() {
+    let temp = std::env::temp_dir();
+    let mut running = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let mut ended = std::process::Command::new("true").spawn().unwrap();
+    ended.wait().unwrap();
+    let folder = |pid: u32| {
+        let folder = temp.join(format!(
+            "brigadier-flow-litter-killed-{pid}-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(folder.join("data")).unwrap();
+        folder
+    };
+    let killed = folder(ended.id());
+    let alive = folder(running.id());
+    let ours = folder(std::process::id());
+    let unnamed = temp.join(format!("brigadier-flow-litter-killed-{}", ended.id()));
+    std::fs::create_dir_all(&unnamed).unwrap();
+    super::remove_killed_tests(&temp);
+    let kept = [alive.exists(), ours.exists(), unnamed.exists()];
+    running.kill().unwrap();
+    running.wait().unwrap();
+    for folder in [&alive, &ours, &unnamed] {
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+    assert!(!killed.exists());
+    assert_eq!(kept, [true; 3]);
+}

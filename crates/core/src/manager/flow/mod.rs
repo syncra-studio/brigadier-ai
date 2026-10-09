@@ -959,7 +959,8 @@ const SCRATCH: &str = "brigadier-flow-";
 /// failed while its session started), after what that session's daemon still runs is ended.
 /// Work the daemon still has in flight then (on the runtime's blocking threads) may write
 /// there afterwards, so they are removed once more as the test's thread ends, when its runtime
-/// and those threads are gone.
+/// and those threads are gone. A test process killed before it drops them leaves them to the
+/// next one's first [`Scratch::new`].
 pub(crate) struct Scratch {
     dir: PathBuf,
     /// The ledger of the session working in it.
@@ -969,6 +970,7 @@ pub(crate) struct Scratch {
 impl Scratch {
     /// A fresh folder named for `name`.
     pub fn new(name: &str) -> Self {
+        sweep_killed_tests();
         let scratch = Self {
             dir: std::env::temp_dir().join(format!(
                 "{SCRATCH}{name}-{}-{}",
@@ -1041,6 +1043,44 @@ impl Drop for Leftovers {
 
 thread_local! {
     static LEFT: Leftovers = const { Leftovers(std::cell::RefCell::new(Vec::new())) };
+}
+
+/// Removes the folders of test processes that are gone, once per test process.
+fn sweep_killed_tests() {
+    static SWEPT: std::sync::Once = std::sync::Once::new();
+    SWEPT.call_once(|| remove_killed_tests(&std::env::temp_dir()));
+}
+
+/// Removes the folders in `temp` that test processes now gone made with [`Scratch::new`].
+fn remove_killed_tests(temp: &Path) {
+    let Ok(platform) = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+        data_dir: Some(temp.to_owned()),
+    }) else {
+        return;
+    };
+    let processes = platform.processes();
+    let Ok(entries) = std::fs::read_dir(temp) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(made_by) else {
+            continue;
+        };
+        let folder = entry.file_type().is_ok_and(|kind| kind.is_dir());
+        if folder && pid != std::process::id() && !processes.is_alive(pid) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// The test process that made the folder named `name` with [`Scratch::new`].
+fn made_by(name: &str) -> Option<u32> {
+    let mut parts = name.strip_prefix(SCRATCH)?.rsplitn(3, '-');
+    let id = parts.next()?;
+    let pid = parts.next()?;
+    parts.next()?;
+    let ours = id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit());
+    ours.then(|| pid.parse().ok()).flatten()
 }
 
 // ----- a scripted session -----------------------------------------------------------------
