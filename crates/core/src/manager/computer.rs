@@ -422,16 +422,21 @@ impl SessionManager {
         &self,
     ) -> std::result::Result<brigadier_computer::wire::Permissions, String> {
         let worker = TaskId("settings".into());
-        let a = self
-            .computer
-            .request(
+        let read = || {
+            self.computer.request(
                 &worker,
                 Provider::Claude,
                 Policy::default(),
                 Op::Permissions,
             )
-            .await
-            .map_err(|e| e.detail)?;
+        };
+        // The helper may have just exited to pick up a screen-recording grant: one more try
+        // starts the next one.
+        let a = match read().await {
+            Err(e) if e.code == ErrorCode::AppNotResponding => read().await,
+            other => other,
+        }
+        .map_err(|e| e.detail)?;
         let p = a
             .reply
             .permissions
@@ -1256,6 +1261,9 @@ pub(crate) mod fake {
         /// The permissions it reports; `None` for both granted. With one missing, engine work
         /// answers `permission_missing`.
         pub permissions: Option<Permissions>,
+        /// The next permissions read finds the helper gone, as when it has just exited to
+        /// pick up a screen-recording grant.
+        pub gone_on_read: bool,
     }
 
     /// A helper connection that answers pings, cancels, session ends, describes of the
@@ -1318,12 +1326,17 @@ pub(crate) mod fake {
             let permissions = lock(&self.desktop).permissions.unwrap_or(Permissions {
                 accessibility: true,
                 screen_recording: true,
+                restarting: false,
             });
             if !op.is_control() && !(permissions.accessibility && permissions.screen_recording) {
                 return done(answer(Reply::error(
                     id,
                     CuError::new(ErrorCode::PermissionMissing, "Accessibility is missing"),
                 )));
+            }
+            if op == Op::Permissions && std::mem::take(&mut lock(&self.desktop).gone_on_read) {
+                self.dead.store(true, Ordering::SeqCst);
+                return done(Err(Gone));
             }
             match op {
                 Op::Permissions => done(answer(Reply {

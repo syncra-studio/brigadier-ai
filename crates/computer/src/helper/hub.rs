@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -36,6 +36,9 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Clone, Copy)]
 pub struct System {
     pub permissions: fn() -> Permissions,
+    /// The grants a new process of this helper would have. A running process keeps the
+    /// screen-recording answer it started with; a fresh one sees a grant given since.
+    pub fresh_permissions: fn() -> Permissions,
     /// Shows the system's own prompt for a grant; returns at once.
     pub request_permission: fn(Grant),
     /// A process's start time, microseconds since the Unix epoch.
@@ -150,6 +153,8 @@ pub struct Hub {
     activity: Arc<Mutex<Activity>>,
     next_conn: AtomicU64,
     next_key: AtomicU64,
+    /// Screen recording was allowed after this process started: it restarts once nothing runs.
+    restart: AtomicBool,
 }
 
 impl Hub {
@@ -187,6 +192,7 @@ impl Hub {
             activity,
             next_conn: AtomicU64::new(1),
             next_key: AtomicU64::new(1),
+            restart: AtomicBool::new(false),
         }))
     }
 
@@ -230,6 +236,12 @@ impl Hub {
     /// How long nothing has been in use: no session open and no request queued or running.
     pub fn idle_for(&self) -> Option<Duration> {
         lock(&self.activity).idle_since.map(|t| t.elapsed())
+    }
+
+    /// Whether the helper should exit now so the next one starts with screen recording:
+    /// the grant came after this process started, and no engine request is queued or running.
+    pub fn restart_due(&self) -> bool {
+        self.restart.load(Ordering::SeqCst) && lock(&self.activity).running == 0
     }
 
     /// Connections that passed the hello and haven't ended.
@@ -386,7 +398,14 @@ impl Hub {
     }
 
     fn permissions(&self, id: u64) -> Reply {
-        let p = (self.system.permissions)();
+        let mut p = (self.system.permissions)();
+        // This process can't see a screen-recording grant given after it started; a fresh
+        // one can. Say it's allowed and restart to pick it up.
+        if !p.screen_recording && (self.system.fresh_permissions)().screen_recording {
+            self.restart.store(true, Ordering::SeqCst);
+            p.screen_recording = true;
+            p.restarting = true;
+        }
         let word = |b: bool| if b { "allowed" } else { "not allowed" };
         Reply {
             id,

@@ -217,6 +217,12 @@ fn granted() -> System {
         permissions: || Permissions {
             accessibility: true,
             screen_recording: true,
+            restarting: false,
+        },
+        fresh_permissions: || Permissions {
+            accessibility: true,
+            screen_recording: true,
+            restarting: false,
         },
         request_permission: |_| {},
         process_start_us: |_| Some(42),
@@ -453,6 +459,7 @@ fn a_missing_grant_is_named_and_the_control_service_still_answers() {
         permissions: || Permissions {
             accessibility: false,
             screen_recording: true,
+            restarting: false,
         },
         ..granted()
     };
@@ -470,6 +477,45 @@ fn a_missing_grant_is_named_and_the_control_service_still_answers() {
     let (_, rx) = send(&c, Op::Permissions);
     let p = answer(&rx).unwrap().reply.permissions.unwrap();
     assert!(!p.accessibility && p.screen_recording);
+}
+
+#[test]
+fn a_screen_grant_given_since_the_start_is_reported_and_restarts_the_helper_once_idle() {
+    let system = System {
+        permissions: || Permissions {
+            accessibility: true,
+            screen_recording: false,
+            restarting: false,
+        },
+        ..granted()
+    };
+    let s = setup(system, None);
+    let c = connect(&s, TOKEN);
+    assert!(!s.hub.restart_due(), "nothing asked yet");
+    let (_, rx) = send(&c, Op::Permissions);
+    let p = answer(&rx).unwrap().reply.permissions.unwrap();
+    assert!(p.accessibility && p.screen_recording && p.restarting);
+    assert!(s.hub.restart_due(), "nothing runs, so it restarts now");
+}
+
+#[test]
+fn no_restart_while_screen_recording_is_still_off_for_a_fresh_process() {
+    let off = || Permissions {
+        accessibility: true,
+        screen_recording: false,
+        restarting: false,
+    };
+    let system = System {
+        permissions: off,
+        fresh_permissions: off,
+        ..granted()
+    };
+    let s = setup(system, None);
+    let c = connect(&s, TOKEN);
+    let (_, rx) = send(&c, Op::Permissions);
+    let p = answer(&rx).unwrap().reply.permissions.unwrap();
+    assert!(!p.screen_recording && !p.restarting);
+    assert!(!s.hub.restart_due());
 }
 
 #[test]

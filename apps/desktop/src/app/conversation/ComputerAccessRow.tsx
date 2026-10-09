@@ -1,13 +1,13 @@
 import { HandRaised } from "@openai/apps-sdk-ui/components/Icon";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { WorkerLine } from "@/app/conversation/WorkerChip";
-import { COMPUTER_USE_ROWS } from "@/app/settings/ComputerUsePage";
+import { COMPUTER_USE_ROWS, GRANT_STEPS } from "@/app/settings/ComputerUsePage";
 import { SummaryRow } from "@/components/assistant-ui/elements/summary-section";
 import { Button } from "@/components/ui/button";
 import type { ComputerAccess, ComputerGrant } from "@/ipc/generated";
-import { allowComputerAccess, readComputerAccess, useComputerAccess } from "@/state/computerAccess";
+import { allowComputerAccess, useLiveComputerAccess } from "@/state/computerAccess";
 
 const GRANTS: readonly ComputerGrant[] = ["accessibility", "screenRecording"];
 
@@ -50,21 +50,15 @@ export function ComputerAccessBody({
       </SummaryRow>
       {missing.map((grant) => <GrantButton key={grant} grant={grant} onAllow={onAllow} />)}
       {access && missing.length === 0 && <p className="text-foreground/65 ps-6 text-sm">Allowed. Workers can use apps now.</p>}
-      {asked && missing.length > 0 && <p className="text-foreground/65 text-label ps-6">In System Settings, turn on Brigadier Computer Use.</p>}
+      {asked && missing.length > 0 && <p className="text-foreground/65 text-label ps-6">{GRANT_STEPS}</p>}
     </div>
   );
 }
 
 export function ComputerAccessRow({ what }: { what: string }) {
-  const access = useComputerAccess();
+  // Kept current while shown; a read that finds both allowed closes this item.
+  const access = useLiveComputerAccess();
   const [asked, setAsked] = useState(false);
-  // Read again when shown and whenever the window comes back: the user allows in System
-  // Settings, then returns. A read that finds both allowed closes this item.
-  useEffect(() => {
-    readComputerAccess();
-    window.addEventListener("focus", readComputerAccess);
-    return () => window.removeEventListener("focus", readComputerAccess);
-  }, []);
   return (
     <ComputerAccessBody
       what={what}

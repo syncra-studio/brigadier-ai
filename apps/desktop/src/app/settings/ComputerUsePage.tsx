@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import {
@@ -9,11 +9,7 @@ import {
   SettingsSection,
 } from "@/app/settings/parts";
 import type { ComputerAccess, ComputerGrant } from "@/ipc/generated";
-import {
-  allowComputerAccess,
-  readComputerAccess,
-  useComputerAccess,
-} from "@/state/computerAccess";
+import { allowComputerAccess, useLiveComputerAccess } from "@/state/computerAccess";
 
 /** The Computer use page's rows, for the page and for Settings search. */
 export const COMPUTER_USE_ROWS = {
@@ -25,6 +21,12 @@ const INTRO =
   "Lets workers see and use apps on this Mac in the background. Your cursor and keyboard stay yours.";
 
 const GRANTS: readonly ComputerGrant[] = ["accessibility", "screenRecording"];
+
+/** What to do in System Settings after an Allow, and what to do when the switch is on but this still says no. */
+export const GRANT_STEPS = "macOS opens System Settings. Turn on Brigadier Computer Use there; this page updates by itself.";
+export const STALE_ENTRY =
+  "Already on there, but still not allowed here? It's from an older build: select Brigadier Computer Use, remove it with −, then press Allow… again.";
+export const RESTARTING = "Brigadier Computer Use is restarting so it can see the screen.";
 
 function GrantRow({
   grant,
@@ -63,6 +65,7 @@ export function ComputerUseBody({
   onAllow: (grant: ComputerGrant) => Promise<void>;
 }) {
   if (!access?.available) return null;
+  const missing = GRANTS.some((grant) => !access[grant]);
   return (
     <SettingsPage title="Computer use" description={INTRO}>
       <SettingsSection>
@@ -71,11 +74,13 @@ export function ComputerUseBody({
             <GrantRow key={grant} grant={grant} allowed={access[grant]} onAllow={onAllow} />
           ))}
         </SettingsCard>
-        {asked && (
-          <p className="text-foreground/65 text-label px-1">
-            In System Settings, turn on Brigadier Computer Use.
-          </p>
+        {asked && missing && (
+          <>
+            <p className="text-foreground/65 text-label px-1">{GRANT_STEPS}</p>
+            <p className="text-foreground/50 text-label px-1">{STALE_ENTRY}</p>
+          </>
         )}
+        {access.restarting && <p className="text-foreground/65 text-label px-1">{RESTARTING}</p>}
         {access.problem && (
           <p className="text-foreground/50 text-label px-1">{access.problem}</p>
         )}
@@ -85,16 +90,9 @@ export function ComputerUseBody({
 }
 
 export function ComputerUsePage() {
-  const access = useComputerAccess();
+  // Kept current while shown: a switch turned on in System Settings shows here by itself.
+  const access = useLiveComputerAccess();
   const [asked, setAsked] = useState(false);
-
-  // Read again when shown and whenever the window comes back: the user grants in System
-  // Settings, then returns here.
-  useEffect(() => {
-    readComputerAccess();
-    window.addEventListener("focus", readComputerAccess);
-    return () => window.removeEventListener("focus", readComputerAccess);
-  }, []);
 
   return (
     <ComputerUseBody

@@ -2,6 +2,7 @@
 //! on a card at the lower permission levels and what doesn't, what reaches the helper (a fake
 //! here), a denial, a reused pid, and the user's Stop while a card waits.
 
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -395,6 +396,7 @@ fn missing(accessibility: bool, screen_recording: bool) -> Option<Permissions> {
     Some(Permissions {
         accessibility,
         screen_recording,
+        restarting: false,
     })
 }
 
@@ -452,6 +454,22 @@ async fn a_missing_permission_lists_one_item_until_both_are_granted() {
     lock(&helper.desktop).permissions = None;
     flow.manager.computer_permissions().await.unwrap();
     assert!(permission_items(&flow.board().await).is_empty());
+    finish(flow, worker).await;
+}
+
+/// A permissions read that finds the helper just gone (it exits to pick up a screen-recording
+/// grant) starts the next one and answers, instead of showing Settings an error.
+#[tokio::test]
+async fn a_permissions_read_starts_a_helper_that_just_restarted() {
+    let (flow, worker, helper) =
+        start("computer-permission-restart", PermissionLevel::FullAccess).await;
+    flow.manager.computer_permissions().await.unwrap();
+    let before = helper.starts.load(Ordering::SeqCst);
+    assert_eq!(before, 1, "the first read started the helper");
+    lock(&helper.desktop).gone_on_read = true;
+    let p = flow.manager.computer_permissions().await.unwrap();
+    assert!(p.accessibility && p.screen_recording);
+    assert_eq!(helper.starts.load(Ordering::SeqCst), before + 1);
     finish(flow, worker).await;
 }
 

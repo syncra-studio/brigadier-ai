@@ -4,6 +4,7 @@
 //!   brigadier-computer observe <window id or title> [always|never|auto]
 //!   brigadier-computer run <script.json> [--out <dir>]
 //!   brigadier-computer serve --socket <path> --token-file <path> [--parent <pid>]
+//!   brigadier-computer permissions
 //!   brigadier-computer web-fixture --log <file> --port-file <file>
 //!   brigadier-computer bench [--out <dir>] [--quick] [--no-foreground] [--cursor] [--replay <dir>]
 //!   brigadier-computer suite tasks | setup <task> <dir> [--seed n] | check <dir> [--records f] [--report f] [--offline]
@@ -44,6 +45,17 @@ fn main() -> anyhow::Result<()> {
             token_file,
             parent,
         });
+    }
+    // The helper's fresh look at its grants: run as its child, it has the helper's grants.
+    if args.first().map(String::as_str) == Some("permissions") {
+        let (accessibility, screen_recording) = brigadier_computer::macos::permissions();
+        let p = brigadier_computer::wire::Permissions {
+            accessibility,
+            screen_recording,
+            restarting: false,
+        };
+        println!("{}", serde_json::to_string(&p)?);
+        return Ok(());
     }
     // Drawing needs no grant.
     if args.first().map(String::as_str) == Some("cursor-demo") {

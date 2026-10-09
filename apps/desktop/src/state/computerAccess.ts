@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import type { ComputerAccess, ComputerGrant } from "@/ipc/generated";
 import { request } from "@/ipc/client";
@@ -31,11 +31,50 @@ export function computerUseAvailable(): boolean {
   return access?.available === true;
 }
 
-/** Reads the permissions again (the user may have changed them in System Settings). */
+let reading = false;
+
+/** Reads the permissions again (the user may have changed them in System Settings). One read at a time. */
 export function readComputerAccess(): void {
+  if (reading) return;
+  reading = true;
   request({ method: "getComputerAccess" })
     .then((response) => set(response.access))
-    .catch((error: unknown) => console.error("computer access read failed", error));
+    .catch((error: unknown) => console.error("computer access read failed", error))
+    .finally(() => {
+      reading = false;
+    });
+}
+
+/** How often a shown permission row reads again while one is missing. */
+export const WATCH_MS = 1500;
+
+/**
+ * Whether the permissions may still change by themselves: one is missing (the user may be
+ * turning it on in System Settings right now), or the helper is restarting to use a grant.
+ */
+export function watchingComputerAccess(read: ComputerAccess | null): boolean {
+  return read === null || read.restarting || !read.accessibility || !read.screenRecording;
+}
+
+/**
+ * The permissions, kept current while shown: read when shown, when the window comes back, and
+ * every {@link WATCH_MS} while one is missing, so a grant in System Settings shows without a
+ * click here.
+ */
+export function useLiveComputerAccess(): ComputerAccess | null {
+  const current = useComputerAccess();
+  const watching = current?.available !== false && watchingComputerAccess(current);
+  useEffect(() => {
+    readComputerAccess();
+    window.addEventListener("focus", readComputerAccess);
+    return () => window.removeEventListener("focus", readComputerAccess);
+  }, []);
+  useEffect(() => {
+    if (!watching) return;
+    const timer = window.setInterval(readComputerAccess, WATCH_MS);
+    return () => window.clearInterval(timer);
+  }, [watching]);
+  return current;
 }
 
 /** Asks the system for one permission; System Settings opens on its pane. */

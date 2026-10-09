@@ -1565,6 +1565,8 @@ pub struct ComputerAccess {
     pub accessibility: bool,
     /// See the screen (Screen Recording).
     pub screen_recording: bool,
+    /// Screen recording was just allowed and Brigadier Computer Use is restarting to use it.
+    pub restarting: bool,
     /// Why the permissions couldn't be read, in plain words.
     pub problem: Option<String>,
 }

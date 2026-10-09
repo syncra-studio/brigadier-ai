@@ -1274,21 +1274,18 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         },
         Request::AllowComputerAccess { grant } => {
             use brigadier_computer::wire::Grant;
-            let (wire, pane) = match grant {
-                ComputerGrant::Accessibility => (Grant::Accessibility, "Privacy_Accessibility"),
-                ComputerGrant::ScreenRecording => (Grant::ScreenRecording, "Privacy_ScreenCapture"),
+            let wire = match grant {
+                ComputerGrant::Accessibility => Grant::Accessibility,
+                ComputerGrant::ScreenRecording => Grant::ScreenRecording,
             };
             let permissions = sessions.request_computer_permission(wire).await;
             // The pane where the user turns Brigadier Computer Use on.
             #[cfg(target_os = "macos")]
             if permissions.is_ok() {
                 let _ = std::process::Command::new("/usr/bin/open")
-                    .arg(format!(
-                        "x-apple.systempreferences:com.apple.preference.security?{pane}"
-                    ))
+                    .arg(computer_pane_url(grant))
                     .spawn();
             }
-            let _ = pane;
             Response::AllowComputerAccess {
                 access: computer_access(permissions),
             }
@@ -1940,6 +1937,21 @@ fn shell_quote(path: &str) -> String {
     }
 }
 
+/// The System Settings pane that lists apps for `grant`: Privacy & Security → Accessibility,
+/// or → Screen & System Audio Recording. Both anchors are in the Privacy & Security
+/// extension, which takes its old pane id in `x-apple.systempreferences:` links.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn computer_pane_url(grant: ComputerGrant) -> &'static str {
+    match grant {
+        ComputerGrant::Accessibility => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        }
+        ComputerGrant::ScreenRecording => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        }
+    }
+}
+
 /// Computer use's permissions as Settings shows them.
 fn computer_access(
     read: std::result::Result<brigadier_computer::wire::Permissions, String>,
@@ -1950,13 +1962,45 @@ fn computer_access(
             available,
             accessibility: p.accessibility,
             screen_recording: p.screen_recording,
+            restarting: p.restarting,
             problem: None,
         },
         Err(problem) => ComputerAccess {
             available,
             accessibility: false,
             screen_recording: false,
+            restarting: false,
             problem: Some(problem),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_grant_opens_its_own_privacy_pane() {
+        assert_eq!(
+            computer_pane_url(ComputerGrant::Accessibility),
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        );
+        assert_eq!(
+            computer_pane_url(ComputerGrant::ScreenRecording),
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        );
+    }
+
+    #[test]
+    fn a_restarting_helper_reads_as_allowed_and_a_failed_read_as_neither() {
+        let access = computer_access(Ok(brigadier_computer::wire::Permissions {
+            accessibility: true,
+            screen_recording: true,
+            restarting: true,
+        }));
+        assert!(access.accessibility && access.screen_recording && access.restarting);
+        let access = computer_access(Err("it didn't answer in time".into()));
+        assert!(!access.accessibility && !access.screen_recording && !access.restarting);
+        assert_eq!(access.problem.as_deref(), Some("it didn't answer in time"));
     }
 }

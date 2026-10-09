@@ -17,6 +17,10 @@ accessibility: boolean,
  */
 screenRecording: boolean, 
 /**
+ * Screen recording was just allowed and Brigadier Computer Use is restarting to use it.
+ */
+restarting: boolean, 
+/**
  * Why the permissions couldn't be read, in plain words.
  */
 problem: string | null, };

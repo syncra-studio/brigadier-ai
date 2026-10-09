@@ -167,10 +167,14 @@ pub struct ImageMeta {
     pub mime: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Permissions {
     pub accessibility: bool,
     pub screen_recording: bool,
+    /// Screen recording was just allowed, and this helper restarts to start using it: macOS
+    /// gives a running process the grant only after a relaunch.
+    #[serde(default)]
+    pub restarting: bool,
 }
 
 /// A process, told apart from a later one with the same pid by its start time.

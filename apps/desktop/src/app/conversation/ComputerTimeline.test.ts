@@ -63,7 +63,7 @@ test("the permission item has one Allow per missing grant and closes its ask onc
       ReactDOMServer.renderToStaticMarkup(
         React.createElement(ComputerAccessBody, { what: "Workers need permission to use apps", access, asked, onAllow: async () => {} }),
       );
-    const none: ComputerAccess = { available: true, accessibility: false, screenRecording: false, problem: null };
+    const none: ComputerAccess = { available: true, accessibility: false, screenRecording: false, restarting: false, problem: null };
 
     const both = render(none);
     assert.match(both, /Workers need permission to use apps/);
@@ -76,7 +76,7 @@ test("the permission item has one Allow per missing grant and closes its ask onc
     assert.deepEqual(buttons(half), ["Allow…"]);
     assert.match(half, />Control apps</);
     assert.doesNotMatch(half, />See the screen</);
-    assert.match(half, /In System Settings, turn on Brigadier Computer Use\./);
+    assert.match(half, /Turn on Brigadier Computer Use there; this page updates by itself\./);
 
     const done = render({ ...none, accessibility: true, screenRecording: true }, true);
     assert.deepEqual(buttons(done), []);
