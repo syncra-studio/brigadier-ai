@@ -31,7 +31,12 @@ pub struct Conn {
     ws: WebSocket<TcpStream>,
     next: u64,
     events: VecDeque<Event>,
+    /// A dialog stopped the page since the current call began.
+    stopped: bool,
 }
+
+/// Events that mean the page now waits on a dialog: input sent to it is answered only after.
+const STOPS: [&str; 2] = ["Debugger.paused", "Page.javascriptDialogOpening"];
 
 impl Conn {
     /// Connects to `ws://127.0.0.1:<port><path>`, the browser endpoint the browser wrote in its
@@ -56,10 +61,12 @@ impl Conn {
             ws,
             next: 1,
             events: VecDeque::new(),
+            stopped: false,
         })
     }
 
-    /// Sends a command and waits for its reply, keeping the events that come first.
+    /// Sends a command and waits for its reply, keeping the events that come first. Input that
+    /// opens a dialog isn't answered until the dialog is: it returns null once the page stops.
     pub fn call(&mut self, session: Option<&str>, method: &str, params: Value) -> CuResult<Value> {
         self.call_within(session, method, params, CALL_TIMEOUT)
     }
@@ -81,6 +88,8 @@ impl Conn {
             .send(Message::text(msg.to_string()))
             .map_err(|e| gone(&e))?;
         let deadline = Instant::now() + timeout;
+        self.stopped = false;
+        let input = method.starts_with("Input.");
         loop {
             match self.read_one()? {
                 Some(v) if v.get("id").and_then(Value::as_u64) == Some(id) => {
@@ -91,6 +100,9 @@ impl Conn {
                     return Ok(v.get("result").cloned().unwrap_or(Value::Null));
                 }
                 Some(_) | None => {}
+            }
+            if input && self.stopped {
+                return Ok(Value::Null);
             }
             if Instant::now() >= deadline {
                 return err(
@@ -152,6 +164,7 @@ impl Conn {
             return Ok(Some(v));
         }
         if let Some(method) = v.get("method").and_then(Value::as_str) {
+            self.stopped |= STOPS.contains(&method);
             self.events.push_back(Event {
                 session: v
                     .get("sessionId")

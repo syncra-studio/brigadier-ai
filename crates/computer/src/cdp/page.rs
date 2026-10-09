@@ -48,6 +48,9 @@ pub struct Dialog {
     pub default_prompt: String,
     /// What a `prompt`'s field holds now, set through `set_value`.
     pub text: Option<String>,
+    /// Where the page waits on it when our wrapper caught it: the session and the paused call
+    /// frame. None for the browser's own dialog window.
+    pub paused: Option<(String, String)>,
 }
 
 /// How the main frame's viewport sits in the window.
@@ -130,6 +133,44 @@ pub struct Page {
 }
 
 /// Installs the DOM-change clock in an isolated world: the page's own scripts never see it.
+/// The page's `alert`, `confirm` and `prompt`, wrapped so a call stops in the debugger instead
+/// of opening the browser's dialog window, which would bring the browser to the front. The page
+/// waits there, as it would on the window, until the dialog's virtual buttons answer it; with
+/// no debugger attached the statement does nothing and the browser's own dialog opens.
+const DIALOG_WRAP: &str = r#"(() => {
+  const w = window;
+  if (w.confirm && w.confirm.__brigadier) return;
+  for (const kind of ["alert", "confirm", "prompt"]) {
+    const native = w[kind];
+    const f = { [kind](message, value) {
+      const __brigadierBox = { kind, message: message === undefined ? "" : String(message),
+        value: value === undefined ? "" : String(value), answered: false, accept: false, text: "" };
+      debugger;
+      if (!__brigadierBox.answered) return native.apply(w, arguments);
+      if (kind === "alert") return undefined;
+      if (kind === "confirm") return __brigadierBox.accept;
+      return __brigadierBox.accept ? __brigadierBox.text : null;
+    } }[kind];
+    Object.defineProperty(f, "__brigadier", { value: true });
+    w[kind] = f;
+  }
+})();"#;
+/// Read in a paused frame: the wrapper's dialog, or nothing for any other pause.
+const DIALOG_READ: &str =
+    "typeof __brigadierBox === 'object' ? JSON.stringify(__brigadierBox) : ''";
+
+/// Catches a session's dialogs in the debugger (see `DIALOG_WRAP`), in the document it shows
+/// now and in every one it loads later.
+fn catch_dialogs(conn: &mut Conn, session: &str) {
+    let s = Some(session);
+    let _ = conn.call(s, "Debugger.enable", json!({}));
+    let _ = conn.call(
+        s,
+        "Page.addScriptToEvaluateOnNewDocument",
+        json!({"source": DIALOG_WRAP, "runImmediately": true}),
+    );
+}
+
 /// How long a request may be open before it no longer holds the page unsettled.
 const LONG_REQUEST: Duration = Duration::from_secs(1);
 
@@ -154,6 +195,7 @@ impl Page {
         let s = Some(session.as_str());
         conn.call(s, "Page.enable", json!({}))?;
         conn.call(s, "Network.enable", json!({}))?;
+        catch_dialogs(conn, &session);
         conn.call(
             s,
             "Target.setAutoAttach",
@@ -194,6 +236,7 @@ impl Page {
                 {
                     let s = Some(child);
                     let _ = conn.call(s, "Network.enable", json!({}));
+                    catch_dialogs(conn, child);
                     let _ = conn.call(
                         s,
                         "Target.setAutoAttach",
@@ -232,9 +275,50 @@ impl Page {
                     message: s("message"),
                     default_prompt: s("defaultPrompt"),
                     text: None,
+                    paused: None,
                 });
             }
             "Page.javascriptDialogClosed" if session == self.session => self.dialog = None,
+            // Our wrapper's stop becomes the dialog; any other pause (the page's own
+            // `debugger` statement) is let go at once, so the page never hangs on us.
+            "Debugger.paused" => {
+                let frame = p["callFrames"][0]["callFrameId"]
+                    .as_str()
+                    .unwrap_or_default();
+                let read = conn
+                    .call(
+                        Some(&session),
+                        "Debugger.evaluateOnCallFrame",
+                        json!({"callFrameId": frame, "expression": DIALOG_READ, "returnByValue": true, "silent": true}),
+                    )
+                    .ok()
+                    .and_then(|r| r["result"]["value"].as_str().map(str::to_owned))
+                    .and_then(|t| serde_json::from_str::<Value>(&t).ok());
+                match read {
+                    Some(b) => {
+                        let s = |k: &str| b[k].as_str().unwrap_or_default().to_owned();
+                        self.dialog = Some(Dialog {
+                            kind: s("kind"),
+                            message: s("message"),
+                            default_prompt: s("value"),
+                            text: None,
+                            paused: Some((session.clone(), frame.to_owned())),
+                        });
+                    }
+                    None => {
+                        let _ = conn.call(Some(&session), "Debugger.resume", json!({}));
+                    }
+                }
+            }
+            "Debugger.resumed"
+                if self
+                    .dialog
+                    .as_ref()
+                    .and_then(|d| d.paused.as_ref())
+                    .is_some_and(|(s, _)| *s == session) =>
+            {
+                self.dialog = None;
+            }
             "Page.frameNavigated" if session == self.session => {
                 let f = &p["frame"];
                 if f.get("parentId").is_none() {
@@ -359,8 +443,8 @@ impl Page {
         Ok(Rect::new(r.x + ox, r.y + oy, r.w, r.h))
     }
 
-    /// Reads the page. While a dialog is open the page's scripts are paused, so only the dialog
-    /// is read: asking the page anything would wait on it.
+    /// Reads the page. While the browser's own dialog window is open the page can't answer, so
+    /// only the dialog is read: asking the page anything would wait on it.
     pub fn snapshot(&mut self, conn: &mut Conn, w: &WindowInfo) -> CuResult<Snapshot> {
         let viewport = self.viewport(conn, w)?;
         let title = conn
@@ -384,9 +468,8 @@ impl Page {
         root.value = Some(self.url.clone());
         root.frame = Some(viewport.rect());
         let mut nodes = vec![root];
-        if let Some(d) = &self.dialog {
-            dialog_nodes(d, &viewport, &mut nodes);
-        } else {
+        // A page stopped in the debugger can still be read, so its refs stay as they were.
+        if self.dialog.as_ref().is_none_or(|d| d.paused.is_some()) {
             let mut reader = Reader {
                 conn,
                 page: self,
@@ -394,6 +477,9 @@ impl Page {
                 nodes: &mut nodes,
             };
             reader.frame(&self.session.clone(), None, 1)?;
+        }
+        if let Some(d) = &self.dialog {
+            dialog_nodes(d, &viewport, &mut nodes);
         }
         Ok(Snapshot {
             nodes,
@@ -939,9 +1025,26 @@ impl Page {
         let Some(d) = self.dialog.clone() else {
             return err(ErrorCode::StaleRef, "the dialog is gone");
         };
+        let text = d.text.unwrap_or(d.default_prompt);
+        if let Some((session, frame)) = &d.paused {
+            let s = Some(session.as_str());
+            let set = format!(
+                "__brigadierBox.answered = true; __brigadierBox.accept = {accept}; \
+                 __brigadierBox.text = {}; true",
+                json!(text)
+            );
+            conn.call(
+                s,
+                "Debugger.evaluateOnCallFrame",
+                json!({"callFrameId": frame, "expression": set, "silent": true}),
+            )?;
+            conn.call(s, "Debugger.resume", json!({}))?;
+            self.dialog = None;
+            return Ok(());
+        }
         let mut params = json!({"accept": accept});
         if accept && d.kind == "prompt" {
-            params["promptText"] = json!(d.text.unwrap_or(d.default_prompt));
+            params["promptText"] = json!(text);
         }
         conn.call(Some(&self.session), "Page.handleJavaScriptDialog", params)?;
         self.dialog = None;

@@ -247,7 +247,7 @@ impl<D: Desktop> Engine<D> {
         }
         if self.on_page(page, |p, _| Ok(p.dialog.is_some()))? {
             return err(
-                ErrorCode::Busy,
+                ErrorCode::BadRequest,
                 "the page waits on its dialog; answer it first (observe shows it)",
             );
         }
@@ -412,7 +412,7 @@ impl<D: Desktop> Engine<D> {
             )
         {
             return err(
-                ErrorCode::Busy,
+                ErrorCode::BadRequest,
                 "the page waits on its dialog; answer it with its accept or dismiss button",
             );
         }
