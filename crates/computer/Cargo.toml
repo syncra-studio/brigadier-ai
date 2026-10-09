@@ -39,6 +39,8 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 png = "0.18.1"
+base64.workspace = true
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = { version = "0.2.189", optional = true }

@@ -7,6 +7,7 @@ pub mod action;
 pub mod bench;
 pub mod block;
 pub mod cancel;
+pub mod cdp;
 pub mod cursor;
 pub mod desktop;
 pub mod engine;
@@ -32,6 +33,7 @@ pub mod client;
 #[cfg(all(target_os = "macos", feature = "engine"))]
 pub mod macos;
 pub mod unsupported;
+pub mod web_fixture;
 pub mod wire;
 
 /// This system's backend.

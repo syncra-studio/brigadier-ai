@@ -151,6 +151,13 @@ pub fn launch<D: Desktop>(
     {
         return err(ErrorCode::Blocked, reason);
     }
+    if let Some(app) = resolved
+        .as_ref()
+        .filter(|a| crate::cdp::is_chromium(a.bundle_id.as_deref()))
+        && let Some(path) = app.bundle_path.clone()
+    {
+        return launch_browser(engine, &path, req.open.as_deref(), cancel);
+    }
     let before: HashMap<i32, HashSet<u32>> = engine
         .desktop
         .apps()?
@@ -266,6 +273,114 @@ pub fn launch<D: Desktop>(
         if !(reason == TERMINAL_NOT_LAUNCHED && opened.new_process) {
             return Err(CuError::new(ErrorCode::Blocked, reason));
         }
+    }
+    Ok(opened)
+}
+
+/// A file path as a URL a browser loads; URLs pass through.
+fn as_url(open: &str) -> String {
+    match local_path(open) {
+        Some(p) if !open.contains("://") => {
+            format!(
+                "file://{}",
+                p.display()
+                    .to_string()
+                    .replace('%', "%25")
+                    .replace(' ', "%20")
+            )
+        }
+        _ => open.to_owned(),
+    }
+}
+
+/// A Chromium browser for the session (§8, Phase 5): a new instance on a scratch profile with its
+/// debugging port, or a new window in the one the session already runs. The window is made in the
+/// background by the browser itself, so the browser never takes the front.
+fn launch_browser<D: Desktop>(
+    engine: &mut Engine<D>,
+    path: &str,
+    open: Option<&str>,
+    cancel: &CancelToken,
+) -> CuResult<Opened> {
+    let url = open.map_or_else(|| "about:blank".to_owned(), as_url);
+    let desktop = &mut engine.desktop;
+    engine.web.prune(|pid| desktop.app(pid).is_ok());
+    let front_before = engine.desktop.user_focus().frontmost_pid;
+    let running = engine
+        .web
+        .browsers
+        .iter()
+        .find(|b| b.app_path.trim_end_matches('/') == path.trim_end_matches('/'))
+        .map(|b| b.pid);
+    let (pid, new_process) = match running {
+        Some(pid) => (pid, false),
+        None => {
+            let before: HashSet<i32> = engine.desktop.apps()?.iter().map(|a| a.pid).collect();
+            let profile = crate::cdp::scratch_profile()?;
+            engine
+                .desktop
+                .open_new(path, &crate::cdp::launch_args(&profile))?;
+            let started = Instant::now();
+            let pid = loop {
+                let fresh = engine.desktop.apps()?.into_iter().find(|a| {
+                    !before.contains(&a.pid)
+                        && a.bundle_path.as_deref().map(|p| p.trim_end_matches('/'))
+                            == Some(path.trim_end_matches('/'))
+                });
+                if let Some(a) = fresh {
+                    break a.pid;
+                }
+                if started.elapsed() >= WINDOW_WAIT {
+                    let _ = std::fs::remove_dir_all(&profile);
+                    return err(ErrorCode::NoSuchTarget, "the browser didn't start");
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            };
+            let browser = crate::cdp::Browser::attach(pid, path, profile, WINDOW_WAIT)?;
+            engine.web.add(browser);
+            (pid, true)
+        }
+    };
+    let browser = engine
+        .web
+        .browser(pid)
+        .ok_or_else(|| CuError::new(ErrorCode::NoSuchTarget, "the browser quit"))?;
+    let target = browser.new_window(&url)?;
+    let bounds = browser.window_bounds(&target)?;
+    // The window the browser made: the one with the tab's bounds.
+    let started = Instant::now();
+    let window = loop {
+        let found = engine.desktop.windows(pid)?.into_iter().find(|w| {
+            (w.frame.x - bounds.x).abs() <= 1.0
+                && (w.frame.y - bounds.y).abs() <= 1.0
+                && (w.frame.w - bounds.w).abs() <= 1.0
+                && (w.frame.h - bounds.h).abs() <= 1.0
+                && !w.title.is_empty()
+        });
+        if let Some(w) = found {
+            break Some(w.id);
+        }
+        if cancel.check().is_err() || started.elapsed() >= WINDOW_WAIT {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let mut app = engine.desktop.app(pid)?;
+    app.windows = engine.desktop.windows(pid)?;
+    let mut opened = Opened {
+        app,
+        new_process,
+        new_windows: window.into_iter().collect(),
+        restored_windows: Vec::new(),
+        front_restored: false,
+    };
+    let front_now = engine.desktop.user_focus().frontmost_pid;
+    if front_now == pid && front_before != pid && front_before != 0 {
+        opened.front_restored = engine.desktop.activate(front_before).is_ok();
+    }
+    // A browser this launch started is reported even when stopped, so it is owned and quit.
+    if window.is_none() && !new_process {
+        cancel.check()?;
     }
     Ok(opened)
 }

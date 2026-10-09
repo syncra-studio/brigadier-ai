@@ -64,7 +64,7 @@ fn print_reply(reply: &Reply, out: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-/// Runs a script: `{"worker": "...", "foreground": false, "steps": [{"observe": {...}} | {"act": {...}} | {"zoom": {...}}]}`.
+/// Runs a script: `{"worker": "...", "foreground": false, "steps": [{"launch": {...}} | {"observe": {...}} | {"act": {...}} | {"zoom": {...}}]}`.
 /// `foreground: false` keeps the foreground rung off, so the script never raises a window or
 /// takes the front, however long the user has been idle.
 /// Writes images, the action records and an annotated copy of the last full screenshot with every
@@ -112,6 +112,16 @@ pub fn run_script<D: Desktop>(engine: &mut Engine<D>, script: &Value, out: &Path
             }
             let reply = engine.act(&worker, &req).map_err(|e| anyhow!("{e}"))?;
             print_reply(&reply, Some(out))?;
+        } else if let Some(l) = step.get("launch") {
+            let req: crate::wire::LaunchRequest = serde_json::from_value(l.clone())?;
+            let cancel = engine
+                .gens
+                .token(&worker, std::time::Duration::from_secs(30));
+            let o = crate::launch::launch(engine, &req, &cancel).map_err(|e| anyhow!("{e}"))?;
+            println!(
+                "launched {} pid {} (new process: {}) windows {:?}",
+                o.app.name, o.app.pid, o.new_process, o.new_windows
+            );
         } else if let Some(z) = step.get("zoom") {
             let req: ZoomRequest = serde_json::from_value(z.clone())?;
             let reply = engine.zoom(&worker, &req).map_err(|e| anyhow!("{e}"))?;

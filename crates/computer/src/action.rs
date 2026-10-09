@@ -135,6 +135,12 @@ pub enum Action {
         #[serde(default = "wait_ms")]
         timeout_ms: u64,
     },
+    /// Loads a URL in a browser page the session launched.
+    Navigate {
+        url: String,
+        #[serde(default)]
+        expect: Option<Expect>,
+    },
 }
 
 fn one() -> u8 {
@@ -160,6 +166,7 @@ impl Action {
             Self::Menu { .. } => "menu",
             Self::Select { .. } => "select",
             Self::Wait { .. } => "wait",
+            Self::Navigate { .. } => "navigate",
         }
     }
 
@@ -173,7 +180,8 @@ impl Action {
             | Self::Drag { expect, .. }
             | Self::Perform { expect, .. }
             | Self::Menu { expect, .. }
-            | Self::Select { expect, .. } => expect.as_ref(),
+            | Self::Select { expect, .. }
+            | Self::Navigate { expect, .. } => expect.as_ref(),
             Self::Wait { expect, .. } => Some(expect),
         }
     }
@@ -188,7 +196,8 @@ impl Action {
             | Self::Drag { expect, .. }
             | Self::Perform { expect, .. }
             | Self::Menu { expect, .. }
-            | Self::Select { expect, .. } => expect.as_mut(),
+            | Self::Select { expect, .. }
+            | Self::Navigate { expect, .. } => expect.as_mut(),
             Self::Wait { expect, .. } => Some(expect),
         }
     }
@@ -259,6 +268,9 @@ pub enum Rung {
     /// The window was raised to the front while the computer sat idle, then the front given
     /// back: the last resort when the background can't reach it.
     Foreground,
+    /// The page's own input, through the debugging protocol of a browser the session launched:
+    /// no system events at all.
+    Page,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

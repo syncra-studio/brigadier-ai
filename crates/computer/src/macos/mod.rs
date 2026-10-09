@@ -885,6 +885,24 @@ impl Desktop for MacDesktop {
             format!("couldn't open it: {}", why.trim()),
         )
     }
+
+    fn open_new(&mut self, path: &str, args: &[String]) -> CuResult<()> {
+        // open(1): -n a new instance, -g not in front, --args the rest to the app's main().
+        let out = std::process::Command::new("/usr/bin/open")
+            .args(["-n", "-g", "-a", path, "--args"])
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| CuError::new(ErrorCode::Failed, format!("open: {e}")))?;
+        if out.status.success() {
+            return Ok(());
+        }
+        let why = String::from_utf8_lossy(&out.stderr);
+        err(
+            ErrorCode::NoSuchTarget,
+            format!("couldn't open it: {}", why.trim()),
+        )
+    }
 }
 
 /// A range in characters as accessibility counts it, in UTF-16 units: an emoji is two.

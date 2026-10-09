@@ -333,4 +333,10 @@ pub trait Desktop {
         let _ = (app, target);
         err(ErrorCode::UnsupportedCapability, "launching")
     }
+    /// Starts a new instance of the app at `path` with these arguments, without bringing it to
+    /// the front: a session browser on its scratch profile.
+    fn open_new(&mut self, path: &str, args: &[String]) -> CuResult<()> {
+        let _ = (path, args);
+        err(ErrorCode::UnsupportedCapability, "launching")
+    }
 }

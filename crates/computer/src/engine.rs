@@ -23,6 +23,8 @@ use crate::record::ActionRecord;
 use crate::redact::redact;
 use crate::tree::{self, Filter, Line, RawNode, WindowRefs};
 
+mod web;
+
 /// The hard page size: 6,000 tokens of text (§1, T1).
 pub const PAGE_CHARS: usize = 24_000;
 /// How long the app must stay silent after an action to count as settled.
@@ -85,6 +87,13 @@ pub struct Engine<D: Desktop> {
     raised: bool,
     /// The agent cursor, told where each action aims just before it is delivered (§4.5).
     pub cursor: Cursor,
+    /// Browsers the session launched, whose pages are reached through their debugging protocol
+    /// (Phase 5).
+    pub web: crate::cdp::Web,
+    /// Refs of the pages those browsers' windows show, by window.
+    web_refs: HashMap<u32, WindowRefs<crate::cdp::WebEl>>,
+    /// The document each page window showed when last read: a new one makes its refs stale.
+    web_docs: HashMap<u32, String>,
 }
 
 /// Roles whose ordinary click is the element's press action.
@@ -117,6 +126,9 @@ impl<D: Desktop> Engine<D> {
             foreground: true,
             raised: false,
             cursor: None,
+            web: crate::cdp::Web::default(),
+            web_refs: HashMap::new(),
+            web_docs: HashMap::new(),
         }
     }
 
@@ -284,7 +296,7 @@ impl<D: Desktop> Engine<D> {
         }
     }
 
-    fn secure_frames(nodes: &[RawNode<D::Element>]) -> Vec<Rect> {
+    fn secure_frames<E>(nodes: &[RawNode<E>]) -> Vec<Rect> {
         nodes
             .iter()
             .filter(|n| n.secure)
@@ -293,7 +305,7 @@ impl<D: Desktop> Engine<D> {
     }
 
     /// A screenshot is worth it when the structure says little (§4.3, `auto`).
-    fn tree_is_poor(nodes: &[RawNode<D::Element>], lines: &[Line]) -> bool {
+    fn tree_is_poor<E>(nodes: &[RawNode<E>], lines: &[Line]) -> bool {
         let labelled = lines.iter().filter(|l| l.text.contains('"')).count();
         let canvas = nodes.iter().any(|n| n.role == "canvas");
         let empty_web = nodes
@@ -342,6 +354,9 @@ impl<D: Desktop> Engine<D> {
     pub fn observe(&mut self, worker: &str, req: &ObserveRequest) -> CuResult<Reply> {
         let w = self.desktop.window(req.window)?;
         self.check_block(&w)?;
+        if let Some(page) = self.web_page(&w) {
+            return self.web_observe(worker, req, &w, page);
+        }
         let element = match req.element.as_deref() {
             Some(e) => Some(
                 tree::parse_ref(e)
@@ -358,6 +373,46 @@ impl<D: Desktop> Engine<D> {
             _ => None,
         };
         let (nodes, lines) = self.read_tree(&w, filtered_read(req))?;
+        let selected = if lines.iter().any(|l| l.text.contains(" focused")) {
+            self.desktop
+                .focus(w.pid)
+                .ok()
+                .filter(|f| f.window == Some(w.id) && !f.secure)
+                .and_then(|f| f.selected_text)
+        } else {
+            None
+        };
+        let secure = Self::secure_frames(&nodes);
+        self.last_secure = (w.id, secure.clone());
+        let shot = match shot {
+            Some(s) => Some(s),
+            None if req.screenshot == Screenshot::Auto && Self::tree_is_poor(&nodes, &lines) => {
+                Some(self.begin_window_shot(&w)?)
+            }
+            None => None,
+        };
+        let image = match shot {
+            Some(shot) => Some(self.image_out(shot.wait()?, &secure)),
+            None => None,
+        };
+        self.render_observation(worker, req, &w, element, &lines, "", selected, image, incomplete)
+    }
+
+    /// An observation's text from its lines, full or as a diff against what this worker saw
+    /// last, with its focus, selected text and image lines; it becomes the worker's new base.
+    #[allow(clippy::too_many_arguments)]
+    fn render_observation(
+        &mut self,
+        worker: &str,
+        req: &ObserveRequest,
+        w: &WindowInfo,
+        element: Option<u32>,
+        lines: &[Line],
+        head: &str,
+        selected: Option<String>,
+        image: Option<ImageOut>,
+        incomplete: bool,
+    ) -> CuResult<Reply> {
         let obs = self.next_obs;
         self.next_obs += 1;
         let base = self.bases.get(&(worker.to_owned(), w.id));
@@ -380,48 +435,30 @@ impl<D: Desktop> Engine<D> {
                         kept.insert(*r, old.clone());
                     }
                 }
-                (self.header(&w, obs, &note)? + &body, omitted)
+                (self.header(w, obs, &note)? + head + &body, omitted)
             }
             None => {
                 let (body, omitted) = tree::render_full(
-                    &lines,
+                    lines,
                     &Filter {
                         element,
                         find: req.find.clone(),
                     },
                     PAGE_CHARS,
                 );
-                (self.header(&w, obs, "")? + &body, omitted)
+                (self.header(w, obs, "")? + head + &body, omitted)
             }
         };
         if let Some(f) = lines.iter().find(|l| l.text.contains(" focused")) {
             let _ = writeln!(text, "focus: e{} {}", f.r, f.text);
-            let selected = self
-                .desktop
-                .focus(w.pid)
-                .ok()
-                .filter(|f| f.window == Some(w.id) && !f.secure)
-                .and_then(|f| f.selected_text);
             if let Some(s) = selected {
                 let _ = writeln!(text, "selected: {}", tree::quote(&s, tree::VALUE_CLIP));
             }
         }
-        self.last_secure = (w.id, Self::secure_frames(&nodes));
-        let shot = match shot {
-            Some(s) => Some(s),
-            None if req.screenshot == Screenshot::Auto && Self::tree_is_poor(&nodes, &lines) => {
-                Some(self.begin_window_shot(&w)?)
-            }
-            None => None,
-        };
-        let image = if let Some(shot) = shot {
-            let img = self.image_out(shot.wait()?, &Self::secure_frames(&nodes));
+        if let Some(img) = &image {
             let t = self.image(&img.id)?;
-            text.push_str(&self.image_line(&img, &t));
-            Some(img)
-        } else {
-            None
-        };
+            text.push_str(&self.image_line(img, &t));
+        }
         if incomplete {
             let _ = writeln!(
                 text,
@@ -639,6 +676,9 @@ impl<D: Desktop> Engine<D> {
     }
 
     fn expect_holds(&mut self, w: &WindowInfo, e: &Expect) -> bool {
+        if let Some(page) = self.web_page(w) {
+            return self.web_expect(w, &page, e);
+        }
         let read = |this: &mut Self, r: &str| -> Option<RawNode<D::Element>> {
             let r = tree::parse_ref(r)?;
             let el = this.windows.get(&w.id)?.get(r)?.element.clone();
@@ -864,6 +904,13 @@ impl<D: Desktop> Engine<D> {
         cancel.check()?;
         let w = self.desktop.window(window)?;
         self.check_block(&w)?;
+        // A page of a browser the session launched takes everything but the browser's own menus
+        // through the browser.
+        if !matches!(action, Action::Menu { .. })
+            && let Some(page) = self.web_page(&w)
+        {
+            return self.web_act_one(worker, &w, page, index, action, cancel, entered);
+        }
         // Settling waits for the app's notifications to stop, so listen before acting.
         self.desktop.watch(w.pid);
         let before_windows: HashSet<u32> =
@@ -1062,6 +1109,12 @@ impl<D: Desktop> Engine<D> {
                 Rung::Element
             }
             Action::Wait { .. } => Rung::Element,
+            Action::Navigate { .. } => {
+                return err(
+                    ErrorCode::UnsupportedCapability,
+                    "navigate works in a browser the session launched; launch one with the URL",
+                );
+            }
         };
         let dispatch = start.elapsed();
         let bound = match action {
@@ -1279,13 +1332,18 @@ impl<D: Desktop> Engine<D> {
     /// last seen (`button "Save"`), a menu path, a key chord.
     fn target_name(&self, window: u32, action: &Action) -> Option<String> {
         let of_ref = |r: &str| {
-            let rec = self.windows.get(&window)?.get(tree::parse_ref(r)?)?;
-            Some(
-                match rec.label.as_deref().filter(|l| !l.trim().is_empty()) {
-                    Some(l) => format!("{} {}", rec.role, tree::quote(l, TARGET_CLIP)),
-                    None => rec.role.clone(),
-                },
-            )
+            let r = tree::parse_ref(r)?;
+            let (role, label) = match self.web_refs.get(&window).and_then(|x| x.get(r)) {
+                Some(rec) => (&rec.role, &rec.label),
+                None => {
+                    let rec = self.windows.get(&window)?.get(r)?;
+                    (&rec.role, &rec.label)
+                }
+            };
+            Some(match label.as_deref().filter(|l| !l.trim().is_empty()) {
+                Some(l) => format!("{role} {}", tree::quote(l, TARGET_CLIP)),
+                None => role.clone(),
+            })
         };
         match action {
             Action::Click { target, .. } | Action::Scroll { target, .. } => {
@@ -1299,6 +1357,7 @@ impl<D: Desktop> Engine<D> {
             Action::Menu { path, .. } => Some(path.join(" › ")),
             Action::Key { key, .. } => Some(key.clone()),
             Action::Wait { .. } => None,
+            Action::Navigate { url, .. } => Some(url.clone()),
         }
     }
 
@@ -1535,6 +1594,9 @@ impl<D: Desktop> Engine<D> {
         let t = self.image(&req.image)?;
         let w = self.desktop.window(t.window)?;
         self.check_block(&w)?;
+        if let Some(page) = self.web_page(&w) {
+            return self.web_zoom(req, &w, page, &t);
+        }
         let [x0, y0, x1, y1] = req.region;
         if x1 <= x0 || y1 <= y0 {
             return err(

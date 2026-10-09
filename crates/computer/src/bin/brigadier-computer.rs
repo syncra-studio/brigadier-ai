@@ -4,6 +4,7 @@
 //!   brigadier-computer observe <window id or title> [always|never|auto]
 //!   brigadier-computer run <script.json> [--out <dir>]
 //!   brigadier-computer serve --socket <path> --token-file <path> [--parent <pid>]
+//!   brigadier-computer web-fixture --log <file> --port-file <file>
 //!   brigadier-computer bench [--out <dir>] [--quick] [--no-foreground] [--cursor] [--replay <dir>]
 //!   brigadier-computer suite tasks | setup <task> <dir> [--seed n] | check <dir> [--records f] [--report f] [--offline]
 //!                            | teardown <dir> | scripted <out> [task…] | watch <out.jsonl>
@@ -50,6 +51,12 @@ fn main() -> anyhow::Result<()> {
         brigadier_computer::macos::overlay::run_with_overlay(mtm, |overlay| {
             brigadier_computer::macos::overlay::demo(&*overlay)
         });
+    }
+    // The browser fixture's server needs no grant either.
+    if args.first().map(String::as_str) == Some("web-fixture") {
+        let log = flag("--log").context("--log <file>")?;
+        let port_file = flag("--port-file").context("--port-file <file>")?;
+        return brigadier_computer::web_fixture::serve(log, &port_file);
     }
     // Listing and checking read files only.
     if args.first().map(String::as_str) == Some("suite") {

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Grounding boards</title>
+<!-- The page's P3 boards: `grounding.html?size=8&seed=1&boards=10`. Each board draws five numbered
+     markers and five lettered decoys of one size at seeded places on a canvas with no accessibility.
+     A press is logged with the marker it hit (`m3`, `dC`) or `canvas`, and its board. The log has
+     the native fixture's format, so the same scoring reads both. -->
+<style>
+  body { font: 14px -apple-system, system-ui, sans-serif; margin: 16px; }
+  canvas { border: 1px solid #999; display: block; margin: 8px 0; }
+</style>
+<script src="/log.js"></script>
+</head>
+<body>
+<p><span id="status">Board 0</span> <button id="next">Next board</button></p>
+<canvas id="board" width="640" height="420" aria-hidden="true"></canvas>
+<script>
+const q = new URLSearchParams(location.search);
+const size = Number(q.get("size") || 12), boards = Number(q.get("boards") || 10);
+let s = BigInt(q.get("seed") || 1) || 1n;
+const M = (1n << 64n) - 1n;
+function next() { s ^= (s << 13n) & M; s ^= s >> 7n; s ^= (s << 17n) & M; return s; }
+const unit = () => Number(next() % 1000000n) / 1000000;
+const colors = ["#e33", "#36c", "#3a3", "#e90", "#93c"];
+const cv = document.getElementById("board"), cx = cv.getContext("2d");
+let markers = [], board = 0;
+function draw() {
+  cx.fillStyle = "#f7f7f7"; cx.fillRect(0, 0, cv.width, cv.height);
+  cx.font = "600 12px -apple-system, system-ui, sans-serif"; cx.textBaseline = "middle";
+  for (const m of markers) {
+    cx.fillStyle = m.color; cx.beginPath(); cx.arc(m.x + size / 2, m.y + size / 2, size / 2, 0, 7); cx.fill();
+    cx.fillStyle = "#000"; cx.fillText(m.label, m.x + size + 3, m.y + size / 2);
+  }
+}
+function deal() {
+  const labels = ["1", "2", "3", "4", "5", "A", "B", "C", "D", "E"], placed = [];
+  markers = labels.map((label, i) => {
+    let r;
+    for (let t = 0; t < 500; t++) {
+      r = { x: 20 + unit() * (cv.width - 60 - size), y: 20 + unit() * (cv.height - 40 - size) };
+      // Apart enough that a label never sits on another marker; near enough to need care.
+      if (!placed.some((p) => r.x - 4 < p.x + size + 28 && r.x + size + 4 > p.x - 28 && r.y - 4 < p.y + size + 14 && r.y + size + 4 > p.y - 14)) break;
+    }
+    placed.push(r);
+    return { id: i < 5 ? "m" + label : "d" + label, label, x: r.x, y: r.y, color: colors[Number(next() % 5n)] };
+  });
+  board += 1;
+  log("board", "layout", { v: board + " " + markers.map((m) => `${m.id}:${Math.trunc(m.x + size / 2)},${Math.trunc(m.y + size / 2)}`).join(" ") });
+  document.getElementById("status").textContent = `Board ${board} of ${boards}`;
+  draw();
+}
+cv.addEventListener("mousedown", (e) => {
+  const x = e.offsetX, y = e.offsetY;
+  const hit = markers.find((m) => (x - m.x - size / 2) ** 2 + (y - m.y - size / 2) ** 2 <= (size / 2) ** 2);
+  log(hit ? hit.id : "canvas", "down", { x, y, v: String(board), trusted: e.isTrusted });
+});
+document.getElementById("next").addEventListener("click", (e) => {
+  log("next-board", "press", { v: String(board), trusted: e.isTrusted });
+  if (board >= boards) {
+    markers = []; draw();
+    document.getElementById("status").textContent = "All boards done";
+    log("board", "done");
+  } else deal();
+});
+deal();
+</script>
+</body>
+</html>
