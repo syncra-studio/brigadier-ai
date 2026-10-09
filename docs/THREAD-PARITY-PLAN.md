@@ -1,8 +1,11 @@
 # Thread parity plan: a conversation that reads like the target, interview cards, clear endings
 
-> Status: draft for review, 2026-10-09. Branch `thread-parity` from `main` at `a9f6924d`.
+> Status: approved 2026-10-09 with the user's answers and the plan review folded in (§8). Branch `thread-parity`
+> from `main` at `a9f6924d`.
 > It builds on docs/THREAD-UX-PLAN.md (approved 2026-10-08, built). Where the two differ, this plan wins; each
-> such change is marked **(changes THREAD-UX-PLAN §n)**.
+> such change is marked **(changes THREAD-UX-PLAN §n)**. Two of the user's 2026-10-09 decisions supersede older
+> ones (§8.2): the merge card replaces THREAD-PLAN §8 decision 6 ("Merging is conversational") for sessions, and
+> the plan card replaces PLAN §10.2's plan-only-in-the-context-card rule for a session's proposed plan.
 > Paths: `C/` = `apps/desktop/src/app/conversation/`, `E/` = `apps/desktop/src/components/assistant-ui/elements/`,
 > `M/` = `crates/core/src/manager/`. File:line references are to `a9f6924d`.
 > "Target behaviour" is the measured behaviour of the conversation view the user holds up as the bar. It was measured
@@ -165,7 +168,7 @@ own screenshots are in `msgs/evidence/brigadier/`.
 | Live header | `C/RequestBlock.tsx:125-140` words match; hidden for the first 2 s (`:152`, `:173`) | Show from the first moment; 8 px to the rule; `/50` → `.498` (same) |
 | Done header | `C/RequestBlock.tsx:195-212`: `ChevronRight size-icon-xs` | Chevron 14 px, centred; hover white |
 | Fold motion | Keyframes on `grid-template-rows` (`styles/globals.css:64-93`) with a 150 ms timer that unmounts (`C/RequestBlock.tsx:635-658`) and `preserveAnchor` scroll fixes (`components/assistant-ui/preserve-anchor.ts`) | **Flicker source 1:** while closing, steered bubbles are inside the fold; once closed they re-render outside it (`C/RequestBlock.tsx:548-573`), so everything below jumps by their height in one frame. **Source 2:** the keyframe's last frame and the unmount timer are separate clocks, so a frame at full height or a 0-height gap can show. **Source 3:** the anchor fix scrolls the thread while the content moves, so what is below can shift twice. |
-| Rows | `ROW` (`E/activity-row.tsx:20`): full-width, 20 px; chevron always shown (`:26-27`) | Content-width, 21 px; chevron on hover **(changes THREAD-UX-PLAN §3.7, "always visible")** |
+| Rows | `ROW` (`E/activity-row.tsx:20`): full-width, 20 px; chevron always shown at `/40` (`:26-27`) | Content-width, 21 px; the chevron stays always visible (the user, 2026-10-09) but quieter, and white with the text on hover |
 | Chevron off-centre (image 3) | `TeamSentence` sets `items-start` (`C/activity/TeamSentence.tsx:132`), so the 12 px chevron sits at the top of a 20 px line | `items-center` everywhere; one chevron size (14 px) |
 | Thinking | Live: a 2-line snippet (`C/ThinkingRow.tsx:24-30`). Settled: a row "Thought" under 1 s (`:33-38`). Timing runs from the first to the last streamed piece (`state/board.ts:459-470`), so a thought that arrives whole lasts 0 s | Live: one line with the newest heading (or first sentence). Settled: no row without text; a real duration; the row says what it was about (§4.3) |
 | Steer | Already a bubble in the block (`C/blocks.ts:589-628`, `C/RequestBlock.tsx:342-365`) | Bubble 10 × 16 px padding, 22 px radius; never folds away; the block must not end because the lead asked in text (§5 Q7) |
@@ -174,7 +177,6 @@ own screenshots are in `msgs/evidence/brigadier/`.
 | Live line | "Waiting for you · {item}" from waiting items (`C/liveStatus.ts:47-49`) and "Waiting for your answer" for a text question (`:58-59`) | "Waiting for your answer" only while a card is open |
 | Workers rail | `C/activity/WorkersStrip.tsx:97`: `-rotate-90` closed (points up), `rotate-90` open (points down) | Right when closed, down when open; 14 px chevron right of the label in a 24 px box |
 | Action bar | `C/RequestBlock.tsx:699-739`: shown, gap 4 px, min-h 30 px | 26 px buttons, gap 2 px, 6 px below the answer |
-| Column | `--container-thread: 52rem` (`styles/tokens.css:293`) | 48rem (768 px) **(changes THREAD-UX-PLAN §3.7, "stays 52rem")** |
 | Plans | Plans are phases only (`work.rs:1052-1065`, `plan_phases`). The plan-mode note asks the thread to show a lead's outline "in plain words" (`M/conversation.rs:87`). The plan shows as a link on the rail (`C/ActionCards.tsx:944-981`), as phase rows in the side panel (`C/cards/PlanSection.tsx`) and as a "Phase N / M" pill (`C/ComposerCapsule.tsx:133-138`) | No written plan document, no plan card in the thread, no "Implement this plan?" choice card |
 
 ## 4. The design: the conversation view
@@ -182,14 +184,31 @@ own screenshots are in `msgs/evidence/brigadier/`.
 ### 4.1 The turn
 1. **Order:** the user's bubble, the work header, the work, the answer, the diff card, the action bar.
 2. **Gaps:** 16 px between every item (the existing `--spacing-activity` token).
-3. **The column** narrows to 48rem.
+3. **The column** stays 52rem (the user, 2026-10-09).
 4. **The header:**
    - It shows from the first event; the 2 s delay goes (`C/RequestBlock.tsx:152`).
-   - Live, it has no chevron. Waiting on a card, it still says `Working for …`; the card and the live line carry the
-     "waiting" (Q6).
+   - Live, it has no chevron. Waiting on a question card, it still says `Working for …`; the card and the live line
+     carry the "waiting" (Q6).
    - Done, it is the ghost button with a 14 px chevron.
-5. **The block folds the moment the final answer starts** (today it does only when workers ran,
+5. **The time runs on through question rounds.**
+   - Today a wait for the user closes the request's work span (`UserRequest::moved_to`, `crates/core/src/work.rs:1628-1657`),
+     and `turnTime` then shows the time waited (`C/blocks.ts:207-215`).
+   - New: a wait on an open question card keeps the span open, as a quota wait does: `moved_to` takes a `card_wait`
+     flag next to `quota_wait`.
+   - So "Working for …" keeps counting while the user answers, and the final "Worked for …" is the wall time from the
+     request's start to its end.
+   - Other waits close the span, as today: an approval, a proposed plan, a takeover, a paused worker.
+   - Test: a request works 10 s, waits 30 s on a card, then works 5 s. It ends as "Worked for 45s".
+6. **The block folds the moment the final answer starts** (today it does only when workers ran,
    `C/RequestBlock.tsx:493-498`), and it is folded by default once done.
+7. **Every size is a design token** (`styles/tokens.css`), with its Compact value where the density changes it. No
+   raw values: `brigadier/no-raw-design-values` must pass. New tokens:
+   - `--spacing-row` (21 px, Compact 20 px), the row's height and line;
+   - `--spacing-row-gap` (4 px), between the rows of an open group;
+   - `--size-chevron` (14 px);
+   - `--max-height-group` (224 px), `--max-height-shell` (144 px), `--max-height-thought` (140 px);
+   - `--radius-bubble` (22 px), `--radius-question-card` (25 px), `--radius-option` (15 px);
+   - `--color-row-chevron`, the quieter chevron colour.
 
 ### 4.2 Folding without flicker
 - **One component, `WorkFold`,** replaces the grid keyframes and the unmount timer.
@@ -212,10 +231,12 @@ own screenshots are in `msgs/evidence/brigadier/`.
   - the final position equals the closed height, ±0.5 px.
 
 ### 4.3 Rows, groups and thinking
-- **`ROW`** becomes `inline-flex min-h-[21px] items-center gap-1.5 self-start text-sm leading-[21px]`, `.6` white.
+- **`ROW`** becomes `inline-flex min-h-row items-center gap-1.5 self-start text-sm leading-row`, `.6` white, from the
+  tokens of §4.1.
   - The icon is 16 px; the hit area is the whole row.
-  - The chevron is 14 px with `ms-1` and `items-center`. It is hidden until hover or focus (`opacity-0
-    group-hover:opacity-100 group-focus-visible:opacity-100`) and shown while open.
+  - The chevron is `size-chevron` with `ms-1`, centred by `items-center`.
+  - It stays **always visible** (THREAD-UX-PLAN §3.7, kept by the user on 2026-10-09). It is quieter: the
+    `--color-row-chevron` token, about `/25`, against today's `/40`. On hover or focus it turns white with the text.
   - `TeamSentence`'s `items-start` goes. A sentence too long for one line truncates; the full names are in its detail.
 - **Two-tone words:** the verb at `/90` of the tertiary colour and the object at `/40`, for `Asked 3 questions`,
   `Edited x.ts +5 −1` (green/red) and lifecycle sentences (`Analyze right panel` / `started working`).
@@ -223,19 +244,23 @@ own screenshots are in `msgs/evidence/brigadier/`.
   - Open: 4 px between rows, max 224 px with a 24 px edge fade.
   - The Shell box takes §2.3's numbers (`C/activity/StepDetail.tsx`).
 - **Thinking:**
-  - **Timing:** a thought runs from the end of the item before it (the previous tool's end, or the turn's start) to
-    the start of the item after it. So a thought that arrives whole still gets its real length. This is computed in
-    `group.ts` from neighbours, not from streamed pieces (`state/board.ts:459-470` stays).
+  - **Timing:** a thought's duration comes only from the provider's own reasoning events: its first `ReasoningDelta`
+    to its complete `Reasoning` (`crates/providers/src/model.rs:538-546`), as the board records them today
+    (`state/board.ts:459-470`).
+    - A thought that arrived in one piece has no measured duration, so its row shows none.
+    - A duration is never inferred from the rows around it.
   - **Live:** one line, never two. It shows "Waiting for your answer" (a card is open); else the newest thought's
     heading, i.e. a leading `**…**` line (one model writes these); else its first sentence, cut to the line;
     else "Thinking".
     - The shimmer's cadence follows §2.4: a 1 s sweep, then every 4 s, the first after 600 ms.
     - It replaces the two-line snippet (`C/ThinkingRow.tsx:24-30`).
   - **After:**
-    - A thought with no text, or under 2 s, has no row.
-    - Otherwise the row reads `Thought for 4s · {heading or first sentence}`, the second part at `/40` and
-      truncated. It opens to the text, max 140 px (as today).
-    - This replaces the bare "Thought" (image 4): every thought row now says what it was about.
+    - A thought with no text has no row.
+    - Otherwise the row says what it was about: `Thought for 4s · {heading or first sentence}`, or
+      `Thought · {…}` when no duration was measured (or it was under 1 s). The second part is at `/40` and
+      truncated.
+    - It opens to the text, max 140 px (as today).
+    - This replaces the bare "Thought" (image 4).
 - **Live group row:** as built: the current step, shimmering.
 
 ### 4.4 Steer bubbles
@@ -271,7 +296,12 @@ own screenshots are in `msgs/evidence/brigadier/`.
   (the overnight report's `splitReport`, `C/phaseView.ts:13-19`; `ReportText`, `C/RequestBlock.tsx:253-269`), for
   every session answer.
 - **"Waiting on you"** goes from under the answer (`C/RequestBlock.tsx:371-393`, `:590`). It goes from the side panel
-  for sessions (`C/PinnedSummary.tsx:210-294`); an overnight run keeps it (§5 Q6).
+  for sessions (`C/PinnedSummary.tsx:210-294`).
+- **An overnight run keeps its list** (the user, 2026-10-09):
+  - It is in plain wording, and it no longer has "Done" buttons (`C/PinnedSummary.tsx:238-247`).
+  - An item ends the way it does today without the user: its card settles, its task stops or reports again
+    without it, or the change it held lands. It also ends when the run ends.
+  - The daemon's `resolveWaiting` stays for the run card's own flows.
 - **The action bar** follows §2.7: 26 px, gap 2 px, 6 px below the answer.
 
 ### 4.7 The workers rail
@@ -325,11 +355,26 @@ own screenshots are in `msgs/evidence/brigadier/`.
 - **In a session, nothing becomes a waiting item any more:**
   - a worker's `needs_user` (`M/workers.rs:2946-2956`, `sync_waiting`);
   - a landing's checks;
-  - `note_for_user` with kind `waiting` (`M/tools.rs:643-681`). That kind goes from the tool's schema
-    (`tools.rs:572-580`); `decided` stays.
-  - `waits_on_user` (`M/requests.rs:401-423`) drops `board.waiting` for session requests.
+  - `note_for_user` with kind `waiting` (`M/tools.rs:643-681`). The kind **stays in the schema**
+    (`tools.rs:572-580`) because overnight runs use it. Outside a run the call is refused with "Say it in your
+    answer instead"; `decided` stays.
+- **What decides it is the run, not the session:**
+  - It is the request's or the task's run (`task.run`, or `isRunRequest`), as `prompts.rs:741-746` already decides
+    it.
   - An overnight run keeps today's behaviour: nobody is there to ask, and its morning list is the point
-    (PLAN.md §10.11).
+    (PLAN.md §10.11). Its list keeps the request waiting, as today.
+- **The thread's and workers' new instructions follow the same split:**
+  - "Say it in your answer", the `needs_user` rule and the report label below apply only outside a run.
+  - A run's instructions keep their wording (`setting_texts`, `M/prompts.rs:155-193`).
+- **Only these waits go: session to-do items and plain-text questions.**
+  - `waits_on_user` (`M/requests.rs:401-423`) ignores `board.waiting` for a request outside a run.
+  - The text-question wait (`asked_user`, `M/requests.rs:31`) goes, because questions are cards now (Q1).
+  - These still make a request wait, as today:
+    - a quota wait;
+    - a takeover in the user's terminal;
+    - a paused worker;
+    - an open approval, plan or question card;
+    - a change waiting to land under "Ask for approval".
 - **Workers test by hand themselves.**
   - `LEAD_STEPS` (`M/prompts.rs:630`) and the `needs_user` rule (`:741-746`) say: a "check it in the app" step is the
     worker's job. Use the scripted UI checks (fixture pages in headless Chromium, `apps/desktop/scripts/capture-*`)
@@ -340,18 +385,25 @@ own screenshots are in `msgs/evidence/brigadier/`.
   couldn't be checked becomes one line, "To check: …". Neither has a button or a waiting state.
 - **The report envelope's label** "Needs the user (already listed for them under Waiting on you)"
   (`M/prompts.rs:862`) becomes "Needs the user (say it in your answer)".
-- **Merge: a decision card, asked once.**
+- **Merge: a decision card, asked once.** This is the user's grill decision Q6 (2026-10-09). It supersedes
+  THREAD-PLAN §8 decision 6 ("Merging is conversational", 2026-10-08) for sessions. That line now points here.
   - A new tool, `propose_merge`, opens a question of kind `Merge { branch, base }` with two options: "Merge into
     {base}" and "Not yet".
-  - **Consent:** `merge_consent` (`M/landing.rs:1221-1266`) accepts a merge card answered "Merge" after the latest user
-    message, with `asked_in` = the card's id. The words check stays for a merge asked in words.
+  - **The card's answer is consent in the daemon's consent contract.**
+    - `merge_consent` (`M/landing.rs:1221-1266`) takes either kind of proof.
+    - **The card:** a merge card for this branch and base, answered "Merge into {base}", with no user message,
+      queued follow-up or other merge since. Its id becomes `asked_in`.
+    - **Words:** the latest user message, checked by `merge_consent::check` as today. A typed "merge it" stays valid.
+    - Each `asked_in` merges once, as today (`:1252-1258`).
+  - Overnight runs keep their own Merge on the run's card (`MergeOvernight`), unchanged.
   - **Once:** a second `propose_merge` is refused while one is open for the session. After "Not yet" it is refused too,
     until the user writes again.
   - **The instructions** (`M/prompts.rs:201`, "there is no card") are rewritten for the card.
   - Tests: consent from the card, refusal on "Not yet", and no second card.
 
 ### Q9: short endings that update instead of repeating
-- **The final answer:**
+- **The final answer** (the user's Q9 decision; it holds whatever the Short replies setting says, and that setting
+  stays as it is for everything else):
   - At most about 5 short lines: what changed and what to know.
   - Then the "To check:" and "You'll need to:" lines.
   - Then `propose_merge` when the work waits on that decision.
@@ -362,6 +414,25 @@ own screenshots are in `msgs/evidence/brigadier/`.
 - **A clean late review** stays a "Reviewed …" row in the folded work (`M/review_runs.rs:68-82`). It doesn't wake the
   thread, as today.
 
+
+### One short opening line (the user, 2026-10-09)
+- The thread may write one short line as it starts work that will take more than a moment, e.g. "I'll check how the
+  tabs work today, then ask you a few questions." It shows as commentary at the top of the block.
+- After that, the THREAD-PLAN Q1 voice rules and `[quiet]` hold as before: no narration between tool calls.
+- `M/prompts.rs:104` changes from "Never write text before or between tool calls" to allow that one line.
+
+### Instruction contract
+- Every instruction change above is in the thread's or the workers' instructions. A resumed CLI keeps the
+  instructions it started with (PLAN §7 "What a resumed session is told").
+- So `prompts::CONTRACT` (`M/prompts.rs:305`) goes from 3 to 4 in phase 1, and to 5 in phase 2. Each bump comes in
+  the phase that changes the thread's instructions.
+- A session whose CLI started on an older contract starts over from its transcript instead of resuming
+  (`role_outdated`, `M/prompts.rs:313-315`). That reseeding exists; the bump uses it.
+- Tests, for both providers: a Claude session and a Codex session told contract 3 start over on their next turn,
+  with the new instructions; one told contract 4 resumes. These extend
+  `a_session_whose_cli_started_before_the_threads_instructions_starts_over` (`M/prompts.rs:1267`).
+- Workers start fresh per task and need no bump.
+
 ### Q3, Q5
 - **Q3** is §4.
 - **Q5:** the branches `brigadier/9a2b00c9/session` and `computer-use` are not touched.
@@ -370,90 +441,140 @@ own screenshots are in `msgs/evidence/brigadier/`.
 
 **Target behaviour:** §2.9. **Today:** §3, last row. A Brigadier plan is a list of phases. A lead's outline lives on
 its task (`PlanStep.outline`, `work.rs:907-909`). Under plan mode the thread is told to "show the outline in plain
-words".
+words" (`M/conversation.rs:87`).
+
+**This supersedes part of PLAN §10.2** (the user's addendum, 2026-10-09). A session's proposed plan shows as a plan
+card in the thread, and "Implement this plan?" takes the composer's place, where §10.2 kept the plan only in the
+context card. What stays from §10.2:
+- The context card's Plan section stays: it lists the plan's phases and their state, and opens the plan's document.
+- Message entry stays: the composer card has free text, Skip and ✕, and Esc puts it aside.
+- An overnight run's phase plans stay inside its run card. Nothing here changes runs.
+- §10.2's paragraph gets a line pointing here.
 
 **The design**
 1. **A plan is a document.**
    - `Plan` (`work.rs:1052`) gains `body: Option<String>`: the markdown plan.
    - A new thread tool, `propose_plan { title, body, phases? }`, records it as a Proposed plan in the request.
+     `phases` are the existing phases (`Plan.steps`): progress uses them, and there is no separate steps model.
    - Under plan mode, the thread's instructions (`M/conversation.rs:87`) say: look around (yourself or scouts), then
      call `propose_plan` and reply `[quiet]`.
-   - The plan's shape: an H1 title, then a one-line summary. Then H2 sections: **Changes** (a short list, files named),
-     **Checks** (how each part will be verified) and **Assumptions** (decisions taken). At most ~15 lines, plain words.
-   - A lead's outline that the user must approve (under "Ask for approval") is shown the same way. Its outline becomes
-     the plan's body.
-2. **The plan card in the thread:** §2.9's card.
-   - While the tool's arguments stream: "Writing plan", shimmering.
+   - **The plan's shape is guidance, not a cap:**
+     - an H1 title, then a one-line summary;
+     - then H2 sections: **Changes** (a short list, files named), **Checks** (how each part will be verified) and
+       **Assumptions** (decisions taken);
+     - plain words, short where it can be.
+     - The card keeps a long plan compact by clipping it; the whole text is one click away.
+     - Plans are exempt from Short replies, as today.
+2. **A lead's outline uses the same card, and the same single approval.**
+   - When a lead's outline needs the user's go-ahead (under "Ask for approval"), the outline is shown as this card:
+     its text is the body.
+   - Its decision runs through the existing outline approval: `ApprovalSubject::Outline` → `go_ahead`. That is the
+     path that clears the worker's block and moves its phase to Building. It does not go through `decide_plan`.
+   - So "Yes, implement this plan" on an outline card resolves that approval. One approval releases the worker; there
+     is never a second card.
+   - Free text goes back to the lead as corrections, through the same path.
+   - Tested: one Yes leaves no open card, and the worker runs.
+3. **The plan card in the thread:** §2.9's card.
+   - While the thread writes the plan, there is a "Writing plan…" placeholder row (shimmering) from the moment the
+     `propose_plan` call starts until the whole document arrives.
+   - Tool input arrives only once complete (`crates/providers/src/model.rs:547-555`), so nothing streams in this pass.
    - Done: clipped at 200 px with a 64 px fade. The header holds Copy and Open.
    - Clicking it opens the plan in a side-panel tab (rendered markdown).
    - It replaces the rail link (`C/ActionCards.tsx:944-981`) and the "plan" card in the thread (`C/blocks.ts:428-436`).
-3. **"Implement this plan?"** is a `ChoiceCard` in the composer's place.
+4. **"Implement this plan?"** is a `ChoiceCard` in the composer's place.
    - The choice is "Yes, implement this plan", or free text "No, and tell Brigadier what to do differently". Plus Skip
      and ✕.
-   - **Yes** sends "Yes, implement this plan" as the user's message, approves the plan, and leaves plan mode (as
-     `decide_plan` does, `M/cards.rs:450-457`).
-   - **Free text** is sent as the user's message: the thread revises and proposes again, and the old plan is
-     superseded.
-   - **✕** leaves plan mode and the plan stays proposed.
-4. **Progress:**
-   - The composer pill keeps its ring (`C/ComposerCapsule.tsx:140-156`) and reads `Step 2 / 3` when the plan has
-     steps. It keeps `Phase 2 / 3` for phases.
-   - A tooltip lists the steps with their marks.
-   - The side panel's Plan item reads `Plan · {title}` and opens the plan tab.
+   - **A thread's own plan:**
+     - Yes approves it and leaves plan mode (`decide_plan`, `M/cards.rs:450-457`). The thread hears it.
+     - Free text rejects it with that message; the thread revises and proposes again.
+   - **A lead's outline:** as in item 2.
+   - **✕** puts the card aside; the plan stays proposed and the side panel still offers it.
+5. **Progress** uses the phase model as it is:
+   - The composer pill (`C/ComposerCapsule.tsx:133-156`) keeps "Phase 2 / 3" and its ring.
+   - A tooltip lists the phases with their marks.
+   - The side panel's Plan item reads `Plan · {title}` and opens the plan's document.
 
 ## 7. Phases
 
-Each phase lands as small commits on `thread-parity`. Every phase ends with:
-- `cargo fmt --check`;
-- `cargo clippy` on the touched crates;
-- `gen-ts` when Rust types change;
-- the desktop `pnpm` typecheck, lint and tests;
-- one review by the other vendor.
+Each phase lands as small commits on `thread-parity`.
+
+**Every phase's "done when" includes:**
+- `tools/full-checks.sh` passing on the integrated tree. That covers workspace Rust tests, clippy, `cargo fmt`,
+  `gen-ts` with no diff, and the desktop typecheck, lint (`brigadier/no-raw-design-values` included), tests, build and
+  real sidecar staging.
+- **Native dev-app checks** on a dev build under its own identity and data dir, never the installed app:
+  - folding and unfolding a work block;
+  - Compact and Normal density;
+  - a narrow window;
+  - cards restored after the app restarts.
+  Screenshots go in the phase report.
+- One review by the other vendor.
+- After each phase: commit, `report.md` for that phase only, status `done`, and stop. A fresh verifier checks it
+  before the next phase starts.
 
 **Screenshots** come from the fixture gallery in headless Chromium at 1728 × 1024, DPR 2, dark theme. The
 before/after set is from the user's own session: its events are extracted into a fixture, the way
 `thread-t1-2026-10-08.events.json` was. Each screenshot sits next to the matching target screenshot in
-`msgs/evidence/compare/`. Live checks use a dev build under its own identity and data dir.
+`msgs/evidence/compare/`. Live checks use the dev build.
 
 ### Phase 1: questions and decisions as cards, one block per request (daemon and UI)
-- **Daemon:** Q2's `AskUser` and `Question` rounds, and `answerQuestion` with answers. Q1/Q7/Q8's instructions,
-  grilling and the text-question guard. Q6's `propose_merge` and the consent change.
+- **Daemon:**
+  - Q2's rounds: `AskUser` and `Question`, and `answerQuestion` with answers.
+  - Q1/Q7/Q8's instructions, grilling, the text-question guard and the opening line.
+  - The card wait that keeps "Working for" counting (§4.1).
+  - Q6's `propose_merge` and the consent change.
+  - `CONTRACT` 4.
 - **UI:** round mode in `ChoiceCard`; the answered row "Asked N questions" in the work; the "Merge into main / Not yet"
-  card; the live line "Waiting for your answer" only on an open card.
+  card; the live line "Waiting for your answer" while a card is open.
 - **Done when:**
   - Rust tests:
     - a round of three answered with one call gives one envelope, and the request continues;
     - a card stored before reads as a round of one;
     - a reply ending on a question with no card gets the note, and the request stays working;
-    - merge consent comes from the card; "Not yet" refuses; a second `propose_merge` is refused.
+    - 10 s of work, a 30 s card wait and 5 s more work end as 45 s worked;
+    - merge consent comes from the card; a typed "merge it" still works; "Not yet" refuses; a second
+      `propose_merge` is refused;
+    - contract 3 sessions (Claude and Codex) start over and contract 4 sessions resume.
   - `group.test.ts`: a request with two rounds and a steer renders one block, with "Asked 3 questions" rows inside it.
   - **Live, dev build:** "grill me about adding a dark-mode toggle" gives one "Working for …" block. Inside it come at
     least two card rounds with pager, Recommended and Next/Submit, then a short summary. A screenshot of the card and
     of the answered rows sits next to target 16/19.
+  - The common checks above.
 
 ### Phase 2: endings without a to-do list (daemon and UI)
-- Q6 without waiting items (sessions); workers' "test it yourself" and `needs_user` rules; Q9's short ending and
-  Details fold; the request's last reply as its answer; the "Waiting on you" UI removed for sessions.
+- **Daemon:**
+  - Q6's waiting items removed outside runs; `note_for_user` kind `waiting` refused outside a run.
+  - Workers test it themselves; the `needs_user` rules, scoped by run.
+  - Q9's short ending and the Details fold.
+  - `CONTRACT` 5.
+- **UI:**
+  - The request's last reply is its answer.
+  - "Waiting on you" is removed for sessions. A run's list stays in plain words with no Done buttons.
 - **Done when:**
   - Rust tests:
-    - a worker report with `needs_user` adds no waiting item in a session, and does in an overnight run;
-    - `note_for_user` rejects kind `waiting`;
-    - a session request with no open card is never "waiting".
+    - a worker report with `needs_user` adds no waiting item in a session, and adds one in an overnight run;
+    - `note_for_user` kind `waiting` is refused in a session and accepted in a run;
+    - a session request with only those items is not "waiting", while quota, takeover, a paused worker and an open
+      card still make it wait.
   - `blocks.test.ts`: a request with an answer and a later updated answer shows only the second, the first in the
     fold; an answer with `### Details` folds it.
   - The user's session fixture, after: no "Waiting on you", one closing, a merge card. A screenshot sits next to
     image 5.
+  - The common checks above.
 
 ### Phase 3: the conversation view at parity (desktop)
-- §4.1–§4.4 and §4.7: the header, `WorkFold`, rows and chevrons, thinking, bubbles, the action bar, the column, and the
-  workers rail.
+- §4.1–§4.4 and §4.7: the header, `WorkFold`, rows and the quieter chevrons, thinking, bubbles, the action bar, and
+  the workers rail. The column stays 52rem.
 - **Done when:**
   - **No flicker:** a frame-sampled Chromium script (`scripts/check-fold-motion.mjs`) passes the §4.2 test on the
-    session fixture with and without steers.
+    session fixture with and without steers. Checked in the native dev app too.
   - **Chevrons centred:** for every visible row in the fixture, the chevron's centre and the text's centre differ by
-    ≤ 0.5 px (script check).
-  - **Thinking:** `group.test.ts` shows no thought row without text, and none under 2 s. A thought that arrives whole
-    between two tools gets their gap as its time. The live line is one line.
+    ≤ 0.5 px, in Normal and in Compact (script check).
+  - **Thinking:** `group.test.ts` shows:
+    - no thought row without text;
+    - a thought with text gets a row that says what it was about;
+    - a thought that arrived whole shows no duration;
+    - the live line is one line.
   - **Side-by-side screenshots** next to target 00, 03, 04, 06, 07, 10, 13, 15 and 22:
     - live working;
     - done and folded;
@@ -462,29 +583,57 @@ before/after set is from the user's own session: its events are extracted into a
     - a command open;
     - a steer, live and done;
     - the workers rail closed and open (chevron right, then down).
-  - Measured header, row, gap and bubble sizes match §2 within 1 px (the script prints them).
+  - Measured header, row, gap and bubble sizes match §2 within 1 px (the script prints them). Every value comes from
+    a token.
+  - The common checks above.
 
 ### Phase 4: plans as documents (daemon and UI)
-- §6: `Plan.body`, `propose_plan`, the plan-mode instructions, the plan card and side-panel tab, "Implement this
-  plan?", and the step pill.
+- §6: `Plan.body`, `propose_plan`, the plan-mode instructions, the "Writing plan…" placeholder, the plan card and its
+  side-panel tab, "Implement this plan?" for a thread's plan and a lead's outline, and the phase tooltip.
 - **Done when:**
   - Rust tests:
     - `propose_plan` records a Proposed plan with its body;
     - "Yes" approves it and turns plan mode off;
-    - free text supersedes it on the next `propose_plan`.
-  - **Live, dev build:** plan mode, "add a --version flag to the CLI", gives a plan card (title, summary, Changes,
-    Checks, Assumptions, ≤ 15 lines) and the Implement card. Yes starts the work, and the pill shows `Step 1 / 3`.
+    - free text rejects it and the next `propose_plan` supersedes it;
+    - an outline card's Yes resolves `ApprovalSubject::Outline` through `go_ahead`, the worker runs, and no second
+      card opens.
+  - **Live, dev build:** plan mode, "add a --version flag to the CLI", gives the placeholder, then a plan card (title,
+    summary, Changes, Checks, Assumptions), then the Implement card. Yes starts the work, and the pill shows the
+    phases.
   - Screenshots next to target 23–26.
+  - The common checks above.
 
-The phases run in order. Phase 3 touches only the desktop, so it can start once phase 1's `blocks.ts` change has
-landed.
+The phases run in order.
 
-## 8. Open points for the user
-1. **Chevrons on hover.** The target hides a row's chevron until hover. THREAD-UX-PLAN §3.7 made them always visible
-   (2026-10-08). Recommendation: follow the target (hover only).
-2. **The column narrows** from 52rem to 48rem (768 px), as the target. Recommendation: yes.
-3. **One short opening line.** The target writes one short line of commentary as it starts work ("I'll check the
-   helper and the tests, then propose a plan."). Brigadier's voice rules forbid any text before or between tool calls
-   (THREAD-PLAN Q1). Recommendation: allow one short opening line per request, when the work will take more than a
-   moment. The rest of the Q1 rules and `[quiet]` stay.
-4. **Overnight runs** keep their "Waiting on you" list, since nobody is there to ask (§5 Q6). Recommendation: yes.
+## 8. Decisions
+
+### 8.1 The user's answers (2026-10-09)
+1. **Row chevrons** stay always visible (the 10-08 ruling), in a quieter tone. Not hover-only.
+2. **The column** stays 52rem.
+3. **One short opening line** per request, when the work will take more than a moment (§5).
+4. **Overnight runs** keep their "Waiting on you" list, in plain wording and with no "Done" buttons.
+5. **Two choices this plan made are confirmed:**
+   - "You'll need to: …" for a key or an account;
+   - one card per round, with a pager and one send.
+
+### 8.2 Decisions this plan supersedes
+- **THREAD-PLAN §8 decision 6** ("Merging is conversational", 2026-10-08) is replaced for sessions by the merge card
+  (grill Q6, 2026-10-09). A typed "merge it" stays valid consent. Overnight runs keep their own Merge.
+- **PLAN §10.2**, "a session's own plan is a Plan section of the context card", is extended by the plan card in the
+  thread and the composer's "Implement this plan?" (the addendum, 2026-10-09). The context card keeps its Plan section,
+  and an overnight run's phase plans stay in the run card.
+
+### 8.3 From the plan review (2026-10-09)
+The thirteen points were folded in:
+- the superseded decisions recorded (§8.2);
+- the run-scoped waiting (§5 Q6);
+- the contract bump (§5);
+- the outline approval path (§6.2);
+- the "Writing plan…" placeholder (§6.3);
+- phases for progress (§6.5);
+- continuous time (§4.1);
+- the narrowed waiting rule (§5 Q6);
+- tokens (§4.1);
+- measured thought durations only (§4.3);
+- plan length as guidance and Short replies untouched (§5 Q9, §6.1);
+- `full-checks.sh` and native checks (§7).
