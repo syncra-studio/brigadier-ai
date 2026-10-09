@@ -96,7 +96,8 @@ impl<D: Desktop> Engine<D> {
         }
     }
 
-    fn check_block(&mut self, w: &WindowInfo) -> CuResult<()> {
+    /// Why the window is off limits under the current block list, or `None` when it isn't.
+    pub fn block_reason(&mut self, w: &WindowInfo) -> CuResult<Option<&'static str>> {
         let app = self.desktop.app(w.pid)?;
         let facts = TargetFacts {
             pid: w.pid,
@@ -106,7 +107,11 @@ impl<D: Desktop> Engine<D> {
             window_title: Some(&w.title),
             window: Some(w.id),
         };
-        match self.block.check(&facts) {
+        Ok(self.block.check(&facts))
+    }
+
+    fn check_block(&mut self, w: &WindowInfo) -> CuResult<()> {
+        match self.block_reason(w)? {
             Some(reason) => err(ErrorCode::Blocked, reason),
             None => Ok(()),
         }

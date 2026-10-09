@@ -51,6 +51,45 @@ pub fn permissions() -> (bool, bool) {
     }
 }
 
+/// Asks the system for a permission: it shows its own prompt the first time and lists this
+/// process in System Settings, where the user grants it. Returns at once; the grant comes
+/// later, if at all.
+pub fn request_permission(grant: crate::wire::Grant) {
+    match grant {
+        crate::wire::Grant::Accessibility => {
+            // SAFETY: a static CFString key the framework exports.
+            let key = unsafe { objc2_application_services::kAXTrustedCheckOptionPrompt };
+            let options =
+                CFDictionary::<CFString, CFBoolean>::from_slices(&[key], &[CFBoolean::new(true)]);
+            // SAFETY: the options dictionary maps the documented key to a CFBoolean.
+            unsafe {
+                objc2_application_services::AXIsProcessTrustedWithOptions(Some(
+                    options.as_opaque(),
+                ));
+            }
+        }
+        crate::wire::Grant::ScreenRecording => {
+            objc2_core_graphics::CGRequestScreenCaptureAccess();
+        }
+    }
+}
+
+/// When the process `pid` started, in microseconds since the Unix epoch; `None` when there is
+/// no such process. With the pid it tells a process apart from a later one that reuses its pid.
+pub fn process_start_us(pid: i32) -> Option<u64> {
+    if pid <= 0 {
+        return None;
+    }
+    // SAFETY: `proc_bsdinfo` is plain data, valid when zeroed.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: the buffer is a `proc_bsdinfo` of exactly `size` bytes, which is what
+    // PROC_PIDTBSDINFO writes.
+    let n =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
+    (n == size).then(|| info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
+}
+
 /// The accessibility notifications that mean an app is still changing.
 const NOTIFICATIONS: &[&str] = &[
     "AXValueChanged",
@@ -652,5 +691,23 @@ fn pick_popup(el: &AxEl, title: &str) -> CuResult<()> {
                 format!("the pop-up has no item {title:?}"),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_process_start_time_is_read_and_stays_the_same() {
+        let me = std::process::id() as i32;
+        let started = process_start_us(me).expect("this process has a start time");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
+        assert!(started <= now && now - started < 24 * 3600 * 1_000_000);
+        assert_eq!(process_start_us(me), Some(started));
+        assert_eq!(process_start_us(-1), None);
     }
 }

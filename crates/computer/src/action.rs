@@ -303,7 +303,7 @@ pub struct ActionResult {
     pub error: Option<CuError>,
     pub timings: Timings,
     /// Side effects worth knowing: a new window, another app in front.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }
 
