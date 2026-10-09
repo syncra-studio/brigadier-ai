@@ -84,7 +84,7 @@ impl Client {
                             let waiter = lock(&p).remove(&reply.id);
                             if let Some(w) = waiter {
                                 w(Ok(Answer {
-                                    reply,
+                                    reply: *reply,
                                     image,
                                     trajectory,
                                 }));

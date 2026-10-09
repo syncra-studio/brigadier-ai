@@ -253,7 +253,7 @@ pub enum Event {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HelperFrame {
-    Reply(Reply),
+    Reply(Box<Reply>),
     Event(Event),
 }
 
