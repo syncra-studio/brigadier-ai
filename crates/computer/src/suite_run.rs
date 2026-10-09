@@ -1053,7 +1053,9 @@ fn solve_web(s: &mut Script, task: &Task) -> Result<()> {
             s.act(vec![
                 set(&r(r#"textfield "Name""#)?, "Ada Lovelace"),
                 set(&r(r#"textfield "Email""#)?, "ada@example.com"),
-                set(&r(r#"popup "Plan""#)?, "Team"),
+                // A click on a closed list's option picks it (a worker's way; `set_value` on the
+                // list is `web-ax-form`'s).
+                click(&r(r#"menu-item "Team""#)?),
                 click(&r(r#"checkbox "Accept terms""#)?),
                 click(&r(r#"button "2 stars""#)?),
                 click(&r(r#"button "Submit""#)?),

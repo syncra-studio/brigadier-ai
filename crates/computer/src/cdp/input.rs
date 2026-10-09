@@ -311,6 +311,48 @@ pub fn text_of(conn: &mut Conn, el: &WebEl) -> CuResult<String> {
     }
 }
 
+/// The `<select>` an `<option>` is in, and the option's label. A closed list's options have no
+/// box to click (the protocol answered "Node does not have a layout object"), so a click on one
+/// picks it in its list. `None` for any other element.
+pub fn option_list(conn: &mut Conn, el: &WebEl) -> CuResult<Option<(WebEl, String)>> {
+    let label = call_on(
+        conn,
+        el,
+        "function(){ return this.tagName === 'OPTION' && this.closest('select') ? this.label : null; }",
+        &[],
+    )?;
+    let Some(label) = label.as_str().map(str::to_owned) else {
+        return Ok(None);
+    };
+    let s = Some(el.session.as_str());
+    let gone = || CuError::new(ErrorCode::StaleRef, "the element is gone");
+    let r = conn.call(s, "DOM.resolveNode", json!({"backendNodeId": el.node}))?;
+    let option = r["object"]["objectId"]
+        .as_str()
+        .ok_or_else(gone)?
+        .to_owned();
+    let list = conn.call(
+        s,
+        "Runtime.callFunctionOn",
+        json!({"objectId": option, "functionDeclaration": "function(){ return this.closest('select'); }"}),
+    );
+    let _ = conn.call(s, "Runtime.releaseObject", json!({"objectId": option}));
+    let list = list?["result"]["objectId"]
+        .as_str()
+        .ok_or_else(gone)?
+        .to_owned();
+    let node = conn.call(s, "DOM.describeNode", json!({"objectId": list}));
+    let _ = conn.call(s, "Runtime.releaseObject", json!({"objectId": list}));
+    let node = node?["node"]["backendNodeId"].as_i64().ok_or_else(gone)?;
+    Ok(Some((
+        WebEl {
+            session: el.session.clone(),
+            node,
+        },
+        label,
+    )))
+}
+
 /// Picks a `<select>`'s option by its label or value with the keyboard, as a person would
 /// without opening its menu: focus, then type the option's label. Returns the option picked.
 pub fn pick_option(

@@ -461,16 +461,33 @@ impl<D: Desktop> Engine<D> {
                 ..
             } => {
                 let mods = parse_mods(modifiers)?;
-                let dialog_el = match target.r#ref.as_deref() {
-                    Some(r) => {
-                        let el = self.web_resolve(w, &page, Self::ref_of(r)?, true)?;
-                        el.is_dialog().then_some(el)
-                    }
+                let el = match target.r#ref.as_deref() {
+                    Some(r) => Some(self.web_resolve(w, &page, Self::ref_of(r)?, true)?),
                     None => None,
                 };
-                if let Some(el) = dialog_el {
-                    self.web_answer(&page, &el, "press")?;
+                let plain = *button == crate::desktop::Button::Left
+                    && *count <= 1
+                    && mods == Mods::default();
+                let option = match &el {
+                    Some(el) if plain && !el.is_dialog() => {
+                        self.on_page(&page, |_, c| input::option_list(c, el))?
+                    }
+                    _ => None,
+                };
+                if let Some(el) = el.as_ref().filter(|el| el.is_dialog()) {
+                    self.web_answer(&page, el, "press")?;
                     out.answered = true;
+                } else if let Some((list, label)) = option {
+                    // An option of a closed list is picked in its list, as `set_value` does.
+                    out.aim = target
+                        .r#ref
+                        .as_deref()
+                        .and_then(|r| self.ref_aim_web(w.id, r));
+                    self.show_cursor(worker, w, out.aim, Gesture::Click);
+                    let label = self.on_page(&page, |p, c| {
+                        input::pick_option(c, p, &list, &label, cancel)
+                    })?;
+                    out.option = Some((list, label));
                 } else {
                     let (css, aim, el) = self.web_point(w, &page, &vp, target, true)?;
                     if let Some(el) = &el {
