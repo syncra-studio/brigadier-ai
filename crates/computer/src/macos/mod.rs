@@ -581,6 +581,21 @@ impl Desktop for MacDesktop {
             let v = CFNumber::new_f64(n);
             return el.set("AXValue", &v);
         }
+        // A web view gives a value to the field focused within its page, whichever field it was
+        // sent to: so a page's field is focused first (its app's focus, not the user's).
+        if web::in_page(el) && el.bool("AXFocused") != Some(true) && el.settable("AXFocused") {
+            el.set("AXFocused", CFBoolean::new(true))?;
+            let until = Instant::now() + web::FOCUS_WAIT;
+            while el.bool("AXFocused") != Some(true) {
+                if Instant::now() > until {
+                    return err(
+                        ErrorCode::NotSettable,
+                        "the field didn't take focus in its page",
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
         el.set("AXValue", &CFString::from_str(text))
     }
 

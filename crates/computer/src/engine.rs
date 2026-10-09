@@ -1527,14 +1527,22 @@ impl<D: Desktop> Engine<D> {
                 }
                 document = node.role == DOCUMENT_TEXT;
                 self.desktop.set_focus(&el)?;
-                // A browser moves focus into its page a moment after it is asked.
-                let until = Instant::now() + Duration::from_millis(300);
-                let mut f = self.check_recipient(w)?;
-                while f.as_ref() != Some(&el) && Instant::now() < until {
+                // A browser moves focus into its page a moment after it is asked (WebKit: up to ≈0.5 s).
+                let until = Instant::now() + Duration::from_millis(1000);
+                // A web view in an app in the background names no focused element: there the
+                // element's own word counts.
+                let took = |s: &mut Self| -> CuResult<bool> {
+                    Ok(match s.check_recipient(w)? {
+                        Some(f) => f == el,
+                        None => s.desktop.read(w, &el).is_ok_and(|n| n.focused),
+                    })
+                };
+                let mut landed = took(self)?;
+                while !landed && Instant::now() < until {
                     std::thread::sleep(Duration::from_millis(5));
-                    f = self.check_recipient(w)?;
+                    landed = took(self)?;
                 }
-                if f.as_ref() != Some(&el) {
+                if !landed {
                     // The app moved focus elsewhere: typing now would go to the wrong place.
                     return err(
                         ErrorCode::BackgroundUnavailable,

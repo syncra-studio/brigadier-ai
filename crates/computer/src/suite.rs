@@ -882,6 +882,7 @@ mod tests {
             x: None,
             y: None,
             v: v.map(Into::into),
+            trusted: None,
         }
     }
 
