@@ -323,7 +323,6 @@ export function TerminalPane({ place }: { place: string }) {
           <TitlebarTips>
             <TitlebarButton
               tooltip="New terminal"
-              shortcut="⌘T"
               className="shrink-0"
               onClick={() => addTab(place)}
             >

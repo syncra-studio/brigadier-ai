@@ -1,7 +1,8 @@
 import { request } from "@/ipc/client";
 import type { Conversation, TerminalInfo } from "@/ipc/generated";
 import { closePage, useBrowsers } from "@/state/browsers";
-import { changeSessionTab, onDiscardTab, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
+import { discardDocument } from "@/state/documentDrafts";
+import { changeSessionTab, discardTab, onDiscardTab, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 // Lives across ConversationView remounts, but not a real app reload. The stable tab ID is
@@ -29,7 +30,7 @@ export async function openMainTerminal(conversationId: string, tabId: string, co
     await request({ method: "closeTerminal", terminalId: attached.terminal.id });
     throw new Error("Terminal tab closed");
   }
-  changeSessionTab(conversationId, tab.id, (current) => current.kind === "terminal" && !current.cwd ? { ...current, cwd: attached.terminal.cwd } : current);
+  changeSessionTab(conversationId, tab.id, (current) => current.kind === "terminal" ? { ...current, cwd: attached.terminal.cwd } : current);
   return attached.terminal;
 }
 
@@ -65,6 +66,7 @@ function deleteSideChat(id: string): void {
   void request({ method: "delete", ids: [id] }).catch(console.error);
 }
 onDiscardTab((tab) => {
+  if (tab.kind === "document") discardDocument(tab.id);
   if (tab.kind === "sideChat" && tab.conversationId && !Object.values(useSessionTabs.getState().sessions)
     .some((session) => session.tabs.some((entry) => entry.kind === "sideChat" && entry.conversationId === tab.conversationId)))
     deleteSideChat(tab.conversationId);
@@ -82,9 +84,12 @@ useApp.subscribe(({ conversations }) => {
   for (const [id, session] of Object.entries(useSessionTabs.getState().sessions)) {
     if (conversations[id]?.lifecycle === "archived") {
       const tabs = session.tabs.filter((tab) => tab.kind !== "terminal" && tab.kind !== "sideChat");
-      if (tabs.length !== session.tabs.length) useSessionTabs.setState((state) => ({ sessions: { ...state.sessions, [id]: {
-        tabs, active: tabs.some((tab) => tab.id === session.active) ? session.active : "chat",
-      } } }));
+      if (tabs.length !== session.tabs.length) {
+        useSessionTabs.setState((state) => ({ sessions: { ...state.sessions, [id]: {
+          tabs, active: tabs.some((tab) => tab.id === session.active) ? session.active : "chat",
+        } } }));
+        for (const tab of session.tabs) if (tab.kind === "terminal" || tab.kind === "sideChat") discardTab(tab);
+      }
     }
   }
 });

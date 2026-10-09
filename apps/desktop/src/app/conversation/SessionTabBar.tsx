@@ -78,7 +78,7 @@ function noAutoscroll(event: ReactMouseEvent): void {
   if (event.button === 1) event.preventDefault();
 }
 
-/** Session keys own main tabs. The bottom pane keeps Cmd+W; off macOS a focused
+/** Session keys own main tabs. The bottom pane keeps Cmd+W and bracket navigation; off macOS a focused
  * terminal keeps its shell Ctrl keys. Cmd+T always creates a main tab on macOS. */
 function useTabKeys(conversationId: string, create: (kind: NewTabKind) => void): void {
   const mac = useApp((s) => s.info?.platform === "macos");
@@ -87,7 +87,7 @@ function useTabKeys(conversationId: string, create: (kind: NewTabKind) => void):
       if (event.defaultPrevented || event.isComposing) return;
       const target = event.target instanceof Element ? event.target : document.activeElement;
       if (!mac && target?.closest('[data-slot="terminal-pane"], [data-main-terminal]')) return;
-      if (target?.closest('[data-slot="terminal-pane"]') && event.code === "KeyW") return;
+      if (target?.closest('[data-slot="terminal-pane"]') && ["KeyW", "BracketLeft", "BracketRight"].includes(event.code)) return;
       const command = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
       if (command && !event.altKey && event.shiftKey && event.code === "KeyT") {
         event.preventDefault(); event.stopPropagation();

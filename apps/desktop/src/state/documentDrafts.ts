@@ -13,7 +13,41 @@ export function documentText(id: string): string {
 export function flushDocument(id: string): void {
   clearTimeout(pending.get(id));
   pending.delete(id);
-  localStorage.setItem(PREFIX + id, documentText(id));
+  try { localStorage.setItem(PREFIX + id, documentText(id)); }
+  catch (error) { console.error("Could not preserve the document draft", error); }
+}
+
+/** Kept outside the tabs blob, alongside the draft, so later edits survive a restart. */
+export function noteDocumentSave(id: string, text: string): void {
+  try { localStorage.setItem(PREFIX + id + ".saved", text); }
+  catch (error) { console.error("Could not preserve the document save state", error); }
+}
+
+export function documentIsSaved(id: string): boolean {
+  try { return localStorage.getItem(PREFIX + id + ".saved") === documentText(id); }
+  catch { return false; }
+}
+
+export function discardDocument(id: string): void {
+  clearTimeout(pending.get(id));
+  pending.delete(id);
+  useDocumentDrafts.setState(({ texts }) => {
+    const { [id]: _gone, ...rest } = texts;
+    return { texts: rest };
+  });
+  try {
+    localStorage.removeItem(PREFIX + id);
+    localStorage.removeItem(PREFIX + id + ".saved");
+  } catch (error) { console.error("Could not remove the document draft", error); }
+}
+
+export function documentRelativePath(root: string | null | undefined, path: string): string | null {
+  if (!root) return null;
+  const directory = root.replaceAll("\\", "/").replace(/\/$/, "") + "/";
+  const file = path.replaceAll("\\", "/");
+  const windows = /^[A-Za-z]:\//.test(directory) || directory.startsWith("//");
+  return (windows ? file.toLowerCase().startsWith(directory.toLowerCase()) : file.startsWith(directory))
+    ? file.slice(directory.length) : null;
 }
 
 export function editDocument(id: string, text: string): void {

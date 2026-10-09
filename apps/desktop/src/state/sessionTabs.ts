@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import { notePaneClose } from "@/state/closedPanes";
+import { discardDocument, documentIsSaved } from "@/state/documentDrafts";
 
 /**
  * A session's tabs over its main area: Chat (the conversation, always first and never
@@ -68,7 +69,18 @@ export const useSessionTabs = create<{ sessions: Record<string, SessionTabs> }>(
     name: "brigadier.sessionTabs",
     version: 1,
     partialize: ({ sessions }) => ({ sessions }),
-    merge: (saved) => ({ sessions: restoreSessionTabs((saved as { sessions?: Record<string, SessionTabs> })?.sessions ?? {}) }),
+    merge: (saved) => {
+      const previous = (saved as { sessions?: Record<string, SessionTabs> })?.sessions ?? {};
+      const sessions = restoreSessionTabs(previous, documentIsSaved);
+      // Store the converted tabs before dropping their drafts, including if the user quits
+      // without touching a tab. A failed storage write must leave the draft recoverable.
+      try {
+        localStorage.setItem("brigadier.sessionTabs", JSON.stringify({ state: { sessions }, version: 1 }));
+        for (const session of Object.values(previous)) for (const tab of session.tabs)
+          if (tab.kind === "document" && tab.savedPath && documentIsSaved(tab.id)) discardDocument(tab.id);
+      } catch { /* Retain draft keys when storage is unavailable. */ }
+      return { sessions };
+    },
   }),
 );
 
@@ -205,6 +217,7 @@ export function selectTab(conversationId: string, id: string): void {
 const closed = new Map<string, { tab: SessionTab; index: number }[]>();
 const discarded = new Set<(tab: SessionTab) => void>();
 export function onDiscardTab(listener: (tab: SessionTab) => void): () => void { discarded.add(listener); return () => { discarded.delete(listener); }; }
+export function discardTab(tab: SessionTab): void { for (const listener of discarded) listener(tab); }
 
 /** Where the window goes when `tab` closes: its opener, else its right, else its left. */
 export function afterClose(current: SessionTabs, tabs: SessionTab[], tab: SessionTab): string {
@@ -314,13 +327,14 @@ export function selectTabNumber(conversationId: string, number: number): void {
   if (id) selectTab(conversationId, id);
 }
 
-/** Saved documents return as ordinary checkout files; unsaved drafts keep their own text key. */
-export function restoreSessionTabs(sessions: Record<string, SessionTabs>): Record<string, SessionTabs> {
+/** Only clean saved documents return as checkout files. Dirty drafts need a new native save grant. */
+export function restoreSessionTabs(sessions: Record<string, SessionTabs>, isSaved: (id: string) => boolean = () => false): Record<string, SessionTabs> {
   return Object.fromEntries(Object.entries(sessions).map(([id, session]) => {
     const remapped = new Map<string, string>();
     const tabs = session.tabs.flatMap((tab): SessionTab[] => {
       if (tab.kind === "terminal") return [{ ...tab, title: "" }];
       if (tab.kind !== "document" || !tab.savedPath) return [tab];
+      if (!isSaved(tab.id)) return [{ ...tab, savedPath: null, relativePath: null }];
       if (!tab.relativePath) return [];
       const file = { kind: "file" as const, id: fileId(tab.relativePath), path: tab.relativePath, preview: false, line: null, reveal: 0, opener: tab.opener };
       remapped.set(tab.id, file.id);

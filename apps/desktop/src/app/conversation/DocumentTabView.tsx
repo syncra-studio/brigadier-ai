@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { Button } from "@/components/ui/button";
 import { saveDocument } from "@/ipc/client";
-import { documentText, editDocument, flushDocument, useDocumentDrafts } from "@/state/documentDrafts";
+import { documentRelativePath, documentText, editDocument, flushDocument, noteDocumentSave, useDocumentDrafts } from "@/state/documentDrafts";
 import { changeSessionTab, type DocumentTab } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
@@ -20,10 +20,13 @@ export function DocumentTabView({ conversationId, tab, active }: { conversationI
       flushDocument(tab.id);
       const written = documentText(tab.id);
       const path = await saveDocument(tab.id, written, root, tab.name);
-      if (path) changeSessionTab(conversationId, tab.id, (current) => current.kind === "document" ? {
-        ...current, savedPath: path, name: path.split(/[\\/]/).pop() || "Untitled",
-        relativePath: root && path.startsWith(root.replace(/\/$/, "") + "/") ? path.slice(root.replace(/\/$/, "").length + 1) : null,
-      } : current);
+      if (path) {
+        noteDocumentSave(tab.id, written);
+        changeSessionTab(conversationId, tab.id, (current) => current.kind === "document" ? {
+          ...current, savedPath: path, name: path.split(/[\\/]/).pop() || "Untitled",
+          relativePath: documentRelativePath(root, path),
+        } : current);
+      }
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { saving.current = false; setBusy(false); }
   };

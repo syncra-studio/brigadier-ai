@@ -588,7 +588,13 @@ impl Session {
                 self.project_terminal_dir(project_id)?,
             ),
         };
-        let cwd = restored_cwd.unwrap_or(cwd);
+        // A remembered shell folder may have been removed since the tab was last open.
+        let cwd = restored_cwd
+            .filter(|path| {
+                let path = std::path::Path::new(path);
+                path.is_absolute() && path.is_dir()
+            })
+            .unwrap_or(cwd);
         if !std::path::Path::new(&cwd).is_absolute() || !std::path::Path::new(&cwd).is_dir() {
             return Err(brigadier_core::Error::Invalid(
                 "terminal folder is not an existing absolute directory".into(),

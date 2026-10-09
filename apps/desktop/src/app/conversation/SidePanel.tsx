@@ -5,7 +5,7 @@ import { useRightSidebar } from "@/app/conversation/RightSidebar";
 import type { AgentsPanelState } from "@/app/conversation/WorkerChip";
 import { TitlebarButton } from "@/components/titlebar-button";
 import { takePaneClose } from "@/state/closedPanes";
-import { openReviewTab, reopenTab } from "@/state/sessionTabs";
+import { openReviewTab } from "@/state/sessionTabs";
 import { HOME_PLACE, placeOf, terminalWorksHere, toggleTerminal, undoTabClose, useTerminalPlaces } from "@/state/terminalPlaces";
 import { useApp } from "@/state/store";
 
@@ -35,7 +35,6 @@ export function useSidePanel(conversationId: string | null, enabled: boolean, em
       if (!enabled && command && event.shiftKey && !event.altKey && event.code === "KeyT") {
         const closed = takePaneClose(conversationId ?? HOME_PLACE);
         if (closed === "terminal") undoTabClose(conversationId ? `conv:${conversationId}` : HOME_PLACE);
-        if (closed === "tab" && enabled && conversationId) reopenTab(conversationId);
         if (closed) event.preventDefault();
       }
       if (!enabled || !conversationId) return;
@@ -115,4 +114,3 @@ export function useReveal(visible: boolean): Reveal {
   }, [visible]);
   return { mounted, out, moving };
 }
-

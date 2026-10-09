@@ -30,6 +30,9 @@ impl SessionManager {
             ));
         }
         if let Some(id) = side_id.as_ref() {
+            if uuid::Uuid::parse_str(&id.0).is_err() {
+                return Err(Error::Invalid("side chat id must be a UUID".into()));
+            }
             if let Ok(existing) = self.core.conversation(id) {
                 if existing.side_of.as_ref() != Some(parent)
                     || existing.lifecycle == Lifecycle::Archived

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { sessionTabKey } from "./sessionTabKeys";
+import { localTerminalFolder } from "./terminalPaths";
 
 const data = new Map<string, string>();
 Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
@@ -11,7 +12,7 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage } });
 const { CHAT_TAB, newSessionTab, sessionTabs, selectTab, closeTab, reopenTab, moveTab,
   selectTabNumber, stepTab, changeSessionTab, restoreSessionTabs, useSessionTabs } = await import("./sessionTabs");
-const { editDocument, documentText, flushDocument } = await import("./documentDrafts");
+const { editDocument, documentText, flushDocument, noteDocumentSave, documentIsSaved, documentRelativePath, discardDocument } = await import("./documentDrafts");
 
 test("multiple tools insert after the front tab; closing returns to the opener and undo restores the position", () => {
   const a = newSessionTab("order", "terminal");
@@ -37,7 +38,7 @@ test("multiple tools insert after the front tab; closing returns to the opener a
   assert.equal(sessionTabs("order").active, CHAT_TAB);
 });
 
-test("restore retains URL, cwd, side conversation, order and draft; saved documents restore only inside checkout", () => {
+test("restore retains URL, cwd, side conversation, order and draft; saved documents restore only inside checkout", async () => {
   const browser = newSessionTab("restore", "browser");
   const terminal = newSessionTab("restore", "terminal", "/workspace");
   const side = newSessionTab("restore", "sideChat");
@@ -45,19 +46,53 @@ test("restore retains URL, cwd, side conversation, order and draft; saved docume
   editDocument(draft, "keep my text"); flushDocument(draft);
   changeSessionTab("restore", browser, (tab) => tab.kind === "browser" ? { ...tab, url: "http://localhost:3000", title: "Preview" } : tab);
   const inside = newSessionTab("restore", "document");
+  noteDocumentSave(inside, "");
   changeSessionTab("restore", inside, (tab) => tab.kind === "document" ? { ...tab, savedPath: "/workspace/notes.txt", relativePath: "notes.txt" } : tab);
   const outside = newSessionTab("restore", "document");
+  noteDocumentSave(outside, "");
   changeSessionTab("restore", outside, (tab) => tab.kind === "document" ? { ...tab, savedPath: "/elsewhere/notes.txt" } : tab);
   const saved = JSON.parse(data.get("brigadier.sessionTabs")!).state.sessions;
   assert.equal(JSON.stringify(saved).includes("keep my text"), false);
-  const restored = restoreSessionTabs(saved).restore!;
+  const restored = restoreSessionTabs(saved, documentIsSaved).restore!;
   assert.deepEqual(restored.tabs.map((tab) => tab.id), [browser, terminal, side, draft, "file:notes.txt"]);
   assert.equal(restored.active, CHAT_TAB);
   assert.equal(documentText(draft), "keep my text");
   assert.deepEqual(restored.tabs.slice(0, 3), sessionTabs("restore").tabs.slice(0, 3));
   useSessionTabs.setState({ sessions: {} });
   data.set("brigadier.sessionTabs", JSON.stringify({ state: { sessions: saved }, version: 1 }));
-  return useSessionTabs.persist.rehydrate();
+  await useSessionTabs.persist.rehydrate();
+  assert.equal(data.has("brigadier.document." + inside + ".saved"), false);
+  await useSessionTabs.persist.rehydrate();
+  assert.deepEqual(sessionTabs("restore").tabs.map((tab) => tab.id), restored.tabs.map((tab) => tab.id));
+});
+
+test("edits after saving survive restoration inside and outside a checkout", () => {
+  for (const relativePath of ["notes.txt", null]) {
+    const id = newSessionTab("dirty", "document");
+    editDocument(id, "saved"); noteDocumentSave(id, "saved");
+    changeSessionTab("dirty", id, (tab) => tab.kind === "document" ? { ...tab, savedPath: "/work/notes.txt", relativePath } : tab);
+    editDocument(id, "edited after saving"); flushDocument(id);
+    const restored = restoreSessionTabs({ dirty: sessionTabs("dirty") }, documentIsSaved).dirty!;
+    const tab = restored.tabs.find((entry) => entry.id === id)!;
+    assert.equal(tab.kind, "document");
+    assert.equal(tab.kind === "document" && tab.savedPath, null);
+    assert.equal(documentText(id), "edited after saving");
+    discardDocument(id);
+    assert.equal(data.has("brigadier.document." + id), false);
+    assert.equal(data.has("brigadier.document." + id + ".saved"), false);
+  }
+  assert.equal(documentRelativePath("C:\\work", "c:\\work\\notes.txt"), "notes.txt");
+  assert.equal(documentRelativePath("/work", "/worker/notes.txt"), null);
+  assert.equal(documentRelativePath("/work/", "/work/notes.txt"), "notes.txt");
+  assert.equal(documentRelativePath("/", "/notes.txt"), "notes.txt");
+});
+
+test("OSC folders reject remote hosts and decode Windows drive paths", () => {
+  assert.equal(localTerminalFolder("file://remote/work"), null);
+  assert.equal(localTerminalFolder("file://localhost/work/a%20b"), "/work/a b");
+  assert.equal(localTerminalFolder("file:///C:/work"), "C:/work");
+  assert.equal(localTerminalFolder("https://localhost/work"), null);
+  assert.equal(localTerminalFolder("not a URL"), null);
 });
 
 test("shortcut modifiers match exactly on each platform and reject composition and AltGraph", () => {

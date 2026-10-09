@@ -13,6 +13,7 @@ import { tokenColor } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/state/store";
 import { onTerminalOutput } from "@/state/terminalPlaces";
+import { localTerminalFolder } from "@/state/terminalPaths";
 
 /*
  * The live terminal (xterm), apart from the pane so it loads only when a shell first shows.
@@ -156,10 +157,8 @@ export function TerminalView({
     if (before) terminal.write(`${before}${RESET}\r\n`);
     const title = onTitle ? terminal.onTitleChange(onTitle) : null;
     const cwd = onCwd ? terminal.parser.registerOscHandler(7, (value) => {
-      try {
-        const url = new URL(value);
-        if (url.protocol === "file:") onCwd(decodeURIComponent(url.pathname));
-      } catch { /* A shell may emit a title that is not a folder URL. */ }
+      const path = localTerminalFolder(value);
+      if (path) onCwd(path);
       return false;
     }) : null;
     const unread = reader?.(() => serialize.serialize({ scrollback: 5000 }));
