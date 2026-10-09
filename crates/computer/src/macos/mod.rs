@@ -93,6 +93,9 @@ pub fn process_start_us(pid: i32) -> Option<u64> {
     (n == size).then(|| info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
 }
 
+/// How long a live process may be missing from the running apps after its launch.
+const APP_KNOWN: Duration = Duration::from_secs(1);
+
 /// The accessibility notifications that mean an app is still changing.
 const NOTIFICATIONS: &[&str] = &[
     "AXValueChanged",
@@ -352,7 +355,15 @@ impl Desktop for MacDesktop {
         let front = NSWorkspace::sharedWorkspace()
             .frontmostApplication()
             .map(|a| a.processIdentifier());
-        NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+        // With AppKit running on the main thread, a process that just launched can be missing
+        // from the running apps for a moment; one that is alive is waited for, briefly.
+        let end = Instant::now() + APP_KNOWN;
+        let mut found = NSRunningApplication::runningApplicationWithProcessIdentifier(pid);
+        while found.is_none() && Instant::now() < end && unsafe { libc::kill(pid, 0) } == 0 {
+            std::thread::sleep(Duration::from_millis(20));
+            found = NSRunningApplication::runningApplicationWithProcessIdentifier(pid);
+        }
+        found
             .map(|a| Self::app_info(&a, front))
             .ok_or_else(|| CuError::new(ErrorCode::NoSuchTarget, format!("no app with pid {pid}")))
     }

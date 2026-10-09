@@ -672,7 +672,9 @@ where
     let spawned = std::thread::Builder::new()
         .name("computer-overlay-work".into())
         .spawn(move || {
-            let code = work(overlay);
+            // A panic here would leave the main thread drawing forever; it ends the process.
+            let code = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(overlay)))
+                .unwrap_or(101);
             std::process::exit(code)
         });
     if let Err(e) = spawned {
