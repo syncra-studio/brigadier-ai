@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use brigadier_computer::action::Action;
 use brigadier_core::tools::{ComputerCall, ToolCall};
 use rmcp::model::{JsonObject, Tool};
 use serde_json::{Value, json};
@@ -151,7 +152,7 @@ fn example(name: &str) -> &'static str {
         "launch" => r#"{"app": "TextEdit"} or {"open": "/path/to/file"}"#,
         "observe" => r#"{"window": 1234, "screenshot": "always"}"#,
         "act" => {
-            r#"{"window": 1234, "actions": [{"do": "set_value", "ref": "e18", "text": "37", "expect": {"is": "value_equals", "ref": "e18", "text": "37"}}, {"do": "click", "ref": "e5", "expect": {"is": "checked", "ref": "e5", "on": true}}, {"do": "click", "image": "i2", "x": 410, "y": 96}]}"#
+            r#"{"window": 1234, "actions": [{"do": "set_value", "ref": "e18", "text": "37", "expect": {"is": "value_equals", "ref": "e18", "text": "37"}}, {"do": "click", "ref": "e5", "expect": {"is": "checked", "ref": "e5", "on": true}}, {"do": "click", "ref": "e7", "expect": {"is": "appears", "find": "Saved"}}, {"do": "click", "image": "i2", "x": 410, "y": 96}]}"#
         }
         "zoom" => r#"{"image": "i3", "region": [100, 80, 300, 180]}"#,
         _ => "",
@@ -352,6 +353,10 @@ fn action(action: &mut Value) {
         rename(e, &IS, "is");
         rename(e, &REF, "ref");
         rename(e, &TEXT, "text");
+        // `appears` looks for a line containing `find`; models name it as the other text fields.
+        if e.get("is").and_then(Value::as_str) == Some("appears") {
+            rename(e, &["text", "label", "name"], "find");
+        }
         rename(e, &["checked", "value_on", "state"], "on");
         if let Some(r) = e.get_mut("ref") {
             number_id(r, 'e');
@@ -414,19 +419,60 @@ fn number_id(v: &mut Value, prefix: char) {
     }
 }
 
+/// Which action of a batch is malformed ("action 3 (click): "): serde names the field, not
+/// the action, and a model fixing a ten-step batch shouldn't have to guess which one.
+fn failing_action(arguments: &Value) -> String {
+    let Some(actions) = arguments.get("actions").and_then(Value::as_array) else {
+        return String::new();
+    };
+    actions
+        .iter()
+        .enumerate()
+        .find(|(_, a)| serde_json::from_value::<Action>((*a).clone()).is_err())
+        .map(|(i, a)| {
+            let kind = a.get("do").and_then(Value::as_str).unwrap_or("?");
+            format!("action {} ({kind}): ", i + 1)
+        })
+        .unwrap_or_default()
+}
+
+/// What a missing field means, for the fields models leave out.
+fn hint(err: &str) -> &'static str {
+    if err.contains("missing field `find`") {
+        r#" (an appears expect names the text a line must contain: {"is": "appears", "find": "Saved"}; to check an element's own value use {"is": "value_equals", "ref": "e5", "text": "..."})"#
+    } else if err.contains("missing field `on`") {
+        r#" (a checked expect says which way: {"is": "checked", "ref": "e5", "on": true})"#
+    } else if err.contains("missing field `ref`") {
+        " (this action or expect needs the element's ref from your last observe, e.g. \"e5\")"
+    } else if err.contains("unknown variant") {
+        " (do is one of click, set_value, type, key, select, scroll, drag, perform, menu, navigate, wait; is is one of value_equals, value_contains, checked, appears, gone, title_contains, focused)"
+    } else {
+        ""
+    }
+}
+
 /// Maps a `tools/call` onto a [`ComputerCall`].
 pub fn parse(name: &str, mut arguments: Value) -> Result<ToolCall, ParseError> {
     normalize(name, &mut arguments);
     let bad = |err: serde_json::Error| ParseError::BadArguments {
         tool: name.to_owned(),
-        reason: format!("{err}. A well-formed call: {}", example(name)),
+        reason: format!(
+            "{}{err}{}. Nothing ran: send the call again, fixed. A well-formed call: {}",
+            if name == "act" {
+                failing_action(&arguments)
+            } else {
+                String::new()
+            },
+            hint(&err.to_string()),
+            example(name)
+        ),
     };
     let call = match name {
         "apps" => ComputerCall::Apps,
-        "launch" => ComputerCall::Launch(serde_json::from_value(arguments).map_err(bad)?),
-        "observe" => ComputerCall::Observe(serde_json::from_value(arguments).map_err(bad)?),
-        "act" => ComputerCall::Act(serde_json::from_value(arguments).map_err(bad)?),
-        "zoom" => ComputerCall::Zoom(serde_json::from_value(arguments).map_err(bad)?),
+        "launch" => ComputerCall::Launch(serde_json::from_value(arguments.clone()).map_err(bad)?),
+        "observe" => ComputerCall::Observe(serde_json::from_value(arguments.clone()).map_err(bad)?),
+        "act" => ComputerCall::Act(serde_json::from_value(arguments.clone()).map_err(bad)?),
+        "zoom" => ComputerCall::Zoom(serde_json::from_value(arguments.clone()).map_err(bad)?),
         _ => return Err(ParseError::UnknownTool(name.to_owned())),
     };
     Ok(ToolCall::Computer(call))
@@ -530,6 +576,14 @@ mod tests {
             &picked.actions[1],
             Action::Select { length: 4, .. }
         ));
+        // An appears expect names its text as the others do.
+        let menu = act_of(
+            json!({"window": 4, "actions": [{"do": "menu", "path": ["A", "B"],
+            "expect": {"is": "appears", "text": "Last action: B"}}]}),
+        );
+        assert!(
+            matches!(&menu.actions[0], Action::Menu { expect: Some(Expect::Appears { find }), .. } if find == "Last action: B")
+        );
         // A plain wait is a pause.
         let paused = act_of(json!({"window": 4, "actions": [{"do": "wait", "timeout_ms": 500}]}));
         assert_eq!(
@@ -554,6 +608,29 @@ mod tests {
         let observe = parse("observe", json!({"window_id": "1234"}));
         assert!(
             matches!(observe, Ok(ToolCall::Computer(ComputerCall::Observe(o))) if o.window == 1234)
+        );
+    }
+
+    #[test]
+    fn an_act_error_names_the_action_and_what_it_needs() {
+        let Err(err) = parse(
+            "act",
+            json!({"window": 4, "actions": [
+                {"do": "click", "ref": "e2"},
+                {"do": "click", "ref": "e6", "expect": {"is": "appears", "ref": "e1"}}
+            ]}),
+        ) else {
+            panic!("an appears without find was taken");
+        };
+        let text = err.to_string();
+        assert!(text.contains("action 2 (click): "), "{text}");
+        assert!(
+            text.contains(r#"{"is": "appears", "find": "Saved"}"#),
+            "{text}"
+        );
+        assert!(
+            text.contains("Nothing ran: send the call again, fixed."),
+            "{text}"
         );
     }
 

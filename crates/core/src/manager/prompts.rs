@@ -774,7 +774,7 @@ fn operate_rules(task: &Task) -> String {
     // it skips the calls that list them and the ones that guess argument names one error at a
     // time, and it can act and report in one exec (measured 2026-10-09: 29 of a run's 128 calls).
     let tools = if task.route.choice.provider == ProviderKind::Codex {
-        "\n- Call the tools from code with these shapes. They are complete: don't list ALL_TOOLS or print a schema. tools.mcp__computer__observe({window}); tools.mcp__computer__act({window, actions: [{do: \"set_value\", ref: \"e18\", text: \"37\", expect: {is: \"value_equals\", ref: \"e18\", text: \"37\"}}, {do: \"click\", ref: \"e5\", expect: {is: \"checked\", ref: \"e5\", on: true}}, {do: \"key\", key: \"cmd+s\"}, {do: \"menu\", path: [\"File\", \"Save\"]}]}); tools.mcp__computer__zoom({image: \"i3\", region: [x0, y0, x1, y1]}); tools.mcp__brigadier__submit_report({summary: \"...\", verification: \"...\", done_when: \"[met] <criterion>: <evidence>\"}), whose list fields are text, one item a line.\n- One exec may make several calls. When the act's expects will prove the end state, act and report in the same exec: submit_report only if the act's text has no \"failed\" or \"skipped\" line, else print the act's text."
+        "\n- Call the tools from code with these shapes. They are complete: don't list ALL_TOOLS or print a schema. tools.mcp__computer__observe({window}); tools.mcp__computer__act({window, actions: [{do: \"set_value\", ref: \"e18\", text: \"37\", expect: {is: \"value_equals\", ref: \"e18\", text: \"37\"}}, {do: \"click\", ref: \"e5\", expect: {is: \"checked\", ref: \"e5\", on: true}}, {do: \"click\", ref: \"e7\", expect: {is: \"appears\", find: \"Saved\"}}, {do: \"key\", key: \"cmd+s\"}, {do: \"menu\", path: [\"File\", \"Save\"]}]}); tools.mcp__computer__zoom({image: \"i3\", region: [x0, y0, x1, y1]}); tools.mcp__brigadier__submit_report({summary: \"...\", verification: \"...\", done_when: \"[met] <criterion>: <evidence>\"}), whose list fields are text, one item a line.\n- One exec may make several calls. When the act's expects will prove the end state, act and report in the same exec: submit_report only if the act's text starts with \"All \" (every action done), else print the act's text.\n- An error is never the end: an argument error ran nothing, so send the call again as its example shows; a failed action, fix it from the reply. End only after submit_report."
     } else {
         ""
     };
@@ -1117,6 +1117,9 @@ mod tests {
         assert!(codex.contains("They are complete: don't list ALL_TOOLS"));
         assert!(codex.contains("tools.mcp__brigadier__submit_report({summary:"));
         assert!(codex.contains("act and report in the same exec"));
+        assert!(codex.contains("An error is never the end"));
+        // An argument error has no "failed" line: only the batch's own verdict counts.
+        assert!(codex.contains("only if the act's text starts with \"All \""));
         // Other kinds hear none of it.
         let lead = worker_brief(&task("claude", Some("lead")), "", "");
         assert!(!lead.contains("How to operate"));
