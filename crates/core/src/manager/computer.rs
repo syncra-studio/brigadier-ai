@@ -45,6 +45,8 @@ pub(crate) const LEASE_TAIL: Duration = Duration::from_secs(30);
 /// What all of a batch's `wait` actions may take together; with the engine's 30 s for the
 /// rest, no batch runs past 330 s (§4.7).
 pub(crate) const MAX_BATCH_WAITS: Duration = Duration::from_secs(300);
+/// How long a worker's end waits for the windows it opened to close.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long a started helper has to answer.
 #[cfg(unix)]
 const START_TIMEOUT: Duration = Duration::from_secs(10);
@@ -256,19 +258,56 @@ impl Computer {
         );
     }
 
-    /// A worker ended: its requests stop, its leases and approvals go.
+    /// A worker ended: the windows it opened in apps it started close, its requests stop,
+    /// its leases and approvals go. Called before the cleanup ledger quits those apps.
     pub(crate) async fn end_worker(&self, task_id: &TaskId) {
-        {
+        let launched = {
             let mut state = lock(&self.state);
             state.leases.retain(|_, l| &l.owner != task_id);
             state.approved.remove(task_id);
-            state.launched.remove(task_id);
-        }
+            state.launched.remove(task_id).unwrap_or_default()
+        };
         self.changes.send_modify(|n| *n += 1);
         let link = self.link.lock().await.clone();
-        if let Some(link) = link.filter(|l| l.is_alive()) {
-            self.tell(&link, &task_id.0, Op::EndSession);
+        let Some(link) = link.filter(|l| l.is_alive()) else {
+            return;
+        };
+        // An app quit with its windows open reopens them at the user's next launch. The
+        // windows it restored from the user's own saved state stay, so they still do.
+        let mut owned: HashMap<Instance, Vec<u32>> = launched
+            .iter()
+            .filter(|l| l.new_process)
+            .map(|l| (l.instance.clone(), Vec::new()))
+            .collect();
+        for l in &launched {
+            if let Some(windows) = owned.get_mut(&l.instance) {
+                windows.extend(&l.new_windows);
+            }
         }
+        for (instance, windows) in owned.into_iter().filter(|(_, w)| !w.is_empty()) {
+            let pid = instance.pid;
+            let (tx, rx) = oneshot::channel();
+            link.send(
+                link.next_id(),
+                &task_id.0,
+                Provider::Claude,
+                Policy::default(),
+                Op::CloseWindows { instance, windows },
+                Box::new(move |answer| {
+                    let _ = tx.send(answer);
+                }),
+            );
+            match tokio::time::timeout(CLOSE_TIMEOUT, rx).await {
+                Ok(Ok(Ok(a))) if a.reply.ok && a.reply.text != "closed" => {
+                    tracing::info!(task = %task_id, pid, said = %a.reply.text, "a launched app kept some windows");
+                }
+                Ok(Ok(Ok(_))) => {}
+                _ => {
+                    tracing::warn!(task = %task_id, pid, "could not close a launched app's windows")
+                }
+            }
+        }
+        self.tell(&link, &task_id.0, Op::EndSession);
     }
 
     fn policy(&self, task_id: &TaskId) -> Policy {
@@ -990,6 +1029,10 @@ pub(crate) mod fake {
             };
             match op {
                 Op::Ping | Op::Cancel { .. } | Op::EndSession | Op::Act(_) => done(answer(ok)),
+                Op::CloseWindows { .. } => done(answer(Reply {
+                    text: "closed".into(),
+                    ..ok
+                })),
                 Op::Describe { window } => {
                     let instance = lock(&self.desktop).windows.get(&window).cloned();
                     done(answer(match instance {
@@ -1032,6 +1075,7 @@ pub(crate) mod fake {
                             bundle_id: Some("com.apple.TextEdit".into()),
                             new_process: true,
                             new_windows: vec![window],
+                            restored_windows: Vec::new(),
                             front_restored: false,
                         }),
                         ..ok
@@ -1192,6 +1236,7 @@ mod tests {
             bundle_id: Some("com.apple.Terminal".into()),
             new_process,
             new_windows: vec![window],
+            restored_windows: Vec::new(),
             front_restored: false,
         };
         {
@@ -1213,6 +1258,51 @@ mod tests {
         let b = r.computer.policy(&task("b"));
         assert!(b.launched_pids.is_empty() && b.launched_windows.is_empty());
         assert_eq!(b.host_pid, Some(77));
+    }
+
+    #[tokio::test]
+    async fn a_workers_end_closes_the_windows_it_opened_in_apps_it_started() {
+        let r = rig();
+        let link = r.computer.link().await.unwrap();
+        let launched = |pid, new_process, windows: Vec<u32>| Launched {
+            instance: instance(pid),
+            app_name: "TextEdit".into(),
+            bundle_id: Some("com.apple.TextEdit".into()),
+            new_process,
+            new_windows: windows,
+            restored_windows: vec![99],
+            front_restored: false,
+        };
+        lock(&r.computer.state).launched.insert(
+            task("a"),
+            vec![
+                // Started by the worker, then a second file opened in it.
+                launched(50, true, vec![7]),
+                launched(50, false, vec![9]),
+                // The user's own app, handed back running: never touched.
+                launched(60, false, vec![8]),
+            ],
+        );
+        drop(link);
+        r.computer.end_worker(&task("a")).await;
+        let ops = lock(&r.links)[0].ops();
+        let close = ops
+            .iter()
+            .position(|o| {
+                matches!(o, Op::CloseWindows { instance: i, windows }
+                    if *i == instance(50) && *windows == vec![7, 9])
+            })
+            .expect("the started app's windows closed");
+        let end = ops
+            .iter()
+            .position(|o| matches!(o, Op::EndSession))
+            .expect("the session ended");
+        assert!(close < end);
+        let closes = ops
+            .iter()
+            .filter(|o| matches!(o, Op::CloseWindows { .. }))
+            .count();
+        assert_eq!(closes, 1, "{ops:?}");
     }
 
     #[tokio::test]

@@ -2,7 +2,7 @@
 //! client: no grants and no AppKit needed.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -29,6 +29,8 @@ const SOON: Duration = Duration::from_secs(5);
 #[derive(Default)]
 struct Seen {
     apps_calls: AtomicUsize,
+    /// The window was closed.
+    closed: AtomicBool,
     /// Told on every pump: an `act` is waiting.
     pumping: Mutex<Option<Sender<()>>>,
 }
@@ -74,7 +76,15 @@ impl Desktop for Fake {
         Ok(vec![a])
     }
     fn windows(&mut self, _: i32) -> CuResult<Vec<WindowInfo>> {
-        Ok(vec![window()])
+        Ok(if self.0.closed.load(Ordering::SeqCst) {
+            Vec::new()
+        } else {
+            vec![window()]
+        })
+    }
+    fn close(&mut self, _: &WindowInfo) -> CuResult<()> {
+        self.0.closed.store(true, Ordering::SeqCst);
+        Ok(())
     }
     fn window(&mut self, id: u32) -> CuResult<WindowInfo> {
         if id == 1 {
@@ -490,4 +500,24 @@ fn describe_names_the_instance_and_sessions_decide_idleness() {
     );
     let e = answer(&rx).unwrap().reply.error.unwrap();
     assert_eq!(e.code, ErrorCode::UnsupportedCapability);
+}
+
+#[test]
+fn closing_a_launched_apps_windows_checks_it_is_still_that_process() {
+    let s = setup(granted(), None);
+    let c = connect(&s, TOKEN);
+    let close = |started_us| Op::CloseWindows {
+        instance: crate::wire::Instance {
+            pid: 10,
+            started_us,
+        },
+        windows: vec![1],
+    };
+    // Another process now has the pid: nothing is closed.
+    let (_, rx) = send(&c, close(7));
+    assert_eq!(answer(&rx).unwrap().reply.text, "the app has already quit");
+    assert!(!s.seen.closed.load(Ordering::SeqCst));
+    let (_, rx) = send(&c, close(42));
+    assert_eq!(answer(&rx).unwrap().reply.text, "closed");
+    assert!(s.seen.closed.load(Ordering::SeqCst));
 }

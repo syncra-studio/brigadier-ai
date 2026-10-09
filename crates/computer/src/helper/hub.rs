@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use crate::action::{ImageOut, Reply as EngineReply};
 use crate::block::BlockList;
 use crate::cancel::{CancelToken, Generations};
-use crate::desktop::Desktop;
+use crate::desktop::{Desktop, WindowInfo};
 use crate::engine::{Engine, REQUEST_DEADLINE};
 use crate::error::{CuError, CuResult, ErrorCode};
 use crate::geom::Provider;
@@ -527,6 +527,10 @@ fn run<D: Desktop>(
             r.described = Some(described);
             (r, Vec::new())
         }
+        Op::CloseWindows { instance, windows } => (
+            reply(close_windows(engine, system, instance, windows)),
+            Vec::new(),
+        ),
         Op::Launch(l) => {
             let o = crate::launch::launch(engine, l, &job.token.with_deadline(REQUEST_DEADLINE))?;
             let started_us = (system.process_start_us)(o.app.pid).ok_or_else(|| {
@@ -548,6 +552,15 @@ fn run<D: Desktop>(
                 let ids: Vec<String> = o.new_windows.iter().map(|w| format!("w{w}")).collect();
                 let _ = write!(text, " · new window {}", ids.join(", "));
             }
+            if !o.restored_windows.is_empty() {
+                let ids: Vec<String> = o.restored_windows.iter().map(|w| format!("w{w}")).collect();
+                let _ = write!(
+                    text,
+                    " · it also reopened the user's earlier {} {}, not yours",
+                    if ids.len() == 1 { "window" } else { "windows" },
+                    ids.join(", ")
+                );
+            }
             if o.front_restored {
                 text.push_str(" · it took the front, which was given back");
             }
@@ -562,6 +575,7 @@ fn run<D: Desktop>(
                 bundle_id: o.app.bundle_id,
                 new_process: o.new_process,
                 new_windows: o.new_windows,
+                restored_windows: o.restored_windows,
                 front_restored: o.front_restored,
             });
             (r, Vec::new())
@@ -576,6 +590,45 @@ fn run<D: Desktop>(
     // Records belong to the request that made them; none may reach a later one.
     engine.records.clear();
     Ok(out)
+}
+
+/// How long closed windows get to go before `CloseWindows` reports the ones still open.
+const CLOSE_WAIT: Duration = Duration::from_secs(2);
+
+/// Closes the windows of `instance` still open, if it's still that process, and says which
+/// stayed (an app asking about unsaved changes keeps its window).
+fn close_windows<D: Desktop>(
+    engine: &mut Engine<D>,
+    system: System,
+    instance: &Instance,
+    windows: &[u32],
+) -> String {
+    if (system.process_start_us)(instance.pid) != Some(instance.started_us) {
+        return "the app has already quit".into();
+    }
+    let open = |e: &mut Engine<D>| -> Vec<WindowInfo> {
+        e.desktop
+            .windows(instance.pid)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|w| windows.contains(&w.id))
+            .collect()
+    };
+    for w in open(engine) {
+        let _ = engine.desktop.close(&w);
+    }
+    let deadline = Instant::now() + CLOSE_WAIT;
+    let mut left = open(engine);
+    while !left.is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+        left = open(engine);
+    }
+    if left.is_empty() {
+        "closed".into()
+    } else {
+        let ids: Vec<String> = left.iter().map(|w| format!("w{}", w.id)).collect();
+        format!("still open: {}", ids.join(", "))
+    }
 }
 
 fn from_engine(id: u64, r: EngineReply) -> (Reply, Vec<Vec<u8>>) {

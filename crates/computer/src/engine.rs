@@ -1390,6 +1390,8 @@ mod tests {
         on_open: Option<AppInfo>,
         /// A launch takes the front.
         open_takes_front: bool,
+        /// The document each window reports showing.
+        documents: HashMap<u32, String>,
     }
 
     fn node(id: u32, depth: u16, role: &str, label: &str, frame: Rect) -> RawNode<u32> {
@@ -1426,6 +1428,7 @@ mod tests {
                 others: Vec::new(),
                 on_open: None,
                 open_takes_front: false,
+                documents: HashMap::new(),
             }
         }
 
@@ -1661,6 +1664,9 @@ mod tests {
             self.log.push("minimize".into());
             self.window.minimized = true;
             Ok(())
+        }
+        fn document(&mut self, w: &WindowInfo) -> Option<String> {
+            self.documents.get(&w.id).cloned()
         }
         fn open(&mut self, app: Option<&str>, target: Option<&str>) -> CuResult<()> {
             self.log.push(format!("open {app:?} {target:?}"));
@@ -2356,6 +2362,61 @@ mod tests {
         assert!(!o.new_process);
         assert_eq!(o.new_windows, vec![6]);
         assert!(!o.front_restored);
+    }
+
+    #[test]
+    fn a_launch_that_restores_windows_reports_the_files_own_window() {
+        let dir = std::env::temp_dir().join(format!("cu-launch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a b.txt");
+        std::fs::write(&file, "").unwrap();
+        let real = std::fs::canonicalize(&file).unwrap();
+        let mut app = other_app(20, "Notes", "dev.example.notes", 5);
+        for (id, title) in [(6, "a b.txt"), (7, "earlier.txt")] {
+            let mut w = app.windows[0].clone();
+            w.id = id;
+            w.title = title.into();
+            app.windows.push(w);
+        }
+        let mut fake = Fake::new(basic());
+        fake.on_open = Some(app.clone());
+        // The app says which document each window shows; a `file:` URL, percent-encoded.
+        let url = format!("file://{}", real.display()).replace(' ', "%20");
+        fake.documents.insert(6, url);
+        fake.documents
+            .insert(5, "file:///Users/someone/older.txt".into());
+        let mut e = engine(fake);
+        let o = launch(&mut e, Some("Notes"), Some(file.to_str().unwrap())).unwrap();
+        assert!(o.new_process);
+        assert_eq!(o.new_windows, vec![6]);
+        // Window 7 reports no document and its title isn't the file's: restored too.
+        assert_eq!(o.restored_windows, vec![5, 7]);
+
+        // An app that reports no documents: told by the window's title.
+        let mut fake = Fake::new(basic());
+        fake.on_open = Some(app);
+        let mut e = engine(fake);
+        let o = launch(&mut e, Some("Notes"), Some(file.to_str().unwrap())).unwrap();
+        assert_eq!(o.new_windows, vec![6]);
+        assert_eq!(o.restored_windows, vec![5, 7]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_launch_whose_window_cant_be_told_reports_every_new_window() {
+        let mut app = other_app(20, "Notes", "dev.example.notes", 5);
+        let mut w = app.windows[0].clone();
+        w.id = 6;
+        app.windows.push(w);
+        let mut fake = Fake::new(basic());
+        fake.on_open = Some(app);
+        let mut e = engine(fake);
+        let started = Instant::now();
+        let o = launch(&mut e, None, Some("/tmp/nothing-shows-this.txt")).unwrap();
+        assert_eq!(o.new_windows, vec![5, 6]);
+        assert!(o.restored_windows.is_empty());
+        // It waited a little for the file's own window, no longer.
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 
     #[test]

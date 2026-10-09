@@ -668,6 +668,22 @@ impl Desktop for MacDesktop {
         self.ax_window(w)?.set("AXMinimized", CFBoolean::new(true))
     }
 
+    fn document(&mut self, w: &WindowInfo) -> Option<String> {
+        self.ax_window(w).ok()?.string("AXDocument")
+    }
+
+    fn close(&mut self, w: &WindowInfo) -> CuResult<()> {
+        let button = self.ax_window(w)?.element("AXCloseButton").ok_or_else(|| {
+            CuError::new(
+                ErrorCode::UnsupportedCapability,
+                format!("window w{} has no close button", w.id),
+            )
+        })?;
+        button.perform("AXPress")?;
+        self.ax_windows.remove(&w.id);
+        Ok(())
+    }
+
     fn open(&mut self, app: Option<&str>, target: Option<&str>) -> CuResult<()> {
         // open(1): -g keeps the app out of the foreground; -b names a bundle id, -a a name or a
         // path.

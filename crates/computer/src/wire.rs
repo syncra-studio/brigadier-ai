@@ -95,6 +95,12 @@ pub enum Op {
     Describe {
         window: u32,
     },
+    /// Closes these windows of a process a worker launched, before it is quit at the worker's
+    /// end, so the app doesn't reopen them at the user's next launch.
+    CloseWindows {
+        instance: Instance,
+        windows: Vec<u32>,
+    },
     // Control work, answered at once.
     Permissions,
     /// Registers the helper with the system for this permission (the system's own prompt) so
@@ -193,8 +199,12 @@ pub struct Launched {
     /// A process this launch started; `false` when the system handed back one that was
     /// already running (the user's own, perhaps), which is never the worker's to quit.
     pub new_process: bool,
-    /// Windows that appeared with this launch.
+    /// The windows this launch opened.
     pub new_windows: Vec<u32>,
+    /// Windows the app reopened from its saved state as it started: the user's, not this
+    /// launch's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub restored_windows: Vec<u32>,
     /// The app took the front and was put back behind the user's app (§2.1).
     pub front_restored: bool,
 }

@@ -227,6 +227,18 @@ pub trait Desktop {
         let _ = w;
         err(ErrorCode::UnsupportedCapability, "minimising a window")
     }
+    /// The file or URL the window shows, as the app reports it (a `file:` URL for a file);
+    /// `None` when it doesn't say.
+    fn document(&mut self, w: &WindowInfo) -> Option<String> {
+        let _ = w;
+        None
+    }
+    /// Closes the window as its close button would: an app may keep it open to ask about
+    /// unsaved changes.
+    fn close(&mut self, w: &WindowInfo) -> CuResult<()> {
+        let _ = w;
+        err(ErrorCode::UnsupportedCapability, "closing a window")
+    }
     /// Opens an app, a file or a URL (or a file or URL in an app) without bringing it to the
     /// front, and returns once the system took the request; windows come later.
     fn open(&mut self, app: Option<&str>, target: Option<&str>) -> CuResult<()> {

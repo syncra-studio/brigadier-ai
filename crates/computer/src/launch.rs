@@ -3,11 +3,12 @@
 //! already runs; that one is never the worker's to quit.
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::block::{TERMINAL_NOT_LAUNCHED, TargetFacts};
 use crate::cancel::CancelToken;
-use crate::desktop::{AppInfo, Desktop};
+use crate::desktop::{AppInfo, Desktop, WindowInfo};
 use crate::engine::Engine;
 use crate::error::{CuError, CuResult, ErrorCode, err};
 use crate::wire::LaunchRequest;
@@ -16,13 +17,21 @@ use crate::wire::LaunchRequest;
 const WINDOW_WAIT: Duration = Duration::from_secs(10);
 /// How long an app that was already running gets to show a window before `launch` returns.
 const REUSED_GRACE: Duration = Duration::from_millis(800);
+/// How long, once windows appeared, a launch that opened a file waits for the one showing it;
+/// an app restoring its saved state may show other documents first.
+const DOCUMENT_GRACE: Duration = Duration::from_millis(1500);
 
 /// What a launch opened.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Opened {
     pub app: AppInfo,
     pub new_process: bool,
+    /// The windows this launch opened: the one showing the file when it opened one and the
+    /// window can be told.
     pub new_windows: Vec<u32>,
+    /// Windows that appeared alongside, which the app reopened from its saved state: the
+    /// user's documents, not this launch's.
+    pub restored_windows: Vec<u32>,
     pub front_restored: bool,
 }
 
@@ -44,6 +53,52 @@ fn names(want: &str, a: &AppInfo) -> bool {
         || a.bundle_path.as_deref().is_some_and(|p| {
             p.trim_end_matches('/') == want || stem(p).eq_ignore_ascii_case(&stem(want))
         })
+}
+
+/// A local path or `file:` URL as a plain path, with symlinks such as `/tmp` resolved.
+fn local_path(s: &str) -> Option<PathBuf> {
+    let path = match s.strip_prefix("file://") {
+        Some(rest) => percent_decode(rest.strip_prefix("localhost").unwrap_or(rest)),
+        None if s.contains("://") => return None,
+        None => s.to_owned(),
+    };
+    let path = PathBuf::from(path.trim_end_matches('/'));
+    path.is_absolute()
+        .then(|| std::fs::canonicalize(&path).unwrap_or(path))
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        if b[i] == b'%'
+            && let (Some(h), Some(l)) = (
+                b.get(i + 1).copied().and_then(hex),
+                b.get(i + 2).copied().and_then(hex),
+            )
+        {
+            out.push((h * 16 + l) as u8);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Whether window `w` shows `file`: by the document the app reports for it, else by a title
+/// that is the file's name, with or without its extension.
+fn shows<D: Desktop>(desktop: &mut D, w: &WindowInfo, file: &Path) -> bool {
+    if let Some(doc) = desktop.document(w) {
+        return local_path(&doc).is_some_and(|p| p == file);
+    }
+    let title = w.title.trim();
+    let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let stem = file.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+    !title.is_empty() && (title == name || title == stem)
 }
 
 fn shown(a: &AppInfo) -> HashSet<u32> {
@@ -92,7 +147,9 @@ pub fn launch<D: Desktop>(
     engine
         .desktop
         .open(req.app.as_deref(), req.open.as_deref())?;
+    let file = req.open.as_deref().and_then(local_path);
     let started = Instant::now();
+    let mut first_window: Option<Instant> = None;
     let found = loop {
         cancel.check()?;
         let apps = engine.desktop.apps()?;
@@ -124,18 +181,41 @@ pub fn launch<D: Desktop>(
         let waited = started.elapsed();
         if let Some(a) = pick {
             let new_process = !before.contains_key(&a.pid);
-            let new_windows: Vec<u32> = match before.get(&a.pid) {
+            let mut appeared: Vec<u32> = match before.get(&a.pid) {
                 Some(old) => shown(&a).difference(old).copied().collect(),
                 None => shown(&a).into_iter().collect(),
             };
+            appeared.sort_unstable();
             let reused_done = !new_process && req.open.is_none() && waited >= REUSED_GRACE;
-            if !new_windows.is_empty() || reused_done || waited >= WINDOW_WAIT {
-                let mut new_windows = new_windows;
-                new_windows.sort_unstable();
+            if !appeared.is_empty() || reused_done || waited >= WINDOW_WAIT {
+                // A file's own window among them; the rest the app restored.
+                let (mut new_windows, mut restored_windows) = (appeared.clone(), Vec::new());
+                if let Some(file) = &file {
+                    let windows: Vec<WindowInfo> = a
+                        .windows
+                        .iter()
+                        .filter(|w| appeared.contains(&w.id))
+                        .cloned()
+                        .collect();
+                    let (own, rest): (Vec<WindowInfo>, Vec<WindowInfo>) = windows
+                        .into_iter()
+                        .partition(|w| shows(&mut engine.desktop, w, file));
+                    if !own.is_empty() {
+                        new_windows = own.iter().map(|w| w.id).collect();
+                        restored_windows = rest.iter().map(|w| w.id).collect();
+                    } else if !appeared.is_empty() {
+                        let since = *first_window.get_or_insert_with(Instant::now);
+                        if since.elapsed() < DOCUMENT_GRACE && waited < WINDOW_WAIT {
+                            std::thread::sleep(Duration::from_millis(50));
+                            continue;
+                        }
+                    }
+                }
                 break Opened {
                     app: a,
                     new_process,
                     new_windows,
+                    restored_windows,
                     front_restored: false,
                 };
             }
