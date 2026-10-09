@@ -41,7 +41,7 @@ objc2 = { version = "0.6.4", optional = true }
 objc2-core-foundation = { version = "0.3.2", optional = true }
 objc2-core-graphics = { version = "0.3.2", optional = true }
 objc2-application-services = { version = "0.3.2", optional = true }
-objc2-foundation = { optional = true, version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSError", "NSURL", "NSEnumerator"] }
+objc2-foundation = { optional = true, version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSBundle", "NSString", "NSError", "NSURL", "NSEnumerator"] }
 objc2-app-kit = { optional = true, version = "0.3.2", default-features = false, features = [
   "std", "libc", "block2", "objc2-core-foundation", "NSWorkspace", "NSRunningApplication", "NSEvent", "NSGraphics",
   "NSApplication", "NSResponder", "NSView", "NSControl", "NSButton", "NSImage", "NSMenu",

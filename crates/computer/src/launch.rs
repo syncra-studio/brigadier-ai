@@ -120,22 +120,36 @@ pub fn launch<D: Desktop>(
             "give an app, a file or URL to open, or both",
         );
     }
-    // Refused before anything opens; a terminal is allowed, as long as it's a new one.
+    // Refused before anything opens, by the name the request gave and by the app the system
+    // would run for it; a terminal is allowed, as long as it's a new one.
+    let resolved = engine
+        .desktop
+        .resolve(req.app.as_deref(), req.open.as_deref());
+    let mut facts = Vec::new();
     if let Some(app) = req.app.as_deref() {
-        let facts = TargetFacts {
+        facts.push(TargetFacts {
             pid: -1,
             bundle_id: Some(app),
             app_name: app,
             bundle_path: Some(app),
             ..Default::default()
-        };
-        if let Some(reason) = engine
-            .block
-            .check(&facts)
-            .filter(|r| *r != TERMINAL_NOT_LAUNCHED)
-        {
-            return err(ErrorCode::Blocked, reason);
-        }
+        });
+    }
+    if let Some(a) = &resolved {
+        facts.push(TargetFacts {
+            pid: -1,
+            bundle_id: a.bundle_id.as_deref(),
+            app_name: &a.name,
+            bundle_path: a.bundle_path.as_deref(),
+            ..Default::default()
+        });
+    }
+    if let Some(reason) = facts
+        .iter()
+        .filter_map(|f| engine.block.check(f))
+        .find(|r| *r != TERMINAL_NOT_LAUNCHED)
+    {
+        return err(ErrorCode::Blocked, reason);
     }
     let before: HashMap<i32, HashSet<u32>> = engine
         .desktop

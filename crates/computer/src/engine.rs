@@ -1412,6 +1412,8 @@ mod tests {
         open_takes_front: bool,
         /// The document each window reports showing.
         documents: HashMap<u32, String>,
+        /// The app the system would run for a launch.
+        resolves_to: Option<AppInfo>,
     }
 
     fn node(id: u32, depth: u16, role: &str, label: &str, frame: Rect) -> RawNode<u32> {
@@ -1451,6 +1453,7 @@ mod tests {
                 on_open: None,
                 open_takes_front: false,
                 documents: HashMap::new(),
+                resolves_to: None,
             }
         }
 
@@ -1700,6 +1703,9 @@ mod tests {
         }
         fn document(&mut self, w: &WindowInfo) -> Option<String> {
             self.documents.get(&w.id).cloned()
+        }
+        fn resolve(&mut self, _: Option<&str>, _: Option<&str>) -> Option<AppInfo> {
+            self.resolves_to.clone()
         }
         fn open(&mut self, app: Option<&str>, target: Option<&str>) -> CuResult<()> {
             self.log.push(format!("open {app:?} {target:?}"));
@@ -2518,6 +2524,34 @@ mod tests {
         e.gens.stop_all();
         let r = crate::launch::launch(&mut e, &req, &token);
         assert_eq!(r.unwrap_err().code, ErrorCode::StoppedByUser);
+    }
+
+    #[test]
+    fn a_launch_of_a_blocked_app_by_name_or_by_its_file_is_refused_before_it_opens() {
+        for (app, open) in [
+            (Some("Keychain Access"), None),
+            (None, Some("/tmp/login.keychain-db")),
+        ] {
+            let mut fake = Fake::new(basic());
+            fake.resolves_to = Some(AppInfo {
+                windows: Vec::new(),
+                ..other_app(-1, "Keychain Access", "com.apple.keychainaccess", 5)
+            });
+            fake.on_open = Some(other_app(
+                20,
+                "Keychain Access",
+                "com.apple.keychainaccess",
+                5,
+            ));
+            let mut e = engine(fake);
+            let r = launch(&mut e, app, open);
+            assert_eq!(r.unwrap_err().code, ErrorCode::Blocked);
+            assert!(
+                e.desktop.log.is_empty(),
+                "nothing opened: {:?}",
+                e.desktop.log
+            );
+        }
     }
 
     #[test]

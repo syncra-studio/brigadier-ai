@@ -241,6 +241,12 @@ pub trait Desktop {
         let _ = w;
         err(ErrorCode::UnsupportedCapability, "closing a window")
     }
+    /// The app `open` would run for these, without running it: its name, bundle id and path,
+    /// so the block list sees the app, whatever name the request gave it.
+    fn resolve(&mut self, app: Option<&str>, target: Option<&str>) -> Option<AppInfo> {
+        let _ = (app, target);
+        None
+    }
     /// Opens an app, a file or a URL (or a file or URL in an app) without bringing it to the
     /// front, and returns once the system took the request; windows come later.
     fn open(&mut self, app: Option<&str>, target: Option<&str>) -> CuResult<()> {

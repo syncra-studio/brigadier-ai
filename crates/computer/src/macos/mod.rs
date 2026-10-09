@@ -29,6 +29,7 @@ use objc2_core_graphics::{
     CGWindowListCopyWindowInfo, CGWindowListOption, kCGWindowBounds, kCGWindowIsOnscreen,
     kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerPID,
 };
+use objc2_foundation::{NSBundle, NSString, NSURL};
 
 pub use ax::AxEl;
 use private::Private;
@@ -694,17 +695,18 @@ impl Desktop for MacDesktop {
         Ok(())
     }
 
+    fn resolve(&mut self, app: Option<&str>, target: Option<&str>) -> Option<AppInfo> {
+        resolve(app, target)
+    }
+
     fn open(&mut self, app: Option<&str>, target: Option<&str>) -> CuResult<()> {
         // open(1): -g keeps the app out of the foreground; -b names a bundle id, -a a name or a
         // path.
         let mut cmd = std::process::Command::new("/usr/bin/open");
         cmd.arg("-g");
         if let Some(app) = app {
-            let bundle_id = !app.contains('/')
-                && !app.contains(' ')
-                && !app.ends_with(".app")
-                && app.split('.').count() >= 3;
-            cmd.arg(if bundle_id { "-b" } else { "-a" }).arg(app);
+            cmd.arg(if is_bundle_id(app) { "-b" } else { "-a" })
+                .arg(app);
         }
         if let Some(t) = target {
             cmd.arg(t);
@@ -746,6 +748,63 @@ fn to_chars(text: &str, start: usize, length: usize) -> (usize, usize) {
     };
     let (from, to) = (chars(start), chars(start.saturating_add(length)));
     (from, to - from)
+}
+
+/// The app `open` would run for `app` and `target`, read from LaunchServices.
+fn resolve(app: Option<&str>, target: Option<&str>) -> Option<AppInfo> {
+    let ws = NSWorkspace::sharedWorkspace();
+    let url = match (app, target) {
+        (Some(app), _) if is_bundle_id(app) => {
+            ws.URLForApplicationWithBundleIdentifier(&NSString::from_str(app))?
+        }
+        (Some(app), _) if app.contains('/') => NSURL::fileURLWithPath(&NSString::from_str(app)),
+        // The lookup by name `open -a` makes; deprecated for bundle ids, which a request
+        // naming the app doesn't have.
+        #[allow(deprecated)]
+        (Some(app), _) => {
+            let path = ws.fullPathForApplication(&NSString::from_str(app))?;
+            NSURL::fileURLWithPath(&path)
+        }
+        (None, Some(t)) if t.trim_end_matches('/').ends_with(".app") => {
+            NSURL::fileURLWithPath(&NSString::from_str(t))
+        }
+        (None, Some(t)) => {
+            let target = if t.contains("://") {
+                NSURL::URLWithString(&NSString::from_str(t))?
+            } else {
+                NSURL::fileURLWithPath(&NSString::from_str(t))
+            };
+            ws.URLForApplicationToOpenURL(&target)?
+        }
+        (None, None) => return None,
+    };
+    let path = url.path()?.to_string();
+    let bundle_id = NSBundle::bundleWithURL(&url)
+        .and_then(|b| b.bundleIdentifier())
+        .map(|b| b.to_string());
+    let name = path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(".app")
+        .to_owned();
+    Some(AppInfo {
+        pid: -1,
+        name,
+        bundle_id,
+        bundle_path: Some(path),
+        frontmost: false,
+        windows: Vec::new(),
+    })
+}
+
+/// Whether `open` names an app by bundle id (`com.apple.TextEdit`) rather than by name or path.
+fn is_bundle_id(app: &str) -> bool {
+    !app.contains('/')
+        && !app.contains(' ')
+        && !app.ends_with(".app")
+        && app.split('.').count() >= 3
 }
 
 /// The frontmost app's pid: the window server's, else AppKit's.
@@ -850,6 +909,23 @@ fn pick_popup(el: &AxEl, title: &str) -> CuResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_launch_target_resolves_to_the_app_the_system_would_run() {
+        let by_name = resolve(Some("TextEdit"), None).unwrap();
+        assert_eq!(by_name.bundle_id.as_deref(), Some("com.apple.TextEdit"));
+        let by_id = resolve(Some("com.apple.TextEdit"), None).unwrap();
+        assert_eq!(by_id.bundle_path, by_name.bundle_path);
+        let path = by_name.bundle_path.clone().unwrap();
+        let by_path = resolve(Some(&path), None).unwrap();
+        assert_eq!(by_path.bundle_id.as_deref(), Some("com.apple.TextEdit"));
+        let keychain = resolve(Some("Keychain Access"), None).unwrap();
+        assert_eq!(
+            keychain.bundle_id.as_deref(),
+            Some("com.apple.keychainaccess")
+        );
+        assert!(resolve(Some("No Such App Anywhere"), None).is_none());
+    }
 
     #[test]
     fn selections_count_characters_where_accessibility_counts_utf16_units() {
