@@ -965,6 +965,22 @@ pub(crate) async fn eventually(what: &str, mut done: impl FnMut() -> bool) {
     }
 }
 
+/// [`eventually`] for a condition that has to wait to be read.
+pub(crate) async fn eventually_async<F, Fut>(what: &str, mut done: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    while !done().await {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 // ----- what a test leaves -----------------------------------------------------------------
 
 /// How a test's folders are named: `brigadier-flow-<name>-<pid>-<uuid>`.

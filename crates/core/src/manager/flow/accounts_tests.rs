@@ -1020,3 +1020,178 @@ async fn an_unsent_steer_survives_an_account_switch_without_repeating_landed_mes
         flow.stop().await;
     }
 }
+
+/// Holds the end of a limited turn of `chat` before its hand-over is chosen: the first is
+/// notified once a turn is held there, the second lets it go on.
+fn hold_hand_over(
+    flow: &Flow,
+    chat: &ConversationId,
+) -> (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    *flow
+        .manager
+        .conv(chat)
+        .unwrap()
+        .hand_over_pause
+        .lock()
+        .unwrap() = Some((reached.clone(), release.clone()));
+    (reached, release)
+}
+
+async fn send(flow: &Flow, chat: &ConversationId, text: &str) {
+    flow.manager
+        .send_message(chat.clone(), text.into(), vec![], vec![], false, None)
+        .await
+        .unwrap();
+}
+
+/// Each request of `chat` by its first message's text, with its state.
+async fn request_states(flow: &Flow, chat: &ConversationId) -> Vec<(String, RequestState)> {
+    let board = flow.core.board(chat).await.unwrap();
+    let messages = flow.core.all_messages(chat).await.unwrap();
+    let mut states: Vec<_> = board
+        .requests
+        .values()
+        .map(|request| {
+            let text = messages
+                .iter()
+                .find(|message| message.request_id.as_deref() == Some(request.id.as_str()))
+                .map(|message| message.text.clone())
+                .unwrap_or_default();
+            (text, request.state.clone())
+        })
+        .collect();
+    states.sort_by(|a, b| a.0.cmp(&b.0));
+    states
+}
+
+/// From the end of a turn cut short by a limit until its hand-over is chosen, its request
+/// still works, whatever settles the requests meanwhile. No turn starts on the CLI at its limit
+/// then, nor a compaction: a message sent meanwhile goes with the hand-over.
+#[tokio::test]
+async fn a_limited_turn_works_through_its_hand_over_and_nothing_starts_on_its_cli() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-hand-over",
+        Options::default(),
+        logging(&log, |turn| match &turn.account {
+            None if turn.input.contains("Hello.") => Reply::text("Hi."),
+            None => Reply::limited(),
+            Some(_) => Reply::text("Done."),
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let chat = chat_on(&flow, ProviderKind::Claude, None).await;
+    // Something to compact.
+    say_to(&flow, &chat, "Hello.").await;
+    let (reached, release) = hold_hand_over(&flow, &chat);
+    send(&flow, &chat, "First.").await;
+    reached.notified().await;
+    // Another source settles the requests (a card answer, a worker's report).
+    flow.manager.settle_requests(&chat).await;
+    assert_eq!(
+        request_states(&flow, &chat).await,
+        vec![
+            ("First.".to_owned(), RequestState::Working),
+            ("Hello.".to_owned(), RequestState::Done)
+        ]
+    );
+    let compacted = flow
+        .manager
+        .compact(chat.clone())
+        .await
+        .expect_err("no compaction during the hand-over");
+    assert!(
+        compacted
+            .to_string()
+            .contains("wait until the reply is done"),
+        "{compacted}"
+    );
+    send(&flow, &chat, "Second.").await;
+    let conv = flow.manager.conv(&chat).unwrap();
+    flow.manager.next_turn_now(&conv).await;
+    assert!(
+        !conv.turn_running().await,
+        "no turn on the CLI at its limit"
+    );
+    // Only this hand-over is held: a later limited turn would go on.
+    *flow
+        .manager
+        .conv(&chat)
+        .unwrap()
+        .hand_over_pause
+        .lock()
+        .unwrap() = None;
+    release.notify_one();
+    super::eventually_async("both requests done", || async {
+        request_states(&flow, &chat)
+            .await
+            .iter()
+            .all(|(_, state)| *state == RequestState::Done)
+    })
+    .await;
+    let turns = seen(&log);
+    let accounts: Vec<_> = turns.iter().map(|turn| turn.account.as_deref()).collect();
+    assert_eq!(accounts, [None, None, Some("acct-b")], "{turns:#?}");
+    assert!(turns[2].input.contains("Second."), "{turns:#?}");
+    assert_eq!(request_states(&flow, &chat).await.len(), 3);
+    flow.stop().await;
+}
+
+/// The user's Stop while a limited turn is handed over ends its request Stopped, and its
+/// messages don't go on their own on the other account; Resume continues it there, as after
+/// any Stop.
+#[tokio::test]
+async fn a_stop_during_a_hand_over_ends_the_request_and_nothing_goes_on_its_own() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-hand-over-stop",
+        Options::default(),
+        logging(&log, |turn| match &turn.account {
+            None => Reply::limited(),
+            Some(_) => Reply::text("Done."),
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let chat = chat_on(&flow, ProviderKind::Claude, None).await;
+    let (reached, release) = hold_hand_over(&flow, &chat);
+    send(&flow, &chat, "First.").await;
+    reached.notified().await;
+    flow.manager.interrupt(chat.clone()).await.unwrap();
+    assert_eq!(
+        request_states(&flow, &chat).await,
+        vec![("First.".to_owned(), RequestState::Stopped)]
+    );
+    release.notify_one();
+    // The chat moved to the other account, and nothing waits or runs.
+    let conv = flow.manager.conv(&chat).unwrap();
+    super::eventually_async("the hand-over to end", || async {
+        let moved = match flow.core.conversation(&chat).unwrap().setup {
+            Some(Setup::Chat { model }) => model.account.as_deref() == Some("acct-b"),
+            _ => false,
+        };
+        moved && !conv.is_busy().await
+    })
+    .await;
+    assert_eq!(seen(&log).len(), 1, "{:#?}", seen(&log));
+    assert_eq!(
+        request_states(&flow, &chat).await,
+        vec![("First.".to_owned(), RequestState::Stopped)]
+    );
+    flow.manager.resume(chat.clone()).await.unwrap();
+    super::eventually_async("the resumed request done", || async {
+        request_states(&flow, &chat).await == vec![("First.".to_owned(), RequestState::Done)]
+    })
+    .await;
+    let turns = seen(&log);
+    assert_eq!(turns.len(), 2, "{turns:#?}");
+    assert_eq!(turns[1].account.as_deref(), Some("acct-b"));
+    flow.stop().await;
+}

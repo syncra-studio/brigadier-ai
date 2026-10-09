@@ -162,10 +162,10 @@ struct ConvState {
     announcing: HashMap<TaskId, Option<String>>,
     /// User messages already in the transcript that the next turn carries.
     pending: Vec<Message>,
-    /// The request of a turn cut short by a limit while its messages move to another account
-    /// or a stand-in: it still works until they are back in `pending` (closing the CLI on the
-    /// way settles the requests).
-    moving: Option<String>,
+    /// A turn cut short by a limit, from its end until its messages are back in `pending` (on
+    /// another account, a stand-in, or waiting for quota) or it has failed. No turn starts
+    /// meanwhile: one would run on the CLI at its limit, as it closes.
+    hand_over: Option<HandOver>,
     /// The request the running turn serves.
     request: Option<String>,
     /// How the last turn for a request ended, when it was stopped or failed.
@@ -272,6 +272,10 @@ pub(crate) struct ConvLive {
     #[cfg(test)]
     pub(super) merge_pause:
         std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    /// Tests: what a limited turn's end waits for before its hand-over is chosen.
+    #[cfg(test)]
+    pub(super) hand_over_pause:
+        std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
 impl ConvLive {
@@ -293,6 +297,8 @@ impl ConvLive {
             user_wrote: tokio::sync::Mutex::new(0),
             #[cfg(test)]
             merge_pause: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            hand_over_pause: std::sync::Mutex::new(None),
         }
     }
 
@@ -390,7 +396,10 @@ impl ConvLive {
     /// Whether a turn is starting or running, or work waits for one.
     pub async fn is_busy(&self) -> bool {
         let state = self.state.lock().await;
-        state.busy || !state.inbox.is_empty() || !state.pending.is_empty()
+        state.busy
+            || state.hand_over.is_some()
+            || !state.inbox.is_empty()
+            || !state.pending.is_empty()
     }
 
     pub async fn idle_since_ms(&self) -> Option<i64> {
@@ -560,13 +569,26 @@ impl ConvLive {
                         .iter()
                         .filter_map(|message| message.request_id.clone()),
                 )
-                .chain(state.moving.clone())
+                .chain(
+                    state
+                        .hand_over
+                        .as_ref()
+                        .and_then(|over| over.request.clone()),
+                )
                 .chain(state.announcing.values().flatten().cloned())
                 .collect(),
             outcomes: state.outcomes.clone(),
             asked_user: state.asked_user.clone(),
         }
     }
+}
+
+/// A limited turn's hand-over under way (see `ConvState::hand_over`).
+struct HandOver {
+    /// The turn's request: it still works (closing the CLI on the way settles the requests).
+    request: Option<String>,
+    /// The user stopped it: its request ended Stopped, and its messages don't go again.
+    stopped: bool,
 }
 
 /// A conversation driver's part in its requests.
@@ -1062,9 +1084,20 @@ impl SessionManager {
         // Messages waiting for quota: the user no longer wants them sent. After a retry that
         // is looking now (it could record the wait again once they are gone).
         let retrying = conv.retry.lock().await;
-        let stopped = {
+        let (stopped, handed_over) = {
             let mut state = conv.state.lock().await;
-            if state.waiting {
+            // A limited turn being handed over: it ends Stopped, and its messages don't go again.
+            let mut handed_over = false;
+            if let Some(over) = &mut state.hand_over
+                && !over.stopped
+            {
+                over.stopped = true;
+                handed_over = true;
+                if let Some(request) = over.request.take() {
+                    state.outcomes.insert(request, RequestState::Stopped);
+                }
+            }
+            let stopped = if state.waiting {
                 let requests: HashSet<String> = state
                     .pending
                     .drain(..)
@@ -1078,14 +1111,22 @@ impl SessionManager {
                 true
             } else {
                 false
-            }
+            };
+            (stopped, handed_over)
         };
         if stopped {
             self.stop_waiting(&conv).await;
+        }
+        if stopped || handed_over {
             self.settle_requests(&id).await;
         }
         drop(retrying);
-        let cli = conv.state.lock().await.cli.clone();
+        // A turn handed over isn't running: its CLI, at its limit, has nothing to interrupt.
+        let cli = if handed_over {
+            None
+        } else {
+            conv.state.lock().await.cli.clone()
+        };
         let waiting = !self
             .core
             .conversation_view(id.clone(), 1)
@@ -1179,7 +1220,12 @@ impl SessionManager {
         let conv = self.conv(&id)?;
         {
             let mut state = conv.state.lock().await;
-            if state.busy || state.held || !state.pending.is_empty() || !state.inbox.is_empty() {
+            if state.busy
+                || state.held
+                || state.hand_over.is_some()
+                || !state.pending.is_empty()
+                || !state.inbox.is_empty()
+            {
                 return Err(Error::Invalid(
                     "wait until the reply is done, then compact".into(),
                 ));
@@ -1376,10 +1422,24 @@ impl SessionManager {
         self.spawn(async move { manager.next_turn(conv).await });
     }
 
+    /// [`Self::kick`], returning once the next turn has started or found it may not (tests).
+    #[cfg(test)]
+    pub(super) async fn next_turn_now(&self, conv: &Arc<ConvLive>) {
+        self.arc().next_turn(conv.clone()).await;
+    }
+
     async fn next_turn(self: Arc<Self>, conv: Arc<ConvLive>) {
+        let waiting = {
+            let state = conv.state.lock().await;
+            // A hand-over under way starts the next turn itself, once it has moved its turn.
+            if state.hand_over.is_some() {
+                return;
+            }
+            state.waiting
+        };
         // Messages waiting for quota go once a model can take them (this looks again now: the
         // user may have picked another model).
-        if conv.state.lock().await.waiting {
+        if waiting {
             self.retry_conversation(&conv).await;
             return;
         }
@@ -1396,7 +1456,12 @@ impl SessionManager {
         let mut sent_queued = false;
         let (users, envelopes, request, user_notes) = loop {
             let mut state = conv.state.lock().await;
-            if state.busy || state.closing || state.held || self.admit().is_err() {
+            if state.busy
+                || state.closing
+                || state.held
+                || state.hand_over.is_some()
+                || self.admit().is_err()
+            {
                 return;
             }
             let mut users = std::mem::take(&mut state.pending);
@@ -2992,7 +3057,7 @@ impl SessionManager {
             // this CLI, past the swap threshold.
             self.consider_rebirth(conv, cli).await;
         }
-        let (limit_hit, landed, carried, asked, served, end_commands) = {
+        let (limit_hit, ended, landed, carried, asked, served, end_commands) = {
             let mut state = conv.state.lock().await;
             state.commands.clear();
             // Taken now, so no turn starts on it in between (a stand-in closes it anyway).
@@ -3019,8 +3084,20 @@ impl SessionManager {
                 _ => None,
             };
             let served = state.request.take();
+            let limit_hit = state.limit_hit.take();
+            // A CLI at its limit fails the turn; an injected limit (development builds)
+            // interrupts it first. Its request isn't over until a hand-over is chosen: it goes
+            // on elsewhere, or waits for quota, or fails then. No turn starts meanwhile.
+            let limited = limit_hit.filter(|_| status != TurnStatus::Completed);
+            if limited.is_some() {
+                state.hand_over = Some(HandOver {
+                    request: served.clone(),
+                    stopped: false,
+                });
+            }
             if let Some(request) = &served
-                && let Some(ended) = ended
+                && let Some(ended) = ended.clone()
+                && limited.is_none()
             {
                 state.outcomes.insert(request.clone(), ended);
             }
@@ -3035,7 +3112,8 @@ impl SessionManager {
                 state.asked_user.insert(request.clone());
             }
             (
-                state.limit_hit.take(),
+                limited,
+                ended,
                 state.landed,
                 std::mem::take(&mut state.in_turn),
                 std::mem::take(&mut state.asked),
@@ -3047,24 +3125,23 @@ impl SessionManager {
         if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
             tracing::warn!(conversation = %conv.id, error = %err, "could not settle follow-ups");
         }
-        // A CLI at its limit fails the turn; an injected limit (development builds) interrupts
-        // it first.
-        if let Some(limit) = limit_hit
-            && status != TurnStatus::Completed
-        {
+        if let Some(limit) = limit_hit {
             self.runtime.note_limit(&cli.account, limit.clone()).await;
+            #[cfg(test)]
+            {
+                let pause = conv.hand_over_pause.lock().unwrap().clone();
+                if let Some((reached, release)) = pause {
+                    reached.notify_one();
+                    release.notified().await;
+                }
+            }
             // Another account of the provider first, with switching on.
             if let Some(next) = self
                 .runtime
                 .switch_target(&cli.account, cli.model.model.as_deref())
             {
-                // The request isn't over: its turn goes on there.
-                if let Some(request) = &served {
-                    let mut state = conv.state.lock().await;
-                    state.outcomes.remove(request);
-                    state.moving = Some(request.clone());
-                }
-                // Not from inside the CLI's own event pump: closing the CLI waits for it.
+                // Its turn goes on there. Not from inside the CLI's own event pump: closing the
+                // CLI waits for it.
                 let (manager, conv, cli) = (self.arc(), conv.clone(), cli.clone());
                 self.spawn(async move {
                     manager
@@ -3075,13 +3152,8 @@ impl SessionManager {
             }
             match self.stand_in_choice(conv, &cli.model).await {
                 Ok(next) => {
-                    // The request isn't over either: its turn goes on there.
-                    if let Some(request) = &served {
-                        let mut state = conv.state.lock().await;
-                        state.outcomes.remove(request);
-                        state.moving = Some(request.clone());
-                    }
-                    // Not from inside the CLI's own event pump: closing the CLI waits for it.
+                    // Its turn goes on there. Not from inside the CLI's own event pump: closing
+                    // the CLI waits for it.
                     let (manager, conv, from) = (self.arc(), conv.clone(), cli.model.clone());
                     let until = limit.resets_at_ms;
                     self.spawn(async move {
@@ -3099,6 +3171,15 @@ impl SessionManager {
                         return;
                     }
                 }
+            }
+            // Nowhere to go: the turn fails (unless the user stopped it meanwhile).
+            let mut state = conv.state.lock().await;
+            let stopped = state.hand_over.take().is_some_and(|over| over.stopped);
+            if let Some(request) = &served
+                && let Some(ended) = ended
+                && !stopped
+            {
+                state.outcomes.insert(request.clone(), ended);
             }
         }
         self.set_run(&conv.id, RunState::Idle, None).await;
@@ -3388,10 +3469,12 @@ impl SessionManager {
             // A new session, not an old one of that vendor, briefed from the transcript.
             state.fresh = true;
             state.reseed = true;
-            let mut pending = carried;
-            pending.append(&mut state.pending);
-            state.pending = pending;
-            state.moving = None;
+            // Stopped meanwhile: its messages stay in the transcript, as a stopped turn's do.
+            if !state.hand_over.take().is_some_and(|over| over.stopped) {
+                let mut pending = carried;
+                pending.append(&mut state.pending);
+                state.pending = pending;
+            }
         }
         self.kick(conv);
     }
@@ -3427,13 +3510,15 @@ impl SessionManager {
         }
         {
             let mut state = conv.state.lock().await;
-            if landed {
-                state.continuing = carried.iter().map(|message| message.id.clone()).collect();
+            // Stopped meanwhile: its messages stay in the transcript, as a stopped turn's do.
+            if !state.hand_over.take().is_some_and(|over| over.stopped) {
+                if landed {
+                    state.continuing = carried.iter().map(|message| message.id.clone()).collect();
+                }
+                let mut pending = carried;
+                pending.append(&mut state.pending);
+                state.pending = pending;
             }
-            let mut pending = carried;
-            pending.append(&mut state.pending);
-            state.pending = pending;
-            state.moving = None;
         }
         self.kick(conv);
     }
@@ -3476,6 +3561,10 @@ impl SessionManager {
     ) {
         let first = {
             let mut state = conv.state.lock().await;
+            // The user stopped the limited turn while its hand-over was chosen: nothing waits.
+            if state.hand_over.take().is_some_and(|over| over.stopped) {
+                return;
+            }
             state.waited_model = Some(from.clone());
             let mut pending = carried;
             pending.append(&mut state.pending);
