@@ -1411,6 +1411,23 @@ impl SessionManager {
         );
         // B7: the grant is a secret too.
         secret_values.push(worker_grant.clone());
+        let mut mcp_servers =
+            vec![self.brigadier_server(worker_grant.clone(), WORKER_TOOL_TIMEOUT_SECS, true)];
+        let mut env = worker_env(&workspace.scratch);
+        // Computer use (COMPUTER-USE-PLAN.md §4.6): its own grant, which can call the computer
+        // tools and nothing else, for the `computer` server and `brigadierd computer`.
+        if cfg!(target_os = "macos") {
+            let computer_grant = self.grants.issue(
+                grant_owner,
+                Role::Computer {
+                    conversation_id: conversation_id.clone(),
+                    task_id: task.id.clone(),
+                },
+            );
+            secret_values.push(computer_grant.clone());
+            env.push((super::computer::GRANT_ENV.into(), computer_grant.clone()));
+            mcp_servers.push(self.computer_server(computer_grant, WORKER_TOOL_TIMEOUT_SECS));
+        }
         let redactor = secrets::redactor(secret_values);
         let allowed_models = self.allowed_models(task).await;
         let spec = SessionSpec {
@@ -1421,17 +1438,13 @@ impl SessionManager {
             origin,
             access: access.clone(),
             append_system_prompt: Some(prompt),
-            mcp_servers: vec![self.brigadier_server(
-                worker_grant.clone(),
-                WORKER_TOOL_TIMEOUT_SECS,
-                true,
-            )],
+            mcp_servers,
             tools: ToolSet::Lean,
             add_dirs: match (&home, &workspace.worktree) {
                 (Some(_), Some(worktree)) => vec![worktree.clone()],
                 _ => Vec::new(),
             },
-            env: worker_env(&workspace.scratch),
+            env,
             unset_env: Vec::new(),
             low_priority: true,
             record_to: None,
@@ -3899,6 +3912,7 @@ impl SessionManager {
         self.task_ended_waiting(task, state).await;
         let owner = format!("task:{}", task.id);
         self.grants.revoke_owner(&owner);
+        self.computer.end_worker(&task.id).await;
         let leftovers = self.runtime.ledger().dispose(&owner).await;
         if !leftovers.is_clean() {
             tracing::warn!(task = %task.id, ?leftovers, "some of the task's leftovers will be retried at the next launch");

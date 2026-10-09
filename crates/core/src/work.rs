@@ -435,6 +435,34 @@ pub struct StoredOutput {
     pub at_ms: i64,
 }
 
+/// One computer-use action of a worker (COMPUTER-USE-PLAN.md §5): the session's action log.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerAction {
+    pub at_ms: i64,
+    /// `click`, `type`, `menu`…
+    pub kind: String,
+    /// The window's title when it acted.
+    pub app_window: String,
+    pub pid: i32,
+    pub window: u32,
+    /// `done`, `failed` or `skipped`.
+    pub status: String,
+    /// How it was delivered: `element`, `background`, `background_activated`, `foreground`.
+    pub rung: Option<String>,
+    /// `confirmed`, `unverified`, `no_change`, `background_unavailable`.
+    pub effect: Option<String>,
+    /// The error code, when it failed.
+    pub error: Option<String>,
+    pub dispatch_ms: f64,
+    /// The whole record as the engine wrote it (JSON), typed text left out.
+    pub record: String,
+    /// The batch's screenshot with every predicted point marked, in the blob store; on the
+    /// batch's first action.
+    #[serde(default)]
+    pub image: Option<String>,
+}
+
 /// A file the session's thread read with its own tools (THREAD-PLAN.md Q8 lever 1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

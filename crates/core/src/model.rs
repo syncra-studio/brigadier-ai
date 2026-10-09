@@ -1685,6 +1685,12 @@ pub enum DomainEvent {
         conversation_id: ConversationId,
         output: crate::work::StoredOutput,
     },
+    /// A worker acted on the desktop (computer use's action log).
+    ComputerActed {
+        conversation_id: ConversationId,
+        task_id: TaskId,
+        action: crate::work::ComputerAction,
+    },
     /// A `run_check` call ran its command, or answered from the check cache (THREAD-PLAN.md
     /// Q8 lever 3, [`crate::manager::checks`]).
     CheckRan {
@@ -1826,6 +1832,7 @@ impl DomainEvent {
             Self::ReviewUpdated { .. } => "review.updated",
             Self::ThreadCommitsSeen { .. } => "thread.seen",
             Self::OutputStored { .. } => "output.stored",
+            Self::ComputerActed { .. } => "computer.acted",
             Self::CheckRan { .. } => "check.ran",
             Self::ThreadLooked { .. } => "thread.looked",
             Self::PreviewUpdated { .. } => "preview.updated",

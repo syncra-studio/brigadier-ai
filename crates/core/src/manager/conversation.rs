@@ -2055,6 +2055,21 @@ impl SessionManager {
         }
     }
 
+    /// The `computer` MCP server a worker gets (COMPUTER-USE-PLAN.md §4.6): behind the CLI's
+    /// tool search until a worker needs it, so one that never touches the desktop pays
+    /// almost nothing.
+    pub(crate) fn computer_server(&self, grant: String, timeout_secs: u64) -> McpServer {
+        let mut server = self.brigadier_server(grant.clone(), timeout_secs, false);
+        server.name = "computer".into();
+        // Claude puts every server's environment into its own, so each grant needs its own
+        // variable; the bridge is told which one to read.
+        server
+            .args
+            .extend(["--grant-env".into(), super::computer::GRANT_ENV.into()]);
+        server.env = vec![(super::computer::GRANT_ENV.into(), grant)];
+        server
+    }
+
     /// A Claude thread's output hook (`brigadierd hook post-tool-use`), with its grant.
     fn output_hook(&self, grant: String) -> OutputHook {
         OutputHook {

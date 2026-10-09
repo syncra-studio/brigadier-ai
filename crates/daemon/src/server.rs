@@ -177,6 +177,9 @@ pub async fn accept_loop(
 async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) {
     let id = daemon.next_connection.fetch_add(1, Ordering::Relaxed);
     tracing::info!(connection = id, client = %client.name, pid = client.pid, "client connected");
+    if client.name == "Brigadier" {
+        daemon.sessions.set_computer_host(client.pid);
+    }
     daemon.metrics.connection_opened(id, client);
     let (late_tx, late) = mpsc::channel(LATE_ANSWERS);
     let mut session = Session {
