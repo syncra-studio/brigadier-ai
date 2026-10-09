@@ -350,6 +350,22 @@ pub fn open_browser<D: Desktop>(
             (pid, true)
         }
     };
+    // Stopped while the browser started: its page isn't made. A browser this launch started is
+    // still reported, so it is owned and quit.
+    if let Err(e) = cancel.check() {
+        if !new_process {
+            return Err(e);
+        }
+        let mut app = desktop.app(pid)?;
+        app.windows = desktop.windows(pid)?;
+        return Ok(Opened {
+            app,
+            new_process,
+            new_windows: Vec::new(),
+            restored_windows: Vec::new(),
+            front_restored: false,
+        });
+    }
     let browser = web
         .browser(pid)
         .ok_or_else(|| CuError::new(ErrorCode::NoSuchTarget, "the browser quit"))?;
