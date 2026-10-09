@@ -13,9 +13,8 @@ use crate::engine::Engine;
 use crate::geom::{Point, Provider, Rect};
 use crate::redact::Rgba;
 
-/// `{"open_plain": {"app": "<path>", "args": [...]}}`: an app as the user runs it, a browser with
-/// no debugging port, say, opened in the background. One that takes the front as it opens a
-/// window gets it taken straight back. Returns its pid and first window.
+/// `{"open_plain": {"app": "<path>", "args": [...]}}`: an app as the user runs it
+/// (`launch::open_plain`).
 fn open_plain<D: Desktop>(engine: &mut Engine<D>, o: &Value) -> Result<(i32, Option<u32>)> {
     let app = o["app"].as_str().context("open_plain needs an app")?;
     let args: Vec<String> = o["args"]
@@ -26,39 +25,7 @@ fn open_plain<D: Desktop>(engine: &mut Engine<D>, o: &Value) -> Result<(i32, Opt
                 .collect()
         })
         .unwrap_or_default();
-    let e = |e: crate::error::CuError| anyhow!("{e}");
-    let before: std::collections::HashSet<i32> = engine
-        .desktop
-        .apps()
-        .map_err(e)?
-        .iter()
-        .map(|a| a.pid)
-        .collect();
-    let front_before = engine.desktop.user_focus().frontmost_pid;
-    engine.desktop.open_new(app, &args).map_err(e)?;
-    let started = std::time::Instant::now();
-    let (mut pid, mut window) = (None, None);
-    while started.elapsed() < std::time::Duration::from_secs(10) {
-        let front = engine.desktop.user_focus().frontmost_pid;
-        if front != front_before && front_before != 0 && !before.contains(&front) {
-            let _ = engine.desktop.activate(front_before);
-        }
-        let fresh = engine.desktop.apps().map_err(e)?.into_iter().find(|a| {
-            !before.contains(&a.pid)
-                && a.bundle_path.as_deref().map(|p| p.trim_end_matches('/'))
-                    == Some(app.trim_end_matches('/'))
-        });
-        if let Some(a) = fresh {
-            pid = Some(a.pid);
-            window = a.windows.iter().find(|w| !w.title.is_empty()).map(|w| w.id);
-            // Kept watching a moment after the window shows: the app may take the front late.
-            if window.is_some() && started.elapsed() > std::time::Duration::from_secs(2) {
-                break;
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    Ok((pid.context("the app didn't start")?, window))
+    crate::launch::open_plain(&mut engine.desktop, app, &args).map_err(|e| anyhow!("{e}"))
 }
 
 /// Resolves `"window": "launched"` to the first window the last launch step opened.

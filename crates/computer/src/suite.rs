@@ -36,6 +36,20 @@ pub enum Setup {
         fixture: &'static str,
         window: &'static str,
     },
+    /// The web fixture's page in a browser (`suite_web`).
+    Web { target: WebTarget },
+}
+
+/// Where a browser task's page is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WebTarget {
+    /// A browser the session launched, driven through its debugging protocol.
+    Cdp,
+    /// Chrome as a user runs it, with no debugging port: its accessibility web area.
+    Plain,
+    /// A WKWebView, the engine Safari embeds: its accessibility web area.
+    WebView,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -205,6 +219,7 @@ pub fn all_tasks() -> impl Iterator<Item = &'static Task> {
         .iter()
         .chain(GROUNDING.iter())
         .chain(crate::suite_quirks::QUIRKS.iter())
+        .chain(crate::suite_web::WEB_TASKS.iter())
 }
 
 pub fn task(id: &str) -> Option<&'static Task> {
@@ -242,6 +257,14 @@ pub struct Prepared {
     /// this. Empty in setups written before it was recorded.
     #[serde(default)]
     pub exe: String,
+    /// The web fixture's server, for a browser task: its pid and start time (µs).
+    #[serde(default)]
+    pub server_pid: i32,
+    #[serde(default)]
+    pub server_start_us: u64,
+    /// The browser's scratch profile, removed with it.
+    #[serde(default)]
+    pub browser_profile: Option<String>,
 }
 
 /// One line of the fixture's log.
@@ -257,6 +280,9 @@ pub struct Event {
     pub y: Option<f64>,
     #[serde(default)]
     pub v: Option<String>,
+    /// For a web page's input event: whether the browser marked it as the user's own.
+    #[serde(default)]
+    pub trusted: Option<bool>,
 }
 
 pub fn read_events(path: &Path) -> anyhow::Result<Vec<Event>> {
@@ -295,7 +321,7 @@ pub struct Verdict {
 }
 
 impl Verdict {
-    fn fail(&mut self, why: impl Into<String>) {
+    pub(crate) fn fail(&mut self, why: impl Into<String>) {
         self.pass = false;
         self.notes.push(why.into());
     }
@@ -401,6 +427,10 @@ pub fn check(
         v.fail(format!("no task {}", prep.task));
         return v;
     };
+    if matches!(t.setup, Setup::Web { .. }) {
+        crate::suite_web::check(t, prep, events, &done, &mut v);
+        return v;
+    }
     let needs_record = |v: &mut Verdict, ok: bool, what: &str| {
         if !ok {
             v.fail(format!("no done action {what} in the records"));

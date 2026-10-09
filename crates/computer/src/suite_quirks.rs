@@ -275,6 +275,7 @@ mod tests {
             x: None,
             y: None,
             v: v.map(str::to_owned),
+            trusted: None,
         }
     }
 

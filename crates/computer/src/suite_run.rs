@@ -20,7 +20,7 @@ use crate::desktop::Desktop;
 use crate::engine::Engine;
 use crate::geom::{Point, Provider};
 use crate::macos::MacDesktop;
-use crate::suite::{self, BOARDS, MARKERS, Prepared, Setup, Task, Verdict};
+use crate::suite::{self, BOARDS, MARKERS, Prepared, Setup, Task, Verdict, WebTarget};
 use crate::tree;
 
 const WORKER: &str = "suite";
@@ -220,6 +220,7 @@ pub fn setup(desktop: &mut MacDesktop, task: &Task, dir: &Path, seed: u64) -> Re
         }
         Setup::DevApp => bail!("the runner sets the dev build up (tools/computer-suite)"),
         Setup::Quirk { .. } => crate::suite_quirks_run::setup(desktop, task, &dir, &mut prep)?,
+        Setup::Web { target } => web_setup(desktop, target, &dir, &mut prep)?,
     }
     // The app's own window notices settle first.
     std::thread::sleep(Duration::from_millis(400));
@@ -233,7 +234,7 @@ pub fn teardown(prep: &Prepared) {
     // Asked to quit first (a fixture with a scratch profile writes it out), then ended.
     for (signal, wait) in [("-TERM", Duration::from_secs(2)), ("-KILL", Duration::ZERO)] {
         if !is_ours(prep) {
-            return;
+            break;
         }
         let _ = Command::new("/bin/kill")
             .args([signal, &prep.pid.to_string()])
@@ -243,6 +244,21 @@ pub fn teardown(prep: &Prepared) {
         while Instant::now() < end && is_ours(prep) {
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+    // A browser task's server, by its own pid while it is still that process.
+    if prep.server_pid > 0
+        && prep.server_start_us != 0
+        && crate::macos::process_start_us(prep.server_pid) == Some(prep.server_start_us)
+    {
+        let _ = Command::new("/bin/kill")
+            .arg(prep.server_pid.to_string())
+            .stderr(Stdio::null())
+            .status();
+    }
+    if let Some(p) = &prep.browser_profile {
+        // The browser writes to it until it has gone.
+        std::thread::sleep(Duration::from_millis(500));
+        let _ = std::fs::remove_dir_all(p);
     }
 }
 
@@ -260,7 +276,126 @@ fn is_ours(prep: &Prepared) -> bool {
     if !prep.exe.is_empty() {
         return comm == prep.exe;
     }
-    comm.ends_with("/target-range") || comm.ends_with("/scratch-pad")
+    comm.ends_with("/target-range")
+        || comm.ends_with("/scratch-pad")
+        || comm.ends_with("/web-view")
+        || comm.ends_with("/Google Chrome for Testing")
+}
+
+/// The browser the browser tasks run in: Chrome for Testing, from `BRIGADIER_TEST_BROWSER` or
+/// the newest one Playwright installed. Never the user's own browser.
+fn test_browser() -> Result<String> {
+    if let Ok(p) = std::env::var("BRIGADIER_TEST_BROWSER") {
+        return Ok(p);
+    }
+    let cache = Path::new(&std::env::var("HOME")?).join("Library/Caches/ms-playwright");
+    let mut found: Vec<PathBuf> = std::fs::read_dir(&cache)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|d| {
+            d.path()
+                .join("chrome-mac-arm64/Google Chrome for Testing.app")
+        })
+        .filter(|p| p.exists())
+        .collect();
+    found.sort();
+    found.pop().map(|p| p.display().to_string()).context(
+        "no Chrome for Testing: set BRIGADIER_TEST_BROWSER, or `npx playwright install chromium`",
+    )
+}
+
+/// A browser task's target: the web fixture's server, then its page in the task's browser.
+fn web_setup(
+    desktop: &mut MacDesktop,
+    target: WebTarget,
+    dir: &Path,
+    prep: &mut Prepared,
+) -> Result<()> {
+    let log = dir.join("fixture-log.jsonl");
+    let port_file = dir.join("fixture-port");
+    let server = Command::new(std::env::current_exe()?)
+        .arg("web-fixture")
+        .arg("--log")
+        .arg(&log)
+        .arg("--port-file")
+        .arg(&port_file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("starting the web fixture's server")?;
+    prep.server_pid = server.id() as i32;
+    prep.server_start_us = crate::macos::process_start_us(prep.server_pid).unwrap_or(0);
+    prep.log = Some(log.display().to_string());
+    let end = Instant::now() + Duration::from_secs(5);
+    let port = loop {
+        if let Some(p) = std::fs::read_to_string(&port_file)
+            .ok()
+            .and_then(|t| t.trim().parse::<u16>().ok())
+        {
+            break p;
+        }
+        if Instant::now() > end {
+            teardown(prep);
+            bail!("the web fixture's server didn't start");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let url = format!("http://localhost:{port}/");
+    let title = match target {
+        WebTarget::Cdp => {
+            let browser = test_browser()?;
+            let mut web = crate::cdp::Web::default();
+            let cancel = crate::cancel::Generations::new().token(WORKER, Duration::from_secs(30));
+            let o = crate::launch::open_browser(desktop, &mut web, &browser, Some(&url), &cancel)
+                .map_err(|e| anyhow!("{e}"))?;
+            prep.pid = o.app.pid;
+            prep.browser_profile = web
+                .browsers
+                .first()
+                .map(|b| b.profile().display().to_string());
+            // The browser outlives this connection: the worker's helper takes it on by its
+            // profile (`cdp::adoptable`).
+            drop(web);
+            "Web Range".to_owned()
+        }
+        WebTarget::Plain => {
+            let browser = test_browser()?;
+            let profile = crate::cdp::scratch_profile().map_err(|e| anyhow!("{e}"))?;
+            prep.browser_profile = Some(profile.display().to_string());
+            let args = vec![
+                format!("--user-data-dir={}", profile.display()),
+                "--no-first-run".into(),
+                "--no-default-browser-check".into(),
+                url.clone(),
+            ];
+            let (pid, _) =
+                crate::launch::open_plain(desktop, &browser, &args).map_err(|e| anyhow!("{e}"))?;
+            prep.pid = pid;
+            "Web Range".to_owned()
+        }
+        WebTarget::WebView => {
+            prep.pid = launch_fixture("web-view", &[std::ffi::OsStr::new(&url)])?;
+            "Web View: Web Range".to_owned()
+        }
+    };
+    prep.pid_start_us = crate::macos::process_start_us(prep.pid).unwrap_or(0);
+    prep.exe = executable(prep.pid).unwrap_or_default();
+    // The page is ready once it logged itself.
+    let end = Instant::now() + Duration::from_secs(15);
+    while !std::fs::read_to_string(&log).is_ok_and(|t| t.contains(r#""ev":"ready""#)) {
+        if Instant::now() > end {
+            teardown(prep);
+            bail!("the web fixture's page didn't load");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    prep.window = wait_window(desktop, prep, &title, 15)?;
+    prep.window_title = title;
+    // Its load isn't part of the trial.
+    std::fs::write(&log, "")?;
+    Ok(())
 }
 
 /// The scratch files' contents as they are on disk now.
@@ -465,6 +600,9 @@ fn dot(frame_h: f64, cx: f64, cy: f64) -> Point {
 
 /// Runs `task`'s scripted solution on its prepared target.
 fn solve(s: &mut Script, task: &Task, prep: &Prepared) -> Result<()> {
+    if matches!(task.setup, Setup::Web { .. }) {
+        return solve_web(s, task);
+    }
     let frame_h = s
         .engine
         .desktop
@@ -813,5 +951,81 @@ pub fn watch(mut desktop: MacDesktop, out: &Path) -> Result<()> {
         }
     }
     writeln!(f, "{}", json!({"at_ms": now_ms(), "end": last}))?;
+    Ok(())
+}
+
+/// A box `@x,y wxh` on an observation's line.
+fn frame_on(text: &str, needle: &str) -> Result<(f64, f64, f64, f64)> {
+    let line = text
+        .lines()
+        .find(|l| l.contains(needle))
+        .ok_or_else(|| anyhow!("no element {needle:?} in:\n{text}"))?;
+    let at = line
+        .split_whitespace()
+        .find_map(|w| w.strip_prefix('@'))
+        .context("the element has no frame")?;
+    let size = line
+        .split_whitespace()
+        .skip_while(|w| !w.starts_with('@'))
+        .nth(1)
+        .context("the element has no size")?;
+    let (x, y) = at.split_once(',').context("a frame's origin")?;
+    let (w, h) = size.split_once('x').context("a frame's size")?;
+    Ok((x.parse()?, y.parse()?, w.parse()?, h.parse()?))
+}
+
+/// The browser tasks' scripted solutions: the fewest calls a worker needs.
+fn solve_web(s: &mut Script, task: &Task) -> Result<()> {
+    let text = s.observe(None, Screenshot::Never)?.text;
+    let r = |needle: &str| ref_on(&text, needle);
+    match task.id {
+        "web-form" => {
+            s.act(vec![
+                set(&r(r#"textfield "Name""#)?, "Ada Lovelace"),
+                set(&r(r#"textfield "Email""#)?, "ada@example.com"),
+                set(&r(r#"popup "Plan""#)?, "Team"),
+                click(&r(r#"checkbox "Accept terms""#)?),
+                click(&r(r#"button "2 stars""#)?),
+                click(&r(r#"button "Submit""#)?),
+            ])?;
+        }
+        "web-ax-form" | "web-ax-form-webkit" => {
+            s.act(vec![
+                set(&r(r#"textfield "Name""#)?, "Ada Lovelace"),
+                set(&r(r#"popup "Plan""#)?, "Team"),
+                click(&r(r#"checkbox "Accept terms""#)?),
+                click(&r(r#"button "Submit""#)?),
+            ])?;
+        }
+        "web-iframe" => {
+            s.act(vec![
+                set(&r(r#"textfield "City""#)?, "Paris"),
+                click(&r(r#"button "Save city""#)?),
+                set(&r(r#"textfield "Code""#)?, "4321"),
+                click(&r(r#"button "Send code""#)?),
+            ])?;
+        }
+        "web-dialog" => {
+            s.act(vec![click(&r(r#"button "Rename item""#)?)])?;
+            let asked = s.observe(None, Screenshot::Never)?.text;
+            s.act(vec![
+                set(&ref_on(&asked, r#"textfield "answer""#)?, "Summary.txt"),
+                click(&ref_on(&asked, r#"button "accept""#)?),
+            ])?;
+            s.act(vec![click(&r(r#"button "Delete item""#)?)])?;
+            let asked = s.observe(None, Screenshot::Never)?.text;
+            s.act(vec![click(&ref_on(&asked, r#"button "dismiss""#)?)])?;
+        }
+        "web-canvas" => {
+            // The picture's dots (fixture index.html), inside its 1 px border.
+            let (x, y, _, _) = frame_on(&text, r#""Dots picture""#)?;
+            let at = s.pixel(&[
+                Point::new(x + 1.0 + 420.0, y + 1.0 + 150.0),
+                Point::new(x + 1.0 + 60.0, y + 1.0 + 60.0),
+            ])?;
+            s.act(at.into_iter().map(click_at).collect())?;
+        }
+        other => bail!("no scripted solution for {other}"),
+    }
     Ok(())
 }

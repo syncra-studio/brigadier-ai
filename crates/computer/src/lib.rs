@@ -26,6 +26,7 @@ pub mod suite_quirks;
 pub mod suite_quirks_run;
 #[cfg(all(target_os = "macos", feature = "engine"))]
 pub mod suite_run;
+pub mod suite_web;
 pub mod tree;
 
 #[cfg(unix)]

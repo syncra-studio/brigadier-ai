@@ -302,12 +302,23 @@ fn launch_browser<D: Desktop>(
     open: Option<&str>,
     cancel: &CancelToken,
 ) -> CuResult<Opened> {
+    open_browser(&mut engine.desktop, &mut engine.web, path, open, cancel)
+}
+
+/// A page in a browser of the session's (`web`): a new window in one already running from
+/// `path`, or a new instance on a scratch profile with its debugging port. Nothing takes the
+/// front: the window is made in the background through the protocol.
+pub fn open_browser<D: Desktop>(
+    desktop: &mut D,
+    web: &mut crate::cdp::Web,
+    path: &str,
+    open: Option<&str>,
+    cancel: &CancelToken,
+) -> CuResult<Opened> {
     let url = open.map_or_else(|| "about:blank".to_owned(), as_url);
-    let desktop = &mut engine.desktop;
-    engine.web.prune(|pid| desktop.app(pid).is_ok());
-    let front_before = engine.desktop.user_focus().frontmost_pid;
-    let running = engine
-        .web
+    web.prune(|pid| desktop.app(pid).is_ok());
+    let front_before = desktop.user_focus().frontmost_pid;
+    let running = web
         .browsers
         .iter()
         .find(|b| b.app_path.trim_end_matches('/') == path.trim_end_matches('/'))
@@ -315,14 +326,12 @@ fn launch_browser<D: Desktop>(
     let (pid, new_process) = match running {
         Some(pid) => (pid, false),
         None => {
-            let before: HashSet<i32> = engine.desktop.apps()?.iter().map(|a| a.pid).collect();
+            let before: HashSet<i32> = desktop.apps()?.iter().map(|a| a.pid).collect();
             let profile = crate::cdp::scratch_profile()?;
-            engine
-                .desktop
-                .open_new(path, &crate::cdp::launch_args(&profile))?;
+            desktop.open_new(path, &crate::cdp::launch_args(&profile))?;
             let started = Instant::now();
             let pid = loop {
-                let fresh = engine.desktop.apps()?.into_iter().find(|a| {
+                let fresh = desktop.apps()?.into_iter().find(|a| {
                     !before.contains(&a.pid)
                         && a.bundle_path.as_deref().map(|p| p.trim_end_matches('/'))
                             == Some(path.trim_end_matches('/'))
@@ -337,12 +346,11 @@ fn launch_browser<D: Desktop>(
                 std::thread::sleep(Duration::from_millis(50));
             };
             let browser = crate::cdp::Browser::attach(pid, path, profile, WINDOW_WAIT)?;
-            engine.web.add(browser);
+            web.add(browser);
             (pid, true)
         }
     };
-    let browser = engine
-        .web
+    let browser = web
         .browser(pid)
         .ok_or_else(|| CuError::new(ErrorCode::NoSuchTarget, "the browser quit"))?;
     let target = browser.new_window(&url)?;
@@ -350,7 +358,7 @@ fn launch_browser<D: Desktop>(
     // The window the browser made: the one with the tab's bounds.
     let started = Instant::now();
     let window = loop {
-        let found = engine.desktop.windows(pid)?.into_iter().find(|w| {
+        let found = desktop.windows(pid)?.into_iter().find(|w| {
             (w.frame.x - bounds.x).abs() <= 1.0
                 && (w.frame.y - bounds.y).abs() <= 1.0
                 && (w.frame.w - bounds.w).abs() <= 1.0
@@ -365,8 +373,8 @@ fn launch_browser<D: Desktop>(
         }
         std::thread::sleep(Duration::from_millis(50));
     };
-    let mut app = engine.desktop.app(pid)?;
-    app.windows = engine.desktop.windows(pid)?;
+    let mut app = desktop.app(pid)?;
+    app.windows = desktop.windows(pid)?;
     let mut opened = Opened {
         app,
         new_process,
@@ -374,13 +382,50 @@ fn launch_browser<D: Desktop>(
         restored_windows: Vec::new(),
         front_restored: false,
     };
-    let front_now = engine.desktop.user_focus().frontmost_pid;
+    let front_now = desktop.user_focus().frontmost_pid;
     if front_now == pid && front_before != pid && front_before != 0 {
-        opened.front_restored = engine.desktop.activate(front_before).is_ok();
+        opened.front_restored = desktop.activate(front_before).is_ok();
     }
     // A browser this launch started is reported even when stopped, so it is owned and quit.
     if window.is_none() && !new_process {
         cancel.check()?;
     }
     Ok(opened)
+}
+
+/// An app as the user runs it, a browser with no debugging port, say, opened in the background
+/// for a test. One that takes the front as it opens a window gets it taken straight back.
+/// Returns its pid and its first titled window.
+pub fn open_plain<D: Desktop>(
+    desktop: &mut D,
+    app: &str,
+    args: &[String],
+) -> CuResult<(i32, Option<u32>)> {
+    let before: HashSet<i32> = desktop.apps()?.iter().map(|a| a.pid).collect();
+    let front_before = desktop.user_focus().frontmost_pid;
+    desktop.open_new(app, args)?;
+    let started = Instant::now();
+    let (mut pid, mut window) = (None, None);
+    while started.elapsed() < WINDOW_WAIT {
+        let front = desktop.user_focus().frontmost_pid;
+        if front != front_before && front_before != 0 && !before.contains(&front) {
+            let _ = desktop.activate(front_before);
+        }
+        let fresh = desktop.apps()?.into_iter().find(|a| {
+            !before.contains(&a.pid)
+                && a.bundle_path.as_deref().map(|p| p.trim_end_matches('/'))
+                    == Some(app.trim_end_matches('/'))
+        });
+        if let Some(a) = fresh {
+            pid = Some(a.pid);
+            window = a.windows.iter().find(|w| !w.title.is_empty()).map(|w| w.id);
+            // Watched a moment after the window shows: the app may take the front late.
+            if window.is_some() && started.elapsed() > Duration::from_secs(2) {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let pid = pid.ok_or_else(|| CuError::new(ErrorCode::NoSuchTarget, "the app didn't start"))?;
+    Ok((pid, window))
 }

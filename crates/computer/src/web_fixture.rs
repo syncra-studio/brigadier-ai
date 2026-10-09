@@ -67,6 +67,11 @@ fn accept(l: &TcpListener, log: &Arc<Mutex<PathBuf>>) {
     }
 }
 
+/// A request line's path.
+fn path_of(line: &str) -> &str {
+    line.split_whitespace().nth(1).unwrap_or("")
+}
+
 fn handle(mut s: TcpStream, log: &Mutex<PathBuf>) -> Result<()> {
     let mut r = BufReader::new(s.try_clone()?);
     loop {
@@ -78,7 +83,7 @@ fn handle(mut s: TcpStream, log: &Mutex<PathBuf>) -> Result<()> {
         let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
         let path = path.split('?').next().unwrap_or("/").to_owned();
         let method = method.to_owned();
-        let (mut length, mut close) = (0usize, false);
+        let (mut length, mut close, mut agent) = (0usize, false, String::new());
         loop {
             let mut h = String::new();
             if r.read_line(&mut h)? == 0 || h.trim().is_empty() {
@@ -92,10 +97,24 @@ fn handle(mut s: TcpStream, log: &Mutex<PathBuf>) -> Result<()> {
                 && k.trim().eq_ignore_ascii_case("connection")
             {
                 close = v.trim().eq_ignore_ascii_case("close");
+            } else if let Some((k, v)) = h.split_once(':')
+                && k.trim().eq_ignore_ascii_case("user-agent")
+            {
+                agent = v.trim().to_owned();
             }
         }
         let mut body = vec![0; length.min(MAX_BODY)];
         r.read_exact(&mut body)?;
+        // Every browser names itself `Mozilla/…`; anything else (a script posting the log, say)
+        // is noted next to the log, so the suite's checker sees it.
+        if !agent.starts_with("Mozilla/") {
+            let path = log.lock().map_err(|_| anyhow::anyhow!("log lock"))?;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(format!("{}.foreign", path.display()))?;
+            writeln!(f, "{method} {path} {agent:?}", path = path_of(&line))?;
+        }
         let (status, kind, content): (&str, &str, &[u8]) = match (method.as_str(), path.as_str()) {
             ("POST", "/log") => {
                 let text = String::from_utf8_lossy(&body);
