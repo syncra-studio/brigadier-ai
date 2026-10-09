@@ -911,7 +911,17 @@ inherited grants**, not the helper bundle's own)
   - an `observe` that asks for a screenshot starts the capture before it reads the tree. An app in the background
     answers its first accessibility read after a pause of 60 ms or more in about 25 ms instead of 6.5 ms. That cost
     showed once the fixtures opened behind other windows, and it put S2 at 77.3 ms against ≤ 70. With the capture
-    and the read overlapped, S2 is under 70 again (Results).
+    and the read overlapped, S2 is under 70 again (Results);
+  - a background app is activated once per batch, not once per action. A pixel click or drag, a ⌘/⌃ shortcut, or a
+    menu item reached through its shortcut runs under synthetic activation: the app is told it is active and its
+    window key, then inactive again. Its window redraws its active look and back each time, so a full bench run
+    (about 2,400 such clicks) made the fixture flicker without a pause, and a worker's batch of n clicks flashed n
+    times. The activation is now held for the batch's window and let go when the batch ends, before its closing
+    look, without the defocus when the app has become the user's own front app meanwhile. A two-click batch now
+    logs one activation where it logged two;
+  - a capture the system fails to start ("Failed to start stream due to audio/video capture failure", 2 of 12
+    grounding runs, and once for over 350 ms while the Mac was in use) is asked for again, four times over about
+    2 s. The error the worker gets names the system's reason.
 - **Pulled forward from Phase 5 (deviation, ruled by the Delegator): windows on other Spaces.** With the user in a
   full-screen app, every other window is off screen, and accessibility lists only the current Space's windows. The
   engine now also reads the app's `AXMainWindow` and `AXFocusedWindow`, which are given wherever they are. Failing
@@ -971,10 +981,16 @@ helper bundle's own; a person was using the Mac during every run from about 11:3
     menu-bar pick 5.2 / 10.7, pop-up 370.1 / 379.5, press 4.2 / 6.9, S4 14.8 / 39.0, S5 3.3 / 16.7 ms; SEL 20/20, P1 and
     P2 1600/1600 (worst 0.00 pt), P2r 200/200, P4 0, F1 0.
   - **After the overlap:** the quick bench (20 repetitions) passes every gate, with S2 at 49.9 / 53.5 ms.
-  - **Cut short:** the full bench after the overlap was stopped after 16 minutes, at the person's request. They saw
-    the fixture flicker (open issue below). The bench writes its timings at the end, so that run has none. Its
-    fixture log shows it had finished P1 and S3 and was almost through P2. The full bench runs only when the Mac is
-    free.
+  - **On the final engine** (`392f100b`: the overlap, activation once per batch, the capture retry), the quick
+    bench passes every gate but F1. F1's 187 changes are the person's own: their cursor moving and their app
+    quitting, while our events never move the cursor. S5 landed 20/20 both ways, by key events and by value.
+  - **No full bench on the final engine.** Two runs were stopped. The first, at the person's request after 16
+    minutes, when they saw the fixture flicker (fixed above); the bench writes its timings at the end, so it has
+    none, and in that run the key-event typing of S5 never landed. That didn't happen again: S5 landed 20/20 in
+    every quick run after it, with and without the activation hold. The second was stopped after 20 minutes,
+    because another run's test loops had taken the machine to a load average of about 90. Its actions, 111–124 ms
+    apart at first, were 200–800 ms apart by then, so any timing it gave would measure that load. The full bench
+    needs a quiet Mac.
 
 **Not done or open**
 - **Codex's E1.** The fixes, in order of calls saved:
@@ -984,7 +1000,9 @@ helper bundle's own; a person was using the Mac during every run from about 11:3
     complete, so it never needs to list `ALL_TOOLS`;
   - the computer tools accept the remaining argument spellings Codex used.
   Then one Codex run of the suite, to check E1 against the gate.
-- **The six dev trials**, once the dev build's window is open again.
+- **The six dev trials**: not run, because the person closed the dev build's window and it was still closed at the
+  end; reopening it ourselves would take the front.
+- **The full bench on the final engine**, on a quiet Mac.
 - **The comparisons**, once tools A–C are turned on and granted.
 - **The helper bundle's own grants.** Every live run used the terminal's inherited grants.
 - **A window on another Space that no accessibility client has reached yet** can't be found by remote token. It is
@@ -996,14 +1014,10 @@ helper bundle's own; a person was using the Mac during every run from about 11:3
 - **`launch` puts the new window on top.** An app a worker launches opens over the user's windows, though without
   keeping the front: it opens in the background, and gives the front back if the app takes it. Only the suite's
   fixtures open at the back.
-- **A background pointer action makes the target window flash.** A pixel click or drag, a ⌘/⌃ shortcut, or a menu
-  item reached through its shortcut runs under synthetic activation when the app is in the background. The app is told it is active and its window key, then told
-  it is inactive again once the action's events are queued. The window redraws in its active look and back: one flash
-  per action. A suite task shows 1–3 flashes. The full bench, with about 2,400 such clicks in a row, made the
-  fixture flicker without a pause; its log holds 766 activations in 16 minutes. The front app, the cursor and the
-  key window never change (F1 0). **The fix:** hold one activation per batch and window, and release it when the
-  batch ends. Skip the release if the app has meanwhile become the user's front app, because a defocus would then
-  deactivate the user's own app. It needs a live check on a window nobody is looking at, so it isn't done yet.
+- **A background app's window still flashes once per batch.** Synthetic activation makes the window redraw in its
+  active look and back. It now happens once per batch, not once per action (above), so a two-click batch flashes once
+  where it flashed twice. Only a window that never needs activation (an element action, or a view that takes a first
+  click) never flashes.
 - **Quota steers Operate to Codex.** With Claude's 5-hour window projected high, the router picks Codex for Operate.
   That is by design, but Codex took about twice as many calls and 2.8× the wall time per trial.
 

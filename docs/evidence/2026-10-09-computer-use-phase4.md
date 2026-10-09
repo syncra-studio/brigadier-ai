@@ -12,7 +12,7 @@ input to a window it didn't open.
 
 | Done when | Result |
 |---|---|
-| The suite runs end to end on Claude and Codex workers, 3 runs per provider | **Partly.** Claude 20/20, 20/20, 17/18; Codex 20/20, 18/18, 18/18. Six dev-build trials didn't run (the dev-build tasks of Codex runs 2–3 and Claude run 3): the dev build's window had been closed, and every way to reopen it takes the front |
+| The suite runs end to end on Claude and Codex workers, 3 runs per provider | **Partly.** Claude 20/20, 20/20, 17/18; Codex 20/20, 18/18, 18/18. Six dev-build trials didn't run (the dev-build tasks of Codex runs 2–3 and Claude run 3): the person closed the dev build's window, it was still closed at the end, and every way for us to reopen it takes the front |
 | E1 meets its gate (as amended by the user: model calls ÷ (scripted tool calls + 2), median ≤ 1.3) | **Claude passes (1.0); Codex misses (2.25).** Pooled medians. Codex's causes and fixes are under E1 |
 | P3 meets its gate (≥ 98% at ≥ 12 pt, ≥ 95% at 8 pt) | **Pass.** 50/50 at each of 8, 12, 16 and 24 pt (Opus, effort medium) |
 | Total provider usage per completed task is reported | **Pass.** Table below |
@@ -155,7 +155,7 @@ as the only GUI path.
 `brigadier-computer bench --no-foreground` (release). It skips P2f, the one step that raises a window, because a
 person was at the Mac.
 
-| gate | full, `deceff7c` (200 reps) | quick, `acf932a1` (20 reps) | target |
+| gate | full, `deceff7c` (200 reps) | quick, `acf932a1`, the overlap (20 reps) | target |
 |---|---|---|---|
 | S1 observe | 6.5 / 7.8 ms | 7.9 / 21.4 ms | ≤ 15 / ≤ 40 |
 | S2 observe + screenshot | **77.3 / 86.3 ms, miss** | 49.9 / 53.5 ms | ≤ 70 / ≤ 120 |
@@ -172,13 +172,28 @@ pause of 60 ms or more, with or without a capture, it takes 23–29 ms: an app i
 are since they open behind other windows, answers its first accessibility read slowly. `acf932a1` starts the capture
 before the tree read, so the two overlap.
 
-**The full bench on `acf932a1` was cut short** after 16 minutes, at the person's request. The fixture's window was
-flickering. The bench writes its timings at the end, so that run has none. Its fixture log shows it had finished
-P1 and S3 and was almost through P2. The cause is the background pointer path's synthetic activation. Each canvas
-click tells the app it is active, then inactive again, and the log holds 766 activations. The window redraws its
-active look and back each time. The plan's "Not done or open" has the fix. A worker's task flashes the window 1–3
-times this way. Only a full bench run back to back makes it a steady flicker. The full bench runs only when the Mac
-is free.
+**The final engine** (`392f100b`) adds activation once per batch and the capture retry. Its quick bench passes
+every gate but F1. F1's 187 changes are the person's: their cursor moving and one of their apps quitting. Our
+events never move the cursor. S5 landed 20/20 by key events and by value.
+
+**No full bench on the final engine.**
+- The first run, on `acf932a1`, was stopped after 16 minutes at the person's request, because the fixture's window
+  flickered. The bench writes its timings at the end, so that run has none.
+  - The flicker: each background canvas click made the app active and then inactive, 766 times in that log. The
+    window redrew its active look and back each time.
+  - A worker's batch of n pixel clicks flashed n times, so `920e66dd` holds the activation for the batch: a
+    two-click batch now logs one activation where it logged two.
+  - In that run, S5's key-event typing never landed. It didn't happen again: S5 landed 20/20 in every quick run
+    after it, with and without the hold.
+- The second run was stopped after 20 minutes. Another run's test loops had taken the machine to a load average of
+  about 90. The fixture's actions, 111–124 ms apart at first, were 200–800 ms apart by then.
+
+The full bench needs a quiet Mac.
+
+**Capture failures.** While the Mac was in use, ScreenCaptureKit sometimes failed to start a window capture
+("Failed to start stream due to audio/video capture failure"): 2 of 12 grounding runs, and once for over 350 ms.
+`8f7f8a3d` and `392f100b` ask again after 100, 250, 500 and 1000 ms, and the error names the system's reason. After
+that, the scripted suite passed 22/22, and the grounding boards 12/12.
 
 ## Reproduce
 
