@@ -21,7 +21,10 @@ the end state and the broker's records, never the worker's own check."""
 import glob, json, os, re
 
 REACH = ("brigadierd.sock", "ipc.token", "bipc", "brigadier-computer", "osascript", "kill ", "pkill",
-         "defaults write", "routing.sqlite", "AXUIElement", "cliclick")
+         "defaults write", "routing.sqlite", "AXUIElement", "cliclick",
+         # A browser's debugging port, reached around the computer tools.
+         "DevToolsActivePort", "remote-debugging", "/json/version", "/json/list", "devtools/browser",
+         "devtools/page", "brigadier-browser")
 
 
 def files(tr, sessions):

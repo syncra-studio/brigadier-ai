@@ -216,7 +216,8 @@ def forbidden(root, scratch, prep):
     state (its data dir, but not the scratch folders workers run in)."""
     data = os.path.join(root, "data")
     own = [os.path.join(data, n) for n in sorted(os.listdir(data)) if n not in ("scratch", "worktrees")]
-    return [scratch, os.path.realpath(scratch), prep.get("log") or "", *prep.get("files", {}), *own]
+    return [scratch, os.path.realpath(scratch), prep.get("log") or "", *prep.get("files", {}),
+            prep.get("browser_profile") or "", *own]
 
 
 def recount(root, r):
