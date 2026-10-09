@@ -41,6 +41,9 @@ pub struct System {
     pub fresh_permissions: fn() -> Permissions,
     /// Shows the system's own prompt for a grant; returns at once.
     pub request_permission: fn(Grant),
+    /// Forgets this helper's own entry for a grant in the system's privacy settings; `Err`
+    /// says why it couldn't.
+    pub reset_permission: fn(Grant) -> Result<(), String>,
     /// A process's start time, microseconds since the Unix epoch.
     pub process_start_us: fn(i32) -> Option<u64>,
 }
@@ -361,6 +364,19 @@ impl Hub {
                 (self.system.request_permission)(*grant);
                 self.permissions(req.id)
             }
+            Op::ResetPermission { grant } => match (self.system.reset_permission)(*grant) {
+                Ok(()) => {
+                    (self.system.request_permission)(*grant);
+                    self.permissions(req.id)
+                }
+                Err(why) => Reply::error(
+                    req.id,
+                    CuError::new(
+                        ErrorCode::AppNotResponding,
+                        format!("Couldn't start over: {why}"),
+                    ),
+                ),
+            },
             Op::Cancel { request } => {
                 // Under the live lock, so the request can't finish between the lookup and the
                 // cancel and leave its id behind.

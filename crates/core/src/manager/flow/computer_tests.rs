@@ -473,6 +473,43 @@ async fn a_permissions_read_starts_a_helper_that_just_restarted() {
     finish(flow, worker).await;
 }
 
+/// Allow… asks the helper to register; Start over asks it to forget its old entry first.
+#[tokio::test]
+async fn allow_asks_and_start_over_resets_first() {
+    use brigadier_computer::wire::Grant;
+    let (flow, worker, helper) = start("computer-start-over", PermissionLevel::FullAccess).await;
+    flow.manager
+        .request_computer_permission(Grant::Accessibility, false)
+        .await
+        .unwrap();
+    flow.manager
+        .request_computer_permission(Grant::ScreenRecording, true)
+        .await
+        .unwrap();
+    let asked: Vec<Op> = helper
+        .ops()
+        .into_iter()
+        .filter(|op| {
+            matches!(
+                op,
+                Op::RequestPermission { .. } | Op::ResetPermission { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        asked,
+        vec![
+            Op::RequestPermission {
+                grant: Grant::Accessibility
+            },
+            Op::ResetPermission {
+                grant: Grant::ScreenRecording
+            },
+        ]
+    );
+    finish(flow, worker).await;
+}
+
 /// A worker's next call that works closes the item too, and an item from before a restart
 /// closes once the permissions are read granted.
 #[tokio::test]

@@ -111,6 +111,12 @@ pub enum Op {
     RequestPermission {
         grant: Grant,
     },
+    /// The user's Start over: forgets this helper's own entry for the permission in the
+    /// system's privacy settings (one left by an older build may never match this one), then
+    /// asks again as [`Op::RequestPermission`] does.
+    ResetPermission {
+        grant: Grant,
+    },
     /// Ends the request with this id: between two events if it runs, before it starts if it
     /// waits.
     Cancel {
@@ -130,6 +136,7 @@ impl Op {
             self,
             Self::Permissions
                 | Self::RequestPermission { .. }
+                | Self::ResetPermission { .. }
                 | Self::Cancel { .. }
                 | Self::EndSession
                 | Self::StopAll

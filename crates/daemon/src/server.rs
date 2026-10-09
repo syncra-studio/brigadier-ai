@@ -1272,13 +1272,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetComputerAccess => Response::GetComputerAccess {
             access: computer_access(sessions.computer_permissions().await),
         },
-        Request::AllowComputerAccess { grant } => {
+        Request::AllowComputerAccess { grant, start_over } => {
             use brigadier_computer::wire::Grant;
             let wire = match grant {
                 ComputerGrant::Accessibility => Grant::Accessibility,
                 ComputerGrant::ScreenRecording => Grant::ScreenRecording,
             };
-            let permissions = sessions.request_computer_permission(wire).await;
+            let permissions = sessions.request_computer_permission(wire, start_over).await;
             // The pane where the user turns Brigadier Computer Use on.
             #[cfg(target_os = "macos")]
             if permissions.is_ok() {

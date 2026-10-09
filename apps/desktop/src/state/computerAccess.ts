@@ -77,7 +77,10 @@ export function useLiveComputerAccess(): ComputerAccess | null {
   return current;
 }
 
-/** Asks the system for one permission; System Settings opens on its pane. */
-export async function allowComputerAccess(grant: ComputerGrant): Promise<void> {
-  set((await request({ method: "allowComputerAccess", grant })).access);
+/**
+ * Asks the system for one permission; System Settings opens on its pane. `startOver` first
+ * forgets Brigadier Computer Use's own entry for it, one an older build left that no longer matches.
+ */
+export async function allowComputerAccess(grant: ComputerGrant, startOver = false): Promise<void> {
+  set((await request({ method: "allowComputerAccess", grant, startOver })).access);
 }

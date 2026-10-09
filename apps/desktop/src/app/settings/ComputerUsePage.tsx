@@ -26,17 +26,22 @@ const GRANTS: readonly ComputerGrant[] = ["accessibility", "screenRecording"];
 export const GRANT_STEPS =
   "System Settings opens on the right list: Device Control and Data Access (called Accessibility before macOS 27) for Control apps, Screen & System Audio Recording for See the screen. Turn on Brigadier Computer Use there; this page updates by itself.";
 export const STALE_ENTRY =
-  "Already on there, but still not allowed here? It's from an older build: select Brigadier Computer Use, remove it with −, then press Allow… again.";
+  "Already on there, but still Not allowed here? That entry is from an older build. Press Start over: Brigadier Computer Use forgets it, and macOS asks again.";
 export const RESTARTING = "Brigadier Computer Use is restarting so it can see the screen.";
+
+/** Asks for a permission; `startOver` first forgets Brigadier Computer Use's old entry for it. */
+export type OnAllow = (grant: ComputerGrant, startOver: boolean) => Promise<void>;
 
 function GrantRow({
   grant,
   allowed,
+  asked,
   onAllow,
 }: {
   grant: ComputerGrant;
   allowed: boolean;
-  onAllow: (grant: ComputerGrant) => Promise<void>;
+  asked: boolean;
+  onAllow: OnAllow;
 }) {
   const allow = useAction();
   return (
@@ -46,9 +51,16 @@ function GrantRow({
       error={allow.error}
     >
       {!allowed && (
-        <SettingsButton disabled={allow.busy} onClick={() => allow.run(() => onAllow(grant))}>
-          Allow…
-        </SettingsButton>
+        <div className="flex gap-2">
+          {asked && (
+            <SettingsButton disabled={allow.busy} onClick={() => allow.run(() => onAllow(grant, true))}>
+              Start over
+            </SettingsButton>
+          )}
+          <SettingsButton disabled={allow.busy} onClick={() => allow.run(() => onAllow(grant, false))}>
+            Allow…
+          </SettingsButton>
+        </div>
       )}
     </SettingsRow>
   );
@@ -63,7 +75,7 @@ export function ComputerUseBody({
   access: ComputerAccess | null;
   /** An Allow was clicked: the user is off to System Settings. */
   asked: boolean;
-  onAllow: (grant: ComputerGrant) => Promise<void>;
+  onAllow: OnAllow;
 }) {
   if (!access?.available) return null;
   const missing = GRANTS.some((grant) => !access[grant]);
@@ -72,7 +84,7 @@ export function ComputerUseBody({
       <SettingsSection>
         <SettingsCard>
           {GRANTS.map((grant) => (
-            <GrantRow key={grant} grant={grant} allowed={access[grant]} onAllow={onAllow} />
+            <GrantRow key={grant} grant={grant} allowed={access[grant]} asked={asked} onAllow={onAllow} />
           ))}
         </SettingsCard>
         {asked && missing && (
@@ -99,9 +111,9 @@ export function ComputerUsePage() {
     <ComputerUseBody
       access={access}
       asked={asked}
-      onAllow={(grant) => {
+      onAllow={(grant, startOver) => {
         setAsked(true);
-        return allowComputerAccess(grant);
+        return allowComputerAccess(grant, startOver);
       }}
     />
   );

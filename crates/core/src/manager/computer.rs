@@ -448,20 +448,22 @@ impl SessionManager {
     }
 
     /// Registers the helper with the system for `grant` (the system's own prompt), so it is
-    /// listed in System Settings; the caller opens the pane.
+    /// listed in System Settings; the caller opens the pane. With `start_over`, the helper
+    /// first forgets its own entry for `grant`, which an older build may have left behind.
     pub async fn request_computer_permission(
         &self,
         grant: brigadier_computer::wire::Grant,
+        start_over: bool,
     ) -> std::result::Result<brigadier_computer::wire::Permissions, String> {
         let worker = TaskId("settings".into());
+        let op = if start_over {
+            Op::ResetPermission { grant }
+        } else {
+            Op::RequestPermission { grant }
+        };
         let a = self
             .computer
-            .request(
-                &worker,
-                Provider::Claude,
-                Policy::default(),
-                Op::RequestPermission { grant },
-            )
+            .request(&worker, Provider::Claude, Policy::default(), op)
             .await
             .map_err(|e| e.detail)?;
         a.reply
@@ -1339,10 +1341,12 @@ pub(crate) mod fake {
                 return done(Err(Gone));
             }
             match op {
-                Op::Permissions => done(answer(Reply {
-                    permissions: Some(permissions),
-                    ..ok
-                })),
+                Op::Permissions | Op::RequestPermission { .. } | Op::ResetPermission { .. } => {
+                    done(answer(Reply {
+                        permissions: Some(permissions),
+                        ..ok
+                    }))
+                }
                 Op::Ping | Op::Cancel { .. } | Op::EndSession | Op::Act(_) => done(answer(ok)),
                 Op::CloseWindows { .. } => done(answer(Reply {
                     text: "closed".into(),

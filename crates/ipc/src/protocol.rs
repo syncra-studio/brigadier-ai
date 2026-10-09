@@ -296,6 +296,10 @@ pub enum Request {
     /// Use with it and opens that pane of System Settings, where the user turns it on.
     AllowComputerAccess {
         grant: ComputerGrant,
+        /// Start over: first forget Brigadier Computer Use's own entry for this permission,
+        /// left by an older build that the system no longer matches.
+        #[serde(default)]
+        start_over: bool,
     },
     /// Whether dictation (the composer's Dictate button) can run, and its speech model.
     GetDictation,

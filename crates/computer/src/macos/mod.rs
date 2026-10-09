@@ -84,6 +84,36 @@ pub fn request_permission(grant: crate::wire::Grant) {
     }
 }
 
+/// Forgets this helper's own entry for `grant` in the system's privacy settings, with
+/// `tccutil reset <service> <bundle id>` ("If a bundle identifier is specified, the service
+/// will be reset for that bundle only", tccutil(1)). Only a bundled helper has an id of its
+/// own; a bare binary would reset whoever launched it, so it refuses.
+pub fn reset_permission(grant: crate::wire::Grant) -> Result<(), String> {
+    let id = NSBundle::mainBundle()
+        .bundleIdentifier()
+        .map(|id| id.to_string())
+        .filter(|id| id.starts_with("ai.brigadier.") && id.ends_with("computer-use"))
+        .ok_or("this isn't the bundled Brigadier Computer Use")?;
+    let out = std::process::Command::new("/usr/bin/tccutil")
+        .args(["reset", tcc_service(grant), &id])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("tccutil didn't run: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+    }
+}
+
+/// The privacy service's name for tccutil.
+pub fn tcc_service(grant: crate::wire::Grant) -> &'static str {
+    match grant {
+        crate::wire::Grant::Accessibility => "Accessibility",
+        crate::wire::Grant::ScreenRecording => "ScreenCapture",
+    }
+}
+
 /// When the process `pid` started, in microseconds since the Unix epoch; `None` when there is
 /// no such process. With the pid it tells a process apart from a later one that reuses its pid.
 pub fn process_start_us(pid: i32) -> Option<u64> {

@@ -55,6 +55,7 @@ pub fn system() -> System {
         },
         fresh_permissions,
         request_permission: crate::macos::request_permission,
+        reset_permission: crate::macos::reset_permission,
         process_start_us: crate::macos::process_start_us,
     }
 }

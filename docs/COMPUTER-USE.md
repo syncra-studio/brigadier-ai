@@ -52,10 +52,11 @@ open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibil
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"   # Screen & System Audio Recording
 ```
 
-**On, but still "Not allowed yet"?** The switch belongs to an older build of Brigadier Computer Use (macOS ties a
-grant to the build it was given to, and an unsigned build changes with every rebuild). In System Settings, select
-**Brigadier Computer Use**, remove it with **−**, then press **Allow…** again in Brigadier and turn the new entry on.
-Signed builds keep their grants across rebuilds and updates.
+**On, but still "Not allowed yet"?** The switch belongs to an older build of Brigadier Computer Use: macOS ties a
+grant to the build it was given to, and an unsigned build changes with every rebuild. After you've pressed **Allow…**
+once, the row also offers **Start over**. It makes Brigadier Computer Use forget its own entry for that permission
+(only its own, with macOS's `tccutil reset`), then macOS asks again; turn the new entry on. Signed builds keep their
+grants across rebuilds and updates.
 
 ### Opening the dev build (for Brigadier's developers)
 

@@ -47,7 +47,12 @@ path: string, } | { "method": "openTerminal", conversationId?: ConversationId, p
 /**
  * Independent shell session; omitted for the original default shell.
  */
-sessionId?: string, cols: number, rows: number, } | { "method": "openSideChat", conversationId: ConversationId, } | { "method": "openSetupTerminal", provider: ProviderKind, install: boolean, cols: number, rows: number, } | { "method": "openWorkerTerminal", taskId: TaskId, cols: number, rows: number, } | { "method": "writeTerminal", terminalId: string, data: string, } | { "method": "resizeTerminal", terminalId: string, cols: number, rows: number, } | { "method": "clearTerminal", terminalId: string, } | { "method": "closeTerminal", terminalId: string, } | { "method": "getComputerAccess" } | { "method": "allowComputerAccess", grant: ComputerGrant, } | { "method": "getDictation" } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation" } | { "method": "appendDictation", dictationId: string, 
+sessionId?: string, cols: number, rows: number, } | { "method": "openSideChat", conversationId: ConversationId, } | { "method": "openSetupTerminal", provider: ProviderKind, install: boolean, cols: number, rows: number, } | { "method": "openWorkerTerminal", taskId: TaskId, cols: number, rows: number, } | { "method": "writeTerminal", terminalId: string, data: string, } | { "method": "resizeTerminal", terminalId: string, cols: number, rows: number, } | { "method": "clearTerminal", terminalId: string, } | { "method": "closeTerminal", terminalId: string, } | { "method": "getComputerAccess" } | { "method": "allowComputerAccess", grant: ComputerGrant, 
+/**
+ * Start over: first forget Brigadier Computer Use's own entry for this permission,
+ * left by an older build that the system no longer matches.
+ */
+startOver: boolean, } | { "method": "getDictation" } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation" } | { "method": "appendDictation", dictationId: string, 
 /**
  * 16 kHz mono 16-bit little-endian PCM, base64-encoded.
  */

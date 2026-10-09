@@ -19,7 +19,7 @@ use crate::error::{CuResult, ErrorCode, err};
 use crate::geom::{ImageTransform, Point, Provider, Rect};
 use crate::redact::Rgba;
 use crate::tree::RawNode;
-use crate::wire::{Event, Op, Permissions, Policy};
+use crate::wire::{Event, Grant, Op, Permissions, Policy};
 
 const TOKEN: &str = "the-token";
 /// Long enough that a test finishing well inside it shows the wait was cut short.
@@ -225,6 +225,7 @@ fn granted() -> System {
             restarting: false,
         },
         request_permission: |_| {},
+        reset_permission: |_| Ok(()),
         process_start_us: |_| Some(42),
     }
 }
@@ -496,6 +497,62 @@ fn a_screen_grant_given_since_the_start_is_reported_and_restarts_the_helper_once
     let p = answer(&rx).unwrap().reply.permissions.unwrap();
     assert!(p.accessibility && p.screen_recording && p.restarting);
     assert!(s.hub.restart_due(), "nothing runs, so it restarts now");
+}
+
+#[test]
+fn start_over_resets_the_grant_then_asks_again_and_a_failed_reset_asks_nothing() {
+    use std::sync::atomic::AtomicU32;
+    // What happened, in order: 1 = reset for Accessibility, 2 = asked for Accessibility.
+    static STEPS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    static FAILS: AtomicU32 = AtomicU32::new(0);
+    let system = System {
+        request_permission: |g| {
+            STEPS
+                .lock()
+                .unwrap()
+                .push(if g == Grant::Accessibility { 2 } else { 0 })
+        },
+        reset_permission: |g| {
+            if FAILS.load(Ordering::SeqCst) > 0 {
+                return Err("tccutil: No such bundle identifier".into());
+            }
+            STEPS
+                .lock()
+                .unwrap()
+                .push(if g == Grant::Accessibility { 1 } else { 0 });
+            Ok(())
+        },
+        ..granted()
+    };
+    let s = setup(system, None);
+    let c = connect(&s, TOKEN);
+    let (_, rx) = send(
+        &c,
+        Op::ResetPermission {
+            grant: Grant::Accessibility,
+        },
+    );
+    let r = answer(&rx).unwrap().reply;
+    assert!(r.ok && r.permissions.is_some(), "{r:?}");
+    assert_eq!(*STEPS.lock().unwrap(), vec![1, 2]);
+
+    FAILS.store(1, Ordering::SeqCst);
+    let (_, rx) = send(
+        &c,
+        Op::ResetPermission {
+            grant: Grant::Accessibility,
+        },
+    );
+    let e = answer(&rx).unwrap().reply.error.unwrap();
+    assert_eq!(
+        e.detail,
+        "Couldn't start over: tccutil: No such bundle identifier"
+    );
+    assert_eq!(
+        *STEPS.lock().unwrap(),
+        vec![1, 2],
+        "nothing asked after a failed reset"
+    );
 }
 
 #[test]
