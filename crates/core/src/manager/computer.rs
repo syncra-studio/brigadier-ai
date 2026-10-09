@@ -127,7 +127,7 @@ struct State {
 }
 
 pub(crate) struct Computer {
-    starter: HelperStarter,
+    starter: Mutex<HelperStarter>,
     link: tokio::sync::Mutex<Option<Arc<dyn HelperLink>>>,
     state: Arc<Mutex<State>>,
     /// The bundle of the Brigadier app that hosts this daemon, blocked for its workers.
@@ -150,13 +150,19 @@ impl Computer {
 
     pub(crate) fn with_starter(daemon_exe: &Path, starter: HelperStarter) -> Self {
         Self {
-            starter,
+            starter: Mutex::new(starter),
             link: tokio::sync::Mutex::new(None),
             state: Arc::default(),
             host_bundle: host_bundle(daemon_exe),
             changes: watch::channel(0).0,
             cold_start_ms: Mutex::new(None),
         }
+    }
+
+    /// Starts later helpers with `starter` (a fake, in tests).
+    #[cfg(test)]
+    pub(crate) fn set_starter(&self, starter: HelperStarter) {
+        *lock(&self.starter) = starter;
     }
 
     /// The Brigadier app that connected to this daemon: its windows hold the cards a worker
@@ -186,7 +192,8 @@ impl Computer {
             }
         });
         let started = Instant::now();
-        let fresh = (self.starter)(on_event).await.map_err(|why| {
+        let starter = lock(&self.starter).clone();
+        let fresh = starter(on_event).await.map_err(|why| {
             CuError::new(
                 ErrorCode::AppNotResponding,
                 format!("Brigadier Computer Use couldn't start: {why}"),
@@ -393,6 +400,12 @@ impl SessionManager {
     /// How long the helper took from its start to its first answer, last time (S7).
     pub fn computer_cold_start_ms(&self) -> Option<f64> {
         self.computer.cold_start_ms()
+    }
+
+    /// Starts the computer-use helper with `starter` from now on (a fake, in tests).
+    #[cfg(test)]
+    pub(crate) fn set_computer_starter(&self, starter: HelperStarter) {
+        self.computer.set_starter(starter);
     }
 }
 
@@ -896,33 +909,55 @@ fn start_helper(
     Err("computer use isn't available on this system yet".into())
 }
 
+/// A fake helper for the broker's tests and the flow tests: a desktop of windows the test
+/// lays out, and every op the broker sent.
 #[cfg(test)]
-mod tests {
+pub(crate) mod fake {
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
+    use brigadier_computer::desktop::WindowInfo;
+    use brigadier_computer::geom::Rect;
     use brigadier_computer::wire::Reply;
 
     use super::*;
 
-    type Waiter = Box<dyn FnOnce(Result<Answer, Gone>) + Send>;
+    pub(crate) type Waiter = Box<dyn FnOnce(Result<Answer, Gone>) + Send>;
+    pub(crate) type OnEvent = Arc<dyn Fn(Event) + Send + Sync>;
 
-    /// A helper that answers pings and describes at once and holds everything else until
-    /// the test says.
+    /// What the fake desktop shows: each window's process, and what the next `launch` opens.
     #[derive(Default)]
-    struct FakeLink {
+    pub(crate) struct Desktop {
+        pub windows: HashMap<u32, Instance>,
+        pub launch: Option<(Instance, u32)>,
+    }
+
+    /// A helper connection that answers pings, cancels, session ends, describes of the
+    /// desktop's windows, acts, and launches the desktop names at once, and holds everything
+    /// else until the test says.
+    #[derive(Default)]
+    pub(crate) struct FakeLink {
         next: AtomicU64,
-        sent: Mutex<Vec<(u64, String, Op, Policy)>>,
-        held: Mutex<HashMap<u64, Waiter>>,
+        pub(crate) sent: Mutex<Vec<(u64, String, Op, Policy)>>,
+        pub(crate) held: Mutex<HashMap<u64, Waiter>>,
         dead: AtomicBool,
+        desktop: Arc<Mutex<Desktop>>,
+    }
+
+    fn answer(reply: Reply) -> Result<Answer, Gone> {
+        Ok(Answer {
+            reply,
+            image: None,
+            trajectory: None,
+        })
     }
 
     impl FakeLink {
-        fn ops(&self) -> Vec<Op> {
+        pub(crate) fn ops(&self) -> Vec<Op> {
             lock(&self.sent).iter().map(|s| s.2.clone()).collect()
         }
 
         /// The helper died: every waiting request learns it.
-        fn die(&self) {
+        pub(crate) fn die(&self) {
             self.dead.store(true, Ordering::SeqCst);
             let held: Vec<Waiter> = lock(&self.held).drain().map(|(_, w)| w).collect();
             for w in held {
@@ -948,16 +983,60 @@ mod tests {
             if self.dead.load(Ordering::SeqCst) {
                 return done(Err(Gone));
             }
+            let ok = Reply {
+                id,
+                ok: true,
+                ..Default::default()
+            };
             match op {
-                Op::Ping | Op::Cancel { .. } | Op::EndSession => done(Ok(Answer {
-                    reply: Reply {
-                        id,
-                        ok: true,
-                        ..Default::default()
-                    },
-                    image: None,
-                    trajectory: None,
-                })),
+                Op::Ping | Op::Cancel { .. } | Op::EndSession | Op::Act(_) => done(answer(ok)),
+                Op::Describe { window } => {
+                    let instance = lock(&self.desktop).windows.get(&window).cloned();
+                    done(answer(match instance {
+                        Some(instance) => Reply {
+                            described: Some(Described {
+                                window: WindowInfo {
+                                    id: window,
+                                    pid: instance.pid,
+                                    title: format!("Window {window}"),
+                                    frame: Rect::default(),
+                                    on_screen: true,
+                                    minimized: false,
+                                },
+                                instance,
+                                app_name: "TextEdit".into(),
+                                bundle_id: Some("com.apple.TextEdit".into()),
+                                bundle_path: None,
+                                blocked: None,
+                            }),
+                            ..ok
+                        },
+                        None => Reply {
+                            ok: false,
+                            error: Some(CuError::new(ErrorCode::NoSuchTarget, "no such window")),
+                            ..ok
+                        },
+                    }))
+                }
+                Op::Launch(_) if lock(&self.desktop).launch.is_some() => {
+                    let (instance, window) = {
+                        let mut desktop = lock(&self.desktop);
+                        let (instance, window) = desktop.launch.take().unwrap();
+                        desktop.windows.insert(window, instance.clone());
+                        (instance, window)
+                    };
+                    done(answer(Reply {
+                        launched: Some(Launched {
+                            instance,
+                            app_name: "TextEdit".into(),
+                            bundle_id: Some("com.apple.TextEdit".into()),
+                            new_process: true,
+                            new_windows: vec![window],
+                            front_restored: false,
+                        }),
+                        ..ok
+                    }))
+                }
                 _ => {
                     lock(&self.held).insert(id, done);
                 }
@@ -968,34 +1047,78 @@ mod tests {
         }
     }
 
-    /// A broker whose starter hands out fresh fake links, keeping them and the event hook.
+    /// Hands out a fresh [`FakeLink`] on each start, keeping them and the broker's event hook.
+    #[derive(Clone, Default)]
+    pub(crate) struct FakeHelper {
+        pub(crate) links: Arc<Mutex<Vec<Arc<FakeLink>>>>,
+        pub(crate) events: Arc<Mutex<Option<OnEvent>>>,
+        pub(crate) starts: Arc<AtomicUsize>,
+        pub(crate) desktop: Arc<Mutex<Desktop>>,
+    }
+
+    impl FakeHelper {
+        pub(crate) fn starter(&self) -> HelperStarter {
+            let helper = self.clone();
+            Arc::new(move |on_event| {
+                helper.starts.fetch_add(1, Ordering::SeqCst);
+                *lock(&helper.events) = Some(on_event);
+                let link = Arc::new(FakeLink {
+                    desktop: helper.desktop.clone(),
+                    ..FakeLink::default()
+                });
+                lock(&helper.links).push(link.clone());
+                Box::pin(async move { Ok(link as Arc<dyn HelperLink>) })
+            })
+        }
+
+        /// Every op the helpers were sent, oldest first.
+        pub(crate) fn ops(&self) -> Vec<Op> {
+            lock(&self.links).iter().flat_map(|l| l.ops()).collect()
+        }
+
+        /// Puts `window` of `instance` on the desktop (again: the window changed hands).
+        pub(crate) fn show(&self, window: u32, instance: Instance) {
+            lock(&self.desktop).windows.insert(window, instance);
+        }
+
+        /// The next `launch` starts `instance` with `window`.
+        pub(crate) fn launches(&self, instance: Instance, window: u32) {
+            lock(&self.desktop).launch = Some((instance, window));
+        }
+
+        /// The user's Stop, from the helper's menu.
+        pub(crate) fn stop(&self) {
+            let on_event = lock(&self.events).clone().expect("a helper started");
+            on_event(Event::Stopped { by: "menu".into() });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::fake::{FakeHelper, FakeLink, OnEvent};
+    use super::*;
+
+    /// A broker on a fake helper, with the helper's links and event hook.
     struct Rig {
         computer: Computer,
         links: Arc<Mutex<Vec<Arc<FakeLink>>>>,
-        events: Arc<Mutex<Option<Arc<dyn Fn(Event) + Send + Sync>>>>,
+        events: Arc<Mutex<Option<OnEvent>>>,
         starts: Arc<AtomicUsize>,
     }
 
     fn rig() -> Rig {
-        let links: Arc<Mutex<Vec<Arc<FakeLink>>>> = Arc::default();
-        let events: Arc<Mutex<Option<Arc<dyn Fn(Event) + Send + Sync>>>> = Arc::default();
-        let starts = Arc::new(AtomicUsize::new(0));
-        let (l, e, s) = (links.clone(), events.clone(), starts.clone());
-        let starter: HelperStarter = Arc::new(move |on_event| {
-            s.fetch_add(1, Ordering::SeqCst);
-            *lock(&e) = Some(on_event);
-            let link = Arc::new(FakeLink::default());
-            lock(&l).push(link.clone());
-            Box::pin(async move { Ok(link as Arc<dyn HelperLink>) })
-        });
+        let helper = FakeHelper::default();
         Rig {
             computer: Computer::with_starter(
                 Path::new("/x/Brigadier.app/Contents/MacOS/brigadierd"),
-                starter,
+                helper.starter(),
             ),
-            links,
-            events,
-            starts,
+            links: helper.links.clone(),
+            events: helper.events.clone(),
+            starts: helper.starts.clone(),
         }
     }
 
