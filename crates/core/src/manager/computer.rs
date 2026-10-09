@@ -663,7 +663,7 @@ impl SessionManager {
     }
 
     /// Forgets which conversations have a permission item, as a restart does.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn forget_computer_waits(&self) {
         lock(&self.computer.state).permission_waits.clear();
     }
