@@ -616,16 +616,12 @@ impl SessionManager {
     /// monitor's view). Whether the user switched it off is not asked: a conversation already
     /// running on it goes on.
     fn provider_ready(&self, kind: ProviderKind) -> bool {
-        self.runtime.overview(kind).is_some_and(|overview| {
-            overview
-                .status
-                .as_ref()
-                .is_some_and(|status| status.logged_in)
-        }) && self
-            .runtime
-            .monitor()
-            .current(kind, crate::now_ms())
-            .is_none_or(|quota| quota.limit.is_none())
+        self.runtime.provider_signed_in(kind)
+            && self
+                .runtime
+                .monitor()
+                .current(kind, crate::now_ms())
+                .is_none_or(|quota| quota.limit.is_none())
     }
 }
 

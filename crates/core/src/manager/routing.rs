@@ -94,12 +94,7 @@ impl SessionManager {
             .into_iter()
             .map(|provider| ProviderState {
                 provider,
-                logged_in: self.runtime.overview(provider).is_some_and(|overview| {
-                    overview
-                        .status
-                        .as_ref()
-                        .is_some_and(|status| status.logged_in)
-                }),
+                logged_in: self.runtime.provider_signed_in(provider),
                 quota: self.runtime.provider_usage(provider, now),
             })
             .collect()

@@ -300,6 +300,23 @@ impl Runtime {
         }
     }
 
+    /// Whether `account` is signed in, as its CLI last said.
+    pub fn signed_in(&self, account: &AccountRef) -> bool {
+        let status = match &account.account {
+            None => self
+                .overview(account.provider)
+                .and_then(|overview| overview.status),
+            Some(id) => self.accounts().get(id).and_then(|live| live.status.clone()),
+        };
+        status.is_some_and(|status| status.logged_in)
+    }
+
+    /// Whether new work of `provider` has a signed-in account to start on: its lead (the
+    /// computer's own login, unless another account leads).
+    pub fn provider_signed_in(&self, provider: ProviderKind) -> bool {
+        self.signed_in(&self.monitor.lead(provider))
+    }
+
     /// How the app names `account` to the user, as Settings → Accounts does: the user's own
     /// login is "this computer's login"; an extra account its name, else its email.
     pub fn account_label(&self, account: &AccountRef) -> String {
