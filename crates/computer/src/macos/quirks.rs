@@ -136,7 +136,19 @@ impl Quirks {
         if !self.woken.insert((w.pid, start_us, w.id)) {
             return;
         }
-        drop(Activation::begin(w.pid, w.id, true));
+        // Held until the app says the window is key: let go at once, a busy app may never see
+        // it key (measured 2026-10-09 under load: one fixture in five then ignored presses).
+        let Ok(act) = Activation::begin(w.pid, w.id, true) else {
+            return;
+        };
+        let app = AxEl::app(w.pid);
+        let end = Instant::now() + REVEAL_WAIT;
+        while Instant::now() < end
+            && app.element("AXFocusedWindow").and_then(|el| el.window_id()) != Some(w.id)
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(act);
     }
 
     /// Whether `w`'s structure is complete: pending while its element count still changes on
