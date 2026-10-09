@@ -611,11 +611,10 @@ impl<D: Desktop> Engine<D> {
                     .as_deref()
                     .is_some_and(|v| v.contains(text.as_str()))
             }),
-            Expect::Checked { r#ref, on } => read(self, r#ref).is_some_and(|n| {
-                matches!(
-                    (n.checked, on),
-                    (Some(tree::Check::On), true) | (Some(tree::Check::Off), false)
-                )
+            // A row, tab or cell has no tick: its selection is what "checked" asks about.
+            Expect::Checked { r#ref, on } => read(self, r#ref).is_some_and(|n| match n.checked {
+                Some(c) => matches!((c, on), (tree::Check::On, true) | (tree::Check::Off, false)),
+                None => n.selected == *on,
             }),
             Expect::Gone { r#ref } => read(self, r#ref).is_none(),
             Expect::TitleContains { text } => self
@@ -2362,6 +2361,40 @@ mod tests {
         let record = serde_json::to_string(&e.records).unwrap();
         assert!(!record.contains("s3cret"), "{record}");
         assert!(record.contains("<12 chars>"), "{record}");
+    }
+
+    #[test]
+    fn a_checked_expect_on_a_row_reads_its_selection() {
+        let mut e = engine(Fake::new(basic()));
+        let mut row = node(6, 1, "row", "Row 3", Rect::new(10.0, 100.0, 100.0, 20.0));
+        row.selected = true;
+        e.desktop.nodes.push(row);
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let r = ref_of(&text, "Row 3");
+        let with = |on: bool| {
+            let Action::Click {
+                target,
+                button,
+                count,
+                modifiers,
+                ..
+            } = click(&r)
+            else {
+                unreachable!()
+            };
+            Action::Click {
+                target,
+                button,
+                count,
+                modifiers,
+                expect: Some(Expect::Checked {
+                    r#ref: r.clone(),
+                    on,
+                }),
+            }
+        };
+        assert_eq!(act(&mut e, vec![with(true)])[0].status, Status::Done);
+        assert_ne!(act(&mut e, vec![with(false)])[0].status, Status::Done);
     }
 
     #[test]

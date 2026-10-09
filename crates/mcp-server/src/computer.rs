@@ -36,7 +36,7 @@ pub fn tools() -> Vec<Tool> {
     let window = json!({"type": "integer", "description": "Window id from apps or launch."});
     let expect = json!({
         "type": "object",
-        "description": "Checked after the action. is: value_equals|value_contains (ref, text), checked (ref, on), appears (find), gone (ref), title_contains (text), focused (ref).",
+        "description": "Checked after the action. is: value_equals|value_contains (ref, text), checked (ref, on: a tick, or a row's, tab's or cell's selection), appears (find), gone (ref), title_contains (text), focused (ref).",
         "properties": {
             "is": {"type": "string"},
             "ref": {"type": "string"},
