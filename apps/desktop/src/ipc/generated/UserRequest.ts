@@ -36,8 +36,9 @@ steeredAfter: string | null,
  */
 undo: RequestUndo | null, 
 /**
- * When it worked, oldest first; the last is open while it works. Waiting for quota is
- * work, waiting for the user is not. Absent on requests stored before it was kept.
+ * When it worked, oldest first; the last is open while it works. Waiting for quota, or
+ * for the user's answer to its question card, is work; other waits for the user are
+ * not. Absent on requests stored before it was kept.
  */
 worked: Array<WorkSpan>, 
 /**
