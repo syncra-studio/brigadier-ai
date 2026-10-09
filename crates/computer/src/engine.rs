@@ -47,6 +47,10 @@ const VALUE_PAGE: usize = 4_000;
 const IMAGES_KEPT: usize = 64;
 /// The longest an observe waits for an app still building its structure on first contact.
 const STRUCTURE_WAIT: Duration = Duration::from_secs(5);
+/// How long a pop-up picked by type-ahead is given to show the choice.
+const POPUP_TYPE_WAIT: Duration = Duration::from_millis(1000);
+/// How often an `appears` expect walks the window while it waits.
+const APPEARS_POLL: Duration = Duration::from_millis(75);
 /// How much of an element's label the action log keeps.
 const TARGET_CLIP: usize = 60;
 /// Diff bases kept, per engine.
@@ -485,10 +489,24 @@ impl<D: Desktop> Engine<D> {
             text.push_str(&self.image_line(img, &t));
         }
         if incomplete {
+            // Observing again cost a model call per look; a wait for what the worker needs is one.
             let _ = writeln!(
                 text,
-                "structure may be incomplete: the app was still building it; observe again"
+                "structure may be incomplete: the app was still building it. Wait for what you \
+                 need in one call rather than observing again, e.g. {{\"do\": \"wait\", \
+                 \"expect\": {{\"is\": \"appears\", \"find\": \"Submit\"}}, \"timeout_ms\": 10000}}"
             );
+            if !w.on_screen && !w.minimized {
+                // Chrome built no page for a window on another Space for 20 s and more
+                // (2026-10-09), and a worker's blind keys submitted a form early.
+                let _ = writeln!(
+                    text,
+                    "this window is off screen: a browser may not build or redraw its page until \
+                     it is in view. If the wait doesn't bring it, ask the orchestrator to have \
+                     the person bring the window into view; don't click or press keys into a page \
+                     you can't read (Return submits a form)"
+                );
+            }
         }
         let _ = writeln!(
             text,
@@ -760,13 +778,21 @@ impl<D: Desktop> Engine<D> {
         bound: Duration,
         cancel: &CancelToken,
     ) -> CuResult<(bool, Option<Duration>)> {
+        let mut walked: Option<Instant> = None;
         loop {
             cancel.check()?;
             self.desktop.pump(Duration::from_millis(4));
             let now = Instant::now();
             if let Some(e) = expect {
-                if self.expect_holds(w, e) {
-                    return Ok((true, Some(now - since)));
+                // `appears` walks the whole window: walked every few milliseconds, a WebKit
+                // view stopped answering accessibility altogether (2026-10-09).
+                let due = !matches!(e, Expect::Appears { .. })
+                    || walked.is_none_or(|t| now - t >= APPEARS_POLL);
+                if due {
+                    walked = Some(now);
+                    if self.expect_holds(w, e) {
+                        return Ok((true, Some(now - since)));
+                    }
                 }
             } else {
                 let last = self
@@ -1052,12 +1078,25 @@ impl<D: Desktop> Engine<D> {
                 } else {
                     // Set first: some controls only hear a value set (a save panel's Save
                     // button stays disabled after an edit, measured 2026-10-09). Then edit.
-                    self.desktop.set_value(&el, text)?;
+                    let rung = match self.desktop.set_value(&el, text) {
+                        Ok(()) => Rung::Element,
+                        Err(e) if e.code == ErrorCode::NotSettable && node.role == "popup" => self
+                            .pick_by_typing(
+                                &w,
+                                r#ref,
+                                &el,
+                                node.value.as_deref(),
+                                text,
+                                e,
+                                cancel,
+                            )?,
+                        Err(e) => return Err(e),
+                    };
                     if EDITED_FIELDS.contains(&node.role.as_str()) {
                         self.replace_as_edit(&el, text);
                     }
                     set_text = Some((el, text.clone()));
-                    Rung::Element
+                    rung
                 }
             }
             Action::Type { text, r#ref, .. } => {
@@ -1546,7 +1585,7 @@ impl<D: Desktop> Engine<D> {
         text: &str,
         cancel: &CancelToken,
     ) -> CuResult<(Rung, bool)> {
-        let document;
+        let role;
         let el = match r {
             Some(r) => {
                 let el = self.resolve_ref(w, Self::ref_of(r)?, true)?;
@@ -1554,7 +1593,7 @@ impl<D: Desktop> Engine<D> {
                 if node.secure {
                     return err(ErrorCode::SecureField, "that is a password field");
                 }
-                document = node.role == DOCUMENT_TEXT;
+                role = node.role;
                 self.desktop.set_focus(&el)?;
                 // A browser moves focus into its page a moment after it is asked (WebKit: up to ≈0.5 s).
                 let until = Instant::now() + Duration::from_millis(1000);
@@ -1582,13 +1621,25 @@ impl<D: Desktop> Engine<D> {
             }
             None => {
                 let f = self.check_recipient(w)?;
-                document = f
+                role = f
                     .as_ref()
                     .and_then(|e| self.desktop.read(w, e).ok())
-                    .is_some_and(|n| n.role == DOCUMENT_TEXT);
+                    .map(|n| n.role)
+                    .unwrap_or_default();
                 f
             }
         };
+        let document = role == DOCUMENT_TEXT;
+        if role == "popup" {
+            // A closed list picks by type-ahead, one key per character: Chrome ignored a
+            // choice's whole name sent as one key event, and took "T" alone (2026-10-09).
+            for c in text.chars() {
+                cancel.check()?;
+                self.desktop
+                    .type_text(w.pid, c.encode_utf8(&mut [0; 4]), cancel)?;
+            }
+            return Ok((Rung::Background, false));
+        }
         // The cheapest checkable route: insert at the selection, read it back. Not in a
         // document's text, where only typed keys count as an edit (undo, unsaved changes, save).
         if let Some(el) = el.as_ref().filter(|_| !document) {
@@ -1617,6 +1668,48 @@ impl<D: Desktop> Engine<D> {
         }
         self.desktop.type_text(w.pid, text, cancel)?;
         Ok((Rung::Background, false))
+    }
+
+    /// Picks `text` in a pop-up whose menu didn't give it, by type-ahead into the focused list
+    /// as a person would: a page's list in a browser window off screen opens no menu
+    /// (2026-10-09). A list left on another choice is typed back to `was`, and `failed` stands.
+    #[allow(clippy::too_many_arguments)]
+    fn pick_by_typing(
+        &mut self,
+        w: &WindowInfo,
+        r: &str,
+        el: &D::Element,
+        was: Option<&str>,
+        text: &str,
+        failed: CuError,
+        cancel: &CancelToken,
+    ) -> CuResult<Rung> {
+        let value = |s: &mut Self| s.desktop.read(w, el).ok().and_then(|n| n.value);
+        let wait_for = |s: &mut Self, want: &str| {
+            let until = Instant::now() + POPUP_TYPE_WAIT;
+            loop {
+                if value(s).as_deref() == Some(want) {
+                    return true;
+                }
+                if Instant::now() > until {
+                    return false;
+                }
+                s.desktop.pump(Duration::from_millis(10));
+            }
+        };
+        if self.type_into(w, Some(r), text, cancel).is_err() {
+            return Err(failed);
+        }
+        if wait_for(self, text) {
+            return Ok(Rung::Background);
+        }
+        if let Some(was) = was
+            && value(self).as_deref() != Some(was)
+        {
+            let _ = self.type_into(w, Some(r), was, cancel);
+            wait_for(self, was);
+        }
+        Err(failed)
     }
 
     /// Replaces a field's text the way an edit does: focus it, select it all, insert the text at
@@ -1918,6 +2011,10 @@ mod tests {
         resolves_to: Option<AppInfo>,
         /// Tree reads, captures and batch ends, in order.
         reads: Vec<&'static str>,
+        /// A page's closed list: its menu never opens (a set value is refused), and keys typed
+        /// into it pick by type-ahead, one character per key event.
+        list_items: Option<Vec<String>>,
+        typed: String,
     }
 
     fn node(id: u32, depth: u16, role: &str, label: &str, frame: Rect) -> RawNode<u32> {
@@ -1961,6 +2058,8 @@ mod tests {
                 documents: HashMap::new(),
                 resolves_to: None,
                 reads: Vec::new(),
+                list_items: None,
+                typed: String::new(),
             }
         }
 
@@ -2079,6 +2178,12 @@ mod tests {
         }
         fn set_value(&mut self, el: &u32, text: &str) -> CuResult<()> {
             self.log.push(format!("set_value {el}"));
+            if self.list_items.is_some() && self.node_mut(*el).role == "popup" {
+                return err(
+                    ErrorCode::NotSettable,
+                    format!("the pop-up has no item {text:?}"),
+                );
+            }
             if !self.frozen {
                 self.node_mut(*el).value = Some(text.into());
             }
@@ -2117,6 +2222,7 @@ mod tests {
         }
         fn set_focus(&mut self, el: &u32) -> CuResult<()> {
             self.focused = Some(*el);
+            self.typed.clear();
             Ok(())
         }
         fn menu(&mut self, _: i32, path: &[String]) -> CuResult<()> {
@@ -2179,8 +2285,20 @@ mod tests {
             self.log.push(format!("key {}", c.key));
             Ok(())
         }
-        fn type_text(&mut self, _: i32, _: &str, _: &CancelToken) -> CuResult<()> {
+        fn type_text(&mut self, _: i32, text: &str, _: &CancelToken) -> CuResult<()> {
             self.log.push("type_text".into());
+            if let (Some(items), Some(f)) = (self.list_items.clone(), self.focused) {
+                // Like a browser's closed list: a key event of several characters picks nothing.
+                if text.chars().count() == 1 {
+                    self.typed.push_str(&text.to_lowercase());
+                    if let Some(i) = items
+                        .iter()
+                        .find(|i| i.to_lowercase().starts_with(&self.typed))
+                    {
+                        self.node_mut(f).value = Some(i.clone());
+                    }
+                }
+            }
             Ok(())
         }
         fn watch(&mut self, _: i32) {}
@@ -2875,6 +2993,104 @@ mod tests {
         assert_eq!(e.desktop.log, vec!["insert 4"]);
     }
 
+    /// `basic()` with a page's closed list "Plan" showing Basic, whose menu never opens.
+    fn closed_list() -> Engine<Fake> {
+        let mut nodes = basic();
+        let mut plan = node(5, 1, "popup", "Plan", Rect::new(10.0, 70.0, 80.0, 20.0));
+        plan.value = Some("Basic".into());
+        nodes.push(plan);
+        let mut fake = Fake::new(nodes);
+        fake.list_items = Some(
+            ["Basic", "Pro", "Team", "Enterprise"]
+                .map(String::from)
+                .into(),
+        );
+        engine(fake)
+    }
+
+    #[test]
+    fn a_list_whose_menu_wont_open_is_set_by_typing_its_choice_one_key_at_a_time() {
+        let mut e = closed_list();
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let plan = ref_of(&text, "Plan");
+        let r = act(
+            &mut e,
+            vec![Action::SetValue {
+                r#ref: plan,
+                text: "Team".into(),
+                expect: None,
+            }],
+        );
+        assert_eq!(r[0].status, Status::Done, "{:?}", r[0].error);
+        assert_eq!(r[0].effect, Some(Effect::Confirmed));
+        assert_eq!(e.desktop.node_mut(5).value.as_deref(), Some("Team"));
+        let keys = e.desktop.log.iter().filter(|l| *l == "type_text").count();
+        assert_eq!(keys, 4, "{:?}", e.desktop.log);
+    }
+
+    #[test]
+    fn a_list_typed_to_no_such_choice_is_typed_back_and_the_error_stands() {
+        let mut e = closed_list();
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let plan = ref_of(&text, "Plan");
+        // "Teams" leaves the list on Team, which isn't what was asked.
+        let r = act(
+            &mut e,
+            vec![Action::SetValue {
+                r#ref: plan,
+                text: "Teams".into(),
+                expect: None,
+            }],
+        );
+        assert_eq!(code(&r[0]), Some(ErrorCode::NotSettable));
+        assert!(
+            r[0].error.as_ref().unwrap().detail.contains("no item"),
+            "{:?}",
+            r[0].error
+        );
+        assert_eq!(e.desktop.node_mut(5).value.as_deref(), Some("Basic"));
+    }
+
+    #[test]
+    fn typing_into_a_list_sends_one_key_per_character() {
+        let mut e = closed_list();
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let plan = ref_of(&text, "Plan");
+        let r = act(
+            &mut e,
+            vec![Action::Type {
+                text: "Team".into(),
+                r#ref: Some(plan.clone()),
+                expect: Some(Expect::ValueEquals {
+                    r#ref: plan,
+                    text: "Team".into(),
+                }),
+            }],
+        );
+        assert_eq!(r[0].effect, Some(Effect::Confirmed), "{:?}", r[0].error);
+        assert_eq!(e.desktop.log, vec!["type_text"; 4]);
+    }
+
+    #[test]
+    fn a_wait_for_text_to_appear_walks_the_window_every_few_hundredths_of_a_second() {
+        let mut e = engine(Fake::new(basic()));
+        observe(&mut e, Screenshot::Never, None);
+        let before = e.desktop.reads.iter().filter(|r| **r == "tree").count();
+        let r = act(
+            &mut e,
+            vec![Action::Wait {
+                expect: Some(Expect::Appears {
+                    find: "Never there".into(),
+                }),
+                timeout_ms: 450,
+            }],
+        );
+        assert_eq!(code(&r[0]), Some(ErrorCode::Failed));
+        let walks = e.desktop.reads.iter().filter(|r| **r == "tree").count() - before;
+        // 450 ms at one walk per 75 ms, plus the reply's own reads.
+        assert!((5..=12).contains(&walks), "{walks} walks");
+    }
+
     #[test]
     fn select_sets_a_range_that_typing_then_replaces() {
         let mut nodes = basic();
@@ -3425,6 +3641,24 @@ mod tests {
             3
         );
         assert!(!r.text.contains("may be incomplete"), "{}", r.text);
+    }
+
+    #[test]
+    fn an_incomplete_window_off_screen_says_to_wait_in_one_call_and_not_to_type_blind() {
+        let mut fake = Fake::new(basic());
+        fake.building = u32::MAX;
+        let mut e = engine(fake);
+        let r = observe(&mut e, Screenshot::Never, None);
+        assert!(r.text.contains(r#""is": "appears""#), "{}", r.text);
+        assert!(!r.text.contains("off screen"), "{}", r.text);
+        let mut fake = Fake::new(basic());
+        fake.building = u32::MAX;
+        fake.window.on_screen = false;
+        let mut e = engine(fake);
+        let r = observe(&mut e, Screenshot::Never, None);
+        assert!(r.text.contains("this window is off screen"), "{}", r.text);
+        assert!(r.text.contains("bring the window into view"), "{}", r.text);
+        assert!(r.text.contains("Return submits a form"), "{}", r.text);
     }
 
     #[test]
