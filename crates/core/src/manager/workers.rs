@@ -592,6 +592,12 @@ impl TaskLive {
             .map(|cli| cli.provider)
     }
 
+    /// The account its CLI session runs on, while it has one.
+    pub(crate) async fn cli_account(&self) -> Option<crate::accounts::AccountRef> {
+        let state = self.state.lock().await;
+        state.cli.as_ref().map(|cli| cli.account.clone())
+    }
+
     /// Ends the worker's CLI session (interrupting first; Codex keeps running its current
     /// command after an interrupt, so the session is closed, which ends its process tree).
     pub async fn close_cli(&self) {

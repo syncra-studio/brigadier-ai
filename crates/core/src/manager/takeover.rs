@@ -161,6 +161,8 @@ impl SessionManager {
         live.set_taken_over(true).await;
         live.supersede().await;
         let from = task.state;
+        // The terminal continues on the account the session ran on.
+        let ran_on = live.cli_account().await;
         live.close_cli().await;
         // What its headless CLI asked can't be answered any more; the terminal asks itself.
         self.expire_cli_cards(&task).await;
@@ -193,7 +195,7 @@ impl SessionManager {
         drop(handing);
         let generation = live.generation().await;
         match self
-            .start_terminal(&*host, &task, &native_id, cols, rows)
+            .start_terminal(&*host, &task, &native_id, ran_on, cols, rows)
             .await
         {
             Ok((terminal, tools, checkout)) => {
@@ -272,13 +274,14 @@ impl SessionManager {
     }
 
     /// Starts the worker's session in a terminal: the same spec as its headless process, a
-    /// fresh grant, in its worktree when it has one. Returns the task's checkout too when the
-    /// terminal starts elsewhere.
+    /// fresh grant, in its worktree when it has one, on the account it `ran_on` (while that is
+    /// still there). Returns the task's checkout too when the terminal starts elsewhere.
     async fn start_terminal(
         &self,
         host: &dyn TerminalHost,
         task: &Task,
         native_id: &str,
+        ran_on: Option<crate::accounts::AccountRef>,
         cols: u16,
         rows: u16,
     ) -> Result<(HostedTerminal, ToolAccess, Option<PathBuf>)> {
@@ -322,13 +325,17 @@ impl SessionManager {
             };
             self.trust_terminal_folder(task, cli, &cwd).await;
         }
+        let mut choice = task.route.choice.clone();
+        if let Some(ran_on) = ran_on {
+            choice.account = Some(
+                ran_on
+                    .account
+                    .unwrap_or_else(|| crate::accounts::OWN.to_owned()),
+            );
+        }
         let command = self
             .runtime
-            .terminal_command(
-                &self.runtime.account_for(&task.route.choice),
-                session.spec,
-                cwd,
-            )
+            .terminal_command(&self.runtime.account_for(&choice), session.spec, cwd)
             .await?;
         let terminal = host.start(
             &task.conversation_id.0,

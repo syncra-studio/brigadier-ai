@@ -523,10 +523,16 @@ impl Provider for FakeCli {
                     .iter()
                     .flat_map(|server| server.env.iter())
                     .map(|(name, value)| (name.into(), value.into()))
-                    .chain([(
-                        "FAKE_ACCESS".into(),
-                        format!("{:?} auto_review={}", spec.access, spec.auto_review).into(),
-                    )])
+                    .chain([
+                        (
+                            "FAKE_ACCESS".into(),
+                            format!("{:?} auto_review={}", spec.access, spec.auto_review).into(),
+                        ),
+                        (
+                            "FAKE_ACCOUNT".into(),
+                            self.account.clone().unwrap_or_default().into(),
+                        ),
+                    ])
                     .collect(),
             })
         })

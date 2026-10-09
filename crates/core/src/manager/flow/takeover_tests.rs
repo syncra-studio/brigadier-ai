@@ -1002,3 +1002,81 @@ async fn stop_all_spares_a_worker_whose_report_won_the_race() {
     );
     flow.stop().await;
 }
+
+/// A worker opened in a terminal carries on there with the account its session ran on, even
+/// when new work would now start on another one.
+#[tokio::test]
+async fn a_terminal_opens_on_the_account_the_worker_ran_on() {
+    let at_work = Arc::new(AtomicBool::new(false));
+    let working = at_work.clone();
+    let flow = Flow::start(
+        "takeover-account",
+        Options::default(),
+        script(move |turn| {
+            let working = working.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    if turn.input.contains("Look around.") {
+                        let reply = turn
+                            .call(
+                                "delegate_task",
+                                json!({"effort": "high", "title": "Look around", "kind": "scout",
+                                   "spec": "List the files.", "provider": "claude"}),
+                            )
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                    }
+                    return Reply::text("[quiet]");
+                }
+                assert_eq!(turn.account.as_deref(), Some("claude-b"));
+                turn.report_context(1_000).await;
+                working.store(true, Ordering::SeqCst);
+                // Still at work when it is opened.
+                std::future::pending::<()>().await;
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "claude-b")], true)
+        .await;
+    let pick_default = |id: Option<&str>| {
+        let mut settings = flow.core.settings();
+        for entry in &mut settings.accounts {
+            entry.default = Some(entry.id.as_str()) == id;
+        }
+        settings
+    };
+    flow.core
+        .update_settings(pick_default(Some("claude-b")))
+        .await
+        .unwrap();
+    let host = Arc::new(FakeHost::default());
+    flow.manager.set_terminal_host(host.clone());
+    flow.say("Look around.").await;
+    flow.until("task-1 at work", |board| {
+        at_work.load(Ordering::SeqCst)
+            && board
+                .tasks
+                .values()
+                .any(|task| task.number == 1 && task.state == TaskState::Running)
+    })
+    .await;
+    let id = task_id(&flow).await;
+    // New work would start on the user's own login now.
+    flow.core.update_settings(pick_default(None)).await.unwrap();
+
+    flow.manager
+        .open_worker_terminal(id.clone(), 80, 24)
+        .await
+        .unwrap();
+    let (terminal, command) = host.started()[0].clone();
+    let account = command
+        .env
+        .iter()
+        .find(|(name, _)| name == "FAKE_ACCOUNT")
+        .map(|(_, value)| value.to_string_lossy().into_owned());
+    assert_eq!(account.as_deref(), Some("claude-b"));
+    host.exit(&terminal);
+    flow.stop().await;
+}
