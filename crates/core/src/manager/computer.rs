@@ -1347,6 +1347,7 @@ pub(crate) mod fake {
                                     frame: Rect::default(),
                                     on_screen: true,
                                     minimized: false,
+                                    hidden: false,
                                 },
                                 instance,
                                 app_name: "TextEdit".into(),
