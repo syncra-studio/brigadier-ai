@@ -160,7 +160,7 @@ impl Computer {
     }
 
     /// Starts later helpers with `starter` (a fake, in tests).
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn set_starter(&self, starter: HelperStarter) {
         *lock(&self.starter) = starter;
     }
@@ -403,7 +403,7 @@ impl SessionManager {
     }
 
     /// Starts the computer-use helper with `starter` from now on (a fake, in tests).
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn set_computer_starter(&self, starter: HelperStarter) {
         self.computer.set_starter(starter);
     }
@@ -1070,7 +1070,11 @@ pub(crate) mod fake {
                 Box::pin(async move { Ok(link as Arc<dyn HelperLink>) })
             })
         }
+    }
 
+    // What the flow tests (macOS only) drive the fake with.
+    #[cfg(target_os = "macos")]
+    impl FakeHelper {
         /// Every op the helpers were sent, oldest first.
         pub(crate) fn ops(&self) -> Vec<Op> {
             lock(&self.links).iter().flat_map(|l| l.ops()).collect()
