@@ -39,4 +39,3 @@ export function changedPaneSize(
   }
   return sizes;
 }
-

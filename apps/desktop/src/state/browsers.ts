@@ -82,4 +82,3 @@ export function closePage(id: string): void {
     console.error("closing the browser failed", error),
   );
 }
-
