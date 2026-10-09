@@ -954,7 +954,13 @@ mod tests {
         let r = rec("text area", set("e3", "Final copy"), Status::Done);
         let mut files = BTreeMap::new();
         files.insert("note.txt".to_owned(), "Final copy\n".to_owned());
-        let v = check(&prep("replace-text"), &[], std::slice::from_ref(&r), &files, None);
+        let v = check(
+            &prep("replace-text"),
+            &[],
+            std::slice::from_ref(&r),
+            &files,
+            None,
+        );
         assert!(v.pass, "{:?}", v.notes);
         files.insert("note.txt".to_owned(), "draft\n".to_owned());
         let v = check(&prep("replace-text"), &[], &[r], &files, None);
