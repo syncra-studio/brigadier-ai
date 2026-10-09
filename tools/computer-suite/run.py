@@ -280,7 +280,8 @@ def settle(root, out, conv, done):
     for i, r in enumerate(done):
         if "task_id" not in r:
             continue
-        end = done[i + 1]["t0_ms"] if i + 1 < len(done) else now_ms()
+        # The next trial that ran (one whose setup failed has no start).
+        end = next((x["t0_ms"] for x in done[i + 1:] if "t0_ms" in x), now_ms())
         r["usage"] = usage(os.path.join(root, "data"), conv, r["task_id"], r["t0_ms"], end)
         recount(root, r)
         json.dump(r, open(os.path.join(out, r["task"].replace(" ", "-"), "result.json"), "w"), indent=1)
