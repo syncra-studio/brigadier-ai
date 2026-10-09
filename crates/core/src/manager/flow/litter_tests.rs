@@ -169,7 +169,7 @@ fn a_write_after_the_drop_is_removed_as_the_thread_ends() {
 }
 
 /// A test process killed before it dropped its folders leaves them to the next one, which
-/// removes them; those of a process still running stay.
+/// ends what still runs in them and removes them; those of a process still running stay.
 #[cfg(unix)]
 #[test]
 fn the_folders_of_a_killed_test_process_are_removed() {
@@ -189,17 +189,39 @@ fn the_folders_of_a_killed_test_process_are_removed() {
         folder
     };
     let killed = folder(ended.id());
+    // A preview the killed process left running in it.
+    let mut orphan = std::process::Command::new("sleep")
+        .arg("30")
+        .current_dir(&killed)
+        .spawn()
+        .unwrap();
     let alive = folder(running.id());
     let ours = folder(std::process::id());
     let unnamed = temp.join(format!("brigadier-flow-litter-killed-{}", ended.id()));
     std::fs::create_dir_all(&unnamed).unwrap();
     super::remove_killed_tests(&temp);
+    let orphan_ended = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+            while orphan.try_wait().unwrap().is_none() && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            orphan.try_wait().unwrap().is_some()
+        });
     let kept = [alive.exists(), ours.exists(), unnamed.exists()];
     running.kill().unwrap();
     running.wait().unwrap();
     for folder in [&alive, &ours, &unnamed] {
         std::fs::remove_dir_all(folder).unwrap();
     }
+    if !orphan_ended {
+        orphan.kill().unwrap();
+        orphan.wait().unwrap();
+    }
+    assert!(orphan_ended, "what ran in it is ended");
     assert!(!killed.exists());
     assert_eq!(kept, [true; 3]);
 }

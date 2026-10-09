@@ -1051,7 +1051,8 @@ fn sweep_killed_tests() {
     SWEPT.call_once(|| remove_killed_tests(&std::env::temp_dir()));
 }
 
-/// Removes the folders in `temp` that test processes now gone made with [`Scratch::new`].
+/// Removes the folders in `temp` that test processes now gone made with [`Scratch::new`],
+/// after ending what still runs in them.
 fn remove_killed_tests(temp: &Path) {
     let Ok(platform) = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
         data_dir: Some(temp.to_owned()),
@@ -1068,6 +1069,10 @@ fn remove_killed_tests(temp: &Path) {
         };
         let folder = entry.file_type().is_ok_and(|kind| kind.is_dir());
         if folder && pid != std::process::id() && !processes.is_alive(pid) {
+            // Its previews and commands outlived it.
+            for orphan in processes.in_dir(&entry.path()).unwrap_or_default() {
+                let _ = processes.kill_tree(orphan);
+            }
             let _ = std::fs::remove_dir_all(entry.path());
         }
     }
