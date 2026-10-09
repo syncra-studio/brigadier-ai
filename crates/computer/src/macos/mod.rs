@@ -11,6 +11,7 @@ pub(crate) mod input;
 pub mod overlay;
 pub mod private;
 mod quirks;
+mod web;
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -148,6 +149,8 @@ pub struct MacDesktop {
     /// The synthetic activation the batch's actions share, with its app (`end_batch` ends it).
     held: Option<(i32, input::Activation)>,
     quirks: quirks::Quirks,
+    /// Browsers' web areas made readable (`web.rs`).
+    web: web::WebAreas,
 }
 
 impl MacDesktop {
@@ -165,6 +168,7 @@ impl MacDesktop {
             ax_windows: HashMap::new(),
             held: None,
             quirks: quirks::Quirks::default(),
+            web: web::WebAreas::default(),
         })
     }
 
@@ -487,9 +491,15 @@ impl Desktop for MacDesktop {
 
     fn tree(&mut self, w: &WindowInfo, all: bool) -> CuResult<Vec<RawNode<AxEl>>> {
         let el = self.ax_window(w)?;
+        self.web.prepare(w.pid, w.id, &el, || {
+            NSRunningApplication::runningApplicationWithProcessIdentifier(w.pid)
+                .and_then(|a| a.bundleIdentifier())
+                .map(|b| b.to_string())
+        });
         let nodes = ax::tree(&el, quirks::origin(w, Some(&el)), all);
         if nodes.len() <= 1 && el.attr("AXRole").is_err() {
             self.ax_windows.remove(&w.id);
+            self.web.forget(w.id);
             return err(
                 ErrorCode::StaleRef,
                 "the window's accessibility element went away; observe again",
@@ -557,7 +567,8 @@ impl Desktop for MacDesktop {
     fn set_value(&mut self, el: &AxEl, text: &str) -> CuResult<()> {
         let role = el.string("AXRole").unwrap_or_default();
         if role == "AXPopUpButton" {
-            return pick_popup(el, text);
+            let windows: Vec<AxEl> = self.ax_windows.values().cloned().collect();
+            return pick_popup(el, text, &windows);
         }
         let numeric = el
             .attr("AXValue")
@@ -1124,7 +1135,28 @@ const PERFORM_REPLY_WAIT: Duration = Duration::from_millis(3);
 /// it is open, so it is opened first and the item pressed at once; a background app's menu
 /// doesn't take the user's focus. AppKit blinks the chosen item (≈350 ms) before it sends the
 /// action, so this waits for the menu to close: the pick has happened when it returns.
-fn pick_popup(el: &AxEl, title: &str) -> CuResult<()> {
+/// The items of a menu open near the top of one of `windows`: a browser shows a page's pop-up
+/// menu in its window, not under the pop-up.
+fn window_menu_items(windows: &[AxEl]) -> Vec<AxEl> {
+    let mut out = Vec::new();
+    let mut level = windows.to_vec();
+    for _ in 0..3 {
+        let mut next = Vec::new();
+        for e in level {
+            for c in e.elements("AXChildren") {
+                if c.string("AXRole").as_deref() == Some("AXMenu") {
+                    out.extend(c.elements("AXChildren"));
+                } else {
+                    next.push(c);
+                }
+            }
+        }
+        level = next;
+    }
+    out
+}
+
+fn pick_popup(el: &AxEl, title: &str, windows: &[AxEl]) -> CuResult<()> {
     let want = norm(title);
     let items = |el: &AxEl| -> Vec<AxEl> {
         el.elements("AXChildren")
@@ -1132,28 +1164,47 @@ fn pick_popup(el: &AxEl, title: &str) -> CuResult<()> {
             .flat_map(|m| m.elements("AXChildren"))
             .collect()
     };
-    let mut found = items(el);
-    let opened = found.is_empty();
+    // A web page's options carry their text as a value, and a closed one keeps only its
+    // choice. An open menu's own (titled) item is pressed rather than an option, so the menu
+    // closes; a browser shows it in the window a little after the options appear.
+    let titled = |el: &AxEl| {
+        items(el)
+            .into_iter()
+            .chain(window_menu_items(windows))
+            .find(|i| i.string("AXTitle").is_some_and(|t| norm(&t) == want))
+    };
+    let valued = |el: &AxEl| {
+        items(el)
+            .into_iter()
+            .find(|i| i.string("AXValue").is_some_and(|t| norm(&t) == want))
+    };
+    let mut found = titled(el);
+    let opened = found.is_none();
     if opened {
         el.perform("AXPress")?;
         // The app fills the menu when it handles the press, a few milliseconds later.
-        let until = Instant::now() + Duration::from_millis(500);
-        found = items(el);
-        while found.is_empty() && Instant::now() < until {
-            std::thread::sleep(Duration::from_millis(1));
-            found = items(el);
+        let until = Instant::now() + Duration::from_millis(1000);
+        while found.is_none() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(2));
+            found = titled(el).or_else(|| valued(el));
         }
     }
-    match found
-        .into_iter()
-        .find(|i| i.string("AXTitle").is_some_and(|t| norm(&t) == want))
-    {
+    let closed =
+        |el: &AxEl| el.elements("AXChildren").is_empty() || el.bool("AXExpanded") == Some(false);
+    match found {
         Some(item) => {
             item.perform("AXPress")?;
             let until = Instant::now() + Duration::from_secs(2);
-            while opened && !el.elements("AXChildren").is_empty() {
+            let mut menu_pressed = false;
+            while opened && !closed(el) {
                 if Instant::now() > until {
                     return err(ErrorCode::Failed, "the pop-up's menu didn't close");
+                }
+                // A page's option, once chosen, may leave the browser's menu open: pressing
+                // the pop-up again closes it.
+                if !menu_pressed && Instant::now() + Duration::from_millis(1850) > until {
+                    el.perform("AXPress")?;
+                    menu_pressed = true;
                 }
                 std::thread::sleep(Duration::from_millis(2));
             }

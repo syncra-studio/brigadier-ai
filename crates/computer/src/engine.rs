@@ -1527,7 +1527,13 @@ impl<D: Desktop> Engine<D> {
                 }
                 document = node.role == DOCUMENT_TEXT;
                 self.desktop.set_focus(&el)?;
-                let f = self.check_recipient(w)?;
+                // A browser moves focus into its page a moment after it is asked.
+                let until = Instant::now() + Duration::from_millis(300);
+                let mut f = self.check_recipient(w)?;
+                while f.as_ref() != Some(&el) && Instant::now() < until {
+                    std::thread::sleep(Duration::from_millis(5));
+                    f = self.check_recipient(w)?;
+                }
                 if f.as_ref() != Some(&el) {
                     // The app moved focus elsewhere: typing now would go to the wrong place.
                     return err(
