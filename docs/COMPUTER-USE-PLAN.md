@@ -870,6 +870,55 @@ inherited grants**, not the helper bundle's own)
 - A GUI-heavy request in a dev session is handed to an `Operate` worker.
 - The macOS comparison table is in the evidence (or the report says the grants weren't given).
 
+**How it is built** (outline reviewed by Codex and ruled by the Delegator, 2026-10-09; the five corrections in
+`msgs/w12-reply-1.md` all accepted)
+- **The kind.** `TaskKind::Operate` writes nothing that lands and gets `RepoAccess::None`: a scratch dir only.
+  `TaskCategory::Operate` has the floor Strong, effort medium and no trials; its needs always include image input,
+  on creation and on every re-route, so a quota fallback only moves to another image-capable model. A settings
+  migration adds Operate to saved "no worker tasks" switches.
+- **Delegation.** `delegate_task` with `kind: "operate"` requires `target` (the app, window or URL) and `end_state`,
+  and refuses them on other kinds. The brief carries the house rule (code or API first, structure next, pixels
+  last), batching, an `expect` on every action, reading the diff, `zoom` for small targets and checking the end
+  state. The `computer` server is always loaded for Operate. The report the thread gets ends with
+  `Computer actions: batches a–b · last screenshot: artifact <hash>`; the screenshot is a stored artifact that
+  `read_artifact` returns as an image. The thread's prompt sends GUI work of more than about five steps, or
+  exploratory GUI work, to an Operate worker.
+- **The suite** (`crates/computer/src/suite.rs`, `suite_run.rs`; `brigadier-computer suite …`): 20 tasks with
+  ground-truth checkers, 4 grounding boards, a scripted (no-model) solver that gives each task's reference batches,
+  and an independent focus monitor. 15 tasks run on the fixture, 3 on a document-editor fixture (`scratch-pad`: an
+  NSTextView whose Save is enabled only by a real edit, with a find bar), and 2 on Brigadier's dev build on its own
+  scratch data dir. A trial is judged by what reached the app: the fixture's own log and a state snapshot it writes
+  on SIGUSR1 (a value set through accessibility sends no notice), plus the broker's delivered actions on the trial's
+  window, never the worker's own expects. Any other control touched is a wrong target.
+- **The runner** (`tools/computer-suite/run.py`): per trial, the fixture is set up, the thread is asked to
+  `delegate_task` with exact arguments, and the runner waits for the task's end. Then it collects the broker's
+  records, the report, the check and the teardown. Model calls are counted from the transcripts: Claude's distinct
+  assistant message ids, Codex's distinct `response_id`s, cross-checked by its token totals. A shortcut audit fails
+  any write to the trial's files or any call into Brigadier's socket or CLI; a read is listed as a peek.
+  `summarize.py` gives the tables, E1, usage per completed task and F1. A front change counts as the suite's only
+  when the suite caused it: after an action, or while a fixture opened. The user may be at the Mac.
+- **The live handoff check** (`handoff.py`): a plain seven-step GUI request, worded as a user would, in a new
+  session on the new-session default. It is judged on the whole request's end state.
+- **Found while building it, fixed in the engine:**
+  - an element scrolled out of view is scrolled to (`AXScrollToVisible`, else calibrated wheel steps) before a pointer
+    click;
+  - a document text view is typed with real keys, because a value set through accessibility doesn't count as an
+    edit;
+  - chords with ⌘ or ⌃ go under synthetic activation, because inactive apps ignore menu shortcuts;
+  - a menu item a background app shows as disabled is reached through its own shortcut;
+  - a `checked` expect on a row, tab or cell reads its selection.
+- **Pulled forward from Phase 5 (deviation, ruled by the Delegator): windows on other Spaces.** With the user in a
+  full-screen app, every other window is off screen, and accessibility lists only the current Space's windows. The
+  engine now also reads the app's `AXMainWindow` and `AXFocusedWindow`, which are given wherever they are. Failing
+  that, it scans the app's elements by remote token (§12). It captures an off-screen window from the window
+  server's backing store (`SLSHWCaptureWindowList`, ~100 ms), where ScreenCaptureKit times out. The remote-token scan
+  only finds elements some accessibility client already reached, so a window nobody has touched yet on another
+  Space may still be missing.
+- **Fixtures open through LaunchServices** (`open -n -g`, as a minimal bundle), never exec'd from a terminal: a
+  fixture exec'd while the terminal was frontmost took the front.
+- **Signals are checked:** before the suite or the bench signals a pid, its start time and binary must still match
+  what was recorded at launch.
+
 ### Phase 5: Browsers and hard surfaces
 
 **Scope**
