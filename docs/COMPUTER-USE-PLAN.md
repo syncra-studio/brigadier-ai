@@ -603,10 +603,16 @@ background route avoids it. Ruled by the Delegator on 2026-10-09: pop-up picks h
   and `zoom` are free; `launch` asks before it runs, and `act` on an instance not yet approved asks once, as a card.
   An approval binds the instance (pid and process start time) and the windows it named or the launch opened; another
   window of that process asks again. Authorization is checked again after the card is answered, and a Stop while a
-  card is pending ends the call.
+  card is pending ends the call. Only the user's Stop ends every waiting card; a worker's end ends its own. The
+  card lives with its call: the answer goes to the waiting call, and a dropped call or a restart expires it.
 - **Ownership.** `launch` tells a new process or window from a reused one (LaunchServices may hand back the user's
   running app). Only new instances become the worker's artifacts in the cleanup ledger, recorded before the launch
-  returns, and only those are quit when the worker ends. A launch that takes the front gives it back (§2.1).
+  returns (a launch runs to its end even if its caller goes), and only those are quit when the worker ends. A launch
+  that opens a file reports the window showing it (the document the app reports, else its title) and lists the
+  windows the app restored from the user's saved state apart. When the worker ends, the windows it opened in apps it
+  started are closed before they are quit; the restored ones stay. The block list checks the app the system would
+  run (looked up by bundle id, path, name, or the app for a file or URL) before anything opens. A launch that takes
+  the front gives it back (§2.1).
 - **Block list per request.** The broker sends each request's policy from its own state: the Brigadier instance
   that hosts the session (so a worker never drives the window with its own cards) and the terminal windows that
   session launched. One session's exceptions never reach another.
@@ -678,8 +684,8 @@ files); terminal windows were sent requests that had to be refused, never input.
   - Lease revocation on Stop is in the broker tests.
 - **Block list:**
   - The fixture as one session's host was refused for that session and allowed for another.
-  - `apps` marks cmux "blocked (a terminal the session didn't launch)", and an `observe` of a cmux window is
-    refused with `blocked` and no image.
+  - `apps` marks the terminal the test ran in "blocked (a terminal the session didn't launch)", and an
+    `observe` of its window is refused with `blocked` and no image.
   - `launch` of Keychain Access is refused before anything opens.
 - **Launch and ownership:**
   - TextEdit (not running) on `a.txt`: a new process and one new window. `b.txt` then reused that process with a
@@ -702,11 +708,19 @@ files); terminal windows were sent requests that had to be refused, never input.
 - **Transcripts:** a Codex MCP result is shown as its text with `[image image/png]` for each image. Before this, the
   base64 filled the clipped output and hid the text after it.
 - **Bench:** the full §7 bench, re-run on `14273968` (release build, 200 repetitions, 1052 s), passes every gate with no regression from Phase 1: S1 6.2/7.6 ms, S2 61.5/66.3 ms, S3 set value 2.3/3.1, menu-bar pick 4.1/5.7, pop-up 361.5/368.9, press 2.4/3.0 ms, S4 16.8/40.3 ms, S5 2.5/10.4 ms, SEL 20/20, P1 1600/1600, P2 1600/1600 (worst 0.00 pt), P2r 200/200, P2f 1/1 (live, idle machine), P4 0, F1 0.
+- **The verification pass** (after the code review in §10.3, on the final tree):
+  - One Claude scout through a dev `brigadierd` on a scratch data dir: `observe` with a screenshot and `zoom` both
+    reached the model (`[Image: …]` in its transcript; it read the 8 pt red dot at 639,72 and the purple one at
+    80,64 of the zoomed `i2`). The fixture log shows `dot-8` and `dot-8-b`, nothing else. Two `ComputerActed`
+    events with their images; deleting the conversation removed the events, all blobs and the CLI session folders.
+  - `launch` of `Keychain Access` by name and by bundle path: `blocked`, nothing opened.
+  - TextEdit (not running before): each launch of a file reported just that file's window; closing the windows a
+    test opened answered `closed` (once a just-opened window missed the first press, so the ones still open are
+    pressed again). On this Mac TextEdit restored no windows after a kill or a clean quit with a window open, so
+    telling the file's window from restored ones is proven by the engine tests, not live.
+  - The quick bench passes every gate, P2f included (`bench --quick`, 20 reps, 107 s).
 - **Not done or open:**
   - The helper-bundle gate needs the user's one-time grants.
-  - A new-process launch counts every window the app restores (TextEdit reopening earlier documents) among its new
-    windows. `open -F` avoids that but erases the app's saved state, so it isn't used.
-  - The ledger quits an owned app with its windows open, so the app may restore them at the user's next launch.
 - **Deviation:** the action log writes the blob first and the event that mentions it second. There's no separate
   ledger artifact: the store keeps any blob an event mentions, and collects one no event mentions after its grace.
   It's the same model as stored tool output.
@@ -878,6 +892,22 @@ All 18 points are accepted and folded in, with one change to point 1:
 The Delegator's own correction: Brigadier's windows are not blocked in general. Only the hosting instance and the
 installed app are blocked, so workers can drive the dev builds they launch (§5).
 
+### 10.3 The review of Phase 2's code (2026-10-09)
+
+All 7 findings were accepted and fixed, each with a test:
+- A batch's leases stayed `running` when its call was dropped mid-await; a guard now releases them however the call
+  ends.
+- Any worker's end denied every pending computer card; only the user's Stop does now, and a worker's end ends its
+  own (its grant is gone).
+- A launch cancelled after `open` lost the new process's ownership; the broker runs the launch to its end apart
+  from its caller, and the helper reports an app it started even when stopped while waiting for its window.
+- The foreground rung restored focus by process only; it now remembers the focused window, refocuses the user's
+  window of the same app, and keeps a window the user picked meanwhile.
+- Computer cards outlived their call (and a restart) as plain action cards; they are marked live, a dropped call
+  expires its card, a restart expires one nothing waits for, and the answer goes to the call instead of a message.
+- `select` passed character offsets to accessibility, which counts UTF-16 units; they are converted both ways.
+- `launch` checked the block list against the request's words only; it now checks the app LaunchServices would run.
+
 ## 11. Checked third-party contracts (2026-10-09)
 
 - **Claude images** (platform.claude.com/docs/en/build-with-claude/vision):
@@ -914,6 +944,13 @@ installed app are blocked, so workers can drive the dev builds they launch (§5)
   - `AXIsProcessTrusted` and `CGPreflightScreenCaptureAccess` check the grants;
   - the System Settings deep links are `x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`
     and `…?Privacy_ScreenCapture`.
+- **Launch and window calls used in Phase 2** (macOS 27 SDK headers, checked 2026-10-09):
+  - `NSWorkspace` `URLForApplicationWithBundleIdentifier:` and `URLForApplicationToOpenURL:` (macOS 10.6+) give the
+    app for a bundle id and for a file or URL; `fullPathForApplication:` (deprecated since macOS 11, still answers)
+    gives it for a name, the lookup `open -a` makes; `NSBundle bundleWithURL:` then `bundleIdentifier`;
+  - `kAXDocumentAttribute` (`AXDocument`) is the window's document as a URL string, and `kAXCloseButtonAttribute`
+    (`AXCloseButton`) its close button (`AXAttributeConstants.h`);
+  - `AXSelectedTextRange` is a `CFRange` over the element's `CFString` value, whose indices are UTF-16 units.
 
 ## 12. Private dependencies (macOS)
 
