@@ -15,6 +15,7 @@ use crate::action::{
 };
 use crate::block::{BlockList, TargetFacts};
 use crate::cancel::{CancelToken, Generations, InputGuard, UserActive};
+use crate::cursor::{Aim as CursorAim, Cursor, Gesture};
 use crate::desktop::{Chord, Desktop, Mods, WindowInfo};
 use crate::error::{CuError, CuResult, ErrorCode, err};
 use crate::geom::{self, ImageTransform, MapError, Point, Provider, Rect};
@@ -80,6 +81,8 @@ pub struct Engine<D: Desktop> {
     /// Set while the foreground rung acts: pointer events still make the window key first, as
     /// a window just raised may not be yet.
     raised: bool,
+    /// The agent cursor, told where each action aims just before it is delivered (§4.5).
+    pub cursor: Cursor,
 }
 
 /// Roles whose ordinary click is the element's press action.
@@ -111,6 +114,7 @@ impl<D: Desktop> Engine<D> {
             last_secure: (0, Vec::new()),
             foreground: true,
             raised: false,
+            cursor: None,
         }
     }
 
@@ -820,6 +824,17 @@ impl<D: Desktop> Engine<D> {
                 let plain = *count == 1
                     && *button == crate::desktop::Button::Left
                     && mods == Mods::default();
+                let pressed = pressable && plain && el.is_some();
+                self.show_cursor(
+                    worker,
+                    &w,
+                    aim,
+                    if pressed {
+                        Gesture::Press
+                    } else {
+                        Gesture::Click
+                    },
+                );
                 if let Some((_, e)) = el.as_ref().filter(|_| pressable && plain) {
                     self.desktop.perform(e, "press")?;
                     Rung::Element
@@ -835,6 +850,7 @@ impl<D: Desktop> Engine<D> {
             }
             Action::SetValue { r#ref, text, .. } => {
                 aim = self.ref_aim(w.id, r#ref);
+                self.show_cursor(worker, &w, aim, Gesture::Type);
                 let el = self.resolve_ref(&w, Self::ref_of(r#ref)?, true)?;
                 let node = self.desktop.read(&w, &el)?;
                 if node.secure {
@@ -846,6 +862,7 @@ impl<D: Desktop> Engine<D> {
             }
             Action::Type { text, r#ref, .. } => {
                 aim = r#ref.as_deref().and_then(|r| self.ref_aim(w.id, r));
+                self.show_cursor(worker, &w, aim, Gesture::Type);
                 let (rung, seen) = self.type_into(&w, r#ref.as_deref(), text, cancel)?;
                 read_back = seen;
                 rung
@@ -863,6 +880,7 @@ impl<D: Desktop> Engine<D> {
             Action::Scroll { target, dx, dy, .. } => {
                 let (p, _, visible) = self.point_of(&w, target)?;
                 aim = Some((p, None));
+                self.show_cursor(worker, &w, aim, Gesture::Scroll);
                 if w.minimized {
                     return err(ErrorCode::BackgroundUnavailable, "the window is minimised");
                 }
@@ -878,11 +896,14 @@ impl<D: Desktop> Engine<D> {
                 }
                 aim = Some((a, None));
                 out_of_view(seen_a && seen_b)?;
+                let to = Point::new(w.frame.x + b.x, w.frame.y + b.y);
+                self.show_cursor(worker, &w, aim, Gesture::Drag { to });
                 self.desktop.drag(&w, a, b, activate, guard, cancel)?;
                 pointer_rung
             }
             Action::Perform { r#ref, action, .. } => {
                 aim = self.ref_aim(w.id, r#ref);
+                self.show_cursor(worker, &w, aim, Gesture::Press);
                 let el = self.resolve_ref(&w, Self::ref_of(r#ref)?, true)?;
                 before_node = self.desktop.read(&w, &el).ok();
                 self.desktop.perform(&el, action)?;
@@ -901,6 +922,7 @@ impl<D: Desktop> Engine<D> {
                 ..
             } => {
                 aim = self.ref_aim(w.id, r#ref);
+                self.show_cursor(worker, &w, aim, Gesture::Press);
                 let el = self.resolve_ref(&w, Self::ref_of(r#ref)?, true)?;
                 if self.desktop.read(&w, &el)?.secure {
                     return err(ErrorCode::SecureField, "that is a password field");
@@ -1039,6 +1061,27 @@ impl<D: Desktop> Engine<D> {
         (record.point, record.element_box) = aim.map_or((None, None), |(p, b)| (Some(p), b));
         self.records.push(record);
         Ok((result, navigated))
+    }
+
+    /// Tells the cursor where an action in `w` aims (window points), in global points. It
+    /// returns at once: the cursor never holds an action back.
+    fn show_cursor(
+        &self,
+        worker: &str,
+        w: &WindowInfo,
+        aim: Option<(Point, Option<Rect>)>,
+        gesture: Gesture,
+    ) {
+        let (Some(cursor), Some((p, element))) = (&self.cursor, aim) else {
+            return;
+        };
+        let (ox, oy) = (w.frame.x, w.frame.y);
+        cursor.aim(CursorAim {
+            worker: worker.to_owned(),
+            at: Point::new(ox + p.x, oy + p.y),
+            element: element.map(|e| Rect::new(ox + e.x, oy + e.y, e.w, e.h)),
+            gesture,
+        });
     }
 
     /// Makes sure the action that just ran has its record (one that failed before it acted,
@@ -1466,6 +1509,7 @@ mod tests {
     use crate::cancel::{Held, Release};
     use crate::desktop::{AppInfo, Button, Capabilities, Capture, Focus, UserFocus};
     use crate::redact::Rgba;
+    use std::sync::Mutex;
 
     struct NoRelease;
     impl Release for NoRelease {
@@ -2499,6 +2543,46 @@ mod tests {
         assert_eq!(r[0].status, Status::Done);
         assert!(started.elapsed() >= Duration::from_millis(150));
         assert_eq!(r[0].delivered, Some(Rung::Background));
+    }
+
+    #[derive(Default)]
+    struct Aims(Mutex<Vec<CursorAim>>);
+    impl crate::cursor::CursorSink for Aims {
+        fn aim(&self, aim: CursorAim) {
+            self.0.lock().unwrap().push(aim);
+        }
+    }
+
+    #[test]
+    fn the_cursor_is_told_where_each_action_aims_in_global_points() {
+        let mut e = engine(Fake::new(basic()));
+        e.desktop.window.frame = Rect::new(100.0, 200.0, 400.0, 300.0);
+        let aims = Arc::new(Aims::default());
+        e.cursor = Some(aims.clone());
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let name = ref_of(&text, "Name");
+        act(
+            &mut e,
+            vec![
+                click(&ref_of(&text, "Next")),
+                click(&name),
+                Action::Key {
+                    key: "tab".into(),
+                    repeat: 1,
+                    expect: None,
+                },
+            ],
+        );
+        let got = aims.0.lock().unwrap().clone();
+        // "Next" (10,10 40×20) is pressed; "Name" (10,40 100×20) is a text field, clicked.
+        // A key names no point, so the cursor stays where it was.
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!(got[0].worker, "w");
+        assert_eq!(got[0].gesture, Gesture::Press);
+        assert_eq!(got[0].at, Point::new(130.0, 220.0));
+        assert_eq!(got[0].element, Some(Rect::new(110.0, 210.0, 40.0, 20.0)));
+        assert_eq!(got[1].gesture, Gesture::Click);
+        assert_eq!(got[1].at, Point::new(160.0, 250.0));
     }
 
     // It reads the image back with the harness's decoder, built on Unix only.

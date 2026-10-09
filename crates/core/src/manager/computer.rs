@@ -331,6 +331,7 @@ impl Computer {
                         .collect()
                 })
                 .unwrap_or_default(),
+            label: None,
         }
     }
 
@@ -580,7 +581,15 @@ impl SessionManager {
         let label = format!("task-{} ({})", task.number, task.title);
         let full = self.permission(conversation_id) == PermissionLevel::FullAccess;
         let computer = &self.computer;
-        let policy = computer.policy(task_id);
+        // The worker's name goes with every request, for its cursor.
+        let name = super::decisions::worker_name(&task)
+            .trim_matches(['\u{201c}', '\u{201d}'])
+            .to_owned();
+        let policy_now = || Policy {
+            label: Some(name.clone()),
+            ..computer.policy(task_id)
+        };
+        let policy = policy_now();
         match call {
             ComputerCall::Apps => {
                 let a = computer
@@ -679,7 +688,7 @@ impl SessionManager {
                     )
                     .await?;
                     // The window may have changed hands while the card waited.
-                    let now = describe(computer.policy(task_id))
+                    let now = describe(policy_now())
                         .await?
                         .reply
                         .described
@@ -703,7 +712,7 @@ impl SessionManager {
                     keys: &keys,
                 };
                 let answer = computer
-                    .request(task_id, provider, computer.policy(task_id), Op::Act(act))
+                    .request(task_id, provider, policy_now(), Op::Act(act))
                     .await;
                 drop(leases);
                 let mut a = answer?;
@@ -1198,6 +1207,20 @@ pub(crate) mod fake {
         /// Every op the helpers were sent, oldest first.
         pub(crate) fn ops(&self) -> Vec<Op> {
             lock(&self.links).iter().flat_map(|l| l.ops()).collect()
+        }
+
+        /// The cursor label each `act` was sent with.
+        pub(crate) fn act_labels(&self) -> Vec<Option<String>> {
+            lock(&self.links)
+                .iter()
+                .flat_map(|l| {
+                    lock(&l.sent)
+                        .iter()
+                        .filter(|s| matches!(s.2, Op::Act(_)))
+                        .map(|s| s.3.label.clone())
+                        .collect::<Vec<_>>()
+                })
+                .collect()
         }
 
         /// Puts `window` of `instance` on the desktop (again: the window changed hands).

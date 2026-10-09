@@ -329,6 +329,11 @@ async fn full_access_never_asks() {
             "act 6"
         ]
     );
+    // Each act carries the worker's name for its cursor.
+    assert_eq!(
+        helper.act_labels(),
+        vec![Some("Edit the note".to_owned()); 3]
+    );
     finish(flow, worker).await;
 }
 

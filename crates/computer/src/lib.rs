@@ -7,6 +7,7 @@ pub mod action;
 pub mod bench;
 pub mod block;
 pub mod cancel;
+pub mod cursor;
 pub mod desktop;
 pub mod engine;
 pub mod error;

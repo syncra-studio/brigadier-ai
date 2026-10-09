@@ -47,6 +47,9 @@ pub struct Policy {
     pub launched_pids: Vec<i32>,
     #[serde(default)]
     pub launched_windows: Vec<u32>,
+    /// The worker's name, for its cursor's pill (§4.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 impl Policy {
