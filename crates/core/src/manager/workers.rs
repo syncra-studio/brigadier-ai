@@ -500,7 +500,6 @@ impl TaskLive {
     }
 
     /// The worker's CLI session, while one runs.
-    #[cfg(debug_assertions)]
     pub(crate) async fn cli(&self) -> Option<Arc<Cli>> {
         self.state.lock().await.cli.clone()
     }
