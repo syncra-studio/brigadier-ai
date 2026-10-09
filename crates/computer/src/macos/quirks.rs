@@ -29,6 +29,8 @@ use crate::desktop::{Structure, WindowInfo};
 /// How long an observe waits for a first-contact app to build its tree: Electron starts it about
 /// 2 s after the attribute is set.
 pub const READY_BOUND: Duration = Duration::from_millis(3500);
+/// How deep under the window a web area is looked for.
+const WEB_AREA_DEPTH: usize = 12;
 /// How long a revealed window takes to become its app's focused window.
 const REVEAL_WAIT: Duration = Duration::from_millis(300);
 
@@ -108,10 +110,11 @@ fn is_electron(pid: i32) -> bool {
         .exists()
 }
 
-/// A web area with at least one child, breadth first, a few levels down.
+/// A web area with at least one child, breadth first. Electron nests it seven or so groups
+/// under the window.
 fn web_area_filled(window: &AxEl) -> bool {
     let mut level = vec![window.clone()];
-    for _ in 0..6 {
+    for _ in 0..WEB_AREA_DEPTH {
         let mut next = Vec::new();
         for el in level {
             if el.string("AXRole").as_deref() == Some("AXWebArea") {
