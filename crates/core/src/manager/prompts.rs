@@ -84,8 +84,8 @@ How to work:
 - Delegate by default: anything beyond a tiny edit goes to a worker (delegate_task), so you stay free to talk while it runs. Delegate early: at most a quick query_brain or code_search for pointers, then delegate_task; the worker reads the code. Title each worker with a plain 2–4 word job name, unique in this chat ("Fix file uploads"), never an id, role or phase number.
 - Split independent parts into workers that run at once (separate questions, writers on separate files, a check needing no other part's result), started in one batch: several delegate_task calls in one message, each one job with its own "done when". Dependent parts run one after another (plan_phases). Meanwhile do your own small work: reads, searches, checks, tiny edits.
 - Each delegate_task names its effort: "medium" for small, bounded work (a file or two, a UI tweak or small feature, copy, a bug in a known place); "low" for a mechanical edit; "high" only for cross-area, risky or unclear work.
-- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part (screenshots only if the user asked), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository and research tasks check current docs, when that is more than a quick look of your own.
-- Answer a worker's question ([question from task-N]) at once with answer_worker: take its recommendation when it fits, else what the brief, the plan, the user's words or the Brain settle. message_worker steers a running worker, or sends a reported one back with the exact gaps.
+- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part (screenshots only if the user asked), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository, research tasks check current docs and operate tasks use apps on screen (over about five GUI steps, or exploring an app), when that is more than a quick look by you or the worker on the task.
+- Answer a worker's question ([question from task-N]) at once with answer_worker. message_worker steers a running worker, or sends a reported one back with the exact gaps.
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
 - Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect.
 - You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
@@ -710,7 +710,7 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String 
             "verify: prove each \"done when\" criterion of the task with your own evidence, run the checks the task's brief asks for on this worktree, and report exactly what passed and failed. Set submit_report's checks: noChecks only when the project has none you could run. Fix nothing."
         }
         TaskKind::Operate => {
-            "operate: operate apps on this Mac through the computer tools to reach the end state the brief names, and report what you did and whether the end state is verified."
+            "operate: use apps on this Mac through the computer tools (apps, launch, observe, act, zoom) to reach the end state named below."
         }
     };
     let write_rules = if task.kind.writes() {
@@ -736,10 +736,10 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String 
     } else {
         "You report to the orchestrator, who speaks for the user: treat its answers as the user's. Keep going on your own for anything the task, the project's docs and the Project Brain (query_brain) settle. When a question truly blocks you, call ask_orchestrator: one question at a time, with the options you see and the one you recommend. It waits for the answer."
     };
-    let code_rules = if matches!(task.kind, TaskKind::Implement | TaskKind::Merge) {
-        WORKER_CODE_RULES
-    } else {
-        ""
+    let code_rules = match task.kind {
+        TaskKind::Implement | TaskKind::Merge => WORKER_CODE_RULES.to_owned(),
+        TaskKind::Operate => operate_rules(task),
+        _ => String::new(),
     };
     // An overnight run's Waiting on you holds only what its done-when needs (PLAN.md §10.11).
     let needs_user = if task.run.is_some() {
@@ -764,6 +764,16 @@ The task:
         number = task.number,
         title = task.title,
         spec = task.spec,
+    )
+}
+
+/// An operate worker's target, end state and habits (COMPUTER-USE-PLAN.md §4.6): few model
+/// calls, each batch checked as it runs, and the end state proven before it reports.
+fn operate_rules(task: &Task) -> String {
+    format!(
+        "\n\nTarget: {target}\nEnd state: {end_state}\n\nHow to operate:\n- Use code, files and app APIs when they can do the job, unless the task says to do it through the UI: then the UI is the job. Read structure (observe's refs) before pixels.\n- Batch the steps you are sure of in one act, and put an expect on every step that changes state. Read the changes act returns instead of observing again.\n- Zoom before clicking a small target by its pixels.\n- Never act on a window the task didn't name or you didn't launch.\n- Finish by checking the end state: an expect that held, or an observe. Report what you did, whether the end state is verified and how, and anything refused or blocked.",
+        target = task.target.as_deref().unwrap_or("(named in the task)"),
+        end_state = task.end_state.as_deref().unwrap_or("(named in the task)"),
     )
 }
 
@@ -1055,6 +1065,27 @@ mod tests {
         ));
         // Its review runs while it gathers its evidence and runs its checks: no idle wait.
         assert!(brief.contains("As soon as your work is committed, call review_code once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks"));
+    }
+
+    #[test]
+    fn an_operator_hears_its_target_end_state_and_habits() {
+        let mut operator = task("claude", None);
+        operator.kind = TaskKind::Operate;
+        operator.target = Some("TextEdit, the window \"Notes\"".into());
+        operator.end_state = Some("The note reads \"hi\"".into());
+        let brief = worker_brief(&operator, "", "");
+        assert!(
+            brief.contains(
+                "Target: TextEdit, the window \"Notes\"\nEnd state: The note reads \"hi\""
+            )
+        );
+        assert!(brief.contains("put an expect on every step that changes state"));
+        assert!(brief.contains("whether the end state is verified and how"));
+        assert!(brief.contains("Don't change files in the repository"));
+        assert!(!brief.contains("How to write code"));
+        // Other kinds hear none of it.
+        let lead = worker_brief(&task("claude", Some("lead")), "", "");
+        assert!(!lead.contains("How to operate"));
     }
 }
 

@@ -10,7 +10,7 @@ use super::workers::route_label;
 use crate::model::{ConversationId, DomainEvent};
 use crate::tools::{NoteKind, OrchestratorCall, ToolReply, WorkerCall};
 use crate::work::{
-    ApprovalSubject, AttachmentRef, DecisionSource, InjectionKind, OrchestratorStep,
+    ApprovalSubject, ArtifactRef, AttachmentRef, DecisionSource, InjectionKind, OrchestratorStep,
     OrchestratorStepKind, QuestionKind, Task, TaskId, TaskKind, WaitingSource, WorkerRole,
 };
 use crate::{Error, Result, now_ms};
@@ -28,9 +28,18 @@ impl SessionManager {
     ) -> ToolReply {
         let name = call.name();
         let is_artifact = matches!(call, OrchestratorCall::ReadArtifact(_));
-        let reply = match self.run_orchestrator_call(&conversation_id, call).await {
-            Ok(text) => ToolReply::ok(text),
-            Err(err) => ToolReply::error(err.to_string()),
+        let image = match &call {
+            OrchestratorCall::ReadArtifact(args) => {
+                self.read_image_artifact(&conversation_id, &args.id).await
+            }
+            _ => None,
+        };
+        let reply = match image {
+            Some(reply) => reply,
+            None => match self.run_orchestrator_call(&conversation_id, call).await {
+                Ok(text) => ToolReply::ok(text),
+                Err(err) => ToolReply::error(err.to_string()),
+            },
         };
         self.log_injection(
             &conversation_id,
@@ -104,6 +113,30 @@ impl SessionManager {
                     }
                     (None, _) => None,
                 };
+                let given = |field: &Option<String>| {
+                    field
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .map(str::to_owned)
+                };
+                let (target, end_state) = (given(&args.target), given(&args.end_state));
+                if args.kind == TaskKind::Operate {
+                    if target.is_none() || end_state.is_none() {
+                        return Err(Error::Invalid(
+                            "an operate task needs `target` (the app, dev build or URL it works \
+                             in, and the window if known) and `end_state` (what must be true at \
+                             the end, checkable on screen)"
+                                .into(),
+                        ));
+                    }
+                } else if args.target.is_some() || args.end_state.is_some() {
+                    return Err(Error::Invalid(format!(
+                        "`target` and `end_state` are for operate tasks; a {:?} task takes its \
+                         goal from its spec",
+                        args.kind
+                    )));
+                }
                 if args.kind == TaskKind::Review
                     && subject
                         .as_ref()
@@ -167,6 +200,8 @@ impl SessionManager {
                         super::workers::TaskExtra {
                             role,
                             phase: args.phase,
+                            target,
+                            end_state,
                             ..Default::default()
                         },
                     )
@@ -533,8 +568,8 @@ impl SessionManager {
     /// `read_artifact` reads what a report of this project stored (its artifacts and
     /// outputs, a kept patch), from this session or another of the project; nothing else in
     /// the store.
-    async fn check_artifact(&self, id: &ConversationId, artifact: &str) -> Result<()> {
-        let names = |task: &Task| {
+    async fn check_artifact(&self, id: &ConversationId, artifact: &str) -> Result<ArtifactRef> {
+        let named = |task: &Task| {
             task.report
                 .iter()
                 .flat_map(|report| &report.artifacts)
@@ -543,18 +578,43 @@ impl SessionManager {
                     crate::work::KeptWork::Diff { artifact, .. } => Some(artifact),
                     _ => None,
                 }))
-                .any(|known| known.id == artifact)
+                .find(|known| known.id == artifact)
+                .cloned()
         };
         for conversation in std::iter::once(id.clone()).chain(self.project_conversations(id)) {
             if let Ok(board) = self.core.board(&conversation).await
-                && board.tasks.values().any(names)
+                && let Some(known) = board.tasks.values().find_map(named)
             {
-                return Ok(());
+                return Ok(known);
             }
         }
         Err(Error::Invalid(format!(
             "{artifact} is not an artifact of a report in this project. Use an id a report, read_report or query_brain gave you."
         )))
+    }
+
+    /// `read_artifact` on a report's image (an operate worker's last screenshot): the image
+    /// itself, which the model reads; `None` for anything else.
+    async fn read_image_artifact(&self, id: &ConversationId, artifact: &str) -> Option<ToolReply> {
+        let known = self.check_artifact(id, artifact.trim()).await.ok()?;
+        if !known.mime.starts_with("image/") {
+            return None;
+        }
+        let reply = match self
+            .core
+            .read_blob_range(known.id.clone(), 0, u32::MAX)
+            .await
+        {
+            Ok((bytes, total)) => ToolReply::ok(format!(
+                "[artifact {} · {} · {total} bytes]",
+                known.id, known.title
+            ))
+            .with_image(known.mime.clone(), bytes),
+            Err(err) => ToolReply::error(err.to_string()),
+        };
+        self.orchestrator_step(id, OrchestratorStepKind::ReadArtifact { name: known.title })
+            .await;
+        Some(reply)
     }
 
     /// The project's other conversations (sessions of the same project), newest first.

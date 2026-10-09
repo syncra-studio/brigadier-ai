@@ -34,7 +34,10 @@ use super::SessionManager;
 use super::cards::CardAnswer;
 use crate::model::{ConversationId, DomainEvent, PermissionLevel};
 use crate::tools::{ComputerCall, ToolReply};
-use crate::work::{ApprovalSubject, CardState, ComputerAction, TaskId, WaitingSource};
+use crate::work::{
+    ApprovalSubject, ArtifactKind, ArtifactRef, CardState, ComputerAction, Task, TaskId,
+    WaitingSource,
+};
 use brigadier_providers::{ApprovalDecision, Decider};
 
 /// The environment variable holding a worker's computer grant, for `brigadierd computer` in
@@ -970,6 +973,96 @@ impl SessionManager {
             tracing::warn!(error = %err, "could not record computer actions");
         }
     }
+
+    /// The line Brigadier adds to an operate worker's report: the batches it ran since its
+    /// previous report, and that stretch's last screenshot, which goes with the report as an
+    /// artifact so the thread can open it with `read_artifact`.
+    pub(crate) async fn computer_report(
+        &self,
+        conversation_id: &ConversationId,
+        task: &Task,
+    ) -> (String, Option<ArtifactRef>) {
+        let mut actions: Vec<ComputerAction> = Vec::new();
+        let mut before = None;
+        loop {
+            let page = match self
+                .core
+                .list_computer_actions(conversation_id, &task.id, before, 500)
+                .await
+            {
+                Ok(page) => page,
+                Err(err) => {
+                    tracing::warn!(task = %task.id, error = %err, "could not read the action log");
+                    break;
+                }
+            };
+            actions.splice(0..0, page.actions);
+            match page.earlier {
+                Some(earlier) => before = Some(earlier),
+                None => break,
+            }
+        }
+        let since = task.report.as_ref().map_or(0, |r| r.submitted_at_ms);
+        let Some((range, image)) = computer_batches(&actions, since) else {
+            let none = if actions.is_empty() {
+                "Computer actions: none"
+            } else {
+                "Computer actions: none since its previous report"
+            };
+            return (none.into(), None);
+        };
+        let screenshot = match image {
+            Some(hash) => match self.core.read_blob_range(hash.clone(), 0, 0).await {
+                Ok((_, bytes)) => Some(ArtifactRef {
+                    id: hash,
+                    title: "Last screenshot".into(),
+                    kind: ArtifactKind::Screenshot,
+                    mime: "image/png".into(),
+                    bytes,
+                    file_name: Some(format!("task-{}-screenshot.png", task.number)),
+                }),
+                Err(err) => {
+                    tracing::warn!(task = %task.id, error = %err, "the last screenshot is gone");
+                    None
+                }
+            },
+            None => None,
+        };
+        let shot = screenshot.as_ref().map_or_else(
+            || "no screenshot".to_owned(),
+            |shot| format!("last screenshot: artifact {}", shot.id),
+        );
+        (format!("Computer actions: {range} · {shot}"), screenshot)
+    }
+}
+
+/// The batches of a worker's action log (oldest first) from the first one at or after
+/// `since_ms`, numbered as its timeline numbers them ("batches 3–9"), and the last screenshot
+/// among them; none when it ran none since.
+pub(crate) fn computer_batches(
+    actions: &[ComputerAction],
+    since_ms: i64,
+) -> Option<(String, Option<String>)> {
+    // Each batch's start and screenshot; an action from before batches were kept is its own.
+    let mut batches: Vec<(i64, Option<&str>)> = Vec::new();
+    let mut last: Option<&str> = None;
+    for action in actions {
+        match batches.last_mut() {
+            Some(batch) if !action.batch.is_empty() && last == Some(action.batch.as_str()) => {
+                batch.1 = batch.1.or(action.image.as_deref());
+            }
+            _ => batches.push((action.at_ms, action.image.as_deref())),
+        }
+        last = Some(action.batch.as_str());
+    }
+    let first = batches.iter().position(|(at, _)| *at >= since_ms)?;
+    let range = if first + 1 == batches.len() {
+        format!("batch {}", first + 1)
+    } else {
+        format!("batches {}–{}", first + 1, batches.len())
+    };
+    let image = batches[first..].iter().rev().find_map(|(_, image)| *image);
+    Some((range, image.map(str::to_owned)))
 }
 
 /// What `describe` answered: the window, or the helper's own error for it.
@@ -1615,5 +1708,54 @@ mod tests {
             Duration::from_secs(crate::manager::workers::WORKER_TOOL_TIMEOUT_SECS)
                 > MAX_BATCH_WAITS + brigadier_computer::engine::REQUEST_DEADLINE
         );
+    }
+
+    /// An action of batch `batch` at `at_ms`; the batch's first carries its screenshot.
+    fn acted(batch: &str, index: u32, at_ms: i64, image: Option<&str>) -> ComputerAction {
+        ComputerAction {
+            batch: batch.into(),
+            index,
+            at_ms,
+            kind: "click".into(),
+            app: "TextEdit".into(),
+            app_window: "Notes".into(),
+            target: None,
+            pid: 7,
+            window: 5,
+            status: "done".into(),
+            rung: None,
+            effect: None,
+            error: None,
+            detail: None,
+            dispatch_ms: 1.0,
+            record: String::new(),
+            image: image.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_report_counts_the_batches_since_the_last_one_and_names_their_last_screenshot() {
+        assert_eq!(computer_batches(&[], 0), None);
+        let log = [
+            acted("b1", 0, 10, Some("shot1")),
+            acted("b1", 1, 11, None),
+            acted("b2", 0, 20, Some("shot2")),
+            // From before batches were kept: a batch of its own, with no screenshot.
+            acted("", 0, 30, None),
+            acted("b3", 0, 40, Some("shot3")),
+            acted("b4", 0, 50, None),
+            acted("b4", 1, 51, None),
+        ];
+        assert_eq!(
+            computer_batches(&log, 0),
+            Some(("batches 1–5".into(), Some("shot3".into())))
+        );
+        // Sent back to work after a report at 25: only what it did since.
+        assert_eq!(
+            computer_batches(&log, 25),
+            Some(("batches 3–5".into(), Some("shot3".into())))
+        );
+        assert_eq!(computer_batches(&log, 45), Some(("batch 5".into(), None)));
+        assert_eq!(computer_batches(&log, 60), None);
     }
 }

@@ -720,6 +720,14 @@ pub struct Task {
     pub quota_wait: Option<QuotaWait>,
     /// The task this one reviews or merges.
     pub subject: Option<TaskId>,
+    /// An operate task's app, dev build or URL, and the window if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub target: Option<String>,
+    /// What an operate task must leave true, checkable on screen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub end_state: Option<String>,
     /// The plan this one reviews.
     pub plan: Option<CardId>,
     pub attachments: Vec<AttachmentRef>,

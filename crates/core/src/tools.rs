@@ -151,6 +151,12 @@ pub struct DelegateTask {
     /// lands it with its own.
     #[serde(default)]
     pub subject: Option<String>,
+    /// For `operate`: the app, dev build path or URL to work in, and the window if known.
+    #[serde(default)]
+    pub target: Option<String>,
+    /// For `operate`: what must be true at the end, checkable on screen.
+    #[serde(default)]
+    pub end_state: Option<String>,
     /// Ids of the user's attachments the worker should get as files.
     #[serde(default)]
     pub attachments: Vec<String>,

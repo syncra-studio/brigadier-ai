@@ -401,7 +401,11 @@ impl FakeCli {
                 efforts: vec!["medium".into(), "high".into()],
                 default_effort: Some("high".into()),
                 is_default: true,
-                input_modalities: vec!["text".into()],
+                // Claude's takes images, so operate work has a model.
+                input_modalities: match self.kind {
+                    ProviderKind::Claude => vec!["text".into(), "image".into()],
+                    ProviderKind::Codex => vec!["text".into()],
+                },
                 fast: None,
                 legacy: false,
             })

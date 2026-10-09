@@ -489,3 +489,201 @@ async fn a_working_call_or_a_read_after_a_restart_closes_the_item() {
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap()
 }
+
+/// An action the operate worker ran, as the action log keeps it.
+fn logged(batch: &str, image: Option<String>) -> crate::work::ComputerAction {
+    crate::work::ComputerAction {
+        batch: batch.into(),
+        index: 0,
+        at_ms: crate::now_ms(),
+        kind: "click".into(),
+        app: "TextEdit".into(),
+        app_window: "Notes".into(),
+        target: Some("button \"Save\"".into()),
+        pid: TEXTEDIT.pid,
+        window: 5,
+        status: "done".into(),
+        rung: Some("element".into()),
+        effect: Some("confirmed".into()),
+        error: None,
+        detail: None,
+        dispatch_ms: 1.0,
+        record: String::new(),
+        image,
+    }
+}
+
+/// `operate` takes a target and an end state, and only it does; its worker hears both, gets
+/// the computer tools loaded from the start (a scout doesn't), and its report ends with its
+/// batches and its last screenshot, which the thread opens as an image.
+#[tokio::test]
+async fn an_operate_task_brings_its_batches_and_last_screenshot_with_its_report() {
+    let reports: Arc<Mutex<Vec<String>>> = Arc::default();
+    let grants: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let shot = Arc::new(Mutex::new(String::new()));
+    let script: Script = {
+        let (reports, grants, shot) = (reports.clone(), grants.clone(), shot.clone());
+        Arc::new(move |turn: Turn| {
+            let (reports, grants, shot) = (reports.clone(), grants.clone(), shot.clone());
+            Box::pin(async move {
+                if turn.is_orchestrator() {
+                    if turn.earlier == 0 {
+                        let operate = |extra: serde_json::Value| {
+                            let mut args = json!({"effort": "medium", "title": "Save the note",
+                                "kind": "operate", "spec": "Save the note in TextEdit."});
+                            args.as_object_mut()
+                                .unwrap()
+                                .extend(extra.as_object().unwrap().clone());
+                            args
+                        };
+                        let reply = turn
+                            .call("delegate_task", operate(json!({"target": "TextEdit"})))
+                            .await;
+                        assert!(reply.is_error);
+                        assert!(reply.text.contains("needs `target`"), "{}", reply.text);
+                        let reply = turn
+                            .call(
+                                "delegate_task",
+                                json!({"effort": "low", "title": "Find the flag", "kind": "scout",
+                                       "spec": "Where is the flag?", "end_state": "Found."}),
+                            )
+                            .await;
+                        assert!(reply.is_error);
+                        assert!(
+                            reply.text.contains("are for operate tasks"),
+                            "{}",
+                            reply.text
+                        );
+                        for args in [
+                            operate(json!({"target": "TextEdit, the window \"Notes\"",
+                                           "end_state": "The note is saved."})),
+                            json!({"effort": "low", "title": "Find the flag", "kind": "scout",
+                                   "spec": "Where is the flag?"}),
+                        ] {
+                            let reply = turn.call("delegate_task", args).await;
+                            assert!(!reply.is_error, "{}", reply.text);
+                        }
+                        return Reply::text("[quiet]");
+                    }
+                    if turn.input.contains("[report task-") {
+                        reports.lock().unwrap().push(turn.input.clone());
+                    }
+                    return Reply::text("Done.");
+                }
+                let kind = if turn.prompt.contains("Kind: operate") {
+                    "operate"
+                } else {
+                    "scout"
+                };
+                grants
+                    .lock()
+                    .unwrap()
+                    .push((kind.into(), turn.computer_grant.clone()));
+                if kind == "operate" {
+                    assert!(
+                        turn.prompt.contains(
+                            "Target: TextEdit, the window \"Notes\"\nEnd state: The note is saved."
+                        ),
+                        "{}",
+                        turn.prompt
+                    );
+                    let Some(crate::tools::Role::Worker {
+                        conversation_id,
+                        task_id,
+                        ..
+                    }) = turn.host.grants.resolve(&turn.grant)
+                    else {
+                        panic!("a worker grant");
+                    };
+                    let hash = turn
+                        .host
+                        .core
+                        .store()
+                        .blobs()
+                        .put(b"\x89PNG fake".to_vec())
+                        .await
+                        .unwrap()
+                        .to_string();
+                    *shot.lock().unwrap() = hash.clone();
+                    let events = [
+                        logged("b1", Some("0".repeat(64))),
+                        logged("b1", None),
+                        logged("b2", Some(hash)),
+                    ]
+                    .into_iter()
+                    .map(|action| crate::model::DomainEvent::ComputerActed {
+                        conversation_id: conversation_id.clone(),
+                        task_id: task_id.clone(),
+                        action,
+                    })
+                    .collect();
+                    turn.host
+                        .core
+                        .record_conversation(&conversation_id, events)
+                        .await
+                        .unwrap();
+                }
+                let reply = turn
+                    .call("submit_report", json!({"summary": "Done."}))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("Reported.")
+            })
+        })
+    };
+    let flow = Flow::start("computer-operate", Options::default(), script).await;
+    flow.say("Save the note in TextEdit, and find the flag.")
+        .await;
+    let board = flow.settled().await;
+
+    // Claude loads the computer tools at once for the operator only.
+    let specs = flow.specs.lock().unwrap().clone();
+    let grants = grants.lock().unwrap().clone();
+    assert_eq!(grants.len(), 2, "{grants:?}");
+    for (kind, grant) in &grants {
+        let server = specs
+            .iter()
+            .flat_map(|(_, spec)| &spec.mcp_servers)
+            .find(|server| server.env.iter().any(|(_, value)| value == grant))
+            .expect("its computer server");
+        assert_eq!(server.name, "computer");
+        assert_eq!(server.always_load, kind == "operate", "{kind}");
+    }
+
+    let shot = shot.lock().unwrap().clone();
+    let reports = reports.lock().unwrap().join("\n");
+    let operate = Flow::task(&board, 1);
+    assert_eq!(operate.kind, crate::work::TaskKind::Operate);
+    assert!(
+        reports.contains(&format!(
+            "Computer actions: batches 1–2 · last screenshot: artifact {shot}"
+        )),
+        "{reports}"
+    );
+    let artifacts = &operate.report.as_ref().expect("a report").artifacts;
+    assert!(
+        artifacts
+            .iter()
+            .any(|a| a.id == shot && a.mime == "image/png"),
+        "{artifacts:?}"
+    );
+    // The scout's report has no such line.
+    assert_eq!(reports.matches("Computer actions:").count(), 1, "{reports}");
+
+    // The thread reads the screenshot as an image.
+    let reply = flow
+        .manager
+        .orchestrator_call(
+            flow.conversation.clone(),
+            crate::tools::OrchestratorCall::ReadArtifact(crate::tools::ReadArtifact {
+                id: shot.clone(),
+                offset: None,
+                limit: None,
+            }),
+        )
+        .await;
+    assert!(!reply.is_error, "{}", reply.text);
+    assert_eq!(reply.images.len(), 1);
+    assert_eq!(reply.images[0].data, b"\x89PNG fake");
+    flow.stop().await;
+}

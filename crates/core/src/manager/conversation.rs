@@ -2057,9 +2057,14 @@ impl SessionManager {
 
     /// The `computer` MCP server a worker gets (COMPUTER-USE-PLAN.md §4.6): behind the CLI's
     /// tool search until a worker needs it, so one that never touches the desktop pays
-    /// almost nothing.
-    pub(crate) fn computer_server(&self, grant: String, timeout_secs: u64) -> McpServer {
-        let mut server = self.brigadier_server(grant.clone(), timeout_secs, false);
+    /// almost nothing; `always_load` for an operate worker, which needs it from the start.
+    pub(crate) fn computer_server(
+        &self,
+        grant: String,
+        timeout_secs: u64,
+        always_load: bool,
+    ) -> McpServer {
+        let mut server = self.brigadier_server(grant.clone(), timeout_secs, always_load);
         server.name = "computer".into();
         // Claude puts every server's environment into its own, so each grant needs its own
         // variable; the bridge is told which one to read.

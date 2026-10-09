@@ -1067,6 +1067,8 @@ impl SessionManager {
                 .map(|wait| format!("Waiting for quota: {}", wait.reason)),
             quota_wait: wait,
             subject: subject.as_ref().map(|task| task.id.clone()),
+            target: extra.target,
+            end_state: extra.end_state,
             plan: None,
             attachments,
             workspace: None,
@@ -1436,7 +1438,11 @@ impl SessionManager {
                     self.config.daemon_exe.to_string_lossy().into_owned(),
                 ),
             ]);
-            mcp_servers.push(self.computer_server(computer_grant, WORKER_TOOL_TIMEOUT_SECS));
+            mcp_servers.push(self.computer_server(
+                computer_grant,
+                WORKER_TOOL_TIMEOUT_SECS,
+                task.kind == TaskKind::Operate,
+            ));
         }
         let redactor = secrets::redactor(secret_values);
         let allowed_models = self.allowed_models(task).await;
@@ -2908,6 +2914,15 @@ impl SessionManager {
         if let Some(message) = self.keep_last_message(&live, task.number).await {
             artifacts.push(message);
         }
+        // An operate worker's actions on the desktop, read from the action log rather than
+        // its own account, and its last screenshot.
+        let computer = if task.kind == TaskKind::Operate {
+            let (line, screenshot) = self.computer_report(conversation_id, &task).await;
+            artifacts.extend(screenshot);
+            Some(line)
+        } else {
+            None
+        };
         let outputs = files.outputs;
         // A gate member's report goes to its gate, not to the orchestrator.
         let reviewing = task.gate_link.is_some();
@@ -2974,6 +2989,9 @@ impl SessionManager {
             let mut shown = task.clone();
             reported(&mut shown);
             let mut text = prompts::report_envelope(&shown, &report, &route_label(&shown));
+            if let Some(line) = &computer {
+                text.push_str(&format!("\n{line}"));
+            }
             if unchanged {
                 text.push_str(&format!(
                     "\n[nothing to land task-{}] It changed no files, so it is done; there is nothing to land.",
@@ -4112,6 +4130,9 @@ pub(crate) struct TaskExtra {
     pub role: Option<WorkerRole>,
     /// The phase of the request's plan it works on.
     pub phase: Option<u32>,
+    /// An operate task's target and end state.
+    pub target: Option<String>,
+    pub end_state: Option<String>,
 }
 
 pub(crate) fn category(kind: TaskKind) -> brigadier_router::TaskCategory {

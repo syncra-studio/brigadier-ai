@@ -24,7 +24,8 @@ when the report or the user's next message arrives. You can delegate several ind
 at once. The worker sees nothing of this conversation but `spec` (and the listed attachments), \
 so make the spec self-contained. `implement` and `merge` tasks change code in their own git \
 worktree, commit their own steps and land only through land_phase; the other kinds only read \
-and report.";
+and report. An `operate` task uses apps on this Mac to reach `end_state` in `target`, and \
+reports what it did and how it checked.";
 
 const MESSAGE_WORKER: &str = "Send text to a worker: an instruction that steers its current \
 work, or sends a reported worker back to work. Answer a worker's question with answer_worker. \

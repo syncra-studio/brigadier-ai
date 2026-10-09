@@ -69,6 +69,14 @@ quotaWait: QuotaWait | null,
  */
 subject: TaskId | null, 
 /**
+ * An operate task's app, dev build or URL, and the window if known.
+ */
+target?: string, 
+/**
+ * What an operate task must leave true, checkable on screen.
+ */
+endState?: string, 
+/**
  * The plan this one reviews.
  */
 plan: CardId | null, attachments: Array<AttachmentRef>, workspace: TaskWorkspace | null, report: Report | null, 
