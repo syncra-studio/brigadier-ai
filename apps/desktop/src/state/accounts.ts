@@ -62,9 +62,9 @@ export function makeDefaultAccount(provider: ProviderKind, id: string | undefine
   }));
 }
 
-/** What an account is called: its name, else who is signed in, else "Your own login". */
+/** What an account is called: its name, else who is signed in; "This computer's login" for the own one. */
 export function accountLabel(view: AccountView): string {
-  if (view.account.account === undefined) return "Your own login";
+  if (view.account.account === undefined) return "This computer's login";
   return view.name || view.status?.email || "New account";
 }
 
