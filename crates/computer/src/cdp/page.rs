@@ -132,6 +132,19 @@ pub struct Page {
     pub closed: bool,
 }
 
+/// Where a document's focus rests: `password` on a password field, `frame` on a frame from
+/// another origin (its document can't be read from here), `none` elsewhere. Followed through
+/// open shadow roots and same-origin frames.
+const FOCUSED_SECURE: &str = "(() => { let a = document.activeElement; \
+    for (let i = 0; a && i < 64; i++) { \
+        if (a.shadowRoot && a.shadowRoot.activeElement) { a = a.shadowRoot.activeElement; continue; } \
+        if (a.contentDocument && a.contentDocument.activeElement) { a = a.contentDocument.activeElement; continue; } \
+        break; } \
+    if (!a) return 'none'; \
+    if (a.type === 'password') return 'password'; \
+    if ((a.tagName === 'IFRAME' || a.tagName === 'FRAME') && !a.contentDocument) return 'frame'; \
+    return 'none'; })()";
+
 /// Installs the DOM-change clock in an isolated world: the page's own scripts never see it.
 /// The page's `alert`, `confirm` and `prompt`, wrapped so a call stops in the debugger instead
 /// of opening the browser's dialog window, which would bring the browser to the front. The page
@@ -1000,6 +1013,35 @@ impl Page {
             s = c.parent.clone();
         }
         err(ErrorCode::Failed, "frames nested too deep")
+    }
+
+    /// Whether a password field has the page's focus. Focus is followed into shadow roots and
+    /// same-origin frames; when it rests on a frame from another origin, every out-of-process
+    /// frame is asked, and a password field focused in any of them counts. A frame that can't
+    /// answer counts as one: keys are refused when the field's state can't be read.
+    pub fn focused_secure(&self, conn: &mut Conn) -> CuResult<bool> {
+        let ask = |conn: &mut Conn, session: &str| -> CuResult<String> {
+            let r = conn.call(
+                Some(session),
+                "Runtime.evaluate",
+                json!({"expression": FOCUSED_SECURE, "returnByValue": true}),
+            )?;
+            Ok(r["result"]["value"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_owned())
+        };
+        match ask(conn, &self.session)?.as_str() {
+            "none" => return Ok(false),
+            "frame" => {}
+            _ => return Ok(true),
+        }
+        for c in &self.children {
+            if ask(conn, &c.session).map_or(true, |v| v == "password" || v == "unknown") {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// The viewport's pixels, at the display's full resolution, without the window coming to

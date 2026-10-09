@@ -25,6 +25,18 @@ struct Outcome {
 /// A target's point in main-viewport CSS pixels, its window point and box, and the element.
 type WebPoint = ((f64, f64), (Point, Option<Rect>), Option<WebEl>);
 
+/// Page roles whose value is the text typed into them.
+const EDITABLE: [&str; 4] = ["textfield", "search-field", "text-area", "combo"];
+
+/// What an element shows, for a value expectation: a field's text (empty when the page reads
+/// none, never its label, so a cleared field equals ""), else its value or label.
+fn shown(n: &RawNode<WebEl>) -> Option<String> {
+    if EDITABLE.contains(&n.role.as_str()) {
+        Some(n.value.clone().unwrap_or_default())
+    } else {
+        n.value.clone().or_else(|| n.label.clone())
+    }
+}
 impl<D: Desktop> Engine<D> {
     /// The page window `w` shows, when it is a window of a browser the session launched.
     pub(super) fn web_page(&mut self, w: &WindowInfo) -> Option<PageId> {
@@ -399,19 +411,10 @@ impl<D: Desktop> Engine<D> {
         self.on_page(page, |p, c| p.answer(c, accept))
     }
 
-    /// Refuses typing while a password field of the page has the focus.
+    /// Refuses keys and typing while a password field of the page has the focus, as the native
+    /// path does (`check_recipient`), wherever in the page's frames it is.
     fn web_check_typing(&mut self, page: &PageId) -> CuResult<()> {
-        let secure = self.on_page(page, |p, c| {
-            let r = c.call(
-                Some(&p.session),
-                "Runtime.evaluate",
-                serde_json::json!({"expression": "(() => { let a = document.activeElement; \
-                    while (a && a.contentDocument && a.contentDocument.activeElement) a = a.contentDocument.activeElement; \
-                    return !!a && a.type === 'password'; })()", "returnByValue": true}),
-            )?;
-            Ok(r["result"]["value"].as_bool().unwrap_or(false))
-        })?;
-        if secure {
+        if self.on_page(page, |p, c| p.focused_secure(c))? {
             return err(ErrorCode::SecureField, "a password field has the focus");
         }
         Ok(())
@@ -524,9 +527,8 @@ impl<D: Desktop> Engine<D> {
             Action::Key { key, repeat, .. } => {
                 let chord = Chord::parse(key)
                     .ok_or_else(|| CuError::new(ErrorCode::BadRequest, format!("bad key {key}")))?;
-                if crate::cdp::keys::page_key(&chord).is_some_and(|k| k.text.is_some()) {
-                    self.web_check_typing(&page)?;
-                }
+                // Any key: paste, Delete and Backspace carry no text but edit the field too.
+                self.web_check_typing(&page)?;
                 for _ in 0..(*repeat).max(1) {
                     cancel.check()?;
                     self.on_page(&page, |p, c| input::key(c, p, &chord))?;
@@ -811,7 +813,6 @@ impl<D: Desktop> Engine<D> {
             }
             this.on_page(page, |_, c| web_page::read(c, &el)).ok()
         };
-        let shown = |n: &RawNode<WebEl>| n.value.clone().or_else(|| n.label.clone());
         match e {
             Expect::ValueEquals { r#ref, text } => {
                 read(self, r#ref).is_some_and(|n| shown(&n).as_deref() == Some(text))
@@ -844,5 +845,38 @@ impl<D: Desktop> Engine<D> {
                     })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(role: &str, label: &str, value: Option<&str>) -> RawNode<WebEl> {
+        let mut n = RawNode::new(
+            WebEl {
+                session: "s".into(),
+                node: 1,
+            },
+            0,
+            role,
+        );
+        n.label = Some(label.into());
+        n.value = value.map(str::to_owned);
+        n
+    }
+
+    #[test]
+    fn a_cleared_field_shows_nothing_not_its_label() {
+        assert_eq!(shown(&node("textfield", "Name", None)).as_deref(), Some(""));
+        assert_eq!(
+            shown(&node("text-area", "Notes", Some("hi"))).as_deref(),
+            Some("hi")
+        );
+        // A button shows its label.
+        assert_eq!(
+            shown(&node("button", "Send", None)).as_deref(),
+            Some("Send")
+        );
     }
 }
