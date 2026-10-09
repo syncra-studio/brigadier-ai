@@ -251,6 +251,10 @@ impl<D: Desktop> Engine<D> {
                 "the page waits on its dialog; answer it first (observe shows it)",
             );
         }
+        // The page's root stands for the page; it has no node of its own to read.
+        if el.node == 0 {
+            return Ok(el);
+        }
         let now = self
             .on_page(page, |_, c| web_page::read(c, &el))
             .map_err(|_| CuError::new(ErrorCode::StaleRef, format!("e{r} is gone")))?;
@@ -502,7 +506,18 @@ impl<D: Desktop> Engine<D> {
                 }
             }
             Action::Scroll { target, dx, dy, .. } => {
-                let (css, aim, _) = self.web_point(w, &page, &vp, target, false)?;
+                // The page itself (its root ref) scrolls at the middle of its view.
+                let root = match target.r#ref.as_deref() {
+                    Some(r) => self.web_resolve(w, &page, Self::ref_of(r)?, false)?.node == 0,
+                    None => false,
+                };
+                let (css, aim) = if root {
+                    let css = (vp.css_w / 2.0, vp.css_h / 2.0);
+                    (css, (vp.to_window(css.0, css.1), None))
+                } else {
+                    let (css, aim, _) = self.web_point(w, &page, &vp, target, false)?;
+                    (css, aim)
+                };
                 out.aim = Some((aim.0, None));
                 self.show_cursor(worker, w, out.aim, Gesture::Scroll);
                 self.on_page(&page, |p, c| input::wheel(c, p, css, *dx, *dy))?;
