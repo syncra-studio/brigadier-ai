@@ -80,8 +80,9 @@ test("actions group by batch and read in plain words, outcome first, route and t
   assert.equal(summaryWords(b1!.actions, true), "Using the computer · Typed into the text field in Target Range");
 });
 
+const at = (index: number, playing = false) => ({ index, playing });
+
 test("the keys step, jump and play; playback stops at the last batch", () => {
-  const at = (index: number, playing = false) => ({ index, playing });
   assert.deepEqual(playbackKey(at(2), "ArrowLeft", 5), at(1));
   assert.deepEqual(playbackKey(at(4), "ArrowRight", 5), at(4));
   assert.deepEqual(playbackKey(at(2), "Home", 5), at(0));

@@ -10,6 +10,7 @@ import type { ComputerAccess, ComputerAction } from "@/ipc/generated";
 const actions = benchRun as ComputerAction[];
 const steps = (html: string) => [...html.matchAll(/data-slot="computer-step"/g)].length;
 const details = (html: string) => [...html.matchAll(/data-slot="computer-step-detail"[^>]*>([^<]*)</g)].map((match) => match[1]);
+const buttons = (html: string) => [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1]);
 const labels = (html: string) => [...html.matchAll(/<button[^>]*aria-label="([^"]*)"/g)].map((match) => match[1]);
 
 test("the timeline is one disclosure: action and outcome on every step, route and time only on the shown batch", async () => {
@@ -63,7 +64,6 @@ test("the permission item has one Allow per missing grant and closes its ask onc
         React.createElement(ComputerAccessBody, { what: "Workers need permission to use apps", access, asked, onAllow: async () => {} }),
       );
     const none: ComputerAccess = { available: true, accessibility: false, screenRecording: false, problem: null };
-    const buttons = (html: string) => [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1]);
 
     const both = render(none);
     assert.match(both, /Workers need permission to use apps/);
