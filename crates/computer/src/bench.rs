@@ -162,6 +162,8 @@ struct Report {
     wrong_target: Vec<(String, Event)>,
     /// Focus changes seen around actions (F1).
     focus_changes: Vec<String>,
+    /// Focus changes the fixture can't have caused, listed, not counted.
+    outside_focus_changes: Vec<String>,
     /// Supported paths per target kind.
     coverage: BTreeMap<String, Vec<String>>,
     t1_text_tokens: usize,
@@ -211,6 +213,7 @@ impl Bench {
 
     /// Runs one action; returns its result and the wall-clock start of the request.
     fn act(&mut self, window: u32, action: Action) -> Result<(ActionResult, f64)> {
+        let before = self.engine.desktop.user_focus();
         let t0 = epoch_ms();
         let reply = self
             .engine
@@ -223,22 +226,37 @@ impl Bench {
                 },
             )
             .map_err(|e| anyhow!("act: {e}"))?;
-        for r in self.engine.records.drain(..) {
-            if !r.user_focus_kept {
-                self.report.focus_changes.push(format!(
-                    "{} on {:?} at {}",
-                    serde_json::to_string(&r.action).unwrap_or_default(),
-                    r.window_title,
-                    r.at_ms
-                ));
-            }
-        }
+        self.engine.records.clear();
+        let what = serde_json::to_string(&reply.results.first().map(|r| &r.action))?;
+        self.check_focus(&what, &before);
         let r = reply
             .results
             .into_iter()
             .next()
             .context("act returned no result")?;
         Ok((r, t0))
+    }
+
+    /// Compares the user's side of the desktop before and after `what` (F1). A change the
+    /// fixture can't have caused, the frontmost app quitting, is listed apart and not counted.
+    fn check_focus(&mut self, what: &str, before: &UserFocus) {
+        let after = self.engine.desktop.user_focus();
+        if after == *before {
+            return;
+        }
+        let quit = after.frontmost_pid != before.frontmost_pid
+            && after.frontmost_pid != self.win.pid
+            && after.cursor == before.cursor
+            && self.engine.desktop.app(before.frontmost_pid).is_err();
+        let line = format!("{what}: {before:?} → {after:?}");
+        if quit {
+            self.report.outside_focus_changes.push(format!(
+                "the frontmost app (pid {}) quit during {line}",
+                before.frontmost_pid
+            ));
+        } else {
+            self.report.focus_changes.push(line);
+        }
     }
 
     /// Records one action against the event it should cause on control `target`. An event on
@@ -605,6 +623,7 @@ impl Bench {
                 .set_focus(&notes_el)
                 .map_err(|e| anyhow!("{e}"))?;
             let _ = self.log.read_new()?;
+            let before = self.engine.desktop.user_focus();
             let t0 = epoch_ms();
             let start = Instant::now();
             let cancel = self.engine.gens.token("bench", Duration::from_secs(30));
@@ -641,11 +660,7 @@ impl Bench {
                         .and_then(|e| e.v.clone())
                 )),
             }
-            if self.engine.desktop.user_focus() != self.user {
-                self.report
-                    .focus_changes
-                    .push("the user's focus changed while typing key events".into());
-            }
+            self.check_focus("type 100 characters as key events", &before);
         }
         Ok(())
     }
@@ -839,6 +854,9 @@ impl Bench {
         for c in &self.report.focus_changes {
             let _ = writeln!(out, "focus changed: {c}");
         }
+        for c in &self.report.outside_focus_changes {
+            let _ = writeln!(out, "not counted: {c}");
+        }
         out
     }
 }
@@ -937,13 +955,8 @@ pub fn run(mut desktop: MacDesktop, out: &Path, quick: bool) -> Result<bool> {
     b.pixels(reps)?;
     b.refusals(reps)?;
     b.typing(reps)?;
-    let user_end = b.engine.desktop.user_focus();
-    if user_end != b.user {
-        b.report.focus_changes.push(format!(
-            "the user's focus differs after the run: {:?} → {:?}",
-            b.user, user_end
-        ));
-    }
+    let start_focus = b.user.clone();
+    b.check_focus("the whole run", &start_focus);
     drop(fixture);
     b.gates();
     let table = b.table();

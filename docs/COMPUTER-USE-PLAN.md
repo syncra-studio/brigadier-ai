@@ -230,6 +230,10 @@ e1 window "scratch.txt"                       @0,0 656x422
   e40: observe e40`). `observe` takes `element` (a subtree) and `find` (matching lines plus their ancestors). Clipped
   values say how long they are, and `observe {element, value_page}` returns the full value a page at a time. Every
   output path (tree, diff, focused element, selected text, error text) respects the page size.
+- **Out of view costs nothing.** A table, outline or list that reports its visible rows has its other rows
+  counted, not read; `element` and `find` read everything. Action names are read only for roles where they add
+  something. An action on a ref aims at the part its scroll views show, and an element scrolled out of view can be
+  pressed but never clicked (`no_such_target`, "scroll it into view first").
 - **Screenshots are optional** (`screenshot: auto | always | never`). `auto` adds one when the tree is poor: a
   canvas, a web area with no children, or fewer than three labelled elements.
 - **Geometry is exact.** Every image has an id and a recorded transform (window origin, content rectangle, display
@@ -294,7 +298,13 @@ skipped with `invalidated`, and the result carries the new state.
 
 **Delivery ladder**, best first. Each action reports the rung that ran:
 1. **Accessibility action or attribute**: press, pick, set value, set the selected text range, raise a menu,
-   increment. No events at all, works on hidden and other-Space windows.
+   increment. No events at all, works on hidden and other-Space windows. An app answers an action only when its
+   handler returns, and a button's handler includes its highlight (≈100 ms) after the action already ran, so
+   the engine waits at most 3 ms for the reply and reads the effect instead. A pop-up's items exist only while
+   its menu is open: the engine opens it, presses the item and waits for the menu to close. AppKit blinks the
+   chosen item for ≈350 ms before it sends the action, and no background route avoids that (Phase 1 tried the
+   item's press and pick actions, Return in the open menu, and arrow keys on the closed pop-up), so a pop-up pick
+   costs ≈360 ms. The menu shows on screen for that time; it takes neither focus nor the cursor.
 2. **Background events to the window**: keys and text posted to the app's pid (measured working, §2). Key events
    don't need the system's authentication envelope on macOS 27 (§2.1); it is bound and kept for apps that ask. Mouse
    events are posted to the pid with the window-routing field and a window-local location. Covered windows take
@@ -515,6 +525,31 @@ for coverage. Nothing merges to main until the user says so.
   and cursor don't change.
 - `tools/full-checks.sh` passes, including Linux and Windows clippy of the new crate (non-mac backends compile as
   stubs that return `unsupported_capability`).
+
+**Results (2026-10-09, `brigadier-computer bench`, release build, 200 repetitions, terminal-launched development
+evidence)**
+
+| Gate | Measured | Target | |
+|---|---|---|---|
+| S1 observe, structure | 6.2 / 8.2 ms | ≤ 15 / ≤ 40 ms | pass |
+| S2 observe with screenshot | 61.3 / 66.3 ms | ≤ 70 / ≤ 120 ms | pass |
+| S3 press, all P1 targets | dispatch 5.9 · effect 3.3 / 5.9 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | pass |
+| S3 set value (slider) | dispatch 3.2 · effect 3.1 / 4.0 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | pass |
+| S3 pick (pop-up) | dispatch 370.6 · effect 363.0 / 371.0 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | **miss** |
+| S4 background pixel click | dispatch 6.5 · effect 16.4 / 41.5 ms | ≤ 15 · ≤ 60 / ≤ 200 ms | pass |
+| S5 100 characters, set value / key events | 2.9 / 13.3 ms | ≤ 20 / ≤ 250 ms | pass |
+| P1 element-path success | 1600/1600 | 100% | pass |
+| P2 pixel mapping, 1× and 2×, centre and 1 pt-inset points | 1600/1600 inside, worst error 0.00 pt | 100%, ≤ 0.5 pt | pass |
+| P2r refusals (minimised window) | 200/200 `background_unavailable` | 100% | pass |
+| P4 wrong-target actions | 0 | 0 | pass |
+| F1 focus theft | 0 | 0 | pass |
+| T1 fixture structure text | 614 tokens | median ≤ 1,500 | (Phase 4 gate) |
+| T2 fixture window image | 900×632 px, ≈759 Claude visual tokens | ≤ 4,784 | (Phase 4 gate) |
+
+The dots are round, so P2's inset points are the four diagonals 1 pt inside the edge rather than a box's corners.
+The pop-up pick misses because AppKit blinks the chosen item for ≈350 ms before it sends the action (§4.4); the
+press, set-value and pick of menu-bar items are not affected. Recommendation: hold pop-up picks to their own
+target (≤ 400 ms effect) and gate S3 on the rest.
 
 ### Phase 2: Helper app, broker and the tool surface
 

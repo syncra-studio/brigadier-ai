@@ -24,9 +24,9 @@ use objc2_core_foundation::{
     CGPoint as CgPoint, kCFRunLoopDefaultMode,
 };
 use objc2_core_graphics::{
-    CGDisplayCopyDisplayMode, CGDisplayMode, CGEvent, CGGetDisplaysWithPoint,
-    CGWindowListCopyWindowInfo, CGWindowListOption, kCGWindowBounds, kCGWindowIsOnscreen,
-    kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerPID,
+    CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGEvent, CGGetActiveDisplayList,
+    CGGetDisplaysWithPoint, CGWindowListCopyWindowInfo, CGWindowListOption, kCGWindowBounds,
+    kCGWindowIsOnscreen, kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerPID,
 };
 
 pub use ax::AxEl;
@@ -141,6 +141,7 @@ impl MacDesktop {
                 .and_then(|v| v.downcast::<CFNumber>().ok())
                 .and_then(|n| n.as_f64())
         };
+        let displays = display_bounds();
         let mut out = Vec::new();
         for d in list.iter() {
             // SAFETY: reading the system's constant keys.
@@ -180,7 +181,7 @@ impl MacDesktop {
                 .get(k_on)
                 .and_then(|v| v.downcast::<CFBoolean>().ok())
                 .is_some_and(|b| b.as_bool());
-            if frame.w < 2.0 || frame.h < 2.0 {
+            if frame.w < 2.0 || frame.h < 2.0 || is_menu_bar_strip(&title, frame, &displays) {
                 continue;
             }
             out.push(WindowInfo {
@@ -545,6 +546,34 @@ impl Desktop for MacDesktop {
             server_front,
         }
     }
+}
+
+/// The active displays' bounds, in global points.
+fn display_bounds() -> Vec<Rect> {
+    let mut ids = [0u32; 16];
+    let mut n = 0u32;
+    // SAFETY: both pointers are valid for the sizes given.
+    unsafe { CGGetActiveDisplayList(ids.len() as u32, ids.as_mut_ptr(), &mut n) };
+    ids[..(n as usize).min(ids.len())]
+        .iter()
+        .map(|&id| {
+            let b = CGDisplayBounds(id);
+            Rect::new(b.origin.x, b.origin.y, b.size.width, b.size.height)
+        })
+        .collect()
+}
+
+/// An app's own strip of the menu bar: AppKit creates it the first time the app is active
+/// (synthetic activation included). It is untitled, as wide as a display and sits on its top
+/// edge; it is not a window anyone opened.
+fn is_menu_bar_strip(title: &str, frame: Rect, displays: &[Rect]) -> bool {
+    title.is_empty()
+        && frame.h <= 44.0
+        && displays.iter().any(|d| {
+            (frame.x - d.x).abs() < 0.5
+                && (frame.y - d.y).abs() < 0.5
+                && (frame.w - d.w).abs() < 0.5
+        })
 }
 
 fn norm(s: &str) -> String {
