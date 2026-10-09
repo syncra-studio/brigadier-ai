@@ -770,9 +770,10 @@ The task:
 /// An operate worker's target, end state and habits (COMPUTER-USE-PLAN.md §4.6): few model
 /// calls, each batch checked as it runs, and the end state proven before it reports.
 fn operate_rules(task: &Task) -> String {
-    // Codex calls tools from code; told their names, it skips a model call listing them.
+    // Codex calls tools from code without their schemas: told their names and shapes, it skips a
+    // model call listing them and the calls that guess argument names one error at a time.
     let tools = if task.route.choice.provider == ProviderKind::Codex {
-        "\n- In code, call tools.mcp__computer__observe, tools.mcp__computer__act and tools.mcp__computer__zoom, and report with tools.mcp__brigadier__submit_report: no need to list the tools first."
+        "\n- In code, call tools.mcp__computer__observe({window}), tools.mcp__computer__act({window, actions: [{do: \"set_value\", ref: \"e18\", text: \"37\", expect: {is: \"value_equals\", ref: \"e18\", text: \"37\"}}, {do: \"click\", ref: \"e5\"}]}) and tools.mcp__computer__zoom({image, region: [x0, y0, x1, y1]}), and report with tools.mcp__brigadier__submit_report: no need to list the tools first."
     } else {
         ""
     };
@@ -1091,7 +1092,9 @@ mod tests {
         assert!(!brief.contains("How to write code"));
         assert!(!brief.contains("tools.mcp__computer__act"));
         operator.route.choice.provider = ProviderKind::Codex;
-        assert!(worker_brief(&operator, "", "").contains("call tools.mcp__computer__observe"));
+        let codex = worker_brief(&operator, "", "");
+        assert!(codex.contains("call tools.mcp__computer__observe({window})"));
+        assert!(codex.contains("actions: [{do: \"set_value\""));
         // Other kinds hear none of it.
         let lead = worker_brief(&task("claude", Some("lead")), "", "");
         assert!(!lead.contains("How to operate"));

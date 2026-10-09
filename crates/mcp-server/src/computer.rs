@@ -143,11 +143,26 @@ pub fn tools() -> Vec<Tool> {
     ]
 }
 
+/// A well-formed call of each tool, added to an argument error. A model calling the tools from
+/// code may not see their schemas, and serde names one missing field at a time: measured
+/// 2026-10-09, a Codex worker spent 7 of a task's 11 model calls guessing `act`'s fields.
+fn example(name: &str) -> &'static str {
+    match name {
+        "launch" => r#"{"app": "TextEdit"} or {"open": "/path/to/file"}"#,
+        "observe" => r#"{"window": 1234, "screenshot": "always"}"#,
+        "act" => {
+            r#"{"window": 1234, "actions": [{"do": "set_value", "ref": "e18", "text": "37", "expect": {"is": "value_equals", "ref": "e18", "text": "37"}}, {"do": "click", "ref": "e5", "expect": {"is": "checked", "ref": "e5", "on": true}}, {"do": "click", "image": "i2", "x": 410, "y": 96}]}"#
+        }
+        "zoom" => r#"{"image": "i3", "region": [100, 80, 300, 180]}"#,
+        _ => "",
+    }
+}
+
 /// Maps a `tools/call` onto a [`ComputerCall`].
 pub fn parse(name: &str, arguments: Value) -> Result<ToolCall, ParseError> {
     let bad = |err: serde_json::Error| ParseError::BadArguments {
         tool: name.to_owned(),
-        reason: err.to_string(),
+        reason: format!("{err}. A well-formed call: {}", example(name)),
     };
     let call = match name {
         "apps" => ComputerCall::Apps,
@@ -192,5 +207,22 @@ mod tests {
             parse("act", json!({"window": 1, "actions": [{"do": "fly"}]})),
             Err(ParseError::BadArguments { .. })
         ));
+    }
+
+    #[test]
+    fn an_argument_error_shows_a_call_that_parses() {
+        for name in ["observe", "act", "zoom"] {
+            let Err(err) = parse(name, json!({"windowId": 4})) else {
+                panic!("{name} took a wrong argument");
+            };
+            let text = err.to_string();
+            let shown = text.split("A well-formed call: ").nth(1).unwrap();
+            let example: Value = serde_json::from_str(shown).unwrap();
+            assert!(parse(name, example).is_ok(), "{name}'s example: {shown}");
+        }
+        let Err(err) = parse("launch", json!({"app": 4})) else {
+            panic!("launch took a number");
+        };
+        assert!(err.to_string().contains(r#"{"app": "TextEdit"}"#));
     }
 }
