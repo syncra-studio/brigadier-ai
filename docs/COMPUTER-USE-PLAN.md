@@ -906,7 +906,11 @@ inherited grants**, not the helper bundle's own)
     edit;
   - chords with ⌘ or ⌃ go under synthetic activation, because inactive apps ignore menu shortcuts;
   - a menu item a background app shows as disabled is reached through its own shortcut;
-  - a `checked` expect on a row, tab or cell reads its selection.
+  - a `checked` expect on a row, tab or cell reads its selection;
+  - an `observe` that asks for a screenshot starts the capture before it reads the tree. An app in the background
+    answers its first accessibility read after a pause of 60 ms or more in about 25 ms instead of 6.5 ms. That cost
+    showed once the fixtures opened behind other windows, and it put S2 at 77.3 ms against ≤ 70. With the capture
+    and the read overlapped, S2 is under 70 again (Results).
 - **Pulled forward from Phase 5 (deviation, ruled by the Delegator): windows on other Spaces.** With the user in a
   full-screen app, every other window is off screen, and accessibility lists only the current Space's windows. The
   engine now also reads the app's `AXMainWindow` and `AXFocusedWindow`, which are given wherever they are. Failing
@@ -918,6 +922,76 @@ inherited grants**, not the helper bundle's own)
   fixture exec'd while the terminal was frontmost took the front.
 - **Signals are checked:** before the suite or the bench signals a pid, its start time and binary must still match
   what was recorded at launch.
+
+**Results** (2026-10-09; the helper spawned from a terminal, so with **the terminal's inherited grants**, not the
+helper bundle's own; a person was using the Mac during every run from about 11:30; evidence:
+`docs/evidence/2026-10-09-computer-use-phase4.md`)
+- **The suite, 3 runs per provider: PARTLY DONE.** Claude (Opus, effort medium): 20/20, 20/20, 17/18. Codex
+  (gpt-6.1-sol, effort medium): 20/20, 18/18, 18/18. Six dev trials didn't run (the two dev-build tasks in Codex
+  runs 2 and 3 and Claude run 3), because the dev build's window had been closed and every way to reopen it brings
+  the app to the front. The one failure is Claude run 3's menu trial: the worker read "Pick Targets" as the menu's
+  name and read the menu bar through a script, which the shortcut audit fails. The task's wording was fixed; a
+  menu-only check with the new wording passed in 1 batch and 3 calls.
+- **E1: MISSED as written.** Median model calls per task over its reference batches, pooled: Claude 4.0, Codex 8.0,
+  against ≤ 1.3. Per run: Claude 4.0, 5.0, 4.5; Codex 10.0, 10.0 and 6.0. Run 3 had argument errors that show a
+  well-formed call, and the call shapes were in the Codex brief. The gate counts calls the reference doesn't make: a
+  worker's one look before it acts and its one report after are 2 calls a script never needs. Measured against
+  reference + 2 (proposed, not adopted: the user decides), the medians are Claude 1.0 and Codex 2.25 (1.75 in run 3).
+- **P3: PASS.** On the router's Claude pick (Opus, effort medium; the cheapest image-capable model it would choose
+  for Operate), 50/50 trials at 8, 12, 16 and 24 pt, with no wrong targets and no misses. The largest error was
+  1.4 pt, and the Wilson lower bound per size is 0.929. That is an empirical pass, not a statistical proof of ≥ 98%.
+  Each size took 13 calls and about 51 s.
+- **Usage per completed task: REPORTED.** Pooled per provider, worker tokens (uncached input / cache read / cache
+  write / output): Claude 12 / 115,913 / 8,137 / 1,106; Codex 22,133 / 136,087 / 0 / 724. The thread that delegated
+  each trial adds about 8 / 136,506 / 1,547 / 377 for Claude and 6 / 104,842 / 1,291 / 346 for Codex. Median wall
+  time per trial: Claude 18.1 s, Codex 51.2 s.
+- **Live handoff: PASS.** A plain seven-step GUI request, worded as a user would, in a new dev session was delegated
+  as `kind: "operate"`. The router picked Codex at effort medium. The task was done in 114 s, and the whole request's
+  end state checks out from the fixture's own log.
+- **F1 during the suite:** 0 front changes caused by the suite in five runs. In Codex run 2, the rule counted 1: the
+  front changed 1.0 s after a failed type. But the person's own window changes were happening just before it, and
+  macOS gave the front to our topmost window. Fixtures now open behind every other window, which removes that path.
+- **Registry:** `strengths.operate` is seeded for the two models measured: Opus 9, gpt-6.1-sol 8.5. The others stay
+  unrated.
+- **Comparisons: NOT RUN.** None of the other installed computer-use tools could run tonight. Tool A's runtime was
+  off; turning it back on is a setting only the user can change. Tool B (Codex's built-in computer use) and tool C
+  need a plugin install, a login or Screen Recording and Accessibility grants, which nobody could give.
+- **Bench** (`bench --no-foreground`, which skips P2f, the one step that raises a window):
+  - **Before the fix:** the full bench on `deceff7c` (200 repetitions, 1209 s) passed every gate but S2, at 77.3 / 86.3 ms
+    against ≤ 70 / ≤ 120. That is the background read cost found above. The others: S1 6.5 / 7.8, S3 set value 4.3 / 23.8,
+    menu-bar pick 5.2 / 10.7, pop-up 370.1 / 379.5, press 4.2 / 6.9, S4 14.8 / 39.0, S5 3.3 / 16.7 ms; SEL 20/20, P1 and
+    P2 1600/1600 (worst 0.00 pt), P2r 200/200, P4 0, F1 0.
+  - **After the overlap:** the quick bench (20 repetitions) passes every gate, with S2 at 49.9 / 53.5 ms.
+  - **Cut short:** the full bench after the overlap was stopped after 16 minutes, at the person's request. They saw
+    the fixture flicker (open issue below). The bench writes its timings at the end, so that run has none. Its
+    fixture log shows it had finished P1 and S3 and was almost through P2. The full bench runs only when the Mac is
+    free.
+
+**Not done or open**
+- **E1's gate.** Either keep it and cut calls (one look and one report are the floor for a worker that has to say
+  what it saw), or adopt reference + 2. The user decides.
+- **The six dev trials**, once the dev build's window is open again.
+- **The comparisons**, once tools A–C are turned on and granted.
+- **The helper bundle's own grants.** Every live run used the terminal's inherited grants.
+- **A window on another Space that no accessibility client has reached yet** can't be found by remote token. It is
+  found once its app is touched, or when it is the main or focused window.
+- **WebKit's first contact** can give a partial tree until `AXEnhancedUserInterface` or `AXManualAccessibility`
+  takes effect; a second read is complete.
+- **Contention between terminal-granted processes:** the helper lives as long as its daemon, by design, so a second
+  terminal-granted process's capture times out while it lives (Phase 3, above). It bites only in development.
+- **`launch` puts the new window on top.** An app a worker launches opens over the user's windows, though without
+  keeping the front: it opens in the background, and gives the front back if the app takes it. Only the suite's
+  fixtures open at the back.
+- **A background pointer action makes the target window flash.** A pixel click or drag, a ⌘/⌃ shortcut, or a menu
+  item reached through its shortcut runs under synthetic activation when the app is in the background. The app is told it is active and its window key, then told
+  it is inactive again once the action's events are queued. The window redraws in its active look and back: one flash
+  per action. A suite task shows 1–3 flashes. The full bench, with about 2,400 such clicks in a row, made the
+  fixture flicker without a pause; its log holds 766 activations in 16 minutes. The front app, the cursor and the
+  key window never change (F1 0). **The fix:** hold one activation per batch and window, and release it when the
+  batch ends. Skip the release if the app has meanwhile become the user's front app, because a defocus would then
+  deactivate the user's own app. It needs a live check on a window nobody is looking at, so it isn't done yet.
+- **Quota steers Operate to Codex.** With Claude's 5-hour window projected high, the router picks Codex for Operate.
+  That is by design, but Codex took about twice as many calls and 2.8× the wall time per trial.
 
 ### Phase 5: Browsers and hard surfaces
 
