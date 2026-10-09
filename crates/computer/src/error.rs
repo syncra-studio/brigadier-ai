@@ -55,12 +55,14 @@ impl ErrorCode {
     /// What the caller should do next.
     pub fn next_step(self) -> &'static str {
         match self {
-            Self::StaleRef => "observe again; that element changed or is gone",
+            Self::StaleRef => {
+                "that element changed or is gone: observe again (only the changes come back) and use its new ref"
+            }
             Self::StaleGeometry => {
                 "observe again with a screenshot; the window changed size since that image"
             }
             Self::Invalidated => {
-                "observe again; an earlier action changed the window, so later targets are gone"
+                "an earlier action changed the window, so the rest was skipped: read the changes in this reply, or observe, then send the rest with the new refs"
             }
             Self::Occluded => {
                 "the window can't be reached where it is; use an element action instead"
@@ -74,11 +76,15 @@ impl ErrorCode {
             }
             Self::Blocked => "that app or window is off limits to workers",
             Self::Busy => "another worker is using that window; wait or pick another",
-            Self::NotSettable => "that element can't take a value; click or type instead",
-            Self::NoSuchAction => {
-                "the element doesn't list that action; observe shows the ones it has"
+            Self::NotSettable => {
+                r#"that element can't take that value: click it, or type into it, e.g. {"do": "type", "ref": "e5", "text": "37"}"#
             }
-            Self::NoSuchTarget => "no such app, window, element or image; check the id",
+            Self::NoSuchAction => {
+                r#"the element doesn't list that action: use one its line shows, or {"do": "click", "ref": "e5"}"#
+            }
+            Self::NoSuchTarget => {
+                "no such app, window, element or image: window ids come from apps or launch (1234), refs from your last observe (e5), images from observe or zoom (i3)"
+            }
             Self::AppNotResponding => "the app isn't answering; wait and observe again",
             Self::Deadline => "the request ran out of time; observe to see where it stopped",
             Self::PermissionMissing => {
@@ -86,8 +92,10 @@ impl ErrorCode {
             }
             Self::StoppedByUser => "the user stopped computer use; don't retry unless asked",
             Self::Cancelled => "the request was cancelled",
-            Self::BadRequest => "fix the arguments and call again",
-            Self::Failed => "observe again before retrying",
+            Self::BadRequest => "fix what the detail names and call again",
+            Self::Failed => {
+                "the window's changes in this reply show where it is now: fix the step from them, observing again only if they don't say enough"
+            }
         }
     }
 }

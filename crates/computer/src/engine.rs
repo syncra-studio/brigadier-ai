@@ -852,7 +852,7 @@ impl<D: Desktop> Engine<D> {
         self.desktop.end_batch();
         drop(guard);
         self.name_apps(first_record);
-        let mut text = render_results(&results);
+        let mut text = batch_verdict(&req.actions, &results) + &render_results(&results);
         let aims: Vec<(Point, Option<Rect>)> = self.records[first_record..]
             .iter()
             .filter_map(|r| Some((r.point?, r.element_box)))
@@ -1745,6 +1745,72 @@ pub fn render_results(results: &[ActionResult]) -> String {
         out.push('\n');
     }
     out
+}
+
+/// The batch in one line, ahead of its results: whether every action ran and every expect
+/// held, so a worker reads its check from the reply instead of observing again (E1: a worker
+/// that re-observed to verify spent a model call a task).
+pub fn batch_verdict(actions: &[Action], results: &[ActionResult]) -> String {
+    let expects = |rs: &[ActionResult]| {
+        rs.iter()
+            .filter(|r| {
+                actions
+                    .get(r.index)
+                    .is_some_and(|a| a.expect().is_some() && !matches!(a, Action::Wait { .. }))
+            })
+            .count()
+    };
+    let plural =
+        |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    if let Some(failed) = results.iter().find(|r| r.status != Status::Done) {
+        let skipped = results
+            .iter()
+            .filter(|r| r.status == Status::Skipped)
+            .count();
+        let rest = if skipped > 0 && failed.status == Status::Failed {
+            format!(
+                ", so {} skipped",
+                plural(skipped, "later action was", "later actions were")
+            )
+        } else {
+            String::new()
+        };
+        return format!(
+            "Action {} ({}) {}{rest}; the actions before it ran. The window's changes below show where it is now.\n",
+            failed.index + 1,
+            failed.action,
+            match failed.status {
+                Status::Skipped => "was skipped",
+                _ => "failed",
+            },
+        );
+    }
+    let held = expects(results);
+    let unchecked = results
+        .iter()
+        .filter(|r| {
+            r.effect != Some(Effect::Confirmed)
+                && actions.get(r.index).is_some_and(|a| a.expect().is_none())
+        })
+        .count();
+    let mut line = format!("All {} done", plural(results.len(), "action", "actions"));
+    if held > 0 {
+        line.push_str(&format!("; {} held", plural(held, "expect", "expects")));
+    }
+    if unchecked > 0 {
+        line.push_str(&format!(
+            "; {} no expect and no confirmed effect: read {} in the changes below",
+            plural(unchecked, "action has", "actions have"),
+            if unchecked == 1 {
+                "its effect"
+            } else {
+                "their effects"
+            }
+        ));
+    } else {
+        line.push_str(": no need to observe again to check them");
+    }
+    line + ".\n"
 }
 
 /// Pointer events reach a window only while it is ordered in: not minimised, its app not
@@ -3316,6 +3382,68 @@ mod tests {
         assert_eq!(
             e.desktop.node_mut(4).value.as_deref(),
             Some("Quarterly report")
+        );
+    }
+
+    #[test]
+    fn a_batch_says_in_one_line_whether_it_is_proven() {
+        let click = |expect: bool| Action::Click {
+            target: Target {
+                r#ref: Some("e5".into()),
+                ..Default::default()
+            },
+            button: Default::default(),
+            count: 1,
+            modifiers: Vec::new(),
+            expect: expect.then(|| Expect::Checked {
+                r#ref: "e5".into(),
+                on: true,
+            }),
+        };
+        let result = |index: usize, status: Status, effect: Effect| ActionResult {
+            index,
+            action: "click".into(),
+            status,
+            delivered: None,
+            settled: true,
+            effect: Some(effect),
+            error: None,
+            timings: Timings::default(),
+            notes: Vec::new(),
+        };
+        let held = batch_verdict(
+            &[click(true), click(true)],
+            &[
+                result(0, Status::Done, Effect::Confirmed),
+                result(1, Status::Done, Effect::Confirmed),
+            ],
+        );
+        assert_eq!(
+            held,
+            "All 2 actions done; 2 expects held: no need to observe again to check them.\n"
+        );
+        let unchecked = batch_verdict(
+            &[click(true), click(false)],
+            &[
+                result(0, Status::Done, Effect::Confirmed),
+                result(1, Status::Done, Effect::Unverified),
+            ],
+        );
+        assert!(
+            unchecked.contains("1 action has no expect and no confirmed effect"),
+            "{unchecked}"
+        );
+        let failed = batch_verdict(
+            &[click(true), click(true), click(true)],
+            &[
+                result(0, Status::Done, Effect::Confirmed),
+                result(1, Status::Failed, Effect::NoChange),
+                result(2, Status::Skipped, Effect::NoChange),
+            ],
+        );
+        assert!(
+            failed.starts_with("Action 2 (click) failed, so 1 later action was skipped"),
+            "{failed}"
         );
     }
 }

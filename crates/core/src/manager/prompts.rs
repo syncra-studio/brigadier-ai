@@ -770,15 +770,16 @@ The task:
 /// An operate worker's target, end state and habits (COMPUTER-USE-PLAN.md §4.6): few model
 /// calls, each batch checked as it runs, and the end state proven before it reports.
 fn operate_rules(task: &Task) -> String {
-    // Codex calls tools from code without their schemas: told their names and shapes, it skips a
-    // model call listing them and the calls that guess argument names one error at a time.
+    // Codex calls tools from code without their schemas: told their names and complete shapes,
+    // it skips the calls that list them and the ones that guess argument names one error at a
+    // time, and it can act and report in one exec (measured 2026-10-09: 29 of a run's 128 calls).
     let tools = if task.route.choice.provider == ProviderKind::Codex {
-        "\n- In code, call tools.mcp__computer__observe({window}), tools.mcp__computer__act({window, actions: [{do: \"set_value\", ref: \"e18\", text: \"37\", expect: {is: \"value_equals\", ref: \"e18\", text: \"37\"}}, {do: \"click\", ref: \"e5\"}]}) and tools.mcp__computer__zoom({image, region: [x0, y0, x1, y1]}), and report with tools.mcp__brigadier__submit_report: no need to list the tools first."
+        "\n- Call the tools from code with these shapes. They are complete: don't list ALL_TOOLS or print a schema. tools.mcp__computer__observe({window}); tools.mcp__computer__act({window, actions: [{do: \"set_value\", ref: \"e18\", text: \"37\", expect: {is: \"value_equals\", ref: \"e18\", text: \"37\"}}, {do: \"click\", ref: \"e5\", expect: {is: \"checked\", ref: \"e5\", on: true}}, {do: \"key\", key: \"cmd+s\"}, {do: \"menu\", path: [\"File\", \"Save\"]}]}); tools.mcp__computer__zoom({image: \"i3\", region: [x0, y0, x1, y1]}); tools.mcp__brigadier__submit_report({summary: \"...\", verification: \"...\", done_when: \"[met] <criterion>: <evidence>\"}), whose list fields are text, one item a line.\n- One exec may make several calls. When the act's expects will prove the end state, act and report in the same exec: submit_report only if the act's text has no \"failed\" or \"skipped\" line, else print the act's text."
     } else {
         ""
     };
     format!(
-        "\n\nTarget: {target}\nEnd state: {end_state}\n\nHow to operate:{tools}\n- Use only the computer tools and the files and apps this task names. Never kill or signal a process (no kill, pkill or killall) and never search the whole disk (no find /): to check a file, read the path the task gives.\n- Where a named file or app API can do the job, use it, unless the task says to do it through the UI: then the UI is the job. Read structure (observe's refs) before pixels.\n- Batch the steps you are sure of in one act, and put an expect on every step that changes state. Read the changes act returns instead of observing again.\n- Zoom before clicking a small target by its pixels.\n- Never act on a window the task didn't name or you didn't launch.\n- Finish by checking the end state: an expect that held, or an observe. Report what you did, whether the end state is verified and how, and anything refused or blocked.",
+        "\n\nTarget: {target}\nEnd state: {end_state}\n\nHow to operate (every model call counts, so use few):{tools}\n- Use only the computer tools and the files and apps this task names. Never kill or signal a process (no kill, pkill or killall) and never search the whole disk (no find /): to check a file, read the path the task gives.\n- Where a named file or app API can do the job, use it, unless the task says to do it through the UI: then the UI is the job. Read structure (observe's refs) before pixels.\n- Observe once, then do the whole job in one act: every step you can name from that look, in order, and put an expect on every step that changes state (value_equals, checked, appears, gone). Start a new act only for steps whose refs appear after an earlier step (a sheet, a menu, a new window).\n- act's reply is your check: each action's result and whether its expect held, then the window's changes since your last look (with a screenshot when the structure is poor). Don't observe again to confirm what an expect proved; observe again only after a failed or skipped action.\n- Zoom before clicking a small target by its pixels.\n- Never act on a window the task didn't name or you didn't launch.\n- As soon as the end state is proven (expects that held, or the one file read the task names), call submit_report: what you did, whether the end state is verified and how, and anything refused or blocked. Then end with one line.",
         target = task.target.as_deref().unwrap_or("(named in the task)"),
         end_state = task.end_state.as_deref().unwrap_or("(named in the task)"),
     )
@@ -1087,6 +1088,10 @@ mod tests {
             )
         );
         assert!(brief.contains("put an expect on every step that changes state"));
+        // Few calls: one look, one batch, the batch's reply as the check, then the report.
+        assert!(brief.contains("Observe once, then do the whole job in one act"));
+        assert!(brief.contains("Don't observe again to confirm what an expect proved"));
+        assert!(brief.contains("As soon as the end state is proven"));
         assert!(brief.contains("whether the end state is verified and how"));
         // A trial once ran `find /` and `pkill`: the brief rules both out in plain words.
         assert!(
@@ -1099,8 +1104,12 @@ mod tests {
         assert!(!brief.contains("tools.mcp__computer__act"));
         operator.route.choice.provider = ProviderKind::Codex;
         let codex = worker_brief(&operator, "", "");
-        assert!(codex.contains("call tools.mcp__computer__observe({window})"));
+        assert!(codex.contains("tools.mcp__computer__observe({window})"));
         assert!(codex.contains("actions: [{do: \"set_value\""));
+        // The report's shape too, so it never lists the tools or guesses the report.
+        assert!(codex.contains("They are complete: don't list ALL_TOOLS"));
+        assert!(codex.contains("tools.mcp__brigadier__submit_report({summary:"));
+        assert!(codex.contains("act and report in the same exec"));
         // Other kinds hear none of it.
         let lead = worker_brief(&task("claude", Some("lead")), "", "");
         assert!(!lead.contains("How to operate"));
