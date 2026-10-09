@@ -1177,7 +1177,7 @@ async fn a_stop_during_a_hand_over_ends_the_request_and_nothing_goes_on_its_own(
             Some(Setup::Chat { model }) => model.account.as_deref() == Some("acct-b"),
             _ => false,
         };
-        moved && !conv.is_busy().await
+        moved && !conv.is_busy().await && idle(&flow, &chat).await
     })
     .await;
     assert_eq!(seen(&log).len(), 1, "{:#?}", seen(&log));
@@ -1193,6 +1193,90 @@ async fn a_stop_during_a_hand_over_ends_the_request_and_nothing_goes_on_its_own(
     let turns = seen(&log);
     assert_eq!(turns.len(), 2, "{turns:#?}");
     assert_eq!(turns[1].account.as_deref(), Some("acct-b"));
+    flow.stop().await;
+}
+
+/// The same Stop while a limited turn is handed over to a stand-in model: nothing goes there
+/// on its own, and the chat no longer shows working.
+#[tokio::test]
+async fn a_stop_during_a_hand_over_to_a_stand_in_ends_the_request() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-hand-over-stop-stand-in",
+        Options::default(),
+        logging(&log, |turn| match turn.provider {
+            ProviderKind::Claude => Reply::limited(),
+            ProviderKind::Codex => Reply::text("Done on Codex."),
+        }),
+    )
+    .await;
+    let chat = chat_on(&flow, ProviderKind::Claude, None).await;
+    let (reached, release) = hold_hand_over(&flow, &chat);
+    send(&flow, &chat, "First.").await;
+    reached.notified().await;
+    flow.manager.interrupt(chat.clone()).await.unwrap();
+    release.notify_one();
+    let conv = flow.manager.conv(&chat).unwrap();
+    super::eventually_async("the hand-over to end", || async {
+        flow.core.conversation(&chat).unwrap().fallback.is_some()
+            && !conv.is_busy().await
+            && idle(&flow, &chat).await
+    })
+    .await;
+    assert_eq!(seen(&log).len(), 1, "{:#?}", seen(&log));
+    assert_eq!(
+        request_states(&flow, &chat).await,
+        vec![("First.".to_owned(), RequestState::Stopped)]
+    );
+    flow.stop().await;
+}
+
+/// Whether `chat` no longer shows working.
+async fn idle(flow: &Flow, chat: &ConversationId) -> bool {
+    flow.core.board(chat).await.unwrap().run == crate::work::RunState::Idle
+}
+
+/// The same Stop while a limited turn would wait for quota (no other account or model can take
+/// it): nothing waits, and a Resume sent before the hand-over ended goes on its own.
+#[tokio::test]
+async fn a_resume_after_a_stop_during_a_quota_hand_over_goes() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-hand-over-stop-wait",
+        Options::default(),
+        logging(&log, |turn| {
+            if turn.input.contains("asked you to resume") {
+                Reply::text("Done.")
+            } else {
+                Reply::limited()
+            }
+        }),
+    )
+    .await;
+    // Codex at its limit too: nothing can stand in.
+    let hour = brigadier_providers::LimitHit {
+        kind: brigadier_providers::LimitKind::UsageWindow,
+        window: Some("five_hour".into()),
+        resets_at_ms: Some(crate::now_ms() + 60 * 60 * 1000),
+    };
+    flow.manager
+        .runtime
+        .note_limit(&crate::accounts::AccountRef::own(ProviderKind::Codex), hour)
+        .await;
+    let chat = chat_on(&flow, ProviderKind::Claude, None).await;
+    let (reached, release) = hold_hand_over(&flow, &chat);
+    send(&flow, &chat, "First.").await;
+    reached.notified().await;
+    flow.manager.interrupt(chat.clone()).await.unwrap();
+    flow.manager.resume(chat.clone()).await.unwrap();
+    release.notify_one();
+    super::eventually_async("the resumed request done", || async {
+        request_states(&flow, &chat).await == vec![("First.".to_owned(), RequestState::Done)]
+    })
+    .await;
+    let turns = seen(&log);
+    assert_eq!(turns.len(), 2, "{turns:#?}");
+    assert_eq!(turns[1].provider, ProviderKind::Claude, "{turns:#?}");
     flow.stop().await;
 }
 

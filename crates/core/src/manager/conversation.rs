@@ -3206,10 +3206,16 @@ impl SessionManager {
                 Err(waiting) => {
                     // Its own model's reset frees the messages too.
                     if let Some(waiting) = with_own_reset(waiting, &cli.model, &limit) {
-                        self.wait_for_model(conv, &cli.model, waiting, carried, served)
+                        let waits = self
+                            .wait_for_model(conv, &cli.model, waiting, carried, served)
                             .await;
                         self.set_run(&conv.id, RunState::Idle, None).await;
                         self.settle_requests(&conv.id).await;
+                        // Stopped meanwhile: what the user sent since (a Resume, a message)
+                        // goes now.
+                        if !waits {
+                            self.kick(conv);
+                        }
                         return;
                     }
                 }
@@ -3506,17 +3512,23 @@ impl SessionManager {
         if let Err(err) = self.core.set_fallback(&conv.id, Some(fallback)).await {
             tracing::warn!(conversation = %conv.id, error = %err, "could not record the stand-in model");
         }
-        {
+        let stopped = {
             let mut state = conv.state.lock().await;
             // A new session, not an old one of that vendor, briefed from the transcript.
             state.fresh = true;
             state.reseed = true;
             // Stopped meanwhile: its messages stay in the transcript, as a stopped turn's do.
-            if !state.hand_over.take().is_some_and(|over| over.stopped) {
+            let stopped = state.hand_over.take().is_some_and(|over| over.stopped);
+            if !stopped {
                 let mut pending = carried;
                 pending.append(&mut state.pending);
                 state.pending = pending;
             }
+            stopped
+        };
+        // Stopped meanwhile: its turn is over, as a stopped turn's is (else the next one runs).
+        if stopped {
+            self.set_run(&conv.id, RunState::Idle, None).await;
         }
         self.kick(conv);
     }
@@ -3550,10 +3562,11 @@ impl SessionManager {
         if let Err(err) = self.run_on_account(&conv.id, &cli.model, &next).await {
             tracing::warn!(conversation = %conv.id, error = %err, "could not record the account it moved to");
         }
-        {
+        let stopped = {
             let mut state = conv.state.lock().await;
             // Stopped meanwhile: its messages stay in the transcript, as a stopped turn's do.
-            if !state.hand_over.take().is_some_and(|over| over.stopped) {
+            let stopped = state.hand_over.take().is_some_and(|over| over.stopped);
+            if !stopped {
                 if landed {
                     state.continuing = carried.iter().map(|message| message.id.clone()).collect();
                 }
@@ -3561,6 +3574,11 @@ impl SessionManager {
                 pending.append(&mut state.pending);
                 state.pending = pending;
             }
+            stopped
+        };
+        // Stopped meanwhile: its turn is over, as a stopped turn's is (else the next one runs).
+        if stopped {
+            self.set_run(&conv.id, RunState::Idle, None).await;
         }
         self.kick(conv);
     }
@@ -3592,7 +3610,8 @@ impl SessionManager {
     /// A conversation's model hit its limit and no model it may use can stand in: its messages
     /// (`carried`, the failed turn's own) wait in `pending` and go on their own once a model
     /// can take them: at the reset, when the user changes their routing, or when a provider's
-    /// state changes ([`Self::retry_conversation`]).
+    /// state changes ([`Self::retry_conversation`]). Whether they wait (not once the user
+    /// stopped the turn).
     async fn wait_for_model(
         &self,
         conv: &Arc<ConvLive>,
@@ -3600,12 +3619,12 @@ impl SessionManager {
         waiting: brigadier_router::Waiting,
         carried: Vec<Message>,
         served: Option<String>,
-    ) {
+    ) -> bool {
         let first = {
             let mut state = conv.state.lock().await;
             // The user stopped the limited turn while its hand-over was chosen: nothing waits.
             if state.hand_over.take().is_some_and(|over| over.stopped) {
-                return;
+                return false;
             }
             state.waited_model = Some(from.clone());
             let mut pending = carried;
@@ -3630,6 +3649,7 @@ impl SessionManager {
             .await;
         }
         self.keep_conversation_waiting(conv, waiting).await;
+        true
     }
 
     /// Records what a waiting conversation waits for (when that changed) and sets the timer
