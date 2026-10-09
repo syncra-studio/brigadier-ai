@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use crate::geom::Provider;
 pub use crate::wire::{Answer, Gone};
 use crate::wire::{
-    Event, Hello, HelperFrame, Op, PROTOCOL, Policy, Reply, Request, read_frame, write_frame,
+    Event, Hello, HelperFrame, Op, PROTOCOL, Policy, Request, read_frame, write_frame,
 };
 
 type Waiter = Box<dyn FnOnce(Result<Answer, Gone>) + Send>;
