@@ -60,13 +60,14 @@ impl ActionRecord {
         // Typed text is not kept in the record: it may be anything the worker was given. A
         // value predicate usually repeats it, so its text goes too.
         let mut action = action.clone();
+        let mut kept_out = Vec::new();
         if let Action::Type { text, .. } | Action::SetValue { text, .. } = &mut action {
-            *text = chars(text);
+            kept_out.push(std::mem::replace(text, chars(text)));
         }
         if let Some(Expect::ValueEquals { text, .. } | Expect::ValueContains { text, .. }) =
             action.expect_mut()
         {
-            *text = chars(text);
+            kept_out.push(std::mem::replace(text, chars(text)));
         }
         Self {
             at_ms,
@@ -86,7 +87,7 @@ impl ActionRecord {
                 .error
                 .as_ref()
                 .filter(|e| e.code != ErrorCode::NotSettable)
-                .map(|e| e.detail.clone()),
+                .map(|e| without(&e.detail, &kept_out)),
             timings: r.timings,
             user_focus_kept,
             point: None,
@@ -97,4 +98,35 @@ impl ActionRecord {
 
 fn chars(text: &str) -> String {
     format!("<{} chars>", text.chars().count())
+}
+
+/// The error's detail with any of the action's kept-out texts replaced by their length: an error
+/// may quote what it was given (`"abc" is not a number`).
+fn without(detail: &str, kept_out: &[String]) -> String {
+    let mut d = detail.to_owned();
+    for t in kept_out.iter().filter(|t| !t.is_empty()) {
+        d = d
+            .replace(&format!("{t:?}"), &chars(t))
+            .replace(t.as_str(), &chars(t));
+    }
+    d
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_error_quoting_the_given_text_keeps_only_its_length() {
+        let kept_out = vec!["s3cret".to_owned()];
+        assert_eq!(
+            without("\"s3cret\" is not a number", &kept_out),
+            "<6 chars> is not a number"
+        );
+        assert_eq!(
+            without("no s3cret here, s3cret", &kept_out),
+            "no <6 chars> here, <6 chars>"
+        );
+        assert_eq!(without("the field is gone", &[]), "the field is gone");
+    }
 }
