@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 use crate::action::Status;
+use crate::error::ErrorCode;
 use crate::record::ActionRecord;
 use crate::suite::{Event, Prepared, Setup, Task, Verdict};
 
@@ -101,8 +102,11 @@ fn presses<'a>(events: &'a [Event], id: &str) -> Vec<&'a Event> {
         .collect()
 }
 
+/// Delivered to the app, as the main suite counts it (`suite.rs`): done, or sent and then only
+/// the worker's own expectation unmet (the press happened; the app showed something else).
 fn acted(r: &ActionRecord) -> bool {
     r.status == Status::Done
+        || (r.status == Status::Failed && r.rung.is_some() && r.error == Some(ErrorCode::Failed))
 }
 
 fn names(r: &ActionRecord, words: &str) -> bool {
@@ -260,7 +264,7 @@ pub fn check(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::ErrorCode;
+    use crate::action::Rung;
     use crate::record::ActionRecord;
 
     fn ev(id: &str, ev: &str, v: Option<&str>) -> Event {
@@ -359,6 +363,25 @@ mod tests {
         let v = check(&p, &good, &elsewhere, &BTreeMap::new(), None).unwrap();
         assert!(!v.pass);
         assert!(v.notes.iter().any(|n| n.contains("another app")));
+    }
+
+    #[test]
+    fn a_press_sent_whose_expectation_went_unmet_still_counts_as_the_tools() {
+        let p = prep("catalyst-order");
+        let good = [ev("place-order", "press", Some("4|gift wrap"))];
+        // The worker expected the status line to go; the app rewrote it instead.
+        let mut sent = rec(7, 70, "button \"Place Order\"", Status::Failed);
+        sent.rung = Some(Rung::Element);
+        let v = check(&p, &good, &[sent.clone()], &BTreeMap::new(), None).unwrap();
+        assert!(v.pass, "{:?}", v.notes);
+        // Refused before it was sent: not the tool's doing.
+        sent.rung = None;
+        sent.error = Some(ErrorCode::StaleRef);
+        assert!(
+            !check(&p, &good, &[sent], &BTreeMap::new(), None)
+                .unwrap()
+                .pass
+        );
     }
 
     #[test]
