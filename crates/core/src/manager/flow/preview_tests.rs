@@ -124,7 +124,10 @@ async fn start(flow: &Flow, pids: &Path) -> (Preview, u32) {
     flow.say(&format!("start {}", server(pids))).await;
     let board = flow
         .until("the preview to run", |board| {
-            board.previews.len() > before && pids.exists() && !running(board).is_empty()
+            // The shell makes the file before it writes the pid in.
+            board.previews.len() > before
+                && std::fs::read_to_string(pids).is_ok_and(|pid| !pid.trim().is_empty())
+                && !running(board).is_empty()
         })
         .await;
     let preview = running(&board).pop().unwrap();
