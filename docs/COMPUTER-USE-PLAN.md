@@ -275,6 +275,7 @@ e1 window "scratch.txt"                       @0,0 656x422
 | `drag` | from and to, each `ref` or point |
 | `perform` | `ref`, an accessibility action the element lists (show menu, increment, confirm…) |
 | `menu` | a path in the app's menu bar, e.g. `["File", "Save As…"]` |
+| `select` | `ref`, `start`, `length` in characters: sets the selected text range, so a `type` replaces it |
 | `wait` | an `expect` predicate and a timeout |
 
 Each action may carry `expect` (an element's value equals or contains, an element appears or goes away, the window
@@ -389,8 +390,9 @@ The descriptions carry the house rule in two lines: use code, files and app APIs
 
 ### 4.7 Cancellation and deadlines
 
-- Every request has a deadline for the whole request (30 s plus the time its `wait` actions ask for, each up to
-  300 s), separate from the 1 s per-call accessibility timeout.
+- Every request has a deadline for the whole request (30 s plus the time its `wait` actions ask for, together at
+  most 300 s, so no batch runs past 330 s; a batch asking for more is refused with `bad_request`), separate from the
+  1 s per-call accessibility timeout. The MCP tool timeout is 360 s, above that with room for the transport.
 - The engine keeps a cancellation generation per session and a global one. Stop, a cancelled MCP request, a worker
   that ends, or a closed connection bumps it. Every action checks it before it starts, and long sequences (typing,
   drags, scroll runs, waits) check it between events.
@@ -566,6 +568,52 @@ background route avoids it. Ruled by the Delegator on 2026-10-09: pop-up picks h
 - `ComputerBroker`: grants by permission level (§5), leases, global stop, action log into the blob store.
 - The `computer` MCP server for Claude and Codex workers, with image blocks; the CLI through the daemon.
 
+**How it is built** (outline reviewed by Codex and ruled by the Delegator, 2026-10-09)
+- **Crate split.** `crates/computer` gets an `engine` feature (on by default) for the backend and its objc2
+  dependencies. brigadierd depends on the crate with `default-features = false`: the request types and the helper
+  client only, no AppKit in the daemon.
+- **The helper process.** Its main thread runs AppKit as an accessory app: the menu-bar Stop item and the ⌃⌥⌘.
+  hotkey. The engine runs on its own thread and starts lazily, so the control service (permissions, permission
+  requests, stop) answers before any grant exists and onboarding is reachable. Each request has an id; a separate
+  control path cancels a request by id or everything, and answers while the engine is busy. A Stop from the menu or
+  the hotkey is pushed to the broker, which revokes every lease. The helper accepts only its parent daemon
+  (`LOCAL_PEERPID` against `--parent`, plus the per-launch token), and in signed builds the same-team signature
+  check (§4.2). It exits when its parent dies, and 10 minutes after the last session ends (not the last request).
+- **One helper per daemon.** The broker starts the bundle with `open -n -g -j -a` (a new instance every time, so
+  two data directories never share a helper or its arguments), its socket and token under that data directory.
+  A helper that crashes is started again on the next call; the call that was running fails with
+  `app_not_responding` and is never replayed. Development and tonight's tests use `BRIGADIER_COMPUTER_HELPER=<binary>`,
+  which spawns the binary directly so it inherits the grants of the terminal the dev build came from.
+- **Bundle.** `stage-sidecar` builds `Brigadier Computer Use.app` on macOS only (Linux and Windows staging
+  unchanged; universal builds both architectures before signing), with the build's identity
+  (`ai.brigadier.computer-use`, `ai.brigadier.dev.computer-use` for dev), signed ad hoc locally, and Tauri's
+  `bundle.macOS.files` puts it in `Contents/Helpers/`.
+- **Foreground rung.** Used only after 60 s of HID idle, re-checked right before raising and between every two
+  events; any user input aborts at once with `background_unavailable`. Restore puts the user's frontmost app,
+  window and cursor back only if they are still what the rung left; a change the user made meanwhile is kept.
+  Background mutations wait while the user is actively using the target window (§5).
+- **Grants and roles.** Each worker gets a second grant with `Role::Computer`, which can call only the computer
+  tools. It reaches the `computer` MCP server and, as `BRIGADIER_COMPUTER_GRANT`, the worker's shell for the CLI. This
+  is a role boundary, not shell isolation: Claude puts every MCP server's environment into its own, so the worker's
+  shell can also see its main grant, as before.
+- **Typed replies.** `ToolReply` becomes text and image blocks; images become MCP image content, before the text.
+  `act` honours `screenshot: never | auto | always` for the model; the annotated image of where each action
+  aimed is kept for the log only.
+- **Permission levels.** Full access runs everything. Under Approve for me and Ask for approval, `apps`, `observe`
+  and `zoom` are free; `launch` asks before it runs, and `act` on an instance not yet approved asks once, as a card.
+  An approval binds the instance (pid and process start time) and the windows it named or the launch opened; another
+  window of that process asks again. Authorization is checked again after the card is answered, and a Stop while a
+  card is pending ends the call.
+- **Ownership.** `launch` tells a new process or window from a reused one (LaunchServices may hand back the user's
+  running app). Only new instances become the worker's artifacts in the cleanup ledger, recorded before the launch
+  returns, and only those are quit when the worker ends. A launch that takes the front gives it back (§2.1).
+- **Block list per request.** The broker sends each request's policy from its own state: the Brigadier instance
+  that hosts the session (so a worker never drives the window with its own cards) and the terminal windows that
+  session launched. One session's exceptions never reach another.
+- **Action log.** Each action is a session event; the annotated image goes to the blob store, its artifact registered
+  in the cleanup ledger before the blob is written, and a deleted conversation takes its images (blobs another
+  conversation also refers to stay). CLI images go to a folder the worker owns, removed when it ends.
+
 **Done when**
 - A Claude worker and a Codex worker each finish a fixture task through MCP on a dev build with a scratch
   `BRIGADIER_DATA_DIR`, with screenshots visible to both models (shown in their transcripts), and each clicks the
@@ -574,8 +622,17 @@ background route avoids it. Ruled by the Delegator on 2026-10-09: pop-up picks h
 - Stop cancels a running batch between two events and releases pressed input.
 - A blocked app is refused.
 - In Approve-for me, `launch` and `act` on a GUI app ask once, bound to the instance.
-- The foreground rung refuses while the user is active and restores focus when used (tested when the machine is
-  free).
+- The foreground rung refuses while the user is active, aborts when they become active between events, and restores
+  focus when used without overriding a change the user made (live when the machine is idle at test time; otherwise
+  with the injectable idle source, and said so).
+- Each model also zooms and clicks a point read off the zoomed image.
+- Cancellation, ownership, approval and lifecycle cases each have an explicit result: a dropped connection, a
+  queued request, menu and hotkey Stop, input release and lease revocation; a file opened in an app that was already
+  running; another window of an approved process, a denial, pid reuse, Stop while a card is pending; two scratch
+  daemons, parent death, idle exit, a crash without replay; two sessions' block lists kept apart.
+- The §7 bench is re-run with no regression, S7 is measured, the cross-platform checks pass, and the crate builds
+  with `default-features = false`.
+- A `select` action sets an arbitrary selected text range, with a test and a fixture check.
 - **Helper-bundle gate** (stays unverified until the user grants access): the grants are attributed to "Brigadier
   Computer Use", not Brigadier or a terminal; a missing or revoked grant gives `permission_missing` with the fix;
   the grant survives a helper restart and an app update; the daemon-launched helper works.
