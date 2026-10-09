@@ -557,6 +557,27 @@ mod tests {
     }
 
     #[test]
+    fn an_unread_row_keeps_what_a_full_read_learned() {
+        let mut refs = WindowRefs::default();
+        let mut full = vec![
+            node(1, 0, "window", Some("Doc")),
+            node(7, 1, "row", Some("Row 7")),
+        ];
+        let first = refs.assign(&full);
+        let r = first[1].r;
+        // The next cheap read only knows the row is there, out of view.
+        let mut stub = RawNode::new(7, 1, "row");
+        stub.unread = true;
+        full[1] = stub;
+        let lines = refs.assign(&full);
+        assert_eq!(lines[1].r, r);
+        assert!(lines[1].hidden);
+        let rec = refs.get(r).unwrap();
+        assert_eq!(rec.label.as_deref(), Some("Row 7"));
+        assert_eq!(rec.generation, refs.generation);
+    }
+
+    #[test]
     fn unnamed_containers_collapse_and_kept_elements_rise() {
         let mut refs = WindowRefs::default();
         let lines = refs.assign(&sample());

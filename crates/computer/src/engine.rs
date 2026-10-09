@@ -446,11 +446,7 @@ impl<D: Desktop> Engine<D> {
 
     /// A window point for a target, the element when it names one, and whether the point can
     /// be seen (an element scrolled out of view can still be pressed, never clicked).
-    fn point_of(
-        &mut self,
-        w: &WindowInfo,
-        t: &Target,
-    ) -> CuResult<Aim<D::Element>> {
+    fn point_of(&mut self, w: &WindowInfo, t: &Target) -> CuResult<Aim<D::Element>> {
         if let Some(r) = t.r#ref.as_deref() {
             let r = Self::ref_of(r)?;
             let el = self.resolve_ref(w, r, true)?;
@@ -1093,4 +1089,450 @@ pub fn render_results(results: &[ActionResult]) -> String {
         out.push('\n');
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cancel::{Held, Release};
+    use crate::desktop::{AppInfo, Button, Capabilities, Capture, Focus, UserFocus};
+    use crate::redact::Rgba;
+
+    struct NoRelease;
+    impl Release for NoRelease {
+        fn release(&self, _: Held) {}
+    }
+
+    /// A desktop with one window whose elements the test sets; it logs every input it gets.
+    struct Fake {
+        window: WindowInfo,
+        nodes: Vec<RawNode<u32>>,
+        focus_secure: bool,
+        focused: Option<u32>,
+        /// A press on this element retitles the window, as a navigation would.
+        retitle_on_press: Option<(u32, String)>,
+        log: Vec<String>,
+    }
+
+    fn node(id: u32, depth: u16, role: &str, label: &str, frame: Rect) -> RawNode<u32> {
+        let mut n = RawNode::new(id, depth, role);
+        n.label = (!label.is_empty()).then(|| label.to_owned());
+        n.frame = Some(frame);
+        n
+    }
+
+    impl Fake {
+        fn new(nodes: Vec<RawNode<u32>>) -> Self {
+            Self {
+                window: WindowInfo {
+                    id: 1,
+                    pid: 10,
+                    title: "Doc".into(),
+                    frame: Rect::new(100.0, 100.0, 400.0, 300.0),
+                    on_screen: true,
+                    minimized: false,
+                },
+                nodes,
+                focus_secure: false,
+                focused: None,
+                retitle_on_press: None,
+                log: Vec::new(),
+            }
+        }
+
+        fn node_mut(&mut self, id: u32) -> &mut RawNode<u32> {
+            self.nodes.iter_mut().find(|n| n.element == id).unwrap()
+        }
+    }
+
+    impl Desktop for Fake {
+        type Element = u32;
+        fn releaser(&self) -> Arc<dyn Release + Send + Sync> {
+            Arc::new(NoRelease)
+        }
+        fn capabilities(&self) -> Capabilities {
+            Capabilities {
+                structure: true,
+                capture: true,
+                element_actions: true,
+                background_keys: true,
+                background_pointer: true,
+                synthetic_activation: true,
+            }
+        }
+        fn apps(&mut self) -> CuResult<Vec<AppInfo>> {
+            let mut a = self.app(10)?;
+            a.windows = vec![self.window.clone()];
+            Ok(vec![a])
+        }
+        fn windows(&mut self, _: i32) -> CuResult<Vec<WindowInfo>> {
+            Ok(vec![self.window.clone()])
+        }
+        fn window(&mut self, id: u32) -> CuResult<WindowInfo> {
+            if id == self.window.id {
+                Ok(self.window.clone())
+            } else {
+                err(ErrorCode::NoSuchTarget, "no window")
+            }
+        }
+        fn app(&mut self, pid: i32) -> CuResult<AppInfo> {
+            Ok(AppInfo {
+                pid,
+                name: "Fake".into(),
+                bundle_id: Some("dev.example.fake".into()),
+                bundle_path: None,
+                frontmost: false,
+                windows: Vec::new(),
+            })
+        }
+        fn tree(&mut self, _: &WindowInfo, _: bool) -> CuResult<Vec<RawNode<u32>>> {
+            Ok(self.nodes.clone())
+        }
+        fn read(&mut self, _: &WindowInfo, el: &u32) -> CuResult<RawNode<u32>> {
+            self.nodes
+                .iter()
+                .find(|n| n.element == *el)
+                .cloned()
+                .ok_or_else(|| CuError::new(ErrorCode::StaleRef, "gone"))
+        }
+        fn backing_scale(&mut self, _: &WindowInfo) -> f64 {
+            2.0
+        }
+        fn capture(
+            &mut self,
+            w: &WindowInfo,
+            crop: Rect,
+            pixels_per_point: f64,
+            max_side: u32,
+        ) -> CuResult<Capture> {
+            let transform = ImageTransform::fit(w.id, w.frame, crop, pixels_per_point, max_side);
+            let (width, height) = (transform.width, transform.height);
+            Ok(Capture {
+                image: Rgba {
+                    width,
+                    height,
+                    data: vec![255; (width * height * 4) as usize],
+                },
+                transform,
+            })
+        }
+        fn perform(&mut self, el: &u32, action: &str) -> CuResult<()> {
+            self.log.push(format!("perform {el} {action}"));
+            if let Some((id, title)) = self.retitle_on_press.clone()
+                && id == *el
+            {
+                self.window.title = title;
+            }
+            Ok(())
+        }
+        fn set_value(&mut self, el: &u32, text: &str) -> CuResult<()> {
+            self.log.push(format!("set_value {el}"));
+            self.node_mut(*el).value = Some(text.into());
+            Ok(())
+        }
+        fn insert_text(&mut self, el: &u32, text: &str) -> CuResult<()> {
+            self.log.push(format!("insert {el}"));
+            let n = self.node_mut(*el);
+            n.value = Some(n.value.clone().unwrap_or_default() + text);
+            Ok(())
+        }
+        fn set_focus(&mut self, el: &u32) -> CuResult<()> {
+            self.focused = Some(*el);
+            Ok(())
+        }
+        fn menu(&mut self, _: i32, path: &[String]) -> CuResult<()> {
+            self.log.push(format!("menu {}", path.join(" > ")));
+            Ok(())
+        }
+        fn focus(&mut self, _: i32) -> CuResult<Focus<u32>> {
+            Ok(Focus {
+                element: self.focused,
+                window: Some(self.window.id),
+                secure: self.focus_secure,
+                role: None,
+            })
+        }
+        fn click(
+            &mut self,
+            _: &WindowInfo,
+            at: Point,
+            _: Button,
+            _: u8,
+            _: Mods,
+            _: bool,
+            _: &mut InputGuard<'_>,
+        ) -> CuResult<()> {
+            self.log.push(format!("click {},{}", at.x, at.y));
+            Ok(())
+        }
+        fn scroll(&mut self, _: &WindowInfo, _: Point, _: i32, _: i32) -> CuResult<()> {
+            self.log.push("scroll".into());
+            Ok(())
+        }
+        fn drag(
+            &mut self,
+            _: &WindowInfo,
+            _: Point,
+            _: Point,
+            _: bool,
+            _: &mut InputGuard<'_>,
+            _: &CancelToken,
+        ) -> CuResult<()> {
+            self.log.push("drag".into());
+            Ok(())
+        }
+        fn key(&mut self, _: i32, c: &Chord, _: &mut InputGuard<'_>) -> CuResult<()> {
+            self.log.push(format!("key {}", c.key));
+            Ok(())
+        }
+        fn type_text(&mut self, _: i32, _: &str, _: &CancelToken) -> CuResult<()> {
+            self.log.push("type_text".into());
+            Ok(())
+        }
+        fn watch(&mut self, _: i32) {}
+        fn pump(&mut self, _: Duration) {}
+        fn last_notification(&self, _: i32) -> Option<Instant> {
+            None
+        }
+        fn user_focus(&mut self) -> UserFocus {
+            UserFocus {
+                frontmost_pid: 99,
+                frontmost_window: Some("The user's own window".into()),
+                cursor: Point::new(5.0, 5.0),
+                server_front: None,
+            }
+        }
+    }
+
+    fn engine(fake: Fake) -> Engine<Fake> {
+        Engine::new(fake, BlockList::default(), Provider::Claude)
+    }
+
+    fn observe(e: &mut Engine<Fake>, shot: Screenshot, find: Option<&str>) -> Reply {
+        e.observe(
+            "w",
+            &ObserveRequest {
+                window: 1,
+                screenshot: shot,
+                since: None,
+                full: true,
+                element: None,
+                find: find.map(str::to_owned),
+                value_page: None,
+            },
+        )
+        .unwrap()
+    }
+
+    /// The ref on the line naming `label`.
+    fn ref_of(text: &str, label: &str) -> String {
+        let quoted = format!("\"{label}\"");
+        let line = text.lines().find(|l| l.contains(&quoted)).unwrap();
+        line.split_whitespace().next().unwrap().to_owned()
+    }
+
+    fn click(r: &str) -> Action {
+        Action::Click {
+            target: Target {
+                r#ref: Some(r.into()),
+                ..Default::default()
+            },
+            button: Button::Left,
+            count: 1,
+            modifiers: Vec::new(),
+            expect: None,
+        }
+    }
+
+    fn act(e: &mut Engine<Fake>, actions: Vec<Action>) -> Vec<ActionResult> {
+        e.act(
+            "w",
+            &ActRequest {
+                window: 1,
+                actions,
+                screenshot: Screenshot::Never,
+            },
+        )
+        .unwrap()
+        .results
+    }
+
+    fn code(r: &ActionResult) -> Option<ErrorCode> {
+        r.error.as_ref().map(|e| e.code)
+    }
+
+    fn basic() -> Vec<RawNode<u32>> {
+        vec![
+            node(1, 0, "window", "Doc", Rect::new(0.0, 0.0, 400.0, 300.0)),
+            node(2, 1, "button", "Next", Rect::new(10.0, 10.0, 40.0, 20.0)),
+            node(3, 1, "button", "Other", Rect::new(60.0, 10.0, 40.0, 20.0)),
+            node(
+                4,
+                1,
+                "textfield",
+                "Name",
+                Rect::new(10.0, 40.0, 100.0, 20.0),
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_navigation_invalidates_the_rest_of_the_batch() {
+        let mut fake = Fake::new(basic());
+        fake.retitle_on_press = Some((2, "Page 2".into()));
+        let mut e = engine(fake);
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let (next, other) = (ref_of(&text, "Next"), ref_of(&text, "Other"));
+        let r = act(&mut e, vec![click(&next), click(&other)]);
+        assert_eq!(r[0].status, Status::Done);
+        assert_eq!(r[0].delivered, Some(Rung::Element));
+        assert_eq!(r[1].status, Status::Skipped);
+        assert_eq!(code(&r[1]), Some(ErrorCode::Invalidated));
+        assert_eq!(e.desktop.log, vec!["perform 2 press"]);
+    }
+
+    #[test]
+    fn a_ref_whose_element_changed_or_was_disabled_is_stale() {
+        let mut e = engine(Fake::new(basic()));
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let (next, other) = (ref_of(&text, "Next"), ref_of(&text, "Other"));
+        e.desktop.node_mut(2).label = Some("Delete".into());
+        e.desktop.node_mut(3).enabled = false;
+        let r = act(&mut e, vec![click(&next)]);
+        assert_eq!(code(&r[0]), Some(ErrorCode::StaleRef));
+        let r = act(&mut e, vec![click(&other)]);
+        assert_eq!(code(&r[0]), Some(ErrorCode::StaleRef));
+        assert!(e.desktop.log.is_empty(), "{:?}", e.desktop.log);
+    }
+
+    #[test]
+    fn a_resized_window_makes_image_points_stale_and_a_kept_size_maps_exactly() {
+        let mut e = engine(Fake::new(basic()));
+        let img = observe(&mut e, Screenshot::Always, None).image.unwrap();
+        let at = |x, y| Action::Click {
+            target: Target {
+                image: Some(img.id.clone()),
+                x: Some(x),
+                y: Some(y),
+                ..Default::default()
+            },
+            button: Button::Left,
+            count: 1,
+            modifiers: Vec::new(),
+            expect: None,
+        };
+        // The window image is at one pixel a point: (200, 150) is that window point.
+        let r = act(&mut e, vec![at(200.0, 150.0)]);
+        assert_eq!(r[0].delivered, Some(Rung::BackgroundActivated));
+        assert_eq!(e.desktop.log, vec!["click 200,150"]);
+        e.desktop.window.frame.w = 500.0;
+        let r = act(&mut e, vec![at(200.0, 150.0)]);
+        assert_eq!(code(&r[0]), Some(ErrorCode::StaleGeometry));
+        assert_eq!(e.desktop.log.len(), 1);
+    }
+
+    #[test]
+    fn typing_never_goes_into_a_password_field() {
+        let mut nodes = basic();
+        let mut pw = node(
+            5,
+            1,
+            "secure-field",
+            "Password",
+            Rect::new(10.0, 70.0, 100.0, 20.0),
+        );
+        pw.secure = true;
+        nodes.push(pw);
+        let mut e = engine(Fake::new(nodes));
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let pw = ref_of(&text, "Password");
+        let r = act(
+            &mut e,
+            vec![Action::Type {
+                text: "hunter2".into(),
+                r#ref: Some(pw),
+                expect: None,
+            }],
+        );
+        assert_eq!(code(&r[0]), Some(ErrorCode::SecureField));
+        // Focus already in a password field: plain typing and keys are refused too.
+        e.desktop.focus_secure = true;
+        let r = act(
+            &mut e,
+            vec![
+                Action::Type {
+                    text: "hunter2".into(),
+                    r#ref: None,
+                    expect: None,
+                },
+                Action::Key {
+                    key: "return".into(),
+                    repeat: 1,
+                    expect: None,
+                },
+            ],
+        );
+        assert_eq!(code(&r[0]), Some(ErrorCode::SecureField));
+        assert_eq!(r[1].status, Status::Skipped);
+        assert!(e.desktop.log.is_empty(), "{:?}", e.desktop.log);
+    }
+
+    #[test]
+    fn typing_into_a_ref_inserts_and_reads_the_text_back() {
+        let mut e = engine(Fake::new(basic()));
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let name = ref_of(&text, "Name");
+        let r = act(
+            &mut e,
+            vec![Action::Type {
+                text: "hello".into(),
+                r#ref: Some(name),
+                expect: None,
+            }],
+        );
+        assert_eq!(r[0].delivered, Some(Rung::Element));
+        assert_eq!(r[0].effect, Some(Effect::Confirmed));
+        assert_eq!(e.desktop.log, vec!["insert 4"]);
+    }
+
+    #[test]
+    fn an_element_scrolled_out_of_view_is_pressed_but_never_clicked() {
+        let nodes = vec![
+            node(1, 0, "window", "Doc", Rect::new(0.0, 0.0, 400.0, 300.0)),
+            node(2, 1, "scroll", "", Rect::new(0.0, 0.0, 200.0, 100.0)),
+            node(
+                3,
+                2,
+                "button",
+                "Far button",
+                Rect::new(10.0, 500.0, 40.0, 20.0),
+            ),
+            node(4, 2, "row", "Far row", Rect::new(0.0, 600.0, 200.0, 20.0)),
+            node(5, 2, "row", "Near row", Rect::new(0.0, 80.0, 200.0, 40.0)),
+        ];
+        let mut e = engine(Fake::new(nodes));
+        let text = observe(&mut e, Screenshot::Never, Some("row")).text;
+        let (far_row, near_row) = (ref_of(&text, "Far row"), ref_of(&text, "Near row"));
+        let text = observe(&mut e, Screenshot::Never, Some("Far button")).text;
+        let far_button = ref_of(&text, "Far button");
+        let r = act(&mut e, vec![click(&far_button)]);
+        assert_eq!(r[0].delivered, Some(Rung::Element));
+        let r = act(&mut e, vec![click(&far_row)]);
+        assert_eq!(code(&r[0]), Some(ErrorCode::NoSuchTarget));
+        // A row half in view is clicked in the part that shows (y 80..100, not its centre 100).
+        let r = act(&mut e, vec![click(&near_row)]);
+        assert_eq!(r[0].status, Status::Done);
+        assert_eq!(e.desktop.log, vec!["perform 3 press", "click 100,90"]);
+    }
+
+    #[test]
+    fn a_minimised_window_refuses_pointer_actions() {
+        let mut e = engine(Fake::new(basic()));
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let name = ref_of(&text, "Name");
+        e.desktop.window.minimized = true;
+        let r = act(&mut e, vec![click(&name)]);
+        assert_eq!(code(&r[0]), Some(ErrorCode::BackgroundUnavailable));
+        assert!(e.desktop.log.is_empty());
+    }
 }
