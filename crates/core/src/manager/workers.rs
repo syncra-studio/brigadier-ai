@@ -1426,6 +1426,16 @@ impl SessionManager {
             );
             secret_values.push(computer_grant.clone());
             env.push((super::computer::GRANT_ENV.into(), computer_grant.clone()));
+            env.extend([
+                (
+                    "BRIGADIER_COMPUTER_DATA_DIR".into(),
+                    self.data_dir.to_string_lossy().into_owned(),
+                ),
+                (
+                    "BRIGADIER_COMPUTER_CLI".into(),
+                    self.config.daemon_exe.to_string_lossy().into_owned(),
+                ),
+            ]);
             mcp_servers.push(self.computer_server(computer_grant, WORKER_TOOL_TIMEOUT_SECS));
         }
         let redactor = secrets::redactor(secret_values);
