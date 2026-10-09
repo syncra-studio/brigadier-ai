@@ -5,12 +5,12 @@ import { renderFixturePage } from "@/fixtures/headless";
 
 type Rendering = {
   timelines: number; threadText: string; closedSteps: number; line: string; steps: number; details: number;
-  opened: string; image: boolean; left: string; current: string; home: string; homeShot: string; end: string;
+  opened: string; image: boolean; left: string; endFocus: { step: string; focused: boolean }; current: string; home: string; homeShot: string; end: string;
   playing: { step: string; button: string }; played: { step: string; button: string }; reads: string[];
 };
 
 // The real worker thread in Chromium: its computer calls fold into one timeline, which the keys
-// and Play step through, reading each batch's screenshot.
+// and Play step through, reading each step's batch screenshot.
 test("a worker's computer calls fold into one timeline that keys and Play step through", { timeout: 60000 }, async (t) => {
   const rendering = JSON.parse(await renderFixturePage(t, "computer-timeline.html", "computer-timeline-result", 15000)) as Rendering;
   assert.equal(rendering.timelines, 1);
@@ -21,16 +21,18 @@ test("a worker's computer calls fold into one timeline that keys and Play step t
   assert.equal(rendering.line, "Used the computer · 9 steps in target-range");
   assert.equal(rendering.steps, 9);
   assert.equal(rendering.details, 1);
-  assert.equal(rendering.opened, "Step 8 of 8");
+  assert.equal(rendering.opened, "Step 9 of 9");
+  // At the end, Next stays focused, so the keys go on working from it.
+  assert.deepEqual(rendering.endFocus, { step: "Step 8 of 9", focused: true });
   assert.ok(rendering.image);
-  assert.equal(rendering.left, "Step 7 of 8");
+  assert.equal(rendering.left, "Step 7 of 9");
   assert.match(rendering.current, /Selected text in “Notes”/);
-  assert.equal(rendering.home, "Step 1 of 8");
+  assert.equal(rendering.home, "Step 1 of 9");
   assert.equal(rendering.homeShot, "image");
-  assert.equal(rendering.end, "Step 8 of 8");
-  assert.deepEqual(rendering.playing, { step: "Step 2 of 8", button: "Pause" });
-  assert.deepEqual(rendering.played, { step: "Step 8 of 8", button: "Play" });
-  // Shown batches read their screenshot once each; a menu pick has none to read.
+  assert.equal(rendering.end, "Step 9 of 9");
+  assert.deepEqual(rendering.playing, { step: "Step 2 of 9", button: "Pause" });
+  assert.deepEqual(rendering.played, { step: "Step 9 of 9", button: "Play" });
+  // Shown steps read their batch's screenshot once each; a menu pick has none to read.
   assert.ok(rendering.reads.includes("bench-00451") && rendering.reads.includes("bench-00001"));
   assert.ok(!rendering.reads.some((hash) => hash === null));
 });

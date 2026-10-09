@@ -13,7 +13,7 @@ const details = (html: string) => [...html.matchAll(/data-slot="computer-step-de
 const buttons = (html: string) => [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1]);
 const labels = (html: string) => [...html.matchAll(/<button[^>]*aria-label="([^"]*)"/g)].map((match) => match[1]);
 
-test("the timeline is one disclosure: action and outcome on every step, route and time only on the shown batch", async () => {
+test("the timeline is one disclosure: action and outcome on every step, route and time only on the shown step", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { ComputerTimelineView } = await server.ssrLoadModule("/src/app/conversation/ComputerTimeline.tsx");
@@ -29,11 +29,11 @@ test("the timeline is one disclosure: action and outcome on every step, route an
 
     const open = render({ defaultOpen: true });
     assert.equal(steps(open), actions.length);
-    // The newest batch is shown first: the foreground click, the only one with details.
+    // The newest step is shown first: the foreground click, the only one with details.
     assert.deepEqual(details(open), [`Brought the window to the front while you were away · target-range, “Minimised Target” · ${Math.round(actions.at(-1)!.dispatchMs)} ms`]);
-    assert.match(open, /Step 8 of 8/);
+    assert.match(open, /Step 9 of 9/);
     assert.deepEqual(labels(open).filter((label) => label !== "Open the screenshot full size"), ["Previous step", "Play", "Next step"]);
-    assert.match(open, /aria-label="Next step"[^>]*disabled/);
+    assert.match(open, /aria-label="Next step" aria-disabled="true"/);
     assert.match(open, /role="toolbar"/);
     assert.match(open, /aria-current="step"/);
     // Outcomes in words, a failure marked as one.

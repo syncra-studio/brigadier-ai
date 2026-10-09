@@ -69,6 +69,13 @@ function Fixture() {
         seen.details = document.querySelectorAll('[data-slot="computer-step-detail"]').length;
         seen.opened = step();
         seen.image = q<HTMLImageElement>('[data-slot="computer-shot"] img')?.src.startsWith("blob:") ?? false;
+        // From the focused Next at the end: a key moves back and Next keeps the focus.
+        const next = q<HTMLButtonElement>('[data-slot="computer-controls"] button[aria-label="Next step"]')!;
+        next.focus();
+        next.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+      }),
+      at(350, () => {
+        seen.endFocus = { step: step(), focused: document.activeElement === q('[data-slot="computer-controls"] button[aria-label="Next step"]') };
         key("ArrowLeft");
       }),
       at(400, () => {
@@ -91,7 +98,7 @@ function Fixture() {
       at(2000, () => {
         seen.playing = { step: step(), button: playLabel() };
       }),
-      at(700 + 1200 * 7 + 300, () => {
+      at(700 + 1200 * 8 + 300, () => {
         seen.played = { step: step(), button: playLabel() };
         seen.reads = [...new Set(reads)];
         setResult(JSON.stringify(seen));

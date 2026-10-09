@@ -47,7 +47,7 @@ function useStoredImage(hash: string | null): string | null {
   return read && read.hash === hash ? read.url : null;
 }
 
-/** One action of the timeline: what it did and what came of it; the shown batch's also say how. */
+/** One action of the timeline: what it did and what came of it; the shown one also says how. */
 function StepRow({ action, shown, onShow }: { action: ComputerAction; shown: boolean; onShow: () => void }) {
   const outcome = outcomeWords(action);
   return (
@@ -91,6 +91,9 @@ function Shot({ batch, url, onOpen }: { batch: Batch | undefined; url: string | 
   );
 }
 
+/** A step button at its end: it looks off but keeps the focus, so the toolbar's keys go on working. */
+const END = "aria-disabled:opacity-50 aria-disabled:cursor-default";
+
 /** The player's controls: previous, play or pause, next, and where it is. */
 function Controls({ playback, count, onChange }: { playback: Playback; count: number; onChange: (next: Playback) => void }) {
   const { index, playing } = playback;
@@ -108,13 +111,13 @@ function Controls({ playback, count, onChange }: { playback: Playback; count: nu
         onChange(next);
       }}
     >
-      <Button size="xs" variant="ghost" aria-label="Previous step" disabled={index === 0} onClick={() => onChange({ index: index - 1, playing: false })}>
+      <Button size="xs" variant="ghost" aria-label="Previous step" aria-disabled={index === 0} className={END} onClick={() => index > 0 && onChange({ index: index - 1, playing: false })}>
         <ChevronLeft aria-hidden />
       </Button>
       <Button size="xs" variant="ghost" aria-label={playing ? "Pause" : "Play"} disabled={count < 2} onClick={() => onChange(playToggle(playback, count))}>
         {playing ? <Pause aria-hidden /> : <Play aria-hidden />}
       </Button>
-      <Button size="xs" variant="ghost" aria-label="Next step" disabled={index >= count - 1} onClick={() => onChange({ index: index + 1, playing: false })}>
+      <Button size="xs" variant="ghost" aria-label="Next step" aria-disabled={index >= count - 1} className={END} onClick={() => index < count - 1 && onChange({ index: index + 1, playing: false })}>
         <ChevronRight aria-hidden />
       </Button>
       <span className="text-foreground/50 ps-1 text-xs tabular-nums" aria-live="polite">
@@ -126,7 +129,7 @@ function Controls({ playback, count, onChange }: { playback: Playback; count: nu
 
 /**
  * The worker's computer use as one disclosure: its line says what it did (live: what it does
- * now); open, it replays the timeline batch by batch, each with its marked screenshot.
+ * now); open, it replays the timeline step by step, each with its batch's marked screenshot.
  */
 export function ComputerTimelineView({
   actions,
@@ -144,19 +147,20 @@ export function ComputerTimelineView({
   onEarlier: () => void;
   defaultOpen?: boolean;
 }) {
-  const batches = batchesOf(actions);
+  // Each step is one action, shown with its batch's screenshot.
+  const steps = batchesOf(actions).flatMap((batch) => batch.actions.map((action) => ({ action, batch })));
   const [open, setOpen] = useState(defaultOpen);
-  const [playback, setPlayback] = useState<Playback>({ index: Math.max(0, batches.length - 1), playing: false });
+  const [playback, setPlayback] = useState<Playback>({ index: Math.max(0, steps.length - 1), playing: false });
   const [full, setFull] = useState(false);
-  const count = batches.length;
-  // A new batch while it is closed or at the end: show the newest.
+  const count = steps.length;
+  // A new step while it is closed or at the end: show the newest.
   const [seen, setSeen] = useState(count);
   if (seen !== count) {
     setSeen(count);
     if (!playback.playing && (playback.index >= seen - 1 || !open)) setPlayback({ index: Math.max(0, count - 1), playing: false });
   }
   const index = Math.min(playback.index, Math.max(0, count - 1));
-  const batch = batches[index];
+  const batch = steps[index]?.batch;
   const url = useStoredImage(open ? (batch?.image ?? null) : null);
   useEffect(() => {
     if (!playback.playing) return;
@@ -185,16 +189,14 @@ export function ComputerTimelineView({
               </Button>
             )}
             <ol data-slot="computer-steps" className="text-foreground/60 flex max-h-72 min-w-0 flex-col overflow-y-auto text-sm">
-              {batches.map((b, i) =>
-                b.actions.map((action) => (
-                  <StepRow
-                    key={`${b.key}:${action.index}:${action.atMs}`}
-                    action={action}
-                    shown={i === index}
-                    onShow={() => setPlayback({ index: i, playing: false })}
-                  />
-                )),
-              )}
+              {steps.map(({ action, batch: of }, i) => (
+                <StepRow
+                  key={`${of.key}:${action.index}:${action.atMs}`}
+                  action={action}
+                  shown={i === index}
+                  onShow={() => setPlayback({ index: i, playing: false })}
+                />
+              ))}
             </ol>
           </div>
           <Dialog open={full && url !== null} onOpenChange={setFull}>
