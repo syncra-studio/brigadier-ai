@@ -305,7 +305,7 @@ impl<D: Desktop> Engine<D> {
     fn header(&mut self, w: &WindowInfo, obs: u64, note: &str) -> CuResult<String> {
         let app = self.desktop.app(w.pid)?;
         Ok(format!(
-            "window w{} {:?} · {} pid {} · obs {}{} · {}x{} pt\n",
+            "window w{} {:?} · {} pid {} · obs {}{} · {}x{} pt{}{}\n",
             w.id,
             w.title,
             app.name,
@@ -313,7 +313,10 @@ impl<D: Desktop> Engine<D> {
             obs,
             note,
             w.frame.w.round() as i64,
-            w.frame.h.round() as i64
+            w.frame.h.round() as i64,
+            // So a worker sees a window's state without looking outside the tool.
+            if w.minimized { " · minimised" } else { "" },
+            if w.hidden { " · app hidden" } else { "" }
         ))
     }
 
@@ -2709,6 +2712,22 @@ mod tests {
         let r = act(&mut e, vec![click(&name)]);
         assert_eq!(code(&r[0]), Some(ErrorCode::BackgroundUnavailable));
         assert!(e.desktop.log.is_empty());
+    }
+
+    #[test]
+    fn a_minimised_windows_observation_says_so() {
+        let mut e = engine(Fake::new(basic()));
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        assert!(
+            !text.lines().next().unwrap().contains("minimised"),
+            "{text}"
+        );
+        e.desktop.window.minimized = true;
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        assert!(
+            text.lines().next().unwrap().ends_with(" · minimised"),
+            "{text}"
+        );
     }
 
     fn scroll_on(r: &str) -> Action {
