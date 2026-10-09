@@ -7,7 +7,7 @@
 
 mod ax;
 mod capture;
-mod input;
+pub(crate) mod input;
 pub mod overlay;
 pub mod private;
 
@@ -479,32 +479,12 @@ impl Desktop for MacDesktop {
     }
 
     fn menu(&mut self, pid: i32, path: &[String]) -> CuResult<()> {
-        let Some(bar) = AxEl::app(pid).element("AXMenuBar") else {
-            return err(ErrorCode::NoSuchTarget, "the app has no menu bar");
-        };
-        let mut level = bar.elements("AXChildren");
-        for (i, name) in path.iter().enumerate() {
-            let want = norm(name);
-            let Some(item) = level
-                .into_iter()
-                .find(|e| e.string("AXTitle").is_some_and(|t| norm(&t) == want))
-            else {
-                return err(ErrorCode::NoSuchTarget, format!("no menu item {name:?}"));
-            };
-            if i + 1 == path.len() {
-                if item.bool("AXEnabled") == Some(false) {
-                    return err(ErrorCode::Failed, format!("menu item {name:?} is disabled"));
-                }
-                return item.perform("AXPress");
-            }
-            // A bar item or submenu item holds one menu whose children are the items.
-            level = item
-                .elements("AXChildren")
-                .into_iter()
-                .flat_map(|m| m.elements("AXChildren"))
-                .collect();
+        let item = menu_item(pid, path)?;
+        if item.bool("AXEnabled") == Some(false) {
+            let name = path.last().map(String::as_str).unwrap_or("");
+            return err(ErrorCode::Failed, format!("menu item {name:?} is disabled"));
         }
-        err(ErrorCode::BadRequest, "an empty menu path")
+        item.perform("AXPress")
     }
 
     fn focus(&mut self, pid: i32) -> CuResult<Focus<AxEl>> {
@@ -567,6 +547,40 @@ impl Desktop for MacDesktop {
 
     fn type_text(&mut self, pid: i32, text: &str, cancel: &CancelToken) -> CuResult<()> {
         input::type_text(pid, text, cancel)
+    }
+
+    fn menu_for(
+        &mut self,
+        w: &WindowInfo,
+        path: &[String],
+        guard: &mut InputGuard<'_>,
+    ) -> CuResult<crate::action::Rung> {
+        match self.menu(w.pid, path) {
+            Ok(()) => Ok(crate::action::Rung::Element),
+            // An app checks its menu items only as a menu opens or a shortcut arrives, and a
+            // background app checks them against no key window. Its shortcut, sent while the
+            // app believes it is active with `w` key, has the item checked then, as for a person.
+            Err(e) if e.code == ErrorCode::Failed && e.detail.ends_with("is disabled") => {
+                let Some(chord) = menu_item(w.pid, path).ok().as_ref().and_then(shortcut_of) else {
+                    return Err(e);
+                };
+                let _act = input::Activation::begin(w.pid, w.id, true)?;
+                input::key(w.pid, &chord, guard)?;
+                Ok(crate::action::Rung::BackgroundActivated)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn shortcut(
+        &mut self,
+        w: &WindowInfo,
+        chord: &Chord,
+        guard: &mut InputGuard<'_>,
+    ) -> CuResult<crate::action::Rung> {
+        let _act = input::Activation::begin(w.pid, w.id, true)?;
+        input::key(w.pid, chord, guard)?;
+        Ok(crate::action::Rung::BackgroundActivated)
     }
 
     fn watch(&mut self, pid: i32) {
@@ -854,6 +868,57 @@ fn is_menu_bar_strip(title: &str, frame: Rect, displays: &[Rect]) -> bool {
                 && (frame.y - d.y).abs() < 0.5
                 && (frame.w - d.w).abs() < 0.5
         })
+}
+
+/// The menu-bar item at `path`.
+fn menu_item(pid: i32, path: &[String]) -> CuResult<AxEl> {
+    let Some(bar) = AxEl::app(pid).element("AXMenuBar") else {
+        return err(ErrorCode::NoSuchTarget, "the app has no menu bar");
+    };
+    let mut level = bar.elements("AXChildren");
+    for (i, name) in path.iter().enumerate() {
+        let want = norm(name);
+        let Some(item) = level
+            .into_iter()
+            .find(|e| e.string("AXTitle").is_some_and(|t| norm(&t) == want))
+        else {
+            return err(ErrorCode::NoSuchTarget, format!("no menu item {name:?}"));
+        };
+        if i + 1 == path.len() {
+            return Ok(item);
+        }
+        // A bar item or submenu item holds one menu whose children are the items.
+        level = item
+            .elements("AXChildren")
+            .into_iter()
+            .flat_map(|m| m.elements("AXChildren"))
+            .collect();
+    }
+    err(ErrorCode::BadRequest, "an empty menu path")
+}
+
+/// A menu item's keyboard shortcut. `AXMenuItemCmdModifiers` bits: 1 shift, 2 option,
+/// 4 control, 8 no command key (`HIToolbox/Menus.h`, `kMenu*Modifier`).
+fn shortcut_of(item: &AxEl) -> Option<Chord> {
+    let key = item.string("AXMenuItemCmdChar")?.to_lowercase();
+    if key.trim().is_empty() {
+        return None;
+    }
+    let bits = item
+        .attr("AXMenuItemCmdModifiers")
+        .ok()
+        .and_then(|v| v.downcast::<CFNumber>().ok())
+        .and_then(|n| n.as_i64())
+        .unwrap_or(0);
+    Some(Chord {
+        mods: Mods {
+            cmd: bits & 8 == 0,
+            shift: bits & 1 != 0,
+            alt: bits & 2 != 0,
+            ctrl: bits & 4 != 0,
+        },
+        key,
+    })
 }
 
 fn norm(s: &str) -> String {

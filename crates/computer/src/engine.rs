@@ -497,6 +497,62 @@ impl<D: Desktop> Engine<D> {
 
     /// A window point for a target, the element when it names one, and whether the point can
     /// be seen (an element scrolled out of view can still be pressed, never clicked).
+    /// Scrolls the view that clips ref `r` with background wheel events until the element shows,
+    /// learning how far a line moves it from each step. For elements that offer no scroll action
+    /// of their own, such as table rows.
+    fn scroll_until_seen(
+        &mut self,
+        w: &WindowInfo,
+        target: &Target,
+        r: u32,
+        mut p: Point,
+        cancel: &CancelToken,
+    ) -> CuResult<(Point, bool)> {
+        let Some(clip) = self
+            .windows
+            .get(&w.id)
+            .and_then(|x| x.get(r))
+            .and_then(|rec| rec.clip)
+        else {
+            return Ok((p, false));
+        };
+        let at = clip.center();
+        // Points per line: a first guess, corrected by what each step moves.
+        let (mut per_x, mut per_y) = (10.0_f64, 10.0_f64);
+        for _ in 0..12 {
+            cancel.check()?;
+            let (ex, ey) = (p.x - at.x, p.y - at.y);
+            let lines = |d: f64, per: f64, half: f64| -> i32 {
+                if d.abs() <= half {
+                    0
+                } else {
+                    ((d / per).round() as i32).clamp(-2000, 2000)
+                }
+            };
+            let (dx, dy) = (
+                lines(ex, per_x, clip.w / 2.0),
+                lines(ey, per_y, clip.h / 2.0),
+            );
+            if dx == 0 && dy == 0 {
+                break;
+            }
+            self.desktop.scroll(w, at, dx, dy)?;
+            std::thread::sleep(Duration::from_millis(40));
+            let (q, _, seen) = self.point_of(w, target)?;
+            if dy != 0 && (p.y - q.y).abs() > 0.5 {
+                per_y = (p.y - q.y).abs() / f64::from(dy.abs());
+            }
+            if dx != 0 && (p.x - q.x).abs() > 0.5 {
+                per_x = (p.x - q.x).abs() / f64::from(dx.abs());
+            }
+            p = q;
+            if seen {
+                return Ok((p, true));
+            }
+        }
+        Ok((p, false))
+    }
+
     fn point_of(&mut self, w: &WindowInfo, t: &Target) -> CuResult<Aim<D::Element>> {
         if let Some(r) = t.r#ref.as_deref() {
             let r = Self::ref_of(r)?;
@@ -809,7 +865,7 @@ impl<D: Desktop> Engine<D> {
                 modifiers,
                 ..
             } => {
-                let (p, el, visible) = self.point_of(&w, target)?;
+                let (mut p, el, mut visible) = self.point_of(&w, target)?;
                 let mods = parse_mods(modifiers)?;
                 let pressable = el.as_ref().is_some_and(|(r, _)| {
                     self.windows
@@ -842,6 +898,19 @@ impl<D: Desktop> Engine<D> {
                     if w.minimized {
                         return err(ErrorCode::BackgroundUnavailable, "the window is minimised");
                     }
+                    // An element scrolled out of view is brought into view by its own scroll
+                    // view first, as a person scrolls to it, so the click needs no batch of
+                    // its own.
+                    if !visible && let Some((r, e)) = &el {
+                        let r = *r;
+                        if self.desktop.perform(e, "scroll-to-visible").is_ok() {
+                            (p, _, visible) = self.point_of(&w, target)?;
+                        }
+                        if !visible {
+                            (p, visible) = self.scroll_until_seen(&w, target, r, p, cancel)?;
+                        }
+                        aim = Some((p, self.ref_frame(w.id, r)));
+                    }
                     out_of_view(visible)?;
                     self.desktop
                         .click(&w, p, *button, *count, mods, activate, guard)?;
@@ -856,9 +925,20 @@ impl<D: Desktop> Engine<D> {
                 if node.secure {
                     return err(ErrorCode::SecureField, "that is a password field");
                 }
-                self.desktop.set_value(&el, text)?;
-                set_text = Some((el, text.clone()));
-                Rung::Element
+                if node.role == DOCUMENT_TEXT {
+                    // A document's text is replaced as a person would: select it all, type over
+                    // it. Set through accessibility, the app wouldn't count it as an edit.
+                    let len = node.value.as_deref().map_or(0, |v| v.chars().count());
+                    self.desktop.set_focus(&el)?;
+                    self.desktop.select(&el, 0, len)?;
+                    let (rung, _) = self.type_into(&w, Some(r#ref), text, cancel)?;
+                    set_text = Some((el, text.clone()));
+                    rung
+                } else {
+                    self.desktop.set_value(&el, text)?;
+                    set_text = Some((el, text.clone()));
+                    Rung::Element
+                }
             }
             Action::Type { text, r#ref, .. } => {
                 aim = r#ref.as_deref().and_then(|r| self.ref_aim(w.id, r));
@@ -871,11 +951,17 @@ impl<D: Desktop> Engine<D> {
                 let chord = Chord::parse(key)
                     .ok_or_else(|| CuError::new(ErrorCode::BadRequest, format!("bad key {key}")))?;
                 self.check_recipient(&w)?;
+                let menu_shortcut = chord.mods.cmd || chord.mods.ctrl;
+                let mut rung = Rung::Background;
                 for _ in 0..(*repeat).max(1) {
                     cancel.check()?;
-                    self.desktop.key(w.pid, &chord, guard)?;
+                    if menu_shortcut {
+                        rung = self.desktop.shortcut(&w, &chord, guard)?;
+                    } else {
+                        self.desktop.key(w.pid, &chord, guard)?;
+                    }
                 }
-                Rung::Background
+                rung
             }
             Action::Scroll { target, dx, dy, .. } => {
                 let (p, _, visible) = self.point_of(&w, target)?;
@@ -912,8 +998,7 @@ impl<D: Desktop> Engine<D> {
             Action::Menu { path, .. } => {
                 // A menu command acts on the app's focused window, so that must be this one.
                 self.check_recipient(&w)?;
-                self.desktop.menu(w.pid, path)?;
-                Rung::Element
+                self.desktop.menu_for(&w, path, guard)?
             }
             Action::Select {
                 r#ref,
@@ -1325,12 +1410,15 @@ impl<D: Desktop> Engine<D> {
         text: &str,
         cancel: &CancelToken,
     ) -> CuResult<(Rung, bool)> {
+        let document;
         let el = match r {
             Some(r) => {
                 let el = self.resolve_ref(w, Self::ref_of(r)?, true)?;
-                if self.desktop.read(w, &el)?.secure {
+                let node = self.desktop.read(w, &el)?;
+                if node.secure {
                     return err(ErrorCode::SecureField, "that is a password field");
                 }
+                document = node.role == DOCUMENT_TEXT;
                 self.desktop.set_focus(&el)?;
                 let f = self.check_recipient(w)?;
                 if f.as_ref() != Some(&el) {
@@ -1342,10 +1430,18 @@ impl<D: Desktop> Engine<D> {
                 }
                 Some(el)
             }
-            None => self.check_recipient(w)?,
+            None => {
+                let f = self.check_recipient(w)?;
+                document = f
+                    .as_ref()
+                    .and_then(|e| self.desktop.read(w, e).ok())
+                    .is_some_and(|n| n.role == DOCUMENT_TEXT);
+                f
+            }
         };
-        // The cheapest checkable route: insert at the selection, read it back.
-        if let Some(el) = &el {
+        // The cheapest checkable route: insert at the selection, read it back. Not in a
+        // document's text, where only typed keys count as an edit (undo, unsaved changes, save).
+        if let Some(el) = el.as_ref().filter(|_| !document) {
             let before = self
                 .desktop
                 .read(w, el)
@@ -1414,6 +1510,9 @@ impl<D: Desktop> Engine<D> {
         })
     }
 }
+
+/// The role of a document's text view: edited only with typed keys.
+const DOCUMENT_TEXT: &str = "text-area";
 
 /// A filtered observation can show what is out of view, so it reads everything.
 fn filtered_read(req: &ObserveRequest) -> bool {
@@ -2384,7 +2483,13 @@ mod tests {
         // A row half in view is clicked in the part that shows (y 80..100, not its centre 100).
         let r = act(&mut e, vec![click(&near_row)]);
         assert_eq!(r[0].status, Status::Done);
-        assert_eq!(e.desktop.log, vec!["perform 3 press", "click 100,90"]);
+        let log = &e.desktop.log;
+        assert_eq!(log.first().map(String::as_str), Some("perform 3 press"));
+        assert_eq!(log.last().map(String::as_str), Some("click 100,90"));
+        // The far row was scrolled towards in its view; this view never moves, so it is
+        // refused, and nothing but the near row is ever clicked.
+        assert!(log.iter().any(|l| l.starts_with("scroll")), "{log:?}");
+        assert_eq!(log.iter().filter(|l| l.starts_with("click")).count(), 1);
     }
 
     #[test]

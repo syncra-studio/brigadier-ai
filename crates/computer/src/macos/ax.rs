@@ -412,6 +412,7 @@ pub fn ax_action(neutral: &str) -> String {
         "cancel" => "AXCancel".into(),
         "raise" => "AXRaise".into(),
         "pick" => "AXPick".into(),
+        "scroll-to-visible" => "AXScrollToVisible".into(),
         other if other.starts_with("AX") => other.into(),
         other => format!("AX{other}"),
     }

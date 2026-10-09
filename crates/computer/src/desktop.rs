@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use std::sync::Arc;
 
+use crate::action::Rung;
 use crate::cancel::{CancelToken, InputGuard, Release};
 use crate::error::{CuResult, ErrorCode, err};
 use crate::geom::{ImageTransform, Point, Rect};
@@ -197,6 +198,31 @@ pub trait Desktop {
     ) -> CuResult<()>;
     fn key(&mut self, pid: i32, chord: &Chord, guard: &mut InputGuard<'_>) -> CuResult<()>;
     fn type_text(&mut self, pid: i32, text: &str, cancel: &CancelToken) -> CuResult<()>;
+    /// Picks a menu-bar item for window `w`. A background app checks its menu items against
+    /// no key window, so some read as disabled; a backend that can make the app believe it is
+    /// active with `w` key sends such an item's shortcut that way.
+    fn menu_for(
+        &mut self,
+        w: &WindowInfo,
+        path: &[String],
+        guard: &mut InputGuard<'_>,
+    ) -> CuResult<Rung> {
+        let _ = guard;
+        self.menu(w.pid, path)?;
+        Ok(Rung::Element)
+    }
+    /// A menu shortcut (a chord with command or control) to window `w`'s app. An app that isn't
+    /// active ignores its menus' shortcuts, so a backend that can make it believe it is active
+    /// does, for the shortcut only.
+    fn shortcut(
+        &mut self,
+        w: &WindowInfo,
+        chord: &Chord,
+        guard: &mut InputGuard<'_>,
+    ) -> CuResult<Rung> {
+        self.key(w.pid, chord, guard)?;
+        Ok(Rung::Background)
+    }
 
     /// Starts listening for the app's accessibility notifications.
     fn watch(&mut self, pid: i32);
