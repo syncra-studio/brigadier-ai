@@ -333,12 +333,32 @@ pub(crate) static GATED_TERMINALS: Mutex<
     )>,
 > = Mutex::new(Vec::new());
 
+/// One cleanup call: provider, account and the native artifacts sent to it.
+type Removal = (ProviderKind, Option<String>, Vec<Artifact>);
+
+/// Per-flow knobs and observations; shared across a restart, never across tests.
+#[derive(Default)]
+pub(crate) struct FakeBehavior {
+    pub signed_out: Mutex<Vec<ProviderKind>>,
+    pub refuse_steers: bool,
+    pub cleanup: bool,
+    pub fail_cleanup: std::sync::atomic::AtomicBool,
+    pub removals: Mutex<Vec<Removal>>,
+}
+
+/// Files a scripted CLI keeps in its own home, even when a session is shared.
+fn fake_files(home: &Path, id: &str) -> [PathBuf; 2] {
+    [home.join("sessions").join(id), home.join("local").join(id)]
+}
+
 /// A scripted stand-in for one CLI.
 struct FakeCli {
     kind: ProviderKind,
     /// The extra account it stands in for.
     account: Option<String>,
     specs: Specs,
+    home: PathBuf,
+    behavior: Arc<FakeBehavior>,
     script: Script,
     /// What answers its one-shot reviews ([`no_findings`] unless a test scripts them).
     reviews: Script,
@@ -386,7 +406,13 @@ impl Provider for FakeCli {
                 provider: self.kind,
                 path: Some("/fake".into()),
                 version: Some("1.0.0".into()),
-                logged_in: true,
+                logged_in: self.account.is_some()
+                    || !self
+                        .behavior
+                        .signed_out
+                        .lock()
+                        .unwrap()
+                        .contains(&self.kind),
                 auth_method: Some("fake".into()),
                 plan: None,
                 email: None,
@@ -423,7 +449,7 @@ impl Provider for FakeCli {
     fn start(
         &self,
         spec: SessionSpec,
-        _ledger: Arc<dyn Ledger>,
+        ledger: Arc<dyn Ledger>,
     ) -> BoxFuture<'_, brigadier_providers::Result<Started>> {
         Box::pin(async move {
             if let brigadier_providers::model::Origin::Resume { native_id } = &spec.origin
@@ -446,6 +472,27 @@ impl Provider for FakeCli {
                 brigadier_providers::model::Origin::Resume { native_id } => native_id.clone(),
                 _ => uuid::Uuid::new_v4().to_string(),
             };
+            if self.behavior.cleanup {
+                let home = self
+                    .account
+                    .as_ref()
+                    .map(|_| self.home.display().to_string());
+                let artifact = match self.kind {
+                    ProviderKind::Claude => Artifact::ClaudeSession {
+                        session_id: native_id.clone(),
+                        home,
+                    },
+                    ProviderKind::Codex => Artifact::CodexThread {
+                        thread_id: native_id.clone(),
+                        home,
+                    },
+                };
+                ledger.record(artifact).await?;
+                for path in fake_files(&self.home, &native_id) {
+                    std::fs::create_dir_all(path.parent().unwrap())?;
+                    std::fs::write(path, "session state")?;
+                }
+            }
             let _ = tx
                 .send(ProviderEvent::SessionStarted {
                     native_id: native_id.clone(),
@@ -463,6 +510,7 @@ impl Provider for FakeCli {
             };
             let session = Arc::new(FakeSession {
                 kind: self.kind,
+                behavior: self.behavior.clone(),
                 account: self.account.clone(),
                 native_id,
                 prompt,
@@ -484,8 +532,45 @@ impl Provider for FakeCli {
         })
     }
 
-    fn remove(&self, _artifacts: Vec<Artifact>) -> BoxFuture<'_, brigadier_providers::Result<()>> {
-        Box::pin(async { Ok(()) })
+    fn remove(&self, artifacts: Vec<Artifact>) -> BoxFuture<'_, brigadier_providers::Result<()>> {
+        Box::pin(async move {
+            self.behavior.removals.lock().unwrap().push((
+                self.kind,
+                self.account.clone(),
+                artifacts.clone(),
+            ));
+            if self
+                .behavior
+                .fail_cleanup
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(brigadier_providers::Error::Invalid(
+                    "cleanup refused".into(),
+                ));
+            }
+            for artifact in artifacts {
+                let (id, home) = match artifact {
+                    Artifact::ClaudeSession { session_id, home } => (session_id, home),
+                    Artifact::CodexThread { thread_id, home } => (thread_id, home),
+                    _ => continue,
+                };
+                let expected = self
+                    .account
+                    .as_ref()
+                    .map(|_| self.home.display().to_string());
+                if home != expected {
+                    return Err(brigadier_providers::Error::Invalid(
+                        "cleanup sent to wrong home".into(),
+                    ));
+                }
+                for path in fake_files(&self.home, &id) {
+                    if path.exists() {
+                        std::fs::remove_file(path)?;
+                    }
+                }
+            }
+            Ok(())
+        })
     }
 
     fn replayer(&self) -> Box<dyn Replayer> {
@@ -554,6 +639,7 @@ impl Replayer for NoRecordings {
 
 struct FakeSession {
     kind: ProviderKind,
+    behavior: Arc<FakeBehavior>,
     account: Option<String>,
     native_id: String,
     prompt: String,
@@ -704,6 +790,11 @@ impl ProviderSession for FakeSession {
     }
 
     fn steer(&self, input: TurnInput) -> BoxFuture<'_, brigadier_providers::Result<()>> {
+        if self.behavior.refuse_steers {
+            return Box::pin(async {
+                Err(brigadier_providers::Error::Invalid("steer refused".into()))
+            });
+        }
         // A running turn reads it if its script asks for it ([`Turn::steered`]); otherwise its
         // reply is already decided and the steer changes nothing.
         if self.running.load(std::sync::atomic::Ordering::SeqCst) {
@@ -776,6 +867,7 @@ async fn boot(
     script: &Script,
     reviews: &Script,
     specs: &Specs,
+    behavior: &Arc<FakeBehavior>,
 ) -> (Arc<SessionManager>, Arc<Core>) {
     let data = data.to_owned();
     let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
@@ -788,12 +880,23 @@ async fn boot(
     });
     let host: Arc<OnceLock<Weak<SessionManager>>> = Arc::default();
     let fake = {
-        let (specs, script, reviews, host) =
-            (specs.clone(), script.clone(), reviews.clone(), host.clone());
-        move |kind, account| -> Arc<dyn Provider> {
+        let (specs, script, reviews, host, behavior, data) = (
+            specs.clone(),
+            script.clone(),
+            reviews.clone(),
+            host.clone(),
+            behavior.clone(),
+            data.clone(),
+        );
+        move |kind: ProviderKind, account: Option<String>| -> Arc<dyn Provider> {
             Arc::new(FakeCli {
                 kind,
+                home: match &account {
+                    Some(id) => data.join("accounts").join(id),
+                    None => data.join("own").join(kind.to_string()),
+                },
                 account,
+                behavior: behavior.clone(),
                 specs: specs.clone(),
                 script: script.clone(),
                 reviews: reviews.clone(),
@@ -858,6 +961,7 @@ pub(crate) struct Flow {
     script: Script,
     reviews: Script,
     specs: Specs,
+    pub behavior: Arc<FakeBehavior>,
 }
 
 /// What a scripted session is set up with.
@@ -873,6 +977,7 @@ pub(crate) struct Options {
     pub reviews: Option<Script>,
     /// The thread's vendor (Claude by default).
     pub thread: ProviderKind,
+    pub behavior: Arc<FakeBehavior>,
 }
 
 impl Default for Options {
@@ -884,6 +989,7 @@ impl Default for Options {
             store: None,
             reviews: None,
             thread: ProviderKind::Claude,
+            behavior: Arc::default(),
         }
     }
 }
@@ -915,7 +1021,8 @@ impl Flow {
         }
         let reviews = options.reviews.clone().unwrap_or_else(no_findings);
         let specs = Specs::default();
-        let (manager, core) = boot(&data, store, &script, &reviews, &specs).await;
+        let (manager, core) =
+            boot(&data, store, &script, &reviews, &specs, &options.behavior).await;
         let project = core
             .create_project("Flow".into(), Some(repo.display().to_string()))
             .await
@@ -959,6 +1066,7 @@ impl Flow {
             script,
             reviews,
             specs,
+            behavior: options.behavior,
         }
     }
 
@@ -968,7 +1076,15 @@ impl Flow {
         self.manager.shutdown().await;
         let data = self.dir.join("data");
         let store = open_store(&data).await;
-        let (manager, core) = boot(&data, store, &self.script, &self.reviews, &self.specs).await;
+        let (manager, core) = boot(
+            &data,
+            store,
+            &self.script,
+            &self.reviews,
+            &self.specs,
+            &self.behavior,
+        )
+        .await;
         self.manager = manager;
         self.core = core;
     }

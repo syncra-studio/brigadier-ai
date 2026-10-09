@@ -184,6 +184,10 @@ impl Runtime {
             )
             .await?,
         );
+        #[cfg(test)]
+        if let Some(providers) = &fakes {
+            ledger.set_test_providers(providers.clone());
+        }
         let routing = {
             let path = data_dir.join("routing.sqlite");
             match tokio::task::spawn_blocking(move || RoutingStore::open(&path)).await {
@@ -237,14 +241,14 @@ impl Runtime {
                 resolving.upgrade()?.account_by_home(home)
             }));
         runtime.load().await?;
+        // A crash's artifacts must resolve to their recorded account before cleanup starts.
+        runtime.sync_accounts().await;
         runtime.sweep().await;
         let ledger = runtime.ledger.clone();
         runtime
             .pumps
             .spawn(async move { ledger.archive_codex_threads().await });
         runtime.refresh_providers(None);
-        let syncing = runtime.clone();
-        runtime.spawn(async move { syncing.sync_accounts().await });
         let poller = runtime.clone();
         runtime.spawn(async move { poller.poll_quota().await });
         Ok(runtime)

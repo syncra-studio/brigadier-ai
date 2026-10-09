@@ -87,6 +87,8 @@ pub struct CleanupLedger {
     state: Mutex<State>,
     worktrees: Mutex<Option<WorktreeRemover>>,
     accounts: Mutex<Option<AccountResolver>>,
+    #[cfg(test)]
+    test_providers: Mutex<Option<[Arc<dyn Provider>; 2]>>,
 }
 
 impl CleanupLedger {
@@ -140,6 +142,8 @@ impl CleanupLedger {
             state: Mutex::new(state),
             worktrees: Mutex::new(None),
             accounts: Mutex::new(None),
+            #[cfg(test)]
+            test_providers: Mutex::new(None),
         })
     }
 
@@ -153,6 +157,12 @@ impl CleanupLedger {
         *self.accounts.lock().unwrap_or_else(|p| p.into_inner()) = Some(resolver);
     }
 
+    /// Keeps flow tests' cleanup on their scripted CLIs, including the own login.
+    #[cfg(test)]
+    pub(crate) fn set_test_providers(&self, providers: [Arc<dyn Provider>; 2]) {
+        *self.test_providers.lock().unwrap() = Some(providers);
+    }
+
     /// The adapter that removes `kind`'s files of a session that ran in `home`.
     fn remover(&self, kind: ProviderKind, home: Option<&str>) -> Arc<dyn Provider> {
         let resolver = self
@@ -164,6 +174,14 @@ impl CleanupLedger {
             && let Some(provider) = resolver(home).filter(|provider| provider.kind() == kind)
         {
             return provider;
+        }
+        #[cfg(test)]
+        if let Some(providers) = &*self.test_providers.lock().unwrap() {
+            return providers
+                .iter()
+                .find(|provider| provider.kind() == kind)
+                .unwrap()
+                .clone();
         }
         match kind {
             ProviderKind::Claude => self.claude.clone(),
@@ -275,6 +293,10 @@ impl CleanupLedger {
     /// holds, so the Codex and ChatGPT apps don't list them among the user's own. A session
     /// closed normally archived its thread already; a thread is unarchived when resumed.
     pub async fn archive_codex_threads(&self) {
+        #[cfg(test)]
+        if self.test_providers.lock().unwrap().is_some() {
+            return;
+        }
         let threads: Vec<String> = self
             .state()
             .artifacts
