@@ -28,16 +28,38 @@ doesn't run a model of its own.
 
 ## Turning it on
 
-macOS asks you once for two permissions, for an item named **Brigadier Computer Use**:
+macOS asks you once for two permissions, for an item named **Brigadier Computer Use** (Brigadier's icon, listed
+apart from Brigadier itself):
 
 1. Open Brigadier's **Settings → Computer use**.
-2. Next to **Control apps**, press **Allow…**. System Settings opens at Privacy & Security → Accessibility. Turn on
-   **Brigadier Computer Use**.
-3. Next to **See the screen**, press **Allow…**. System Settings opens at Privacy & Security → Screen Recording.
-   Turn on **Brigadier Computer Use**.
+2. Next to **Control apps**, press **Allow…**. macOS shows its own prompt, then System Settings opens at Privacy &
+   Security → Accessibility. Turn on **Brigadier Computer Use**.
+3. Next to **See the screen**, press **Allow…**. System Settings opens at Privacy & Security → Screen & System Audio
+   Recording. Turn on **Brigadier Computer Use**. If macOS offers **Quit & Reopen**, you can choose it or not:
+   Brigadier Computer Use restarts by itself to start seeing the screen.
+
+You don't need to come back and click anything: the page reads the permissions every second or two while one is
+missing, and each row turns to **Allowed** on its own.
 
 The permissions belong to Brigadier Computer Use, not to Brigadier or a terminal, and they stay when Brigadier
 updates. If a worker needs them before you've given them, the conversation shows the same two Allow buttons.
+
+**On, but still "Not allowed yet"?** The switch belongs to an older build of Brigadier Computer Use (macOS ties a
+grant to the build it was given to, and an unsigned build changes with every rebuild). In System Settings, select
+**Brigadier Computer Use**, remove it with **−**, then press **Allow…** again in Brigadier and turn the new entry on.
+Signed builds keep their grants across rebuilds and updates.
+
+### Opening the dev build (for Brigadier's developers)
+
+A checkout's dev build is `target/debug/bundle/macos/Brigadier Dev.app`. Its helper is named **Brigadier Computer
+Use** too, with its own id (`ai.brigadier.dev.computer-use`), so it gets its own entries in System Settings. Build it
+signed, so the grants survive rebuilds, then open it with the script, never `/Applications/Brigadier.app`:
+
+```sh
+cd apps/desktop && APPLE_SIGNING_IDENTITY="Developer ID Application: SYNCRA, SRL (7JQSPMWT79)" pnpm tauri:debug-app
+cd ../.. && tools/open-dev-app.sh              # its own data, /tmp/brigadier-dev
+tools/open-dev-app.sh /tmp/my-scratch          # or another data folder
+```
 
 ## Safety
 
