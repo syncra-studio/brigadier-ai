@@ -1363,22 +1363,29 @@ impl SessionManager {
                 matches!(&step.kind, OrchestratorStepKind::Merged { asked_in: Some(done), .. } if done == asked)
             })
         };
-        // The user chose "Merge" on the card, after their latest message.
+        // The user's latest answer on a merge card, after their latest message, decides: its
+        // "Merge" is consent, anything else revokes what their message said.
         let card = board
             .questions
             .values()
             .filter(|question| {
                 matches!(&question.kind, QuestionKind::Merge { branch: b, base: a } if b == branch && a == base)
-                    && question
-                        .answer
-                        .as_deref()
-                        .is_some_and(|answer| merge_chosen(answer, base))
+                    && question.answer.is_some()
             })
             .max_by_key(|question| question.answered_at_ms);
         if let Some(card) = card
             && let Some(answered) = card.answered_at_ms
             && latest.is_none_or(|latest| answered >= latest.created_at_ms)
         {
+            if !card
+                .answer
+                .as_deref()
+                .is_some_and(|answer| merge_chosen(answer, base))
+            {
+                return Err(refuse(
+                    "the user answered \"Not yet\" on the merge card after their latest message; don't ask again until they bring it up".into(),
+                ));
+            }
             let asked = card.id.to_string();
             if used(&asked) {
                 return Err(refuse(

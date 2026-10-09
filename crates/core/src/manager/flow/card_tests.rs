@@ -231,7 +231,7 @@ async fn a_question_asked_in_text_is_asked_again_on_a_card() {
     let heard = inputs.lock().unwrap().clone();
     assert_eq!(heard.len(), 3, "{heard:#?}");
     assert!(
-        heard[1].contains("Ask it with ask_user instead"),
+        heard[1].contains("Ask it on a card instead"),
         "{}",
         heard[1]
     );
@@ -437,5 +437,103 @@ async fn the_requests_opening_line_shows_and_later_narration_does_not() {
         shown.iter().any(|text| text.contains("keep their order")),
         "{shown:#?}"
     );
+    flow.stop().await;
+}
+
+/// A card left open for an earlier request doesn't spare a later one: its text question still
+/// gets the note.
+#[tokio::test]
+async fn an_earlier_requests_open_card_doesnt_spare_a_later_text_question() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = inputs.clone();
+    let flow = Flow::start(
+        "card-guard-scope",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("Plan the export.") {
+                    let asked = turn.call("ask_user", round()).await;
+                    assert!(!asked.is_error, "{}", asked.text);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("asked the user a question in text") {
+                    return Reply::text("[quiet]");
+                }
+                Reply::text("Should the theme follow the system?")
+            }
+        }),
+    )
+    .await;
+    flow.say("Plan the export.").await;
+    flow.until("the card", |board| open_card(board, false).is_some())
+        .await;
+    flow.settled().await;
+    flow.say("Add a dark mode.").await;
+    flow.until("the note", |_| {
+        inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|input| input.contains("asked the user a question in text"))
+    })
+    .await;
+    flow.stop().await;
+}
+
+/// A "Not yet" on the merge card after the user's message revokes what that message said:
+/// finish_session refuses the words it quoted.
+#[tokio::test]
+async fn a_not_yet_on_the_card_revokes_the_words_before_it() {
+    let calls: Calls = Arc::default();
+    let log = calls.clone();
+    let flow = Flow::start(
+        "card-merge-revoked",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if turn.input.contains("Add notes and merge it.") {
+                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                    assert!(call(&turn, &log, "propose_merge", json!({})).await);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("doesn't want") {
+                    assert!(
+                        !call(
+                            &turn,
+                            &log,
+                            "finish_session",
+                            json!({ "user_words": "merge it" })
+                        )
+                        .await
+                    );
+                    return Reply::text("It stays on its branch.");
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add notes and merge it.").await;
+    let board = flow
+        .until("the merge card", |board| open_card(board, true).is_some())
+        .await;
+    let card = open_card(&board, true).unwrap();
+    flow.manager
+        .answer_question(
+            flow.conversation.clone(),
+            card.id.clone(),
+            vec!["Not yet".into()],
+        )
+        .await
+        .unwrap();
+    flow.until("the refusal", |_| calls.lock().unwrap().len() >= 2)
+        .await;
+    flow.settled().await;
+    assert!(!on_main(&flow, "NOTES.md"), "nothing merged after Not yet");
+    let calls = calls.lock().unwrap().clone();
+    assert!(calls[1].1.contains("Not yet"), "{calls:#?}");
     flow.stop().await;
 }

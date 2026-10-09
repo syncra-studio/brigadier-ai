@@ -3142,18 +3142,30 @@ impl SessionManager {
             // this CLI, past the swap threshold.
             self.consider_rebirth(conv, cli).await;
         }
-        // A card the thread opened is what the user answers; a question in its text alongside
-        // one asks nothing more.
-        let card_open = conv.kind == ConversationKind::Session
-            && self.core.board(&conv.id).await.is_ok_and(|board| {
-                board.questions.values().any(|question| {
-                    question.is_open()
-                        && matches!(
-                            question.kind,
-                            QuestionKind::Orchestrator | QuestionKind::Merge { .. }
-                        )
+        // A card the thread opened for a request is what the user answers; a question in its
+        // text alongside one asks nothing more.
+        let carded: HashSet<String> = match conv.kind {
+            ConversationKind::Session => self
+                .core
+                .board(&conv.id)
+                .await
+                .map(|board| {
+                    board
+                        .questions
+                        .values()
+                        .filter(|question| {
+                            question.is_open()
+                                && matches!(
+                                    question.kind,
+                                    QuestionKind::Orchestrator | QuestionKind::Merge { .. }
+                                )
+                        })
+                        .filter_map(|question| question.request_id.clone())
+                        .collect()
                 })
-            });
+                .unwrap_or_default(),
+            _ => HashSet::new(),
+        };
         let in_run = self.overnight.active.get(&conv.id).is_some();
         let (limit_hit, ended, landed, carried, asked, served, end_commands) = {
             let mut state = conv.state.lock().await;
@@ -3208,7 +3220,8 @@ impl SessionManager {
                 && let Some(request) = &served
                 && reply.as_deref().is_some_and(asks_user)
             {
-                if card_open || in_run || state.told_to_ask_on_card.contains(request) {
+                if carded.contains(request) || in_run || state.told_to_ask_on_card.contains(request)
+                {
                     state.asked_user.insert(request.clone());
                 } else {
                     state.told_to_ask_on_card.insert(request.clone());
@@ -4456,7 +4469,7 @@ impl Quiet {
 }
 
 /// What the thread is told when its reply asked the user something in text, with no card open.
-const ASK_ON_A_CARD: &str = "[Your reply asked the user a question in text. Ask it with ask_user instead (a card, with options and the one you recommend), then reply [quiet]. Don't repeat the question in text.]";
+const ASK_ON_A_CARD: &str = "[Your reply asked the user a question in text. Ask it on a card instead: propose_merge for the merge, ask_user for anything else (with options and the one you recommend). Then reply [quiet], and don't repeat the question in text.]";
 
 /// Replies shorter than this are held back until the turn shows whether they were narration.
 const NARRATION_BYTES: usize = 400;
