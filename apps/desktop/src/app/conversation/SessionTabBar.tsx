@@ -9,6 +9,8 @@ import {
   useRef,
 } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TitlebarButton } from "@/components/titlebar-button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuShortcut, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -48,6 +50,7 @@ import {
   stepTab,
   tabOrder,
   useSessionTabsOf,
+  useTabCloseAsk,
 } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
@@ -171,6 +174,7 @@ export function SessionTabBar({
   children?: ReactNode;
 }) {
   const id = conversation.id;
+  const confirmClose = useTabCloseAsk((state) => state.confirm);
   const { tabs, active } = useSessionTabsOf(id);
   const connection = useApp((s) => s.connection.status);
   const archived = conversation.lifecycle === "archived";
@@ -357,6 +361,21 @@ export function SessionTabBar({
       )}
       <PreviewChip conversationId={id} />
       {children}
+      <Dialog open={confirmClose !== null} onOpenChange={(open) => { if (!open) useTabCloseAsk.setState({ confirm: null }); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Close unsaved files?</DialogTitle>
+            <DialogDescription>These files have unsaved changes. Keep them open to save your work, or close them without saving.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => useTabCloseAsk.setState({ confirm: null })}>Keep open</Button>
+            <Button variant="destructive" onClick={() => {
+              useTabCloseAsk.setState({ confirm: null });
+              confirmClose?.();
+            }}>Close without saving</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </header>
   );
 }

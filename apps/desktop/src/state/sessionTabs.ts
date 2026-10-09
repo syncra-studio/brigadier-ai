@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import { notePaneClose } from "@/state/closedPanes";
-import { discardDocument, documentIsSaved } from "@/state/documentDrafts";
+import { discardDocument, documentIsSaved, pruneDocumentDrafts } from "@/state/documentDrafts";
 
 /**
  * A session's tabs over its main area: Chat (the conversation, always first and never
@@ -78,6 +78,8 @@ export const useSessionTabs = create<{ sessions: Record<string, SessionTabs> }>(
         localStorage.setItem("brigadier.sessionTabs", JSON.stringify({ state: { sessions }, version: 1 }));
         for (const session of Object.values(previous)) for (const tab of session.tabs)
           if (tab.kind === "document" && tab.savedPath && documentIsSaved(tab.id)) discardDocument(tab.id);
+        pruneDocumentDrafts(new Set(Object.values(sessions).flatMap((session) =>
+          session.tabs.filter((tab) => tab.kind === "document").map((tab) => tab.id))));
       } catch { /* Retain draft keys when storage is unavailable. */ }
       return { sessions };
     },
@@ -239,19 +241,29 @@ function remember(conversationId: string, gone: SessionTab[]): void {
   closed.set(conversationId, list);
 }
 
-export function closeTab(conversationId: string, id: string): void {
+export const useTabCloseAsk = create<{ confirm: (() => void) | null }>(() => ({ confirm: null }));
+
+function askToClose(tabs: SessionTab[], confirm: () => void): boolean {
+  if (!tabs.some((tab) => tab.kind === "document" && !documentIsSaved(tab.id))) return false;
+  useTabCloseAsk.setState({ confirm });
+  return true;
+}
+
+export function closeTab(conversationId: string, id: string, confirmed = false): void {
   if (id === CHAT_TAB) return;
   const current = sessionTabs(conversationId);
   const tab = current.tabs.find((entry) => entry.id === id);
   if (!tab) return;
+  if (!confirmed && askToClose([tab], () => closeTab(conversationId, id, true))) return;
   const tabs = current.tabs.filter((entry) => entry.id !== id);
   remember(conversationId, [tab]);
   update(conversationId, () => ({ tabs, active: afterClose(current, tabs, tab) }));
 }
 
 /** Closes every tab but Chat and `id`. */
-export function closeOtherTabs(conversationId: string, id: string): void {
+export function closeOtherTabs(conversationId: string, id: string, confirmed = false): void {
   const current = sessionTabs(conversationId);
+  if (!confirmed && askToClose(current.tabs.filter((tab) => tab.id !== id), () => closeOtherTabs(conversationId, id, true))) return;
   remember(
     conversationId,
     current.tabs.filter((tab) => tab.id !== id),
@@ -263,9 +275,10 @@ export function closeOtherTabs(conversationId: string, id: string): void {
 }
 
 /** Closes the tabs to the right of `id` (every tab, for Chat). */
-export function closeTabsToTheRight(conversationId: string, id: string): void {
+export function closeTabsToTheRight(conversationId: string, id: string, confirmed = false): void {
   const current = sessionTabs(conversationId);
   const at = id === CHAT_TAB ? -1 : current.tabs.findIndex((tab) => tab.id === id);
+  if (!confirmed && askToClose(current.tabs.slice(at + 1), () => closeTabsToTheRight(conversationId, id, true))) return;
   const kept = current.tabs.slice(0, at + 1);
   remember(conversationId, current.tabs.slice(at + 1));
   update(conversationId, () => ({

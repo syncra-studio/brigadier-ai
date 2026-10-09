@@ -166,7 +166,7 @@ function FileBrowser({
             onChange={(event) => {
               setQuery(event.target.value);
               setActive(0);
-        }}
+            }}
             onKeyDown={(event) => {
               if (!results) return;
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -177,7 +177,7 @@ function FileBrowser({
                 const path = results[active];
                 if (path) onOpen(path, true);
               }
-        }}
+            }}
             className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none"
           />
         </label>

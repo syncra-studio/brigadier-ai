@@ -59,3 +59,14 @@ export function editDocument(id: string, text: string): void {
 if (typeof window !== "undefined" && window.addEventListener) {
   window.addEventListener("pagehide", () => { for (const id of pending.keys()) flushDocument(id); });
 }
+
+/** Closed drafts have no persisted tab to reopen after a restart. */
+export function pruneDocumentDrafts(ids: Set<string>): void {
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (!key.startsWith(PREFIX)) continue;
+      const id = key.slice(PREFIX.length).replace(/\.saved$/, "");
+      if (!ids.has(id)) localStorage.removeItem(key);
+    }
+  } catch (error) { console.error("Could not remove abandoned document drafts", error); }
+}
