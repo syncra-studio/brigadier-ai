@@ -14,14 +14,27 @@ pub struct ActionRecord {
     /// Milliseconds since the Unix epoch.
     pub at_ms: u64,
     pub worker: String,
+    /// The action's place in its batch, from 0.
+    #[serde(default)]
+    pub index: usize,
     pub pid: i32,
     pub window: u32,
     pub window_title: String,
+    /// The app's name.
+    #[serde(default)]
+    pub app: String,
+    /// What it aimed at, in words, when it named something: `button "Save"`, a menu path, a
+    /// key chord. A point has none: `point` says where.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
     pub action: Action,
     pub status: Status,
     pub rung: Option<Rung>,
     pub effect: Option<Effect>,
     pub error: Option<ErrorCode>,
+    /// The error's detail. Left out where it could repeat a value the action read back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
     pub timings: Timings,
     /// The user's frontmost app, its key window and the cursor were the same after.
     pub user_focus_kept: bool,
@@ -58,14 +71,22 @@ impl ActionRecord {
         Self {
             at_ms,
             worker: worker.to_owned(),
+            index: r.index,
             pid: w.pid,
             window: w.id,
             window_title: w.title.clone(),
+            app: String::new(),
+            target: None,
             action,
             status: r.status,
             rung: r.delivered,
             effect: r.effect,
             error: r.error.as_ref().map(|e| e.code),
+            detail: r
+                .error
+                .as_ref()
+                .filter(|e| e.code != ErrorCode::NotSettable)
+                .map(|e| e.detail.clone()),
             timings: r.timings,
             user_focus_kept,
             point: None,

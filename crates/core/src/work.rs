@@ -439,11 +439,25 @@ pub struct StoredOutput {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ComputerAction {
+    /// The batch (one `act` call) it ran in; with `index`, the action's id.
+    #[serde(default)]
+    pub batch: String,
+    /// Its place in the batch, from 0. Every action of a batch has an event, the ones that
+    /// failed before acting and the ones skipped after a failure too.
+    #[serde(default)]
+    pub index: u32,
     pub at_ms: i64,
     /// `click`, `type`, `menu`…
     pub kind: String,
+    /// The app's name.
+    #[serde(default)]
+    pub app: String,
     /// The window's title when it acted.
     pub app_window: String,
+    /// What it aimed at, in words: `button "Save"`, a menu path, a key chord; none for a
+    /// point (the image marks it).
+    #[serde(default)]
+    pub target: Option<String>,
     pub pid: i32,
     pub window: u32,
     /// `done`, `failed` or `skipped`.
@@ -452,8 +466,11 @@ pub struct ComputerAction {
     pub rung: Option<String>,
     /// `confirmed`, `unverified`, `no_change`, `background_unavailable`.
     pub effect: Option<String>,
-    /// The error code, when it failed.
+    /// The error code, when it failed or was skipped.
     pub error: Option<String>,
+    /// The error's detail.
+    #[serde(default)]
+    pub detail: Option<String>,
     pub dispatch_ms: f64,
     /// The whole record as the engine wrote it (JSON), typed text left out.
     pub record: String,

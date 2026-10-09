@@ -3,15 +3,33 @@
 /**
  * One computer-use action of a worker (COMPUTER-USE-PLAN.md §5): the session's action log.
  */
-export type ComputerAction = { atMs: number, 
+export type ComputerAction = { 
+/**
+ * The batch (one `act` call) it ran in; with `index`, the action's id.
+ */
+batch: string, 
+/**
+ * Its place in the batch, from 0. Every action of a batch has an event, the ones that
+ * failed before acting and the ones skipped after a failure too.
+ */
+index: number, atMs: number, 
 /**
  * `click`, `type`, `menu`…
  */
 kind: string, 
 /**
+ * The app's name.
+ */
+app: string, 
+/**
  * The window's title when it acted.
  */
-appWindow: string, pid: number, window: number, 
+appWindow: string, 
+/**
+ * What it aimed at, in words: `button "Save"`, a menu path, a key chord; none for a
+ * point (the image marks it).
+ */
+target: string | null, pid: number, window: number, 
 /**
  * `done`, `failed` or `skipped`.
  */
@@ -25,9 +43,13 @@ rung: string | null,
  */
 effect: string | null, 
 /**
- * The error code, when it failed.
+ * The error code, when it failed or was skipped.
  */
-error: string | null, dispatchMs: number, 
+error: string | null, 
+/**
+ * The error's detail.
+ */
+detail: string | null, dispatchMs: number, 
 /**
  * The whole record as the engine wrote it (JSON), typed text left out.
  */

@@ -42,6 +42,8 @@ const TRAJECTORY_SIDE: u32 = 1280;
 const VALUE_PAGE: usize = 4_000;
 /// Images kept for coordinate mapping and zoom, per engine.
 const IMAGES_KEPT: usize = 64;
+/// How much of an element's label the action log keeps.
+const TARGET_CLIP: usize = 60;
 /// Diff bases kept, per engine.
 const BASES_KEPT: usize = 256;
 
@@ -648,6 +650,8 @@ impl<D: Desktop> Engine<D> {
         let mut stop: Option<CuError> = None;
         let first_record = self.records.len();
         for (index, action) in req.actions.iter().enumerate() {
+            let target = self.target_name(req.window, action);
+            let before = self.records.len();
             if let Some(why) = &stop {
                 let e = match why.code {
                     ErrorCode::Invalidated
@@ -657,6 +661,7 @@ impl<D: Desktop> Engine<D> {
                     _ => CuError::new(ErrorCode::Failed, "skipped: an earlier action failed"),
                 };
                 results.push(skipped(index, action, e));
+                self.complete_record(worker, req.window, action, before, target, &results);
                 continue;
             }
             let r = match self.act_one(worker, req.window, index, action, &cancel, &mut guard) {
@@ -697,8 +702,10 @@ impl<D: Desktop> Engine<D> {
                     stop = Some(e);
                 }
             }
+            self.complete_record(worker, req.window, action, before, target, &results);
         }
         drop(guard);
+        self.name_apps(first_record);
         let mut text = render_results(&results);
         let aims: Vec<(Point, Option<Rect>)> = self.records[first_record..]
             .iter()
@@ -1032,6 +1039,94 @@ impl<D: Desktop> Engine<D> {
         (record.point, record.element_box) = aim.map_or((None, None), |(p, b)| (Some(p), b));
         self.records.push(record);
         Ok((result, navigated))
+    }
+
+    /// Makes sure the action that just ran has its record (one that failed before it acted,
+    /// or was skipped, has none yet) and gives it its place and target.
+    fn complete_record(
+        &mut self,
+        worker: &str,
+        window: u32,
+        action: &Action,
+        before: usize,
+        target: Option<String>,
+        results: &[ActionResult],
+    ) {
+        let Some(result) = results.last() else {
+            return;
+        };
+        if self.records.len() == before {
+            let w = self
+                .records
+                .last()
+                .filter(|r| r.window == window)
+                .map(|r| WindowInfo {
+                    id: window,
+                    pid: r.pid,
+                    title: r.window_title.clone(),
+                    frame: Rect::default(),
+                    on_screen: true,
+                    minimized: false,
+                })
+                .or_else(|| self.desktop.window(window).ok())
+                .unwrap_or(WindowInfo {
+                    id: window,
+                    pid: 0,
+                    title: String::new(),
+                    frame: Rect::default(),
+                    on_screen: false,
+                    minimized: false,
+                });
+            self.records
+                .push(ActionRecord::new(worker, &w, action, result, true));
+        }
+        if let Some(r) = self.records.last_mut() {
+            r.index = result.index;
+            r.target = target;
+        }
+    }
+
+    /// Names the app of every record from `first` on.
+    fn name_apps(&mut self, first: usize) {
+        let mut names: HashMap<i32, String> = HashMap::new();
+        for i in first..self.records.len() {
+            let pid = self.records[i].pid;
+            if pid <= 0 {
+                continue;
+            }
+            let name = names
+                .entry(pid)
+                .or_insert_with(|| self.desktop.app(pid).map(|a| a.name).unwrap_or_default())
+                .clone();
+            self.records[i].app = name;
+        }
+    }
+
+    /// What an action aims at, in words for the action log: the element a ref named as it was
+    /// last seen (`button "Save"`), a menu path, a key chord.
+    fn target_name(&self, window: u32, action: &Action) -> Option<String> {
+        let of_ref = |r: &str| {
+            let rec = self.windows.get(&window)?.get(tree::parse_ref(r)?)?;
+            Some(
+                match rec.label.as_deref().filter(|l| !l.trim().is_empty()) {
+                    Some(l) => format!("{} {}", rec.role, tree::quote(l, TARGET_CLIP)),
+                    None => rec.role.clone(),
+                },
+            )
+        };
+        match action {
+            Action::Click { target, .. } | Action::Scroll { target, .. } => {
+                target.r#ref.as_deref().and_then(of_ref)
+            }
+            Action::Drag { from, .. } => from.r#ref.as_deref().and_then(of_ref),
+            Action::SetValue { r#ref, .. }
+            | Action::Perform { r#ref, .. }
+            | Action::Select { r#ref, .. } => of_ref(r#ref),
+            Action::Type { r#ref, .. } => r#ref.as_deref().and_then(of_ref),
+            Action::Menu { path, .. } => Some(path.join(" › ")),
+            Action::Key { key, .. } => Some(key.clone()),
+            Action::Wait { .. } => None,
+        }
     }
 
     /// A ref's last seen box and its centre.
@@ -2050,6 +2145,59 @@ mod tests {
         e.desktop.focus_secure = true;
         let text = observe(&mut e, Screenshot::Never, None).text;
         assert!(!text.contains("selected:"), "{text}");
+    }
+
+    #[test]
+    fn every_action_of_a_batch_has_its_record_failed_and_skipped_ones_too() {
+        let mut e = engine(Fake::new(basic()));
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let (next, other) = (ref_of(&text, "Next"), ref_of(&text, "Other"));
+        e.desktop.node_mut(2).enabled = false;
+        let click = |r: &str| Action::Click {
+            target: Target {
+                r#ref: Some(r.to_owned()),
+                ..Default::default()
+            },
+            button: Button::Left,
+            count: 1,
+            modifiers: Vec::new(),
+            expect: None,
+        };
+        let results = act(
+            &mut e,
+            vec![
+                click(&next),
+                click(&other),
+                Action::Menu {
+                    path: vec!["File".into(), "Save".into()],
+                    expect: None,
+                },
+            ],
+        );
+        assert_eq!(results.len(), 3);
+        let r = &e.records;
+        assert_eq!(r.len(), 3, "{r:?}");
+        assert_eq!(
+            r.iter().map(|r| (r.index, r.status)).collect::<Vec<_>>(),
+            [
+                (0, Status::Failed),
+                (1, Status::Skipped),
+                (2, Status::Skipped)
+            ]
+        );
+        assert_eq!(r[0].target.as_deref(), Some("button \"Next\""));
+        assert_eq!(r[1].target.as_deref(), Some("button \"Other\""));
+        assert_eq!(r[2].target.as_deref(), Some("File › Save"));
+        assert_eq!(r[0].error, Some(ErrorCode::StaleRef));
+        assert!(
+            r[0].detail
+                .as_deref()
+                .is_some_and(|d| d.contains("disabled"))
+        );
+        assert!(
+            r.iter()
+                .all(|r| r.app == "Fake" && r.window == 1 && r.pid != 0)
+        );
     }
 
     #[test]

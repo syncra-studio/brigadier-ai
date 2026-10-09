@@ -832,6 +832,7 @@ impl SessionManager {
             },
             None => None,
         };
+        let batch = uuid::Uuid::now_v7().to_string();
         let events = a
             .reply
             .records
@@ -841,15 +842,20 @@ impl SessionManager {
                 conversation_id: conversation_id.clone(),
                 task_id: task_id.clone(),
                 action: ComputerAction {
+                    batch: batch.clone(),
+                    index: r.index as u32,
                     at_ms: r.at_ms as i64,
                     kind: r.action.kind().into(),
+                    app: r.app.clone(),
                     app_window: r.window_title.clone(),
+                    target: r.target.clone(),
                     pid: r.pid,
                     window: r.window,
                     status: wire_name(&r.status).unwrap_or_default(),
                     rung: r.rung.as_ref().and_then(wire_name),
                     effect: r.effect.as_ref().and_then(wire_name),
                     error: r.error.map(|c| c.as_str().to_owned()),
+                    detail: r.detail.clone(),
                     dispatch_ms: r.timings.dispatch_ms,
                     record: serde_json::to_string(r).unwrap_or_default(),
                     image: if i == 0 { image.clone() } else { None },
