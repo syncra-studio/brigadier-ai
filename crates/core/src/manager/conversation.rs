@@ -1423,7 +1423,7 @@ impl SessionManager {
     }
 
     /// [`Self::kick`], returning once the next turn has started or found it may not (tests).
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) async fn next_turn_now(&self, conv: &Arc<ConvLive>) {
         self.arc().next_turn(conv.clone()).await;
     }
