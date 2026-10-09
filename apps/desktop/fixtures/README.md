@@ -92,3 +92,12 @@ dev daemon, 2026-10-08) through the board reducer from its stored events
 (`src/fixtures/boards/thread-t1-2026-10-08.events.json`). `?at=<ms>` stops at a live moment.
 Unfold "Worked for" and its groups to compare the activity rows; `activity/group.test.ts` reads the
 same events.
+
+# Computer timeline
+
+`http://localhost:1426/fixtures/computer-timeline.html` renders a finished worker's thread whose
+computer calls fold into its one "Used the computer" timeline. The timeline holds one batch of
+each kind from a `brigadier-computer bench --quick --replay` run
+(`src/fixtures/boards/computer-bench-run.json`); every screenshot reads as a 1×1 image. Open it,
+then step with ←/→, Home and End on its toolbar, or Play. `ComputerTimelineRender.test.ts` drives
+the same page in headless Chromium.
