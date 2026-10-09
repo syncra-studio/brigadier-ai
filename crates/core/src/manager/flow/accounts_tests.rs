@@ -534,3 +534,91 @@ async fn an_account_in_use_is_not_removed_and_a_chat_pinned_to_a_removed_one_run
     assert_eq!(seen(&log).last().unwrap().account, None);
     flow.stop().await;
 }
+
+#[tokio::test]
+async fn a_model_window_used_up_on_one_account_sends_that_models_work_to_another() {
+    use crate::accounts::AccountRef;
+    use brigadier_providers::{QuotaSnapshot, QuotaSource, QuotaWindow};
+
+    let flow = Flow::start(
+        "accounts-model-window",
+        Options::default(),
+        logging(&Log::default(), |_| Reply::text("Noted.")),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let runtime = &flow.manager.runtime;
+    let note = |account: Option<&str>, opus_used: f64| {
+        let now = crate::now_ms();
+        let window = |id: &str, used: f64, model: Option<&str>| QuotaWindow {
+            id: id.into(),
+            label: id.into(),
+            used_percent: used,
+            resets_at_ms: Some(now + 60 * 60 * 1000),
+            window_minutes: Some(7 * 24 * 60),
+            bucket: None,
+            model: model.map(Into::into),
+        };
+        runtime.monitor().note(
+            &AccountRef::new(ProviderKind::Claude, account.map(Into::into)),
+            &QuotaSnapshot {
+                provider: ProviderKind::Claude,
+                windows: vec![
+                    window("seven_day", 30.0, None),
+                    window("seven_day_opus", opus_used, Some("opus")),
+                ],
+                limit: None,
+                observed_at_ms: now,
+                source: QuotaSource::Read,
+            },
+            now,
+        );
+    };
+    let own = AccountRef::own(ProviderKind::Claude);
+    let opus_left = |runtime: &crate::runtime::Runtime| {
+        runtime
+            .provider_usage(ProviderKind::Claude, crate::now_ms())
+            .unwrap()
+            .windows
+            .iter()
+            .find(|state| state.window.id == "seven_day_opus")
+            .unwrap()
+            .window
+            .used_percent
+    };
+
+    // Opus used up on the computer's login, with room on the other account: routing sees
+    // that room, Opus work starts there under any of the model's names, and a chat on the
+    // CLI's default model may move there.
+    note(None, 100.0);
+    note(Some("acct-b"), 20.0);
+    assert_eq!(opus_left(runtime), 20.0);
+    for name in ["opus", "claude-opus-5-5", "opus[1m]"] {
+        assert_eq!(
+            runtime
+                .launch_account(ProviderKind::Claude, Some(name))
+                .account
+                .as_deref(),
+            Some("acct-b"),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        runtime.launch_account(ProviderKind::Claude, Some("sonnet")),
+        own
+    );
+    assert_eq!(
+        runtime
+            .switch_target(&own, None)
+            .and_then(|next| next.account),
+        Some("acct-b".into())
+    );
+
+    // Used up on both: no account takes it, so neither hands it to the other.
+    note(Some("acct-b"), 100.0);
+    assert_eq!(opus_left(runtime), 100.0);
+    assert_eq!(runtime.switch_target(&own, None), None);
+    assert_eq!(runtime.switch_target(&own, Some("opus")), None);
+    flow.stop().await;
+}

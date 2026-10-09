@@ -262,22 +262,56 @@ impl Runtime {
     }
 
     /// A provider's quota as routing sees it: each window with its rolling estimate, from the
-    /// monitor's samples over the window's span.
+    /// monitor's samples over the window's span. The windows are the lead account's, except
+    /// that a model's own window used up there is another signed-in account's that still has
+    /// room (with switching on): work on that model starts there ([`Self::launch_account`]).
     pub fn provider_usage(
         &self,
         kind: ProviderKind,
         now: i64,
     ) -> Option<brigadier_router::ProviderQuota> {
         let lead = self.monitor.lead(kind);
-        let snapshot = self.monitor.current_for(&lead, now)?;
+        let mut snapshot = self.monitor.current_for(&lead, now)?;
+        let mut owners = vec![lead.clone(); snapshot.windows.len()];
+        if self.core.settings().switch_accounts {
+            let others: Vec<_> = self
+                .account_candidates(kind)
+                .into_iter()
+                .filter(|candidate| candidate.account != lead && candidate.logged_in)
+                .filter_map(|candidate| {
+                    let quota = candidate.quota?;
+                    crate::accounts::headroom(&quota, None).map(|_| (candidate.account, quota))
+                })
+                .collect();
+            for (window, owner) in snapshot.windows.iter_mut().zip(&mut owners) {
+                if window.model.is_none() || window.used_percent < 100.0 {
+                    continue;
+                }
+                let roomier = others
+                    .iter()
+                    .filter_map(|(account, quota)| {
+                        quota
+                            .windows
+                            .iter()
+                            .find(|other| other.id == window.id && other.used_percent < 100.0)
+                            .map(|other| (account, other))
+                    })
+                    .min_by(|a, b| a.1.used_percent.total_cmp(&b.1.used_percent));
+                if let Some((account, other)) = roomier {
+                    *window = other.clone();
+                    *owner = account.clone();
+                }
+            }
+        }
         let history: Vec<(String, Vec<brigadier_router::QuotaSample>)> = snapshot
             .windows
             .iter()
-            .map(|window| {
+            .zip(&owners)
+            .map(|(window, owner)| {
                 let span_ms = window.window_minutes.unwrap_or(7 * 24 * 60) * 60 * 1000;
                 (
                     window.id.clone(),
-                    self.monitor.history(&lead, &window.id, now - span_ms),
+                    self.monitor.history(owner, &window.id, now - span_ms),
                 )
             })
             .collect();
