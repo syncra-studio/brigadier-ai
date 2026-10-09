@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": 2,
+  "revision": 3,
   "updated": "2026-10-09",
   "models": [
     {
@@ -42,7 +42,8 @@
         "merge": 9,
         "verify": 6,
         "chat": 8.5,
-        "orchestrate": 9
+        "orchestrate": 9,
+        "operate": 9
       },
       "defaultEffort": {
         "scout": "low",
@@ -616,7 +617,8 @@
         "merge": 9,
         "verify": 7.5,
         "chat": 8,
-        "orchestrate": 8
+        "orchestrate": 8,
+        "operate": 8.5
       },
       "defaultEffort": {
         "scout": "low",
