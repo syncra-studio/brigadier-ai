@@ -89,12 +89,12 @@ How to work:
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
 - Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect.
 - You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
-- Land finished work with land_phase (a phase isn't needed). What it left unfixed goes to a fix task (role fix, subject that task) or, when only the user can settle it, to note_for_user.
+- Land finished work with land_phase (a phase isn't needed). What it left unfixed goes to a fix task (role fix, subject that task) or, when only the user can settle it, on a card (ask_user).
 - Every landing and every commit of your own gets one review by the other vendor in the background; nothing waits for it, and a tip already reviewed isn't reviewed again. Its findings arrive as a [review …] message, maybe after your answer or a merge: fix what you agree with (a fix worker, or a tiny fix) and say why not for the rest.
 - Your own edits stay tiny: a few lines, only in files you have already read, then a quick check of them. Anything else goes to a worker. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`.
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
 - Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, or you decide or answer something for them, keep it with remember (personal: true for a preference that holds in every project), silently; outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision. code_search, code_refs and project_map find code faster than grepping.
-- Ask the user only what only they can decide, only with ask_user (a card, never a question in your text), then reply {quiet}; the answers come back in this request. Note what only they can do (a key, an account, a paid signup) with note_for_user, kind waiting, and a judgement call you made for them with kind decided. Work that doesn't depend on it carries on.
+- Ask the user only what only they can decide, only with ask_user (a card, never a question in your text), then reply {quiet}; the answers come back in this request. Note a judgement call you made for them with note_for_user, kind decided. Checking it in the app by hand is the workers' job and yours, never the user's.
 - Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise list them for the user. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - Tools return at once; never wait or poll. Reports, questions, reviews and outcomes arrive later as messages from Brigadier, in blocks like [report task-3 …] … [/report].
 - Each worker has an outputs folder for files meant for you or the user. Never tell a worker to write anywhere outside its worktree and scratch folder.{GRILLING}
@@ -102,7 +102,8 @@ How to work:
 How to talk to the user:
 - The user sees quiet worker lifecycle lines next to your replies and can open each worker's own thread. Don't announce what you delegated, don't repeat a task's spec, and don't restate reports.
 - Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show. This holds right after you delegate, too. Starting work that takes more than a moment, you may write one short opening line ("I'll check how tabs work, then ask you a few questions."); otherwise never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
-- When the request's work is done, write one final answer: what was found or done, what was checked and how, and what's next. A decision you need goes on a card (ask_user, or propose_merge), never in text. What waits on the user shows as a short list under your answer by itself (from note_for_user and the workers' needs_user): don't repeat it. Don't repeat what you already told them.
+- When the request's work is done, write one final answer: at most about five short lines of what changed and what to know. Then, if any, one line "To check: …" for what nobody could check and one "You'll need to: …" for what only the user can do (a key, an account). Then the full report (checks run, review findings, what wasn't tested) under a last heading `### Details`, shown folded. A decision goes on a card (ask_user, propose_merge), never in text.
+- A late review's fix that lands after your answer: write the ending again, updated; the user sees only the newest. Never repeat a closing or ask the merge again.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.
 - A [follow-up …] block is a message the user sent while you work on their request; it waits in their queue until you sort it with route_follow_up, silently (the user sees where it goes). If it belongs to this work (a question about the same thing, a detail or a change for it), it joins it: it reaches you at once as the user's message, and your one final answer covers it too. If it is a request of its own, it waits and reaches you on its own once this work is done; don't act on it before.{voice}{orchestrator_voice}
 - {AUTHORITY}{short}{code_rules}{preferences}"#,
@@ -307,8 +308,10 @@ pub(crate) fn short_replies_note(short: bool) -> String {
 /// ones, with a role no note can replace, starts over from its transcript instead of resuming
 /// ([`role_outdated`]). Version 3 adds how the thread splits and starts its workers
 /// (THREAD-UX-PLAN.md §4, §4.1). Version 4 asks the user only on cards, in rounds, with the
-/// interview, the opening line and the merge card (THREAD-PARITY-PLAN.md §5).
-pub(crate) const CONTRACT: u32 = 4;
+/// interview, the opening line and the merge card (THREAD-PARITY-PLAN.md §5). Version 5 lists
+/// nothing for the user outside an overnight run, has workers check by hand themselves, and
+/// asks for the short ending with its folded Details, updated rather than repeated (§5 Q6, Q9).
+pub(crate) const CONTRACT: u32 = 5;
 /// A Chat's contract: its instructions didn't change with the thread's.
 const CHAT_CONTRACT: u32 = 1;
 /// The first contract whose instructions say that notes replace them.
@@ -748,10 +751,12 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String 
         _ => String::new(),
     };
     // An overnight run's Waiting on you holds only what its done-when needs (PLAN.md §10.11).
+    // In a session the user is there, and the thread tells them in its answer: workers check
+    // by hand themselves (THREAD-PARITY-PLAN §5 Q6).
     let needs_user = if task.run.is_some() {
         "If a \"done when\" criterion can't be met without something only the user can do (a credential, a sign-in, an account, a paid signup), list exactly that under needs_user and finish everything else around it. Anything optional the user could add goes under risks, not needs_user."
     } else {
-        "If something only the user can do blocks part of the task (a credential, a sign-in, an account, a paid signup), don't stall on it: stub it (read it from an environment variable or config), list it under needs_user and finish everything else around it."
+        "A \"check it in the app\" or \"test it by hand\" step is yours, never the user's: run the app (its dev server, or a headless browser driving it, or the project's scripted UI checks) and check it yourself. What truly can't be checked goes under risks as \"Not checked: …\", never under needs_user.\n- needs_user is only for a key, an account or a paid signup that blocks part of the task: don't stall on it; stub it (read it from an environment variable or config), list it under needs_user and finish everything else around it."
     };
     format!(
         r#"Today is {today}.
@@ -890,11 +895,14 @@ pub(crate) fn report_envelope(task: &Task, report: &Report, route: &str) -> Stri
     list("Done when", &report.done_when, &mut text);
     list("Open questions", &report.open_questions, &mut text);
     list("Risks", &report.risks, &mut text);
-    // A worker's are listed for the user (a gate member's go to its gate).
-    let needs_user = if task.gate_link.is_none() {
+    // An overnight run's are listed for the user (a gate member's go to its gate); in a
+    // session the thread says them in its answer.
+    let needs_user = if task.gate_link.is_some() {
+        "Needs the user"
+    } else if task.run.is_some() {
         "Needs the user (already listed for them under Waiting on you)"
     } else {
-        "Needs the user"
+        "Needs the user (say it in your answer)"
     };
     list(needs_user, &report.needs_user, &mut text);
     if let Some(verdict) = report.verdict {
@@ -1329,6 +1337,17 @@ mod environment_tests {
         assert!(claude.contains("run_unsandboxed"));
         assert!(claude.contains("a failing command's output comes as the CLI's own excerpt"));
         assert!(claude.contains("Your workspace: (none yet)"));
+        // The short ending, with its folded Details, updated rather than repeated; nothing
+        // is listed for the user outside a run (THREAD-PARITY-PLAN §5 Q6, Q9).
+        for text in [&codex, &claude] {
+            assert!(text.contains("at most about five short lines"));
+            assert!(text.contains("\"To check: …\""));
+            assert!(text.contains("\"You'll need to: …\""));
+            assert!(text.contains("`### Details`, shown folded"));
+            assert!(text.contains("write the ending again, updated"));
+            assert!(!text.contains("kind waiting"));
+            assert!(!text.contains("Waiting on you"));
+        }
         // The merge is asked once on a card; typed words still consent.
         let worktree = environment_text(&Environment::NewWorktree {
             base: "main".into(),
