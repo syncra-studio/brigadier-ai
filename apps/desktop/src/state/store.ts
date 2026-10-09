@@ -33,6 +33,7 @@ export type SettingsPageId =
   | "accounts"
   | "routing"
   | "git"
+  | "computerUse"
   | "storage"
   | "inspector"
   | "archived";
@@ -586,6 +587,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "reviewUpdated":
     case "threadCommitsSeen":
     case "outputStored":
+    case "computerActed":
     case "checkRan":
     case "threadLooked":
     case "previewUpdated":

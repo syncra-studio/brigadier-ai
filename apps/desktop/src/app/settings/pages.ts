@@ -3,6 +3,7 @@ import {
   AvatarProfile,
   Branch,
   Chats,
+  Cursor,
   MemoryOnRemember,
   Robot,
   Shuffle,
@@ -15,6 +16,7 @@ import { lazy, type ComponentType, type SVGProps } from "react";
 
 import { ACCOUNTS_ROWS, AccountsPage } from "@/app/settings/AccountsPage";
 import { ARCHIVED_ROWS, ArchivedPage } from "@/app/settings/ArchivedPage";
+import { COMPUTER_USE_ROWS, ComputerUsePage } from "@/app/settings/ComputerUsePage";
 import { CONVERSATIONS_ROWS, ConversationsPage } from "@/app/settings/ConversationsPage";
 import { GENERAL_ROWS, GeneralPage } from "@/app/settings/GeneralPage";
 import { GIT_ROWS, GitPage } from "@/app/settings/GitPage";
@@ -22,6 +24,7 @@ import { PERSONALIZATION_ROWS, PersonalizationPage } from "@/app/settings/Person
 import { STORAGE_ROWS, StoragePage } from "@/app/settings/StoragePage";
 import { PROVIDERS_ROWS, ProvidersPage } from "@/app/providers/ProvidersPage";
 import { ROUTING_PAGE_ROWS, RoutingPage } from "@/app/routing/RoutingPage";
+import { computerUseAvailable } from "@/state/computerAccess";
 import type { SettingsPageId } from "@/state/store";
 
 /**
@@ -41,6 +44,8 @@ export type SettingsPageEntry = {
   group: SettingsGroup;
   component: ComponentType;
   rows: readonly SettingsRowCopy[];
+  /** Whether the page shows on this system; every page does unless it says otherwise. */
+  shown?: () => boolean;
 };
 
 // The Usage page (charts and all) and the Inspector (a developer view) load when first
@@ -137,6 +142,16 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     rows: Object.values(GIT_ROWS),
   },
   {
+    id: "computerUse",
+    label: "Computer use",
+    icon: Cursor,
+    group: "Agents",
+    component: ComputerUsePage,
+    rows: Object.values(COMPUTER_USE_ROWS),
+    // Only where the system has computer use (macOS), once Settings has read that.
+    shown: computerUseAvailable,
+  },
+  {
     id: "storage",
     label: "Storage",
     icon: Storage,
@@ -167,6 +182,11 @@ export function settingsPage(id: SettingsPageId): SettingsPageEntry {
   return SETTINGS_PAGES.find((page) => page.id === id) ?? SETTINGS_PAGES[0]!;
 }
 
+/** The pages that show on this system. */
+export function shownSettingsPages(): SettingsPageEntry[] {
+  return SETTINGS_PAGES.filter((page) => page.shown?.() ?? true);
+}
+
 export type SettingsSearchResult = { page: SettingsPageEntry; row: SettingsRowCopy | null };
 
 /** Pages and rows whose words contain every word of the query, pages first. */
@@ -178,10 +198,11 @@ export function searchSettings(query: string): SettingsSearchResult[] {
     return words.every((word) => haystack.includes(word));
   };
   const results: SettingsSearchResult[] = [];
-  for (const page of SETTINGS_PAGES) {
+  const pages = shownSettingsPages();
+  for (const page of pages) {
     if (matches(page.label)) results.push({ page, row: null });
   }
-  for (const page of SETTINGS_PAGES) {
+  for (const page of pages) {
     for (const row of page.rows) {
       if (matches(`${row.label} ${row.description ?? ""}`)) results.push({ page, row });
     }
