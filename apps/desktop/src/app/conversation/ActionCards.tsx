@@ -682,6 +682,7 @@ function ChoiceCard({
   onPage,
   onChoose,
   onText,
+  onTyped,
   onSkip,
   onDismiss,
   busy,
@@ -708,6 +709,8 @@ function ChoiceCard({
   onPage?: (step: -1 | 1) => void;
   onChoose: (index: number) => void;
   onText: (text: string) => void;
+  /** What the free-text row holds as it is typed, so paging away and back keeps it. */
+  onTyped?: (text: string) => void;
   onSkip: () => void;
   onDismiss: () => void;
   busy: boolean;
@@ -843,6 +846,7 @@ function ChoiceCard({
             onFocus={() => setHighlight(-1)}
             onChange={(event) => {
               setTyped(event.target.value);
+              onTyped?.(event.target.value);
               if (event.target.value) setHighlight(-1);
             }}
             onKeyDown={(event) => {
@@ -911,6 +915,8 @@ function QuestionAction({
   const action = useAction();
   const [page, setPage] = useState(0);
   const [answers, setAnswers] = useState<(string | null)[]>([]);
+  // Text typed on a question but not sent yet, kept while the user pages through the round.
+  const [drafts, setDrafts] = useState<(string | undefined)[]>([]);
   if (!question) return null;
 
   const round = questionRound(question);
@@ -921,9 +927,12 @@ function QuestionAction({
   // Back to any question answered so far, or on to the first one still open.
   const reachable = (to: number) =>
     to >= 0 && to < round.length && to <= answers.filter((answer) => answer !== null).length;
+  const draft = (text: string | undefined) =>
+    setDrafts((kept) => round.map((_, index) => (index === at ? text : kept[index])));
   const answer = (text: string) => {
     const next = round.map((_, index) => (index === at ? text : (answers[index] ?? null)));
     setAnswers(next);
+    draft(undefined);
     const open = next.findIndex((given) => given === null);
     if (open >= 0) {
       setPage(open);
@@ -947,7 +956,8 @@ function QuestionAction({
     ) : undefined;
   return (
     <ChoiceCard
-      // A question of the round starts fresh, but keeps an answer given before paging back.
+      // A question of the round starts fresh, but keeps an answer given, or text typed, before
+      // paging away.
       key={at}
       name="question"
       title={
@@ -976,7 +986,7 @@ function QuestionAction({
         recommended: item.recommended === index,
       }))}
       initial={picked >= 0 ? picked : (item.recommended ?? 0)}
-      initialText={given !== null && picked < 0 && given !== SKIPPED ? given : ""}
+      initialText={drafts[at] ?? (given !== null && picked < 0 && given !== SKIPPED ? given : "")}
       placeholder={
         item.options.length > 0
           ? "No, and tell Brigadier what to do differently"
@@ -987,6 +997,7 @@ function QuestionAction({
       onPage={(step) => reachable(at + step) && setPage(at + step)}
       onChoose={(index) => answer(item.options[index]?.label ?? "")}
       onText={answer}
+      onTyped={draft}
       onSkip={() => answer(SKIPPED)}
       onDismiss={onDismiss}
       busy={action.busy}
