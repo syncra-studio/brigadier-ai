@@ -29,6 +29,10 @@ engine = [
 name = "brigadier-computer"
 required-features = ["engine"]
 
+[[example]]
+name = "cursor-proof"
+required-features = ["engine"]
+
 [dependencies]
 anyhow.workspace = true
 serde.workspace = true
