@@ -618,13 +618,16 @@ impl Utf8Stream {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::path::{Path, PathBuf};
 
     use super::Terminals;
 
     /// A folder in the temp directory, removed when dropped however the test ends.
+    #[cfg(unix)]
     struct Temp(PathBuf);
 
+    #[cfg(unix)]
     impl std::ops::Deref for Temp {
         type Target = Path;
 
@@ -633,6 +636,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl Drop for Temp {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
