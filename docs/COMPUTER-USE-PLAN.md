@@ -1293,6 +1293,105 @@ search the whole disk. `observe`'s description, which every worker sees, says th
 - **Contention between terminal-granted processes** (Phase 3) bites only in development.
 - **Quota steers Operate to Codex** when Claude's window is projected high; Codex takes about twice the calls.
 
+### Phase 7, item 2: efficiency, gate E1 (2026-10-09/10, branch `cu-e1`)
+
+**The gate**, as the user amended it: the median of model calls ÷ (the scripted solver's tool calls + 2), per
+provider, at most 1.3, with no drop in task success. Measured on the suite's 29 model tasks (the grounding boards
+and the dev-build tasks have no reference or need the dev app), Operate at the router's medium effort, against the
+combined verification's scripted run.
+
+**Result: E1 passes for both providers.**
+
+| run | build | passed | E1 median |
+|---|---|---|---|
+| Claude 1 | `920ebeb4` | 29/29 | 1.0 |
+| Claude 2 | `65fbcf2c` | 27/29 | 1.0 |
+| Claude 3 | `484b24e3` | 29/29 | 1.0 |
+| Codex 2 | `21b896e2` | 29/29 | 0.89 |
+| Codex 3 | `d4930498` | 28/29 | 1.0 |
+| **Claude, pooled** | | **85/87** | **1.0** (median 4 calls) |
+| **Codex, pooled** | | **57/58** | **1.0** (median 4 calls) |
+
+Before this work: Claude ≈1.5 and Codex 2.25 (1.75 on browser tasks). Codex run 1 (`185c42eb`, 21/29, E1 0.8)
+doesn't count: all eight failures were one bug, an `appears` expect without `find`, fixed in `21b896e2`.
+
+**Where the extra calls went, and the fixes** (each with a unit test):
+- *Re-observing after an act.* The Operate brief now says observe once, do the whole job in one act with expects,
+  and the act's reply is the check; a reply opens with a verdict line ("All 4 actions done; 4 expects held: no need
+  to observe again"). `act`'s description says the same.
+- *Argument errors and retries.* The computer tools take the spellings models use; an argument error names the
+  failing action, what its expect needs, shows a well-formed call and says "Nothing ran: send the call again".
+  `submit_report` takes its lists as objects or one text. An unknown image id names the ids there are.
+- *Every error names the next call*, with an example.
+- *Codex's own discovery and one-action batches.* Its brief gives every call shape, `submit_report` included, says
+  not to list the tools, to act and report in one exec, that an error is never the end, and to report only when the
+  act's text starts with "All ".
+- *Looks that found nothing yet.* A full look names the window's file (a worker had run `lsof` for it); a window
+  whose page is still being built is waited for a whole bound again on the next look; an incomplete look now offers
+  one `wait` with `appears` rather than another look.
+- *Page lists.* A click on a closed `<select>`'s option failed ("Node does not have a layout object"); the worker
+  then picked by keys and its Return submitted the form twice (Codex 3's one failure). The click now picks the
+  option through the page's own keys, as `set_value` does, and the scripted `web-form` solution clicks the option.
+  Through accessibility, `type` sent a choice's whole name as one key event, which Chrome ignores in a closed list;
+  it now sends one key per character (live: "Team" picked in 55 ms), and `set_value` on a list whose menu won't
+  open falls back to that type-ahead, typing the old choice back if it lands elsewhere.
+- *A WebKit view stopped answering* ("app_not_responding: AXValue") under a `wait` for `appears`, which walked the
+  whole window every few milliseconds; it now walks every 75 ms.
+
+The safety rule (only the computer tools and the files the brief names, never kill or signal a process, never
+search the whole disk) and its tests are unchanged.
+
+**Per task**: model calls (E1) per run.
+
+| task | ref batches | claude-1 | claude-2 | claude-3 | codex-2 | codex-3 |
+|---|---|---|---|---|---|---|
+| append-line | 1 | 6 (1.5) | 6 (1.5) | 6 (1.5) | 4 (1) | 5 (1.25) |
+| catalyst-order | 1 | 5 (1.25) | 4 (1) | 5 (1.25) | 3 (0.75) | 3 (0.75) |
+| check-8 | 1 | 4 (1) | 4 (1) | 4 (1) | 3 (0.75) | 3 (0.75) |
+| electron-signup | 1 | 4 (1) | 4 (1) | 4 (1) | 3 (0.75) | 3 (0.75) |
+| find-replace | 2 | 8 (1.6) | 6 (1.2) | 5 (1) | 3 (0.6) | 5 (1) |
+| form | 1 | 4 (1) | 4 (1) | 4 (1) | 3 (0.75) | 3 (0.75) |
+| last-row | 1 | 5 (1.25) | 6 (1.5) | 6 (1.5) | 5 (1.25) | 5 (1.25) |
+| menu | 1 | 3 (1) | 3 (1) | 3 (1) | 4 (1.33) | 4 (1.33) |
+| minimised-code | 1 | 4 (1) | 4 (1) | 4 (1) | 5 (1.25) | 5 (1.25) |
+| name | 1 | 4 (1) | 4 (1) | 4 (1) | 3 (0.75) | 3 (0.75) |
+| password | 2 | 4 (0.8) | 4 (0.8) | 4 (0.8) | 4 (0.8) | 4 (0.8) |
+| popup | 1 | 5 (1.25) | 6 (1.5) | 7 (1.75) | 4 (1) | 4 (1) |
+| press-3 | 1 | 4 (1) | 4 (1) | 4 (1) | 4 (1) | 4 (1) |
+| red-dot | 1 | 5 (1.25) | 5 (1.25) | 5 (1.25) | 8 (2) | 7 (1.75) |
+| replace-text | 1 | 7 (1.75) | 5 (1.25) | 5 (1.25) | 3 (0.75) | 4 (1) |
+| row-173 | 1 | 4 (1) | 4 (1) | 7 (1.75) | 4 (1) | 5 (1.25) |
+| save-panel | 2 | 16 (2.67) | 9 (1.5) | 5 (0.83) | 8 (1.33) | 4 (0.67) |
+| sheet | 2 | 5 (0.83) | 5 (0.83) | 5 (0.83) | 7 (1.17) | 7 (1.17) |
+| slider | 1 | 4 (1) | 4 (1) | 4 (1) | 3 (0.75) | 3 (0.75) |
+| stepper | 1 | 4 (1) | 4 (1) | 4 (1) | 3 (0.75) | 3 (0.75) |
+| swiftui-item | 1 | 4 (1) | 4 (1) | 4 (1) | 5 (1.25) | 5 (1.25) |
+| tab | 1 | 5 (1.25) | 4 (1) | 4 (1) | 3 (0.75) | 3 (0.75) |
+| two-dots | 1 | 4 (1) | 4 (1) | 4 (1) | 8 (2) | 7 (1.75) |
+| web-ax-form | 1 | 15 (3.75) | 18 (4.5) **fail** | 4 (1) | 4 (1) | 4 (1) |
+| web-ax-form-webkit | 1 | 4 (1) | 12 (3) **fail** | 4 (1) | 3 (0.75) | 4 (1) |
+| web-canvas | 1 | 4 (0.8) | 4 (0.8) | 4 (0.8) | 5 (1) | 6 (1.2) |
+| web-dialog | 4 | 7 (0.78) | 7 (0.78) | 7 (0.78) | 8 (0.89) | 6 (0.67) |
+| web-form | 1 | 6 (1.5) | 4 (1) | 5 (1.25) | 3 (0.75) | 4 (1) **fail** |
+| web-iframe | 1 | 5 (1.25) | 5 (1.25) | 5 (1.25) | 3 (0.75) | 3 (0.75) |
+
+**Open**
+- **A Chrome window on another Space.** Claude 2 failed `web-ax-form` and `web-ax-form-webkit`, and two repeats on
+  that build failed `web-ax-form` again; each time the user was on a full-screen Space, so the window was off screen.
+  Chrome built no page tree for 20 s and more, its screenshots were stale, and synthetic activation didn't bring the
+  tree (the first repeat); its list opened no menu. With the user on the desktop's Space, both tasks passed in every run.
+  The engine now sends list keys one at a time and falls back to type-ahead; the incomplete note tells a worker of
+  a window off screen to wait in one call, then ask for the window to be brought into view, and never to click or
+  press keys into a page it can't read. Neither path has been exercised live off screen; that needs the user on
+  another Space during a run. Making Chromium's windows key once, as Electron's are, was considered and not done:
+  activation didn't bring the tree.
+- **`save-panel` (Codex 2): a pixel click into a save panel's field under synthetic activation brought the app to
+  the front 74 ms later**, with no cursor activity. An old delivery path, unchanged here. Suggested: refuse pointer
+  events into a save panel with `background_unavailable`.
+- **F1 in these runs**: the suite's own front changes were Chrome's plain launch in `web-ax-form`'s setup (known)
+  and the save panel above; the rest overlapped the person's own clicks or window switches. The user was at the Mac throughout.
+- `password` passes with the note that the report repeats the password the request itself gave.
+
 ### Phase 6: Windows and Linux backends (a future build)
 
 **Not in this build.** The user ruled on 2026-10-09 that computer use ships macOS-only; Windows and Linux are a
