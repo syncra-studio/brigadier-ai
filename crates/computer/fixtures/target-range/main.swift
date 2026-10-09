@@ -6,7 +6,9 @@
 //
 //   target-range <log path>
 //
-// It never activates itself: it is opened in the background (`open -n -g`) and driven there.
+// It never activates itself: it is opened in the background (`open -n -g`) and driven there, its
+// windows ordered behind every other window, so it never shows over the user's work and a Space
+// switch never hands it the front.
 
 import AppKit
 
@@ -203,7 +205,7 @@ func runGrounding(size: CGFloat) -> Never {
   next.frame = NSRect(x: 10, y: 10, width: 120, height: 30)
   groot.addSubview(next)
   canvas.deal(size: size, rng: &gh.rng); gh.showBoard()
-  gw.orderFront(nil)
+  gw.orderBack(nil)
   log("app", "ready", v: String(ProcessInfo.processInfo.processIdentifier))
     withExtendedLifetime(gh) { NSApplication.shared.run() }
   exit(0)
@@ -326,7 +328,7 @@ last.identifier = NSUserInterfaceItemIdentifier("last-action")
 root.addSubview(last)
 lastAction = last
 
-w.orderFront(nil)
+w.orderBack(nil)
 
 // A second window, minimised: background pointer events can't reach it.
 let mini = NSWindow(contentRect: NSRect(x: 120, y: 160, width: 300, height: 200), styleMask: [.titled, .miniaturizable], backing: .buffered, defer: false)
@@ -334,7 +336,7 @@ mini.title = "Minimised Target"
 let miniCanvas = DotCanvas(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
 miniCanvas.dots = [.init(id: "mini-dot", rect: NSRect(x: 140, y: 90, width: 20, height: 20), color: .systemRed)]
 mini.contentView = miniCanvas
-mini.orderFront(nil)
+mini.orderBack(nil)
 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { mini.miniaturize(nil) }
 
 // SIGUSR1 logs every control's state: the end state a checker reads, since a value set through

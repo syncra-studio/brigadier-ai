@@ -7,7 +7,9 @@
 //
 //   scratch-pad <file>
 //
-// It never activates itself: it is opened in the background (`open -n -g`) and driven there.
+// It never activates itself: it is opened in the background (`open -n -g`) and driven there, its
+// windows ordered behind every other window, so it never shows over the user's work and a Space
+// switch never hands it the front.
 
 import AppKit
 
@@ -81,5 +83,5 @@ tv.setAccessibilityLabel("Document")
 ed.text = tv
 w.contentView!.addSubview(scroll)
 w.makeFirstResponder(tv)
-w.orderFront(nil)
+w.orderBack(nil)
 app.run()
