@@ -763,15 +763,18 @@ files); terminal windows were sent requests that had to be refused, never input.
   the element outline.
 - **The timeline.** A worker's computer calls (Claude's `mcp__computer__*`, Codex's `computer/*`, the CLI through
   `$BRIGADIER_COMPUTER_CLI`) fold out of its activity into one "Used the computer" disclosure after its recent
-  activity. Its line says what it did, or what it does now while live. Open, it shows the shown batch's marked
-  screenshot (full size on click), a player (Previous, Play, Next, "Step i of n"; ←/→, Home, End and Space on its
-  toolbar) and the steps: action and outcome in words on every step, the route and its time only on the shown
-  batch's. History is read in pages (`listComputerActions`) and kept up by live `computerActed` events. Screenshots
-  are read with the existing `readAttachment`.
+  activity. Its line says what it did, or what it does now while live. Open, it shows the shown step's batch's
+  marked screenshot (full size on click), a player (Previous, Play, Next, "Step i of n", a step being one action, as
+  the line counts them; ←/→, Home, End and Space on its toolbar, which keeps the focus at either end) and the steps:
+  action and outcome in words on every step, the route and its time only on the shown one's. History is read in
+  pages (`listComputerActions`, which reads past pages holding only other workers' actions) and kept up by live
+  `computerActed` events. Screenshots are read with the existing `readAttachment`.
 - **The permission item.** A missing grant raises one "Waiting on you" item per conversation. It holds up no request:
-  the worker has its error and goes on. It has one Allow button per missing grant and no Done button. It closes by
-  itself when a read finds both grants in, or on the worker's next working call, and is found again after a
-  restart.
+  the worker has its error, which says the user is already asked, and goes on. It has one Allow button per missing
+  grant and no Done button. It closes by itself when a read finds both grants in, or on the worker's next working
+  call, and is found again after a restart. The thread relaying a worker's report about the same permissions
+  (`note_for_user` naming Accessibility, Screen Recording or computer use while the item is open) is told it is
+  already listed, not given a second item.
 - **`bench --replay <dir>`** writes the bench's action log the way the daemon keeps it (`actions.json`, one
   `ComputerAction` per action) with each batch's marked PNG beside it.
 
@@ -815,12 +818,27 @@ inherited grants**, not the helper bundle's own)
 - **Found on the way, fixed:** with AppKit running on the main thread, a just-launched app could be missing from the
   running apps for a moment ("no app with pid", once in five runs); a live process is now waited for, up to 1 s. A
   panic in the overlay's work thread now ends the process instead of leaving it drawing forever.
-- **Found on the way, open:** while one of these terminal-attributed processes (the helper, a bench) holds
-  ScreenCaptureKit, every capture from another of them times out until the first exits; the system `screencapture`
-  isn't affected. All of them run under the terminal's identity tonight, so this may be a per-client limit that a
-  signed helper with its own grant never hits. The case that matters is the installed app's helper and a dev
-  build's at the same time. To check once the helper bundle has its own grant: start one helper, have it capture a
-  window, then capture from a second helper.
+- **Verified again** (2026-10-09, fresh checks on the final tree): `cursor-proof` again showed both cursors at once
+  (12/12 and 12/12 actions in 7.4 s) and the same bytes with and without the cursor (91,971 for `observe`, 91,967
+  for the action log's image). On a dev build, a Claude scout pressed, ticked, set the slider, typed into "Name" and
+  clicked the red dot by pixel, and the fixture's log shows exactly those five events. The thread reads "Used the
+  computer · 5 steps in target-range", and its player reads "Step 5 of 5". With the dev bundle's own helper, which
+  has no grants (nothing in privacy settings touched), a scout's call got `permission_missing`. The session's
+  summary then listed "Let workers use apps on this Mac" with an Allow per grant, and after a daemon restart the
+  earlier conversation's item was still there. The quick bench and the full bench with the cursor drawn (200
+  repetitions, 1057 s) pass every gate: S1 6.2/8.1, S2 56.9/61.8, S4 20.8/47.0, S5 2.5/7.0 ms, P1 and P2 1600/1600,
+  P4 0, F1 0.
+- **Found on the way, open, and not ours:** while one of these terminal-attributed processes (the helper, a bench)
+  holds ScreenCaptureKit, every capture from another of them times out until the first exits; the system
+  `screencapture` isn't affected. It isn't a leak in our capture: dropping the cached `SCShareableContent` after
+  every capture changes nothing, and two plain Swift processes that only call `SCShareableContent` and
+  `SCScreenshotManager.captureImage` (Apple's API, none of our code) block each other the same way: the second
+  capture waits until the first process exits. All of them run under the terminal's identity, so this is likely a
+  per-client limit that a helper with its own grant never hits. It bites in development: a terminal capture while
+  a dev daemon's terminal-granted helper works made that worker's batch screenshot time out (the timeline then
+  says "No screenshot for this step"). The case that matters is the installed app's helper and a dev build's at the
+  same time. To check once the helper bundle has its own grant: start one helper, have it capture a window, then
+  capture from a second helper.
 
 ### Phase 4: The GUI specialist, the model-in-the-loop suite and macOS comparisons
 
