@@ -614,12 +614,18 @@ fn close_windows<D: Desktop>(
             .filter(|w| windows.contains(&w.id))
             .collect()
     };
-    for w in open(engine) {
-        let _ = engine.desktop.close(&w);
-    }
+    // A window that has just opened may miss the first press: the ones still open are
+    // pressed again every half second. One asking about unsaved changes stays.
     let deadline = Instant::now() + CLOSE_WAIT;
     let mut left = open(engine);
+    let mut pressed: Option<Instant> = None;
     while !left.is_empty() && Instant::now() < deadline {
+        if pressed.is_none_or(|t| t.elapsed() >= Duration::from_millis(500)) {
+            for w in &left {
+                let _ = engine.desktop.close(w);
+            }
+            pressed = Some(Instant::now());
+        }
         std::thread::sleep(Duration::from_millis(50));
         left = open(engine);
     }
