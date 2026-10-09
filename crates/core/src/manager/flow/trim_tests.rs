@@ -420,31 +420,42 @@ async fn a_run_is_killed_at_its_timeout_and_when_the_thread_ends() {
     let env = flow.manager.runtime.cli_env().clone();
     let dir = Scratch::new("run");
     let pid_file = dir.join("child.pid");
+    // Made once it has printed: its timeout fires only after that, however slow the machine.
+    let printed = dir.join("printed");
     let mut spec = env.spec(std::path::Path::new("/bin/sh"));
     spec.args = vec![
         "-c".into(),
         format!(
-            "sleep 60 & echo $! > {}; echo started; wait",
-            pid_file.display()
+            "sleep 60 & echo $! > {}; echo started; : > {}; wait",
+            pid_file.display(),
+            printed.display()
         )
         .into(),
     ];
     spec.cwd = Some(dir.to_path_buf());
     let owner = "orch:test-kill";
-    let started = tokio::time::Instant::now();
-    let ran = super::super::run::run_command(
-        platform.clone(),
-        &spec,
-        Duration::from_secs(1),
-        tokio_util::sync::CancellationToken::new(),
-        owner,
-        flow.manager.runtime.ledger(),
-    )
-    .await
-    .unwrap();
+    let gate = Arc::new(tokio::sync::Notify::new());
+    super::super::run::hold_timeout(owner, gate.clone());
+    let (ran, opened) = tokio::join!(
+        super::super::run::run_command(
+            platform.clone(),
+            &spec,
+            Duration::from_secs(1),
+            tokio_util::sync::CancellationToken::new(),
+            owner,
+            flow.manager.runtime.ledger(),
+        ),
+        async {
+            super::eventually("the command to print", || printed.exists()).await;
+            gate.notify_one();
+            tokio::time::Instant::now()
+        }
+    );
+    let ran = ran.unwrap();
     assert_eq!(ran.status, "timed out after 1 s");
     assert_eq!(ran.output, b"started\n");
-    assert!(started.elapsed() < Duration::from_secs(10));
+    // Killed at its timeout, not waited for.
+    assert!(opened.elapsed() < Duration::from_secs(10));
     let child: u32 = std::fs::read_to_string(&pid_file)
         .unwrap()
         .trim()

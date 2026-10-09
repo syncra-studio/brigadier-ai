@@ -360,6 +360,22 @@ impl Drop for Running {
     }
 }
 
+/// Tests: the next run by each owner here times out only once its gate is notified too, so a
+/// test sees what the command did before its timeout, however slow the machine.
+#[cfg(test)]
+static TIMEOUT_GATES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Notify>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Tests: holds the timeout of `owner`'s next run until `gate` is notified.
+#[cfg(all(test, unix))]
+pub(crate) fn hold_timeout(owner: &str, gate: Arc<tokio::sync::Notify>) {
+    TIMEOUT_GATES
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(owner.to_owned(), gate);
+}
+
 /// Runs `spec` to its end, `timeout`, or `ended` (the thread's CLI ended), whichever comes
 /// first, recorded under `owner` in the cleanup ledger while it runs.
 pub(crate) async fn run_command(
@@ -396,12 +412,24 @@ pub(crate) async fn run_command(
         let _ = platform.processes().kill_tree(pid);
         why
     };
+    #[cfg(test)]
+    let gate = TIMEOUT_GATES
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(owner);
+    let timed_out = async {
+        tokio::time::sleep(timeout).await;
+        #[cfg(test)]
+        if let Some(gate) = gate {
+            gate.notified().await;
+        }
+    };
     let status = tokio::select! {
         status = child.wait() => match status {
             Ok(status) => exit_status(status),
             Err(err) => stopped(format!("lost the command: {err}")),
         },
-        () = tokio::time::sleep(timeout) => {
+        () = timed_out => {
             stopped(format!("timed out after {} s", timeout.as_secs()))
         }
         () = ended.cancelled() => stopped("stopped: the thread's session ended".into()),
