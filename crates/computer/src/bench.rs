@@ -167,6 +167,8 @@ struct Report {
     focus_changes: Vec<String>,
     /// Focus changes the fixture can't have caused, listed, not counted.
     outside_focus_changes: Vec<String>,
+    /// The focus changes during SA, also counted in F1.
+    sa_focus_changes: usize,
     /// Supported paths per target kind.
     coverage: BTreeMap<String, Vec<String>>,
     t1_text_tokens: usize,
@@ -260,6 +262,30 @@ fn find_ref(text: &str, needle: &str) -> Result<String> {
         .and_then(|l| l.split_whitespace().find(|w| tree::parse_ref(w).is_some()))
         .map(str::to_owned)
         .ok_or_else(|| anyhow!("no element {needle:?} in the observation"))
+}
+
+/// The centre, in window points, of the element on the observation line that contains `needle`
+/// (its `@x,y wxh`).
+fn centre_of(text: &str, needle: &str) -> Result<Point> {
+    let line = text
+        .lines()
+        .find(|l| l.contains(needle))
+        .ok_or_else(|| anyhow!("no element {needle:?} in the observation"))?;
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let at = words
+        .iter()
+        .position(|w| w.starts_with('@'))
+        .context("no frame on the line")?;
+    let num = |s: &str, sep: char| -> Option<(f64, f64)> {
+        let (a, b) = s.split_once(sep)?;
+        Some((a.parse().ok()?, b.parse().ok()?))
+    };
+    let (x, y) = num(&words[at][1..], ',').context("bad position")?;
+    let (w, h) = words
+        .get(at + 1)
+        .and_then(|s| num(s, 'x'))
+        .context("bad size")?;
+    Ok(Point::new(x + w / 2.0, y + h / 2.0))
 }
 
 impl Bench {
@@ -903,6 +929,92 @@ impl Bench {
         Ok(())
     }
 
+    /// SA: ordinary controls of an inactive app clicked by pixel in the background, through
+    /// synthetic activation: an NSButton, an NSTextView and a SwiftUI button, in the quirk-pad
+    /// fixture. Its own gate, with its own focus count.
+    fn synthetic_activation(&mut self, reps: u32, dir: &Path) -> Result<()> {
+        let log_path = dir.join("quirk-pad-log.jsonl");
+        let save = dir.join("quirk-pad-save");
+        std::fs::create_dir_all(&save)?;
+        let pid = crate::suite_run::launch_fixture(
+            "quirk-pad",
+            &[log_path.as_os_str(), save.as_os_str()],
+        )?;
+        let prep = crate::suite::Prepared {
+            pid,
+            pid_start_us: crate::macos::process_start_us(pid).unwrap_or(0),
+            exe: crate::suite_run::executable(pid).unwrap_or_default(),
+            ..Default::default()
+        };
+        let main_log = std::mem::replace(
+            &mut self.log,
+            LogTail {
+                path: log_path,
+                offset: 0,
+            },
+        );
+        let thefts = self.report.focus_changes.len();
+        let r = self.sa_clicks(&prep, reps);
+        self.log = main_log;
+        crate::suite_run::teardown(&prep);
+        self.report.sa_focus_changes = self.report.focus_changes.len() - thefts;
+        r?;
+        self.report.coverage.insert(
+            "plain inactive controls: NSButton, NSTextView, SwiftUI button".into(),
+            vec!["background pointer with synthetic activation".into()],
+        );
+        Ok(())
+    }
+
+    fn sa_clicks(&mut self, prep: &crate::suite::Prepared, reps: u32) -> Result<()> {
+        let desktop = &mut self.engine.desktop;
+        let appkit = crate::suite_run::wait_window(desktop, prep, "AppKit Pad", 10)?;
+        let swiftui = crate::suite_run::wait_window(desktop, prep, "SwiftUI Pad", 10)?;
+        desktop.watch(prep.pid);
+        // The fixture's own setup (it minimises one window, then orders another out) is over
+        // before the clock starts, so it isn't counted as a click's effect.
+        let _ = self.log.until(Duration::from_secs(5), |e| e.id == "out-window")?;
+        std::thread::sleep(Duration::from_millis(300));
+        let _ = self.log.read_new()?;
+        for (window, needle, target, ev) in [
+            (appkit, "button \"Plain Button\"", "plain-button", "press"),
+            (appkit, "text-area \"Notes\"", "notes-view", "down"),
+            (swiftui, "button \"Tap Me\"", "swiftui-tap", "press"),
+        ] {
+            let reply = self.observe(window, Screenshot::Always, true)?;
+            let img = reply.image.context("no window image")?.id;
+            let centre = centre_of(&reply.text, needle)?;
+            let p = self
+                .engine
+                .image_transform(&img)
+                .context("the image is gone")?
+                .to_image(centre);
+            for _ in 0..reps {
+                let (res, t0) = self.act(
+                    window,
+                    Action::Click {
+                        target: crate::action::Target {
+                            image: Some(img.clone()),
+                            x: Some(p.x),
+                            y: Some(p.y),
+                            ..Default::default()
+                        },
+                        button: Default::default(),
+                        count: 1,
+                        modifiers: Vec::new(),
+                        expect: None,
+                    },
+                )?;
+                self.score(&format!("SA click {target}"), &res, t0, target, |e| {
+                    e.id == target && e.ev == ev
+                })?;
+                // Read the rest of the click (a text view's selection) before the next one.
+                let _ = self.log.until(Duration::from_millis(30), |_| false)?;
+            }
+        }
+        Ok(())
+    }
+
     fn gates(&mut self) {
         let mut gates = Vec::new();
         let ops = &self.report.ops;
@@ -1062,6 +1174,17 @@ impl Bench {
             target: "0".into(),
             pass: self.report.wrong_target.is_empty(),
         });
+        let (ok, n) = rate("SA click");
+        if n > 0 {
+            let thefts = self.report.sa_focus_changes;
+            gates.push(Gate {
+                id: "SA",
+                what: "inactive NSButton, NSTextView, SwiftUI button by pixel".into(),
+                measured: format!("{ok}/{n} landed · {thefts} focus changes"),
+                target: "100%, 0".into(),
+                pass: ok == n && thefts == 0,
+            });
+        }
         gates.push(Gate {
             id: "F1",
             what: "focus theft: frontmost app, cursor, key windows".into(),
@@ -1231,6 +1354,7 @@ pub fn run(
     b.refusals(reps)?;
     b.typing(reps)?;
     b.selection((reps / 10).max(5))?;
+    b.synthetic_activation(reps, &out)?;
     let start_focus = b.user.clone();
     b.check_focus("the whole run", &start_focus);
     if foreground {
