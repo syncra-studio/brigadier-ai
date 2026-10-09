@@ -974,7 +974,12 @@ impl<D: Desktop> Engine<D> {
                     set_text = Some((el, text.clone()));
                     rung
                 } else {
+                    // Set first: some controls only hear a value set (a save panel's Save
+                    // button stays disabled after an edit, measured 2026-10-09). Then edit.
                     self.desktop.set_value(&el, text)?;
+                    if EDITED_FIELDS.contains(&node.role.as_str()) {
+                        self.replace_as_edit(&el, text);
+                    }
                     set_text = Some((el, text.clone()));
                     Rung::Element
                 }
@@ -1509,6 +1514,19 @@ impl<D: Desktop> Engine<D> {
         Ok((Rung::Background, false))
     }
 
+    /// Replaces a field's text the way an edit does: focus it, select it all, insert the text at
+    /// the selection, all through accessibility. A value set alone skips the field's editor, so
+    /// a SwiftUI binding never hears of it (measured 2026-10-09: the field showed the text and
+    /// the app saved an empty title). Best effort, after the caller set the value to `text`.
+    fn replace_as_edit(&mut self, el: &D::Element, text: &str) {
+        let len = text.chars().count();
+        let _ = self
+            .desktop
+            .set_focus(el)
+            .and_then(|()| self.desktop.select(el, 0, len))
+            .and_then(|()| self.desktop.insert_text(el, text));
+    }
+
     pub fn zoom(&mut self, worker: &str, req: &ZoomRequest) -> CuResult<Reply> {
         let _ = worker;
         let t = self.image(&req.image)?;
@@ -1553,6 +1571,9 @@ impl<D: Desktop> Engine<D> {
 
 /// The role of a document's text view: edited only with typed keys.
 const DOCUMENT_TEXT: &str = "text-area";
+
+/// Fields whose value is replaced as an edit (`Engine::replace_as_edit`).
+const EDITED_FIELDS: [&str; 3] = ["textfield", "search-field", "combo"];
 
 /// A filtered observation can show what is out of view, so it reads everything.
 fn filtered_read(req: &ObserveRequest) -> bool {
@@ -3175,5 +3196,26 @@ mod tests {
         stopper.join().unwrap();
         assert_eq!(r.unwrap_err().code, ErrorCode::StoppedByUser);
         assert!(t0.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_fields_value_is_replaced_as_an_edit_then_set() {
+        let set = |text: &str| Action::SetValue {
+            r#ref: "e4".into(),
+            text: text.into(),
+            expect: None,
+        };
+        let mut fake = Fake::new(basic());
+        fake.node_mut(4).value = Some("old text".into());
+        let mut e = engine(fake);
+        observe(&mut e, Screenshot::Never, None);
+        let r = act(&mut e, vec![set("Quarterly report")]);
+        assert_eq!(r[0].status, Status::Done, "{:?}", r[0].error);
+        assert_eq!(e.desktop.log, ["set_value 4", "select 4 0 16", "insert 4"]);
+        assert_eq!(e.desktop.focused, Some(4));
+        assert_eq!(
+            e.desktop.node_mut(4).value.as_deref(),
+            Some("Quarterly report")
+        );
     }
 }
