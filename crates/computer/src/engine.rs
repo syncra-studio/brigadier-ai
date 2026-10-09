@@ -28,6 +28,10 @@ pub const PAGE_CHARS: usize = 24_000;
 pub const QUIET: Duration = Duration::from_millis(50);
 /// The settle bound when nothing is expected.
 pub const SETTLE_BOUND: Duration = Duration::from_millis(1_500);
+/// A batch's deadline, before the time its waits may take.
+pub const REQUEST_DEADLINE: Duration = Duration::from_secs(30);
+/// The longest one wait action may take.
+pub const MAX_WAIT: Duration = Duration::from_secs(300);
 /// Characters per page of an element's full value.
 const VALUE_PAGE: usize = 4_000;
 /// Images kept for coordinate mapping and zoom, per engine.
@@ -570,7 +574,33 @@ impl<D: Desktop> Engine<D> {
     }
 
     pub fn act(&mut self, worker: &str, req: &ActRequest) -> CuResult<Reply> {
-        let cancel = self.gens.token(worker, Duration::from_secs(30));
+        self.act_from(worker, req, None)
+    }
+
+    /// `act` for a request that was queued: `queued` was taken when it arrived, so a stop or a
+    /// cancel that came while it waited ends it before its first action.
+    pub fn act_from(
+        &mut self,
+        worker: &str,
+        req: &ActRequest,
+        queued: Option<&CancelToken>,
+    ) -> CuResult<Reply> {
+        // The deadline makes room for the waits the batch asks for.
+        let waits: Duration = req
+            .actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Wait { timeout_ms, .. } => {
+                    Some(Duration::from_millis(*timeout_ms).min(MAX_WAIT))
+                }
+                _ => None,
+            })
+            .sum();
+        let deadline = REQUEST_DEADLINE + waits;
+        let cancel = match queued {
+            Some(q) => q.with_deadline(deadline),
+            None => self.gens.token(worker, deadline),
+        };
         let releaser = self.desktop.releaser();
         let mut guard = InputGuard::new(&*releaser);
         let mut results: Vec<ActionResult> = Vec::with_capacity(req.actions.len());
@@ -777,9 +807,7 @@ impl<D: Desktop> Engine<D> {
         };
         let dispatch = start.elapsed();
         let bound = match action {
-            Action::Wait { timeout_ms, .. } => {
-                Duration::from_millis(*timeout_ms).min(Duration::from_secs(300))
-            }
+            Action::Wait { timeout_ms, .. } => Duration::from_millis(*timeout_ms).min(MAX_WAIT),
             _ => SETTLE_BOUND,
         };
         let (settled, effect_at) = self.settle(

@@ -6,12 +6,14 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
 use crate::action::{ActRequest, Action, ObserveRequest, Reply, ZoomRequest};
 use crate::block::BlockList;
+use crate::cancel::CancelToken;
 use crate::desktop::Desktop;
 use crate::engine::Engine;
 use crate::geom::{Point, Provider, Rect};
@@ -218,6 +220,8 @@ struct Job {
     worker: String,
     op: String,
     req: Value,
+    /// Taken when the request arrived, so a stop sent while it waits in the queue ends it.
+    queued: CancelToken,
     reply: mpsc::Sender<(Value, Option<Vec<u8>>)>,
 }
 
@@ -273,11 +277,14 @@ pub fn serve<D: Desktop>(mut engine: Engine<D>, socket: &Path, token_file: &Path
                     }
                     let (rtx, rrx) = mpsc::channel();
                     let req = msg.get("req").cloned().unwrap_or(Value::Null);
+                    // Its deadline is set again when the request starts.
+                    let queued = gens.token(&worker, Duration::ZERO);
                     if tx
                         .send(Job {
                             worker,
                             op,
                             req,
+                            queued,
                             reply: rtx,
                         })
                         .is_err()
@@ -303,7 +310,7 @@ pub fn serve<D: Desktop>(mut engine: Engine<D>, socket: &Path, token_file: &Path
     eprintln!("serving on {}", socket.display());
     // The engine stays on this thread: its accessibility objects and run loop live here.
     while let Ok(job) = rx.recv() {
-        let answer = handle(&mut engine, &job.worker, &job.op, job.req);
+        let answer = handle(&mut engine, &job.worker, &job.op, job.req, &job.queued);
         let _ = job.reply.send(answer);
     }
     Ok(())
@@ -314,6 +321,7 @@ fn handle<D: Desktop>(
     worker: &str,
     op: &str,
     mut req: Value,
+    queued: &CancelToken,
 ) -> (Value, Option<Vec<u8>>) {
     if let Err(e) = resolve_window(engine, &mut req) {
         return (json!({"ok": false, "error": e.to_string()}), None);
@@ -329,7 +337,7 @@ fn handle<D: Desktop>(
             Err(e) => return (json!({"ok": false, "error": e.to_string()}), None),
         },
         "act" => match serde_json::from_value::<ActRequest>(req) {
-            Ok(r) => engine.act(worker, &r),
+            Ok(r) => engine.act_from(worker, &r, Some(queued)),
             Err(e) => return (json!({"ok": false, "error": e.to_string()}), None),
         },
         "zoom" => match serde_json::from_value::<ZoomRequest>(req) {

@@ -386,8 +386,8 @@ The descriptions carry the house rule in two lines: use code, files and app APIs
 
 ### 4.7 Cancellation and deadlines
 
-- Every request has a deadline for the whole request (default 30 s, `wait` up to 300 s), separate from the 1 s
-  per-call accessibility timeout.
+- Every request has a deadline for the whole request (30 s plus the time its `wait` actions ask for, each up to
+  300 s), separate from the 1 s per-call accessibility timeout.
 - The engine keeps a cancellation generation per session and a global one. Stop, a cancelled MCP request, a worker
   that ends, or a closed connection bumps it. Every action checks it before it starts, and long sequences (typing,
   drags, scroll runs, waits) check it between events.

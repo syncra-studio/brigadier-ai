@@ -83,6 +83,14 @@ impl CancelToken {
         Ok(())
     }
 
+    /// The same generations with a new deadline, `d` from now.
+    pub fn with_deadline(&self, d: Duration) -> Self {
+        Self {
+            deadline: Instant::now() + d,
+            ..self.clone()
+        }
+    }
+
     pub fn remaining(&self) -> Duration {
         self.deadline.saturating_duration_since(Instant::now())
     }
@@ -162,6 +170,19 @@ mod tests {
         assert_eq!(t.check().unwrap_err().code, ErrorCode::StoppedByUser);
         let later = g.token("s1", Duration::from_secs(30));
         assert!(later.check().is_ok());
+    }
+
+    #[test]
+    fn a_stop_while_a_request_is_queued_ends_it_when_it_starts() {
+        let g = Generations::new();
+        let queued = g.token("s1", Duration::ZERO);
+        g.stop_all();
+        let started = queued.with_deadline(Duration::from_secs(30));
+        assert_eq!(started.check().unwrap_err().code, ErrorCode::StoppedByUser);
+        let fresh = g
+            .token("s1", Duration::ZERO)
+            .with_deadline(Duration::from_secs(30));
+        assert!(fresh.check().is_ok());
     }
 
     #[test]
