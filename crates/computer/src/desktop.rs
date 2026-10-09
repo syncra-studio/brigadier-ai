@@ -125,6 +125,17 @@ pub struct UserFocus {
     pub server_front: Option<u64>,
 }
 
+/// Whether a window's structure is all there: some apps build it only after the first
+/// accessibility client asks, and take a moment to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Structure {
+    Ready,
+    /// Still being built; read again shortly.
+    Pending,
+    /// The app took longer than the engine waits; what it read may be partial.
+    Incomplete,
+}
+
 /// One captured image with how it was made.
 pub struct Capture {
     pub image: Rgba,
@@ -265,6 +276,11 @@ pub trait Desktop {
     /// The end of a batch: a backend that kept an app believing it is active across the batch's
     /// actions lets it go, so the window shows its active look once a batch, not once an action.
     fn end_batch(&mut self) {}
+    /// Whether `w`'s structure is complete yet (see `Structure`).
+    fn structure(&mut self, w: &WindowInfo) -> Structure {
+        let _ = w;
+        Structure::Ready
+    }
 
     /// Reads, from any thread, how many seconds ago the user last used a mouse, trackpad or
     /// keyboard. Input this crate posts doesn't count. Zero when the backend can't tell, which

@@ -10,6 +10,7 @@ mod capture;
 pub(crate) mod input;
 pub mod overlay;
 pub mod private;
+mod quirks;
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -146,6 +147,7 @@ pub struct MacDesktop {
     ax_windows: HashMap<u32, AxEl>,
     /// The synthetic activation the batch's actions share, with its app (`end_batch` ends it).
     held: Option<(i32, input::Activation)>,
+    quirks: quirks::Quirks,
 }
 
 impl MacDesktop {
@@ -162,6 +164,7 @@ impl MacDesktop {
             watches: HashMap::new(),
             ax_windows: HashMap::new(),
             held: None,
+            quirks: quirks::Quirks::default(),
         })
     }
 
@@ -202,13 +205,31 @@ impl MacDesktop {
                 self.ax_windows.insert(id, el);
             }
         }
+        self.quirks.first_contact(w.pid);
+        if !self.ax_windows.contains_key(&w.id) && !w.on_screen {
+            // Revealing makes the window key inside its app, which would end an activation
+            // the batch holds on another of its windows.
+            if self.held.as_ref().is_some_and(|(pid, _)| *pid == w.pid) {
+                self.release_activation();
+            }
+            let front = front_pid();
+            if let Some(el) = quirks::reveal(w, front) {
+                self.ax_windows.insert(w.id, el);
+            }
+        }
         if !self.ax_windows.contains_key(&w.id) {
             self.remote_windows(w);
         }
         self.ax_windows.get(&w.id).cloned().ok_or_else(|| {
+            let why = if w.on_screen || w.minimized {
+                ""
+            } else {
+                ": it is off screen and its app didn't make it key, so it is ordered out (shown \
+                 on no Space) or its app is your front app"
+            };
             CuError::new(
                 ErrorCode::NoSuchTarget,
-                format!("window w{} has no accessibility element", w.id),
+                format!("window w{} has no accessibility element{why}", w.id),
             )
         })
     }
@@ -350,6 +371,11 @@ impl MacDesktop {
 
 impl Desktop for MacDesktop {
     type Element = AxEl;
+
+    fn structure(&mut self, w: &WindowInfo) -> crate::desktop::Structure {
+        let el = self.ax_window(w).ok();
+        self.quirks.structure(w, el.as_ref())
+    }
 
     fn releaser(&self) -> Arc<dyn Release + Send + Sync> {
         Arc::new(input::Releaser)
