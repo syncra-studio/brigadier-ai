@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use crate::action::{ImageOut, Reply as EngineReply};
 use crate::block::BlockList;
 use crate::cancel::{CancelToken, Generations};
+use crate::cursor::Cursor;
 use crate::desktop::{Desktop, WindowInfo};
 use crate::engine::{Engine, REQUEST_DEADLINE};
 use crate::error::{CuError, CuResult, ErrorCode};
@@ -143,6 +144,8 @@ pub struct Hub {
     system: System,
     pub gens: Arc<Generations>,
     jobs: Sender<Work>,
+    /// The agent cursor's overlay, told when sessions end and when the user stops (§4.5).
+    cursor: Cursor,
     conns: Mutex<HashMap<u64, Arc<Conn>>>,
     activity: Arc<Mutex<Activity>>,
     next_conn: AtomicU64,
@@ -151,8 +154,14 @@ pub struct Hub {
 
 impl Hub {
     /// Starts the engine thread. `make` builds the desktop there on the first engine request
-    /// that finds every grant in place, and again after a failure.
-    pub fn start<D, F>(access: Access, system: System, make: F) -> std::io::Result<Arc<Self>>
+    /// that finds every grant in place, and again after a failure. `cursor` draws where each
+    /// worker acts.
+    pub fn start<D, F>(
+        access: Access,
+        system: System,
+        cursor: Cursor,
+        make: F,
+    ) -> std::io::Result<Arc<Self>>
     where
         D: Desktop + 'static,
         F: FnMut() -> CuResult<D> + Send + 'static,
@@ -164,15 +173,16 @@ impl Hub {
             running: 0,
             idle_since: Some(Instant::now()),
         }));
-        let (g, a) = (gens.clone(), activity.clone());
+        let (g, a, c) = (gens.clone(), activity.clone(), cursor.clone());
         std::thread::Builder::new()
             .name("computer-engine".into())
-            .spawn(move || engine_loop(rx, g, a, system, make))?;
+            .spawn(move || engine_loop(rx, g, a, system, c, make))?;
         Ok(Arc::new(Self {
             access,
             system,
             gens,
             jobs: tx,
+            cursor,
             conns: Mutex::default(),
             activity,
             next_conn: AtomicU64::new(1),
@@ -201,6 +211,9 @@ impl Hub {
     /// and every connection hears it. Never waits: the events go out from their own thread.
     pub fn stop(self: &Arc<Self>, by: &str) {
         self.gens.stop_all();
+        if let Some(c) = &self.cursor {
+            c.clear();
+        }
         let hub = self.clone();
         let by = by.to_owned();
         let _ = std::thread::Builder::new()
@@ -352,10 +365,16 @@ impl Hub {
                 self.gens.cancel_session(&req.worker);
                 lock(&self.activity).end(&req.worker);
                 let _ = self.jobs.send(Work::Forget(req.worker.clone()));
+                if let Some(c) = &self.cursor {
+                    c.end(&req.worker);
+                }
                 ok("session ended")
             }
             Op::StopAll => {
                 self.gens.stop_all();
+                if let Some(c) = &self.cursor {
+                    c.clear();
+                }
                 ok("stopped")
             }
             Op::Ping => ok("pong"),
@@ -431,6 +450,7 @@ fn engine_loop<D, F>(
     gens: Arc<Generations>,
     activity: Arc<Mutex<Activity>>,
     system: System,
+    cursor: Cursor,
     mut make: F,
 ) where
     D: Desktop,
@@ -446,8 +466,11 @@ fn engine_loop<D, F>(
             }
             Work::Job(job) => {
                 let started = Instant::now();
+                if let (Some(c), Some(label)) = (&cursor, &job.req.policy.label) {
+                    c.label(&job.req.worker, label);
+                }
                 let run = catch_unwind(AssertUnwindSafe(|| {
-                    run(&mut engine, &mut make, &gens, system, &job)
+                    run(&mut engine, &mut make, &gens, system, &cursor, &job)
                 }));
                 let (mut reply, images) = match run {
                     Ok(Ok((reply, images))) => (reply, images),
@@ -475,6 +498,7 @@ fn run<D: Desktop>(
     make: &mut impl FnMut() -> CuResult<D>,
     gens: &Arc<Generations>,
     system: System,
+    cursor: &Cursor,
     job: &Job,
 ) -> CuResult<(Reply, Vec<Vec<u8>>)> {
     let req = &job.req;
@@ -488,6 +512,7 @@ fn run<D: Desktop>(
         None => {
             let mut e = Engine::new(make()?, BlockList::default(), Provider::Claude);
             e.gens = gens.clone();
+            e.cursor = cursor.clone();
             slot.insert(e)
         }
     };

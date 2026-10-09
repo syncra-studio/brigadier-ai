@@ -20,6 +20,7 @@ use serde_json::Value;
 use crate::action::{
     ActRequest, Action, ActionResult, ObserveRequest, Reply, Rung, Screenshot, Status,
 };
+use crate::cursor::Cursor;
 use crate::desktop::{Desktop, UserFocus, WindowInfo};
 use crate::engine::Engine;
 use crate::error::ErrorCode;
@@ -1106,7 +1107,8 @@ fn wait_windows(desktop: &mut MacDesktop, pid: i32) -> Result<(WindowInfo, Windo
     }
 }
 
-pub fn run(mut desktop: MacDesktop, out: &Path, quick: bool) -> Result<bool> {
+/// Runs the bench. With a `cursor`, the agent cursor draws every action it aims.
+pub fn run(mut desktop: MacDesktop, out: &Path, quick: bool, cursor: Cursor) -> Result<bool> {
     let reps = if quick { 20 } else { 200 };
     std::fs::create_dir_all(out)?;
     let out = out.canonicalize()?;
@@ -1127,6 +1129,10 @@ pub fn run(mut desktop: MacDesktop, out: &Path, quick: bool) -> Result<bool> {
     std::thread::sleep(Duration::from_millis(500));
     let mut engine = Engine::new(desktop, crate::harness::dev_block_list(), Provider::Claude);
     engine.desktop.watch(pid);
+    if let Some(c) = &cursor {
+        c.label("bench", "Bench");
+    }
+    engine.cursor = cursor;
     let mut b = Bench {
         engine,
         log: LogTail {

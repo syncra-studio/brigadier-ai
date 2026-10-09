@@ -11,6 +11,7 @@ use super::hub::{Access, Hub, System};
 use crate::action::{ActRequest, Action, Expect, Screenshot};
 use crate::cancel::{CancelToken, Held, InputGuard, Release};
 use crate::client::{Answer, Client, Gone};
+use crate::cursor::{Aim, Cursor, CursorSink};
 use crate::desktop::{
     AppInfo, Button, Capabilities, Capture, Chord, Desktop, Focus, Mods, UserFocus, WindowInfo,
 };
@@ -238,6 +239,10 @@ impl Drop for Setup {
 }
 
 fn setup(system: System, parent: Option<i32>) -> Setup {
+    setup_with(system, parent, None)
+}
+
+fn setup_with(system: System, parent: Option<i32>, cursor: Cursor) -> Setup {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
         "bcu-hub-{}-{}",
@@ -256,7 +261,7 @@ fn setup(system: System, parent: Option<i32>) -> Setup {
         parent,
         team: None,
     };
-    let hub = Hub::start(access, system, move || Ok(Fake(s.clone()))).unwrap();
+    let hub = Hub::start(access, system, cursor, move || Ok(Fake(s.clone()))).unwrap();
     hub.accept(listener).unwrap();
     Setup {
         hub,
@@ -278,18 +283,15 @@ fn send(c: &Client, op: Op) -> (u64, Answered) {
 }
 
 fn send_as(c: &Client, worker: &str, op: Op) -> (u64, Answered) {
+    send_with(c, worker, Policy::default(), op)
+}
+
+fn send_with(c: &Client, worker: &str, policy: Policy, op: Op) -> (u64, Answered) {
     let id = c.next_id();
     let (tx, rx) = mpsc::channel();
-    c.send(
-        id,
-        worker,
-        Provider::Claude,
-        Policy::default(),
-        op,
-        move |a| {
-            let _ = tx.send(a);
-        },
-    );
+    c.send(id, worker, Provider::Claude, policy, op, move |a| {
+        let _ = tx.send(a);
+    });
     (id, rx)
 }
 
@@ -521,4 +523,74 @@ fn closing_a_launched_apps_windows_checks_it_is_still_that_process() {
     let (_, rx) = send(&c, close(42));
     assert_eq!(answer(&rx).unwrap().reply.text, "closed");
     assert!(s.seen.closed.load(Ordering::SeqCst));
+}
+
+/// What the cursor was told, in order.
+#[derive(Default)]
+struct Told(Mutex<Vec<String>>);
+
+impl Told {
+    fn take(&self) -> Vec<String> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+    }
+}
+
+impl CursorSink for Told {
+    fn aim(&self, aim: Aim) {
+        let p = aim.at;
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("aim {} {},{}", aim.worker, p.x, p.y));
+    }
+    fn label(&self, worker: &str, label: &str) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("label {worker} {label}"));
+    }
+    fn end(&self, worker: &str) {
+        self.0.lock().unwrap().push(format!("end {worker}"));
+    }
+    fn clear(&self) {
+        self.0.lock().unwrap().push("clear".into());
+    }
+}
+
+#[test]
+fn the_cursor_hears_names_aims_ends_and_stops() {
+    let told = Arc::new(Told::default());
+    let s = setup_with(granted(), None, Some(told.clone()));
+    let c = connect(&s, TOKEN);
+    let named = Policy {
+        label: Some("Fix the login page".into()),
+        ..Policy::default()
+    };
+    // A point needs the image it was read from.
+    let observe = serde_json::from_value(serde_json::json!({"window": 1, "screenshot": "always"}));
+    let (_, rx) = send_with(&c, "w1", named.clone(), Op::Observe(observe.unwrap()));
+    let image = answer(&rx).unwrap().reply.image.unwrap().id;
+    told.take();
+    let click = serde_json::json!({"do": "click", "image": image, "x": 20.0, "y": 30.0});
+    let act = Op::Act(ActRequest {
+        window: 1,
+        actions: vec![serde_json::from_value(click).unwrap()],
+        screenshot: Screenshot::Never,
+    });
+    let (_, rx) = send_with(&c, "w1", named, act);
+    assert!(answer(&rx).unwrap().reply.results[0].error.is_none());
+    // The name comes before the request's aims; the engine got the cursor.
+    assert_eq!(told.take(), ["label w1 Fix the login page", "aim w1 20,30"]);
+    // No name, nothing told before the request.
+    let (_, rx) = send(&c, Op::Apps);
+    assert!(answer(&rx).unwrap().reply.ok);
+    assert!(told.take().is_empty());
+    let (_, rx) = send_as(&c, "w1", Op::EndSession);
+    assert!(answer(&rx).unwrap().reply.ok);
+    assert_eq!(told.take(), ["end w1"]);
+    let (_, rx) = send(&c, Op::StopAll);
+    assert!(answer(&rx).unwrap().reply.ok);
+    assert_eq!(told.take(), ["clear"]);
+    s.hub.stop("menu");
+    assert_eq!(told.take(), ["clear"]);
 }

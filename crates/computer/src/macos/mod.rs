@@ -8,6 +8,7 @@
 mod ax;
 mod capture;
 mod input;
+pub mod overlay;
 pub mod private;
 
 use std::cell::Cell;

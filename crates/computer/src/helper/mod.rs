@@ -5,7 +5,7 @@
 //! The control service (permissions, cancel, stop) answers before any grant exists, so the
 //! user can be walked through granting them. The engine starts on its own thread on the first
 //! engine request that finds every grant in place. The main thread runs AppKit for the
-//! menu-bar Stop item and the ⌃⌥⌘. hotkey.
+//! menu-bar Stop item, the ⌃⌥⌘. hotkey and the agent cursor's overlay.
 //!
 //! The helper exits when its parent daemon goes away, and [`IDLE_EXIT`] after the last
 //! session ended with nothing queued or running.
@@ -115,7 +115,9 @@ pub fn serve(o: Options) -> Result<()> {
         parent: o.parent,
         team,
     };
-    let hub = Hub::start(access, system(), crate::macos::MacDesktop::new)?;
+    // The overlay draws on this thread once `menu::run` runs AppKit on it.
+    let overlay: crate::cursor::Cursor = Some(crate::macos::overlay::Overlay::new());
+    let hub = Hub::start(access, system(), overlay, crate::macos::MacDesktop::new)?;
     hub.accept(listener)?;
     eprintln!("brigadier-computer: serving on {}", o.socket.display());
 

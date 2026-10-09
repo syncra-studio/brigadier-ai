@@ -397,6 +397,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "block2",
+ "dispatch2",
  "libc",
  "objc2",
  "objc2-app-kit",
@@ -404,6 +405,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation",
+ "objc2-quartz-core",
  "objc2-screen-capture-kit",
  "png 0.18.1",
  "serde",
@@ -3277,6 +3279,7 @@ dependencies = [
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
+ "objc2-quartz-core",
 ]
 
 [[package]]
@@ -3457,6 +3460,7 @@ dependencies = [
  "bitflags 2.13.2",
  "objc2",
  "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-foundation",
 ]
 
