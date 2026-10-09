@@ -149,8 +149,6 @@ pub struct MacDesktop {
     /// The synthetic activation the batch's actions share, with its app (`end_batch` ends it).
     held: Option<(i32, input::Activation)>,
     quirks: quirks::Quirks,
-    /// Browsers' web areas made readable (`web.rs`).
-    web: web::WebAreas,
 }
 
 impl MacDesktop {
@@ -168,7 +166,6 @@ impl MacDesktop {
             ax_windows: HashMap::new(),
             held: None,
             quirks: quirks::Quirks::default(),
-            web: web::WebAreas::default(),
         })
     }
 
@@ -196,7 +193,7 @@ impl MacDesktop {
         if let Some(el) = self.ax_windows.get(&w.id) {
             return Ok(el.clone());
         }
-        if self.quirks.first_contact(w.pid) {
+        if self.quirks.first_contact(w.pid) == quirks::Kind::Electron {
             // Waking it makes it key inside its app, which would end an activation the batch
             // holds on another of its windows.
             if self.held.as_ref().is_some_and(|(pid, _)| *pid == w.pid) {
@@ -491,15 +488,10 @@ impl Desktop for MacDesktop {
 
     fn tree(&mut self, w: &WindowInfo, all: bool) -> CuResult<Vec<RawNode<AxEl>>> {
         let el = self.ax_window(w)?;
-        self.web.prepare(w.pid, w.id, &el, || {
-            NSRunningApplication::runningApplicationWithProcessIdentifier(w.pid)
-                .and_then(|a| a.bundleIdentifier())
-                .map(|b| b.to_string())
-        });
         let nodes = ax::tree(&el, quirks::origin(w, Some(&el)), all);
         if nodes.len() <= 1 && el.attr("AXRole").is_err() {
             self.ax_windows.remove(&w.id);
-            self.web.forget(w.id);
+            self.quirks.forget(w.id);
             return err(
                 ErrorCode::StaleRef,
                 "the window's accessibility element went away; observe again",

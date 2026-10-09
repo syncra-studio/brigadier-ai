@@ -7,21 +7,21 @@
 //!   window and cursor don't change (measured 2026-10-09 on AppKit and SwiftUI windows, the user
 //!   on a full-screen Space). It is never done to the user's own front app: making one of its
 //!   windows key would take their typing.
-//! - **Electron apps** build their accessibility tree only when a client sets
-//!   `AXManualAccessibility` on the application element, and Electron delays the build by about
-//!   2 s. It is set once per process instance (setting it again restarts the countdown), and an
-//!   observe waits for the page's web area to fill, up to `READY_BOUND`.
-//!
-//! - **Lazy trees.** AppKit, SwiftUI and Catalyst windows add elements in the moments after the
-//!   first accessibility query (measured 2026-10-09: a Catalyst window 19 → 20 elements and an
-//!   AppKit one 36 → 38 within 150 ms; the first read of the Catalyst one lacked its stepper,
-//!   which a read or the app's own launch builds later). The first observe of a window walks it
-//!   until its element count holds for `SETTLE_QUIET` and the app is past `LAUNCHING`, up to
-//!   `SETTLE_BOUND`, once per window and process instance. An app already running pays one quiet
-//!   window; only an app launched a moment ago waits longer.
-//!
-//! Browsers (Chromium-family apps by bundle id, `AXEnhancedUserInterface`) are the browser
-//! stream's (`web.rs`), not this module's.
+//! - **First contact**, once per process instance, on the application element. Some apps build
+//!   their tree only when a client asks for it: Electron when `AXManualAccessibility` is set,
+//!   Chromium browsers when `AXEnhancedUserInterface` is (both flags are set on them, and stay
+//!   set for the process), each about 2 s later; setting a flag again restarts that countdown.
+//!   WebKit fills a page's tree lazily once it is read, and may first report its scroll area
+//!   outside the window. AppKit, SwiftUI and Catalyst windows add elements in the moments after
+//!   the first query (measured 2026-10-09: a Catalyst window 19 → 20 elements and an AppKit one
+//!   36 → 38 within 150 ms; a Catalyst stepper came with the app's launch, later still).
+//! - **One settle per window.** The first observe of a window walks it until its element count
+//!   holds for `SETTLE_QUIET` and the app is past `LAUNCHING`: the page's elements where the
+//!   window holds a page (or will: Electron and Chromium windows always do), every element
+//!   otherwise. A page also has to have content inside its window. It waits up to `PAGE_BOUND`
+//!   for a page and `SETTLE_BOUND` for anything else, once per window and process instance. An
+//!   app already running pays one quiet window; only an app launched a moment ago, or a page
+//!   still being built, waits longer.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -32,14 +32,15 @@ use objc2_core_foundation::CFBoolean;
 
 use super::ax::AxEl;
 use super::input::Activation;
+use super::web;
 use crate::desktop::{Structure, WindowInfo};
 use crate::geom::Point;
 
-/// How long an observe waits for a first-contact app to build its tree: Electron starts it about
-/// 2 s after the attribute is set.
-pub const READY_BOUND: Duration = Duration::from_millis(3500);
-/// How deep under the window a web area is looked for.
-const WEB_AREA_DEPTH: usize = 12;
+/// How long a window's first observe waits for its page: Electron and Chromium start building it
+/// about 2 s after their flag is set, and a busy Mac adds to that. Under the engine's own wait.
+const PAGE_BOUND: Duration = Duration::from_millis(4500);
+/// How long an empty view (`web::empty_host`) is given to show the page it will hold.
+const APPEAR_WAIT: Duration = Duration::from_secs(1);
 /// How long a window's element count must hold on first contact before its tree counts as built.
 /// 100 ms was too short under load (2026-10-09, load average 15: a Catalyst stepper came later).
 const SETTLE_QUIET: Duration = Duration::from_millis(250);
@@ -48,18 +49,27 @@ const SETTLE_QUIET: Duration = Duration::from_millis(250);
 /// launches, the count unchanged for the second before). A window of an app this young is
 /// settled no sooner than this after its process started.
 const LAUNCHING: Duration = Duration::from_millis(2000);
-/// The longest first-contact settle: an app that keeps changing (a clock, a progress bar) is
-/// taken as it is.
+/// The longest first-contact settle of a window without a page: an app that keeps changing (a
+/// clock, a progress bar) is taken as it is.
 const SETTLE_BOUND: Duration = Duration::from_millis(2500);
 /// How long a revealed window takes to become its app's focused window.
 const REVEAL_WAIT: Duration = Duration::from_millis(300);
+
+/// What an app is asked for on first contact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Native,
+    /// `AXManualAccessibility`; its windows are made key once (`Quirks::wake`).
+    Electron,
+    /// `AXManualAccessibility` and `AXEnhancedUserInterface`.
+    Chromium,
+}
 
 /// What first contact did to one process instance.
 #[derive(Debug, Clone, Copy)]
 struct Contact {
     start_us: u64,
-    electron: bool,
-    at: Instant,
+    kind: Kind,
 }
 
 /// Windows of Electron apps that have been key once (see `Quirks::wake`).
@@ -86,14 +96,23 @@ impl Settle {
         }
     }
 
-    /// Takes a new count; true when the tree counts as built.
-    fn update(&mut self, count: usize, now: Instant) -> bool {
+    /// Takes a new count, whether what it counts is usable yet (a page with content), and how
+    /// long this window may be waited for.
+    fn update(&mut self, count: usize, usable: bool, bound: Duration, now: Instant) -> Structure {
         if count != self.count {
             self.count = count;
             self.changed = now;
         }
-        (now.duration_since(self.changed) >= SETTLE_QUIET && now >= self.launched)
-            || now.duration_since(self.began) >= SETTLE_BOUND
+        let quiet = now.duration_since(self.changed) >= SETTLE_QUIET && now >= self.launched;
+        if usable && quiet {
+            Structure::Ready
+        } else if now.duration_since(self.began) < bound {
+            Structure::Pending
+        } else if usable {
+            Structure::Ready
+        } else {
+            Structure::Incomplete
+        }
     }
 }
 
@@ -109,28 +128,26 @@ pub struct Quirks {
 }
 
 impl Quirks {
-    /// Makes first contact with `pid` once per process instance: an Electron app is asked for its
-    /// tree. Cheap after the first call.
-    pub fn first_contact(&mut self, pid: i32) -> bool {
+    /// Makes first contact with `pid` once per process instance, on its application element:
+    /// an Electron or Chromium app is asked for its tree. Cheap after the first call.
+    pub fn first_contact(&mut self, pid: i32) -> Kind {
         let start_us = super::process_start_us(pid).unwrap_or(0);
         if let Some(c) = self.contacts.get(&pid)
             && c.start_us == start_us
         {
-            return c.electron;
+            return c.kind;
         }
-        let electron = is_electron(pid);
-        if electron {
-            let _ = AxEl::app(pid).set("AXManualAccessibility", CFBoolean::new(true));
+        let kind = kind(pid);
+        let app = AxEl::app(pid);
+        if kind != Kind::Native {
+            let _ = app.set("AXManualAccessibility", CFBoolean::new(true));
         }
-        self.contacts.insert(
-            pid,
-            Contact {
-                start_us,
-                electron,
-                at: Instant::now(),
-            },
-        );
-        electron
+        if kind == Kind::Chromium {
+            // Chromium reports the call unimplemented, yet builds its page trees from it.
+            let _ = app.set("AXEnhancedUserInterface", CFBoolean::new(true));
+        }
+        self.contacts.insert(pid, Contact { start_us, kind });
+        kind
     }
 
     /// Makes an Electron window key inside its app once, by synthetic activation, then lets it go.
@@ -139,7 +156,7 @@ impl Quirks {
     /// a tree whose presses did nothing; after one activation, both worked from then on). Not
     /// done to the user's own front app, which is active already.
     pub fn wake(&mut self, w: &WindowInfo, user_front: Option<i32>) {
-        if !self.first_contact(w.pid) || user_front == Some(w.pid) {
+        if self.first_contact(w.pid) != Kind::Electron || user_front == Some(w.pid) {
             return;
         }
         let start_us = self.contacts.get(&w.pid).map_or(0, |c| c.start_us);
@@ -161,42 +178,36 @@ impl Quirks {
         drop(act);
     }
 
-    /// Whether `w`'s structure is complete: pending while its element count still changes on
-    /// first contact, and an Electron window while its web area is missing or empty, until
-    /// `READY_BOUND` after first contact.
+    /// Whether `w`'s structure is complete: pending while the window's first-contact settle
+    /// runs, incomplete when its page never came.
     pub fn structure(&mut self, w: &WindowInfo, window: Option<&AxEl>) -> Structure {
-        let electron = self.first_contact(w.pid);
+        let kind = self.first_contact(w.pid);
         let Some(window) = window else {
             return Structure::Ready;
         };
-        if !electron {
-            return self.settle(w, window);
-        }
-        if web_area_filled(window) {
-            return Structure::Ready;
-        }
-        let age = self.contacts.get(&w.pid).map(|c| c.at.elapsed());
-        if age.is_some_and(|a| a < READY_BOUND) {
-            Structure::Pending
-        } else {
-            Structure::Incomplete
-        }
-    }
-}
-
-impl Quirks {
-    fn settle(&mut self, w: &WindowInfo, window: &AxEl) -> Structure {
         let start_us = self.contacts.get(&w.pid).map_or(0, |c| c.start_us);
         let key = (w.pid, start_us, w.id);
         if self.settled.contains(&key) {
             return Structure::Ready;
         }
-        // Counted by a full walk, rows out of view included: elements are built as their
-        // attributes are first read.
-        let count = super::ax::tree(window, origin(w, Some(window)), true).len();
         let now = Instant::now();
-        let built = match self.settling.get_mut(&key) {
-            Some(s) => s.update(count, now),
+        let began = self.settling.get(&key).map_or(now, |s| s.began);
+        let page = web::content(window);
+        let (count, usable, bound) = match page {
+            Some(p) => (p.count, p.count > 1 && p.placed, PAGE_BOUND),
+            // Electron and Chromium windows hold a page once it is built.
+            None if kind != Kind::Native => (0, false, PAGE_BOUND),
+            None => {
+                // Counted by a full walk, rows out of view included: elements are built as
+                // their attributes are first read.
+                let count = super::ax::tree(window, origin(w, Some(window)), true).len();
+                // An empty view may be a web view whose page comes once it is asked for.
+                let waiting = now.duration_since(began) < APPEAR_WAIT && web::empty_host(window);
+                (count, !waiting, SETTLE_BOUND)
+            }
+        };
+        let state = match self.settling.get_mut(&key) {
+            Some(s) => s.update(count, usable, bound, now),
             None => {
                 let age = SystemTime::now()
                     .duration_since(UNIX_EPOCH + Duration::from_micros(start_us))
@@ -204,53 +215,46 @@ impl Quirks {
                 let launching = LAUNCHING.saturating_sub(age);
                 self.settling
                     .insert(key, Settle::new(count, now, now + launching));
-                false
+                Structure::Pending
             }
         };
-        if !built {
-            return Structure::Pending;
+        if state == Structure::Ready {
+            self.settling.remove(&key);
+            self.settled.insert(key);
         }
-        self.settling.remove(&key);
-        self.settled.insert(key);
-        Structure::Ready
+        state
+    }
+
+    /// Forgets a window whose element went away, so a new one with its id settles again.
+    pub fn forget(&mut self, window_id: u32) {
+        self.settled.retain(|k| k.2 != window_id);
+        self.settling.retain(|k, _| k.2 != window_id);
     }
 }
 
-/// Electron apps carry Electron's framework in their bundle.
-fn is_electron(pid: i32) -> bool {
+/// What first contact asks of the app: Electron apps carry Electron's framework in their bundle;
+/// Chromium browsers are known by bundle id.
+fn kind(pid: i32) -> Kind {
     let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
-        return false;
+        return Kind::Native;
     };
-    let Some(path) = app
+    let path = app
         .bundleURL()
         .and_then(|u| u.path())
-        .map(|p| p.to_string())
-    else {
-        return false;
-    };
-    Path::new(&path)
-        .join("Contents/Frameworks/Electron Framework.framework")
-        .exists()
-}
-
-/// A web area with at least one child, breadth first. Electron nests it seven or so groups
-/// under the window.
-fn web_area_filled(window: &AxEl) -> bool {
-    let mut level = vec![window.clone()];
-    for _ in 0..WEB_AREA_DEPTH {
-        let mut next = Vec::new();
-        for el in level {
-            if el.string("AXRole").as_deref() == Some("AXWebArea") {
-                return !el.elements("AXChildren").is_empty();
-            }
-            next.extend(el.elements("AXChildren"));
-        }
-        if next.is_empty() {
-            return false;
-        }
-        level = next;
+        .map(|p| p.to_string());
+    if path.is_some_and(|p| {
+        Path::new(&p)
+            .join("Contents/Frameworks/Electron Framework.framework")
+            .exists()
+    }) {
+        return Kind::Electron;
     }
-    false
+    let bundle = app.bundleIdentifier().map(|b| b.to_string());
+    if web::is_chromium(bundle.as_deref()) {
+        Kind::Chromium
+    } else {
+        Kind::Native
+    }
 }
 
 /// The point element frames are made relative to: the window's top left as accessibility gives
@@ -292,16 +296,19 @@ pub fn reveal(w: &WindowInfo, user_front: Option<i32>) -> Option<AxEl> {
 mod tests {
     use super::*;
 
+    const R: Structure = Structure::Ready;
+    const P: Structure = Structure::Pending;
+
     #[test]
     fn a_tree_counts_as_built_once_its_count_holds() {
         let t = Instant::now();
         let ms = |n| t + Duration::from_millis(n);
         let mut s = Settle::new(19, t, t);
-        assert!(!s.update(19, ms(50)));
+        assert_eq!(s.update(19, true, SETTLE_BOUND, ms(50)), P);
         // The lazy stepper arrives.
-        assert!(!s.update(20, ms(80)));
-        assert!(!s.update(20, ms(300)));
-        assert!(s.update(20, ms(330)));
+        assert_eq!(s.update(20, true, SETTLE_BOUND, ms(80)), P);
+        assert_eq!(s.update(20, true, SETTLE_BOUND, ms(300)), P);
+        assert_eq!(s.update(20, true, SETTLE_BOUND, ms(330)), R);
     }
 
     #[test]
@@ -309,9 +316,10 @@ mod tests {
         let t = Instant::now();
         let mut s = Settle::new(1, t, t);
         for i in 1..20u64 {
-            assert!(!s.update(i as usize + 1, t + Duration::from_millis(i * 50)));
+            let at = t + Duration::from_millis(i * 50);
+            assert_eq!(s.update(i as usize + 1, true, SETTLE_BOUND, at), P);
         }
-        assert!(s.update(99, t + SETTLE_BOUND));
+        assert_eq!(s.update(99, true, SETTLE_BOUND, t + SETTLE_BOUND), R);
     }
 
     #[test]
@@ -320,11 +328,35 @@ mod tests {
         let ms = |n| t + Duration::from_millis(n);
         // Launched 300 ms before first contact: its launch ends 1.7 s in.
         let mut s = Settle::new(18, t, ms(1700));
-        assert!(!s.update(18, ms(400)));
-        assert!(!s.update(18, ms(1000)));
+        assert_eq!(s.update(18, true, SETTLE_BOUND, ms(400)), P);
+        assert_eq!(s.update(18, true, SETTLE_BOUND, ms(1000)), P);
         // The stepper arrives with no read to prompt it.
-        assert!(!s.update(20, ms(1150)));
-        assert!(!s.update(20, ms(1300)));
-        assert!(s.update(20, ms(1700)));
+        assert_eq!(s.update(20, true, SETTLE_BOUND, ms(1150)), P);
+        assert_eq!(s.update(20, true, SETTLE_BOUND, ms(1300)), P);
+        assert_eq!(s.update(20, true, SETTLE_BOUND, ms(1700)), R);
+    }
+
+    #[test]
+    fn a_page_is_waited_for_past_two_seconds_then_reported_incomplete() {
+        let t = Instant::now();
+        let ms = |n| t + Duration::from_millis(n);
+        let mut s = Settle::new(0, t, t);
+        // No page yet: quiet, but not usable.
+        assert_eq!(s.update(0, false, PAGE_BOUND, ms(2100)), P);
+        assert_eq!(s.update(0, false, PAGE_BOUND, ms(4400)), P);
+        assert_eq!(
+            s.update(0, false, PAGE_BOUND, t + PAGE_BOUND),
+            Structure::Incomplete
+        );
+    }
+
+    #[test]
+    fn a_page_built_at_two_seconds_is_ready_once_it_holds() {
+        let t = Instant::now();
+        let ms = |n| t + Duration::from_millis(n);
+        let mut s = Settle::new(1, t, t);
+        assert_eq!(s.update(1, false, PAGE_BOUND, ms(2000)), P);
+        assert_eq!(s.update(240, true, PAGE_BOUND, ms(2100)), P);
+        assert_eq!(s.update(240, true, PAGE_BOUND, ms(2350)), R);
     }
 }
