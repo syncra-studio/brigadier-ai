@@ -426,11 +426,17 @@ impl Desktop for MacDesktop {
         let role = el.as_ref().and_then(|e| e.string("AXRole"));
         let secure =
             el.as_ref().and_then(|e| e.string("AXSubrole")).as_deref() == Some("AXSecureTextField");
+        let selected_text = el
+            .as_ref()
+            .filter(|_| !secure)
+            .and_then(|e| e.string("AXSelectedText"))
+            .filter(|t| !t.is_empty());
         Ok(Focus {
             element: el,
             window,
             secure,
             role,
+            selected_text,
         })
     }
 

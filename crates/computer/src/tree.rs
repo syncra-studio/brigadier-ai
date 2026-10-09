@@ -136,9 +136,9 @@ fn merge_child<E>(nodes: &[RawNode<E>], kept: &[bool], i: usize, end: usize) -> 
 }
 
 /// How long a value is shown before it is clipped.
-const VALUE_CLIP: usize = 80;
+pub const VALUE_CLIP: usize = 80;
 
-fn quote(s: &str, max: usize) -> String {
+pub fn quote(s: &str, max: usize) -> String {
     let flat: String = s
         .chars()
         .map(|c| {

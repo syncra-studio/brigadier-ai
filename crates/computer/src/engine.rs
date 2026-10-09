@@ -345,6 +345,15 @@ impl<D: Desktop> Engine<D> {
         };
         if let Some(f) = lines.iter().find(|l| l.text.contains(" focused")) {
             let _ = writeln!(text, "focus: e{} {}", f.r, f.text);
+            let selected = self
+                .desktop
+                .focus(w.pid)
+                .ok()
+                .filter(|f| f.window == Some(w.id) && !f.secure)
+                .and_then(|f| f.selected_text);
+            if let Some(s) = selected {
+                let _ = writeln!(text, "selected: {}", tree::quote(&s, tree::VALUE_CLIP));
+            }
         }
         let want_image = match req.screenshot {
             Screenshot::Always => true,
@@ -1158,6 +1167,7 @@ mod tests {
         focus_window: Option<u32>,
         /// Setting or inserting text succeeds but leaves the value as it was.
         frozen: bool,
+        selected_text: Option<String>,
         /// A press on this element retitles the window, as a navigation would.
         retitle_on_press: Option<(u32, String)>,
         log: Vec<String>,
@@ -1186,6 +1196,7 @@ mod tests {
                 focused: None,
                 focus_window: Some(1),
                 frozen: false,
+                selected_text: None,
                 retitle_on_press: None,
                 log: Vec::new(),
             }
@@ -1305,6 +1316,7 @@ mod tests {
                 window: self.focus_window,
                 secure: self.focus_secure,
                 role: None,
+                selected_text: self.selected_text.clone(),
             })
         }
         fn click(
@@ -1674,6 +1686,22 @@ mod tests {
         let r = act(&mut e, vec![typing()]);
         assert_eq!(r[0].delivered, Some(Rung::Background));
         assert_eq!(e.desktop.log, vec!["insert 4", "type_text"]);
+    }
+
+    #[test]
+    fn an_observation_ends_with_the_focus_and_its_selected_text() {
+        let mut nodes = basic();
+        nodes[3].focused = true;
+        let mut e = engine(Fake::new(nodes));
+        e.desktop.selected_text = Some("ell".into());
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        assert!(
+            text.contains("focus: e") && text.contains("selected: \"ell\""),
+            "{text}"
+        );
+        e.desktop.focus_secure = true;
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        assert!(!text.contains("selected:"), "{text}");
     }
 
     #[test]

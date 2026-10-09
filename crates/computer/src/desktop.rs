@@ -103,6 +103,8 @@ pub struct Focus<E> {
     pub window: Option<u32>,
     pub secure: bool,
     pub role: Option<String>,
+    /// The focused element's selected text; never read from a password field.
+    pub selected_text: Option<String>,
 }
 
 /// The user's side of the desktop, compared before and after every action (F1).
