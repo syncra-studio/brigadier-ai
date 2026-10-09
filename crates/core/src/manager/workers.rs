@@ -852,7 +852,7 @@ impl SessionManager {
         extra: TaskExtra,
     ) -> Result<Task> {
         self.admit()?;
-        let _fence = self.enter(conversation_id)?;
+        let fence = self.enter(conversation_id)?;
         let conversation = self.core.conversation(conversation_id)?;
         if !matches!(conversation.setup, Some(Setup::Session { .. })) {
             return Err(Error::Invalid("tasks belong to a session".into()));
@@ -1092,6 +1092,14 @@ impl SessionManager {
             task: Box::new(task.clone()),
         }];
         events.extend(worker_step(&task, None, false));
+        // A cleanup that stopped waiting for this has already passed the session's tasks (it
+        // may have been restored since): the task isn't made.
+        if fence.cut_off() {
+            if prewarmed.is_some() {
+                self.release_prewarm(&task.id);
+            }
+            return Err(super::closing::closing_error());
+        }
         if let Err(err) = self.core.record_conversation(conversation_id, events).await {
             if prewarmed.is_some() {
                 self.release_prewarm(&task.id);
