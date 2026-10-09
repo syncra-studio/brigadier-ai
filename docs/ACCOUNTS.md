@@ -1,7 +1,8 @@
 # Several accounts per agent
 
-The user can sign in to more than one Claude Code or Codex account, pick which one a chat runs
-on, and let Brigadier move a chat to another account of the same agent when one hits its limit.
+The user can sign in to more than one Claude Code or Codex account, pick in Settings → Accounts
+the one new chats start on (Use / In use), and let Brigadier move a chat to another account of
+the same agent when one hits its limit. There is no account picker in the composer.
 Evidence for every CLI behaviour relied on here: `docs/evidence/2026-10-09-accounts.md`.
 
 ## Design
@@ -61,8 +62,7 @@ Evidence for every CLI behaviour relied on here: `docs/evidence/2026-10-09-accou
 | Add and remove | `crates/core/src/manager/accounts.rs` |
 | Auto-switch | `crates/core/src/manager/conversation.rs` (`switch_account`), `fallback.rs` |
 | IPC | `GetAccounts`, `AddAccount`, `SignInAccount`, `RemoveAccount`, `RefreshAccounts`; event `accountsChecked`; sign-in terminal in `crates/daemon/src/server.rs` (`open_account_terminal`) |
-| Settings → Accounts | `apps/desktop/src/app/settings/AccountsPage.tsx`, `state/accounts.ts` |
-| Chat account picker | `AccountPicker` in `apps/desktop/src/app/conversation/SetupPickers.tsx` |
+| Settings → Accounts | `apps/desktop/src/app/settings/AccountsPage.tsx`, `state/accounts.ts` (a sign-in already being opened is shared, so a double mount or click adds one account) |
 | Tests | `crates/core/src/manager/flow/accounts_tests.rs`, `takeover_tests.rs` (account case), unit tests in the files above |
 
 ## How to test

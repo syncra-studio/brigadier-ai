@@ -5,6 +5,7 @@ import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
 import type { ProviderKind, ProviderOverview, TerminalInfo } from "@/ipc/generated";
+import { cn } from "@/lib/utils";
 import { loadProviders, refreshProviders } from "@/state/actions";
 import { closeSetupTerminal, openSetupTerminal } from "@/state/onboarding";
 import { useApp } from "@/state/store";
@@ -56,6 +57,7 @@ export function SetupTerminal({
   openTerminal,
   check,
   onExited,
+  bare = false,
 }: {
   provider: ProviderKind;
   install: boolean;
@@ -66,6 +68,8 @@ export function SetupTerminal({
   check?: (() => Promise<void>) | null;
   /** The command finished, with its exit code. */
   onExited?: (code: number | null) => void;
+  /** Shown as a row of a list, without a frame of its own. */
+  bare?: boolean;
 }) {
   const terminalId = useRef<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -152,8 +156,8 @@ export function SetupTerminal({
   };
 
   return (
-    <div className="rounded-surface min-w-0 overflow-hidden border">
-      <div className="bg-muted/30 flex items-center gap-2 px-3 py-2">
+    <div className={bare ? "min-w-0" : "rounded-surface min-w-0 overflow-hidden border"}>
+      <div className={cn("flex items-center gap-2", bare ? "px-4 py-3" : "bg-muted/30 px-3 py-2")}>
         {failed || stuck ? (
           <ExclamationMarkCircle className="text-destructive size-icon-sm shrink-0" />
         ) : (

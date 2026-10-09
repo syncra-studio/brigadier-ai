@@ -1,7 +1,8 @@
 import { DotsHorizontal, Plus, Reload } from "@openai/apps-sdk-ui/components/Icon";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
+import { ErrorLine } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { SetupTerminal } from "@/app/onboarding/SetupTerminal";
 import {
@@ -12,21 +13,19 @@ import {
   SettingsSection,
   SwitchSetting,
 } from "@/app/settings/parts";
-import { WindowBar } from "@/app/usage/WindowBar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { useNow } from "@/hooks/use-now";
 import type { AccountView, ProviderKind } from "@/ipc/generated";
-import { formatAgo } from "@/lib/format";
-import { glance } from "@/lib/quota";
+import { formatAgo, formatCountdown } from "@/lib/format";
+import { glance, tone, used } from "@/lib/quota";
 import { PROVIDERS } from "@/lib/routing";
 import {
   accountLabel,
@@ -44,9 +43,9 @@ import { useApp } from "@/state/store";
 /** The Accounts page's rows, for Settings search; the page renders this copy. */
 export const ACCOUNTS_ROWS = {
   switch: {
-    label: "Switch accounts when one runs out",
+    label: "Switch to another account when one runs out",
     description:
-      "When an account hits its limit, the chat carries on with another account of the same kind. When all are used up, Brigadier uses the other provider.",
+      "A chat that hits its account's limit carries on with your next account. When every account is used up, Brigadier uses the other provider.",
   },
   add: {
     label: "Add account",
@@ -62,8 +61,8 @@ export const ACCOUNTS_ROWS = {
 const SIGN_IN_SLACK_MS = 2000;
 
 /**
- * Settings → Accounts: the switch for moving chats between accounts, then each agent's accounts
- * (the computer's own login first) with who is signed in and how much is left, and Add account.
+ * Settings → Accounts: each agent's accounts (the computer's own login first) with who is signed
+ * in and how much is left, a row adding another, then the switch for moving chats between them.
  */
 export function AccountsPage() {
   const views = useApp((s) => s.accounts?.accounts);
@@ -77,7 +76,7 @@ export function AccountsPage() {
   return (
     <SettingsPage
       title="Accounts"
-      description="Sign in to more than one Claude or Codex account. Brigadier can move a chat to another account when one runs out."
+      description="Sign in once to each of your accounts, then pick the one new chats use."
       actions={
         <>
           {checkedAtMs > 0 && (
@@ -94,11 +93,6 @@ export function AccountsPage() {
         </>
       }
     >
-      <SettingsSection>
-        <SettingsCard>
-          <SwitchSetting setting="switchAccounts" row={ACCOUNTS_ROWS.switch} />
-        </SettingsCard>
-      </SettingsSection>
       {PROVIDERS.map((provider) => (
         <ProviderAccounts
           key={provider}
@@ -107,14 +101,22 @@ export function AccountsPage() {
           now={now}
         />
       ))}
+      <SettingsSection>
+        <SettingsCard>
+          <SwitchSetting setting="switchAccounts" row={ACCOUNTS_ROWS.switch} />
+        </SettingsCard>
+      </SettingsSection>
     </SettingsPage>
   );
 }
 
-/** An account being signed in to: a new one (`id` null until it is added) or an extra one again. */
-type SigningIn = { id: string | null; exitedAtMs: number | null };
+/**
+ * An account being signed in to: a new one (`id` null until it is added; `fresh` stays true so
+ * a sign-in that never finishes leaves no account behind) or an extra one again.
+ */
+type SigningIn = { id: string | null; fresh: boolean; exitedAtMs: number | null };
 
-/** One agent's accounts, with Add account and the terminal of the sign-in under way. */
+/** One agent's accounts as a list, ending in a row that adds another and shows its sign-in. */
 function ProviderAccounts({
   provider,
   views,
@@ -129,7 +131,7 @@ function ProviderAccounts({
   const signingId = useRef<string | null>(null);
   const start = (id: string | null) => {
     signingId.current = id;
-    setSigning({ id, exitedAtMs: null });
+    setSigning({ id, fresh: id === null, exitedAtMs: null });
   };
   const openTerminal = useCallback(
     async (cols: number, rows: number) => {
@@ -147,63 +149,81 @@ function ProviderAccounts({
     setSigning((current) => current && { ...current, exitedAtMs: Date.now() });
   }, []);
 
-  // Its terminal closes by itself once the account reads as signed in after the sign-in ended.
+  // Its row closes by itself once the account reads as signed in after the sign-in ended.
   const signed = signing?.id ? views?.find((view) => view.account.account === signing.id) : undefined;
   const finished =
     signing?.exitedAtMs != null &&
     signed?.status?.loggedIn === true &&
     (signed.checkedAtMs ?? 0) >= signing.exitedAtMs - SIGN_IN_SLACK_MS;
   const active = finished ? null : signing;
+  // A new account shows in the list only once it is signed in.
+  const shown = (views ?? []).filter(
+    (view) =>
+      !(active?.fresh && view.account.account === active.id && view.status?.loggedIn !== true),
+  );
+  const anySignedIn = shown.some((view) => view.status?.loggedIn === true);
+
+  const close = () => {
+    const current = signing;
+    setSigning(null);
+    // Cancelled before it finished: the new account goes again.
+    if (current?.fresh && current.id && signed?.status?.loggedIn !== true) {
+      void removeAccount(current.id).catch(() => {});
+    }
+    void refreshAccounts().catch(() => {});
+  };
 
   return (
-    <SettingsSection
-      title={label}
-      actions={
-        <SettingsButton
-          aria-label={`Add a ${label} account`}
-          disabled={active !== null}
-          onClick={() => start(null)}
-        >
-          <Plus />
-          {ACCOUNTS_ROWS.add.label}
-        </SettingsButton>
-      }
-    >
+    <SettingsSection title={label}>
       <SettingsCard>
         {views === null ? (
           <SettingsRow label="Reading the accounts…" />
         ) : (
-          views.map((view) => (
+          shown.map((view) => (
             <AccountRow
               key={view.account.account ?? "own"}
               view={view}
               now={now}
               busy={active !== null}
-              onSignIn={() => start(view.account.account ?? null)}
+              onSignIn={start}
             />
           ))
         )}
+        {active ? (
+          <SetupTerminal
+            bare
+            provider={provider}
+            install={false}
+            openTerminal={openTerminal}
+            check={null}
+            onExited={onExited}
+            onClose={close}
+          />
+        ) : (
+          <button
+            type="button"
+            aria-label={`Add a ${label} account`}
+            disabled={views === null}
+            onClick={() => start(null)}
+            className="text-muted-foreground hover:text-foreground hover:bg-foreground/5 flex items-center gap-3 px-4 py-3 text-left text-sm transition-colors disabled:opacity-50"
+          >
+            <span className="border-divider flex size-8 shrink-0 items-center justify-center rounded-full border border-dashed">
+              <Plus className="size-icon-sm" />
+            </span>
+            {anySignedIn ? `Add another ${label} account` : `Add a ${label} account`}
+          </button>
+        )}
       </SettingsCard>
-      {active && (
-        <SetupTerminal
-          provider={provider}
-          install={false}
-          openTerminal={openTerminal}
-          check={null}
-          onExited={onExited}
-          onClose={() => {
-            setSigning(null);
-            void refreshAccounts().catch(() => {});
-          }}
-        />
-      )}
     </SettingsSection>
   );
 }
 
+/** Short names for usage windows in an account's summary line. */
+const SHORT_WINDOW: Record<string, string> = { "5-hour": "5h", Weekly: "week" };
+
 /**
- * One account: its name, who is signed in, its usage windows and when they were read; a
- * Default badge, Sign in when it needs it, and a menu for the rest.
+ * One account: who it is, its plan and how much of each window is used, then Use (or In use for
+ * the one new chats start on). Rename, Sign in again and Remove sit in its menu.
  */
 function AccountRow({
   view,
@@ -214,7 +234,8 @@ function AccountRow({
   view: AccountView;
   now: number;
   busy: boolean;
-  onSignIn: () => void;
+  /** Signs in to the account `id` again. */
+  onSignIn: (id: string) => void;
 }) {
   const id = view.account.account;
   const own = id === undefined;
@@ -222,25 +243,43 @@ function AccountRow({
   const action = useAction();
   const [renaming, setRenaming] = useState(false);
   const status = view.status;
-  const needsSignIn = status !== null && status.path !== null && !status.loggedIn;
-  const windows = view.quota ? glance(view.quota) : [];
+  const signedIn = status?.loggedIn === true;
+  const email = status?.email ?? null;
+  const renamed = !own && view.name !== "" && view.name !== email;
+  const title = renamed ? view.name : (email ?? accountLabel(view));
+  const windows = signedIn && view.quota ? glance(view.quota) : [];
 
-  const who = !status
-    ? "Checking…"
-    : !status.path
-      ? "Not installed"
-      : !status.loggedIn
-        ? "Not signed in"
-        : [status.email ?? "Signed in", status.plan && `${capitalize(status.plan)} plan`]
-            .filter(Boolean)
-            .join(" · ");
-  const read =
-    view.quotaAtMs !== null ? `Usage read ${formatAgo(view.quotaAtMs, now)}` : "Usage not read yet";
+  const details: ReactNode[] = [];
+  if (!status) details.push("Checking…");
+  else if (!status.path) details.push(`${PROVIDER_LABELS[provider]} isn't installed`);
+  else if (!signedIn) details.push("Not signed in");
+  else {
+    if (renamed && email) details.push(email);
+    if (status.plan) details.push(capitalize(status.plan));
+    for (const window of windows) {
+      const percent = used(window);
+      const resets =
+        window.resetsAtMs !== null ? `, resets in ${formatCountdown(window.resetsAtMs, now)}` : "";
+      details.push(
+        <span key={window.id} className={tone(percent).text} title={`${window.label}: ${percent}% used${resets}`}>
+          {SHORT_WINDOW[window.label] ?? window.label.toLowerCase()} {percent}%
+        </span>,
+      );
+    }
+    if (signedIn && view.quotaAtMs === null) details.push("usage not read yet");
+  }
+  if (own) details.push("your terminal's login");
 
   return (
-    <SettingsRow
-      label={
-        renaming && id ? (
+    <div className="flex items-center gap-3 px-4 py-3">
+      <span
+        aria-hidden
+        className="bg-foreground/10 text-foreground/80 flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-medium"
+      >
+        {initial(title)}
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        {renaming && id ? (
           <RenameField
             name={view.name || accountLabel(view)}
             onDone={(name) => {
@@ -248,72 +287,65 @@ function AccountRow({
               if (name !== null && name !== view.name) action.run(() => renameAccount(id, name));
             }}
           />
-        ) : own ? (
-          ACCOUNTS_ROWS.own.label
         ) : (
-          accountLabel(view)
-        )
-      }
-      description={
-        <span className="flex flex-col gap-1.5">
-          <span>
-            {who}
-            {own && ` · ${ACCOUNTS_ROWS.own.description}`}
-          </span>
-          {view.error && <span className="text-destructive">{view.error}</span>}
-          {windows.length > 0 && (
-            <span className="grid max-w-md grid-cols-1 gap-2 pt-0.5 @md:grid-cols-2">
-              {windows.map((window) => (
-                <WindowBar key={window.id} window={window} now={now} />
-              ))}
+          <span className="text-label truncate font-medium">{title}</span>
+        )}
+        <span className="text-foreground/65 flex flex-wrap gap-x-1.5 text-xs tabular-nums">
+          {details.map((detail, index) => (
+            <span key={index} className="flex gap-x-1.5">
+              {index > 0 && <span aria-hidden>·</span>}
+              {detail}
             </span>
-          )}
-          {status?.loggedIn && <span className="text-muted-foreground">{read}</span>}
+          ))}
         </span>
-      }
-      error={action.error}
-    >
-      {view.default && <Badge variant="secondary">Default</Badge>}
-      {needsSignIn && !own && (
-        <SettingsButton disabled={busy} onClick={onSignIn}>
+        {view.error && <span className="text-destructive text-xs">{view.error}</span>}
+        <ErrorLine error={action.error} />
+      </div>
+      {!signedIn && !own && status?.path ? (
+        <SettingsButton disabled={busy} onClick={() => id && onSignIn(id)}>
           Sign in
         </SettingsButton>
+      ) : view.default ? (
+        <Badge variant="secondary" title="New chats start on this account">
+          In use
+        </Badge>
+      ) : (
+        <SettingsButton
+          disabled={action.busy || !signedIn}
+          title="Start new chats on this account"
+          onClick={() => action.run(() => makeDefaultAccount(provider, id))}
+        >
+          Use
+        </SettingsButton>
       )}
-      <DropdownMenu modal={false}>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            aria-label={`${own ? ACCOUNTS_ROWS.own.label : accountLabel(view)}: actions`}
-            className="text-muted-foreground"
-            disabled={action.busy}
-          >
-            <DotsHorizontal />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuLabel>{own ? ACCOUNTS_ROWS.own.label : accountLabel(view)}</DropdownMenuLabel>
-          <DropdownMenuItem
-            disabled={view.default}
-            onSelect={() => action.run(() => makeDefaultAccount(provider, id))}
-          >
-            Make default
-          </DropdownMenuItem>
-          {!own && (
-            <>
-              <DropdownMenuItem onSelect={() => setRenaming(true)}>Rename</DropdownMenuItem>
-              <DropdownMenuItem disabled={busy} onSelect={onSignIn}>
-                Sign in again
-              </DropdownMenuItem>
-              <DropdownMenuItem variant="destructive" onSelect={() => action.run(() => removeAccount(id))}>
-                Remove
-              </DropdownMenuItem>
-            </>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </SettingsRow>
+      {own ? (
+        <span aria-hidden className="size-6 shrink-0" />
+      ) : (
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              aria-label={`${title}: more`}
+              className="text-muted-foreground shrink-0"
+              disabled={action.busy}
+            >
+              <DotsHorizontal />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => setRenaming(true)}>Rename</DropdownMenuItem>
+            <DropdownMenuItem disabled={busy} onSelect={() => onSignIn(id)}>
+              Sign in again
+            </DropdownMenuItem>
+            <DropdownMenuItem variant="destructive" onSelect={() => action.run(() => removeAccount(id))}>
+              Remove
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </div>
   );
 }
 
@@ -344,4 +376,8 @@ function RenameField({ name, onDone }: { name: string; onDone: (name: string | n
 
 function capitalize(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function initial(text: string): string {
+  return (text.trim().charAt(0) || "?").toUpperCase();
 }
