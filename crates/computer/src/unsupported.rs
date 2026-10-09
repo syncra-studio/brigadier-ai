@@ -47,7 +47,7 @@ impl Desktop for Unsupported {
     fn app(&mut self, _: i32) -> CuResult<AppInfo> {
         no()
     }
-    fn tree(&mut self, _: &WindowInfo) -> CuResult<Vec<RawNode<u64>>> {
+    fn tree(&mut self, _: &WindowInfo, _: bool) -> CuResult<Vec<RawNode<u64>>> {
         no()
     }
     fn read(&mut self, _: &WindowInfo, _: &u64) -> CuResult<RawNode<u64>> {

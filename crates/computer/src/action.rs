@@ -251,6 +251,8 @@ pub enum Status {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Timings {
+    /// The pre-action checks: window, block list, focus snapshot, before the action starts.
+    pub checks_ms: f64,
     /// Until the action was delivered.
     pub dispatch_ms: f64,
     /// Until the change was seen (an `expect` held, or the element's state changed).

@@ -39,6 +39,8 @@ pub struct RawNode<E> {
     pub secure: bool,
     /// Platform-neutral action names beyond the role's default (`show-menu`, `increment`…).
     pub actions: Vec<String>,
+    /// Out of view and not read: only its role is known.
+    pub unread: bool,
 }
 
 impl<E> RawNode<E> {
@@ -57,6 +59,7 @@ impl<E> RawNode<E> {
             expanded: None,
             secure: false,
             actions: Vec::new(),
+            unread: false,
         }
     }
 }
@@ -98,6 +101,9 @@ const INTERACTIVE: &[&str] = &[
 
 /// Whether an element earns a line of its own.
 fn keep<E>(n: &RawNode<E>) -> bool {
+    if n.unread {
+        return true;
+    }
     let named = n.label.as_deref().is_some_and(|l| !l.trim().is_empty());
     let valued = n.value.as_deref().is_some_and(|v| !v.trim().is_empty());
     let stateful =
@@ -283,10 +289,11 @@ impl<E: Clone + Eq + Hash> WindowRefs<E> {
                 clips.pop();
             }
             let clip = clips.last().map(|&(_, c)| c);
-            let hidden = match (clip, n.frame) {
-                (Some(c), Some(f)) => f.intersect(&c).is_empty(),
-                _ => false,
-            };
+            let hidden = n.unread
+                || match (clip, n.frame) {
+                    (Some(c), Some(f)) => f.intersect(&c).is_empty(),
+                    _ => false,
+                };
             if (n.role == "scroll" || n.role == "window")
                 && let Some(f) = n.frame
             {
@@ -304,6 +311,20 @@ impl<E: Clone + Eq + Hash> WindowRefs<E> {
                 }
             };
             seen.insert(n.element.clone(), r);
+            // An unread element keeps what an earlier full read learned about it.
+            if n.unread
+                && let Some(rec) = self.records.get_mut(&r)
+            {
+                rec.generation = self.generation;
+                lines.push(Line {
+                    r,
+                    depth: stack.last().map_or(0, |&(_, _, k)| k + 1),
+                    text: render_line(n),
+                    parent: stack.last().map(|&(_, r, _)| r),
+                    hidden,
+                });
+                continue;
+            }
             self.records.insert(
                 r,
                 RefRecord {

@@ -267,9 +267,15 @@ impl Desktop for MacDesktop {
     }
 
     fn window(&mut self, id: u32) -> CuResult<WindowInfo> {
+        // The one-window query skips windows that aren't on screen (minimised, hidden).
         let mut w = Self::window_list(CGWindowListOption::OptionIncludingWindow, id)
             .into_iter()
             .find(|w| w.id == id)
+            .or_else(|| {
+                Self::window_list(CGWindowListOption::OptionAll, 0)
+                    .into_iter()
+                    .find(|w| w.id == id)
+            })
             .ok_or_else(|| CuError::new(ErrorCode::NoSuchTarget, format!("no window w{id}")))?;
         if !w.on_screen
             && let Ok(el) = self.ax_window(&w)
@@ -288,9 +294,9 @@ impl Desktop for MacDesktop {
             .ok_or_else(|| CuError::new(ErrorCode::NoSuchTarget, format!("no app with pid {pid}")))
     }
 
-    fn tree(&mut self, w: &WindowInfo) -> CuResult<Vec<RawNode<AxEl>>> {
+    fn tree(&mut self, w: &WindowInfo, all: bool) -> CuResult<Vec<RawNode<AxEl>>> {
         let el = self.ax_window(w)?;
-        let nodes = ax::tree(&el, Point::new(w.frame.x, w.frame.y));
+        let nodes = ax::tree(&el, Point::new(w.frame.x, w.frame.y), all);
         if nodes.len() <= 1 && el.attr("AXRole").is_err() {
             self.ax_windows.remove(&w.id);
             return err(
@@ -346,7 +352,7 @@ impl Desktop for MacDesktop {
                 format!("the element has no {action} action"),
             );
         }
-        el.perform(&name)
+        el.perform_bounded(&name, PERFORM_REPLY_WAIT)
     }
 
     fn set_value(&mut self, el: &AxEl, text: &str) -> CuResult<()> {
@@ -545,6 +551,11 @@ fn norm(s: &str) -> String {
     s.trim().replace("...", "…").to_lowercase()
 }
 
+/// How long an element action waits for the app's reply. An app answers only when its
+/// handler returns, and a button's handler includes its highlight (≈100 ms) after the action
+/// has already run; the engine's effect check reads the outcome instead of waiting for that.
+const PERFORM_REPLY_WAIT: Duration = Duration::from_millis(3);
+
 /// Picks a pop-up button's item by title through its menu. The menu's items only exist while
 /// it is open, so it is opened first and the item pressed at once; a background app's menu
 /// doesn't take the user's focus. AppKit blinks the chosen item (≈350 ms) before it sends the
@@ -561,7 +572,13 @@ fn pick_popup(el: &AxEl, title: &str) -> CuResult<()> {
     let opened = found.is_empty();
     if opened {
         el.perform("AXPress")?;
+        // The app fills the menu when it handles the press, a few milliseconds later.
+        let until = Instant::now() + Duration::from_millis(500);
         found = items(el);
+        while found.is_empty() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(1));
+            found = items(el);
+        }
     }
     match found
         .into_iter()

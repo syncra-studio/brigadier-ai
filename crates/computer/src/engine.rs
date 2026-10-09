@@ -39,6 +39,9 @@ const BASES_KEPT: usize = 256;
 type Observed<E> = (Vec<RawNode<E>>, Vec<Line>);
 /// A ref and its element.
 type RefTarget<E> = (u32, E);
+/// Where a target lands: the window point, the element when it names one, and whether the
+/// point can be seen.
+type Aim<E> = (Point, Option<RefTarget<E>>, bool);
 
 struct Base {
     obs: u64,
@@ -147,8 +150,8 @@ impl<D: Desktop> Engine<D> {
         Ok(out)
     }
 
-    fn read_tree(&mut self, w: &WindowInfo) -> CuResult<Observed<D::Element>> {
-        let nodes = self.desktop.tree(w)?;
+    fn read_tree(&mut self, w: &WindowInfo, all: bool) -> CuResult<Observed<D::Element>> {
+        let nodes = self.desktop.tree(w, all)?;
         let refs = self.windows.entry(w.id).or_default();
         let lines = refs.assign(&nodes);
         Ok((nodes, lines))
@@ -167,6 +170,11 @@ impl<D: Desktop> Engine<D> {
     /// The transform an image was made with, while the engine still keeps it.
     pub fn image_transform(&self, id: &str) -> Option<ImageTransform> {
         self.image(id).ok()
+    }
+
+    /// A ref's element as last observed.
+    pub fn ref_element(&self, window: u32, r: u32) -> Option<D::Element> {
+        Some(self.windows.get(&window)?.get(r)?.element.clone())
     }
 
     /// A ref's frame (window points) as last observed.
@@ -297,7 +305,7 @@ impl<D: Desktop> Engine<D> {
         if let (Some(r), Some(page)) = (element, req.value_page) {
             return self.value_page(&w, r, page);
         }
-        let (nodes, lines) = self.read_tree(&w)?;
+        let (nodes, lines) = self.read_tree(&w, filtered_read(req))?;
         let obs = self.next_obs;
         self.next_obs += 1;
         let base = self.bases.get(&(worker.to_owned(), w.id));
@@ -442,7 +450,7 @@ impl<D: Desktop> Engine<D> {
         &mut self,
         w: &WindowInfo,
         t: &Target,
-    ) -> CuResult<(Point, Option<RefTarget<D::Element>>, bool)> {
+    ) -> CuResult<Aim<D::Element>> {
         if let Some(r) = t.r#ref.as_deref() {
             let r = Self::ref_of(r)?;
             let el = self.resolve_ref(w, r, true)?;
@@ -522,7 +530,7 @@ impl<D: Desktop> Engine<D> {
                     .focus(w.pid)
                     .is_ok_and(|f| f.element.as_ref() == Some(&el))
             }
-            Expect::Appears { find } => self.desktop.tree(w).is_ok_and(|nodes| {
+            Expect::Appears { find } => self.desktop.tree(w, true).is_ok_and(|nodes| {
                 let needle = find.to_lowercase();
                 nodes
                     .iter()
@@ -656,6 +664,7 @@ impl<D: Desktop> Engine<D> {
         cancel: &CancelToken,
         guard: &mut InputGuard<'_>,
     ) -> CuResult<(ActionResult, bool)> {
+        let entered = Instant::now();
         cancel.check()?;
         let w = self.desktop.window(window)?;
         self.check_block(&w)?;
@@ -872,6 +881,7 @@ impl<D: Desktop> Engine<D> {
             effect: Some(effect),
             error,
             timings: Timings {
+                checks_ms: ms(start - entered),
                 dispatch_ms: ms(dispatch),
                 effect_ms: effect_at.map(ms),
                 settle_ms: ms(settle_ms),
@@ -995,6 +1005,11 @@ impl<D: Desktop> Engine<D> {
             results: Vec::new(),
         })
     }
+}
+
+/// A filtered observation can show what is out of view, so it reads everything.
+fn filtered_read(req: &ObserveRequest) -> bool {
+    req.element.is_some() || req.find.is_some()
 }
 
 fn ms(d: Duration) -> f64 {

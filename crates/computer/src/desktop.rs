@@ -136,8 +136,10 @@ pub trait Desktop {
     fn window(&mut self, id: u32) -> CuResult<WindowInfo>;
     /// The app that owns `pid`, without its windows.
     fn app(&mut self, pid: i32) -> CuResult<AppInfo>;
-    /// The window's elements in pre-order, frames in window points.
-    fn tree(&mut self, window: &WindowInfo) -> CuResult<Vec<RawNode<Self::Element>>>;
+    /// The window's elements in pre-order, frames in window points. Unless `all` is asked for,
+    /// a backend may skip reading rows its lists report out of view; those come back
+    /// `unread`, with only their role.
+    fn tree(&mut self, window: &WindowInfo, all: bool) -> CuResult<Vec<RawNode<Self::Element>>>;
     /// One element read fresh (children not included), frame in window points.
     fn read(&mut self, window: &WindowInfo, el: &Self::Element)
     -> CuResult<RawNode<Self::Element>>;

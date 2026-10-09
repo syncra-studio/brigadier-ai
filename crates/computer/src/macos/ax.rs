@@ -1,6 +1,7 @@
 //! The accessibility side: reading a window's elements in few calls, mapping roles to the
 //! platform-neutral ones, and element actions.
 
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::ptr::NonNull;
 
@@ -11,7 +12,7 @@ use objc2_core_foundation::{
     CFArray, CFBoolean, CFNumber, CFRetained, CFString, CFType, CGPoint, CGSize,
 };
 
-use crate::error::{CuResult, ErrorCode, err};
+use crate::error::{CuError, CuResult, ErrorCode, err};
 use crate::geom::{Point, Rect};
 use crate::tree::{Check, RawNode};
 
@@ -116,6 +117,32 @@ impl AxEl {
         let a = CFString::from_str(action);
         // SAFETY: a live element and action name.
         check(unsafe { self.0.perform_action(&a) }, action)
+    }
+
+    /// Performs an action, waiting at most `wait` for the app's reply. A reply still pending
+    /// then is left to its thread: the action was delivered, and an error it may bring shows
+    /// up as no effect.
+    pub fn perform_bounded(&self, action: &str, wait: std::time::Duration) -> CuResult<()> {
+        struct Sendable(AxEl);
+        // SAFETY: accessibility elements are immutable references to another process's
+        // objects; the accessibility API may be called from any thread.
+        unsafe impl Send for Sendable {}
+        let el = Sendable(self.clone());
+        let action = action.to_owned();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("ax-perform".into())
+            .spawn(move || {
+                let el = el;
+                let _ = tx.send(el.0.perform(&action));
+            })
+            .map_err(|e| {
+                CuError::new(ErrorCode::Failed, format!("couldn't start a thread: {e}"))
+            })?;
+        match rx.recv_timeout(wait) {
+            Ok(r) => r,
+            Err(_) => Ok(()),
+        }
     }
 
     pub fn action_names(&self) -> Vec<String> {
@@ -357,7 +384,8 @@ pub fn ax_action(neutral: &str) -> String {
     }
 }
 
-/// Roles whose actions are read (a call per element, so only where they matter).
+/// Roles whose actions are read (a call per element, so only where they can add something):
+/// a standard control's role already says what it does.
 fn reads_actions(role: &str) -> bool {
     !matches!(
         role,
@@ -366,10 +394,38 @@ fn reads_actions(role: &str) -> bool {
             | "AXScrollArea"
             | "AXScrollBar"
             | "AXSplitGroup"
+            | "AXSplitter"
             | "AXColumn"
+            | "AXRow"
+            | "AXTable"
+            | "AXOutline"
+            | "AXList"
             | "AXWindow"
+            | "AXSheet"
             | "AXImage"
+            | "AXHeading"
+            | "AXToolbar"
+            | "AXTabGroup"
             | "AXMenuBar"
+            | "AXMenu"
+            | "AXMenuItem"
+            | "AXMenuBarItem"
+            | "AXButton"
+            | "AXCheckBox"
+            | "AXRadioButton"
+            | "AXPopUpButton"
+            | "AXMenuButton"
+            | "AXLink"
+            | "AXDisclosureTriangle"
+            | "AXSlider"
+            | "AXIncrementor"
+            | "AXTextField"
+            | "AXTextArea"
+            | "AXComboBox"
+            | "AXValueIndicator"
+            | "AXLevelIndicator"
+            | "AXProgressIndicator"
+            | "AXBusyIndicator"
     )
 }
 
@@ -469,20 +525,53 @@ fn read_one(
     (node, children)
 }
 
+/// The rows of a table, outline or list that it reports out of view. Empty when it can't say,
+/// or says nothing is in view: then every row is read.
+fn rows_out_of_view(list: &AxEl) -> HashSet<AxEl> {
+    for (all, visible) in [
+        ("AXRows", "AXVisibleRows"),
+        ("AXChildren", "AXVisibleChildren"),
+    ] {
+        let seen: HashSet<AxEl> = list.elements(visible).into_iter().collect();
+        if !seen.is_empty() {
+            return list
+                .elements(all)
+                .into_iter()
+                .filter(|r| !seen.contains(r))
+                .collect();
+        }
+    }
+    HashSet::new()
+}
+
 /// The window's elements in pre-order, frames relative to `origin` (the window's top left).
-pub fn tree(window: &AxEl, origin: Point) -> Vec<RawNode<AxEl>> {
+/// Unless `all` is asked for, rows a list reports out of view aren't read: they come back
+/// `unread`, which keeps a long table's observation as cheap as its visible part.
+pub fn tree(window: &AxEl, origin: Point, all: bool) -> Vec<RawNode<AxEl>> {
     let names = attr_names();
     let mut out = Vec::new();
-    let mut stack: Vec<(AxEl, u16)> = vec![(window.clone(), 0)];
-    while let Some((el, depth)) = stack.pop() {
+    let mut stack: Vec<(AxEl, u16, bool)> = vec![(window.clone(), 0, false)];
+    while let Some((el, depth, unread)) = stack.pop() {
         if out.len() >= MAX_NODES {
             break;
         }
+        if unread {
+            let mut node = RawNode::new(el, depth, "row");
+            node.unread = true;
+            out.push(node);
+            continue;
+        }
         let (node, children) = read_one(&el, depth, origin, &names);
+        let skip = if !all && matches!(node.role.as_str(), "table" | "outline" | "list") {
+            rows_out_of_view(&el)
+        } else {
+            HashSet::new()
+        };
         out.push(node);
         if depth < MAX_DEPTH {
             for c in children.into_iter().rev() {
-                stack.push((c, depth + 1));
+                let unread = skip.contains(&c);
+                stack.push((c, depth + 1, unread));
             }
         }
     }
