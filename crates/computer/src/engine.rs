@@ -2264,6 +2264,8 @@ mod tests {
         assert_eq!(r[0].delivered, Some(Rung::Background));
     }
 
+    // It reads the image back with the harness's decoder, built on Unix only.
+    #[cfg(unix)]
     #[test]
     fn an_act_keeps_a_marked_image_for_the_log_and_not_for_the_model() {
         let mut e = engine(Fake::new(basic()));

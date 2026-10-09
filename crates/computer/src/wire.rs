@@ -281,6 +281,18 @@ pub fn write_frame(w: &mut impl std::io::Write, b: &[u8]) -> std::io::Result<()>
     w.flush()
 }
 
+/// A reply and the images that followed it (`image`, then `trajectory`, as listed).
+#[derive(Debug, Clone)]
+pub struct Answer {
+    pub reply: Reply,
+    pub image: Option<Vec<u8>>,
+    pub trajectory: Option<Vec<u8>>,
+}
+
+/// The connection ended before the reply came.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Gone;
+
 #[cfg(test)]
 mod tests {
     use super::*;

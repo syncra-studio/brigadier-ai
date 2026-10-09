@@ -19,15 +19,14 @@
 //!   and dies with the conversation like any stored output.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use brigadier_computer::action::{ActRequest, Action};
-use brigadier_computer::client::{Answer, Gone};
 use brigadier_computer::error::{CuError, ErrorCode};
 use brigadier_computer::geom::Provider;
-use brigadier_computer::wire::{Described, Event, Instance, Launched, Op, Policy};
+use brigadier_computer::wire::{Answer, Described, Event, Gone, Instance, Launched, Op, Policy};
 use brigadier_providers::{Artifact, BoxFuture, ProviderKind};
 use tokio::sync::{oneshot, watch};
 
@@ -47,6 +46,7 @@ pub(crate) const LEASE_TAIL: Duration = Duration::from_secs(30);
 /// rest, no batch runs past 330 s (§4.7).
 pub(crate) const MAX_BATCH_WAITS: Duration = Duration::from_secs(300);
 /// How long a started helper has to answer.
+#[cfg(unix)]
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 /// What the model is told when a permission is missing.
 const PERMISSION_FIX: &str =
@@ -824,8 +824,8 @@ fn start_helper(
         .and_then(Path::parent)
         .map(|contents| contents.join("Helpers/Brigadier Computer Use.app"))
         .filter(|b| b.exists());
-    let direct: Option<PathBuf> = std::env::var_os("BRIGADIER_COMPUTER_HELPER")
-        .map(PathBuf::from)
+    let direct: Option<std::path::PathBuf> = std::env::var_os("BRIGADIER_COMPUTER_HELPER")
+        .map(std::path::PathBuf::from)
         .or_else(|| {
             bundle
                 .is_none()

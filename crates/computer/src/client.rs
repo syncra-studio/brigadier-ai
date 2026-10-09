@@ -11,21 +11,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::geom::Provider;
+pub use crate::wire::{Answer, Gone};
 use crate::wire::{
     Event, Hello, HelperFrame, Op, PROTOCOL, Policy, Reply, Request, read_frame, write_frame,
 };
-
-/// A reply and the images that followed it (`image`, then `trajectory`, as listed).
-#[derive(Debug, Clone)]
-pub struct Answer {
-    pub reply: Reply,
-    pub image: Option<Vec<u8>>,
-    pub trajectory: Option<Vec<u8>>,
-}
-
-/// The connection ended before the reply came.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Gone;
 
 type Waiter = Box<dyn FnOnce(Result<Answer, Gone>) + Send>;
 
