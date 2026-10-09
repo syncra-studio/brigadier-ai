@@ -1045,6 +1045,81 @@ helper bundle's own; a person was using the Mac during every run from about 11:3
 - Synthetic activation (§2.1), if the spike left it open, is measured with its own gate: ordinary inactive
   controls clicked in the background with F1 at 0.
 
+#### Stream B — app quirks (results, 2026-10-09)
+
+Built on branch `cu-quirks` (from `computer-use` d6931c02). macOS only, as the user ruled. All evidence comes from
+the cmux terminal, so the helper ran with the terminal's inherited Accessibility and Screen Recording grants, not
+grants of its own. No TCC setting was touched.
+
+**What the engine does now**
+- **First contact** (`macos/quirks.rs`, once per process instance):
+  - Electron apps get `AXManualAccessibility`. An observe waits for the page's web area, up to 3.5 s.
+  - Each Electron window is made key once by synthetic activation, held until the app reports it focused (up
+    to 300 ms). Until then Electron serves no page tree, or ignores presses.
+  - The first observe of any window walks it until its element count holds for 250 ms. AppKit, SwiftUI and
+    Catalyst windows add elements just after the first read. An app younger than 2 s is settled no sooner than
+    2 s after its launch: a Catalyst app built a stepper about 1.2 s after launch, after a quiet second, in 5 of
+    8 launches. An app that is already running pays only the 250 ms once.
+- **Off-Space windows nobody has touched:** made key inside their app, read as its focused window, then
+  defocused (never the user's front app). Elements are framed relative to the window's position as
+  accessibility reports it, because accessibility places an off-Space window whole display widths away.
+- **Text fields:** a value is set, then replaced as an edit (focus, select all, insert). A SwiftUI binding hears
+  only the edit; some AppKit controls hear only the set.
+- **Minimised windows and hidden apps:** a window's observation now says `· minimised` or `· app hidden`.
+  Element actions work on a minimised window; pointer actions refuse it with `background_unavailable`.
+- **Several displays:** window-to-global points, the scale of the display under a point and Cocoa screen frames
+  are small functions in `geom.rs`. They are unit-tested for a 1× display left of and above a 2× main display.
+  **This Mac has one display**, so there is no live second-display check.
+
+**Suite tasks** (`suite_quirks.rs`; fixtures `quirk-pad`, `electron-pad`, `catalyst-pad`, built by the suite):
+`electron-signup`, `swiftui-item`, `catalyst-order`, `save-panel`, `minimised-code`. Each has a checker on the
+fixture's own log and state, and a scripted reference. All 5 scripted references pass, and so do `name` and `form`.
+
+**Model runs** (Opus medium, gpt-6.1-sol medium; 2 runs per provider). F1 suite-caused focus changes: **0** in
+every run.
+
+| run | as run | after the checker fix | failures |
+|---|---|---|---|
+| claude-1 | 4/5 | 4/5 | `minimised-code`: the worker used `osascript` to confirm the window stayed minimised (shortcut audit). Fixed in the engine: the observation now says `minimised` |
+| codex-1 | 4/5 | 5/5 | `catalyst-order`: the order was placed, but the worker's own expectation on Place Order went unmet |
+| claude-2 | 3/5 | 4/5 | `catalyst-order` as above; `save-panel`: the worker searched the disk with `find /`, then `pkill -f` (shortcut audit) |
+| codex-2 | 4/5 | 5/5 | `catalyst-order` as above |
+
+Runs 1 used an earlier engine; runs 2 used the final one. The checker fix aligns the quirk checker with the main
+suite's (`suite.rs`): an action that was sent, where only the worker's expectation went unmet, counts as the tool's.
+An action refused before it was sent still doesn't count.
+- **P3:** not exercised. No worker made a pixel action in any of the 20 trials; every action went through
+  structure (element and background-activated rungs).
+- **E1** (calls ÷ (scripted tool calls + 2), median ≤ 1.3): **MISS**. Claude was 1.5 in both runs; Codex was
+  1.67 in run 1 and 1.5 in run 2. Pooled, both providers are at 1.5. The workers observe once more than the
+  reference, to verify. Phase 5's done-when asks for P3 and F1, not E1; E1 is reported for completeness.
+- **Off-Space save panel:** while its window is on another Space, a save panel keeps Save disabled. This held for
+  15 s whether the name was set, inserted, or both, and after a synthetic make-key. Pressing the disabled button
+  does nothing. `save-panel` passes when the window is on the user's Space (both providers, and the scripted
+  reference). It can't finish while the user is in another Space, for example a full-screen app. Open.
+
+**SA gate** (bench): a background pixel click, with no ref, on quirk-pad's inactive NSButton, NSTextView and
+SwiftUI button, 200 each. **600/600 landed, 0 focus changes: pass.** p50 dispatch is 3.3–3.4 ms; p50 effect is
+9.9–15.4 ms. The quick bench gave 60/60, 0 focus changes.
+
+**Full bench** (200 reps, `--no-foreground`, 2026-10-09 17:03–17:23, under a load average of 12–20 from other
+workers' builds): every gate passes but F1. The 4 focus changes are all a browser fixture, "Google Chrome for
+Testing — Web Range", coming to the front three times. The parallel browser stream was launching it at the same
+time; the front-app log has it at 17:04:27, 17:14:17 and 17:20:06, and the bench's own target-range never took
+the front. The bench can't tell another worker's launches from its own, so F1 counts as a MISS for this run.
+Rerun it when nothing else is driving the Mac.
+
+**Also open:**
+- A menu-bar pick brought the target app to the front once. The quick bench's `S3 pick menu-bar` did it while a
+  system alert ("… quit unexpectedly", from UserNotificationCenter) was the front app. With an ordinary front app,
+  200/200 menu picks changed nothing. This is the menu path, not stream B's; the repro is that alert in front,
+  then a menu pick.
+- A fixture that crashes raises the system's "quit unexpectedly" alert, and that alert takes the front. It
+  happened once, when catalyst-pad's plist still carried `NSPrincipalClass` (fixed in e426472b).
+
+**Private dependencies:** no new calls. The reveal and the wake reuse the make-key and focus records (§12).
+`AXManualAccessibility` is an undocumented attribute (§12).
+
 ### Phase 6: Windows and Linux backends
 
 **Scope**
@@ -1245,6 +1320,8 @@ disables the capabilities that need it (`unsupported_capability`) without affect
 | `GetProcessForPID` | function (deprecated, public) | `OSStatus (pid_t, ProcessSerialNumber *)` | the PSN for the record call |
 | `_SLPSSetFrontProcessWithOptions` | function (SkyLight) | `OSStatus (const ProcessSerialNumber *, CGWindowID, uint32 mode)`, mode `0x200` | the foreground rung's raise and give-back; `AXFrontmost` reports success but moves nothing (measured). Missing: the rung is `unsupported_capability` |
 | `GetProcessPID` | function (deprecated, public) | `OSStatus (const ProcessSerialNumber *, pid_t *)` | the pid of `_SLPSGetFrontProcess`'s answer; `NSWorkspace.frontmostApplication` is stale off a running main run loop |
+
+| `AXManualAccessibility` | accessibility attribute (undocumented), set to `true` on the application element | `CFBoolean` | an Electron app builds its accessibility tree (Phase 5, stream B); set once per process instance |
 
 The spike adds a row for anything else it needs, with the ABI it verified.
 
