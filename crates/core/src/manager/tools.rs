@@ -717,8 +717,9 @@ impl SessionManager {
         Ok(())
     }
 
-    /// `note_for_user`: a judgement call for "Decided for you", or something only the user
-    /// can do for "Waiting on you", under the request the orchestrator serves.
+    /// `note_for_user`: a judgement call for "Decided for you", or, in an overnight run,
+    /// something only the user can do for its "Waiting on you", under the request the
+    /// orchestrator serves (refused outside a run).
     pub(crate) async fn note_for_user(
         &self,
         id: &ConversationId,
@@ -752,9 +753,9 @@ impl SessionManager {
                     .wait_on_user(id, request, WaitingSource::Orchestrator, what)
                     .await?;
                 Ok(if added {
-                    "Listed under Waiting on you. You hear when the user marks it done; carry on with anything that doesn't depend on it."
+                    "Listed under the run's Waiting on you; carry on with anything that doesn't depend on it."
                 } else {
-                    "It is already listed under Waiting on you."
+                    "It is already listed under the run's Waiting on you."
                 }
                 .into())
             }

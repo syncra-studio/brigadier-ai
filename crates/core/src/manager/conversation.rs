@@ -205,8 +205,7 @@ struct ConvState {
     /// The running turn's last reply.
     last_reply: Option<String>,
     /// Requests whose last turn ended asking the user something in its reply: until the user
-    /// writes again, no reminder pushes the orchestrator past its question, and one with a
-    /// reported change still undecided waits on the user.
+    /// writes again, no reminder pushes the orchestrator past its question.
     asked_user: HashSet<String>,
     /// Requests whose thread was told once to ask its text question on a card instead (see
     /// [`ASK_ON_A_CARD`]).
@@ -582,7 +581,6 @@ impl ConvLive {
                 .chain(state.announcing.values().flatten().cloned())
                 .collect(),
             outcomes: state.outcomes.clone(),
-            asked_user: state.asked_user.clone(),
         }
     }
 }
@@ -603,8 +601,6 @@ pub(super) struct RequestActivity {
     pub carried: HashSet<String>,
     /// How requests' last turns ended, when they were stopped or failed.
     pub outcomes: HashMap<String, RequestState>,
-    /// Requests whose last turn ended asking the user something in its reply.
-    pub asked_user: HashSet<String>,
 }
 
 impl SessionManager {
@@ -3351,6 +3347,11 @@ impl SessionManager {
         }
         let undecided = self.undecided(&board, request).await;
         let mut state = conv.state.lock().await;
+        // Its last turn asked the user something: nothing pushes it past that before they
+        // answer.
+        if state.asked_user.contains(request) {
+            return;
+        }
         let new: Vec<TaskId> = undecided
             .into_iter()
             .map(|task| task.id)

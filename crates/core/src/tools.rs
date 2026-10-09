@@ -615,8 +615,8 @@ pub struct FinishSession {
 pub enum NoteKind {
     /// A judgement call you made on the user's behalf: it shows under "Decided for you".
     Decided,
-    /// Something only the user can do: it shows under "Waiting on you" until they mark it
-    /// done.
+    /// During an overnight run, something only the user can do: it shows in the run's
+    /// "Waiting on you" list. Refused outside a run (say it in the answer instead).
     Waiting,
 }
 

@@ -153,9 +153,10 @@ an [answer] message: on \"Merge\", call finish_session without user_words.";
 const NOTE_FOR_USER: &str = "Keep the user's session summary current. kind \"decided\": a \
 judgement call you made on the user's behalf that they would want to know (a product or scope \
 choice they didn't settle), with why; it shows under \"Decided for you\". kind \"waiting\": \
-something only the user can do (a key, a sign-in, an account, a push), in one line; it shows \
-under \"Waiting on you\" until they mark it done, and you hear when they do. Brigadier lists its \
-own decisions and the workers' needs_user items itself: don't repeat them. Returns at once.";
+during an overnight run only, something only the user can do (a key, a sign-in, an account, a \
+push), in one line, for the run's \"Waiting on you\" list; outside a run it is refused: say it \
+in your answer instead. Brigadier lists its own decisions and, in a run, the workers' needs_user \
+items itself: don't repeat them. Returns at once.";
 
 const RUN: &str = "Run a shell command and get its result: use it for builds, tests, logs and \
 long listings, anything that prints a lot. It runs with this session's access, in the same \

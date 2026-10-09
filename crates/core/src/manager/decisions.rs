@@ -7,17 +7,17 @@
 //!   because it couldn't be verified, or handed to the orchestrator; a permission a worker
 //!   asked for declined. The orchestrator notes its own judgement calls (`note_for_user`), and
 //!   the stall watchdog its actions ([`SessionManager::decided_for_task`]).
-//! - **Waiting on you.** What only the user can do: a worker's `needs_user` lines, what a
-//!   change's checks need from the user first, what the orchestrator notes, and cards left
-//!   unanswered (the watchdog, with [`WaitingSource::Card`]). An item is listed once per
-//!   source and text (in an overnight run, once per config key or criterion it names:
-//!   `account_id`, `p2-c2`), under the request its task works for now, and keeps that request
-//!   waiting while other work goes on. It is over when the user clicks Done (the orchestrator
-//!   hears it), or without them: when its card settles, its task is stopped or reports again
-//!   without it, the change it held lands or a later round of its checks no longer lists it,
-//!   or the user edits its request or asks for a new answer. In an overnight run, only what a
-//!   done-when criterion needs is listed, and marking an item done after its phase settled
-//!   or its run ended wakes nobody.
+//! - **Waiting on you**, an overnight run's list only (THREAD-PARITY-PLAN §5 Q6): nobody is
+//!   there to ask, so what only the user can do is kept for the morning. A session lists
+//!   nothing: the user is there, so a decision goes on a card and what only they can do is a
+//!   line of the thread's answer. In a run, the list holds a worker's `needs_user` lines (only
+//!   what a done-when criterion needs), what the orchestrator notes, what the run's rules
+//!   declined, and cards left unanswered (the watchdog, with [`WaitingSource::Card`]). An item
+//!   is listed once per config key or criterion it names (`account_id`, `p2-c2`), under the
+//!   request its task works for now, and keeps that request waiting while other work goes on.
+//!   It is over without the user when its card settles, its task is stopped or reports again
+//!   without it, the change it held lands, or its run ends (the run's report keeps the list);
+//!   or when the user marks it done, which wakes the orchestrator unless the run is over.
 
 use std::collections::HashSet;
 
@@ -31,6 +31,9 @@ use crate::work::{
     PlanState, ResolvedBy, Task, TaskId, TaskState, WaitingItem, WaitingSource,
 };
 use crate::{Error, Result, now_ms};
+
+/// Why a session lists nothing for the user to do.
+pub(crate) const SAY_IT_IN_THE_ANSWER: &str = "Say it in your answer instead: outside an overnight run nothing is listed for the user. Write what only they can do as one line, \"You'll need to: …\", and ask a decision on a card (ask_user).";
 
 /// The longest line a decision or a waiting item keeps.
 const LINE_CHARS: usize = 300;
@@ -120,9 +123,9 @@ impl SessionManager {
         }
     }
 
-    /// Lists something only the user can do, or rewords the open item with the same key (and
-    /// files it under `request_id`, a later request that repeats it). Returns whether a new
-    /// item was listed.
+    /// Lists something only the user can do for an overnight run, or rewords the open item
+    /// with the same key (and files it under `request_id`, a later request that repeats it).
+    /// Returns whether a new item was listed; refused outside a run.
     pub(crate) async fn wait_on_user(
         &self,
         conversation_id: &ConversationId,
@@ -138,6 +141,9 @@ impl SessionManager {
         let added = {
             let _held = self.waiting.lock().await;
             let board = self.core.board(conversation_id).await?;
+            if waiting_run(&source, request_id.as_deref(), &board).is_none() {
+                return Err(Error::Invalid(SAY_IT_IN_THE_ANSWER.into()));
+            }
             let what = named(&what, &board);
             let key = waiting_key(&source, &what);
             let open_same = board.waiting.values().find(|open| open.key == key);
@@ -181,12 +187,12 @@ impl SessionManager {
         Ok(added)
     }
 
-    /// A task reported what only the user can do (its `needs_user`, `source`
-    /// [`WaitingSource::Task`]) or what its change's checks need from them first
+    /// A task of an overnight run reported what only the user can do (its `needs_user`,
+    /// `source` [`WaitingSource::Task`]) or what its change's checks need from them first
     /// ([`WaitingSource::Landing`]): each line is listed once, and the task's open items of
     /// that source the new list no longer names are over. Nothing changes when the task moved
-    /// on meanwhile (stopped, reported again, a newer round of checks). Returns how many lines
-    /// are listed.
+    /// on meanwhile (stopped, reported again, a newer round of checks), or outside a run,
+    /// where the thread says it in its answer. Returns how many lines are listed.
     pub(crate) async fn sync_waiting(
         &self,
         task: &Task,
@@ -206,10 +212,11 @@ impl SessionManager {
             let Ok(board) = self.core.board(&task.conversation_id).await else {
                 return 0;
             };
-            if !board
-                .tasks
-                .get(&task.id)
-                .is_some_and(|now| lists_still(&source, task, now))
+            if waiting_run(&source, request.as_deref(), &board).is_none()
+                || !board
+                    .tasks
+                    .get(&task.id)
+                    .is_some_and(|now| lists_still(&source, task, now))
             {
                 return 0;
             }
@@ -346,14 +353,19 @@ impl SessionManager {
         .await;
     }
 
-    /// Items whose card was answered or expired are over. Returns whether any was, before
-    /// the conversation's requests are settled.
-    pub(crate) async fn settle_card_waits(
+    /// Items whose card was answered or expired are over, as are those of a run that ended
+    /// (its report keeps them) and those of no run (listed before sessions stopped listing
+    /// anything). Returns whether any was, before the conversation's requests are settled.
+    pub(crate) async fn settle_waits(
         &self,
         conversation_id: &ConversationId,
         board: &Board,
     ) -> bool {
-        let settled = |item: &WaitingItem| matches!(&item.source, WaitingSource::Card { card_id } if !card_open(board, card_id));
+        let settled = |item: &WaitingItem| {
+            matches!(&item.source, WaitingSource::Card { card_id } if !card_open(board, card_id))
+                || waiting_run(&item.source, item.request_id.as_deref(), board)
+                    .is_none_or(|run| board.runs.get(&run).is_none_or(|run| run.state.is_final()))
+        };
         if !board.waiting.values().any(settled) {
             return false;
         }
@@ -585,11 +597,12 @@ fn reconciled_waits(
         .map(|item| item.id.clone())
         .collect();
     let mut listed = Vec::new();
-    // A gate member's report goes to its gate, which lists what it needs (`Landing`).
+    // A gate member's report goes to its gate, which lists what it needs (`Landing`); a
+    // session's thread says it in its answer.
     let live = board
         .tasks
         .values()
-        .filter(|task| !task.state.is_final() && task.gate_link.is_none());
+        .filter(|task| !task.state.is_final() && task.gate_link.is_none() && task.run.is_some());
     for task in live {
         let Some(report) = &task.report else {
             continue;
@@ -1503,14 +1516,29 @@ mod tests {
         assert_eq!(gone, ["w1", "w2"]);
     }
 
+    /// `task` as a worker of an overnight run.
+    fn run_task(mut task: Task) -> Task {
+        task.run = Some(crate::overnight::RunTaskContext {
+            run_id: OvernightRunId("run1".into()),
+            segment: 1,
+            generation: 1,
+            role: crate::overnight::RunRole::Worker,
+            rules_hash: String::new(),
+        });
+        task
+    }
+
     #[test]
     fn a_restart_lists_what_a_live_report_could_not() {
         let mut board = Board::default();
-        let reported = task(
+        let reported = run_task(task(
             "t1",
             TaskState::Reported,
             Some((1, &["Sign in to npm", "Push the branch", "Set STRIPE_KEY"])),
-        );
+        ));
+        // A session's worker lists nothing: the thread says it in its answer.
+        let session = task("t3", TaskState::Reported, Some((1, &["Set OTHER_KEY"])));
+        board.tasks.insert(session.id.clone(), session);
         let mut member = task("t2", TaskState::Reported, Some((1, &["Add the API key"])));
         member.gate_link = Some(crate::work::GateLink {
             owner: crate::work::GateOwner::Task {

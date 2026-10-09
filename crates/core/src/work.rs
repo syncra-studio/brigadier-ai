@@ -1612,8 +1612,9 @@ pub enum WaitingSource {
     Computer,
 }
 
-/// Something only the user can do, listed under "Waiting on you" until they mark it done or
-/// it is over without them. Its request waits while it is open; other work goes on.
+/// Something only the user can do, on an overnight run's "Waiting on you" list until it is
+/// over without them (the run's end included) or they mark it done. Its request waits while
+/// it is open; other work goes on. A session lists nothing: its thread says it in its answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WaitingItem {

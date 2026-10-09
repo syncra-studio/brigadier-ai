@@ -29,6 +29,9 @@ where
 const QUIET: &str = "[quiet]";
 const MORNING: &str = "Good morning: the run is over; the report follows.";
 
+/// What phase 1's lead needs from the user.
+const RELEASE_TOKEN: &str = "Add RELEASE_TOKEN to .env to publish p1.txt.";
+
 /// The task numbers of the reports in a thread's input, in order.
 fn reports_in(input: &str) -> Vec<u32> {
     input
@@ -306,7 +309,8 @@ impl Thread {
     }
 }
 
-/// A lead that commits its phase's file and reports.
+/// A lead that commits its phase's file and reports; phase 1's lists something only the user
+/// can do, which the run keeps for the morning.
 async fn build(turn: &Turn) -> Reply {
     let n = phase_of_lead(turn).expect("a phase lead");
     let file = format!("p{n}.txt");
@@ -320,7 +324,8 @@ async fn build(turn: &Turn) -> Reply {
         .call(
             "submit_report",
             json!({"summary": format!("Added {file}."), "changes": [file],
-                   "done_when": format!("[met] p{n}.txt exists: ls shows it")}),
+                   "done_when": format!("[met] p{n}.txt exists: ls shows it"),
+                   "needs_user": if n == 1 { vec![RELEASE_TOKEN] } else { Vec::new() }}),
         )
         .await;
     assert!(!reply.is_error, "{}", reply.text);
@@ -580,6 +585,7 @@ async fn a_run_told_to_stop_after_phase_2_settles_two_phases_and_stops() {
         "Named the files pN.txt.",
         "### Waiting on you",
         "Add the release key to .env.",
+        RELEASE_TOKEN,
         "How each phase was checked:",
         "Settled: Made p1.txt",
         "Usage: ",
@@ -591,6 +597,11 @@ async fn a_run_told_to_stop_after_phase_2_settles_two_phases_and_stops() {
         !shown.contains("task-"),
         "workers by name, not number:\n{report}"
     );
+    // The run's list ends with it: its report keeps it, and nothing asks for a Done.
+    flow.until("the run's Waiting on you to end with it", |board| {
+        board.waiting.is_empty()
+    })
+    .await;
 
     // After the run the same native session goes on, in the session's checkout.
     flow.say("Thanks.").await;
