@@ -28,10 +28,37 @@ type WebPoint = ((f64, f64), (Point, Option<Rect>), Option<WebEl>);
 impl<D: Desktop> Engine<D> {
     /// The page window `w` shows, when it is a window of a browser the session launched.
     pub(super) fn web_page(&mut self, w: &WindowInfo) -> Option<PageId> {
-        if !self.web.pids().contains(&w.pid) {
+        if !self.web.pids().contains(&w.pid) && !self.adopt_browser(w.pid) {
             return None;
         }
         self.web.page_of(w)
+    }
+
+    /// Takes on a browser another helper launched for a session, found by its scratch
+    /// profile (`cdp::adoptable`); any other browser is remembered as not ours.
+    fn adopt_browser(&mut self, pid: i32) -> bool {
+        if self.web.foreign.contains(&pid) {
+            return false;
+        }
+        let adopted = (|| {
+            let app = self.desktop.app(pid).ok()?;
+            if !crate::cdp::is_chromium(app.bundle_id.as_deref()) {
+                return None;
+            }
+            let profile = crate::cdp::adoptable(pid)?;
+            let path = app.bundle_path.clone().unwrap_or_default();
+            Browser::attach(pid, &path, profile, Duration::ZERO).ok()
+        })();
+        match adopted {
+            Some(b) => {
+                self.web.add(b);
+                true
+            }
+            None => {
+                self.web.foreign.insert(pid);
+                false
+            }
+        }
     }
 
     fn browser(&mut self, pid: i32) -> CuResult<&mut Browser> {

@@ -61,9 +61,33 @@ pub fn launch_args(profile: &Path) -> Vec<String> {
     ]
 }
 
+/// Where the session's browsers keep their scratch profiles: only this helper makes them.
+fn profiles_base() -> PathBuf {
+    std::env::temp_dir().join("brigadier-browser")
+}
+
+/// The scratch profile of a running browser a session launched, maybe from another helper
+/// process (the suite's setup, or this helper before a restart), read from its command line.
+/// None for any other browser: the user's own are never driven through the protocol.
+pub fn adoptable(pid: i32) -> Option<PathBuf> {
+    let out = std::process::Command::new("/bin/ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let line = String::from_utf8_lossy(&out.stdout);
+    let base = profiles_base();
+    let dir = line
+        .split(" --")
+        .find_map(|a| a.strip_prefix("user-data-dir="))
+        .map(|d| PathBuf::from(d.trim()))?;
+    let dir = dir.canonicalize().ok()?;
+    let base = base.canonicalize().ok()?;
+    (dir.parent() == Some(base.as_path()) && active_port(&dir).is_some()).then_some(dir)
+}
+
 /// A fresh scratch profile directory.
 pub fn scratch_profile() -> CuResult<PathBuf> {
-    let base = std::env::temp_dir().join("brigadier-browser");
+    let base = profiles_base();
     std::fs::create_dir_all(&base)
         .map_err(|e| CuError::new(ErrorCode::Failed, format!("a browser profile: {e}")))?;
     // Profiles left by a browser that outlived its helper.
@@ -111,14 +135,6 @@ pub struct Browser {
     windows: HashMap<u32, String>,
     /// The browser's own session-less events are read from here.
     discovered: bool,
-}
-
-impl Drop for Browser {
-    fn drop(&mut self) {
-        // The scratch profile goes with the browser. One the browser still writes to is swept by
-        // a later start, once it is a day old.
-        let _ = std::fs::remove_dir_all(&self.profile);
-    }
 }
 
 impl Browser {
@@ -357,6 +373,8 @@ fn title_matches(tab: &str, window: &str) -> bool {
 #[derive(Default)]
 pub struct Web {
     pub browsers: Vec<Browser>,
+    /// Chromium processes looked at and found not to be a session's: not asked again.
+    pub foreign: HashSet<i32>,
 }
 
 impl Web {
@@ -364,9 +382,17 @@ impl Web {
         self.browsers.push(b);
     }
 
-    /// Forgets browsers that quit; their profiles go with them.
+    /// Forgets browsers that quit; their profiles go with them. A browser still running when
+    /// its helper ends keeps its profile, so another helper can take it on (`adoptable`); a
+    /// later start sweeps it once it is a day old.
     pub fn prune(&mut self, mut alive: impl FnMut(i32) -> bool) {
-        self.browsers.retain(|b| alive(b.pid));
+        self.browsers.retain(|b| {
+            let on = alive(b.pid);
+            if !on {
+                let _ = std::fs::remove_dir_all(&b.profile);
+            }
+            on
+        });
     }
 
     pub fn browser(&mut self, pid: i32) -> Option<&mut Browser> {
