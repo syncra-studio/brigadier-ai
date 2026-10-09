@@ -1064,6 +1064,8 @@ disables the capabilities that need it (`unsupported_capability`) without affect
 |---|---|---|---|
 | `_AXUIElementGetWindow` | function (HIServices) | `AXError (AXUIElementRef, CGWindowID *)` | pair an accessibility window with its window-server id |
 | `_AXUIElementCreateWithRemoteToken` | function (HIServices) | `AXUIElementRef (CFDataRef token)`, +1 retained; token = pid (i32), 0 (i32), `0x636f636f` (i32), element id (u64), 20 bytes | reach a window on another Space that is neither the app's main nor its focused window (Phase 4, pulled forward from Phase 5); only elements an accessibility client already reached have ids |
+| `SLSMainConnectionID` | function (SkyLight) | `int32 (void)` | this process's window-server connection, for the capture below |
+| `SLSHWCaptureWindowList` | function (SkyLight) | `CFArrayRef (int32 connection, const CGWindowID *ids, int32 count, uint32 options)`, +1 retained array of `CGImage`; options `1<<11 \| 1<<9 \| 1<<8` (ignore the global clip shape, nominal and best resolution) | pixels of a window on another Space, from the window server's backing store (~100 ms); ScreenCaptureKit times out on such a window (measured, Phase 4) |
 | mouse event field 51 | `CGEventField` raw value | `int64` window id | AppKit's window for a pid-posted mouse down/up (measured, §2) |
 | mouse event field 103 | `CGEventField` raw value | `int64` window id | the same for mouse-moved events (measured, §2) |
 | `CGEventSetWindowLocation` | function (SkyLight, exported) | `void (CGEventRef, CGPoint)`, window-local, top-left | the event's location inside the target window (measured, §2) |
