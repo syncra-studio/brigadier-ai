@@ -4,7 +4,9 @@ usage: summarize.py <reference scripted.json> <run dir> [<run dir> ...] [--json 
 
 Per trial: pass, wrong-target events, rungs, batches, model calls, E1 (calls ÷ the fewest `act`
 batches the scripted solver needed), wall time, the model the attempts actually ran on, and the
-usage of the worker and of the thread's relay turns.
+usage of the worker and of the thread's relay turns. Beside E1, `E1+2` is the amendment the report
+proposes (not the gate): the scripted solver's tool calls plus 2, for the report and the final turn.
+With several runs, a closing table per provider pools their trials.
 
 F1, from each run's focus monitor (`suite watch`, from the first setup to the last teardown): a
 change is the suite's only with a cause of the suite's just before it (see `focus`). The user may
@@ -78,8 +80,36 @@ def focus(run, results):
             "other_changes": others[:20]}
 
 
+def median(xs):
+    xs = sorted(x for x in xs if x is not None)
+    return xs[len(xs) // 2] if xs else None
+
+
+def providers(out):
+    """Every run of a provider pooled: trials, passes, E1, wall time, usage per completed task."""
+    pooled = {}
+    for name, r in out["runs"].items():
+        pooled.setdefault(name.split("-")[0], []).append((name, r))
+    rows = {}
+    for prov, runs in pooled.items():
+        trials = [x for _, r in runs for x in r["rows"]]
+        passed = sum(r["passed"] for _, r in runs)
+        per = {k: {f: round(sum(r["usage_total"][k][f] for _, r in runs) / max(1, passed)) for f in TOKENS}
+               for k in ("worker", "thread")}
+        rows[prov] = {"runs": [n for n, _ in runs], "trials": len(trials), "passed": passed,
+                      "e1_median": median([x["e1"] for x in trials]),
+                      "e1_plus2_median": median([x["e1_plus2"] for x in trials]),
+                      "calls_median": median([x["model_calls"] for x in trials]),
+                      "wall_s_median": median([x["wall_s"] for x in trials]),
+                      "f1_suite_changes": sum(len(r["focus"]["suite"]) for _, r in runs),
+                      "usage_per_completed_task": per}
+    return rows
+
+
 def main():
-    ref = {r["task"]: r["reference_batches"] for r in json.load(open(sys.argv[1]))}
+    scripted = json.load(open(sys.argv[1]))
+    ref = {r["task"]: r["reference_batches"] for r in scripted}
+    ref2 = {r["task"]: r["tool_calls"] + 2 for r in scripted if r.get("tool_calls")}
     runs = [a for a in sys.argv[2:] if not a.startswith("--") and not a.endswith(".json")]
     out = {"runs": {}}
     for run in runs:
@@ -96,6 +126,7 @@ def main():
                 "wrong_target": v.get("wrong_target"), "rungs": v.get("rungs"), "batches": r.get("batches"),
                 "reference_batches": refb, "model_calls": calls,
                 "e1": round(calls / refb, 2) if calls and refb else None,
+                "e1_plus2": round(calls / ref2[r["task"]], 2) if calls and r["task"] in ref2 else None,
                 "child_calls": (r.get("calls") or {}).get("child_calls"),
                 "wall_s": round((r.get("wall_ms") or 0) / 1000, 1),
                 "worker_s": round((r.get("worker_ms") or 0) / 1000, 1),
@@ -113,25 +144,36 @@ def main():
             "trials": len(rows), "passed": len(passed), "rows": rows,
             "usage_total": {"worker": w, "thread": t},
             "usage_per_completed_task": {k: {f: round(v / n) for f, v in x.items()} for k, x in (("worker", w), ("thread", t))},
-            "e1_median": sorted(x["e1"] for x in rows if x["e1"])[len([x for x in rows if x["e1"]]) // 2] if any(x["e1"] for x in rows) else None,
+            "e1_median": median([x["e1"] for x in rows]),
+            "e1_plus2_median": median([x["e1_plus2"] for x in rows]),
             "focus": focus(run, results),
         }
+    out["providers"] = providers(out)
     js = json.dumps(out, indent=1)
     if "--json" in sys.argv:
         open(sys.argv[sys.argv.index("--json") + 1], "w").write(js)
     for name, r in out["runs"].items():
-        print(f"## {name}: {r['passed']}/{r['trials']} passed, E1 median {r['e1_median']}, "
+        print(f"## {name}: {r['passed']}/{r['trials']} passed, E1 median {r['e1_median']} (E1+2 {r['e1_plus2_median']}), "
               f"F1 suite changes {len(r['focus']['suite'])} (target to front with no suite cause "
               f"{len(r['focus']['target_front_without_cause'])}, other {r['focus']['other']})")
-        print("| task | pass | batches | ref | calls | E1 | wall s | model | worker in/cache/out | thread in/cache/out | notes |")
-        print("|---|---|---|---|---|---|---|---|---|---|---|")
+        print("| task | pass | batches | ref | calls | E1 | E1+2 | wall s | model | worker in/cache/out | thread in/cache/out | notes |")
+        print("|---|---|---|---|---|---|---|---|---|---|---|---|")
         for x in r["rows"]:
             wt, tt = x["worker_tokens"], x["thread_tokens"]
             print(f"| {x['task']} | {'pass' if x['pass'] else 'FAIL'}{' ' + x['outcome'] if x['outcome'] else ''} | {x['batches']} | "
-                  f"{x['reference_batches']} | {x['model_calls']} | {x['e1']} | {x['wall_s']} | {', '.join(x['models'])} | "
+                  f"{x['reference_batches']} | {x['model_calls']} | {x['e1']} | {x['e1_plus2']} | {x['wall_s']} | {', '.join(x['models'])} | "
                   f"{wt['input_uncached']}/{wt['cache_read']}/{wt['output']} | {tt['input_uncached']}/{tt['cache_read']}/{tt['output']} | "
                   f"{'; '.join(x['notes'] or [])[:160]}{x['error'] or ''} |")
         print("per completed task:", json.dumps(r["usage_per_completed_task"]))
+    if len(out["runs"]) > 1:
+        print("\n## Per provider, runs pooled")
+        print("| provider | runs | passed | median calls | E1 median | E1+2 median | median wall s | F1 suite changes | worker in/cache-read/cache-write/out per completed task | thread, the same |")
+        print("|---|---|---|---|---|---|---|---|---|---|")
+        for prov, p in out["providers"].items():
+            w, t = p["usage_per_completed_task"]["worker"], p["usage_per_completed_task"]["thread"]
+            print(f"| {prov} | {len(p['runs'])} | {p['passed']}/{p['trials']} | {p['calls_median']} | {p['e1_median']} | "
+                  f"{p['e1_plus2_median']} | {p['wall_s_median']} | {p['f1_suite_changes']} | "
+                  f"{'/'.join(str(w[k]) for k in TOKENS)} | {'/'.join(str(t[k]) for k in TOKENS)} |")
 
 
 if __name__ == "__main__":
