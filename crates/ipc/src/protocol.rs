@@ -290,6 +290,13 @@ pub enum Request {
     CloseTerminal {
         terminal_id: String,
     },
+    /// Whether computer use has the system permissions it needs (Settings → Computer use).
+    GetComputerAccess,
+    /// Asks the system for one of computer use's permissions: registers Brigadier Computer
+    /// Use with it and opens that pane of System Settings, where the user turns it on.
+    AllowComputerAccess {
+        grant: ComputerGrant,
+    },
     /// Whether dictation (the composer's Dictate button) can run, and its speech model.
     GetDictation,
     /// Downloads the speech model into the data folder. Answered at once; progress and the
@@ -1013,6 +1020,12 @@ pub enum Response {
     ResizeTerminal,
     ClearTerminal,
     CloseTerminal,
+    GetComputerAccess {
+        access: ComputerAccess,
+    },
+    AllowComputerAccess {
+        access: ComputerAccess,
+    },
     GetDictation {
         dictation: DictationStatus,
     },
@@ -1529,6 +1542,28 @@ pub enum TerminalOutput {
         terminal_id: String,
         code: Option<u32>,
     },
+}
+
+/// Computer use's system permissions, as Brigadier Computer Use holds them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerAccess {
+    /// This system has computer use (macOS for now).
+    pub available: bool,
+    /// Control apps (Accessibility).
+    pub accessibility: bool,
+    /// See the screen (Screen Recording).
+    pub screen_recording: bool,
+    /// Why the permissions couldn't be read, in plain words.
+    pub problem: Option<String>,
+}
+
+/// One of computer use's system permissions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ComputerGrant {
+    Accessibility,
+    ScreenRecording,
 }
 
 /// Whether dictation can run here, as `getDictation` returns it.

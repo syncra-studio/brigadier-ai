@@ -346,6 +346,56 @@ impl Computer {
     }
 }
 
+impl SessionManager {
+    /// The helper's system permissions (starting it if needed): `Err` says why they couldn't
+    /// be read.
+    pub async fn computer_permissions(
+        &self,
+    ) -> std::result::Result<brigadier_computer::wire::Permissions, String> {
+        let worker = TaskId("settings".into());
+        let a = self
+            .computer
+            .request(
+                &worker,
+                Provider::Claude,
+                Policy::default(),
+                Op::Permissions,
+            )
+            .await
+            .map_err(|e| e.detail)?;
+        a.reply
+            .permissions
+            .ok_or_else(|| "Brigadier Computer Use didn't say".into())
+    }
+
+    /// Registers the helper with the system for `grant` (the system's own prompt), so it is
+    /// listed in System Settings; the caller opens the pane.
+    pub async fn request_computer_permission(
+        &self,
+        grant: brigadier_computer::wire::Grant,
+    ) -> std::result::Result<brigadier_computer::wire::Permissions, String> {
+        let worker = TaskId("settings".into());
+        let a = self
+            .computer
+            .request(
+                &worker,
+                Provider::Claude,
+                Policy::default(),
+                Op::RequestPermission { grant },
+            )
+            .await
+            .map_err(|e| e.detail)?;
+        a.reply
+            .permissions
+            .ok_or_else(|| "Brigadier Computer Use didn't say".into())
+    }
+
+    /// How long the helper took from its start to its first answer, last time (S7).
+    pub fn computer_cold_start_ms(&self) -> Option<f64> {
+        self.computer.cold_start_ms()
+    }
+}
+
 /// Cancels a request in the helper unless its answer came.
 struct CancelOnDrop {
     link: Option<Arc<dyn HelperLink>>,

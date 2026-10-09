@@ -12,6 +12,7 @@ name = "brigadierd"
 path = "src/main.rs"
 
 [dependencies]
+brigadier-computer.workspace = true
 anyhow.workspace = true
 base64.workspace = true
 brigadier-core.workspace = true

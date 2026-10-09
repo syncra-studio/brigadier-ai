@@ -14,9 +14,9 @@ use brigadier_core::{
 };
 use brigadier_ipc::metrics::{DaemonMetrics, Diagnostics, budgets};
 use brigadier_ipc::protocol::{
-    ArtifactText, ClientFrame, ClientInfo, DaemonActivity, DaemonInfo, DictationUpdate, ErrorCode,
-    EventEnvelope, IpcError, LifecycleOutcome, Outcome, RawJson, Request, Response, SendOutcome,
-    ServerFrame, TerminalInfo, TerminalOutput,
+    ArtifactText, ClientFrame, ClientInfo, ComputerAccess, ComputerGrant, DaemonActivity,
+    DaemonInfo, DictationUpdate, ErrorCode, EventEnvelope, IpcError, LifecycleOutcome, Outcome,
+    RawJson, Request, Response, SendOutcome, ServerFrame, TerminalInfo, TerminalOutput,
 };
 use brigadier_ipc::{Accepted, Connection, Listener, Reader, Token, Writer};
 use brigadier_providers::ProviderKind;
@@ -1259,6 +1259,30 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             daemon.terminals.close(&terminal_id);
             Response::CloseTerminal
         }
+        Request::GetComputerAccess => Response::GetComputerAccess {
+            access: computer_access(sessions.computer_permissions().await),
+        },
+        Request::AllowComputerAccess { grant } => {
+            use brigadier_computer::wire::Grant;
+            let (wire, pane) = match grant {
+                ComputerGrant::Accessibility => (Grant::Accessibility, "Privacy_Accessibility"),
+                ComputerGrant::ScreenRecording => (Grant::ScreenRecording, "Privacy_ScreenCapture"),
+            };
+            let permissions = sessions.request_computer_permission(wire).await;
+            // The pane where the user turns Brigadier Computer Use on.
+            #[cfg(target_os = "macos")]
+            if permissions.is_ok() {
+                let _ = std::process::Command::new("/usr/bin/open")
+                    .arg(format!(
+                        "x-apple.systempreferences:com.apple.preference.security?{pane}"
+                    ))
+                    .spawn();
+            }
+            let _ = pane;
+            Response::AllowComputerAccess {
+                access: computer_access(permissions),
+            }
+        }
         Request::GetDictation
         | Request::DownloadDictationModel
         | Request::CancelDictationDownload
@@ -1903,5 +1927,26 @@ fn shell_quote(path: &str) -> String {
         format!("& '{}'", path.replace('\'', "''"))
     } else {
         format!("'{}'", path.replace('\'', "'\"'\"'"))
+    }
+}
+
+/// Computer use's permissions as Settings shows them.
+fn computer_access(
+    read: std::result::Result<brigadier_computer::wire::Permissions, String>,
+) -> ComputerAccess {
+    let available = cfg!(target_os = "macos");
+    match read {
+        Ok(p) => ComputerAccess {
+            available,
+            accessibility: p.accessibility,
+            screen_recording: p.screen_recording,
+            problem: None,
+        },
+        Err(problem) => ComputerAccess {
+            available,
+            accessibility: false,
+            screen_recording: false,
+            problem: Some(problem),
+        },
     }
 }
