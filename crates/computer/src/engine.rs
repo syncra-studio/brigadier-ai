@@ -730,6 +730,7 @@ impl<D: Desktop> Engine<D> {
         };
         let mut before_node: Option<RawNode<D::Element>> = None;
         let mut set_text: Option<(D::Element, String)> = None;
+        let mut selected: Option<(D::Element, (usize, usize))> = None;
         // The action read its own effect back (text inserted and seen in the value).
         let mut read_back = false;
         let start = Instant::now();
@@ -824,6 +825,22 @@ impl<D: Desktop> Engine<D> {
                 self.desktop.menu(w.pid, path)?;
                 Rung::Element
             }
+            Action::Select {
+                r#ref,
+                start,
+                length,
+                ..
+            } => {
+                let el = self.resolve_ref(&w, Self::ref_of(r#ref)?, true)?;
+                if self.desktop.read(&w, &el)?.secure {
+                    return err(ErrorCode::SecureField, "that is a password field");
+                }
+                // A text field takes focus by selecting everything, so focus first, then the range.
+                self.desktop.set_focus(&el)?;
+                self.desktop.select(&el, *start, *length)?;
+                selected = Some((el, (*start, *length)));
+                Rung::Element
+            }
             Action::Wait { .. } => Rung::Element,
         };
         let dispatch = start.elapsed();
@@ -869,6 +886,21 @@ impl<D: Desktop> Engine<D> {
                     format!("the value is now {:?}", now.unwrap_or_default()),
                 ));
                 Effect::NoChange
+            }
+        } else if let Some((el, want)) = selected {
+            match self.desktop.selection(&el) {
+                Some(now) if now == want => Effect::Confirmed,
+                Some((s, l)) => {
+                    status = Status::Failed;
+                    error = Some(CuError::new(
+                        ErrorCode::NotSettable,
+                        format!(
+                            "the selection is now {l} characters from {s}: past the end of the text?"
+                        ),
+                    ));
+                    Effect::NoChange
+                }
+                None => Effect::Unverified,
             }
         } else if read_back {
             Effect::Confirmed
@@ -1170,6 +1202,8 @@ mod tests {
         selected_text: Option<String>,
         /// A press on this element retitles the window, as a navigation would.
         retitle_on_press: Option<(u32, String)>,
+        /// The selected range of each element, in characters; text inserted replaces it.
+        selections: HashMap<u32, (usize, usize)>,
         log: Vec<String>,
     }
 
@@ -1198,6 +1232,7 @@ mod tests {
                 frozen: false,
                 selected_text: None,
                 retitle_on_press: None,
+                selections: HashMap::new(),
                 log: Vec::new(),
             }
         }
@@ -1297,10 +1332,33 @@ mod tests {
         fn insert_text(&mut self, el: &u32, text: &str) -> CuResult<()> {
             self.log.push(format!("insert {el}"));
             if !self.frozen {
+                let range = self.selections.remove(el);
                 let n = self.node_mut(*el);
-                n.value = Some(n.value.clone().unwrap_or_default() + text);
+                let old: Vec<char> = n.value.clone().unwrap_or_default().chars().collect();
+                let (s, l) = range.unwrap_or((old.len(), 0));
+                let mut new: String = old[..s].iter().collect();
+                new.push_str(text);
+                new.extend(&old[s + l..]);
+                n.value = Some(new);
             }
             Ok(())
+        }
+        fn select(&mut self, el: &u32, start: usize, length: usize) -> CuResult<()> {
+            self.log.push(format!("select {el} {start} {length}"));
+            let len = self
+                .read(&self.window.clone(), el)?
+                .value
+                .unwrap_or_default()
+                .chars()
+                .count();
+            // Like AppKit, a range past the end is clamped.
+            let start = start.min(len);
+            self.selections
+                .insert(*el, (start, length.min(len - start)));
+            Ok(())
+        }
+        fn selection(&mut self, el: &u32) -> Option<(usize, usize)> {
+            self.selections.get(el).copied()
         }
         fn set_focus(&mut self, el: &u32) -> CuResult<()> {
             self.focused = Some(*el);
@@ -1771,6 +1829,50 @@ mod tests {
         assert_eq!(r[0].delivered, Some(Rung::Element));
         assert_eq!(r[0].effect, Some(Effect::Confirmed));
         assert_eq!(e.desktop.log, vec!["insert 4"]);
+    }
+
+    #[test]
+    fn select_sets_a_range_that_typing_then_replaces() {
+        let mut nodes = basic();
+        nodes[3].value = Some("hello world!".into());
+        let mut e = engine(Fake::new(nodes));
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let name = ref_of(&text, "Name");
+        let r = act(
+            &mut e,
+            vec![
+                Action::Select {
+                    r#ref: name.clone(),
+                    start: 6,
+                    length: 5,
+                    expect: None,
+                },
+                Action::Type {
+                    text: "there".into(),
+                    r#ref: None,
+                    expect: Some(Expect::ValueEquals {
+                        r#ref: name.clone(),
+                        text: "hello there!".into(),
+                    }),
+                },
+            ],
+        );
+        assert_eq!(r[0].delivered, Some(Rung::Element));
+        assert_eq!(r[0].effect, Some(Effect::Confirmed));
+        assert_eq!(r[1].effect, Some(Effect::Confirmed), "{:?}", r[1]);
+        assert_eq!(e.desktop.node_mut(4).value.as_deref(), Some("hello there!"));
+        // A range past the end is clamped by the app, and the result says so.
+        let r = act(
+            &mut e,
+            vec![Action::Select {
+                r#ref: name,
+                start: 50,
+                length: 3,
+                expect: None,
+            }],
+        );
+        assert_eq!(r[0].status, Status::Failed);
+        assert_eq!(code(&r[0]), Some(ErrorCode::NotSettable));
     }
 
     #[test]

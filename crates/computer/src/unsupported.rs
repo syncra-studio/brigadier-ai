@@ -71,6 +71,12 @@ impl Desktop for Unsupported {
     fn set_focus(&mut self, _: &u64) -> CuResult<()> {
         no()
     }
+    fn select(&mut self, _: &u64, _: usize, _: usize) -> CuResult<()> {
+        no()
+    }
+    fn selection(&mut self, _: &u64) -> Option<(usize, usize)> {
+        None
+    }
     fn menu(&mut self, _: i32, _: &[String]) -> CuResult<()> {
         no()
     }

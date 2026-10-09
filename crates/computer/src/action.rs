@@ -121,6 +121,15 @@ pub enum Action {
         #[serde(default)]
         expect: Option<Expect>,
     },
+    /// Sets the selected text range, in characters, so a `type` that follows replaces it.
+    Select {
+        #[serde(rename = "ref")]
+        r#ref: String,
+        start: usize,
+        length: usize,
+        #[serde(default)]
+        expect: Option<Expect>,
+    },
     Wait {
         expect: Expect,
         #[serde(default = "wait_ms")]
@@ -149,6 +158,7 @@ impl Action {
             Self::Drag { .. } => "drag",
             Self::Perform { .. } => "perform",
             Self::Menu { .. } => "menu",
+            Self::Select { .. } => "select",
             Self::Wait { .. } => "wait",
         }
     }
@@ -162,7 +172,8 @@ impl Action {
             | Self::Scroll { expect, .. }
             | Self::Drag { expect, .. }
             | Self::Perform { expect, .. }
-            | Self::Menu { expect, .. } => expect.as_ref(),
+            | Self::Menu { expect, .. }
+            | Self::Select { expect, .. } => expect.as_ref(),
             Self::Wait { expect, .. } => Some(expect),
         }
     }
@@ -176,7 +187,8 @@ impl Action {
             | Self::Scroll { expect, .. }
             | Self::Drag { expect, .. }
             | Self::Perform { expect, .. }
-            | Self::Menu { expect, .. } => expect.as_mut(),
+            | Self::Menu { expect, .. }
+            | Self::Select { expect, .. } => expect.as_mut(),
             Self::Wait { expect, .. } => Some(expect),
         }
     }
@@ -185,7 +197,7 @@ impl Action {
     pub fn uses_app_focus(&self) -> bool {
         matches!(
             self,
-            Self::Type { .. } | Self::Key { .. } | Self::Menu { .. }
+            Self::Type { .. } | Self::Key { .. } | Self::Menu { .. } | Self::Select { .. }
         )
     }
 }

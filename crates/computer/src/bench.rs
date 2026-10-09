@@ -677,6 +677,82 @@ impl Bench {
         Ok(())
     }
 
+    /// `select` then `type`: characters 6–11 of the notes field are replaced, checked in the
+    /// fixture's own log.
+    fn selection(&mut self, reps: u32) -> Result<()> {
+        let id = self.win.id;
+        let text = self.observe(id, Screenshot::Never, true)?.text;
+        let notes = find_ref(&text, "textfield \"Notes\"")?;
+        for _ in 0..reps {
+            self.act(
+                id,
+                Action::SetValue {
+                    r#ref: notes.clone(),
+                    text: "hello world!".into(),
+                    expect: None,
+                },
+            )?;
+            let _ = self.log.read_new()?;
+            let before = self.engine.desktop.user_focus();
+            let reply = self
+                .engine
+                .act(
+                    "bench",
+                    &ActRequest {
+                        window: id,
+                        actions: vec![
+                            Action::Select {
+                                r#ref: notes.clone(),
+                                start: 6,
+                                length: 5,
+                                expect: None,
+                            },
+                            Action::Type {
+                                text: "there".into(),
+                                r#ref: None,
+                                expect: None,
+                            },
+                        ],
+                        screenshot: Screenshot::Never,
+                    },
+                )
+                .map_err(|e| anyhow!("{e}"))?;
+            let events = self.log.until(Duration::from_millis(1_000), |e| {
+                e.id == "notes" && e.v.as_deref() == Some("hello there!")
+            })?;
+            let o = self
+                .report
+                .ops
+                .entry("SEL select and type over".into())
+                .or_default();
+            o.tried += 1;
+            let done = reply.results.iter().all(|r| r.status == Status::Done);
+            if done
+                && events
+                    .iter()
+                    .any(|e| e.v.as_deref() == Some("hello there!"))
+            {
+                o.ok += 1;
+            } else {
+                o.miss(format!(
+                    "{:?} / last {:?}",
+                    reply
+                        .results
+                        .iter()
+                        .map(|r| r.error.as_ref().map(|e| e.code))
+                        .collect::<Vec<_>>(),
+                    events
+                        .iter()
+                        .rev()
+                        .find(|e| e.id == "notes")
+                        .and_then(|e| e.v.clone())
+                ));
+            }
+            self.check_focus("select and type over", &before);
+        }
+        Ok(())
+    }
+
     fn gates(&mut self) {
         let mut gates = Vec::new();
         let ops = &self.report.ops;
@@ -778,6 +854,14 @@ impl Bench {
             measured: format!("{sv:.1} / {keys:.1} ms ({sv_ok}/{sv_n}, {k_ok}/{k_n} landed)"),
             target: "≤ 20 / ≤ 250 ms".into(),
             pass: sv <= 20.0 && keys <= 250.0 && sv_ok == sv_n && k_ok == k_n,
+        });
+        let (ok, n) = rate("SEL");
+        gates.push(Gate {
+            id: "SEL",
+            what: "select characters 6–11 and type over them".into(),
+            measured: format!("{ok}/{n}"),
+            target: "100%".into(),
+            pass: n > 0 && ok == n,
         });
         let (ok, n) = rate("P1 press");
         gates.push(Gate {
@@ -980,6 +1064,7 @@ pub fn run(mut desktop: MacDesktop, out: &Path, quick: bool) -> Result<bool> {
     b.pixels(reps)?;
     b.refusals(reps)?;
     b.typing(reps)?;
+    b.selection((reps / 10).max(5))?;
     let start_focus = b.user.clone();
     b.check_focus("the whole run", &start_focus);
     drop(fixture);

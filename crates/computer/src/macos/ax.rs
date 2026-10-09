@@ -9,7 +9,7 @@ use objc2_application_services::{
     AXCopyMultipleAttributeOptions, AXError, AXUIElement, AXValue, AXValueType,
 };
 use objc2_core_foundation::{
-    CFArray, CFBoolean, CFNumber, CFRetained, CFString, CFType, CGPoint, CGSize,
+    CFArray, CFBoolean, CFNumber, CFRange, CFRetained, CFString, CFType, CGPoint, CGSize,
 };
 
 use crate::error::{CuError, CuResult, ErrorCode, err};
@@ -100,6 +100,39 @@ impl AxEl {
         let key = CFString::from_static_str(name);
         // SAFETY: both arguments are live CF objects.
         check(unsafe { self.0.set_attribute_value(&key, value) }, name)
+    }
+
+    /// Sets a range attribute (`AXSelectedTextRange`), in characters.
+    pub fn set_range(&self, name: &'static str, start: usize, length: usize) -> CuResult<()> {
+        let range = CFRange {
+            location: start as isize,
+            length: length as isize,
+        };
+        // SAFETY: `range` is a CFRange, the layout the CFRange type tag names.
+        let v = unsafe { AXValue::new(AXValueType::CFRange, NonNull::from(&range).cast()) }
+            .ok_or_else(|| CuError::new(ErrorCode::Failed, "couldn't make a range value"))?;
+        self.set(name, &v)
+    }
+
+    /// A range attribute, in characters.
+    pub fn range(&self, name: &'static str) -> Option<(usize, usize)> {
+        let v = self.attr(name).ok()?.downcast::<AXValue>().ok()?;
+        let mut r = CFRange {
+            location: 0,
+            length: 0,
+        };
+        // SAFETY: `r` is a CFRange, checked against the value's type tag first.
+        let read = unsafe {
+            v.r#type() == AXValueType::CFRange
+                && v.value(AXValueType::CFRange, NonNull::from(&mut r).cast())
+        };
+        if !read {
+            return None;
+        }
+        Some((
+            usize::try_from(r.location).ok()?,
+            usize::try_from(r.length).ok()?,
+        ))
     }
 
     pub fn settable(&self, name: &'static str) -> bool {

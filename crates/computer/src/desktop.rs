@@ -163,6 +163,10 @@ pub trait Desktop {
     /// Inserts text at the element's selection, without key events.
     fn insert_text(&mut self, el: &Self::Element, text: &str) -> CuResult<()>;
     fn set_focus(&mut self, el: &Self::Element) -> CuResult<()>;
+    /// Sets the element's selected text range, in characters.
+    fn select(&mut self, el: &Self::Element, start: usize, length: usize) -> CuResult<()>;
+    /// The element's selected text range, in characters.
+    fn selection(&mut self, el: &Self::Element) -> Option<(usize, usize)>;
     /// Presses the menu-bar item at `path`, e.g. `["File", "Save As…"]`.
     fn menu(&mut self, pid: i32, path: &[String]) -> CuResult<()>;
     fn focus(&mut self, pid: i32) -> CuResult<Focus<Self::Element>>;

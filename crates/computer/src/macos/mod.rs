@@ -386,6 +386,17 @@ impl Desktop for MacDesktop {
         el.set("AXFocused", CFBoolean::new(true))
     }
 
+    fn select(&mut self, el: &AxEl, start: usize, length: usize) -> CuResult<()> {
+        if !el.settable("AXSelectedTextRange") {
+            return err(ErrorCode::NotSettable, "that element has no text selection");
+        }
+        el.set_range("AXSelectedTextRange", start, length)
+    }
+
+    fn selection(&mut self, el: &AxEl) -> Option<(usize, usize)> {
+        el.range("AXSelectedTextRange")
+    }
+
     fn menu(&mut self, pid: i32, path: &[String]) -> CuResult<()> {
         let Some(bar) = AxEl::app(pid).element("AXMenuBar") else {
             return err(ErrorCode::NoSuchTarget, "the app has no menu bar");
