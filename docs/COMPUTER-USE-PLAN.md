@@ -531,19 +531,19 @@ for coverage. Nothing merges to main until the user says so.
 - `tools/full-checks.sh` passes, including Linux and Windows clippy of the new crate (non-mac backends compile as
   stubs that return `unsupported_capability`).
 
-**Results (2026-10-09, `brigadier-computer bench`, release build, 200 repetitions, terminal-launched development
-evidence)**
+**Results (2026-10-09, `brigadier-computer bench`, release build, 200 repetitions, on `0d4ef581` after the Phase 1
+review fixes, terminal-launched development evidence)**
 
 | Gate | Measured | Target | |
 |---|---|---|---|
-| S1 observe, structure | 6.5 / 8.3 ms | ≤ 15 / ≤ 40 ms | pass |
-| S2 observe with screenshot | 62.6 / 67.1 ms | ≤ 70 / ≤ 120 ms | pass |
-| S3 press, all P1 targets | dispatch 6.5 · effect 3.8 / 4.9 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | pass |
-| S3 set value (slider) | dispatch 3.6 · effect 3.6 / 4.7 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | pass |
-| S3 menu-bar pick (20 repetitions, `--quick`, after the ruling) | dispatch 3.5 · effect 3.5 / 4.8 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | pass |
-| S3p pop-up pick | effect 368.3 / 373.1 ms (dispatch 376.6, it waits for the menu to close) | ≤ 400 / ≤ 400 ms | pass |
-| S4 background pixel click | dispatch 8.4 · effect 18.6 / 43.5 ms | ≤ 15 · ≤ 60 / ≤ 200 ms | pass |
-| S5 100 characters, set value / key events | 3.8 / 13.8 ms | ≤ 20 / ≤ 250 ms | pass |
+| S1 observe, structure | 6.4 / 8.1 ms | ≤ 15 / ≤ 40 ms | pass |
+| S2 observe with screenshot | 61.9 / 66.1 ms | ≤ 70 / ≤ 120 ms | pass |
+| S3 press, all P1 targets | dispatch 7.2 · effect 4.2 / 8.2 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | pass |
+| S3 set value (slider) | dispatch 3.7 · effect 3.6 / 4.6 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | pass |
+| S3 menu-bar pick | dispatch 4.0 · effect 4.0 / 5.3 ms | ≤ 10 · ≤ 40 / ≤ 150 ms | pass |
+| S3p pop-up pick | effect 368.3 / 372.9 ms (dispatch 377.0, it waits for the menu to close) | ≤ 400 / ≤ 400 ms | pass |
+| S4 background pixel click | dispatch 8.6 · effect 18.7 / 43.5 ms | ≤ 15 · ≤ 60 / ≤ 200 ms | pass |
+| S5 100 characters, set value / key events | 3.4 / 12.7 ms | ≤ 20 / ≤ 250 ms | pass |
 | P1 element-path success | 1600/1600 | 100% | pass |
 | P2 pixel mapping, 1× and 2×, centre and 1 pt-inset points | 1600/1600 inside, worst error 0.00 pt | 100%, ≤ 0.5 pt | pass |
 | P2r refusals (minimised window) | 200/200 `background_unavailable` | 100% | pass |
