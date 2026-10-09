@@ -400,7 +400,7 @@ impl Runtime {
         if let Some(overview) = overview {
             self.record_overview(overview).await;
         }
-        if accounts && !self.accounts().is_empty() {
+        if accounts {
             self.publish_accounts().await;
         }
     }
@@ -699,6 +699,8 @@ impl Runtime {
                 let overview = runtime.check(kind).await;
                 runtime.record_overview(overview).await;
                 runtime.state().refreshing.remove(&kind);
+                // The computer's own login is Settings → Accounts' first row.
+                runtime.publish_accounts().await;
             });
         }
     }
