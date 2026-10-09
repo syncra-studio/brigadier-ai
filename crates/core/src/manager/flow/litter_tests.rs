@@ -173,7 +173,8 @@ fn a_write_after_the_drop_is_removed_as_the_thread_ends() {
 #[cfg(unix)]
 #[test]
 fn the_folders_of_a_killed_test_process_are_removed() {
-    let temp = std::env::temp_dir();
+    // Out of reach of other tests' sweeps: it is this process's own.
+    let temp = Scratch::new("litter-killed");
     let mut running = std::process::Command::new("sleep")
         .arg("30")
         .spawn()
@@ -214,9 +215,6 @@ fn the_folders_of_a_killed_test_process_are_removed() {
     let kept = [alive.exists(), ours.exists(), unnamed.exists()];
     running.kill().unwrap();
     running.wait().unwrap();
-    for folder in [&alive, &ours, &unnamed] {
-        std::fs::remove_dir_all(folder).unwrap();
-    }
     if !orphan_ended {
         orphan.kill().unwrap();
         orphan.wait().unwrap();
