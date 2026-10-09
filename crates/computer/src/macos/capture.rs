@@ -1,7 +1,9 @@
 //! One window's pixels through ScreenCaptureKit, at an exact scale, covered or not; a window on
 //! another Space through the window server's own capture.
 
+use std::cell::Cell;
 use std::ptr::NonNull;
+use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -30,6 +32,8 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Default)]
 pub struct Shareable {
     content: Option<Retained<SCShareableContent>>,
+    /// Set by a capture that failed: the window may be gone or the list stale.
+    stale: Rc<Cell<bool>>,
 }
 
 fn fetch_content() -> CuResult<Retained<SCShareableContent>> {
@@ -59,6 +63,9 @@ fn fetch_content() -> CuResult<Retained<SCShareableContent>> {
 
 impl Shareable {
     fn window(&mut self, id: u32) -> CuResult<Retained<SCWindow>> {
+        if self.stale.replace(false) {
+            self.content = None;
+        }
         for refresh in [false, true] {
             if refresh || self.content.is_none() {
                 self.content = Some(fetch_content()?);
@@ -88,6 +95,18 @@ impl Shareable {
         scale: f64,
         max_side: u32,
     ) -> CuResult<(Rgba, ImageTransform)> {
+        self.begin(id, frame, crop, scale, max_side)?()
+    }
+
+    /// Starts the capture `capture` makes; the returned wait gives its image.
+    pub fn begin(
+        &mut self,
+        id: u32,
+        frame: Rect,
+        crop: Rect,
+        scale: f64,
+        max_side: u32,
+    ) -> CuResult<impl FnOnce() -> CuResult<(Rgba, ImageTransform)> + 'static> {
         let win = self.window(id)?;
         let t = ImageTransform::fit(id, frame, crop, scale, max_side);
         // SAFETY: plain object creation and setters.
@@ -112,7 +131,8 @@ impl Shareable {
             let img = NonNull::new(img).map(|p| unsafe { CFRetained::retain(p) });
             let _ = tx.send(img);
         });
-        // SAFETY: the block lives until the handler ran (we wait for it below).
+        // SAFETY: the API copies the handler; the wait below also keeps ours until it ran or the
+        // capture is given up, and a send after that goes nowhere.
         unsafe {
             SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
                 &filter,
@@ -120,16 +140,21 @@ impl Shareable {
                 Some(&block),
             );
         }
-        let img = match rx.recv_timeout(TIMEOUT) {
-            Ok(Some(i)) => i,
-            Ok(None) => {
-                // The window may be gone or the list stale: drop the cache for next time.
-                self.content = None;
-                return err(ErrorCode::Failed, "the capture failed");
-            }
-            Err(_) => return err(ErrorCode::Failed, "the capture timed out"),
-        };
-        Ok((to_rgba(&img, t.width, t.height)?, t))
+        let stale = self.stale.clone();
+        Ok(move || {
+            let got = rx.recv_timeout(TIMEOUT);
+            drop(block);
+            let img = match got {
+                Ok(Some(i)) => i,
+                Ok(None) => {
+                    // Drop the cached list before the next capture.
+                    stale.set(true);
+                    return err(ErrorCode::Failed, "the capture failed");
+                }
+                Err(_) => return err(ErrorCode::Failed, "the capture timed out"),
+            };
+            Ok((to_rgba(&img, t.width, t.height)?, t))
+        })
     }
 }
 

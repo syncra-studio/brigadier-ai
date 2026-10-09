@@ -131,6 +131,19 @@ pub struct Capture {
     pub transform: ImageTransform,
 }
 
+/// A capture under way: `wait` gives its image. Other reads of the same app may run meanwhile.
+pub struct PendingCapture(Box<dyn FnOnce() -> CuResult<Capture>>);
+
+impl PendingCapture {
+    pub fn new(wait: impl FnOnce() -> CuResult<Capture> + 'static) -> Self {
+        Self(Box::new(wait))
+    }
+
+    pub fn wait(self) -> CuResult<Capture> {
+        (self.0)()
+    }
+}
+
 pub trait Desktop {
     type Element: Clone + Eq + Hash + std::fmt::Debug;
 
@@ -162,6 +175,18 @@ pub trait Desktop {
         pixels_per_point: f64,
         max_side: u32,
     ) -> CuResult<Capture>;
+    /// Starts the same capture as `capture` without waiting for it, so that reading the window's
+    /// tree overlaps it. A backend that can't overlap captures at once.
+    fn begin_capture(
+        &mut self,
+        window: &WindowInfo,
+        crop: Rect,
+        pixels_per_point: f64,
+        max_side: u32,
+    ) -> CuResult<PendingCapture> {
+        let done = self.capture(window, crop, pixels_per_point, max_side);
+        Ok(PendingCapture::new(move || done))
+    }
 
     /// A platform-neutral element action: `press`, `show-menu`, `increment`, `decrement`,
     /// `confirm`, `cancel`, `raise`, `pick`.

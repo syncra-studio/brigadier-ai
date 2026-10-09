@@ -37,7 +37,8 @@ use private::Private;
 
 use crate::cancel::{CancelToken, InputGuard, Release};
 use crate::desktop::{
-    AppInfo, Button, Capabilities, Capture, Chord, Desktop, Focus, Mods, UserFocus, WindowInfo,
+    AppInfo, Button, Capabilities, Capture, Chord, Desktop, Focus, Mods, PendingCapture, UserFocus,
+    WindowInfo,
 };
 use crate::error::{CuError, CuResult, ErrorCode, err};
 use crate::geom::{Point, Rect};
@@ -472,6 +473,26 @@ impl Desktop for MacDesktop {
             capture::capture_offscreen(w.id, w.frame, crop, pixels_per_point, max_side)?
         };
         Ok(Capture { image, transform })
+    }
+
+    fn begin_capture(
+        &mut self,
+        w: &WindowInfo,
+        crop: Rect,
+        pixels_per_point: f64,
+        max_side: u32,
+    ) -> CuResult<PendingCapture> {
+        if !w.on_screen {
+            let done = self.capture(w, crop, pixels_per_point, max_side);
+            return Ok(PendingCapture::new(move || done));
+        }
+        let wait = self
+            .shareable
+            .begin(w.id, w.frame, crop, pixels_per_point, max_side)?;
+        Ok(PendingCapture::new(move || {
+            let (image, transform) = wait()?;
+            Ok(Capture { image, transform })
+        }))
     }
 
     fn perform(&mut self, el: &AxEl, action: &str) -> CuResult<()> {

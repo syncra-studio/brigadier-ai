@@ -16,7 +16,7 @@ use crate::action::{
 use crate::block::{BlockList, TargetFacts};
 use crate::cancel::{CancelToken, Generations, InputGuard, UserActive};
 use crate::cursor::{Aim as CursorAim, Cursor, Gesture};
-use crate::desktop::{Chord, Desktop, Mods, WindowInfo};
+use crate::desktop::{Capture, Chord, Desktop, Mods, PendingCapture, WindowInfo};
 use crate::error::{CuError, CuResult, ErrorCode, err};
 use crate::geom::{self, ImageTransform, MapError, Point, Provider, Rect};
 use crate::record::ActionRecord;
@@ -254,19 +254,32 @@ impl<D: Desktop> Engine<D> {
         max_side: u32,
         secure: &[Rect],
     ) -> CuResult<ImageOut> {
-        let mut cap = self.desktop.capture(w, crop, pixels_per_point, max_side)?;
+        let cap = self.desktop.capture(w, crop, pixels_per_point, max_side)?;
+        Ok(self.image_out(cap, secure))
+    }
+
+    /// The window's whole screenshot as `observe` sends it: started before the tree is read, so
+    /// the two overlap (an app in the background answers its first read slowly).
+    fn begin_window_shot(&mut self, w: &WindowInfo) -> CuResult<PendingCapture> {
+        let crop = Rect::new(0.0, 0.0, w.frame.w, w.frame.h);
+        let scale = geom::fitting_scale(w.frame.w, w.frame.h, 1.0, geom::MAX_IMAGE_SIDE);
+        self.desktop
+            .begin_capture(w, crop, scale, geom::MAX_IMAGE_SIDE)
+    }
+
+    fn image_out(&mut self, mut cap: Capture, secure: &[Rect]) -> ImageOut {
         redact(&mut cap.image, &cap.transform, secure);
         let (width, height) = (cap.image.width, cap.image.height);
         let png = cap.image.encode_png();
         let id = self.remember_image(cap.transform);
-        Ok(ImageOut {
+        ImageOut {
             id,
             png,
             width,
             height,
             tokens: geom::image_tokens(self.provider, width, height),
             provider: self.provider,
-        })
+        }
     }
 
     fn secure_frames(nodes: &[RawNode<D::Element>]) -> Vec<Rect> {
@@ -334,6 +347,10 @@ impl<D: Desktop> Engine<D> {
         if let (Some(r), Some(page)) = (element, req.value_page) {
             return self.value_page(&w, r, page);
         }
+        let shot = match req.screenshot {
+            Screenshot::Always => Some(self.begin_window_shot(&w)?),
+            _ => None,
+        };
         let (nodes, lines) = self.read_tree(&w, filtered_read(req))?;
         let obs = self.next_obs;
         self.next_obs += 1;
@@ -384,21 +401,15 @@ impl<D: Desktop> Engine<D> {
             }
         }
         self.last_secure = (w.id, Self::secure_frames(&nodes));
-        let want_image = match req.screenshot {
-            Screenshot::Always => true,
-            Screenshot::Never => false,
-            Screenshot::Auto => Self::tree_is_poor(&nodes, &lines),
+        let shot = match shot {
+            Some(s) => Some(s),
+            None if req.screenshot == Screenshot::Auto && Self::tree_is_poor(&nodes, &lines) => {
+                Some(self.begin_window_shot(&w)?)
+            }
+            None => None,
         };
-        let image = if want_image {
-            let crop = Rect::new(0.0, 0.0, w.frame.w, w.frame.h);
-            let scale = geom::fitting_scale(w.frame.w, w.frame.h, 1.0, geom::MAX_IMAGE_SIDE);
-            let img = self.capture(
-                &w,
-                crop,
-                scale,
-                geom::MAX_IMAGE_SIDE,
-                &Self::secure_frames(&nodes),
-            )?;
+        let image = if let Some(shot) = shot {
+            let img = self.image_out(shot.wait()?, &Self::secure_frames(&nodes));
             let t = self.image(&img.id)?;
             text.push_str(&self.image_line(&img, &t));
             Some(img)
@@ -1665,6 +1676,8 @@ mod tests {
         documents: HashMap<u32, String>,
         /// The app the system would run for a launch.
         resolves_to: Option<AppInfo>,
+        /// Tree reads and captures, in order.
+        reads: Vec<&'static str>,
     }
 
     fn node(id: u32, depth: u16, role: &str, label: &str, frame: Rect) -> RawNode<u32> {
@@ -1706,6 +1719,7 @@ mod tests {
                 open_takes_front: false,
                 documents: HashMap::new(),
                 resolves_to: None,
+                reads: Vec::new(),
             }
         }
 
@@ -1770,6 +1784,7 @@ mod tests {
             })
         }
         fn tree(&mut self, _: &WindowInfo, _: bool) -> CuResult<Vec<RawNode<u32>>> {
+            self.reads.push("tree");
             Ok(self.nodes.clone())
         }
         fn read(&mut self, _: &WindowInfo, el: &u32) -> CuResult<RawNode<u32>> {
@@ -1789,6 +1804,7 @@ mod tests {
             pixels_per_point: f64,
             max_side: u32,
         ) -> CuResult<Capture> {
+            self.reads.push("capture");
             let transform = ImageTransform::fit(w.id, w.frame, crop, pixels_per_point, max_side);
             let (width, height) = (transform.width, transform.height);
             Ok(Capture {
@@ -2076,6 +2092,16 @@ mod tests {
         let r = act(&mut e, vec![click(&other)]);
         assert_eq!(code(&r[0]), Some(ErrorCode::StaleRef));
         assert!(e.desktop.log.is_empty(), "{:?}", e.desktop.log);
+    }
+
+    #[test]
+    fn an_asked_for_screenshot_starts_before_the_tree_is_read() {
+        let mut e = engine(Fake::new(basic()));
+        assert!(observe(&mut e, Screenshot::Always, None).image.is_some());
+        assert_eq!(e.desktop.reads, ["capture", "tree"]);
+        e.desktop.reads.clear();
+        assert!(observe(&mut e, Screenshot::Never, None).image.is_none());
+        assert_eq!(e.desktop.reads, ["tree"]);
     }
 
     #[test]
