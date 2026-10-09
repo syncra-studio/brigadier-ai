@@ -40,6 +40,7 @@ import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgres
 import { useReviewLines } from "@/app/conversation/reviewStatus";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
+import { ComputerAccessRow } from "@/app/conversation/ComputerAccessRow";
 import { useAction } from "@/app/conversation/useAction";
 import { SidePanelContext } from "@/app/conversation/SidePanel";
 import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
@@ -200,6 +201,8 @@ function waitingFrom(
       return null;
     case "run":
       return "Declined during the overnight run";
+    case "computer":
+      return null;
   }
 }
 
@@ -219,6 +222,7 @@ function WaitingRow({
   const from = waitingFrom(item, tasks);
   const [open, setOpen] = useState(false);
   const { source } = item;
+  if (source.type === "computer") return <ComputerAccessRow what={item.what} />;
   return (
     <div className="flex flex-col">
       <SummaryRow
