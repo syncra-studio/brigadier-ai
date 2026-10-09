@@ -448,7 +448,15 @@ impl<D: Desktop> Engine<D> {
                     },
                     PAGE_CHARS,
                 );
-                (self.header(w, obs, "")? + head + &body, omitted)
+                // The file the window shows, so a worker checks it on disk without hunting
+                // for its path (a worker once ran lsof on the app for it).
+                let file = self
+                    .desktop
+                    .document(w)
+                    .and_then(|doc| crate::launch::local_path(&doc))
+                    .map(|path| format!("file: {}\n", path.display()))
+                    .unwrap_or_default();
+                (self.header(w, obs, "")? + &file + head + &body, omitted)
             }
         };
         if let Some(f) = lines.iter().find(|l| l.text.contains(" focused")) {
@@ -1111,7 +1119,10 @@ impl<D: Desktop> Engine<D> {
                 selected = Some((el, (*start, *length)));
                 Rung::Element
             }
-            Action::Wait { .. } => Rung::Element,
+            Action::Wait { .. } => {
+                pause(action, cancel)?;
+                Rung::Element
+            }
             Action::Navigate { .. } => {
                 return err(
                     ErrorCode::UnsupportedCapability,
@@ -1747,6 +1758,19 @@ pub fn render_results(results: &[ActionResult]) -> String {
     out
 }
 
+/// A `wait` without an expect sleeps its time, at most [`MAX_WAIT`], stopping for a cancel.
+fn pause(action: &Action, cancel: &CancelToken) -> CuResult<()> {
+    let Some(pause) = action.pause() else {
+        return Ok(());
+    };
+    let until = Instant::now() + pause.min(MAX_WAIT);
+    while Instant::now() < until {
+        cancel.check()?;
+        std::thread::sleep(Duration::from_millis(20).min(until - Instant::now()));
+    }
+    Ok(())
+}
+
 /// The batch in one line, ahead of its results: whether every action ran and every expect
 /// held, so a worker reads its check from the reply instead of observing again (E1: a worker
 /// that re-observed to verify spent a model call a task).
@@ -2311,6 +2335,50 @@ mod tests {
     }
 
     #[test]
+    fn a_wait_without_an_expect_pauses() {
+        let mut e = engine(Fake::new(basic()));
+        observe(&mut e, Screenshot::Never, None);
+        let started = Instant::now();
+        let r = act(
+            &mut e,
+            vec![Action::Wait {
+                expect: None,
+                timeout_ms: 120,
+            }],
+        );
+        assert_eq!(r[0].status, Status::Done, "{:?}", r[0]);
+        assert!(started.elapsed() >= Duration::from_millis(120));
+    }
+
+    #[test]
+    fn a_full_look_names_the_file_the_window_shows() {
+        let mut fake = Fake::new(basic());
+        let id = fake.window.id;
+        fake.documents
+            .insert(id, "file:///nowhere-w24/note%20one.txt".into());
+        let mut e = engine(fake);
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        assert!(
+            text.contains("\nfile: /nowhere-w24/note one.txt\n"),
+            "{text}"
+        );
+        // A batch's closing look, a diff, doesn't repeat it.
+        let next = ref_of(&text, "Next");
+        let reply = e
+            .act(
+                "w",
+                &ActRequest {
+                    window: 1,
+                    actions: vec![click(&next)],
+                    screenshot: Screenshot::Never,
+                },
+            )
+            .unwrap();
+        assert!(reply.text.contains("changes since obs"), "{}", reply.text);
+        assert!(!reply.text.contains("file: "), "{}", reply.text);
+    }
+
+    #[test]
     fn an_asked_for_screenshot_starts_before_the_tree_is_read() {
         let mut e = engine(Fake::new(basic()));
         assert!(observe(&mut e, Screenshot::Always, None).image.is_some());
@@ -2701,7 +2769,7 @@ mod tests {
         let text = observe(&mut e, Screenshot::Never, None).text;
         let r = ref_of(&text, label);
         let wait = |expect| Action::Wait {
-            expect,
+            expect: Some(expect),
             timeout_ms: 50,
         };
         let holds = act(
@@ -3121,7 +3189,7 @@ mod tests {
                 &ActRequest {
                     window: 1,
                     actions: vec![Action::Wait {
-                        expect: Expect::TitleContains { text: "Doc".into() },
+                        expect: Some(Expect::TitleContains { text: "Doc".into() }),
                         timeout_ms: 10,
                     }],
                     screenshot: Screenshot::Never,

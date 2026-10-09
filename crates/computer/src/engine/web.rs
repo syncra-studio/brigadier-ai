@@ -616,7 +616,7 @@ impl<D: Desktop> Engine<D> {
                 }
                 self.on_page(&page, |_, c| input::select_range(c, &el, *from, *length))?;
             }
-            Action::Wait { .. } => {}
+            Action::Wait { .. } => super::pause(action, cancel)?,
             Action::Navigate { url, .. } => {
                 self.on_page(&page, |p, c| p.navigate(c, url))?;
             }

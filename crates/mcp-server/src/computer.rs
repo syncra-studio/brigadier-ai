@@ -311,6 +311,14 @@ fn action(action: &mut Value) {
         number_id(r, 'e');
     }
     rename(a, &TEXT, "text");
+    // `select` is a text range; with an option and no range it means picking that option in a
+    // pop-up or list, which `set_value` does (a worker sent it so for a page's <select>).
+    if kind == "select" && !a.contains_key("start") {
+        rename(a, &["option", "item", "choice", "label"], "text");
+        if a.contains_key("text") {
+            a.insert("do".into(), json!("set_value"));
+        }
+    }
     if kind == "key" {
         rename(a, &["keys", "combo", "shortcut", "hotkey"], "key");
         if let Some(Value::Array(keys)) = a.get("key") {
@@ -511,6 +519,22 @@ mod tests {
         );
         assert!(
             matches!(&act.actions[5], Action::Perform { r#ref, action, .. } if r#ref == "e7" && action == "AXShowMenu")
+        );
+        // Picking an option is a set_value; a text range stays a select.
+        let picked = act_of(json!({"window": 4, "actions": [
+            {"do": "select", "ref": "e9", "option": "Team"},
+            {"do": "select", "ref": "e3", "start": 0, "length": 4}
+        ]}));
+        assert!(matches!(&picked.actions[0], Action::SetValue { text, .. } if text == "Team"));
+        assert!(matches!(
+            &picked.actions[1],
+            Action::Select { length: 4, .. }
+        ));
+        // A plain wait is a pause.
+        let paused = act_of(json!({"window": 4, "actions": [{"do": "wait", "timeout_ms": 500}]}));
+        assert_eq!(
+            paused.actions[0].pause(),
+            Some(std::time::Duration::from_millis(500))
         );
         // One action on its own, beside the window.
         let one = act_of(json!({"window": 4, "do": "click", "ref": "e2"}));

@@ -314,9 +314,9 @@ fn long_act() -> Op {
     Op::Act(ActRequest {
         window: 1,
         actions: vec![Action::Wait {
-            expect: Expect::Appears {
+            expect: Some(Expect::Appears {
                 find: "never there".into(),
-            },
+            }),
             timeout_ms: LONG_WAIT_MS,
         }],
         screenshot: Screenshot::Never,

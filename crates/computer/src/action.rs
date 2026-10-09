@@ -130,8 +130,11 @@ pub enum Action {
         #[serde(default)]
         expect: Option<Expect>,
     },
+    /// Waits until `expect` holds, at most `timeout_ms`; without one, a plain pause of
+    /// `timeout_ms` (a model asks for one while a page loads or a menu opens).
     Wait {
-        expect: Expect,
+        #[serde(default)]
+        expect: Option<Expect>,
         #[serde(default = "wait_ms")]
         timeout_ms: u64,
     },
@@ -181,8 +184,8 @@ impl Action {
             | Self::Perform { expect, .. }
             | Self::Menu { expect, .. }
             | Self::Select { expect, .. }
+            | Self::Wait { expect, .. }
             | Self::Navigate { expect, .. } => expect.as_ref(),
-            Self::Wait { expect, .. } => Some(expect),
         }
     }
 
@@ -197,8 +200,19 @@ impl Action {
             | Self::Perform { expect, .. }
             | Self::Menu { expect, .. }
             | Self::Select { expect, .. }
+            | Self::Wait { expect, .. }
             | Self::Navigate { expect, .. } => expect.as_mut(),
-            Self::Wait { expect, .. } => Some(expect),
+        }
+    }
+
+    /// A `wait` without an expect: how long it pauses.
+    pub fn pause(&self) -> Option<std::time::Duration> {
+        match self {
+            Self::Wait {
+                expect: None,
+                timeout_ms,
+            } => Some(std::time::Duration::from_millis(*timeout_ms)),
+            _ => None,
         }
     }
 

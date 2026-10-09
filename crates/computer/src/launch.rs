@@ -56,7 +56,7 @@ fn names(want: &str, a: &AppInfo) -> bool {
 }
 
 /// A local path or `file:` URL as a plain path, with symlinks such as `/tmp` resolved.
-fn local_path(s: &str) -> Option<PathBuf> {
+pub(crate) fn local_path(s: &str) -> Option<PathBuf> {
     let path = match s.strip_prefix("file://") {
         Some(rest) => percent_decode(rest.strip_prefix("localhost").unwrap_or(rest)),
         None if s.contains("://") => return None,

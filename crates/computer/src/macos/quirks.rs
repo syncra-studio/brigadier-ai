@@ -111,6 +111,9 @@ impl Settle {
         } else if usable {
             Structure::Ready
         } else {
+            // The next look waits a whole bound again: answering "incomplete" at once made a
+            // worker spend a model call per look while Chrome was still building its page.
+            self.began = now;
             Structure::Incomplete
         }
     }
@@ -347,6 +350,22 @@ mod tests {
         assert_eq!(
             s.update(0, false, PAGE_BOUND, t + PAGE_BOUND),
             Structure::Incomplete
+        );
+        // The next look waits again for the page, and takes it once it holds.
+        let next = t + PAGE_BOUND + Duration::from_millis(100);
+        assert_eq!(s.update(0, false, PAGE_BOUND, next), P);
+        assert_eq!(
+            s.update(40, true, PAGE_BOUND, next + Duration::from_millis(100)),
+            P
+        );
+        assert_eq!(
+            s.update(
+                40,
+                true,
+                PAGE_BOUND,
+                next + Duration::from_millis(100) + SETTLE_QUIET
+            ),
+            Structure::Ready
         );
     }
 
