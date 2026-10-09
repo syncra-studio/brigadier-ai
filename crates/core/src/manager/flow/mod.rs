@@ -949,6 +949,100 @@ async fn boot(
     (manager, core)
 }
 
+// ----- what a test leaves -----------------------------------------------------------------
+
+/// How a test's folders are named: `brigadier-flow-<name>-<pid>-<uuid>`.
+const SCRATCH: &str = "brigadier-flow-";
+
+/// A folder a test made in the temp directory, and the test data folders of the session
+/// working in it: removed when dropped, however the test ends (it passed, failed part-way, or
+/// failed while its session started), after what that session's daemon still runs is ended.
+/// Work the daemon still has in flight then (on the runtime's blocking threads) may write
+/// there afterwards, so they are removed once more as the test's thread ends, when its runtime
+/// and those threads are gone.
+pub(crate) struct Scratch {
+    dir: PathBuf,
+    /// The ledger of the session working in it.
+    ledger: Option<Arc<crate::ledger::CleanupLedger>>,
+}
+
+impl Scratch {
+    /// A fresh folder named for `name`.
+    pub fn new(name: &str) -> Self {
+        let scratch = Self {
+            dir: std::env::temp_dir().join(format!(
+                "{SCRATCH}{name}-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4().simple()
+            )),
+            ledger: None,
+        };
+        std::fs::create_dir_all(&scratch.dir).unwrap();
+        scratch
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.dir
+    }
+}
+
+impl AsRef<Path> for Scratch {
+    fn as_ref(&self) -> &Path {
+        &self.dir
+    }
+}
+
+impl Drop for Scratch {
+    // Runs while a failed test unwinds, so nothing in it may panic.
+    fn drop(&mut self) {
+        let folders = self
+            .ledger
+            .take()
+            .map(|ledger| ledger.abandon(&self.dir))
+            .unwrap_or_default();
+        let left = Left {
+            dir: std::mem::take(&mut self.dir),
+            folders,
+        };
+        left.remove();
+        let _ = LEFT.try_with(|all| all.0.try_borrow_mut().map(|mut all| all.push(left)));
+    }
+}
+
+/// What a dropped [`Scratch`] removed.
+struct Left {
+    dir: PathBuf,
+    folders: Vec<PathBuf>,
+}
+
+impl Left {
+    fn remove(&self) {
+        for folder in &self.folders {
+            let _ = crate::ledger::remove_test_data_folder(folder);
+        }
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// This thread's dropped folders, removed again as it ends.
+struct Leftovers(std::cell::RefCell<Vec<Left>>);
+
+impl Drop for Leftovers {
+    fn drop(&mut self) {
+        for left in self.0.get_mut().drain(..) {
+            left.remove();
+        }
+    }
+}
+
+thread_local! {
+    static LEFT: Leftovers = const { Leftovers(std::cell::RefCell::new(Vec::new())) };
+}
+
 // ----- a scripted session -----------------------------------------------------------------
 
 /// A session in a fresh data folder on a fresh repository, its CLIs scripted.
@@ -957,7 +1051,7 @@ pub(crate) struct Flow {
     pub core: Arc<Core>,
     pub repo: PathBuf,
     pub conversation: ConversationId,
-    dir: PathBuf,
+    dir: Scratch,
     script: Script,
     reviews: Script,
     specs: Specs,
@@ -997,11 +1091,7 @@ impl Default for Options {
 impl Flow {
     /// Starts a session whose Claude and Codex CLIs run `script`.
     pub async fn start(name: &str, options: Options, script: Script) -> Flow {
-        let dir = std::env::temp_dir().join(format!(
-            "brigadier-flow-{name}-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4().simple()
-        ));
+        let mut dir = Scratch::new(name);
         let repo = dir.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         let repo = repo.canonicalize().unwrap();
@@ -1023,6 +1113,7 @@ impl Flow {
         let specs = Specs::default();
         let (manager, core) =
             boot(&data, store, &script, &reviews, &specs, &options.behavior).await;
+        dir.ledger = Some(manager.runtime.ledger().clone());
         let project = core
             .create_project("Flow".into(), Some(repo.display().to_string()))
             .await
@@ -1085,6 +1176,7 @@ impl Flow {
             &self.behavior,
         )
         .await;
+        self.dir.ledger = Some(manager.runtime.ledger().clone());
         self.manager = manager;
         self.core = core;
     }
@@ -1234,17 +1326,10 @@ impl Flow {
             .unwrap_or_else(|| panic!("no task-{number}"))
     }
 
+    /// Quits the manager as a daemon that stops does. Its folders go with the session (a
+    /// daemon that quits keeps its live tasks' test data folders; a test's tasks end with it).
     pub async fn stop(self) {
         self.manager.shutdown().await;
-        // A daemon that quits keeps its live tasks' test data folders; a test's tasks end
-        // with it.
-        for conversation in self.core.catalog().conversations {
-            for task in self.core.tasks(&conversation.id).await.unwrap_or_default() {
-                let folder = crate::manager::workers::test_data_dir(&task.id);
-                let _ = crate::ledger::remove_test_data_folder(&folder);
-            }
-        }
-        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 
@@ -1254,6 +1339,8 @@ mod accounts_tests;
 mod checks_tests;
 #[cfg(test)]
 mod engine_tests;
+#[cfg(test)]
+mod litter_tests;
 #[cfg(test)]
 mod overnight_tests;
 mod preview_tests;

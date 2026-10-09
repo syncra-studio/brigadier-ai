@@ -9,7 +9,7 @@ use brigadier_providers::ProviderKind;
 use brigadier_providers::model::{Origin, SessionSpec};
 use serde_json::json;
 
-use super::{Flow, Options, Reply, Script, Turn};
+use super::{Flow, Options, Reply, Scratch, Script, Turn};
 use crate::digest::DIGEST_MAX;
 use crate::manager::{HOOK_GRANT_ENV, HookOutput};
 use crate::model::{
@@ -418,8 +418,7 @@ async fn a_run_is_killed_at_its_timeout_and_when_the_thread_ends() {
     .await;
     let platform = flow.manager.runtime.platform().clone();
     let env = flow.manager.runtime.cli_env().clone();
-    let dir = std::env::temp_dir().join(format!("brigadier-run-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("run");
     let pid_file = dir.join("child.pid");
     let mut spec = env.spec(std::path::Path::new("/bin/sh"));
     spec.args = vec![
@@ -430,7 +429,7 @@ async fn a_run_is_killed_at_its_timeout_and_when_the_thread_ends() {
         )
         .into(),
     ];
-    spec.cwd = Some(dir.clone());
+    spec.cwd = Some(dir.to_path_buf());
     let owner = "orch:test-kill";
     let started = tokio::time::Instant::now();
     let ran = super::super::run::run_command(
@@ -482,7 +481,6 @@ async fn a_run_is_killed_at_its_timeout_and_when_the_thread_ends() {
     .await
     .unwrap();
     assert_eq!(ran.status, "stopped: the thread's session ended");
-    std::fs::remove_dir_all(&dir).unwrap();
     // The thread's session spec is untouched by any of it.
     assert!(
         flow.thread_specs()

@@ -10,7 +10,7 @@ use std::time::Duration;
 use brigadier_providers::Artifact;
 use serde_json::json;
 
-use super::{Flow, Options, Reply, Script, Turn};
+use super::{Flow, Options, Reply, Scratch, Script, Turn};
 use crate::board::Board;
 use crate::model::{Environment, Setup};
 use crate::work::{Preview, PreviewState};
@@ -131,11 +131,8 @@ async fn start(flow: &Flow, pids: &Path) -> (Preview, u32) {
     (preview, child_pid(pids))
 }
 
-fn scratch(name: &str) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("brigadier-preview-{name}-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn scratch(name: &str) -> Scratch {
+    Scratch::new(&format!("preview-{name}"))
 }
 
 /// A preview runs in the session's worktree, leads its own process group and is recorded under
@@ -264,7 +261,6 @@ async fn a_preview_runs_in_the_workspace_and_outlives_the_threads_cli() {
         "forgotten once ended"
     );
     flow.stop().await;
-    std::fs::remove_dir_all(&tmp).unwrap();
 }
 
 /// A preview that ends on its own reads as exited with its code, and `start_preview` says so.
@@ -350,7 +346,6 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
         "told once: {last}"
     );
     flow.stop().await;
-    std::fs::remove_dir_all(&tmp).unwrap();
 }
 
 /// The user's Stop, a change of the thread's workspace, and the merge of the session branch
@@ -462,7 +457,6 @@ async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
         }
     );
     flow.stop().await;
-    std::fs::remove_dir_all(&tmp).unwrap();
 }
 
 /// A Stop that comes while a preview is starting refuses that start rather than leaving it
@@ -525,7 +519,6 @@ async fn a_stop_during_a_start_refuses_it_and_a_late_log_snapshot_keeps_the_end(
     flow.manager.record_log(&live, "out-stale").await;
     assert_eq!(flow.board().await.previews[&preview.id], ended);
     flow.stop().await;
-    std::fs::remove_dir_all(&tmp).unwrap();
 }
 
 /// Archive and delete stop the session's previews before its worktree goes, and remove their
@@ -570,7 +563,6 @@ async fn archive_and_delete_stop_previews() {
             );
         }
         flow.stop().await;
-        std::fs::remove_dir_all(&tmp).unwrap();
     }
 }
 
@@ -658,5 +650,4 @@ async fn quit_stops_previews_and_the_launch_sweep_ends_a_crashs_leftovers() {
     );
     assert!(flow.manager.runtime.ledger().artifacts(&owner).is_empty());
     flow.stop().await;
-    std::fs::remove_dir_all(&tmp).unwrap();
 }

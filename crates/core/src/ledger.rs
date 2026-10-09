@@ -655,6 +655,35 @@ pub(crate) fn remove_test_data_folder(dir: &Path) -> std::io::Result<()> {
     }
 }
 
+#[cfg(test)]
+impl CleanupLedger {
+    /// What a test's daemon still holds, for a test that ends without disposing of it: ends
+    /// at once every process recorded and anything running in `dir` or a recorded test data
+    /// folder, and returns those folders for the caller to remove.
+    pub(crate) fn abandon(&self, dir: &Path) -> Vec<PathBuf> {
+        let mut folders = Vec::new();
+        for (_, artifacts, _) in self.owners() {
+            for artifact in artifacts {
+                match artifact {
+                    Artifact::Process { pid, started_at_ms } => {
+                        cleanup::end_process(&*self.platform, pid, started_at_ms);
+                    }
+                    Artifact::ScratchDir { path } if test_data_folder(Path::new(&path)) => {
+                        folders.push(PathBuf::from(path));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for place in std::iter::once(dir).chain(folders.iter().map(PathBuf::as_path)) {
+            if let Err(err) = end_in_dir(&*self.platform, place) {
+                tracing::debug!(error = %err, "could not end a test's processes");
+            }
+        }
+        folders
+    }
+}
+
 /// A task's test data folder (`/tmp/brigadier-test-<last 8 of its id>`, PLAN.md §10.13):
 /// directly in the temp directory, named only that way.
 fn test_data_folder(dir: &Path) -> bool {

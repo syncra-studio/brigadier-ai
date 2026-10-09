@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::{Flow, Options, Reply, Script, Turn};
+use super::{Flow, Options, Reply, Scratch, Script, Turn};
 use crate::model::{ConversationId, ConversationKind, DomainEvent, PermissionLevel, streams};
 use crate::sessions::Origin;
 
@@ -209,11 +209,7 @@ async fn the_first_start_deletes_every_old_conversation() {
 #[tokio::test]
 async fn the_earlier_engines_own_records_still_read() {
     let heard: Heard = Arc::default();
-    let repo = std::env::temp_dir().join(format!(
-        "brigadier-flow-engine-old-records-{}",
-        uuid::Uuid::new_v4().simple()
-    ));
-    std::fs::create_dir_all(&repo).unwrap();
+    let repo = Scratch::new("engine-old-records");
     let seed = old_store_in(&[], repo.to_str().unwrap())
         .replace("\"role\":\"worker\"", "\"role\":\"phaseVerifier\"")
         .replace(
@@ -246,7 +242,6 @@ async fn the_earlier_engines_own_records_still_read() {
         Some(crate::knowledge::RebirthTrigger::Recovery)
     );
     flow.stop().await;
-    let _ = std::fs::remove_dir_all(&repo);
 }
 
 /// A fresh store only gets the marker; a Chat and a session made after the first start, and
@@ -353,11 +348,7 @@ async fn a_first_start_cut_off_deletes_only_what_it_listed() {
 #[tokio::test]
 async fn an_old_conversation_whose_delete_fails_resumes_nothing() {
     let heard: Heard = Arc::default();
-    let repo = std::env::temp_dir().join(format!(
-        "brigadier-flow-engine-not-a-repo-{}",
-        uuid::Uuid::new_v4().simple()
-    ));
-    std::fs::create_dir_all(&repo).unwrap();
+    let repo = Scratch::new("engine-not-a-repo");
     let seed = old_store_in(&[], repo.to_str().unwrap());
     let flow = Flow::start(
         "engine-stuck",
@@ -427,7 +418,6 @@ async fn an_old_conversation_whose_delete_fails_resumes_nothing() {
         heard.lock().unwrap()
     );
     flow.stop().await;
-    std::fs::remove_dir_all(&repo).unwrap();
 }
 
 /// The marker and the list fold as recorded: the list until the marker, the marker for good.
