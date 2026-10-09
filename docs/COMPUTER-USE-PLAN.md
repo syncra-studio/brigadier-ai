@@ -1120,6 +1120,80 @@ Rerun it when nothing else is driving the Mac.
 **Private dependencies:** no new calls. The reveal and the wake reuse the make-key and focus records (§12).
 `AXManualAccessibility` is an undocumented attribute (§12).
 
+#### Stream A: browsers (2026-10-09, branch `cu-browser`)
+
+**Built**
+- **A browser the session launched, through its debugging protocol** (`crates/computer/src/cdp/`, `engine/web.rs`).
+  - `launch` of a Chromium browser starts it in the background with these flags:
+    - a scratch `--user-data-dir` under `$TMPDIR/brigadier-browser/`;
+    - `--remote-debugging-port=0` on 127.0.0.1;
+    - `--no-startup-window`.
+  - Pages open with `Target.createTarget {background: true}`, so the browser never comes to the front.
+  - Another helper process takes on such a browser by its scratch profile, so the suite's setup and the worker's
+    helper can be different processes.
+  - `observe` gives a page tree with refs, built from the accessibility tree of every frame and stitched under its
+    iframe owner. Out-of-process frames come from their own sessions; boxes are mapped from the document, through
+    the viewport (scroll and zoom), to the window.
+  - Refs use the same action schema as native ones. `click` and `drag` are trusted input after a frame-by-frame
+    hit test, so a covered element is `occluded`. The other actions:
+    - `set_value` selects all, then inserts;
+    - `type` inserts at the selection;
+    - `<select>` is picked with keys;
+    - `scroll` goes through the page's root ref;
+    - `navigate` is the one new action.
+  - Screenshots and `zoom` come from the page itself, so they never take focus. Settling waits for network idle
+    and a quiet DOM.
+  - JS `alert`, `confirm` and `prompt` stop in the debugger (`Debugger.paused`). They show as virtual refs (accept,
+    dismiss, the prompt's text) and are answered without page script and never auto-accepted. The browser's own
+    dialog window activated Chrome, which this avoids.
+  - Actions on this path are recorded with the rung `page`. The UI words it as "Inside the page, through the
+    browser".
+- **Browsers without a debugging port: their accessibility web area** (`macos/web.rs`).
+  - The first look at a Chromium browser sets `AXManualAccessibility` and `AXEnhancedUserInterface` on the app.
+    Chromium builds the page tree about 2.6 s later.
+  - The first look at any web area waits until its node count is stable and its holder lies inside the window.
+    WebKit reports its scroll area at a stale place on first contact.
+  - A WKWebView builds its tree only when asked. Until then it is an empty group covering much of the window, and
+    the first look waits up to 1 s for the page to appear.
+  - **A page's field gets focus within its page before `set_value`.** WebKit gives a value to whichever field is
+    focused, not the one it was sent to: unfocused, "Email" overwrote "Name". This is focus inside the app, not
+    the user's.
+  - A web view in a background app names no focused element. `type` therefore trusts the field's own `AXFocused`
+    there, and waits up to 1 s for focus.
+- **Fixture:** a std-only local HTTP server (`web_fixture.rs`, started and stopped by the suite) serving one page.
+  - The page has a form (an 8 px checkbox, 9 px star buttons), JS dialogs, a `<dialog>`, a canvas, a same-origin
+    iframe and a cross-origin one in a scrolled box.
+  - Every event is logged with `isTrusted`, and a request that no browser made goes in a `.foreign` file.
+  - `web-view` is a WKWebView window: the stand-in for Safari, which tests never drive.
+- **Suite:** `web-form`, `web-iframe`, `web-dialog` and `web-canvas` run through the protocol; `web-ax-form` runs on
+  Chrome without a port; `web-ax-form-webkit` runs on the WKWebView. `Web grounding 8 px` and `16 px` are P3 boards
+  on the page canvas.
+  - The checkers fail any of these:
+    - untrusted input;
+    - a wrong control;
+    - a missing page rung on the protocol path, or a page rung where the protocol isn't offered;
+    - a request no browser made;
+    - no done record.
+  - The audit counts the debugging port and the scratch profile as shortcuts.
+
+**Results** (Chrome for Testing 155.0.8059.12; the helper ran from the cmux terminal with its inherited grants;
+the protocol path needs none)
+
+| Gate | Result | Evidence |
+|---|---|---|
+| Scripted references | **8/8 web pass**; the whole scripted suite 28/28 in one run before the two grounding tasks were added | `brigadier-computer suite scripted <out>`: web-form 1 batch / 2 calls, web-iframe 1/2, web-dialog 4/7, web-canvas 1/3, web-ax-form 1/2, web-ax-form-webkit 1/2, each grounding board set 10/30 |
+| Model runs, 1 per provider | **Claude 6/6, Codex 6/6** | `tools/computer-suite/run.py <root> claude 1 …` / `codex 1 …`; no shortcuts, no peeks, only computer tools |
+| E1 (indicative, one run) | **Claude 1.25 (PASS); Codex 1.75 (MISS)** | Claude: 1.25, 1.5, 0.89, 0.6, 1.25, 1.75; Codex: 2.5, 1.75, 1.22, 1.4, 2.25, 1.75. Codex's miss repeats Phase 4's (pooled 2.25 there) |
+| P3 on the page canvas (Claude, Opus medium) | **PASS: 50/50 at 8 px, 50/50 at 16 px** | 0 wrong, 0 misses; mean error 0.85 px, largest 1.41 px; Wilson lower bound 0.929 per size. An empirical pass, as in Phase 4. Every click was a pixel read off the page's screenshot and went through the page |
+| F1 during the runs | **0 changes caused by actions** | The focus monitor ran through every run. Its one change per run (≈60–230 ms, given straight back) came 4.5 s before `web-ax-form` started: the suite's own plain launch of Chrome, which a launch without a port can't avoid |
+
+**Open**
+- Chrome with no debugging port: background key events (`type`) don't land in its page, though `set_value` does.
+- A plain launch of Chrome (not through `launch`) flicks the front for about 0.1–0.2 s. The suite's setup gives it
+  straight back; workers launch through `launch`, which never does this.
+- `AXEnhancedUserInterface` stays set on a Chromium process once it has been looked at, which costs it some speed.
+- The full bench was not rerun for this stream; the scripted suite (28/28) is the regression check.
+
 ### Phase 6: Windows and Linux backends
 
 **Scope**
