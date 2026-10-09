@@ -602,12 +602,14 @@ impl<D: Desktop> Engine<D> {
             let el = this.windows.get(&w.id)?.get(r)?.element.clone();
             this.desktop.read(w, &el).ok()
         };
+        // A label's text is its title, not a value: what the element shows is checked.
+        let shown = |n: &RawNode<D::Element>| n.value.clone().or_else(|| n.label.clone());
         match e {
             Expect::ValueEquals { r#ref, text } => {
-                read(self, r#ref).is_some_and(|n| n.value.as_deref() == Some(text))
+                read(self, r#ref).is_some_and(|n| shown(&n).as_deref() == Some(text))
             }
             Expect::ValueContains { r#ref, text } => read(self, r#ref).is_some_and(|n| {
-                n.value
+                shown(&n)
                     .as_deref()
                     .is_some_and(|v| v.contains(text.as_str()))
             }),
@@ -2395,6 +2397,37 @@ mod tests {
         };
         assert_eq!(act(&mut e, vec![with(true)])[0].status, Status::Done);
         assert_ne!(act(&mut e, vec![with(false)])[0].status, Status::Done);
+    }
+
+    #[test]
+    fn a_value_expect_on_a_label_reads_its_text() {
+        let mut e = engine(Fake::new(basic()));
+        let label = "Last action: picked Pick Me 3";
+        e.desktop
+            .nodes
+            .push(node(6, 1, "text", label, Rect::new(10.0, 100.0, 200.0, 18.0)));
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let r = ref_of(&text, label);
+        let wait = |expect| Action::Wait {
+            expect,
+            timeout_ms: 50,
+        };
+        let holds = act(
+            &mut e,
+            vec![wait(Expect::ValueContains {
+                r#ref: r.clone(),
+                text: "Pick Me 3".into(),
+            })],
+        );
+        assert_eq!(holds[0].status, Status::Done);
+        let misses = act(
+            &mut e,
+            vec![wait(Expect::ValueEquals {
+                r#ref: r,
+                text: "Last action: none".into(),
+            })],
+        );
+        assert_ne!(misses[0].status, Status::Done);
     }
 
     #[test]

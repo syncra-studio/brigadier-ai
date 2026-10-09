@@ -922,10 +922,24 @@ fn menu_item(pid: i32, path: &[String]) -> CuResult<AxEl> {
     for (i, name) in path.iter().enumerate() {
         let want = norm(name);
         let Some(item) = level
-            .into_iter()
+            .iter()
             .find(|e| e.string("AXTitle").is_some_and(|t| norm(&t) == want))
+            .cloned()
         else {
-            return err(ErrorCode::NoSuchTarget, format!("no menu item {name:?}"));
+            // What is there, so the next try needs no other way to read the menus.
+            let titles: Vec<String> = level
+                .iter()
+                .filter_map(|e| e.string("AXTitle"))
+                .filter(|t| !t.trim().is_empty())
+                .collect();
+            let place = match i {
+                0 => "the menu bar".to_owned(),
+                _ => path[..i].join(" › "),
+            };
+            return err(
+                ErrorCode::NoSuchTarget,
+                format!("no menu item {name:?} in {place}; it has: {}", titles.join(", ")),
+            );
         };
         if i + 1 == path.len() {
             return Ok(item);
