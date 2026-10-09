@@ -21,6 +21,25 @@ func log(_ id: String, _ ev: String, x: Double? = nil, y: Double? = nil, v: Stri
   if let v { o["v"] = v }
   let data = try! JSONSerialization.data(withJSONObject: o, options: [.sortedKeys])
   logHandle.write(data + Data([0x0a]))
+  if let line = lastActionText(id, ev, v) { lastAction?.stringValue = "Last action: " + line }
+}
+
+// What a person sees after a press, a menu pick or a click on a dot: real apps show the effect,
+// so a worker can check it on screen rather than in the log.
+var lastAction: NSTextField?
+var presses: [String: Int] = [:]
+let dotNames = ["dot-8": "red", "dot-12": "blue", "dot-16": "green", "dot-24": "orange"]
+func lastActionText(_ id: String, _ ev: String, _ v: String?) -> String? {
+  switch ev {
+  case "press" where id.hasPrefix("button-"):
+    presses[id, default: 0] += 1
+    let n = presses[id]!
+    return "pressed Button \(id.dropFirst(7)) pt (\(n) \(n == 1 ? "time" : "times") in all)"
+  case "pick" where id == "menu": return "picked \(v ?? "") in the Targets menu"
+  case "down" where id.hasPrefix("dot-"): return "clicked the \(dotNames[id] ?? "purple") dot"
+  case "down" where id == "canvas": return "clicked the canvas, on no dot"
+  default: return nil
+  }
 }
 
 final class Flipped: NSView { override var isFlipped: Bool { true } }
@@ -299,6 +318,12 @@ for (i, size) in [8, 12, 16, 24].enumerated() {
   dy += 90
 }
 root.addSubview(canvas)
+
+let last = NSTextField(labelWithString: "Last action: none")
+last.frame = NSRect(x: 20, y: 440, width: 560, height: 18)
+last.identifier = NSUserInterfaceItemIdentifier("last-action")
+root.addSubview(last)
+lastAction = last
 
 w.orderFront(nil)
 

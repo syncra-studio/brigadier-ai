@@ -5,7 +5,7 @@
 //!   brigadier-computer run <script.json> [--out <dir>]
 //!   brigadier-computer serve --socket <path> --token-file <path> [--parent <pid>]
 //!   brigadier-computer bench [--out <dir>] [--quick] [--cursor] [--replay <dir>]
-//!   brigadier-computer suite tasks | setup <task> <dir> [--seed n] | check <dir> [--records f] [--report f]
+//!   brigadier-computer suite tasks | setup <task> <dir> [--seed n] | check <dir> [--records f] [--report f] [--offline]
 //!                            | teardown <dir> | scripted <out> [task…] | watch <out.jsonl>
 //!
 //! `serve` is the long-lived helper the daemon talks to; the rest is a development and fixture
@@ -74,6 +74,7 @@ fn main() -> anyhow::Result<()> {
                     &dir,
                     flag("--records").as_deref(),
                     flag("--report").as_deref(),
+                    !args.iter().any(|a| a == "--offline"),
                 )?;
                 println!("{}", serde_json::to_string_pretty(&v)?);
                 std::process::exit(if v.pass { 0 } else { 1 });

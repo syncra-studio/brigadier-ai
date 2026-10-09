@@ -160,9 +160,19 @@ pub fn read_files(prep: &Prepared) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Asks a live fixture for its state snapshot and waits briefly for it in the log.
+/// Asks a live fixture for its state snapshot and waits briefly for it in the log. Only the
+/// fixture itself is signalled: after teardown its pid may belong to another process, which
+/// SIGUSR1 would end.
 fn snapshot(prep: &Prepared, log: &Path) {
     if prep.pid <= 0 || prep.task.starts_with("Grounding") {
+        return;
+    }
+    let comm = Command::new("/bin/ps")
+        .args(["-o", "comm=", "-p", &prep.pid.to_string()])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .unwrap_or_default();
+    if !comm.ends_with("/target-range") {
         return;
     }
     let before = suite::read_events(log).map(|e| e.len()).unwrap_or(0);
@@ -185,11 +195,20 @@ fn snapshot(prep: &Prepared, log: &Path) {
 }
 
 /// Checks a trial set up in `dir`, with the broker's records and the worker's report.
-pub fn check_dir(dir: &Path, records: Option<&Path>, report: Option<&Path>) -> Result<Verdict> {
+/// `live`: the fixture still runs and is asked for its state; offline, the log's last snapshot
+/// stands (a trial checked again after teardown).
+pub fn check_dir(
+    dir: &Path,
+    records: Option<&Path>,
+    report: Option<&Path>,
+    live: bool,
+) -> Result<Verdict> {
     let prep: Prepared = serde_json::from_slice(&std::fs::read(dir.join("setup.json"))?)?;
     let events = match &prep.log {
         Some(l) => {
-            snapshot(&prep, Path::new(l));
+            if live {
+                snapshot(&prep, Path::new(l));
+            }
             suite::read_events(Path::new(l))?
         }
         None => Vec::new(),
@@ -592,7 +611,7 @@ pub fn scripted(desktop: MacDesktop, out: &Path, only: &[String]) -> Result<bool
         }
         std::fs::write(dir.join("records.jsonl"), &records)?;
         std::fs::write(dir.join("transcript.txt"), &transcript)?;
-        let verdict = check_dir(&dir, Some(&dir.join("records.jsonl")), None)?;
+        let verdict = check_dir(&dir, Some(&dir.join("records.jsonl")), None, true)?;
         let grounding = match task.setup {
             Setup::Grounding { size } => Some(suite::score_grounding(
                 size,

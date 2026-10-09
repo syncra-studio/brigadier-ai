@@ -12,10 +12,12 @@ Model calls (E1's numerator):
   Codex's code mode calls tools from JavaScript in an `exec` call (`tools.mcp__computer__act(...)`):
   an `exec` that calls only computer tools counts as a computer call.
 
-The audit lists every tool call that isn't a computer tool, and fails the trial on one that names
-a path or name in `forbidden` (the trial's files, the fixture's log, the daemon's data dir) or
-reaches into Brigadier or the target app another way (its socket, the helper's CLI, AppleScript,
-signals)."""
+The audit lists every tool call that isn't a computer tool. It fails the trial on a shortcut: a
+call that writes to a path or name in `forbidden` (the trial's files, the fixture's log, the
+daemon's data dir), or that reaches into Brigadier or the target app another way (its socket, the
+helper's CLI, AppleScript, signals). A call that only reads one of them (`od` of the saved file,
+the log copied to the worker's outputs) is a peek: listed, not failed, since the checker judges
+the end state and the broker's records, never the worker's own check."""
 import glob, json, os, re
 
 REACH = ("brigadierd.sock", "ipc.token", "bipc", "brigadier-computer", "osascript", "kill ", "pkill",
@@ -115,15 +117,39 @@ def computer_tool(name, text=""):
     return False
 
 
+WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch")
+# Shell forms that write to a path named after them.
+WRITES = (r">>?\s*['\"]?{p}", r"\btee\b[^|;&]*{p}", r"\bsed\s+-i[^|;&]*{p}", r"\b(rm|truncate|touch|chmod)\b[^|;&]*{p}",
+          r"\b(cp|mv|ln|rsync)\b[^|;&]*\s['\"]?{p}\S*['\"]?\s*($|[|;&])", r"\bdd\b[^|;&]*of={p}",
+          r"open\([^)]*{p}[^)]*['\"][wa]")
+
+
+def writes_to(name, text, path):
+    if name in WRITE_TOOLS or name.lower() in ("write", "edit"):
+        return path in text
+    p = re.escape(path)
+    return any(re.search(w.format(p=p) + r"", text) for w in WRITES)
+
+
 def audit(tr, sessions, forbidden):
     forbidden = [f for f in forbidden if f]
-    out = {"computer_tools": {}, "other_tools": [], "shortcuts": []}
+    out = {"computer_tools": {}, "other_tools": [], "shortcuts": [], "peeks": []}
     for name, text in tool_calls(tr, sessions):
         if computer_tool(name, text):
             out["computer_tools"][name] = out["computer_tools"].get(name, 0) + 1
             continue
+        if name.startswith("mcp__brigadier__") or (name == "exec" and "tools.mcp__brigadier__" in text
+                                                   and "tools.mcp__computer__" not in text):
+            continue  # the report and Brigadier's own worker tools: words, not actions
         out["other_tools"].append(f"{name}: {text[:300]}")
-        hit = [f for f in forbidden if f in text] + [r for r in REACH if r in text]
-        if hit:
-            out["shortcuts"].append(f"{name} names {', '.join(hit)}")
+        command = json.loads(text) if text.startswith("{") else text
+        command = command.get("command", text) if isinstance(command, dict) else text
+        reach = [r for r in REACH if r in command]
+        written = [f for f in forbidden if f in command and writes_to(name, command, f)]
+        read = [f for f in forbidden if f in command and f not in written]
+        if reach or written:
+            out["shortcuts"].append(f"{name} {'writes ' + ', '.join(written) if written else ''}"
+                                    f"{' reaches ' + ', '.join(reach) if reach else ''}: {command[:200]}")
+        elif read:
+            out["peeks"].append(f"{name} reads {', '.join(read)}: {command[:200]}")
     return out

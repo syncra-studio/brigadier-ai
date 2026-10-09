@@ -120,8 +120,8 @@ def check(d, task, trial):
     elif task == "dev-settings":
         perm = catalog(data)["settings"]["defaultPermission"]
         report = open(os.path.join(trial, "report.md")).read().lower() if os.path.exists(os.path.join(trial, "report.md")) else ""
-        # The level as Settings words it; the report must name it and no other level.
-        words = {"askForApproval": "ask", "approveForMe": "approve for me", "fullAccess": "full access"}
+        # The level as Settings words it (lib/setup.ts); the report must name it and no other level.
+        words = {"askForApproval": "ask for approval", "approveForMe": "approve for me", "fullAccess": "full access"}
         named = [k for k, w in words.items() if w in report]
         out.update(default_permission=perm, named=named, pass_=named == [perm])
     print(json.dumps(out))

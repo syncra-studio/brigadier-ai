@@ -202,10 +202,18 @@ def trial(root, out, t, provider, model, seed, conv):
         worker_ms=(attempts[-1].get("endedAtMs") or t1) - attempts[0]["startedAtMs"] if attempts else None,
         wall_ms=t1 - t0, usage=usage(data, conv, task["id"], t0, t1),
         sessions=native_ids(root, task["id"]), thread_reply=last_reply(v))
-    result["forbidden"] = [scratch, os.path.join(root, "data"), prep.get("log") or "", *prep.get("files", {})]
+    result["forbidden"] = forbidden(root, scratch, prep)
     recount(root, result)
     json.dump(result, open(os.path.join(d, "result.json"), "w"), indent=1)
     return result
+
+
+def forbidden(root, scratch, prep):
+    """What a worker may read but never write: the trial's files and log, and the daemon's own
+    state (its data dir, but not the scratch folders workers run in)."""
+    data = os.path.join(root, "data")
+    own = [os.path.join(data, n) for n in sorted(os.listdir(data)) if n not in ("scratch", "worktrees")]
+    return [scratch, os.path.realpath(scratch), prep.get("log") or "", *prep.get("files", {}), *own]
 
 
 def recount(root, r):

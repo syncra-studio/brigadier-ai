@@ -328,6 +328,14 @@ fn target_has(r: &ActionRecord, words: &str) -> bool {
         .is_some_and(|t| t.to_lowercase().contains(&words.to_lowercase()))
 }
 
+/// The action reached its element: it was done, or it was delivered and only the worker's own
+/// expect didn't hold (a row expected "checked", Settings expected to show a word on its first
+/// page). Its effect is judged by the end state, not by the worker's guess.
+fn acted(r: &ActionRecord) -> bool {
+    r.status == Status::Done
+        || (r.status == Status::Failed && r.rung.is_some() && r.error == Some(ErrorCode::Failed))
+}
+
 fn pixel_click(r: &ActionRecord) -> bool {
     matches!(&r.action, Action::Click { target, .. } if target.r#ref.is_none())
 }
@@ -350,11 +358,7 @@ pub fn check(
         .iter()
         .filter(|r| r.pid == prep.pid && r.window == prep.window)
         .collect();
-    let done: Vec<&ActionRecord> = mine
-        .iter()
-        .copied()
-        .filter(|r| r.status == Status::Done)
-        .collect();
+    let done: Vec<&ActionRecord> = mine.iter().copied().filter(|r| acted(r)).collect();
     for r in &done {
         let rung = r
             .rung
@@ -365,7 +369,7 @@ pub fn check(
     }
     let others = records
         .iter()
-        .filter(|r| r.pid != prep.pid && r.status == Status::Done)
+        .filter(|r| r.pid != prep.pid && acted(r))
         .count();
     if others > 0 {
         v.fail(format!("{others} actions landed on another app"));
@@ -563,7 +567,7 @@ pub fn check(
             let any = |w: &str| {
                 records
                     .iter()
-                    .any(|r| r.pid == prep.pid && r.status == Status::Done && target_has(r, w))
+                    .any(|r| r.pid == prep.pid && acted(r) && target_has(r, w))
             };
             needs_record(&mut v, any("Open Sheet"), "on Open Sheet");
             needs_record(&mut v, any("Close Sheet"), "on Close Sheet");
@@ -645,7 +649,7 @@ pub fn check(
                 &mut v,
                 records.iter().any(|r| {
                     r.pid == prep.pid
-                        && r.status == Status::Done
+                        && acted(r)
                         && (target_has(r, "Settings")
                             || matches!(&r.action, Action::Menu { path, .. } if path.iter().any(|p| p.contains("Settings"))))
                 }),
