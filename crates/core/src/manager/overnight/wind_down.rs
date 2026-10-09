@@ -156,16 +156,7 @@ impl SessionManager {
                 || board
                     .tasks
                     .values()
-                    .filter(|task| owned(task, &run))
-                    .any(|task| {
-                        matches!(
-                            task.state,
-                            TaskState::Queued
-                                | TaskState::Starting
-                                | TaskState::Running
-                                | TaskState::Landing
-                        )
-                    });
+                    .any(|task| owned(task, &run) && still_works(task));
             if !live || now_ms() >= cutoff {
                 break;
             }
@@ -406,6 +397,15 @@ fn owned(task: &crate::work::Task, run: &OvernightRun) -> bool {
         .is_some_and(|context| context.run_id == run.id)
 }
 
+/// Whether a run's task still works, so its ending waits for it: it runs or lands, or its
+/// checked fix lands on its own once its worker's turn is over.
+fn still_works(task: &crate::work::Task) -> bool {
+    matches!(
+        task.state,
+        TaskState::Queued | TaskState::Starting | TaskState::Running | TaskState::Landing
+    ) || super::super::workers::relanding_pending(task)
+}
+
 /// When live work stops at the latest: a deadline run keeps the last part of its reserve for
 /// the report; a Stop without one waits a bounded time.
 fn cutoff_ms(run: &OvernightRun, now: i64) -> i64 {
@@ -464,6 +464,35 @@ mod tests {
             "Speed",
             Vec::new(),
         )
+    }
+
+    #[test]
+    fn a_checked_fix_landing_on_its_own_holds_the_ending() {
+        let mut task: crate::work::Task = serde_json::from_value(serde_json::json!({
+            "id": "t1",
+            "conversationId": "c1",
+            "number": 1,
+            "position": 0,
+            "title": "Phase 4",
+            "kind": "implement",
+            "spec": "Write p4.txt.",
+            "access": { "repo": "write", "network": false, "unsandboxed": false },
+            "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
+            "state": "reported",
+            "attachments": [],
+            "createdAtMs": 0,
+            "updatedAtMs": 0
+        }))
+        .expect("a task");
+        // A report the thread decides about doesn't hold the ending; one Brigadier lands
+        // itself once its worker's turn is over does.
+        assert!(!still_works(&task));
+        task.landing = Some("Phase 4".into());
+        assert!(still_works(&task));
+        task.state = TaskState::Landing;
+        assert!(still_works(&task));
+        task.state = TaskState::Landed;
+        assert!(!still_works(&task));
     }
 
     #[test]
