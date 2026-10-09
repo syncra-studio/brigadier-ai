@@ -15,16 +15,17 @@
 //! - **Lazy trees.** AppKit, SwiftUI and Catalyst windows add elements in the moments after the
 //!   first accessibility query (measured 2026-10-09: a Catalyst window 19 → 20 elements and an
 //!   AppKit one 36 → 38 within 150 ms; the first read of the Catalyst one lacked its stepper,
-//!   which the read itself made the app build). The first observe of a window walks it until
-//!   its element count holds for `SETTLE_QUIET`, up to `SETTLE_BOUND`, once per window and
-//!   process instance.
+//!   which a read or the app's own launch builds later). The first observe of a window walks it
+//!   until its element count holds for `SETTLE_QUIET` and the app is past `LAUNCHING`, up to
+//!   `SETTLE_BOUND`, once per window and process instance. An app already running pays one quiet
+//!   window; only an app launched a moment ago waits longer.
 //!
 //! Browsers (Chromium-family apps by bundle id, `AXEnhancedUserInterface`) are the browser
 //! stream's (`web.rs`), not this module's.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use objc2_app_kit::NSRunningApplication;
 use objc2_core_foundation::CFBoolean;
@@ -40,10 +41,16 @@ pub const READY_BOUND: Duration = Duration::from_millis(3500);
 /// How deep under the window a web area is looked for.
 const WEB_AREA_DEPTH: usize = 12;
 /// How long a window's element count must hold on first contact before its tree counts as built.
-const SETTLE_QUIET: Duration = Duration::from_millis(100);
+/// 100 ms was too short under load (2026-10-09, load average 15: a Catalyst stepper came later).
+const SETTLE_QUIET: Duration = Duration::from_millis(250);
+/// How long an app counts as launching: it may build controls with no read to prompt it, after a
+/// quiet second (measured 2026-10-09: a Catalyst stepper 1.1–1.2 s after launch in 5 of 8
+/// launches, the count unchanged for the second before). A window of an app this young is
+/// settled no sooner than this after its process started.
+const LAUNCHING: Duration = Duration::from_millis(2000);
 /// The longest first-contact settle: an app that keeps changing (a clock, a progress bar) is
 /// taken as it is.
-const SETTLE_BOUND: Duration = Duration::from_millis(1000);
+const SETTLE_BOUND: Duration = Duration::from_millis(2500);
 /// How long a revealed window takes to become its app's focused window.
 const REVEAL_WAIT: Duration = Duration::from_millis(300);
 
@@ -65,14 +72,17 @@ struct Settle {
     count: usize,
     changed: Instant,
     began: Instant,
+    /// When the app's launch is over (`LAUNCHING` after its process started).
+    launched: Instant,
 }
 
 impl Settle {
-    fn new(count: usize, now: Instant) -> Self {
+    fn new(count: usize, now: Instant, launched: Instant) -> Self {
         Self {
             count,
             changed: now,
             began: now,
+            launched,
         }
     }
 
@@ -82,7 +92,7 @@ impl Settle {
             self.count = count;
             self.changed = now;
         }
-        now.duration_since(self.changed) >= SETTLE_QUIET
+        (now.duration_since(self.changed) >= SETTLE_QUIET && now >= self.launched)
             || now.duration_since(self.began) >= SETTLE_BOUND
     }
 }
@@ -181,14 +191,19 @@ impl Quirks {
         if self.settled.contains(&key) {
             return Structure::Ready;
         }
-        // Counted by the observe's own walk: Catalyst builds a control's elements when their
-        // attributes are first read, so a walk of children alone never sees them come.
-        let count = super::ax::tree(window, origin(w, Some(window)), false).len();
+        // Counted by a full walk, rows out of view included: elements are built as their
+        // attributes are first read.
+        let count = super::ax::tree(window, origin(w, Some(window)), true).len();
         let now = Instant::now();
         let built = match self.settling.get_mut(&key) {
             Some(s) => s.update(count, now),
             None => {
-                self.settling.insert(key, Settle::new(count, now));
+                let age = SystemTime::now()
+                    .duration_since(UNIX_EPOCH + Duration::from_micros(start_us))
+                    .unwrap_or(LAUNCHING);
+                let launching = LAUNCHING.saturating_sub(age);
+                self.settling
+                    .insert(key, Settle::new(count, now, now + launching));
                 false
             }
         };
@@ -281,21 +296,35 @@ mod tests {
     fn a_tree_counts_as_built_once_its_count_holds() {
         let t = Instant::now();
         let ms = |n| t + Duration::from_millis(n);
-        let mut s = Settle::new(19, t);
+        let mut s = Settle::new(19, t, t);
         assert!(!s.update(19, ms(50)));
         // The lazy stepper arrives.
         assert!(!s.update(20, ms(80)));
-        assert!(!s.update(20, ms(150)));
-        assert!(s.update(20, ms(180)));
+        assert!(!s.update(20, ms(300)));
+        assert!(s.update(20, ms(330)));
     }
 
     #[test]
     fn a_tree_that_keeps_changing_is_taken_after_the_bound() {
         let t = Instant::now();
-        let mut s = Settle::new(1, t);
+        let mut s = Settle::new(1, t, t);
         for i in 1..20u64 {
             assert!(!s.update(i as usize + 1, t + Duration::from_millis(i * 50)));
         }
         assert!(s.update(99, t + SETTLE_BOUND));
+    }
+
+    #[test]
+    fn a_just_launched_apps_tree_waits_for_the_launch_to_end() {
+        let t = Instant::now();
+        let ms = |n| t + Duration::from_millis(n);
+        // Launched 300 ms before first contact: its launch ends 1.7 s in.
+        let mut s = Settle::new(18, t, ms(1700));
+        assert!(!s.update(18, ms(400)));
+        assert!(!s.update(18, ms(1000)));
+        // The stepper arrives with no read to prompt it.
+        assert!(!s.update(20, ms(1150)));
+        assert!(!s.update(20, ms(1300)));
+        assert!(s.update(20, ms(1700)));
     }
 }
