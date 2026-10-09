@@ -27,6 +27,8 @@ use crate::redact::Rgba;
 use super::private::Private;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
+/// The pauses before a failed capture is asked for again.
+const RETRY_PAUSES: [Duration; 2] = [Duration::from_millis(100), Duration::from_millis(250)];
 
 /// The shareable windows, cached: listing them costs tens of milliseconds (§2).
 #[derive(Default)]
@@ -125,31 +127,55 @@ impl Shareable {
             config.setScalesToFit(true);
             (filter, config)
         };
-        let (tx, rx) = mpsc::channel::<Option<CFRetained<CGImage>>>();
-        let block = RcBlock::new(move |img: *mut CGImage, _error: *mut NSError| {
-            // SAFETY: the handler's image is null or live; retaining keeps it past the handler.
+        let (tx, rx) = mpsc::channel::<Result<CFRetained<CGImage>, String>>();
+        let block = RcBlock::new(move |img: *mut CGImage, error: *mut NSError| {
+            // SAFETY: the handler's image and error are null or live; retaining keeps the image
+            // past the handler.
             let img = NonNull::new(img).map(|p| unsafe { CFRetained::retain(p) });
-            let _ = tx.send(img);
+            let why = || {
+                // SAFETY: a live error's description is a plain getter.
+                unsafe { error.as_ref() }
+                    .map(|e| e.localizedDescription().to_string())
+                    .unwrap_or_default()
+            };
+            let _ = tx.send(img.ok_or_else(why));
         });
-        // SAFETY: the API copies the handler; the wait below also keeps ours until it ran or the
-        // capture is given up, and a send after that goes nowhere.
-        unsafe {
-            SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
-                &filter,
-                &config,
-                Some(&block),
-            );
-        }
+        let submit =
+            move |filter: &SCContentFilter,
+                  config: &SCStreamConfiguration,
+                  block: &RcBlock<dyn Fn(*mut CGImage, *mut NSError)>| {
+                // SAFETY: the API copies the handler; the wait below also keeps ours until it ran or
+                // the capture is given up, and a send after that goes nowhere.
+                unsafe {
+                    SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
+                        filter,
+                        config,
+                        Some(block),
+                    );
+                }
+            };
+        submit(&filter, &config, &block);
         let stale = self.stale.clone();
         Ok(move || {
-            let got = rx.recv_timeout(TIMEOUT);
+            let mut got = rx.recv_timeout(TIMEOUT);
+            // The system now and then fails to start a capture ("Failed to start stream due to
+            // audio/video capture failure", measured 2026-10-09: 2 of 12 runs of 10 boards), and
+            // the same request a moment later succeeds.
+            for pause in RETRY_PAUSES {
+                if !matches!(got, Ok(Err(_))) {
+                    break;
+                }
+                std::thread::sleep(pause);
+                submit(&filter, &config, &block);
+                got = rx.recv_timeout(TIMEOUT);
+            }
             drop(block);
             let img = match got {
-                Ok(Some(i)) => i,
-                Ok(None) => {
+                Ok(Ok(i)) => i,
+                Ok(Err(why)) => {
                     // Drop the cached list before the next capture.
                     stale.set(true);
-                    return err(ErrorCode::Failed, "the capture failed");
+                    return err(ErrorCode::Failed, format!("the capture failed: {why}"));
                 }
                 Err(_) => return err(ErrorCode::Failed, "the capture timed out"),
             };
