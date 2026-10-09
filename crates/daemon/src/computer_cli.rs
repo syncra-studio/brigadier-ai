@@ -125,12 +125,7 @@ pub fn run(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         Err(err) => return fail(&err),
     };
     if let Some(err) = reply.get("error") {
-        return fail(
-            &err["message"]
-                .as_str()
-                .unwrap_or("the call failed")
-                .to_owned(),
-        );
+        return fail(err["message"].as_str().unwrap_or("the call failed"));
     }
     let result = &reply["result"];
     let mut out = String::new();
