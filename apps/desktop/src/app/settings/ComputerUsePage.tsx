@@ -23,7 +23,8 @@ const INTRO =
 const GRANTS: readonly ComputerGrant[] = ["accessibility", "screenRecording"];
 
 /** What to do in System Settings after an Allow, and what to do when the switch is on but this still says no. */
-export const GRANT_STEPS = "macOS opens System Settings. Turn on Brigadier Computer Use there; this page updates by itself.";
+export const GRANT_STEPS =
+  "System Settings opens on the right list: Device Control and Data Access (called Accessibility before macOS 27) for Control apps, Screen & System Audio Recording for See the screen. Turn on Brigadier Computer Use there; this page updates by itself.";
 export const STALE_ENTRY =
   "Already on there, but still not allowed here? It's from an older build: select Brigadier Computer Use, remove it with −, then press Allow… again.";
 export const RESTARTING = "Brigadier Computer Use is restarting so it can see the screen.";

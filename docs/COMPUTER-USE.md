@@ -33,7 +33,8 @@ apart from Brigadier itself):
 
 1. Open Brigadier's **Settings → Computer use**.
 2. Next to **Control apps**, press **Allow…**. macOS shows its own prompt, then System Settings opens at Privacy &
-   Security → Accessibility. Turn on **Brigadier Computer Use**.
+   Security → **Device Control and Data Access** (macOS 27's name for the list called Accessibility before). Turn on
+   **Brigadier Computer Use**.
 3. Next to **See the screen**, press **Allow…**. System Settings opens at Privacy & Security → Screen & System Audio
    Recording. Turn on **Brigadier Computer Use**. If macOS offers **Quit & Reopen**, you can choose it or not:
    Brigadier Computer Use restarts by itself to start seeing the screen.
@@ -43,6 +44,13 @@ missing, and each row turns to **Allowed** on its own.
 
 The permissions belong to Brigadier Computer Use, not to Brigadier or a terminal, and they stay when Brigadier
 updates. If a worker needs them before you've given them, the conversation shows the same two Allow buttons.
+
+To open those lists yourself:
+
+```sh
+open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"   # Device Control and Data Access
+open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"   # Screen & System Audio Recording
+```
 
 **On, but still "Not allowed yet"?** The switch belongs to an older build of Brigadier Computer Use (macOS ties a
 grant to the build it was given to, and an unsigned build changes with every rebuild). In System Settings, select

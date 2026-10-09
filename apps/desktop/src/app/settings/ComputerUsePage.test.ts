@@ -27,6 +27,7 @@ test("computer use shows each missing permission with one Allow button, and noth
     const half = render({ ...none, accessibility: true, problem: "Couldn't read." }, true);
     assert.match(half, /Allowed/);
     assert.equal([...half.matchAll(/>Allow…</g)].length, 1);
+    assert.match(half, /Device Control and Data Access \(called Accessibility before macOS 27\)/);
     assert.match(half, /Turn on Brigadier Computer Use there; this page updates by itself\./);
     assert.match(half, /Couldn(&#x27;|')t read\./);
     assert.match(half, /remove it with −, then press Allow… again\./);

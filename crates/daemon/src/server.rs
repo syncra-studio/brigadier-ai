@@ -1937,9 +1937,10 @@ fn shell_quote(path: &str) -> String {
     }
 }
 
-/// The System Settings pane that lists apps for `grant`: Privacy & Security → Accessibility,
-/// or → Screen & System Audio Recording. Both anchors are in the Privacy & Security
-/// extension, which takes its old pane id in `x-apple.systempreferences:` links.
+/// The System Settings pane that lists apps for `grant`: Privacy & Security → Accessibility
+/// (named Device Control and Data Access from macOS 27), or → Screen & System Audio Recording.
+/// Both anchors are in the Privacy & Security extension, which takes its old pane id in
+/// `x-apple.systempreferences:` links.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn computer_pane_url(grant: ComputerGrant) -> &'static str {
     match grant {
