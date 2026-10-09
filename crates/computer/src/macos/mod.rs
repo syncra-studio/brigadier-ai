@@ -1182,10 +1182,18 @@ fn pick_popup(el: &AxEl, title: &str, windows: &[AxEl]) -> CuResult<()> {
     // A web page's options carry their text as a value, and a closed one keeps only its
     // choice. An open menu's own (titled) item is pressed rather than an option, so the menu
     // closes; a browser shows it in the window a little after the options appear.
+    // Only a page's pop-up looks for its menu in the window, or needs a second press: an
+    // app's own pop-up blinks the chosen item (≈350 ms) before its menu closes.
+    let page = web::in_page(el);
     let titled = |el: &AxEl| {
+        let shown = if page {
+            window_menu_items(windows)
+        } else {
+            Vec::new()
+        };
         items(el)
             .into_iter()
-            .chain(window_menu_items(windows))
+            .chain(shown)
             .find(|i| i.string("AXTitle").is_some_and(|t| norm(&t) == want))
     };
     let valued = |el: &AxEl| {
@@ -1217,7 +1225,7 @@ fn pick_popup(el: &AxEl, title: &str, windows: &[AxEl]) -> CuResult<()> {
                 }
                 // A page's option, once chosen, may leave the browser's menu open: pressing
                 // the pop-up again closes it.
-                if !menu_pressed && Instant::now() + Duration::from_millis(1850) > until {
+                if page && !menu_pressed && Instant::now() + Duration::from_millis(1850) > until {
                     el.perform("AXPress")?;
                     menu_pressed = true;
                 }
