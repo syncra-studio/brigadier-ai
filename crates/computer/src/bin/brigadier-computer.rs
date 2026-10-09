@@ -4,7 +4,7 @@
 //!   brigadier-computer observe <window id or title> [always|never|auto]
 //!   brigadier-computer run <script.json> [--out <dir>]
 //!   brigadier-computer serve --socket <path> --token-file <path> [--parent <pid>]
-//!   brigadier-computer bench [--out <dir>] [--quick] [--cursor]
+//!   brigadier-computer bench [--out <dir>] [--quick] [--cursor] [--replay <dir>]
 //!
 //! `serve` is the long-lived helper the daemon talks to; the rest is a development and fixture
 //! harness. `bench --cursor` draws the agent cursor over the bench's actions, and the unlisted
@@ -90,11 +90,13 @@ fn main() -> anyhow::Result<()> {
         Some("bench") => {
             let out = flag("--out").unwrap_or_else(|| PathBuf::from("target/computer-bench"));
             let quick = args.iter().any(|a| a == "--quick");
+            let replay = flag("--replay");
             if args.iter().any(|a| a == "--cursor") {
                 // AppKit on this thread draws the cursor; the bench runs on another.
                 let mtm = objc2::MainThreadMarker::new().context("the main thread")?;
                 brigadier_computer::macos::overlay::run_with_overlay(mtm, move |overlay| {
-                    let run = desktop().and_then(|d| bench::run(d, &out, quick, Some(overlay)));
+                    let run = desktop()
+                        .and_then(|d| bench::run(d, &out, quick, Some(overlay), replay.as_deref()));
                     match run {
                         Ok(true) => 0,
                         Ok(false) => 1,
@@ -105,14 +107,14 @@ fn main() -> anyhow::Result<()> {
                     }
                 });
             }
-            let ok = bench::run(desktop()?, &out, quick, None)?;
+            let ok = bench::run(desktop()?, &out, quick, None, replay.as_deref())?;
             if !ok {
                 std::process::exit(1);
             }
         }
         _ => {
             eprintln!(
-                "usage: brigadier-computer apps | observe <window> [always|never|auto] | run <script> | serve --socket <p> --token-file <p> [--parent <pid>] | bench [--out <dir>] [--quick] [--cursor]"
+                "usage: brigadier-computer apps | observe <window> [always|never|auto] | run <script> | serve --socket <p> --token-file <p> [--parent <pid>] | bench [--out <dir>] [--quick] [--cursor] [--replay <dir>]"
             );
             std::process::exit(2);
         }

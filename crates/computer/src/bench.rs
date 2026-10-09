@@ -18,7 +18,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::action::{
-    ActRequest, Action, ActionResult, ObserveRequest, Reply, Rung, Screenshot, Status,
+    ActRequest, Action, ActionResult, ImageOut, ObserveRequest, Reply, Rung, Screenshot, Status,
 };
 use crate::cursor::Cursor;
 use crate::desktop::{Desktop, UserFocus, WindowInfo};
@@ -181,6 +181,72 @@ struct Bench {
     mini: WindowInfo,
     report: Report,
     user: UserFocus,
+    replay: Option<ReplayLog>,
+}
+
+/// The run's action log, written the way the daemon keeps it (one `ComputerAction` per action,
+/// core's `work.rs`), so the app's timeline can replay a bench run.
+struct ReplayLog {
+    dir: PathBuf,
+    actions: Vec<Value>,
+    batches: u32,
+}
+
+impl ReplayLog {
+    /// One `act`'s records; its trajectory image goes beside the log as `<batch>.png`.
+    fn batch(
+        &mut self,
+        records: &[crate::record::ActionRecord],
+        trajectory: Option<ImageOut>,
+    ) -> Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        self.batches += 1;
+        let batch = format!("bench-{:05}", self.batches);
+        let image = match trajectory {
+            Some(t) => {
+                std::fs::write(self.dir.join(format!("{batch}.png")), &t.png)?;
+                Some(batch.clone())
+            }
+            None => None,
+        };
+        for (i, r) in records.iter().enumerate() {
+            self.actions.push(serde_json::json!({
+                "batch": batch,
+                "index": r.index,
+                "atMs": r.at_ms,
+                "kind": r.action.kind(),
+                "app": r.app,
+                "appWindow": r.window_title,
+                "target": r.target,
+                "pid": r.pid,
+                "window": r.window,
+                "status": wire_name(&r.status),
+                "rung": r.rung.as_ref().and_then(wire_name),
+                "effect": r.effect.as_ref().and_then(wire_name),
+                "error": r.error.map(|c| c.as_str()),
+                "detail": r.detail,
+                "dispatchMs": r.timings.dispatch_ms,
+                "record": serde_json::to_string(r)?,
+                "image": if i == 0 { image.clone() } else { None },
+            }));
+        }
+        Ok(())
+    }
+
+    fn write(&self) -> Result<PathBuf> {
+        let path = self.dir.join("actions.json");
+        std::fs::write(&path, serde_json::to_vec_pretty(&self.actions)?)?;
+        Ok(path)
+    }
+}
+
+/// An enum's name as it reads on the wire (`background_activated`).
+fn wire_name(v: &impl Serialize) -> Option<String> {
+    serde_json::to_value(v)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
 }
 
 fn ms_since(t0: f64, t: f64) -> f64 {
@@ -229,7 +295,7 @@ impl Bench {
                 },
             )
             .map_err(|e| anyhow!("act: {e}"))?;
-        self.engine.records.clear();
+        self.logged(reply.trajectory.clone())?;
         let what = serde_json::to_string(&reply.results.first().map(|r| &r.action))?;
         self.check_focus(&what, &before);
         let r = reply
@@ -238,6 +304,15 @@ impl Bench {
             .next()
             .context("act returned no result")?;
         Ok((r, t0))
+    }
+
+    /// Hands the last `act`'s records to the replay log, when there is one, and clears them.
+    fn logged(&mut self, trajectory: Option<ImageOut>) -> Result<()> {
+        let records = std::mem::take(&mut self.engine.records);
+        match &mut self.replay {
+            Some(log) => log.batch(&records, trajectory),
+            None => Ok(()),
+        }
     }
 
     /// Compares the user's side of the desktop before and after `what` (F1). A change the
@@ -791,6 +866,7 @@ impl Bench {
                     },
                 )
                 .map_err(|e| anyhow!("{e}"))?;
+            self.logged(reply.trajectory.clone())?;
             let events = self.log.until(Duration::from_millis(1_000), |e| {
                 e.id == "notes" && e.v.as_deref() == Some("hello there!")
             })?;
@@ -1107,8 +1183,15 @@ fn wait_windows(desktop: &mut MacDesktop, pid: i32) -> Result<(WindowInfo, Windo
     }
 }
 
-/// Runs the bench. With a `cursor`, the agent cursor draws every action it aims.
-pub fn run(mut desktop: MacDesktop, out: &Path, quick: bool, cursor: Cursor) -> Result<bool> {
+/// Runs the bench. With a `cursor`, the agent cursor draws every action it aims; with `replay`,
+/// the run's action log and its images are written there for the app's timeline.
+pub fn run(
+    mut desktop: MacDesktop,
+    out: &Path,
+    quick: bool,
+    cursor: Cursor,
+    replay: Option<&Path>,
+) -> Result<bool> {
     let reps = if quick { 20 } else { 200 };
     std::fs::create_dir_all(out)?;
     let out = out.canonicalize()?;
@@ -1146,6 +1229,17 @@ pub fn run(mut desktop: MacDesktop, out: &Path, quick: bool, cursor: Cursor) -> 
             ..Default::default()
         },
         user,
+        replay: match replay {
+            Some(dir) => {
+                std::fs::create_dir_all(dir)?;
+                Some(ReplayLog {
+                    dir: dir.to_owned(),
+                    actions: Vec::new(),
+                    batches: 0,
+                })
+            }
+            None => None,
+        },
     };
     let _ = b.log.read_new()?;
     let started = Instant::now();
@@ -1175,5 +1269,8 @@ pub fn run(mut desktop: MacDesktop, out: &Path, quick: bool, cursor: Cursor) -> 
     std::fs::write(&json, serde_json::to_vec_pretty(&b.report)?)?;
     std::fs::write(out.join(format!("bench-{stamp}.txt")), &table)?;
     println!("results in {}", json.display());
+    if let Some(log) = &b.replay {
+        println!("action log in {}", log.write()?.display());
+    }
     Ok(b.report.gates.iter().all(|g| g.pass))
 }
