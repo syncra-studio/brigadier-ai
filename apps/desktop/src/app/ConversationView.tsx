@@ -1,4 +1,3 @@
-import { RightSidebar, RightSidebarContext, RightSidebarToggle } from "@/app/conversation/RightSidebar";
 import {
   type AppendMessage,
   AssistantRuntimeProvider,
@@ -24,6 +23,7 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 
+import { RightSidebar, RightSidebarContext, RightSidebarToggle } from "@/app/conversation/RightSidebar";
 import { PaneComposer, FloatingComposerSlot } from "@/app/conversation/PaneComposer";
 import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";

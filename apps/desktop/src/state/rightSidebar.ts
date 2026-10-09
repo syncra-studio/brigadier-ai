@@ -23,7 +23,13 @@ export function setRightSidebarOpen(next: boolean | ((open: boolean) => boolean)
 }
 
 export function selectRightSidebarTab(id: string, tab: RightSidebarTab): void {
-  useRightSidebarState.setState(({ tabs }) => ({ tabs: { ...tabs, [id]: tab } }));
+  useRightSidebarState.setState(({ tabs }) => {
+    if (tab === "files") {
+      const { [id]: _default, ...rest } = tabs;
+      return { tabs: rest };
+    }
+    return { tabs: { ...tabs, [id]: tab } };
+  });
 }
 
 export function isRightSidebarTab(tab: string): tab is RightSidebarTab {
@@ -32,7 +38,7 @@ export function isRightSidebarTab(tab: string): tab is RightSidebarTab {
 
 export function isRightSidebarKey(event: KeyboardEvent, mac: boolean): boolean {
   return (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)
-    && event.altKey && !event.shiftKey && !event.isComposing && event.code === "KeyB";
+    && event.altKey && !event.shiftKey && !event.isComposing && !event.getModifierState?.("AltGraph") && event.code === "KeyB";
 }
 
 /** With an expanded left sidebar, the right one folds first as the window narrows. */
@@ -42,4 +48,18 @@ export function rightSidebarFolds(windowWidth: number, leftOpen: boolean, leftWi
 
 export function rightSidebarToggleLabel(open: boolean): string {
   return open ? "Hide right sidebar" : "Show right sidebar";
+}
+
+/** Deleted sessions leave no preference behind; failed deletions keep theirs. */
+export function forgetRightSidebarTabs(ids: readonly string[]): void {
+  const tabs = { ...useRightSidebarState.getState().tabs };
+  for (const id of ids) delete tabs[id];
+  useRightSidebarState.setState({ tabs });
+}
+
+/** A refreshed catalog is authoritative, including sessions deleted while the app was away. */
+export function pruneRightSidebarTabs(ids: readonly string[]): void {
+  const kept = new Set(ids);
+  const gone = Object.keys(useRightSidebarState.getState().tabs).filter((id) => !kept.has(id));
+  if (gone.length) forgetRightSidebarTabs(gone);
 }

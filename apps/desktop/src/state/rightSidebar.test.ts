@@ -10,7 +10,7 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
 } });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage } });
 const { isRightSidebarKey, rightSidebarFolds, rightSidebarToggleLabel,
-  useRightSidebarState: state, selectRightSidebarTab, setRightSidebarOpen } = await import("./rightSidebar");
+  useRightSidebarState: state, selectRightSidebarTab, setRightSidebarOpen, forgetRightSidebarTabs, pruneRightSidebarTabs } = await import("./rightSidebar");
 
 const key = (change: Partial<KeyboardEvent> = {}) => ({
   code: "KeyB", metaKey: true, ctrlKey: false, altKey: true, shiftKey: false, isComposing: false,
@@ -23,6 +23,7 @@ test("only Alt plus the platform command key toggles the right sidebar", () => {
   for (const change of [{ altKey: false }, { shiftKey: true }, { code: "KeyS" }, { isComposing: true }, { ctrlKey: true }]) {
     assert.equal(isRightSidebarKey(key(change), true), false);
   }
+  assert.equal(isRightSidebarKey(key({ metaKey: false, ctrlKey: true, getModifierState: (modifier) => modifier === "AltGraph" }), false), false);
   assert.equal(isRightSidebarKey(key(), false), false);
   assert.equal(isRightSidebarKey(key({ metaKey: false, ctrlKey: true }), true), false);
 });
@@ -54,6 +55,13 @@ test("open is app-wide, tabs belong to sessions, and both survive rehydration", 
     assert.equal(state.getState().tabs.a, "workers");
     assert.equal(data.has("brigadier.sidebarCollapsed"), false);
     assert.equal(data.has("brigadier.sidebarWidth"), false);
+    selectRightSidebarTab("a", "files");
+    assert.equal(state.getState().tabs.a, undefined);
+    selectRightSidebarTab("c", "workers");
+    forgetRightSidebarTabs(["b"]);
+    assert.deepEqual(state.getState().tabs, { c: "workers" });
+    pruneRightSidebarTabs(["a"]);
+    assert.deepEqual(state.getState().tabs, {});
   } finally {
     delete (globalThis as { window?: unknown }).window;
     if (storage) Object.defineProperty(globalThis, "localStorage", storage);

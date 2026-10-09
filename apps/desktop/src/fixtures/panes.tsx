@@ -1,5 +1,3 @@
-import { SidebarToggle } from "@/app/SidebarToggle";
-import { RightSidebar, RightSidebarContext, RightSidebarToggle } from "@/app/conversation/RightSidebar";
 // oxlint-disable react/refs, brigadier/no-raw-design-values -- Browser fixtures emulate external page styling; the probe exposes pane callbacks for automation.
 /** Production pane components with synthetic shell, webview and worker data. No daemon. */
 import {
@@ -12,6 +10,8 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { SidebarToggle } from "@/app/SidebarToggle";
+import { RightSidebar, RightSidebarContext, RightSidebarToggle } from "@/app/conversation/RightSidebar";
 import {
   TerminalButton,
   SidePanel,

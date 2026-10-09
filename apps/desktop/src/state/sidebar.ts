@@ -52,4 +52,3 @@ export function saveWidth(key: string, width: number | null): void {
     // Storage can be unavailable; the width then lasts until the app quits.
   }
 }
-

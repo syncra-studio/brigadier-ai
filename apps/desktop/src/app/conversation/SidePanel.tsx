@@ -18,7 +18,6 @@ import {
 
 import { BarItem } from "@/app/BarItem";
 import { RightSidebarToggle, useRightSidebar } from "@/app/conversation/RightSidebar";
-import { isRightSidebarTab, type RightSidebarTab } from "@/state/rightSidebar";
 import type { AgentsPanelState } from "@/app/conversation/WorkerChip";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { useSidebar } from "@/components/ui/sidebar";
@@ -26,6 +25,7 @@ import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { takePaneClose } from "@/state/closedPanes";
 import { newBrowserTab, reopenBrowserTab } from "@/state/browsers";
+import { isRightSidebarTab, type RightSidebarTab } from "@/state/rightSidebar";
 import { openReviewTab, reopenTab } from "@/state/sessionTabs";
 import {
   HOME_PLACE,

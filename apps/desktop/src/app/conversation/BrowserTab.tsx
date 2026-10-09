@@ -1,4 +1,3 @@
-import { RightSidebarToggle } from "@/app/conversation/RightSidebar";
 import {
   ArrowLeft,
   ArrowRight,
@@ -13,6 +12,7 @@ import {
 } from "@openai/apps-sdk-ui/components/Icon";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 
+import { RightSidebarToggle } from "@/app/conversation/RightSidebar";
 import {
   TerminalButton,
   SidePanelContext,
