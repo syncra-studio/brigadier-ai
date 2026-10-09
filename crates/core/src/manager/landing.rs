@@ -1303,7 +1303,25 @@ impl SessionManager {
             }
         };
         let reviews = match self.core.board(id).await {
-            Ok(board) => merged_reviews(&board),
+            Ok(board) => {
+                // A merge card the user left open (they asked in words instead) has nothing
+                // left to ask: it goes, so its request doesn't wait on it.
+                let open: Vec<_> = board
+                    .questions
+                    .values()
+                    .filter(|question| {
+                        question.is_open() && matches!(&question.kind, QuestionKind::Merge { .. })
+                    })
+                    .cloned()
+                    .collect();
+                for question in &open {
+                    self.withdraw_question(question).await;
+                }
+                if !open.is_empty() {
+                    self.settle_requests(id).await;
+                }
+                merged_reviews(&board)
+            }
             Err(_) => String::new(),
         };
         self.orchestrator_step(

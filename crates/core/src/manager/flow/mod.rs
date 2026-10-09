@@ -258,6 +258,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "finish_session" => ToolCall::Orchestrator(O::FinishSession(arg(name, args))),
         "propose_merge" => ToolCall::Orchestrator(O::ProposeMerge(arg(name, args))),
         "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
+        "route_follow_up" => ToolCall::Orchestrator(O::RouteFollowUp(arg(name, args))),
         "list_tasks" => ToolCall::Orchestrator(O::ListTasks),
         "settle_step" => ToolCall::Orchestrator(O::SettleStep(arg(name, args))),
         "end_run" => ToolCall::Orchestrator(O::EndRun(arg(name, args))),
