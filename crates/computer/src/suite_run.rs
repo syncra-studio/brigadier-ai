@@ -95,9 +95,15 @@ pub fn launch_fixture(name: &str, args: &[&std::ffi::OsStr]) -> Result<i32> {
         now_ms()
     ));
     let _ = std::fs::remove_file(&pid_file);
-    let st = Command::new("/usr/bin/open")
-        .args(["-n", "-g", "--env"])
-        .arg(format!("FIXTURE_PID_FILE={}", pid_file.display()))
+    let mut open = Command::new("/usr/bin/open");
+    open.args(["-n", "-g", "--env"])
+        .arg(format!("FIXTURE_PID_FILE={}", pid_file.display()));
+    // The display a fixture's window opens on, for the several-displays checks (fixtures that
+    // read it: target-range).
+    if let Ok(n) = std::env::var("BRIGADIER_FIXTURE_SCREEN") {
+        open.arg("--env").arg(format!("FIXTURE_SCREEN={n}"));
+    }
+    let st = open
         .arg(&app)
         .arg("--args")
         .args(args)
@@ -376,18 +382,48 @@ fn web_setup(
             page_title.to_owned()
         }
         WebTarget::Plain => {
+            // A browser as the user runs it, with none of the protocol's background flags. Its
+            // window is made through a one-off protocol connection, so nothing takes the front
+            // (a startup window takes it for up to seconds); the profile sits a level below the
+            // scratch profiles, so no helper adopts its port (`cdp::adoptable`) and the engine
+            // drives it through accessibility only.
             let browser = test_browser()?;
-            let profile = crate::cdp::scratch_profile().map_err(|e| anyhow!("{e}"))?;
-            prep.browser_profile = Some(profile.display().to_string());
+            let scratch = crate::cdp::scratch_profile().map_err(|e| anyhow!("{e}"))?;
+            prep.browser_profile = Some(scratch.display().to_string());
+            let profile = scratch.join("plain");
             let args = vec![
                 format!("--user-data-dir={}", profile.display()),
+                "--remote-debugging-address=127.0.0.1".into(),
+                "--remote-debugging-port=0".into(),
                 "--no-first-run".into(),
                 "--no-default-browser-check".into(),
-                url.clone(),
+                "--no-startup-window".into(),
             ];
-            let (pid, _) =
-                crate::launch::open_plain(desktop, &browser, &args).map_err(|e| anyhow!("{e}"))?;
+            let before: Vec<i32> = desktop.apps()?.iter().map(|a| a.pid).collect();
+            desktop
+                .open_new(&browser, &args)
+                .map_err(|e| anyhow!("{e}"))?;
+            let end = Instant::now() + Duration::from_secs(15);
+            let pid = loop {
+                let fresh = desktop.apps()?.into_iter().find(|a| {
+                    !before.contains(&a.pid)
+                        && a.bundle_path.as_deref().map(|p| p.trim_end_matches('/'))
+                            == Some(browser.trim_end_matches('/'))
+                });
+                if let Some(a) = fresh {
+                    break a.pid;
+                }
+                if Instant::now() > end {
+                    teardown(prep);
+                    bail!("the browser didn't start");
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            };
             prep.pid = pid;
+            let mut b =
+                crate::cdp::Browser::attach(pid, &browser, profile, Duration::from_secs(15))
+                    .map_err(|e| anyhow!("{e}"))?;
+            b.new_window(&url).map_err(|e| anyhow!("{e}"))?;
             page_title.to_owned()
         }
         WebTarget::WebView => {

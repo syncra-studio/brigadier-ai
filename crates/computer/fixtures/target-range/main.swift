@@ -12,6 +12,15 @@
 
 import AppKit
 
+/// `FIXTURE_SCREEN=<n>`: the window opens on display n (`NSScreen.screens` order), near its top
+/// left, for the several-displays checks.
+func placeOnScreen(_ win: NSWindow) {
+  guard let n = ProcessInfo.processInfo.environment["FIXTURE_SCREEN"].flatMap({ Int($0) }),
+        n < NSScreen.screens.count else { return }
+  let v = NSScreen.screens[n].visibleFrame
+  win.setFrameTopLeftPoint(NSPoint(x: v.minX + 40, y: v.maxY - 40))
+}
+
 let logPath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "/tmp/target-range.log"
 FileManager.default.createFile(atPath: logPath, contents: nil)
 let logHandle = FileHandle(forWritingAtPath: logPath)!
@@ -205,6 +214,7 @@ func runGrounding(size: CGFloat) -> Never {
   next.frame = NSRect(x: 10, y: 10, width: 120, height: 30)
   groot.addSubview(next)
   canvas.deal(size: size, rng: &gh.rng); gh.showBoard()
+  placeOnScreen(gw)
   gw.orderBack(nil)
   log("app", "ready", v: String(ProcessInfo.processInfo.processIdentifier))
     withExtendedLifetime(gh) { NSApplication.shared.run() }
@@ -328,6 +338,7 @@ last.identifier = NSUserInterfaceItemIdentifier("last-action")
 root.addSubview(last)
 lastAction = last
 
+placeOnScreen(w)
 w.orderBack(nil)
 
 // A second window, minimised: background pointer events can't reach it.
