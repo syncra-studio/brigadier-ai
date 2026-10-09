@@ -1,5 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Brigadier Dev",
-  "identifier": "ai.brigadier.dev"
+  "identifier": "ai.brigadier.dev",
+  "build": {
+    "beforeDevCommand": "pnpm stage-sidecar --helper-id ai.brigadier.dev.computer-use && pnpm dev",
+    "beforeBuildCommand": "pnpm stage-sidecar --helper-id ai.brigadier.dev.computer-use && pnpm build"
+  }
 }
