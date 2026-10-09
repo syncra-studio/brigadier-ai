@@ -43,7 +43,7 @@ accessibility notification for 50 ms after the effect).
 | T1 | structure text of a typical window (fixture, TextEdit, Finder, a Settings pane) | median ≤ 1,500 tokens, hard page size 6,000 |
 | T2 | screenshot cost | stated in every result as a labelled estimate for the worker's provider; window crop, ≤ 2,000 px per side, ≤ 4,784 Claude visual tokens |
 | T3 | all computer tool definitions together | ≤ 2,500 tokens |
-| E1 | model calls per eval task | ≤ 1.3× the task's reference batch count (the fewest `act` batches a script needs, recorded per task); published agents take 1.4–2.7× |
+| E1 | model calls per eval task | median ≤ 1.3× the task's reference: the scripted solver's tool calls + 2, for one look before acting and one report (amended by the user on 2026-10-09, §9; it was 1.3× the fewest `act` batches) |
 
 Other computer-use tools can't be measured on this machine tonight (their helpers need grants or a sign-in nobody can
 give at night), so the targets are absolute. Phase 4 adds side-by-side runs on macOS as soon as the user grants
@@ -495,7 +495,8 @@ The `Desktop` trait and its capability flags are the seam. The backends slot in 
   scratch Finder folder and Brigadier's dev build on a scratch data dir. Examples: set the slider to 37; tick the
   8 pt checkbox; pick the third nested menu item; find and open row 173; click the red dot on the canvas; write and
   save a file in TextEdit; rename a file in Finder. Each task has a scripted checker. Metrics: success, wrong-target
-  actions, model calls (E1), tokens per step, wall time, focus theft.
+  actions, model calls (E1: model calls ÷ (the scripted solver's tool calls + 2)), tokens per step, wall time,
+  focus theft.
 
 ## 8. Phases
 
@@ -932,11 +933,19 @@ helper bundle's own; a person was using the Mac during every run from about 11:3
   the app to the front. The one failure is Claude run 3's menu trial: the worker read "Pick Targets" as the menu's
   name and read the menu bar through a script, which the shortcut audit fails. The task's wording was fixed; a
   menu-only check with the new wording passed in 1 batch and 3 calls.
-- **E1: MISSED as written.** Median model calls per task over its reference batches, pooled: Claude 4.0, Codex 8.0,
-  against ≤ 1.3. Per run: Claude 4.0, 5.0, 4.5; Codex 10.0, 10.0 and 6.0. Run 3 had argument errors that show a
-  well-formed call, and the call shapes were in the Codex brief. The gate counts calls the reference doesn't make: a
-  worker's one look before it acts and its one report after are 2 calls a script never needs. Measured against
-  reference + 2 (proposed, not adopted: the user decides), the medians are Claude 1.0 and Codex 2.25 (1.75 in run 3).
+- **E1, as amended (model calls ÷ (scripted tool calls + 2) ≤ 1.3): Claude PASSES, Codex MISSES.** Pooled
+  medians: Claude 1.0, Codex 2.25. Per run: Claude 1.0, 1.25, 1.25; Codex 2.5, 2.5, 1.75. Run 3 had argument errors
+  that show a well-formed call, and the call shapes were in the Codex brief. The gate as first written, calls per
+  reference batch, missed for both: Claude 4.0, Codex 8.0.
+- **Where Codex's extra calls go** (run 3: 128 calls over 18 trials):
+  - 13 rejected `submit_report` calls. Codex sends `done_when` as a list of objects (criterion, status, evidence)
+    or `changes` as a string. The error names a serde type ("data did not match any variant of untagged enum
+    Lines") instead of showing the call, so it guesses again, 2–3 tries per report.
+  - 16 calls that run no tool: code-mode `exec` calls that list `ALL_TOOLS` to read a tool's schema, its report
+    tool's included, or that only print.
+  - 12 computer calls rejected for their arguments.
+  - Without those 41 calls, run 3's median would be about 1.25, inside the gate. That is an estimate, at one model
+    call per tool call, which is how Codex worked here.
 - **P3: PASS.** On the router's Claude pick (Opus, effort medium; the cheapest image-capable model it would choose
   for Operate), 50/50 trials at 8, 12, 16 and 24 pt, with no wrong targets and no misses. The largest error was
   1.4 pt, and the Wilson lower bound per size is 0.929. That is an empirical pass, not a statistical proof of ≥ 98%.
@@ -968,8 +977,13 @@ helper bundle's own; a person was using the Mac during every run from about 11:3
     free.
 
 **Not done or open**
-- **E1's gate.** Either keep it and cut calls (one look and one report are the floor for a worker that has to say
-  what it saw), or adopt reference + 2. The user decides.
+- **Codex's E1.** The fixes, in order of calls saved:
+  - `submit_report` accepts what Codex sends: a list of objects or a string wherever a list of lines is asked for.
+    Its argument errors show a well-formed call, as the computer tools' do;
+  - the Codex Operate brief gives `submit_report`'s call shape beside the computer tools', and says the shapes are
+    complete, so it never needs to list `ALL_TOOLS`;
+  - the computer tools accept the remaining argument spellings Codex used.
+  Then one Codex run of the suite, to check E1 against the gate.
 - **The six dev trials**, once the dev build's window is open again.
 - **The comparisons**, once tools A–C are turned on and granted.
 - **The helper bundle's own grants.** Every live run used the terminal's inherited grants.
@@ -1049,6 +1063,9 @@ Decided in this plan:
   Full access through the GUI.
 - **Later** (user, when awake): one-time grants for the helper app (Accessibility, Screen Recording); whether other
   computer-use tools may be granted for the Phase 6 comparison.
+- **E1 amended (user, 2026-10-09):** the reference is the scripted solver's tool calls + 2, for one look before
+  acting and one report. The gate stays a median ≤ 1.3. The first gate, 1.3× the fewest `act` batches, counted those
+  two calls against every worker.
 
 ## 10. Codex's reviews
 

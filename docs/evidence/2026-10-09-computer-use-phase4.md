@@ -13,7 +13,7 @@ input to a window it didn't open.
 | Done when | Result |
 |---|---|
 | The suite runs end to end on Claude and Codex workers, 3 runs per provider | **Partly.** Claude 20/20, 20/20, 17/18; Codex 20/20, 18/18, 18/18. Six dev-build trials didn't run (the dev-build tasks of Codex runs 2–3 and Claude run 3): the dev build's window had been closed, and every way to reopen it takes the front |
-| E1 meets its gate (≤ 1.3× the reference batches) | **Missed.** Pooled medians: Claude 4.0, Codex 8.0. Against the proposed reference + 2: Claude 1.0, Codex 2.25 |
+| E1 meets its gate (as amended by the user: model calls ÷ (scripted tool calls + 2), median ≤ 1.3) | **Claude passes (1.0); Codex misses (2.25).** Pooled medians. Codex's causes and fixes are under E1 |
 | P3 meets its gate (≥ 98% at ≥ 12 pt, ≥ 95% at 8 pt) | **Pass.** 50/50 at each of 8, 12, 16 and 24 pt (Opus, effort medium) |
 | Total provider usage per completed task is reported | **Pass.** Table below |
 | A GUI-heavy request in a dev session is handed to an `Operate` worker | **Pass.** Delegated as `kind: "operate"`, done in 114 s, the whole request's end state checked |
@@ -28,14 +28,14 @@ counted from the transcripts.
 
 **Per run**
 
-| run | model | passed | E1 median | E1+2 median | F1 suite changes |
+| run | model | passed | E1 median (gate ≤ 1.3) | calls per reference batch | F1 suite changes |
 |---|---|---|---|---|---|
-| claude-1 | Opus 5.5, medium | 20/20 | 4.0 | 1.0 | 0 |
-| claude-2 | Opus 5.5, medium | 20/20 | 5.0 | 1.25 | 0 |
-| claude-3 | Opus 5.5, medium | 17/18 | 4.5 | 1.25 | 0 |
-| codex-1 | gpt-6.1-sol, medium | 20/20 | 10.0 | 2.5 | 0 |
-| codex-2 | gpt-6.1-sol, medium | 18/18 | 10.0 | 2.5 | 1 (see F1) |
-| codex-3 | gpt-6.1-sol, medium | 18/18 | 6.0 | 1.75 | 0 |
+| claude-1 | Opus 5.5, medium | 20/20 | 1.0 pass | 4.0 | 0 |
+| claude-2 | Opus 5.5, medium | 20/20 | 1.25 pass | 5.0 | 0 |
+| claude-3 | Opus 5.5, medium | 17/18 | 1.25 pass | 4.5 | 0 |
+| codex-1 | gpt-6.1-sol, medium | 20/20 | 2.5 miss | 10.0 | 0 |
+| codex-2 | gpt-6.1-sol, medium | 18/18 | 2.5 miss | 10.0 | 1 (see F1) |
+| codex-3 | gpt-6.1-sol, medium | 18/18 | 1.75 miss | 6.0 | 0 |
 
 Runs 1–2 used the build before `283e7747` (argument errors that show a well-formed call, call shapes in the Codex
 brief), `9c53bd87` (menu misses name what the level holds) and `11607541` (the menu task reworded). Run 3 used the
@@ -77,19 +77,33 @@ build after them, so Codex's E1 is given per run.
 
 **Pooled per provider, and usage per completed task** (tokens: uncached input / cache read / cache write / output)
 
-| provider | runs | passed | median calls | E1 median | E1+2 median | median wall s | worker per completed task | thread per completed task |
+| provider | runs | passed | median calls | E1 median (gate ≤ 1.3) | calls per reference batch | median wall s | worker per completed task | thread per completed task |
 |---|---|---|---|---|---|---|---|---|
-| Claude | 3 | 57/58 | 5 | 4.0 | 1.0 | 18.1 | 12 / 115,913 / 8,137 / 1,106 | 8 / 136,506 / 1,547 / 377 |
-| Codex | 3 | 56/56 | 10 | 8.0 | 2.25 | 51.2 | 22,133 / 136,087 / 0 / 724 | 6 / 104,842 / 1,291 / 346 |
+| Claude | 3 | 57/58 | 5 | 1.0 pass | 4.0 | 18.1 | 12 / 115,913 / 8,137 / 1,106 | 8 / 136,506 / 1,547 / 377 |
+| Codex | 3 | 56/56 | 10 | 2.25 miss | 8.0 | 51.2 | 22,133 / 136,087 / 0 / 724 | 6 / 104,842 / 1,291 / 346 |
 
 The worker usage is the Operate worker's own. The thread usage is the delegating thread's turn around the trial.
 
 ## E1
 
-The gate (§7) is ≤ 1.3× the reference batch count. A worker can't meet it on a one-batch task: it looks once before
-it acts and reports once after, and a script makes neither call. So the medians are 4.0 (Claude) and 8.0 (Codex),
-not ≤ 1.3. **Proposed, not adopted:** measure against reference + 2. On that measure the medians are Claude 1.0 and
-Codex 2.25 (1.75 in run 3). The gate is unchanged until the user decides.
+**The gate, amended by the user on 2026-10-09:** model calls ÷ (the scripted solver's tool calls + 2), median ≤ 1.3.
+The 2 are the worker's look before it acts and its report after, which a script never makes. The first gate, 1.3×
+the fewest `act` batches, counted them against every worker: by it, Claude was 4.0 and Codex 8.0.
+
+- **Claude passes:** 1.0 pooled (1.0, 1.25, 1.25 per run).
+- **Codex misses:** 2.25 pooled (2.5, 2.5, 1.75 per run).
+
+**Where Codex's extra calls go.** Run 3 used the build with call shapes in the brief: 128 calls over 18 trials, read
+from its transcripts.
+
+| cause | calls | the fix |
+|---|---|---|
+| `submit_report` rejected: `done_when` sent as a list of objects (criterion, status, evidence), or `changes` as a string; the error names a serde type, not the call, so it guesses 2–3 times | 13 | accept a list of objects or a string wherever a list of lines is asked for, and show a well-formed call in the error, as the computer tools do |
+| code-mode `exec` calls that run no tool: listing `ALL_TOOLS` to read a schema, its report tool's included, or only printing | 16 | give `submit_report`'s call shape in the Codex Operate brief beside the computer tools', and say the shapes are complete |
+| computer calls rejected for their arguments | 12 | accept the argument spellings Codex used |
+
+Without those 41 calls, run 3's median would be about 1.25, inside the gate. That is an estimate, at one model call
+per tool call, which is how Codex worked here. It needs a Codex run after the fixes to count.
 
 ## P3: grounding
 
