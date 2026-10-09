@@ -3,17 +3,18 @@
 //!   brigadier-computer apps
 //!   brigadier-computer observe <window id or title> [always|never|auto]
 //!   brigadier-computer run <script.json> [--out <dir>]
-//!   brigadier-computer serve --socket <path> --token-file <path>
+//!   brigadier-computer serve --socket <path> --token-file <path> [--parent <pid>]
 //!   brigadier-computer bench [--out <dir>] [--quick]
 //!
-//! Workers reach the engine through the daemon instead (docs/COMPUTER-USE-PLAN.md §4.1).
+//! `serve` is the long-lived helper the daemon talks to; the rest is a development and fixture
+//! harness. Workers reach the engine through the daemon (docs/COMPUTER-USE-PLAN.md §4.1).
 
 #[cfg(target_os = "macos")]
 fn main() -> anyhow::Result<()> {
     use std::path::PathBuf;
 
     use anyhow::{Context, anyhow, bail};
-    use brigadier_computer::{bench, harness};
+    use brigadier_computer::{bench, harness, helper};
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |name: &str| {
@@ -22,6 +23,24 @@ fn main() -> anyhow::Result<()> {
             .and_then(|i| args.get(i + 1))
             .map(PathBuf::from)
     };
+    // The helper answers without grants, so the user can be walked through giving them.
+    if args.first().map(String::as_str) == Some("serve") {
+        let socket = flag("--socket").context("--socket <path>")?;
+        let token_file = flag("--token-file").context("--token-file <path>")?;
+        let parent = match flag("--parent") {
+            Some(p) => Some(
+                p.to_str()
+                    .and_then(|s| s.parse::<i32>().ok())
+                    .context("--parent <pid>")?,
+            ),
+            None => None,
+        };
+        return brigadier_computer::helper::serve(helper::Options {
+            socket,
+            token_file,
+            parent,
+        });
+    }
     let (ax, screen) = brigadier_computer::macos::permissions();
     if !ax || !screen {
         bail!(
@@ -60,11 +79,6 @@ fn main() -> anyhow::Result<()> {
                 &harness::out_dir(flag("--out"), "run"),
             )?;
         }
-        Some("serve") => {
-            let socket = flag("--socket").context("--socket <path>")?;
-            let token = flag("--token-file").context("--token-file <path>")?;
-            harness::serve(harness::new_engine(desktop()?), &socket, &token)?;
-        }
         Some("bench") => {
             let out = flag("--out").unwrap_or_else(|| PathBuf::from("target/computer-bench"));
             let quick = args.iter().any(|a| a == "--quick");
@@ -75,7 +89,7 @@ fn main() -> anyhow::Result<()> {
         }
         _ => {
             eprintln!(
-                "usage: brigadier-computer apps | observe <window> [always|never|auto] | run <script> | serve --socket <p> --token-file <p> | bench [--out <dir>] [--quick]"
+                "usage: brigadier-computer apps | observe <window> [always|never|auto] | run <script> | serve --socket <p> --token-file <p> [--parent <pid>] | bench [--out <dir>] [--quick]"
             );
             std::process::exit(2);
         }

@@ -42,7 +42,11 @@ objc2-core-foundation = { version = "0.3.2", optional = true }
 objc2-core-graphics = { version = "0.3.2", optional = true }
 objc2-application-services = { version = "0.3.2", optional = true }
 objc2-foundation = { optional = true, version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSError", "NSURL", "NSEnumerator"] }
-objc2-app-kit = { optional = true, version = "0.3.2", default-features = false, features = ["std", "libc", "NSWorkspace", "NSRunningApplication", "NSEvent", "NSGraphics"] }
+objc2-app-kit = { optional = true, version = "0.3.2", default-features = false, features = [
+  "std", "libc", "block2", "objc2-core-foundation", "NSWorkspace", "NSRunningApplication", "NSEvent", "NSGraphics",
+  "NSApplication", "NSResponder", "NSView", "NSControl", "NSButton", "NSImage", "NSMenu",
+  "NSMenuItem", "NSStatusBar", "NSStatusItem", "NSStatusBarButton",
+] }
 objc2-screen-capture-kit = { optional = true, version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-core-foundation", "objc2-core-graphics", "SCShareableContent", "SCScreenshotManager", "SCStream"] }
 
 [lints]

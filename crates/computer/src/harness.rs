@@ -1,19 +1,13 @@
 //! The development and fixture harness behind `brigadier-computer` (§4.1). Workers never reach
 //! the engine this way; from Phase 2 their calls go through the daemon's broker.
 
-use std::io::{Read, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
 use crate::action::{ActRequest, Action, ObserveRequest, Reply, ZoomRequest};
 use crate::block::BlockList;
-use crate::cancel::CancelToken;
 use crate::desktop::Desktop;
 use crate::engine::Engine;
 use crate::geom::{Point, Provider, Rect};
@@ -194,175 +188,6 @@ fn predicted<D: Desktop>(
             Some((t.to_image(p), None))
         }
         _ => None,
-    }
-}
-
-// ── serve ──────────────────────────────────────────────────────────────────────────────────
-
-fn read_frame(s: &mut UnixStream) -> std::io::Result<Vec<u8>> {
-    let mut len = [0u8; 4];
-    s.read_exact(&mut len)?;
-    let n = u32::from_be_bytes(len) as usize;
-    if n > 16 << 20 {
-        return Err(std::io::Error::other("frame too large"));
-    }
-    let mut buf = vec![0; n];
-    s.read_exact(&mut buf)?;
-    Ok(buf)
-}
-
-fn write_frame(s: &mut UnixStream, b: &[u8]) -> std::io::Result<()> {
-    s.write_all(&(b.len() as u32).to_be_bytes())?;
-    s.write_all(b)
-}
-
-struct Job {
-    worker: String,
-    op: String,
-    req: Value,
-    /// Taken when the request arrived, so a stop sent while it waits in the queue ends it.
-    queued: CancelToken,
-    reply: mpsc::Sender<(Value, Option<Vec<u8>>)>,
-}
-
-fn random_token() -> Result<String> {
-    let mut b = [0u8; 24];
-    std::fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
-    Ok(b.iter().map(|x| format!("{x:02x}")).collect())
-}
-
-/// `serve`: frames are a 4-byte big-endian length and JSON; an image follows its reply as one
-/// binary frame. Every request carries the token from the token file. `stop` is answered on
-/// the connection's own thread, so it never waits behind a running batch (§4.7).
-pub fn serve<D: Desktop>(mut engine: Engine<D>, socket: &Path, token_file: &Path) -> Result<()> {
-    let dir = socket.parent().context("socket path")?;
-    std::fs::create_dir_all(dir)?;
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-    let _ = std::fs::remove_file(socket);
-    let token = random_token()?;
-    std::fs::write(token_file, &token)?;
-    std::fs::set_permissions(token_file, std::fs::Permissions::from_mode(0o600))?;
-    let listener = UnixListener::bind(socket)?;
-    let (tx, rx) = mpsc::channel::<Job>();
-    let gens = engine.gens.clone();
-    std::thread::spawn(move || {
-        for conn in listener.incoming() {
-            let Ok(mut conn) = conn else { continue };
-            let tx = tx.clone();
-            let token = token.clone();
-            let gens = gens.clone();
-            std::thread::spawn(move || {
-                while let Ok(frame) = read_frame(&mut conn) {
-                    let Ok(msg) = serde_json::from_slice::<Value>(&frame) else {
-                        break;
-                    };
-                    if msg.get("token").and_then(Value::as_str) != Some(token.as_str()) {
-                        let _ = write_frame(&mut conn, br#"{"ok":false,"error":"bad token"}"#);
-                        break;
-                    }
-                    let worker = msg
-                        .get("worker")
-                        .and_then(Value::as_str)
-                        .unwrap_or("dev")
-                        .to_owned();
-                    let op = msg
-                        .get("op")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_owned();
-                    if op == "stop" {
-                        gens.stop_all();
-                        let _ = write_frame(&mut conn, br#"{"ok":true,"text":"stopped\n"}"#);
-                        continue;
-                    }
-                    let (rtx, rrx) = mpsc::channel();
-                    let req = msg.get("req").cloned().unwrap_or(Value::Null);
-                    // Its deadline is set again when the request starts.
-                    let queued = gens.token(&worker, Duration::ZERO);
-                    if tx
-                        .send(Job {
-                            worker,
-                            op,
-                            req,
-                            queued,
-                            reply: rtx,
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                    let Ok((v, img)) = rrx.recv() else { break };
-                    let Ok(bytes) = serde_json::to_vec(&v) else {
-                        break;
-                    };
-                    if write_frame(&mut conn, &bytes).is_err() {
-                        break;
-                    }
-                    if let Some(img) = img
-                        && write_frame(&mut conn, &img).is_err()
-                    {
-                        break;
-                    }
-                }
-            });
-        }
-    });
-    eprintln!("serving on {}", socket.display());
-    // The engine stays on this thread: its accessibility objects and run loop live here.
-    while let Ok(job) = rx.recv() {
-        let answer = handle(&mut engine, &job.worker, &job.op, job.req, &job.queued);
-        let _ = job.reply.send(answer);
-    }
-    Ok(())
-}
-
-fn handle<D: Desktop>(
-    engine: &mut Engine<D>,
-    worker: &str,
-    op: &str,
-    mut req: Value,
-    queued: &CancelToken,
-) -> (Value, Option<Vec<u8>>) {
-    if let Err(e) = resolve_window(engine, &mut req) {
-        return (json!({"ok": false, "error": e.to_string()}), None);
-    }
-    let reply = match op {
-        "apps" => engine.apps_text().map(|text| Reply {
-            text,
-            image: None,
-            results: Vec::new(),
-        }),
-        "observe" => match serde_json::from_value::<ObserveRequest>(req) {
-            Ok(r) => engine.observe(worker, &r),
-            Err(e) => return (json!({"ok": false, "error": e.to_string()}), None),
-        },
-        "act" => match serde_json::from_value::<ActRequest>(req) {
-            Ok(r) => engine.act_from(worker, &r, Some(queued)),
-            Err(e) => return (json!({"ok": false, "error": e.to_string()}), None),
-        },
-        "zoom" => match serde_json::from_value::<ZoomRequest>(req) {
-            Ok(r) => engine.zoom(worker, &r),
-            Err(e) => return (json!({"ok": false, "error": e.to_string()}), None),
-        },
-        other => {
-            return (
-                json!({"ok": false, "error": format!("unknown op {other}")}),
-                None,
-            );
-        }
-    };
-    match reply {
-        Ok(r) => {
-            let image = r.image.as_ref().map(|i| json!({"id": i.id, "width": i.width, "height": i.height, "tokens": i.tokens, "bytes": i.png.len()}));
-            (
-                json!({"ok": true, "text": r.text, "results": r.results, "image": image}),
-                r.image.map(|i| i.png),
-            )
-        }
-        Err(e) => (
-            json!({"ok": false, "error": e.to_string(), "code": e.code}),
-            None,
-        ),
     }
 }
 

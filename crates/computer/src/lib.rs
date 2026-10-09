@@ -13,6 +13,8 @@ pub mod error;
 pub mod geom;
 #[cfg(unix)]
 pub mod harness;
+#[cfg(all(target_os = "macos", feature = "engine"))]
+pub mod helper;
 pub mod record;
 pub mod redact;
 pub mod tree;
