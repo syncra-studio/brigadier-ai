@@ -13,6 +13,14 @@ use crate::engine::Engine;
 use crate::geom::{Point, Provider, Rect};
 use crate::redact::Rgba;
 
+/// Resolves `"window": "launched"` to the first window the last launch step opened.
+fn launched_window(v: &mut Value, launched: Option<u32>) -> Result<()> {
+    if v.get("window").and_then(Value::as_str) == Some("launched") {
+        v["window"] = json!(launched.ok_or_else(|| anyhow!("no launch opened a window"))?);
+    }
+    Ok(())
+}
+
 /// Resolves `"window": "<title>"` to a window id.
 pub fn resolve_window<D: Desktop>(engine: &mut Engine<D>, v: &mut Value) -> Result<()> {
     if let Some(title) = v.get("window").and_then(Value::as_str).map(str::to_owned) {
@@ -85,10 +93,12 @@ pub fn run_script<D: Desktop>(engine: &mut Engine<D>, script: &Value, out: &Path
     }
     let mut last_full: Option<(String, Rgba)> = None;
     let mut annotated: Option<Rgba> = None;
+    let mut launched: Option<u32> = None;
     for (i, step) in steps.iter().enumerate() {
         println!("── step {} ──", i + 1);
         if let Some(o) = step.get("observe") {
             let mut o = o.clone();
+            launched_window(&mut o, launched)?;
             resolve_window(engine, &mut o)?;
             let req: ObserveRequest = serde_json::from_value(o)?;
             let reply = engine.observe(&worker, &req).map_err(|e| anyhow!("{e}"))?;
@@ -100,6 +110,7 @@ pub fn run_script<D: Desktop>(engine: &mut Engine<D>, script: &Value, out: &Path
             }
         } else if let Some(a) = step.get("act") {
             let mut a = a.clone();
+            launched_window(&mut a, launched)?;
             resolve_window(engine, &mut a)?;
             let req: ActRequest = serde_json::from_value(a)?;
             // Mark where each action is predicted to land, before it runs.
@@ -122,6 +133,7 @@ pub fn run_script<D: Desktop>(engine: &mut Engine<D>, script: &Value, out: &Path
                 "launched {} pid {} (new process: {}) windows {:?}",
                 o.app.name, o.app.pid, o.new_process, o.new_windows
             );
+            launched = o.new_windows.first().copied();
         } else if let Some(z) = step.get("zoom") {
             let req: ZoomRequest = serde_json::from_value(z.clone())?;
             let reply = engine.zoom(&worker, &req).map_err(|e| anyhow!("{e}"))?;

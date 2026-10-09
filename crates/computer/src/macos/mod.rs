@@ -401,6 +401,10 @@ impl Desktop for MacDesktop {
     }
 
     fn apps(&mut self) -> CuResult<Vec<AppInfo>> {
+        // The workspace's list of running apps only updates while this thread's run loop
+        // runs: without a turn, a long-lived helper never sees an app started after it read
+        // the list once.
+        self.pump(Duration::ZERO);
         let ws = NSWorkspace::sharedWorkspace();
         let front = ws.frontmostApplication().map(|a| a.processIdentifier());
         let windows = Self::window_list(
