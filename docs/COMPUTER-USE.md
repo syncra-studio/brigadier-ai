@@ -74,8 +74,8 @@ tools/open-dev-app.sh /tmp/my-scratch          # or another data folder
 ## Safety
 
 - **Some apps are never touched.** Workers can't see or use password managers, Keychain Access, the system's
-  password and security prompts, or the Privacy & Security, Users & Groups, Passwords and Login Items settings.
-  They can't use terminal windows they didn't open, or the Brigadier you're using.
+  password and security prompts, or the Privacy & Security settings (each of its lists too, such as Device Control
+  and Data Access), Users & Groups, Passwords and Login Items. They can't use terminal windows they didn't open, or the Brigadier you're using.
 - **Passwords stay hidden.** A worker never reads a password field's contents, and Brigadier refuses to type or
   paste while a password field has the focus.
 - **You come first.** If you're typing or clicking in the window a worker wants to change, it waits until you

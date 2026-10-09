@@ -428,7 +428,9 @@ comes from limits that need nobody awake.
 - **Hard block list**, enforced in the helper, not the prompt: the target can't be observed or acted on.
   - Password managers: 1Password, Bitwarden, Dashlane, KeePassXC, LastPass, Apple Passwords.
   - Keychain Access, and the system's authentication and security-agent dialogs.
-  - The Privacy & Security, Users & Groups, Passwords and Login Items panes of System Settings.
+  - The Privacy & Security, Users & Groups, Passwords and Login Items panes of System Settings. On macOS 27 each
+    privacy list (Device Control and Data Access, Screen & System Audio Recording, ...) is titled by its own name,
+    so those names are listed too, and the process that draws them is blocked by its bundle id.
   - Terminal-type apps (Terminal, iTerm2, cmux, Ghostty, Warp, Alacritty, kitty, WezTerm) unless the session
     launched that window.
   - The Brigadier instance that hosts the session (its pid and bundle path) and the installed
