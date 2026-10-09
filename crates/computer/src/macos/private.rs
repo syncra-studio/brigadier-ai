@@ -27,6 +27,11 @@ type GetFront = unsafe extern "C" fn(*mut Psn) -> i32;
 type SetWindowLocation = unsafe extern "C" fn(*const c_void, CGPoint);
 type AxGetWindow = unsafe extern "C" fn(*const c_void, *mut u32) -> i32;
 type GetProcessForPid = unsafe extern "C" fn(libc::pid_t, *mut Psn) -> i32;
+type SetFront = unsafe extern "C" fn(*const Psn, u32, u32) -> i32;
+type GetProcessPid = unsafe extern "C" fn(*const Psn, *mut libc::pid_t) -> i32;
+
+/// `_SLPSSetFrontProcessWithOptions`'s mode for a front change the user asked for.
+const FRONT_USER_GENERATED: u32 = 0x200;
 
 pub struct Private {
     post_record: Option<PostRecord>,
@@ -34,6 +39,8 @@ pub struct Private {
     set_window_location: Option<SetWindowLocation>,
     ax_get_window: Option<AxGetWindow>,
     get_process_for_pid: Option<GetProcessForPid>,
+    set_front: Option<SetFront>,
+    get_process_pid: Option<GetProcessPid>,
 }
 
 const SKYLIGHT: &CStr = c"/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight";
@@ -87,7 +94,14 @@ impl Private {
                         std::mem::transmute::<*mut c_void, SetWindowLocation>(p)
                     })
                 },
+                set_front: {
+                    let p = from_sky(sym(sky, c"_SLPSSetFrontProcessWithOptions"));
+                    // SAFETY: as in `bind!`.
+                    (!p.is_null())
+                        .then(|| unsafe { std::mem::transmute::<*mut c_void, SetFront>(p) })
+                },
                 ax_get_window: bind!(any, c"_AXUIElementGetWindow", AxGetWindow),
+                get_process_pid: bind!(any, c"GetProcessPID", GetProcessPid),
                 get_process_for_pid: bind!(any, c"GetProcessForPID", GetProcessForPid),
             }
         })
@@ -128,6 +142,27 @@ impl Private {
         let mut psn = Psn::default();
         // SAFETY: `psn` is a valid out pointer.
         (unsafe { f(&mut psn) } == 0).then_some(psn)
+    }
+
+    /// Brings a process to the front through the window server, with `window` (0: the app's
+    /// own choice) as its key window: the foreground rung's raise and its give-back. The
+    /// system's activation calls are declined from a background process.
+    pub fn set_front(&self, pid: i32, window: u32) -> bool {
+        let (Some(f), Some(psn)) = (self.set_front, self.psn(pid)) else {
+            return false;
+        };
+        // SAFETY: `psn` is a valid serial number read just now.
+        unsafe { f(&psn, window, FRONT_USER_GENERATED) == 0 }
+    }
+
+    /// The pid of the window server's front process. Fresh on any thread, where AppKit's
+    /// frontmost app updates only on a running main run loop.
+    pub fn front_pid(&self) -> Option<i32> {
+        let f = self.get_process_pid?;
+        let psn = self.server_front()?;
+        let mut pid: libc::pid_t = 0;
+        // SAFETY: `psn` was just read; `pid` is a valid out pointer.
+        (unsafe { f(&psn, &mut pid) } == 0 && pid > 0).then_some(pid)
     }
 
     pub fn psn(&self, pid: i32) -> Option<Psn> {

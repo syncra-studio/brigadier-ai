@@ -152,6 +152,26 @@ impl MacDesktop {
         })
     }
 
+    /// Brings `pid` to the front (with `window` key when not 0) and waits until it is: through
+    /// the window server, else accessibility. A background process's activation calls are
+    /// declined (measured 2026-10-09: `AXFrontmost` reported success and nothing moved).
+    fn front(&mut self, pid: i32, window: u32) -> CuResult<()> {
+        if !Private::get().set_front(pid, window) {
+            AxEl::app(pid).set("AXFrontmost", CFBoolean::new(true))?;
+        }
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline {
+            if front_pid() == Some(pid) {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        err(
+            ErrorCode::Failed,
+            format!("pid {pid} didn't come to the front"),
+        )
+    }
+
     fn ax_window(&mut self, w: &WindowInfo) -> CuResult<AxEl> {
         if let Some(el) = self.ax_windows.get(&w.id) {
             return Ok(el.clone());
@@ -581,10 +601,7 @@ impl Desktop for MacDesktop {
     }
 
     fn user_focus(&mut self) -> UserFocus {
-        let front = NSWorkspace::sharedWorkspace()
-            .frontmostApplication()
-            .map(|a| a.processIdentifier())
-            .unwrap_or(0);
+        let front = front_pid().unwrap_or(0);
         let frontmost_window = (front != 0)
             .then(|| AxEl::app(front).element("AXFocusedWindow"))
             .flatten()
@@ -605,11 +622,13 @@ impl Desktop for MacDesktop {
     }
 
     fn idle_source(&self) -> Arc<dyn Fn() -> f64 + Send + Sync> {
-        // The HID system's state counts the hardware only: events this crate posts to an app
-        // don't reset it. `!0` is the system's "any input" event type.
+        // The combined session state: events this crate posts to one app don't reset it,
+        // where the HID system's state (and IOHIDSystem's HIDIdleTime) do, measured 2026-10-09:
+        // three background clicks took both to 0.1 s while this stayed at hours. `!0` is the
+        // system's "any input" event type.
         Arc::new(|| {
             CGEventSource::seconds_since_last_event_type(
-                CGEventSourceStateID::HIDSystemState,
+                CGEventSourceStateID::CombinedSessionState,
                 CGEventType(!0),
             )
         })
@@ -617,32 +636,32 @@ impl Desktop for MacDesktop {
 
     fn raise(&mut self, w: &WindowInfo) -> CuResult<()> {
         let el = self.ax_window(w)?;
-        if el.bool("AXMinimized") == Some(true) {
+        let was_minimized = el.bool("AXMinimized") == Some(true);
+        if was_minimized {
             el.set("AXMinimized", CFBoolean::new(false))?;
         }
         el.perform("AXRaise")?;
         let _ = el.set("AXMain", CFBoolean::new(true));
-        self.activate(w.pid)
+        self.front(w.pid, w.id)?;
+        if was_minimized {
+            // Events sent while the window flies out of the Dock are lost: wait until it is on
+            // screen and its frame holds still.
+            let deadline = Instant::now() + Duration::from_millis(1500);
+            let mut last: Option<Rect> = None;
+            while Instant::now() < deadline {
+                let now = self.window(w.id)?;
+                if now.on_screen && !now.minimized && last == Some(now.frame) {
+                    return Ok(());
+                }
+                last = Some(now.frame);
+                std::thread::sleep(Duration::from_millis(40));
+            }
+        }
+        Ok(())
     }
 
     fn activate(&mut self, pid: i32) -> CuResult<()> {
-        // Through accessibility: the system lets a background process bring another app to
-        // the front this way, where its activation calls would be declined.
-        AxEl::app(pid).set("AXFrontmost", CFBoolean::new(true))?;
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while Instant::now() < deadline {
-            let front = NSWorkspace::sharedWorkspace()
-                .frontmostApplication()
-                .map(|a| a.processIdentifier());
-            if front == Some(pid) {
-                return Ok(());
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        err(
-            ErrorCode::Failed,
-            format!("pid {pid} didn't come to the front"),
-        )
+        self.front(pid, 0)
     }
 
     fn minimize(&mut self, w: &WindowInfo) -> CuResult<()> {
@@ -677,6 +696,15 @@ impl Desktop for MacDesktop {
             format!("couldn't open it: {}", why.trim()),
         )
     }
+}
+
+/// The frontmost app's pid: the window server's, else AppKit's.
+fn front_pid() -> Option<i32> {
+    Private::get().front_pid().or_else(|| {
+        NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .map(|a| a.processIdentifier())
+    })
 }
 
 /// The active displays' bounds, in global points.

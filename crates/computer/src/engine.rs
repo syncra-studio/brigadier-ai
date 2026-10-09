@@ -73,6 +73,11 @@ pub struct Engine<D: Desktop> {
     pub records: Vec<ActionRecord>,
     /// The password fields of the window observed last, painted over in the action log's image.
     last_secure: (u32, Vec<Rect>),
+    /// Whether the foreground rung may be used; the bench turns it off to measure refusals.
+    pub foreground: bool,
+    /// Set while the foreground rung acts: pointer events still make the window key first, as
+    /// a window just raised may not be yet.
+    raised: bool,
 }
 
 /// Roles whose ordinary click is the element's press action.
@@ -102,6 +107,8 @@ impl<D: Desktop> Engine<D> {
             next_image: 1,
             records: Vec::new(),
             last_secure: (0, Vec::new()),
+            foreground: true,
+            raised: false,
         }
     }
 
@@ -655,6 +662,7 @@ impl<D: Desktop> Engine<D> {
             let r = match self.act_one(worker, req.window, index, action, &cancel, &mut guard) {
                 Err(e)
                     if e.code == ErrorCode::BackgroundUnavailable
+                        && self.foreground
                         && !matches!(action, Action::Wait { .. }) =>
                 {
                     self.foreground(worker, req.window, index, action, &cancel, &mut guard, e)
@@ -768,7 +776,7 @@ impl<D: Desktop> Engine<D> {
         let caps = self.desktop.capabilities();
         // Activation only for a background app: a defocus afterwards would otherwise
         // deactivate the user's own frontmost app.
-        let activate = caps.synthetic_activation && !target_is_front;
+        let activate = caps.synthetic_activation && (!target_is_front || self.raised);
         let pointer_rung = if activate {
             Rung::BackgroundActivated
         } else {
@@ -1065,15 +1073,25 @@ impl<D: Desktop> Engine<D> {
         // Checked right before raising, and between every two events after.
         fg.check()?;
         let raised = self.desktop.raise(&w);
+        self.raised = true;
         let r = raised.and_then(|()| self.act_one(worker, window, index, action, &fg, guard));
-        // Give the front back, unless the user took it meanwhile.
+        self.raised = false;
+        // Put things back, unless the user moved on to another app meanwhile: the front to
+        // their app, the window back to the Dock. A failed raise may have done half of it.
         let now = self.desktop.user_focus();
-        let ours = now.frontmost_pid == w.pid;
+        let user_moved =
+            now.frontmost_pid != w.pid && now.frontmost_pid != user_before.frontmost_pid;
         let mut gave_back = false;
-        if ours && user_before.frontmost_pid != w.pid && user_before.frontmost_pid != 0 {
-            gave_back = self.desktop.activate(user_before.frontmost_pid).is_ok();
+        if !user_moved {
+            if now.frontmost_pid == w.pid
+                && user_before.frontmost_pid != w.pid
+                && user_before.frontmost_pid != 0
+            {
+                gave_back = self.desktop.activate(user_before.frontmost_pid).is_ok();
+            }
             if w.minimized
                 && let Ok(again) = self.desktop.window(window)
+                && !again.minimized
             {
                 let _ = self.desktop.minimize(&again);
             }

@@ -17,7 +17,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::action::{ActRequest, Action, ActionResult, ObserveRequest, Reply, Screenshot, Status};
+use crate::action::{
+    ActRequest, Action, ActionResult, ObserveRequest, Reply, Rung, Screenshot, Status,
+};
 use crate::desktop::{Desktop, UserFocus, WindowInfo};
 use crate::engine::Engine;
 use crate::error::ErrorCode;
@@ -532,8 +534,10 @@ impl Bench {
         Ok(())
     }
 
-    /// P2r: a minimised window can't take a background click; it must say so.
+    /// P2r: a minimised window can't take a background click; it must say so (the foreground
+    /// rung, off here, is P2f's).
     fn refusals(&mut self, reps: u32) -> Result<()> {
+        self.engine.foreground = false;
         let id = self.mini.id;
         let text = self.observe(id, Screenshot::Never, true)?.text;
         let win_ref = find_ref(&text, "window \"Minimised Target\"")?;
@@ -572,6 +576,75 @@ impl Bench {
         self.report.coverage.insert(
             "minimised window".into(),
             vec!["refused: background_unavailable".into()],
+        );
+        self.engine.foreground = true;
+        Ok(())
+    }
+
+    /// P2f: the foreground rung, live, only when nobody has used the computer for a minute. A
+    /// click on the minimised window raises it and lands, the window goes back to the Dock and
+    /// the front back to the user's app (F1 checks the rest of the user's side).
+    fn foreground_rung(&mut self) -> Result<()> {
+        let idle = (self.engine.desktop.idle_source())();
+        if idle < crate::engine::FOREGROUND_IDLE.as_secs_f64() {
+            self.report.coverage.insert(
+                "foreground rung".into(),
+                vec![format!("not run: the computer was used {idle:.0} s ago")],
+            );
+            return Ok(());
+        }
+        let before = self.engine.desktop.user_focus();
+        let id = self.mini.id;
+        let text = self.observe(id, Screenshot::Never, true)?.text;
+        let win_ref = find_ref(&text, "window \"Minimised Target\"")?;
+        let (res, _) = self.act(
+            id,
+            Action::Click {
+                target: crate::action::Target {
+                    r#ref: Some(win_ref),
+                    ..Default::default()
+                },
+                button: Default::default(),
+                count: 1,
+                modifiers: Vec::new(),
+                expect: None,
+            },
+        )?;
+        std::thread::sleep(Duration::from_millis(200));
+        // The window's centre, title bar included, falls just above the dot: any press on its
+        // canvas counts.
+        let hit = self
+            .log
+            .read_new()?
+            .iter()
+            .any(|e| (e.id == "mini-dot" || e.id == "canvas") && e.ev == "down");
+        let front_back = self.engine.desktop.user_focus().frontmost_pid == before.frontmost_pid;
+        // The window flies back into the Dock for a moment.
+        let end = Instant::now() + Duration::from_secs(2);
+        let mut minimised = false;
+        while !minimised && Instant::now() < end {
+            minimised = self.engine.desktop.window(id).is_ok_and(|w| w.minimized);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let o = self
+            .report
+            .ops
+            .entry("P2f foreground rung".into())
+            .or_default();
+        o.tried += 1;
+        if res.delivered == Some(Rung::Foreground) && hit && front_back && minimised {
+            o.ok += 1;
+        } else {
+            o.miss(format!(
+                "rung {:?}, hit {hit}, front back {front_back}, minimised again {minimised}, {:?}",
+                res.delivered, res.error
+            ));
+        }
+        self.report.coverage.insert(
+            "foreground rung".into(),
+            vec![format!(
+                "after {idle:.0} s idle: raised, clicked, front given back {front_back}, minimised again {minimised}"
+            )],
         );
         Ok(())
     }
@@ -894,6 +967,17 @@ impl Bench {
             target: "100%".into(),
             pass: n > 0 && ok == n,
         });
+        // Only when the computer sat idle for a minute; otherwise it isn't a gate this run.
+        let (ok, n) = rate("P2f");
+        if n > 0 {
+            gates.push(Gate {
+                id: "P2f",
+                what: "foreground rung: raised, clicked, front and Dock given back".into(),
+                measured: format!("{ok}/{n}"),
+                target: "100%".into(),
+                pass: ok == n,
+            });
+        }
         gates.push(Gate {
             id: "P4",
             what: "wrong-target actions with an effect".into(),
@@ -1067,6 +1151,7 @@ pub fn run(mut desktop: MacDesktop, out: &Path, quick: bool) -> Result<bool> {
     b.selection((reps / 10).max(5))?;
     let start_focus = b.user.clone();
     b.check_focus("the whole run", &start_focus);
+    b.foreground_rung()?;
     drop(fixture);
     b.gates();
     let table = b.table();
