@@ -29,7 +29,7 @@ impl SaveGrant {
             }
         };
         if current != self.last {
-            return Err("The file changed outside Brigadier. Your draft was not saved; reopen the file to review those changes.".into());
+            return Err("The file changed outside Brigadier. Your draft was not saved. Save again to choose a new destination or confirm replacement in the save dialog.".into());
         }
         Ok(())
     }
@@ -84,7 +84,10 @@ pub async fn save_document(
     // Serialize dialogs and writes, including repeated Cmd+S while a dialog is open.
     let mut grants = documents.0.lock().await;
     let path = if let Some(grant) = grants.get(&id) {
-        grant.check()?;
+        if let Err(error) = grant.check() {
+            grants.remove(&id);
+            return Err(error);
+        }
         grant.path.clone()
     } else {
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -112,6 +115,18 @@ pub async fn save_document(
         else {
             return Ok(None);
         };
+        // Follow a chosen link once; the grant then names its target, so atomic replacement
+        // preserves the link. New files still use the exact parent chosen in the dialog.
+        let path = match path.canonicalize() {
+            Ok(target) => target,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && std::fs::symlink_metadata(&path).is_err() =>
+            {
+                path
+            }
+            Err(error) => return Err(format!("Cannot resolve the selected file: {error}")),
+        };
         grants.insert(
             id.clone(),
             SaveGrant {
@@ -135,6 +150,11 @@ pub async fn save_document(
         },
     );
     Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub async fn forget_document(documents: State<'_, Documents>, id: String) {
+    documents.0.lock().await.remove(&id);
 }
 
 #[cfg(test)]

@@ -662,6 +662,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             documents::save_document,
+            documents::forget_document,
             app_info,
             uninstall_app,
             quit_app,
