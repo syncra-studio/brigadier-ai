@@ -2,7 +2,7 @@
 //! element is the same, generations that catch recycled and replaced elements, and the compact
 //! text a model reads, full or as a diff against what this worker saw last.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::hash::Hash;
 
@@ -421,8 +421,9 @@ fn select(lines: &[Line], f: &Filter) -> Vec<bool> {
 }
 
 /// Renders lines in full, within `budget` characters. What doesn't fit is named by where it
-/// is, so the model can ask for that part (§4.3: paging, not truncation).
-pub fn render_full(lines: &[Line], filter: &Filter, budget: usize) -> String {
+/// is, so the model can ask for that part (§4.3: paging, not truncation). Returns the text and
+/// the refs left out for the budget.
+pub fn render_full(lines: &[Line], filter: &Filter, budget: usize) -> (String, HashSet<u32>) {
     let on = select(lines, filter);
     let base_depth = lines
         .iter()
@@ -432,6 +433,7 @@ pub fn render_full(lines: &[Line], filter: &Filter, budget: usize) -> String {
         .min()
         .unwrap_or(0);
     let mut out = String::new();
+    let mut omitted = HashSet::new();
     let mut left_out: BTreeMap<Option<u32>, usize> = BTreeMap::new();
     let mut out_of_view: BTreeMap<Option<u32>, usize> = BTreeMap::new();
     let filtered = filter.element.is_some() || filter.find.is_some();
@@ -448,6 +450,7 @@ pub fn render_full(lines: &[Line], filter: &Filter, budget: usize) -> String {
         );
         if out.len() + line.len() > budget || !left_out.is_empty() {
             *left_out.entry(l.parent).or_default() += 1;
+            omitted.insert(l.r);
             continue;
         }
         out.push_str(&line);
@@ -467,17 +470,25 @@ pub fn render_full(lines: &[Line], filter: &Filter, budget: usize) -> String {
             }
         }
     }
-    out
+    (out, omitted)
 }
 
 /// Renders what changed since `base` (ref → line text): `~` changed, `+` added, `-` ranges of
-/// removed refs. One line when nothing changed.
-pub fn render_diff(lines: &[Line], base: &HashMap<u32, String>, budget: usize) -> String {
+/// removed refs. One line when nothing changed. Returns the text and the refs of the changes
+/// left out for the budget.
+pub fn render_diff(
+    lines: &[Line],
+    base: &HashMap<u32, String>,
+    budget: usize,
+) -> (String, HashSet<u32>) {
     let mut out = String::new();
-    let mut omitted = 0usize;
-    let mut push = |out: &mut String, s: String| {
+    let mut left_out = 0usize;
+    let mut omitted = HashSet::new();
+    // Pushes one change line, or counts it and its refs as left out.
+    let mut push = |out: &mut String, s: String, refs: std::ops::RangeInclusive<u32>| {
         if out.len() + s.len() > budget {
-            omitted += 1;
+            left_out += 1;
+            omitted.extend(refs);
         } else {
             out.push_str(&s);
         }
@@ -485,11 +496,11 @@ pub fn render_diff(lines: &[Line], base: &HashMap<u32, String>, budget: usize) -
     for l in lines {
         match base.get(&l.r) {
             Some(old) if *old == l.text => {}
-            Some(_) => push(&mut out, format!("~ e{} {}\n", l.r, l.text)),
-            None => push(&mut out, format!("+ e{} {}\n", l.r, l.text)),
+            Some(_) => push(&mut out, format!("~ e{} {}\n", l.r, l.text), l.r..=l.r),
+            None => push(&mut out, format!("+ e{} {}\n", l.r, l.text), l.r..=l.r),
         }
     }
-    let now: std::collections::HashSet<u32> = lines.iter().map(|l| l.r).collect();
+    let now: HashSet<u32> = lines.iter().map(|l| l.r).collect();
     let mut gone: Vec<u32> = base.keys().copied().filter(|r| !now.contains(r)).collect();
     gone.sort_unstable();
     for (a, b) in ranges(&gone) {
@@ -498,15 +509,15 @@ pub fn render_diff(lines: &[Line], base: &HashMap<u32, String>, budget: usize) -
         } else {
             format!("- e{a}–e{b}\n")
         };
-        push(&mut out, s);
+        push(&mut out, s, a..=b);
     }
-    if omitted > 0 {
-        let _ = writeln!(out, "… {omitted} more changes: observe full");
+    if left_out > 0 {
+        let _ = writeln!(out, "… {left_out} more changes: observe full");
     }
     if out.is_empty() {
         out.push_str("no change\n");
     }
-    out
+    (out, omitted)
 }
 
 fn ranges(sorted: &[u32]) -> Vec<(u32, u32)> {
@@ -572,7 +583,7 @@ mod tests {
     fn unnamed_containers_collapse_and_kept_elements_rise() {
         let mut refs = WindowRefs::default();
         let lines = refs.assign(&sample());
-        let text = render_full(&lines, &Filter::default(), 10_000);
+        let text = render_full(&lines, &Filter::default(), 10_000).0;
         assert_eq!(
             text,
             "e1 window \"Doc\" @1,0 10x10\n  e2 button \"OK\" @4,0 10x10\n  e3 checkbox \"Bold\" @6,0 10x10\n"
@@ -625,13 +636,13 @@ mod tests {
         let mut refs = WindowRefs::default();
         let first = refs.assign(&sample());
         let base: HashMap<u32, String> = first.iter().map(|l| (l.r, l.text.clone())).collect();
-        assert_eq!(render_diff(&first, &base, 10_000), "no change\n");
+        assert_eq!(render_diff(&first, &base, 10_000).0, "no change\n");
         let mut next = sample();
         next[5].checked = Some(Check::On);
         next.retain(|n| n.element != 4);
         next.push(node(7, 1, "button", Some("Apply")));
         let lines = refs.assign(&next);
-        let d = render_diff(&lines, &base, 10_000);
+        let d = render_diff(&lines, &base, 10_000).0;
         assert_eq!(
             d,
             "~ e3 checkbox \"Bold\" checked @6,0 10x10\n+ e4 button \"Apply\" @7,0 10x10\n- e2\n"
@@ -646,8 +657,9 @@ mod tests {
         }
         let mut refs = WindowRefs::default();
         let lines = refs.assign(&nodes);
-        let text = render_full(&lines, &Filter::default(), 600);
+        let (text, omitted) = render_full(&lines, &Filter::default(), 600);
         assert!(text.len() < 700);
+        assert!(!omitted.contains(&lines[1].r) && omitted.contains(&lines[200].r));
         assert!(
             text.ends_with("more under e1: observe element e1\n"),
             "{text}"
@@ -659,7 +671,8 @@ mod tests {
                 find: Some("Row 173".into()),
             },
             600,
-        );
+        )
+        .0;
         assert!(sub.contains("Row 173") && sub.contains("e1 table"), "{sub}");
     }
 

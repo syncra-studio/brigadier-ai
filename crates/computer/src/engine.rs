@@ -199,12 +199,9 @@ impl<D: Desktop> Engine<D> {
             })
     }
 
-    fn set_base(&mut self, worker: &str, window: u32, obs: u64, lines: &[Line]) {
+    fn set_base(&mut self, worker: &str, window: u32, obs: u64, lines: HashMap<u32, String>) {
         let key = (worker.to_owned(), window);
-        let base = Base {
-            obs,
-            lines: lines.iter().map(|l| (l.r, l.text.clone())).collect(),
-        };
+        let base = Base { obs, lines };
         if self.bases.insert(key.clone(), base).is_none() {
             self.base_order.push_back(key);
             while self.base_order.len() > BASES_KEPT {
@@ -320,15 +317,22 @@ impl<D: Desktop> Engine<D> {
             (Some(b), Some(since)) if b.obs == since => Some(b),
             _ => None,
         };
-        let mut text = match diff_base {
+        // What a diff left out over the page size stays as the worker last saw it.
+        let mut kept: HashMap<u32, String> = HashMap::new();
+        let (mut text, omitted) = match diff_base {
             Some(b) => {
                 let note = format!(" (changes since obs {})", b.obs);
                 let visible: Vec<Line> = lines.iter().filter(|l| !l.hidden).cloned().collect();
-                let body = tree::render_diff(&visible, &b.lines, PAGE_CHARS);
-                self.header(&w, obs, &note)? + &body
+                let (body, omitted) = tree::render_diff(&visible, &b.lines, PAGE_CHARS);
+                for r in &omitted {
+                    if let Some(old) = b.lines.get(r) {
+                        kept.insert(*r, old.clone());
+                    }
+                }
+                (self.header(&w, obs, &note)? + &body, omitted)
             }
             None => {
-                let body = tree::render_full(
+                let (body, omitted) = tree::render_full(
                     &lines,
                     &Filter {
                         element,
@@ -336,7 +340,7 @@ impl<D: Desktop> Engine<D> {
                     },
                     PAGE_CHARS,
                 );
-                self.header(&w, obs, "")? + &body
+                (self.header(&w, obs, "")? + &body, omitted)
             }
         };
         if let Some(f) = lines.iter().find(|l| l.text.contains(" focused")) {
@@ -369,9 +373,15 @@ impl<D: Desktop> Engine<D> {
             tree::text_tokens(&text)
         );
         if !filtered {
-            // The base holds what the worker was shown: lines out of view come back as additions.
-            let shown: Vec<Line> = lines.iter().filter(|l| !l.hidden).cloned().collect();
-            self.set_base(worker, w.id, obs, &shown);
+            // The base holds what the worker was shown: lines out of view or over the page size
+            // come back as changes later.
+            let mut shown: HashMap<u32, String> = lines
+                .iter()
+                .filter(|l| !l.hidden && !omitted.contains(&l.r))
+                .map(|l| (l.r, l.text.clone()))
+                .collect();
+            shown.extend(kept);
+            self.set_base(worker, w.id, obs, shown);
         }
         Ok(Reply {
             text,
@@ -694,6 +704,8 @@ impl<D: Desktop> Engine<D> {
         cancel.check()?;
         let w = self.desktop.window(window)?;
         self.check_block(&w)?;
+        // Settling waits for the app's notifications to stop, so listen before acting.
+        self.desktop.watch(w.pid);
         let before_windows: HashSet<u32> =
             self.desktop.windows(w.pid)?.iter().map(|x| x.id).collect();
         let user_before = self.desktop.user_focus();
@@ -758,8 +770,8 @@ impl<D: Desktop> Engine<D> {
                 Rung::Element
             }
             Action::Type { text, r#ref, .. } => {
-                let rung = self.type_into(&w, r#ref.as_deref(), text, cancel)?;
-                read_back = rung == Rung::Element;
+                let (rung, seen) = self.type_into(&w, r#ref.as_deref(), text, cancel)?;
+                read_back = seen;
                 rung
             }
             Action::Key { key, repeat, .. } => {
@@ -834,10 +846,12 @@ impl<D: Desktop> Engine<D> {
             }
         } else if let Some((el, text)) = set_text {
             let now = self.desktop.read(&w, &el).ok().and_then(|n| n.value);
-            if now.as_deref() == Some(text.as_str())
-                || (now.is_some()
-                    && text.parse::<f64>().ok() == now.as_deref().and_then(|v| v.parse().ok()))
-            {
+            // A number may come back formatted ("5" as "5.0"); anything else must match exactly.
+            let same_number = matches!(
+                (text.parse::<f64>(), now.as_deref().map(str::parse::<f64>)),
+                (Ok(a), Some(Ok(b))) if a == b
+            );
+            if now.as_deref() == Some(text.as_str()) || same_number {
                 Effect::Confirmed
             } else {
                 status = Status::Failed;
@@ -936,13 +950,14 @@ impl<D: Desktop> Engine<D> {
         Ok(f.element)
     }
 
+    /// Types `text`; returns the rung and whether the text was read back in the value.
     fn type_into(
         &mut self,
         w: &WindowInfo,
         r: Option<&str>,
         text: &str,
         cancel: &CancelToken,
-    ) -> CuResult<Rung> {
+    ) -> CuResult<(Rung, bool)> {
         let el = match r {
             Some(r) => {
                 let el = self.resolve_ref(w, Self::ref_of(r)?, true)?;
@@ -978,12 +993,17 @@ impl<D: Desktop> Engine<D> {
                     .and_then(|n| n.value)
                     .unwrap_or_default();
                 if after != before && after.contains(text) {
-                    return Ok(Rung::Element);
+                    return Ok((Rung::Element, true));
+                }
+                // Unchanged, but the text is there: the selection may have held this very
+                // text. Typing it again could insert a second copy, so it stays unverified.
+                if after == before && after.contains(text) {
+                    return Ok((Rung::Element, false));
                 }
             }
         }
         self.desktop.type_text(w.pid, text, cancel)?;
-        Ok(Rung::Background)
+        Ok((Rung::Background, false))
     }
 
     pub fn zoom(&mut self, worker: &str, req: &ZoomRequest) -> CuResult<Reply> {
@@ -1136,6 +1156,8 @@ mod tests {
         focused: Option<u32>,
         /// The window accessibility places the focus in; `None` when it can't tell.
         focus_window: Option<u32>,
+        /// Setting or inserting text succeeds but leaves the value as it was.
+        frozen: bool,
         /// A press on this element retitles the window, as a navigation would.
         retitle_on_press: Option<(u32, String)>,
         log: Vec<String>,
@@ -1163,6 +1185,7 @@ mod tests {
                 focus_secure: false,
                 focused: None,
                 focus_window: Some(1),
+                frozen: false,
                 retitle_on_press: None,
                 log: Vec::new(),
             }
@@ -1255,13 +1278,17 @@ mod tests {
         }
         fn set_value(&mut self, el: &u32, text: &str) -> CuResult<()> {
             self.log.push(format!("set_value {el}"));
-            self.node_mut(*el).value = Some(text.into());
+            if !self.frozen {
+                self.node_mut(*el).value = Some(text.into());
+            }
             Ok(())
         }
         fn insert_text(&mut self, el: &u32, text: &str) -> CuResult<()> {
             self.log.push(format!("insert {el}"));
-            let n = self.node_mut(*el);
-            n.value = Some(n.value.clone().unwrap_or_default() + text);
+            if !self.frozen {
+                let n = self.node_mut(*el);
+                n.value = Some(n.value.clone().unwrap_or_default() + text);
+            }
             Ok(())
         }
         fn set_focus(&mut self, el: &u32) -> CuResult<()> {
@@ -1537,6 +1564,116 @@ mod tests {
         let r = act(&mut e, vec![menu()]);
         assert_eq!(r[0].status, Status::Done);
         assert_eq!(e.desktop.log, vec!["menu File > Close"]);
+    }
+
+    #[test]
+    fn a_diff_still_shows_what_an_over_long_observation_left_out() {
+        let mut nodes = vec![node(
+            1,
+            0,
+            "window",
+            "Doc",
+            Rect::new(0.0, 0.0, 400.0, 300.0),
+        )];
+        for i in 0..1_000 {
+            let label = format!("Row {i:04} with a label long enough to fill the page");
+            nodes.push(node(
+                2 + i,
+                1,
+                "row",
+                &label,
+                Rect::new(0.0, 0.0, 400.0, 20.0),
+            ));
+        }
+        let mut e = engine(Fake::new(nodes));
+        let diff = |e: &mut Engine<Fake>| {
+            e.observe(
+                "w",
+                &ObserveRequest {
+                    window: 1,
+                    screenshot: Screenshot::Never,
+                    since: None,
+                    full: false,
+                    element: None,
+                    find: None,
+                    value_page: None,
+                },
+            )
+            .unwrap()
+            .text
+        };
+        let full = observe(&mut e, Screenshot::Never, None).text;
+        assert!(full.contains("more under e1") && !full.contains("Row 0999"));
+        // The rows the page left out come next, as additions, until all were shown.
+        let mut seen = 0;
+        while seen < 5 {
+            let d = diff(&mut e);
+            if d.contains("Row 0999") {
+                break;
+            }
+            assert!(d.contains("+ e"), "{d}");
+            seen += 1;
+        }
+        assert!(seen < 5);
+        assert!(diff(&mut e).contains("no change"));
+        // Changes a diff leaves out over the page size come in the next one.
+        for n in e.desktop.nodes.iter_mut().skip(1) {
+            n.label = Some(format!("{} changed", n.label.clone().unwrap()));
+        }
+        let first = diff(&mut e);
+        assert!(first.contains("more changes") && !first.contains("Row 0999"));
+        let mut rest = String::new();
+        for _ in 0..5 {
+            rest = diff(&mut e);
+            if rest.contains("Row 0999") {
+                break;
+            }
+        }
+        assert!(rest.contains("~ e") && rest.contains("Row 0999"), "{rest}");
+    }
+
+    #[test]
+    fn a_value_is_confirmed_only_when_it_reads_back() {
+        let mut e = engine(Fake::new(basic()));
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let name = ref_of(&text, "Name");
+        e.desktop.frozen = true;
+        let set = |v: &str| Action::SetValue {
+            r#ref: name.clone(),
+            text: v.into(),
+            expect: None,
+        };
+        e.desktop.node_mut(4).value = Some("old".into());
+        let r = act(&mut e, vec![set("new")]);
+        assert_eq!(code(&r[0]), Some(ErrorCode::NotSettable));
+        // A number the control formats its own way is the same number.
+        e.desktop.node_mut(4).value = Some("5.0".into());
+        let r = act(&mut e, vec![set("5")]);
+        assert_eq!(r[0].effect, Some(Effect::Confirmed));
+    }
+
+    #[test]
+    fn an_insert_that_may_have_replaced_the_same_text_is_not_typed_again() {
+        let mut e = engine(Fake::new(basic()));
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let name = ref_of(&text, "Name");
+        e.desktop.frozen = true;
+        let typing = || Action::Type {
+            text: "hello".into(),
+            r#ref: Some(name.clone()),
+            expect: None,
+        };
+        e.desktop.node_mut(4).value = Some("hello".into());
+        let r = act(&mut e, vec![typing()]);
+        assert_eq!(r[0].delivered, Some(Rung::Element));
+        assert_eq!(r[0].effect, Some(Effect::Unverified));
+        assert_eq!(e.desktop.log, vec!["insert 4"]);
+        // An insert the app ignored, with the text nowhere in the value: typed as keys.
+        e.desktop.node_mut(4).value = Some("other".into());
+        e.desktop.log.clear();
+        let r = act(&mut e, vec![typing()]);
+        assert_eq!(r[0].delivered, Some(Rung::Background));
+        assert_eq!(e.desktop.log, vec!["insert 4", "type_text"]);
     }
 
     #[test]

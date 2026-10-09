@@ -230,7 +230,8 @@ e1 window "scratch.txt"                       @0,0 656x422
 - **Paging, not truncation.** Above the page size the result says what was left out and where (`… 340 rows under
   e40: observe e40`). `observe` takes `element` (a subtree) and `find` (matching lines plus their ancestors). Clipped
   values say how long they are, and `observe {element, value_page}` returns the full value a page at a time. Every
-  output path (tree, diff, focused element, selected text, error text) respects the page size.
+  output path (tree, diff, focused element, selected text, error text) respects the page size. What a page left
+  out doesn't count as seen: the worker's next diff brings it.
 - **Out of view costs nothing.** A table, outline or list that reports its visible rows has its other rows
   counted, not read; `element` and `find` read everything. Action names are read only for roles where they add
   something. An action on a ref aims at the part its scroll views show, and an element scrolled out of view can be
@@ -338,7 +339,9 @@ automatically. If an action made another app frontmost or opened a new window, t
 `no_such_action`, `app_not_responding`, `deadline`, `permission_missing`, `stopped_by_user`…) and one line on what to do next, e.g. "observe again; refs from before a navigation are gone".
 
 **Text** goes in by the cheapest route that can be checked: set the value or insert at the selection through
-accessibility, read it back, and fall back to key events. Pasting is only used for rich text, and it saves and
+accessibility, read it back, and fall back to key events. An insert that leaves the value unchanged with the text
+already in it may have replaced a selection holding that very text, so it is reported unverified, never typed a
+second time. Pasting is only used for rich text, and it saves and
 restores the user's clipboard and checks that the user didn't copy something in between. A paste goes through the
 same secure-field check as typing.
 
