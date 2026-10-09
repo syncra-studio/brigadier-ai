@@ -216,6 +216,14 @@ impl SessionManager {
             runtime.platform().clone(),
             data_dir.join("stopped-processes.json"),
         ));
+        // A test's scripted session runs on a calm machine, whatever the host's heat or memory
+        // pressure: a test that wants it strained says so.
+        #[cfg(test)]
+        if runtime.faked() {
+            machine
+                .guard
+                .fake(brigadier_sandbox::MachineLoad::default());
+        }
         let manager = Arc::new_cyclic(|me| Self {
             me: me.clone(),
             core,
