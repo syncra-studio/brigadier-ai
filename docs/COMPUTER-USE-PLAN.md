@@ -1192,7 +1192,11 @@ the protocol path needs none)
 - A plain launch of Chrome (not through `launch`) flicks the front for about 0.1–0.2 s. The suite's setup gives it
   straight back; workers launch through `launch`, which never does this.
 - `AXEnhancedUserInterface` stays set on a Chromium process once it has been looked at, which costs it some speed.
-- The full bench was not rerun for this stream; the scripted suite (28/28) is the regression check.
+- **Regressions:** the scripted suite passed 28/28, and `bench --quick --no-foreground` passes every gate. The
+  combined verifier runs the full bench once, on the merged tree.
+  - The first quick bench caught S3p at 390.3 / 402.4 ms. The browser pop-up handling had reached native pop-ups:
+    a second press while AppKit blinks the item, and a look through the window's menus on every poll.
+  - Limited to pop-ups inside a page, S3p is back to 368.0 / 373.9 ms; native and page pop-up tasks still pass.
 
 ### Phase 6: Windows and Linux backends
 
