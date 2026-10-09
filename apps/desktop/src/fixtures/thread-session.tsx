@@ -6,7 +6,8 @@
  *
  * Query: `density=compact`; `sidebar=0` (closed); `at=<ms>` (only the events up to that time, a
  * live moment of the session); `done=1` (the turn that waits on the user's merge answer as done,
- * its work folded).
+ * its work folded); `computer=1` (computer use's missing permissions under "Waiting on you", the
+ * summary open).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -65,11 +66,16 @@ const conversation = {
   },
 } as unknown as Conversation;
 
+const computer = query.get("computer") === "1";
+if (computer) {
+  board = { ...board, waiting: { ...board.waiting, "computer-access": { id: "computer-access", requestId: null, source: { type: "computer" },
+    key: "computer", what: "Allow computer use: workers need to see and control apps on this Mac.", createdAtMs: events.at(-1)?.atMs ?? 0 } } };
+}
 useBoard.setState({ board: { ...board, loaded: true, head: messages.at(-1)?.id ?? null } });
 useApp.setState({
   conversations: { [id]: conversation },
   threads: { [id]: { ...emptyThread, items: messages } },
-  pinnedSummary: false,
+  pinnedSummary: computer,
   connection: { status: "connected", daemon: null, reason: null },
 });
 
@@ -83,6 +89,9 @@ mockIPC((command, payload) => {
       return { method: req.method, diff: null };
     case "listFiles":
       return { method: req.method, files: [], truncated: false };
+    case "getComputerAccess":
+    case "allowComputerAccess":
+      return { method: req.method, access: { available: true, accessibility: false, screenRecording: true, problem: null } };
     default:
       return { method: req.method };
   }
