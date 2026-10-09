@@ -69,7 +69,7 @@ use crate::{Error, Result, now_ms};
 const DELTA_WINDOW: Duration = Duration::from_millis(30);
 /// The CLIs' own limit on a worker's MCP calls: as long as `ask_orchestrator` waits for its
 /// answer ([`QUESTION_TIMEOUT`]); no other worker tool waits that long.
-const WORKER_TOOL_TIMEOUT_SECS: u64 = QUESTION_TIMEOUT.as_secs();
+pub(crate) const WORKER_TOOL_TIMEOUT_SECS: u64 = QUESTION_TIMEOUT.as_secs();
 /// How long the watchdog's nudge may take to reach a silent worker's CLI.
 const NUDGE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a fix Brigadier lands waits for the worker's turn that reported it to end.

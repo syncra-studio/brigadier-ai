@@ -724,9 +724,9 @@ impl SessionManager {
                     app_window: r.window_title.clone(),
                     pid: r.pid,
                     window: r.window,
-                    status: format!("{:?}", r.status).to_lowercase(),
-                    rung: r.rung.map(|x| format!("{x:?}").to_lowercase()),
-                    effect: r.effect.map(|x| format!("{x:?}").to_lowercase()),
+                    status: wire_name(&r.status).unwrap_or_default(),
+                    rung: r.rung.as_ref().and_then(wire_name),
+                    effect: r.effect.as_ref().and_then(wire_name),
                     error: r.error.map(|c| c.as_str().to_owned()),
                     dispatch_ms: r.timings.dispatch_ms,
                     record: serde_json::to_string(r).unwrap_or_default(),
@@ -738,6 +738,13 @@ impl SessionManager {
             tracing::warn!(error = %err, "could not record computer actions");
         }
     }
+}
+
+/// An enum's name as it reads on the wire (`background_activated`).
+fn wire_name(v: &impl serde::Serialize) -> Option<String> {
+    serde_json::to_value(v)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
 }
 
 /// The model's reply: the image first, then the text.
@@ -885,4 +892,267 @@ fn start_helper(
     _: Arc<dyn Fn(Event) + Send + Sync>,
 ) -> Result<Arc<dyn HelperLink>, String> {
     Err("computer use isn't available on this system yet".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
+    use brigadier_computer::wire::Reply;
+
+    use super::*;
+
+    type Waiter = Box<dyn FnOnce(Result<Answer, Gone>) + Send>;
+
+    /// A helper that answers pings and describes at once and holds everything else until
+    /// the test says.
+    #[derive(Default)]
+    struct FakeLink {
+        next: AtomicU64,
+        sent: Mutex<Vec<(u64, String, Op, Policy)>>,
+        held: Mutex<HashMap<u64, Waiter>>,
+        dead: AtomicBool,
+    }
+
+    impl FakeLink {
+        fn ops(&self) -> Vec<Op> {
+            lock(&self.sent).iter().map(|s| s.2.clone()).collect()
+        }
+
+        /// The helper died: every waiting request learns it.
+        fn die(&self) {
+            self.dead.store(true, Ordering::SeqCst);
+            let held: Vec<Waiter> = lock(&self.held).drain().map(|(_, w)| w).collect();
+            for w in held {
+                w(Err(Gone));
+            }
+        }
+    }
+
+    impl HelperLink for FakeLink {
+        fn next_id(&self) -> u64 {
+            self.next.fetch_add(1, Ordering::SeqCst) + 1
+        }
+        fn send(
+            &self,
+            id: u64,
+            worker: &str,
+            _: Provider,
+            policy: Policy,
+            op: Op,
+            done: Box<dyn FnOnce(Result<Answer, Gone>) + Send>,
+        ) {
+            lock(&self.sent).push((id, worker.to_owned(), op.clone(), policy));
+            if self.dead.load(Ordering::SeqCst) {
+                return done(Err(Gone));
+            }
+            match op {
+                Op::Ping | Op::Cancel { .. } | Op::EndSession => done(Ok(Answer {
+                    reply: Reply {
+                        id,
+                        ok: true,
+                        ..Default::default()
+                    },
+                    image: None,
+                    trajectory: None,
+                })),
+                _ => {
+                    lock(&self.held).insert(id, done);
+                }
+            }
+        }
+        fn is_alive(&self) -> bool {
+            !self.dead.load(Ordering::SeqCst)
+        }
+    }
+
+    /// A broker whose starter hands out fresh fake links, keeping them and the event hook.
+    struct Rig {
+        computer: Computer,
+        links: Arc<Mutex<Vec<Arc<FakeLink>>>>,
+        events: Arc<Mutex<Option<Arc<dyn Fn(Event) + Send + Sync>>>>,
+        starts: Arc<AtomicUsize>,
+    }
+
+    fn rig() -> Rig {
+        let links: Arc<Mutex<Vec<Arc<FakeLink>>>> = Arc::default();
+        let events: Arc<Mutex<Option<Arc<dyn Fn(Event) + Send + Sync>>>> = Arc::default();
+        let starts = Arc::new(AtomicUsize::new(0));
+        let (l, e, s) = (links.clone(), events.clone(), starts.clone());
+        let starter: HelperStarter = Arc::new(move |on_event| {
+            s.fetch_add(1, Ordering::SeqCst);
+            *lock(&e) = Some(on_event);
+            let link = Arc::new(FakeLink::default());
+            lock(&l).push(link.clone());
+            Box::pin(async move { Ok(link as Arc<dyn HelperLink>) })
+        });
+        Rig {
+            computer: Computer::with_starter(
+                Path::new("/x/Brigadier.app/Contents/MacOS/brigadierd"),
+                starter,
+            ),
+            links,
+            events,
+            starts,
+        }
+    }
+
+    fn task(n: &str) -> TaskId {
+        TaskId(n.into())
+    }
+
+    fn instance(pid: i32) -> Instance {
+        Instance { pid, started_us: 1 }
+    }
+
+    #[test]
+    fn a_held_lease_names_its_holder_and_the_owner_ends_it() {
+        let r = rig();
+        let (a, b) = (task("a"), task("b"));
+        let keys = [LeaseKey::Window(3), LeaseKey::App(instance(9))];
+        r.computer.take_leases(&a, "task-1 (Check)", &keys).unwrap();
+        let e = r
+            .computer
+            .take_leases(&b, "task-2", &[LeaseKey::Window(3)])
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Busy);
+        assert!(e.detail.contains("task-1 (Check)"), "{e}");
+        // Another window of another app is free.
+        r.computer
+            .take_leases(&b, "task-2", &[LeaseKey::Window(4)])
+            .unwrap();
+        // Released, it stays for the tail; its owner may take it again.
+        r.computer.release_leases(&a, &keys);
+        assert!(r.computer.take_leases(&b, "task-2", &keys[..1]).is_err());
+        r.computer.take_leases(&a, "task-1 (Check)", &keys).unwrap();
+        r.computer.release_leases(&a, &keys);
+        // The worker's end frees it at once.
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(r.computer.end_worker(&a));
+        r.computer.take_leases(&b, "task-2", &keys).unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_users_stop_revokes_every_lease_and_wakes_waiting_cards() {
+        let r = rig();
+        r.computer.link().await.unwrap();
+        r.computer
+            .take_leases(&task("a"), "task-1", &[LeaseKey::Window(3)])
+            .unwrap();
+        let mut changes = r.computer.changes.subscribe();
+        let seen = *changes.borrow_and_update();
+        let on_event = lock(&r.events).clone().unwrap();
+        on_event(Event::Stopped { by: "menu".into() });
+        assert!(lock(&r.computer.state).leases.is_empty());
+        assert_ne!(*changes.borrow_and_update(), seen);
+        r.computer
+            .take_leases(&task("b"), "task-2", &[LeaseKey::Window(3)])
+            .unwrap();
+    }
+
+    #[test]
+    fn each_sessions_block_list_holds_only_its_own_launches() {
+        let r = rig();
+        r.computer.set_host_pid(77);
+        let launched = |pid, new_process, window| Launched {
+            instance: instance(pid),
+            app_name: "Terminal".into(),
+            bundle_id: Some("com.apple.Terminal".into()),
+            new_process,
+            new_windows: vec![window],
+            front_restored: false,
+        };
+        {
+            let mut s = lock(&r.computer.state);
+            s.launched.insert(
+                task("a"),
+                vec![launched(50, true, 7), launched(60, false, 8)],
+            );
+        }
+        let a = r.computer.policy(&task("a"));
+        assert_eq!(
+            a.launched_pids,
+            vec![50],
+            "a reused process isn't the session's"
+        );
+        assert_eq!(a.launched_windows, vec![7, 8]);
+        assert_eq!(a.host_pid, Some(77));
+        assert_eq!(a.host_bundle_path.as_deref(), Some("/x/Brigadier.app"));
+        let b = r.computer.policy(&task("b"));
+        assert!(b.launched_pids.is_empty() && b.launched_windows.is_empty());
+        assert_eq!(b.host_pid, Some(77));
+    }
+
+    #[tokio::test]
+    async fn a_dropped_call_cancels_its_request_in_the_helper() {
+        let r = rig();
+        let a = task("a");
+        let call = r
+            .computer
+            .request(&a, Provider::Claude, Policy::default(), Op::Apps);
+        // The caller gives up (an MCP cancel, a closed connection) before the answer.
+        let gave_up = tokio::time::timeout(Duration::from_millis(50), call).await;
+        assert!(gave_up.is_err());
+        let link = lock(&r.links)[0].clone();
+        let ops = link.ops();
+        let id = lock(&link.sent)[0].0;
+        assert_eq!(ops.last(), Some(&Op::Cancel { request: id }), "{ops:?}");
+    }
+
+    #[tokio::test]
+    async fn a_crash_fails_the_running_call_and_the_next_one_starts_a_new_helper() {
+        let r = Arc::new(rig());
+        let r2 = r.clone();
+        let running = tokio::spawn(async move {
+            r2.computer
+                .request(&task("a"), Provider::Claude, Policy::default(), Op::Apps)
+                .await
+        });
+        while lock(&r.links)
+            .first()
+            .is_none_or(|l| lock(&l.held).is_empty())
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        lock(&r.links)[0].die();
+        let e = running.await.unwrap().unwrap_err();
+        assert_eq!(e.code, ErrorCode::AppNotResponding);
+        assert!(e.detail.contains("isn't repeated"), "{e}");
+        // The next call starts a second helper, which never sees the first call again.
+        let a = task("a");
+        let next = r
+            .computer
+            .request(&a, Provider::Claude, Policy::default(), Op::Ping);
+        next.await.unwrap();
+        assert_eq!(r.starts.load(Ordering::SeqCst), 2);
+        assert_eq!(lock(&r.links)[1].ops(), vec![Op::Ping]);
+    }
+
+    #[test]
+    fn a_batch_may_wait_300_seconds_in_all() {
+        let wait = |ms| {
+            serde_json::from_value::<Action>(serde_json::json!({
+                "do": "wait", "expect": {"is": "appears", "find": "Done"}, "timeout_ms": ms
+            }))
+            .unwrap()
+        };
+        let act = |actions| ActRequest {
+            window: 1,
+            actions,
+            screenshot: Default::default(),
+        };
+        assert_eq!(
+            batch_waits(&act(vec![wait(200_000), wait(100_000)])),
+            MAX_BATCH_WAITS
+        );
+        assert!(batch_waits(&act(vec![wait(200_000), wait(100_001)])) > MAX_BATCH_WAITS);
+        // The worker's tool timeout outlasts the longest batch the engine allows.
+        assert!(
+            Duration::from_secs(crate::manager::workers::WORKER_TOOL_TIMEOUT_SECS)
+                > MAX_BATCH_WAITS + brigadier_computer::engine::REQUEST_DEADLINE
+        );
+    }
 }
