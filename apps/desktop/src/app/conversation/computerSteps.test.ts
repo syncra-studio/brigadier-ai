@@ -105,4 +105,7 @@ test("a live action and a page read of the same action keep one copy, in time or
   actions = withAction(actions, b);
   actions = withAction(actions, c);
   assert.deepEqual(actions.map((x) => x.atMs), [10, 15, 20]);
+  // A page that starts mid-batch, then the batch's first action live, in the same millisecond.
+  const page = [action({ index: 1, atMs: 30, status: "skipped" }), action({ index: 2, atMs: 30, status: "skipped" })];
+  assert.deepEqual(withAction(page, action({ index: 0, atMs: 30, status: "failed" })).map((x) => x.index), [0, 1, 2]);
 });

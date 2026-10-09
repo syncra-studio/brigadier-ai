@@ -424,11 +424,14 @@ function firstLine(text: string): string {
   return line.length > 120 ? `${line.slice(0, 120)}…` : line;
 }
 
-/** `actions` with `action` in its place (by time), once: its batch and index identify it. */
+/** `actions` with `action` in its place (by time, then by index in its batch), once: its batch and index identify it. */
 export function withAction(actions: readonly ComputerAction[], action: ComputerAction): ComputerAction[] {
   const same = (other: ComputerAction) => other.batch === action.batch && other.index === action.index && other.atMs === action.atMs;
   if (actions.some(same)) return actions as ComputerAction[];
-  const at = actions.findLastIndex((other) => other.atMs <= action.atMs) + 1;
+  // A batch's failed and skipped actions can share a millisecond.
+  const before = (other: ComputerAction) =>
+    other.atMs < action.atMs || (other.atMs === action.atMs && (other.batch !== action.batch || other.index < action.index));
+  const at = actions.findLastIndex(before) + 1;
   return [...actions.slice(0, at), action, ...actions.slice(at)];
 }
 
