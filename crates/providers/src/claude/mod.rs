@@ -1638,6 +1638,65 @@ mod tests {
         assert_eq!(content[1], content[3]);
     }
 
+    /// The extra home keeps local state even though its transcript lives in the shared
+    /// main history. Same-id state on an unrelated account is not part of this cleanup.
+    #[tokio::test]
+    async fn account_cleanup_removes_shared_history_and_only_its_local_session_files() {
+        let dir = Temp::new();
+        let main = dir.path().join("main");
+        let extra = dir.path().join("extra");
+        let unrelated = dir.path().join("unrelated");
+        let id = uuid::Uuid::new_v4().to_string();
+        let other_id = uuid::Uuid::new_v4().to_string();
+        let paths = |home: &Path, id: &str| {
+            vec![
+                home.join("projects/cwd").join(format!("{id}.jsonl")),
+                home.join("projects/cwd")
+                    .join(id)
+                    .join("subagents/agent.jsonl"),
+                home.join("tasks").join(id).join("task.json"),
+                home.join("session-env").join(id).join("env"),
+                home.join("file-history").join(id).join("file"),
+                home.join("debug").join(format!("{id}.txt")),
+                home.join("todos").join(format!("{id}-agent.json")),
+            ]
+        };
+        let removed: Vec<_> = paths(&main, &id)
+            .into_iter()
+            .chain(paths(&extra, &id))
+            .collect();
+        let kept: Vec<_> = paths(&unrelated, &id)
+            .into_iter()
+            .chain(paths(&main, &other_id))
+            .chain(paths(&extra, &other_id))
+            .collect();
+        for path in removed.iter().chain(&kept) {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "session state").unwrap();
+        }
+        let env = CliEnv::from_vars([
+            ("HOME".into(), dir.path().as_os_str().to_owned()),
+            ("CLAUDE_CONFIG_DIR".into(), main.as_os_str().to_owned()),
+        ]);
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.path().join("data")),
+        })
+        .unwrap();
+        let adapter = Claude::for_account(platform, &env, &extra);
+        adapter
+            .remove(vec![Artifact::ClaudeSession {
+                session_id: id,
+                home: Some(extra.display().to_string()),
+            }])
+            .await
+            .unwrap();
+        assert!(removed.iter().all(|path| !path.exists()), "{removed:?}");
+        assert!(
+            kept.iter()
+                .all(|path| std::fs::read_to_string(path).unwrap() == "session state")
+        );
+    }
+
     /// A fresh folder, removed after the test.
     struct Temp(PathBuf);
 
