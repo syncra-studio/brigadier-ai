@@ -12,6 +12,13 @@
 //!   2 s. It is set once per process instance (setting it again restarts the countdown), and an
 //!   observe waits for the page's web area to fill, up to `READY_BOUND`.
 //!
+//! - **Lazy trees.** AppKit, SwiftUI and Catalyst windows add elements in the moments after the
+//!   first accessibility query (measured 2026-10-09: a Catalyst window 19 → 20 elements and an
+//!   AppKit one 36 → 38 within 150 ms; the first read of the Catalyst one lacked its stepper,
+//!   which the read itself made the app build). The first observe of a window walks it until
+//!   its element count holds for `SETTLE_QUIET`, up to `SETTLE_BOUND`, once per window and
+//!   process instance.
+//!
 //! Browsers (Chromium-family apps by bundle id, `AXEnhancedUserInterface`) are the browser
 //! stream's (`web.rs`), not this module's.
 
@@ -32,6 +39,11 @@ use crate::geom::Point;
 pub const READY_BOUND: Duration = Duration::from_millis(3500);
 /// How deep under the window a web area is looked for.
 const WEB_AREA_DEPTH: usize = 12;
+/// How long a window's element count must hold on first contact before its tree counts as built.
+const SETTLE_QUIET: Duration = Duration::from_millis(100);
+/// The longest first-contact settle: an app that keeps changing (a clock, a progress bar) is
+/// taken as it is.
+const SETTLE_BOUND: Duration = Duration::from_millis(1000);
 /// How long a revealed window takes to become its app's focused window.
 const REVEAL_WAIT: Duration = Duration::from_millis(300);
 
@@ -46,10 +58,44 @@ struct Contact {
 /// Windows of Electron apps that have been key once (see `Quirks::wake`).
 type Woken = HashSet<(i32, u64, u32)>;
 
+/// One window's first-contact settle: its element count, when that last changed, when the
+/// settle began. Pure, so it is tested without accessibility.
+#[derive(Debug, Clone, Copy)]
+struct Settle {
+    count: usize,
+    changed: Instant,
+    began: Instant,
+}
+
+impl Settle {
+    fn new(count: usize, now: Instant) -> Self {
+        Self {
+            count,
+            changed: now,
+            began: now,
+        }
+    }
+
+    /// Takes a new count; true when the tree counts as built.
+    fn update(&mut self, count: usize, now: Instant) -> bool {
+        if count != self.count {
+            self.count = count;
+            self.changed = now;
+        }
+        now.duration_since(self.changed) >= SETTLE_QUIET
+            || now.duration_since(self.began) >= SETTLE_BOUND
+    }
+}
+
+/// A window of one process instance: pid, start time, window id.
+type WindowKey = (i32, u64, u32);
+
 #[derive(Default)]
 pub struct Quirks {
     contacts: HashMap<i32, Contact>,
     woken: Woken,
+    settling: HashMap<WindowKey, Settle>,
+    settled: HashSet<WindowKey>,
 }
 
 impl Quirks {
@@ -93,15 +139,17 @@ impl Quirks {
         drop(Activation::begin(w.pid, w.id, true));
     }
 
-    /// Whether `w`'s structure is complete: an Electron window is pending while its web area is
-    /// missing or empty, until `READY_BOUND` after first contact.
+    /// Whether `w`'s structure is complete: pending while its element count still changes on
+    /// first contact, and an Electron window while its web area is missing or empty, until
+    /// `READY_BOUND` after first contact.
     pub fn structure(&mut self, w: &WindowInfo, window: Option<&AxEl>) -> Structure {
-        if !self.first_contact(w.pid) {
-            return Structure::Ready;
-        }
+        let electron = self.first_contact(w.pid);
         let Some(window) = window else {
             return Structure::Ready;
         };
+        if !electron {
+            return self.settle(w, window);
+        }
         if web_area_filled(window) {
             return Structure::Ready;
         }
@@ -111,6 +159,33 @@ impl Quirks {
         } else {
             Structure::Incomplete
         }
+    }
+}
+
+impl Quirks {
+    fn settle(&mut self, w: &WindowInfo, window: &AxEl) -> Structure {
+        let start_us = self.contacts.get(&w.pid).map_or(0, |c| c.start_us);
+        let key = (w.pid, start_us, w.id);
+        if self.settled.contains(&key) {
+            return Structure::Ready;
+        }
+        // Counted by the observe's own walk: Catalyst builds a control's elements when their
+        // attributes are first read, so a walk of children alone never sees them come.
+        let count = super::ax::tree(window, origin(w, Some(window)), false).len();
+        let now = Instant::now();
+        let built = match self.settling.get_mut(&key) {
+            Some(s) => s.update(count, now),
+            None => {
+                self.settling.insert(key, Settle::new(count, now));
+                false
+            }
+        };
+        if !built {
+            return Structure::Pending;
+        }
+        self.settling.remove(&key);
+        self.settled.insert(key);
+        Structure::Ready
     }
 }
 
@@ -184,4 +259,31 @@ pub fn reveal(w: &WindowInfo, user_front: Option<i32>) -> Option<AxEl> {
     }
     drop(act);
     found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tree_counts_as_built_once_its_count_holds() {
+        let t = Instant::now();
+        let ms = |n| t + Duration::from_millis(n);
+        let mut s = Settle::new(19, t);
+        assert!(!s.update(19, ms(50)));
+        // The lazy stepper arrives.
+        assert!(!s.update(20, ms(80)));
+        assert!(!s.update(20, ms(150)));
+        assert!(s.update(20, ms(180)));
+    }
+
+    #[test]
+    fn a_tree_that_keeps_changing_is_taken_after_the_bound() {
+        let t = Instant::now();
+        let mut s = Settle::new(1, t);
+        for i in 1..20u64 {
+            assert!(!s.update(i as usize + 1, t + Duration::from_millis(i * 50)));
+        }
+        assert!(s.update(99, t + SETTLE_BOUND));
+    }
 }
