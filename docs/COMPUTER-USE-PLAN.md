@@ -790,7 +790,8 @@ inherited grants**, not the helper bundle's own)
 - **The cursor changes no result: PASS.** The quick bench with the cursor drawn (`bench --quick --cursor`) passed
   every gate in five runs, P4 0 and F1 0. One earlier run failed with "no app with pid" (fixed, below).
 - **Bench:** the full §7 bench with the cursor drawn (`bench --cursor`, release build on `24323b5c`, 200 repetitions,
-  1052 s) passes every gate with no regression from Phase 2: S1 6.2/7.9 ms, S2 56.8/61.4 ms, S3 set value 2.4/5.0,
+  1052 s) passes every gate. Against Phase 2's last run, pixel clicks' effect is about 4 ms slower with the cursor
+  drawn (S4 p50 21.3 against 17.2 ms, p95 48.0 against 41.7 ms; the gate is 60/200 ms); the rest is level: S1 6.2/7.9 ms, S2 56.8/61.4 ms, S3 set value 2.4/5.0,
   menu-bar pick 3.7/6.0, pop-up 362.2/369.7, press 2.5/5.3 ms, S4 21.3/48.0 ms, S5 2.6/7.5 ms, SEL 20/20, P1
   1600/1600, P2 1600/1600 (worst 0.00 pt), P2r 200/200, P2f 1/1, P4 0, F1 0.
 - **The timeline replays a bench run: PASS (test).** `bench --quick --replay` wrote 456 actions in 451 batches.
