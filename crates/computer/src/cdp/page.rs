@@ -7,7 +7,7 @@
 //! element's content box in the parent's viewport. The main viewport maps to window points by
 //! the page zoom, below the browser's toolbar: `window = viewport origin + css × zoom`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -113,7 +113,10 @@ pub struct Page {
     pub target: String,
     pub session: String,
     children: Vec<Child>,
-    inflight: HashSet<String>,
+    /// Requests in flight by id, which is the same in every session (an out-of-process
+    /// frame's document starts in its parent's session and finishes in its own): the
+    /// session that started each, when, and its URL.
+    inflight: HashMap<String, (String, Instant, String)>,
     net_changed: Instant,
     pub loader: String,
     main_frame: String,
@@ -127,6 +130,9 @@ pub struct Page {
 }
 
 /// Installs the DOM-change clock in an isolated world: the page's own scripts never see it.
+/// How long a request may be open before it no longer holds the page unsettled.
+const LONG_REQUEST: Duration = Duration::from_secs(1);
+
 const QUIET_INSTALL: &str = "(() => { if (globalThis.__brigadierLast !== undefined) return true; \
 globalThis.__brigadierLast = performance.now(); \
 new MutationObserver(() => { globalThis.__brigadierLast = performance.now(); }) \
@@ -159,7 +165,7 @@ impl Page {
             target: target.to_owned(),
             session,
             children: Vec::new(),
-            inflight: HashSet::new(),
+            inflight: HashMap::new(),
             net_changed: Instant::now(),
             loader: frame["loaderId"].as_str().unwrap_or_default().to_owned(),
             main_frame: frame["id"].as_str().unwrap_or_default().to_owned(),
@@ -207,13 +213,15 @@ impl Page {
             }
             "Network.requestWillBeSent" => {
                 if let Some(id) = p["requestId"].as_str() {
-                    self.inflight.insert(format!("{session}:{id}"));
+                    let url = p["request"]["url"].as_str().unwrap_or_default().to_owned();
+                    self.inflight
+                        .insert(id.to_owned(), (session.to_owned(), Instant::now(), url));
                     self.net_changed = Instant::now();
                 }
             }
             "Network.loadingFinished" | "Network.loadingFailed" => {
                 if let Some(id) = p["requestId"].as_str() {
-                    self.inflight.remove(&format!("{session}:{id}"));
+                    self.inflight.remove(id);
                     self.net_changed = Instant::now();
                 }
             }
@@ -235,8 +243,7 @@ impl Page {
                     self.url = f["url"].as_str().unwrap_or_default().to_owned();
                     self.world = None;
                     // A new document: whatever was in flight belonged to the old one.
-                    self.inflight
-                        .retain(|r| !r.starts_with(&format!("{session}:")));
+                    self.inflight.retain(|_, (s, _, _)| *s != session);
                 }
             }
             _ => {}
@@ -246,7 +253,13 @@ impl Page {
     /// How long the page has been quiet: no request in flight and no DOM change. Zero while
     /// something is in flight or the page can't be asked.
     pub fn quiet_for(&mut self, conn: &mut Conn) -> Duration {
-        if !self.inflight.is_empty() || self.dialog.is_some() {
+        // A request open longer than a second is a long poll, a stream or a beacon the
+        // browser never reports finished: waiting on it would never settle.
+        let busy = self
+            .inflight
+            .values()
+            .any(|(_, at, _)| at.elapsed() < LONG_REQUEST);
+        if busy || self.dialog.is_some() {
             return Duration::ZERO;
         }
         let net = self.net_changed.elapsed();
