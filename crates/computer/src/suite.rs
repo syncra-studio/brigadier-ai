@@ -271,6 +271,9 @@ pub struct Verdict {
     /// Done actions on the task's window, by rung.
     pub rungs: BTreeMap<String, usize>,
     pub notes: Vec<String>,
+    /// For the grounding boards: P3's counts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grounding: Option<Grounding>,
 }
 
 impl Verdict {
@@ -660,6 +663,20 @@ pub fn check(
     if matches!(t.setup, Setup::Document { .. }) {
         needs_record(&mut v, !done.is_empty(), "on the Scratch Pad window");
     }
+    if let Setup::Grounding { size } = t.setup {
+        // P3 is the hit rate; the trial passes when every board was dealt and every click hit.
+        let g = score_grounding(size, events);
+        if g.boards < BOARDS {
+            v.fail(format!("{} of {BOARDS} boards done", g.boards));
+        }
+        if g.hits < g.trials {
+            v.fail(format!(
+                "{} of {} hits ({} wrong, {} misses, {} missing)",
+                g.hits, g.trials, g.wrong, g.misses, g.missing
+            ));
+        }
+        v.grounding = Some(g);
+    }
     v
 }
 
@@ -1004,6 +1021,25 @@ mod tests {
         assert_eq!(g.wrong, 1);
         assert_eq!(g.missing, 4);
         assert_eq!(g.extra, 1);
+        // The check carries the counts, and fails boards left undone or clicks that missed.
+        let v = check(
+            &prep("Grounding 8 pt"),
+            &events,
+            &[],
+            &BTreeMap::new(),
+            None,
+        );
+        assert!(!v.pass);
+        assert_eq!(v.grounding.as_ref().map(|g| g.hits), Some(4));
+        let all: Vec<Event> = (1..=BOARDS)
+            .flat_map(|b| {
+                std::iter::once(layout(b))
+                    .chain((1..=MARKERS).map(move |m| down(&format!("m{m}"), b)))
+            })
+            .collect();
+        let v = check(&prep("Grounding 8 pt"), &all, &[], &BTreeMap::new(), None);
+        assert!(v.pass, "{:?}", v.notes);
+        assert_eq!(v.grounding.map(|g| (g.hits, g.trials)), Some((50, 50)));
     }
 
     #[test]
