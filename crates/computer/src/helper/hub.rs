@@ -30,15 +30,21 @@ use crate::wire::{
 
 /// How long a new connection has to send its hello.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often the grants are looked at again while a session is open.
+pub const RECHECK_EVERY: Duration = Duration::from_secs(3);
+/// How old a look at the grants may be when an engine request starts; an older one is
+/// repeated first. A session's looks every [`RECHECK_EVERY`] keep it younger.
+const LOOK_FRESH_FOR: Duration = Duration::from_secs(10);
 
 /// What the control service and the engine thread ask of the system. Plain functions, so tests
 /// can stand in for the system's answers.
 #[derive(Clone, Copy)]
 pub struct System {
     pub permissions: fn() -> Permissions,
-    /// The grants a new process of this helper would have. A running process keeps the
-    /// screen-recording answer it started with; a fresh one sees a grant given since.
-    pub fresh_permissions: fn() -> Permissions,
+    /// The grants a new process of this helper would have, or `None` when it can't be asked.
+    /// A running process keeps the answers it started with; a fresh one sees a grant given or
+    /// taken away since.
+    pub fresh_permissions: fn() -> Option<Permissions>,
     /// Shows the system's own prompt for a grant; returns at once.
     pub request_permission: fn(Grant),
     /// Forgets this helper's own entry for a grant in the system's privacy settings; `Err`
@@ -57,6 +63,76 @@ pub struct Access {
     pub parent: Option<i32>,
     /// This helper's signing team: when set, the peer must be signed by the same team.
     pub team: Option<String>,
+}
+
+/// The helper's grants as a fresh process sees them. macOS answers a running process from
+/// what it saw at its start, so the truth is a new process's answer, and this process
+/// restarts when the two differ.
+struct Grants {
+    system: System,
+    /// The last fresh look and when it was taken; `None` until one ran.
+    look: Mutex<Option<(Instant, Permissions)>>,
+    /// This process's answers differ from a fresh one's: it restarts once nothing runs.
+    restart: AtomicBool,
+}
+
+impl Grants {
+    /// Looks again in a fresh process and says what the helper has. Without a fresh answer,
+    /// this process's own.
+    fn read(&self) -> Permissions {
+        let held = (self.system.permissions)();
+        match (self.system.fresh_permissions)() {
+            Some(fresh) => {
+                *lock(&self.look) = Some((Instant::now(), fresh));
+                self.judge(held, fresh)
+            }
+            None => held,
+        }
+    }
+
+    /// The fresh answer, marked `restarting` when this process must restart to use a grant
+    /// given since it started. Any difference, a grant taken away too, makes it restart.
+    fn judge(&self, held: Permissions, fresh: Permissions) -> Permissions {
+        if (held.accessibility, held.screen_recording)
+            != (fresh.accessibility, fresh.screen_recording)
+        {
+            self.restart.store(true, Ordering::SeqCst);
+        }
+        Permissions {
+            accessibility: fresh.accessibility,
+            screen_recording: fresh.screen_recording,
+            restarting: (fresh.accessibility && !held.accessibility)
+                || (fresh.screen_recording && !held.screen_recording),
+        }
+    }
+
+    /// Whether the last fresh look is older than `age`, or there is none.
+    fn stale(&self, age: Duration) -> bool {
+        lock(&self.look).is_none_or(|(at, _)| at.elapsed() >= age)
+    }
+
+    /// Whether an engine request may use the system now. It trusts a recent fresh look, and
+    /// looks again before refusing, so a grant just given is never refused on an old answer.
+    fn for_engine(&self) -> CuResult<()> {
+        let held = (self.system.permissions)();
+        let known = (!self.stale(LOOK_FRESH_FOR))
+            .then(|| lock(&self.look).map(|(_, p)| p))
+            .flatten();
+        let mut p = known.map_or(held, |fresh| self.judge(held, fresh));
+        if known.is_none() || missing(p).is_some() || p.restarting {
+            p = self.read();
+        }
+        if let Some(e) = missing(p) {
+            return Err(e);
+        }
+        if p.restarting {
+            return Err(CuError::new(
+                ErrorCode::AppNotResponding,
+                "Brigadier Computer Use is restarting to use a permission just allowed",
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -156,8 +232,7 @@ pub struct Hub {
     activity: Arc<Mutex<Activity>>,
     next_conn: AtomicU64,
     next_key: AtomicU64,
-    /// Screen recording was allowed after this process started: it restarts once nothing runs.
-    restart: AtomicBool,
+    grants: Arc<Grants>,
 }
 
 impl Hub {
@@ -181,10 +256,20 @@ impl Hub {
             running: 0,
             idle_since: Some(Instant::now()),
         }));
-        let (g, a, c) = (gens.clone(), activity.clone(), cursor.clone());
+        let grants = Arc::new(Grants {
+            system,
+            look: Mutex::new(None),
+            restart: AtomicBool::new(false),
+        });
+        let (g, a, c, gr) = (
+            gens.clone(),
+            activity.clone(),
+            cursor.clone(),
+            grants.clone(),
+        );
         std::thread::Builder::new()
             .name("computer-engine".into())
-            .spawn(move || engine_loop(rx, g, a, system, c, make))?;
+            .spawn(move || engine_loop(rx, g, a, system, gr, c, make))?;
         Ok(Arc::new(Self {
             access,
             system,
@@ -195,7 +280,7 @@ impl Hub {
             activity,
             next_conn: AtomicU64::new(1),
             next_key: AtomicU64::new(1),
-            restart: AtomicBool::new(false),
+            grants,
         }))
     }
 
@@ -241,10 +326,20 @@ impl Hub {
         lock(&self.activity).idle_since.map(|t| t.elapsed())
     }
 
-    /// Whether the helper should exit now so the next one starts with screen recording:
-    /// the grant came after this process started, and no engine request is queued or running.
+    /// Whether the helper should exit now so the next one starts with the grants as they are:
+    /// one was given or taken away after this process started, and no engine request is
+    /// queued or running.
     pub fn restart_due(&self) -> bool {
-        self.restart.load(Ordering::SeqCst) && lock(&self.activity).running == 0
+        self.grants.restart.load(Ordering::SeqCst) && lock(&self.activity).running == 0
+    }
+
+    /// Looks at the grants again when a session is open and the last look is older than
+    /// [`RECHECK_EVERY`], so one taken away mid-session refuses the next request. Takes a new
+    /// process's time; call it off the engine thread.
+    pub fn recheck(&self) {
+        if self.idle_for().is_none() && self.grants.stale(RECHECK_EVERY) {
+            self.grants.read();
+        }
     }
 
     /// Connections that passed the hello and haven't ended.
@@ -414,14 +509,7 @@ impl Hub {
     }
 
     fn permissions(&self, id: u64) -> Reply {
-        let mut p = (self.system.permissions)();
-        // This process can't see a screen-recording grant given after it started; a fresh
-        // one can. Say it's allowed and restart to pick it up.
-        if !p.screen_recording && (self.system.fresh_permissions)().screen_recording {
-            self.restart.store(true, Ordering::SeqCst);
-            p.screen_recording = true;
-            p.restarting = true;
-        }
+        let p = self.grants.read();
         let word = |b: bool| if b { "allowed" } else { "not allowed" };
         Reply {
             id,
@@ -485,6 +573,7 @@ fn engine_loop<D, F>(
     gens: Arc<Generations>,
     activity: Arc<Mutex<Activity>>,
     system: System,
+    grants: Arc<Grants>,
     cursor: Cursor,
     mut make: F,
 ) where
@@ -505,7 +594,15 @@ fn engine_loop<D, F>(
                     c.label(&job.req.worker, label);
                 }
                 let run = catch_unwind(AssertUnwindSafe(|| {
-                    run(&mut engine, &mut make, &gens, system, &cursor, &job)
+                    run(
+                        &mut engine,
+                        &mut make,
+                        &gens,
+                        system,
+                        &grants,
+                        &cursor,
+                        &job,
+                    )
                 }));
                 let (mut reply, images) = match run {
                     Ok(Ok((reply, images))) => (reply, images),
@@ -533,15 +630,14 @@ fn run<D: Desktop>(
     make: &mut impl FnMut() -> CuResult<D>,
     gens: &Arc<Generations>,
     system: System,
+    grants: &Grants,
     cursor: &Cursor,
     job: &Job,
 ) -> CuResult<(Reply, Vec<Vec<u8>>)> {
     let req = &job.req;
     // Cancelled or stopped while it waited: it never starts.
     job.token.with_deadline(REQUEST_DEADLINE).check()?;
-    if let Some(e) = missing((system.permissions)()) {
-        return Err(e);
-    }
+    grants.for_engine()?;
     let engine = match slot {
         Some(e) => e,
         None => {

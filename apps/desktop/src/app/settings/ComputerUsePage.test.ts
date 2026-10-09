@@ -40,7 +40,7 @@ test("computer use shows each missing permission with one Allow button, and noth
     const both = render({ ...none, accessibility: true, screenRecording: true, restarting: true }, true);
     assert.equal([...both.matchAll(/>Allow…</g)].length, 0);
     assert.doesNotMatch(both, /Turn on Brigadier Computer Use/);
-    assert.match(both, /Brigadier Computer Use is restarting so it can see the screen\./);
+    assert.match(both, /Brigadier Computer Use is restarting to use the permission you just gave\./);
 
     assert.equal(render({ ...none, available: false }), "");
     assert.equal(render(null), "");

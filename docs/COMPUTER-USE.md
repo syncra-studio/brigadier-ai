@@ -37,10 +37,11 @@ apart from Brigadier itself):
    **Brigadier Computer Use**.
 3. Next to **See the screen**, press **Allow…**. System Settings opens at Privacy & Security → Screen & System Audio
    Recording. Turn on **Brigadier Computer Use**. If macOS offers **Quit & Reopen**, you can choose it or not:
-   Brigadier Computer Use restarts by itself to start seeing the screen.
+   Brigadier Computer Use restarts by itself to use the new permission.
 
 You don't need to come back and click anything: the page reads the permissions every second or two while one is
-missing, and each row turns to **Allowed** on its own.
+missing, and each row turns to **Allowed** on its own. It keeps reading them every few seconds while it is open, so a
+permission you turn off later shows as **Not allowed yet** too, and a worker that asks for it is told it's missing.
 
 The permissions belong to Brigadier Computer Use, not to Brigadier or a terminal, and they stay when Brigadier
 updates. If a worker needs them before you've given them, the conversation shows the same two Allow buttons.

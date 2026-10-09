@@ -27,7 +27,7 @@ export const GRANT_STEPS =
   "System Settings opens on the right list: Device Control and Data Access (called Accessibility before macOS 27) for Control apps, Screen & System Audio Recording for See the screen. Turn on Brigadier Computer Use there; this page updates by itself.";
 export const STALE_ENTRY =
   "Already on there, but still Not allowed here? That entry is from an older build. Press Start over: Brigadier Computer Use forgets it, and macOS asks again.";
-export const RESTARTING = "Brigadier Computer Use is restarting so it can see the screen.";
+export const RESTARTING = "Brigadier Computer Use is restarting to use the permission you just gave.";
 
 /** Asks for a permission; `startOver` first forgets Brigadier Computer Use's old entry for it. */
 export type OnAllow = (grant: ComputerGrant, startOver: boolean) => Promise<void>;

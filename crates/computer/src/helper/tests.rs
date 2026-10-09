@@ -219,10 +219,12 @@ fn granted() -> System {
             screen_recording: true,
             restarting: false,
         },
-        fresh_permissions: || Permissions {
-            accessibility: true,
-            screen_recording: true,
-            restarting: false,
+        fresh_permissions: || {
+            Some(Permissions {
+                accessibility: true,
+                screen_recording: true,
+                restarting: false,
+            })
         },
         request_permission: |_| {},
         reset_permission: |_| Ok(()),
@@ -456,12 +458,16 @@ fn the_users_stop_ends_running_work_and_is_told_to_every_connection() {
 
 #[test]
 fn a_missing_grant_is_named_and_the_control_service_still_answers() {
-    let system = System {
-        permissions: || Permissions {
+    fn off() -> Permissions {
+        Permissions {
             accessibility: false,
             screen_recording: true,
             restarting: false,
-        },
+        }
+    }
+    let system = System {
+        permissions: off,
+        fresh_permissions: || Some(off()),
         ..granted()
     };
     let s = setup(system, None);
@@ -478,6 +484,102 @@ fn a_missing_grant_is_named_and_the_control_service_still_answers() {
     let (_, rx) = send(&c, Op::Permissions);
     let p = answer(&rx).unwrap().reply.permissions.unwrap();
     assert!(!p.accessibility && p.screen_recording);
+}
+
+#[test]
+fn a_grant_taken_away_since_the_start_is_reported_and_refuses_engine_work() {
+    // This process still says yes, as macOS answers it from its start; a fresh one says no.
+    let system = System {
+        fresh_permissions: || {
+            Some(Permissions {
+                accessibility: false,
+                screen_recording: true,
+                restarting: false,
+            })
+        },
+        ..granted()
+    };
+    let s = setup(system, None);
+    let c = connect(&s, TOKEN);
+    let (_, rx) = send(&c, Op::Apps);
+    let e = answer(&rx).unwrap().reply.error.unwrap();
+    assert_eq!(e.code, ErrorCode::PermissionMissing);
+    assert_eq!(
+        e.detail,
+        "Brigadier Computer Use isn't allowed to control apps (Accessibility)"
+    );
+    assert_eq!(s.seen.apps_calls.load(Ordering::SeqCst), 0);
+    let (_, rx) = send(&c, Op::Permissions);
+    let p = answer(&rx).unwrap().reply.permissions.unwrap();
+    assert!(!p.accessibility && p.screen_recording && !p.restarting);
+    assert!(
+        s.hub.restart_due(),
+        "it restarts so its own answers match again"
+    );
+}
+
+#[test]
+fn a_fresh_look_that_can_not_run_leaves_the_helpers_own_answers() {
+    let system = System {
+        fresh_permissions: || None,
+        ..granted()
+    };
+    let s = setup(system, None);
+    let c = connect(&s, TOKEN);
+    let (_, rx) = send(&c, Op::Permissions);
+    let p = answer(&rx).unwrap().reply.permissions.unwrap();
+    assert!(p.accessibility && p.screen_recording && !p.restarting);
+    assert!(!s.hub.restart_due());
+    let (_, rx) = send(&c, Op::Apps);
+    assert!(answer(&rx).unwrap().reply.ok);
+}
+
+#[test]
+fn engine_work_waits_out_a_restart_for_a_grant_given_since_the_start() {
+    let system = System {
+        permissions: || Permissions {
+            accessibility: false,
+            screen_recording: true,
+            restarting: false,
+        },
+        ..granted()
+    };
+    let s = setup(system, None);
+    let c = connect(&s, TOKEN);
+    let (_, rx) = send(&c, Op::Apps);
+    let e = answer(&rx).unwrap().reply.error.unwrap();
+    assert_eq!(e.code, ErrorCode::AppNotResponding, "{e:?}");
+    assert!(e.detail.contains("restarting"), "{e:?}");
+    assert_eq!(s.seen.apps_calls.load(Ordering::SeqCst), 0);
+    assert!(s.hub.restart_due());
+}
+
+#[test]
+fn a_session_looks_at_the_grants_again_only_when_its_last_look_is_old() {
+    use std::sync::atomic::AtomicU32;
+    static LOOKS: AtomicU32 = AtomicU32::new(0);
+    let system = System {
+        fresh_permissions: || {
+            LOOKS.fetch_add(1, Ordering::SeqCst);
+            (granted().fresh_permissions)()
+        },
+        ..granted()
+    };
+    let s = setup(system, None);
+    s.hub.recheck();
+    assert_eq!(LOOKS.load(Ordering::SeqCst), 0, "no session, no look");
+    let c = connect(&s, TOKEN);
+    let (_, rx) = send(&c, Op::Apps);
+    assert!(answer(&rx).unwrap().reply.ok);
+    assert_eq!(LOOKS.load(Ordering::SeqCst), 1, "the first request looks");
+    let (_, rx) = send(&c, Op::Apps);
+    assert!(answer(&rx).unwrap().reply.ok);
+    s.hub.recheck();
+    assert_eq!(
+        LOOKS.load(Ordering::SeqCst),
+        1,
+        "a recent look serves both the next request and the recheck"
+    );
 }
 
 #[test]
@@ -557,14 +659,16 @@ fn start_over_resets_the_grant_then_asks_again_and_a_failed_reset_asks_nothing()
 
 #[test]
 fn no_restart_while_screen_recording_is_still_off_for_a_fresh_process() {
-    let off = || Permissions {
-        accessibility: true,
-        screen_recording: false,
-        restarting: false,
-    };
+    fn off() -> Permissions {
+        Permissions {
+            accessibility: true,
+            screen_recording: false,
+            restarting: false,
+        }
+    }
     let system = System {
         permissions: off,
-        fresh_permissions: off,
+        fresh_permissions: || Some(off()),
         ..granted()
     };
     let s = setup(system, None);

@@ -62,19 +62,16 @@ pub fn system() -> System {
 
 /// Asks a new process of this same binary (`brigadier-computer permissions`). It runs as
 /// this helper's child, so macOS checks the helper's own grants; being new, it sees a grant
-/// given since the helper started. Both false when it can't be run.
-fn fresh_permissions() -> Permissions {
-    std::env::current_exe()
-        .and_then(|exe| {
-            std::process::Command::new(exe)
-                .arg("permissions")
-                .stdin(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .output()
-        })
-        .ok()
-        .and_then(|out| serde_json::from_slice(&out.stdout).ok())
-        .unwrap_or_default()
+/// given or taken away since the helper started. `None` when it can't be run.
+fn fresh_permissions() -> Option<Permissions> {
+    let exe = std::env::current_exe().ok()?;
+    let out = std::process::Command::new(exe)
+        .arg("permissions")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    serde_json::from_slice(&out.stdout).ok()
 }
 
 fn random_token() -> Result<String> {
@@ -161,11 +158,12 @@ pub fn serve(o: Options) -> Result<()> {
                 if watched.idle_for().is_some_and(|d| d >= idle_exit) {
                     exit_clean(&opts, "no session for the idle time");
                 }
+                watched.recheck();
                 if watched.restart_due() {
                     // The reply that said so goes out first; the daemon starts a new helper
                     // on its next request.
                     std::thread::sleep(WATCH_EVERY);
-                    exit_clean(&opts, "restarting to use the new screen-recording grant");
+                    exit_clean(&opts, "restarting to use the grants as they are now");
                 }
             }
         })?;

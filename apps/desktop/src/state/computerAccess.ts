@@ -45,35 +45,38 @@ export function readComputerAccess(): void {
     });
 }
 
-/** How often a shown permission row reads again while one is missing. */
+/** How often a shown permission row reads again while one is missing or the helper restarts. */
 export const WATCH_MS = 1500;
+/** How often it reads again while both are allowed: the user may still take one away. */
+export const WATCH_ALLOWED_MS = 3000;
 
 /**
- * Whether the permissions may still change by themselves: one is missing (the user may be
- * turning it on in System Settings right now), or the helper is restarting to use a grant.
+ * How often a shown permission row reads again: often while one is missing (the user may be
+ * turning it on in System Settings right now) or the helper is restarting to use a grant, less
+ * often once both are allowed. Never where the system has no computer use.
  */
-export function watchingComputerAccess(read: ComputerAccess | null): boolean {
-  return read === null || read.restarting || !read.accessibility || !read.screenRecording;
+export function watchEvery(read: ComputerAccess | null): number | null {
+  if (read?.available === false) return null;
+  return read === null || read.restarting || !read.accessibility || !read.screenRecording ? WATCH_MS : WATCH_ALLOWED_MS;
 }
 
 /**
  * The permissions, kept current while shown: read when shown, when the window comes back, and
- * every {@link WATCH_MS} while one is missing, so a grant in System Settings shows without a
- * click here.
+ * every {@link watchEvery}, so a change in System Settings shows without a click here.
  */
 export function useLiveComputerAccess(): ComputerAccess | null {
   const current = useComputerAccess();
-  const watching = current?.available !== false && watchingComputerAccess(current);
+  const every = watchEvery(current);
   useEffect(() => {
     readComputerAccess();
     window.addEventListener("focus", readComputerAccess);
     return () => window.removeEventListener("focus", readComputerAccess);
   }, []);
   useEffect(() => {
-    if (!watching) return;
-    const timer = window.setInterval(readComputerAccess, WATCH_MS);
+    if (every === null) return;
+    const timer = window.setInterval(readComputerAccess, every);
     return () => window.clearInterval(timer);
-  }, [watching]);
+  }, [every]);
   return current;
 }
 
