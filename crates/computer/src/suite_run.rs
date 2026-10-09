@@ -220,7 +220,10 @@ pub fn setup(desktop: &mut MacDesktop, task: &Task, dir: &Path, seed: u64) -> Re
         }
         Setup::DevApp => bail!("the runner sets the dev build up (tools/computer-suite)"),
         Setup::Quirk { .. } => crate::suite_quirks_run::setup(desktop, task, &dir, &mut prep)?,
-        Setup::Web { target } => web_setup(desktop, target, &dir, &mut prep)?,
+        Setup::Web { target } => web_setup(desktop, target, None, &dir, &mut prep)?,
+        Setup::WebGrounding { size } => {
+            web_setup(desktop, WebTarget::Cdp, Some((size, seed)), &dir, &mut prep)?
+        }
     }
     // The app's own window notices settle first.
     std::thread::sleep(Duration::from_millis(400));
@@ -305,10 +308,12 @@ fn test_browser() -> Result<String> {
     )
 }
 
-/// A browser task's target: the web fixture's server, then its page in the task's browser.
+/// A browser task's target: the web fixture's server, then its page in the task's browser: the
+/// form page, or the grounding boards of `(size, seed)`.
 fn web_setup(
     desktop: &mut MacDesktop,
     target: WebTarget,
+    boards: Option<(u32, u64)>,
     dir: &Path,
     prep: &mut Prepared,
 ) -> Result<()> {
@@ -342,7 +347,17 @@ fn web_setup(
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    let url = format!("http://localhost:{port}/");
+    let url = match boards {
+        Some((size, seed)) => format!(
+            "http://localhost:{port}/grounding.html?size={size}&seed={seed}&boards={BOARDS}"
+        ),
+        None => format!("http://localhost:{port}/"),
+    };
+    let page_title = if boards.is_some() {
+        "Grounding boards"
+    } else {
+        "Web Range"
+    };
     let title = match target {
         WebTarget::Cdp => {
             let browser = test_browser()?;
@@ -358,7 +373,7 @@ fn web_setup(
             // The browser outlives this connection: the worker's helper takes it on by its
             // profile (`cdp::adoptable`).
             drop(web);
-            "Web Range".to_owned()
+            page_title.to_owned()
         }
         WebTarget::Plain => {
             let browser = test_browser()?;
@@ -373,18 +388,23 @@ fn web_setup(
             let (pid, _) =
                 crate::launch::open_plain(desktop, &browser, &args).map_err(|e| anyhow!("{e}"))?;
             prep.pid = pid;
-            "Web Range".to_owned()
+            page_title.to_owned()
         }
         WebTarget::WebView => {
             prep.pid = launch_fixture("web-view", &[std::ffi::OsStr::new(&url)])?;
-            "Web View: Web Range".to_owned()
+            format!("Web View: {page_title}")
         }
     };
     prep.pid_start_us = crate::macos::process_start_us(prep.pid).unwrap_or(0);
     prep.exe = executable(prep.pid).unwrap_or_default();
-    // The page is ready once it logged itself.
+    // The page is ready once it logged itself; the boards, once the first was dealt.
+    let ready = if boards.is_some() {
+        r#""ev":"layout""#
+    } else {
+        r#""ev":"ready""#
+    };
     let end = Instant::now() + Duration::from_secs(15);
-    while !std::fs::read_to_string(&log).is_ok_and(|t| t.contains(r#""ev":"ready""#)) {
+    while !std::fs::read_to_string(&log).is_ok_and(|t| t.contains(ready)) {
         if Instant::now() > end {
             teardown(prep);
             bail!("the web fixture's page didn't load");
@@ -393,8 +413,10 @@ fn web_setup(
     }
     prep.window = wait_window(desktop, prep, &title, 15)?;
     prep.window_title = title;
-    // Its load isn't part of the trial.
-    std::fs::write(&log, "")?;
+    // Its load isn't part of the trial; the first board's layout is.
+    if boards.is_none() {
+        std::fs::write(&log, "")?;
+    }
     Ok(())
 }
 
@@ -410,7 +432,12 @@ pub fn read_files(prep: &Prepared) -> BTreeMap<String, String> {
 /// fixture itself is signalled: after teardown its pid may belong to another process, which
 /// SIGUSR1 would end.
 fn snapshot(prep: &Prepared, log: &Path) {
-    if prep.task.starts_with("Grounding") || prep.log.is_none() || !is_ours(prep) {
+    // A web page logs as it goes, and its browser isn't the fixture: neither is signalled.
+    if prep.task.starts_with("Grounding")
+        || prep.server_pid != 0
+        || prep.log.is_none()
+        || !is_ours(prep)
+    {
         return;
     }
     let before = suite::read_events(log).map(|e| e.len()).unwrap_or(0);
@@ -602,6 +629,9 @@ fn dot(frame_h: f64, cx: f64, cy: f64) -> Point {
 fn solve(s: &mut Script, task: &Task, prep: &Prepared) -> Result<()> {
     if matches!(task.setup, Setup::Web { .. }) {
         return solve_web(s, task);
+    }
+    if matches!(task.setup, Setup::WebGrounding { .. }) {
+        return solve_web_boards(s, prep);
     }
     let frame_h = s
         .engine
@@ -855,10 +885,12 @@ pub fn scripted(desktop: MacDesktop, out: &Path, only: &[String]) -> Result<bool
         std::fs::write(dir.join("transcript.txt"), &transcript)?;
         let verdict = check_dir(&dir, Some(&dir.join("records.jsonl")), None, true)?;
         let grounding = match task.setup {
-            Setup::Grounding { size } => Some(suite::score_grounding(
-                size,
-                &suite::read_events(Path::new(prep.log.as_deref().unwrap_or_default()))?,
-            )),
+            Setup::Grounding { size } | Setup::WebGrounding { size } => {
+                Some(suite::score_grounding(
+                    size,
+                    &suite::read_events(Path::new(prep.log.as_deref().unwrap_or_default()))?,
+                ))
+            }
             _ => None,
         };
         teardown(&prep);
@@ -975,6 +1007,44 @@ fn frame_on(text: &str, needle: &str) -> Result<(f64, f64, f64, f64)> {
 }
 
 /// The browser tasks' scripted solutions: the fewest calls a worker needs.
+/// The page's boards: each board's marker centres from the page's log, inside the Board
+/// picture's 1 px border, clicked as pixels of a screenshot.
+fn solve_web_boards(s: &mut Script, prep: &Prepared) -> Result<()> {
+    let log = PathBuf::from(prep.log.as_deref().context("the boards' log")?);
+    for _ in 1..=BOARDS {
+        let text = s.observe(None, Screenshot::Never)?.text;
+        let (x, y, _, _) = frame_on(&text, r#"canvas "Board""#)?;
+        let events = suite::read_events(&log)?;
+        let layout = events
+            .iter()
+            .rev()
+            .find(|e| e.id == "board" && e.ev == "layout")
+            .and_then(|e| e.v.clone())
+            .context("a dealt board")?;
+        let centres: BTreeMap<&str, (f64, f64)> = layout
+            .split(' ')
+            .skip(1)
+            .filter_map(|p| {
+                let (id, xy) = p.split_once(':')?;
+                let (cx, cy) = xy.split_once(',')?;
+                Some((id, (cx.parse().ok()?, cy.parse().ok()?)))
+            })
+            .collect();
+        let pts: Vec<Point> = (1..=MARKERS)
+            .map(|i| {
+                let (cx, cy) = centres[format!("m{i}").as_str()];
+                Point::new(x + 1.0 + cx, y + 1.0 + cy)
+            })
+            .collect();
+        let targets = s.pixel(&pts)?;
+        let next = ref_on(&text, r#"button "Next board""#)?;
+        let mut acts: Vec<Action> = targets.into_iter().map(click_at).collect();
+        acts.push(click(&next));
+        s.act(acts)?;
+    }
+    Ok(())
+}
+
 fn solve_web(s: &mut Script, task: &Task) -> Result<()> {
     let text = s.observe(None, Screenshot::Never)?.text;
     let r = |needle: &str| ref_on(&text, needle);

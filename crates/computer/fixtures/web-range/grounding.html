@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <title>Grounding boards</title>
 <!-- The page's P3 boards: `grounding.html?size=8&seed=1&boards=10`. Each board draws five numbered
-     markers and five lettered decoys of one size at seeded places on a canvas with no accessibility.
+     markers and five lettered decoys of one size at seeded places on a canvas with no accessibility
+     inside: the picture itself is labelled, so it can be found, never what is drawn on it.
      A press is logged with the marker it hit (`m3`, `dC`) or `canvas`, and its board. The log has
      the native fixture's format, so the same scoring reads both. -->
 <style>
@@ -15,7 +16,7 @@
 </head>
 <body>
 <p><span id="status">Board 0</span> <button id="next">Next board</button></p>
-<canvas id="board" width="640" height="420" aria-hidden="true"></canvas>
+<canvas id="board" width="640" height="420" role="img" aria-label="Board"></canvas>
 <script>
 const q = new URLSearchParams(location.search);
 const size = Number(q.get("size") || 12), boards = Number(q.get("boards") || 10);

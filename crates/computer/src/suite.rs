@@ -38,6 +38,9 @@ pub enum Setup {
     },
     /// The web fixture's page in a browser (`suite_web`).
     Web { target: WebTarget },
+    /// The web fixture's grounding boards, markers of this size in CSS px, in a browser the
+    /// session launched (`suite_web`).
+    WebGrounding { size: u32 },
 }
 
 /// Where a browser task's page is shown.
@@ -220,6 +223,7 @@ pub fn all_tasks() -> impl Iterator<Item = &'static Task> {
         .chain(GROUNDING.iter())
         .chain(crate::suite_quirks::QUIRKS.iter())
         .chain(crate::suite_web::WEB_TASKS.iter())
+        .chain(crate::suite_web::WEB_GROUNDING.iter())
 }
 
 pub fn task(id: &str) -> Option<&'static Task> {
@@ -427,7 +431,7 @@ pub fn check(
         v.fail(format!("no task {}", prep.task));
         return v;
     };
-    if matches!(t.setup, Setup::Web { .. }) {
+    if matches!(t.setup, Setup::Web { .. } | Setup::WebGrounding { .. }) {
         crate::suite_web::check(t, prep, events, &done, &mut v);
         return v;
     }

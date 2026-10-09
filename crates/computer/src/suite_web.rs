@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 
 use crate::action::Action;
 use crate::record::ActionRecord;
-use crate::suite::{Event, Prepared, Setup, Task, Verdict, WebTarget};
+use crate::suite::{BOARDS, Event, Prepared, Setup, Task, Verdict, WebTarget};
 
 const FORM: &str = "On the Web Range page, fill in the Sign-up form: Name Ada Lovelace (replacing the name that is there), Email ada@example.com, Plan Team; tick Accept terms but not Send news, rate it 2 stars, then press Submit once.";
 const AX_FORM: &str = "On the Web Range page, set Name to Ada Lovelace (replacing the name that is there) and Plan to Team, tick Accept terms, then press Submit once.";
@@ -67,6 +67,22 @@ pub const WEB_TASKS: [Task; 6] = [
     },
 ];
 
+/// The page's P3 boards (`fixtures/web-range/grounding.html`), one task per marker size: pixels
+/// read off the page's screenshots, clicked through the browser's protocol.
+pub const WEB_GROUNDING: [Task; 2] = [
+    grounding(8, "Web grounding 8 px"),
+    grounding(16, "Web grounding 16 px"),
+];
+
+const fn grounding(size: u32, id: &'static str) -> Task {
+    Task {
+        id,
+        setup: Setup::WebGrounding { size },
+        goal: "The Board picture on the Grounding boards page shows numbered markers 1 to 5 and lettered decoys A to E; it has no accessibility elements. On each board, click marker 1, then 2, 3, 4 and 5, once each, at its dot (not its label), then press Next board. Go on until the page says all boards are done. Don't click a marker twice or click to test.",
+        end_state: "Every board's five markers were clicked once each, in order.",
+    }
+}
+
 /// The page's controls each task may touch; an event on any other is a wrong target.
 fn allowed(id: &str) -> &'static [&'static str] {
     match id {
@@ -92,8 +108,9 @@ pub fn foreign_requests(prep: &Prepared) -> Vec<String> {
 /// Checks a browser task: the page's log, trusted input only, the broker's records, and no
 /// request to the page's server that a browser didn't make.
 pub fn check(t: &Task, prep: &Prepared, events: &[Event], done: &[&ActionRecord], v: &mut Verdict) {
-    let target = match t.setup {
-        Setup::Web { target } => target,
+    let (target, grounding) = match t.setup {
+        Setup::Web { target } => (target, None),
+        Setup::WebGrounding { size } => (WebTarget::Cdp, Some(size)),
         _ => return,
     };
     if done.is_empty() {
@@ -128,6 +145,21 @@ pub fn check(t: &Task, prep: &Prepared, events: &[Event], done: &[&ActionRecord]
             "input the browser didn't mark as the user's: {}",
             untrusted.join(", ")
         ));
+    }
+    if let Some(size) = grounding {
+        // As the native boards: every board dealt and every click a hit; misses are its own count.
+        let g = crate::suite::score_grounding(size, events);
+        if g.boards < BOARDS {
+            v.fail(format!("{} of {BOARDS} boards done", g.boards));
+        }
+        if g.hits < g.trials {
+            v.fail(format!(
+                "{} of {} hits ({} wrong, {} misses, {} missing)",
+                g.hits, g.trials, g.wrong, g.misses, g.missing
+            ));
+        }
+        v.grounding = Some(g);
+        return;
     }
     let ok = allowed(t.id);
     let wrong: Vec<String> = events
