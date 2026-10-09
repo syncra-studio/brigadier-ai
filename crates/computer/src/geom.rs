@@ -150,6 +150,28 @@ impl ImageTransform {
     }
 }
 
+/// A window point (top left of the frame) on the desktop, in global points: top left of the
+/// first display, y down. A display left of or above it has negative coordinates.
+pub fn to_global(frame: Rect, p: Point) -> Point {
+    Point::new(frame.x + p.x, frame.y + p.y)
+}
+
+/// The pixels per point of the display that holds `p`, from each display's global bounds and
+/// scale; the first display's when none holds it (a point in a gap between displays).
+pub fn scale_at(displays: &[(Rect, f64)], p: Point) -> f64 {
+    displays
+        .iter()
+        .find(|(b, _)| b.contains(p))
+        .or(displays.first())
+        .map_or(2.0, |&(_, s)| s)
+}
+
+/// A Cocoa screen frame (bottom left of the first screen, y up) in global points (top left of
+/// the first display, y down). `main_height` is the first screen's height.
+pub fn from_cocoa(frame: Rect, main_height: f64) -> Rect {
+    Rect::new(frame.x, main_height - (frame.y + frame.h), frame.w, frame.h)
+}
+
 /// The estimated cost of an image for the worker's provider, labelled as an estimate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -285,6 +307,52 @@ mod tests {
         let resized = Rect::new(200.0, 585.0, 700.0, 332.0);
         assert_eq!(t.to_window(5.0, 5.0, resized), Err(MapError::StaleGeometry));
         assert_eq!(t.to_window(640.0, 5.0, FRAME), Err(MapError::OutsideImage));
+    }
+
+    // This Mac has one display: these cover a second one, a 1× display left of and above a
+    // 2× main display, as macOS lays them out (negative global coordinates).
+    const MAIN: Rect = Rect::new(0.0, 0.0, 1728.0, 1117.0);
+    const LEFT: Rect = Rect::new(-1920.0, -300.0, 1920.0, 1080.0);
+
+    #[test]
+    fn a_window_on_a_display_left_of_the_main_one_maps_to_negative_global_points() {
+        let frame = Rect::new(-1500.0, -200.0, 640.0, 332.0);
+        let scale = scale_at(&[(MAIN, 2.0), (LEFT, 1.0)], frame.center());
+        assert_eq!(scale, 1.0);
+        let t = ImageTransform::fit(7, frame, Rect::new(0.0, 0.0, 640.0, 332.0), scale, 2000);
+        assert_eq!((t.width, t.height), (640, 332));
+        let p = t.to_window(70.0, 68.0, frame).unwrap();
+        assert_eq!(to_global(frame, p), Point::new(-1430.0, -132.0));
+        assert!(LEFT.contains(to_global(frame, p)));
+        // The same window moved onto the 2× display: twice the pixels, the same points.
+        let moved = Rect::new(300.0, 200.0, 640.0, 332.0);
+        let scale = scale_at(&[(MAIN, 2.0), (LEFT, 1.0)], moved.center());
+        let t = ImageTransform::fit(7, moved, Rect::new(0.0, 0.0, 640.0, 332.0), scale, 2000);
+        assert_eq!((t.width, t.height), (1280, 664));
+        let p = t.to_window(140.0, 136.0, moved).unwrap();
+        assert_eq!(to_global(moved, p), Point::new(370.0, 268.0));
+    }
+
+    #[test]
+    fn a_point_between_displays_takes_the_first_displays_scale() {
+        let displays = [(MAIN, 2.0), (LEFT, 1.0)];
+        assert_eq!(scale_at(&displays, Point::new(-10.0, 900.0)), 2.0);
+        assert_eq!(scale_at(&displays, Point::new(-10.0, 0.0)), 1.0);
+        assert_eq!(scale_at(&[], Point::new(0.0, 0.0)), 2.0);
+    }
+
+    #[test]
+    fn a_cocoa_screen_frame_turns_into_global_points() {
+        // Cocoa puts the left display, 300 pt above the main one's top, at y = 1117 + 300 - 1080.
+        let cocoa = Rect::new(-1920.0, 337.0, 1920.0, 1080.0);
+        assert_eq!(from_cocoa(cocoa, MAIN.h), LEFT);
+        assert_eq!(from_cocoa(MAIN, MAIN.h), MAIN);
+        // A display below the main one.
+        let below = Rect::new(0.0, -900.0, 1440.0, 900.0);
+        assert_eq!(
+            from_cocoa(below, MAIN.h),
+            Rect::new(0.0, 1117.0, 1440.0, 900.0)
+        );
     }
 
     #[test]

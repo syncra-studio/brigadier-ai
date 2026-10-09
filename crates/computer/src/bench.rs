@@ -973,7 +973,9 @@ impl Bench {
         desktop.watch(prep.pid);
         // The fixture's own setup (it minimises one window, then orders another out) is over
         // before the clock starts, so it isn't counted as a click's effect.
-        let _ = self.log.until(Duration::from_secs(5), |e| e.id == "out-window")?;
+        let _ = self
+            .log
+            .until(Duration::from_secs(5), |e| e.id == "out-window")?;
         std::thread::sleep(Duration::from_millis(300));
         let _ = self.log.read_new()?;
         for (window, needle, target, ev) in [

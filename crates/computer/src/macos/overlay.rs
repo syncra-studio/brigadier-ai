@@ -34,7 +34,7 @@ use objc2_quartz_core::{
 use crate::cursor::{
     Aim, Change, CursorMsg, CursorScene, CursorSink, FADE, Gesture, IDLE, Phase, WorkerCursor,
 };
-use crate::geom::{Point, Rect};
+use crate::geom::{self, Point, Rect};
 
 /// The glide to a new point.
 const GLIDE: f64 = 0.15;
@@ -295,10 +295,16 @@ impl Panel {
         window.setContentView(Some(&view));
         // Shown without activating the helper, which never activates.
         window.orderFrontRegardless();
-        let origin = Point::new(
-            frame.origin.x,
-            main_height - (frame.origin.y + frame.size.height),
+        let global = geom::from_cocoa(
+            Rect::new(
+                frame.origin.x,
+                frame.origin.y,
+                frame.size.width,
+                frame.size.height,
+            ),
+            main_height,
         );
+        let origin = Point::new(global.x, global.y);
         Self {
             window,
             root,

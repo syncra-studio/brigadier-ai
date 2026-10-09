@@ -13,7 +13,7 @@ use super::private::{FIELD_MOUSE_WINDOW, FIELD_MOVED_WINDOW, Private};
 use crate::cancel::{CancelToken, Held, InputGuard, Release};
 use crate::desktop::{Button, Chord, Mods, WindowInfo};
 use crate::error::{CuResult, ErrorCode, err};
-use crate::geom::Point;
+use crate::geom::{self, Point};
 
 fn source() -> Option<CFRetained<CGEventSource>> {
     CGEventSource::new(CGEventSourceStateID::Private)
@@ -77,7 +77,8 @@ fn mouse_event(
     clicks: i64,
     mods: Mods,
 ) -> CuResult<CFRetained<CGEvent>> {
-    let global = CGPoint::new(w.frame.x + local.x, w.frame.y + local.y);
+    let global = geom::to_global(w.frame, local);
+    let global = CGPoint::new(global.x, global.y);
     let Some(e) = CGEvent::new_mouse_event(source().as_deref(), ty, global, cg_button(button))
     else {
         return err(ErrorCode::Failed, "couldn't make a mouse event");
@@ -226,7 +227,8 @@ pub fn scroll(w: &WindowInfo, at: Point, dx: i32, dy: i32) -> CuResult<()> {
     ) else {
         return err(ErrorCode::Failed, "couldn't make a scroll event");
     };
-    CGEvent::set_location(Some(&e), CGPoint::new(w.frame.x + at.x, w.frame.y + at.y));
+    let at = geom::to_global(w.frame, at);
+    CGEvent::set_location(Some(&e), CGPoint::new(at.x, at.y));
     CGEvent::set_integer_value_field(Some(&e), CGEventField(FIELD_MOUSE_WINDOW), i64::from(w.id));
     if !Private::get().set_window_location(&e, CGPoint::new(at.x, at.y)) {
         return err(

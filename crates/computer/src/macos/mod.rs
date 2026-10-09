@@ -23,13 +23,13 @@ use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication, NSWorks
 use objc2_application_services::{AXError, AXObserver, AXUIElement};
 use objc2_core_foundation::{
     CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFRunLoop, CFString, CFType,
-    CGPoint as CgPoint, kCFRunLoopDefaultMode,
+    kCFRunLoopDefaultMode,
 };
 use objc2_core_graphics::{
     CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGEvent, CGEventSource,
-    CGEventSourceStateID, CGEventType, CGGetActiveDisplayList, CGGetDisplaysWithPoint,
-    CGWindowListCopyWindowInfo, CGWindowListOption, kCGWindowBounds, kCGWindowIsOnscreen,
-    kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerPID,
+    CGEventSourceStateID, CGEventType, CGGetActiveDisplayList, CGWindowListCopyWindowInfo,
+    CGWindowListOption, kCGWindowBounds, kCGWindowIsOnscreen, kCGWindowLayer, kCGWindowName,
+    kCGWindowNumber, kCGWindowOwnerPID,
 };
 use objc2_foundation::{NSBundle, NSString, NSURL};
 
@@ -42,7 +42,7 @@ use crate::desktop::{
     WindowInfo,
 };
 use crate::error::{CuError, CuResult, ErrorCode, err};
-use crate::geom::{Point, Rect};
+use crate::geom::{self, Point, Rect};
 use crate::tree::RawNode;
 
 /// Whether this process may use accessibility and capture the screen.
@@ -500,23 +500,7 @@ impl Desktop for MacDesktop {
     }
 
     fn backing_scale(&mut self, w: &WindowInfo) -> f64 {
-        let c = w.frame.center();
-        let mut ids = [0u32; 4];
-        let mut n = 0u32;
-        // SAFETY: `ids` has room for 4 displays and `n` is a valid out pointer.
-        let ok =
-            unsafe { CGGetDisplaysWithPoint(CgPoint::new(c.x, c.y), 4, ids.as_mut_ptr(), &mut n) };
-        if ok.0 != 0 || n == 0 {
-            return 2.0;
-        }
-        let Some(mode) = CGDisplayCopyDisplayMode(ids[0]) else {
-            return 2.0;
-        };
-        let (px, pt) = (
-            CGDisplayMode::pixel_width(Some(&mode)),
-            CGDisplayMode::width(Some(&mode)),
-        );
-        if pt == 0 { 2.0 } else { px as f64 / pt as f64 }
+        geom::scale_at(&displays(), w.frame.center())
     }
 
     fn capture(
@@ -993,8 +977,8 @@ fn front_pid() -> Option<i32> {
     })
 }
 
-/// The active displays' bounds, in global points.
-fn display_bounds() -> Vec<Rect> {
+/// The active displays' bounds, in global points, and pixels per point, the main display first.
+fn displays() -> Vec<(Rect, f64)> {
     let mut ids = [0u32; 16];
     let mut n = 0u32;
     // SAFETY: both pointers are valid for the sizes given.
@@ -1003,9 +987,25 @@ fn display_bounds() -> Vec<Rect> {
         .iter()
         .map(|&id| {
             let b = CGDisplayBounds(id);
-            Rect::new(b.origin.x, b.origin.y, b.size.width, b.size.height)
+            let scale = CGDisplayCopyDisplayMode(id)
+                .map(|m| {
+                    let (px, pt) = (
+                        CGDisplayMode::pixel_width(Some(&m)),
+                        CGDisplayMode::width(Some(&m)),
+                    );
+                    if pt == 0 { 2.0 } else { px as f64 / pt as f64 }
+                })
+                .unwrap_or(2.0);
+            (
+                Rect::new(b.origin.x, b.origin.y, b.size.width, b.size.height),
+                scale,
+            )
         })
         .collect()
+}
+
+fn display_bounds() -> Vec<Rect> {
+    displays().into_iter().map(|(b, _)| b).collect()
 }
 
 /// An app's own strip of the menu bar: AppKit creates it the first time the app is active
