@@ -1056,25 +1056,33 @@ impl Core {
         limit: u32,
     ) -> Result<ComputerPage> {
         self.conversation(id)?;
-        let (events, has_more) = self
-            .read_page(streams::conversation(id), "computer.acted", before, limit)
-            .await?;
-        let earlier = has_more
-            .then(|| events.first().map(|e| e.stream_seq))
-            .flatten();
-        let actions = events
-            .iter()
-            .filter_map(|event| match decode(event) {
-                Ok(DomainEvent::ComputerActed {
-                    task_id: of,
-                    action,
-                    ..
-                }) if &of == task_id => Some(Ok(action)),
-                Ok(_) => None,
-                Err(err) => Some(Err(err)),
-            })
-            .collect::<Result<_>>()?;
-        Ok(ComputerPage { actions, earlier })
+        // A page counts the conversation's events, every worker's: read on past pages that hold
+        // none of this worker's, so a page with earlier ones is never empty.
+        let mut before = before;
+        loop {
+            let (events, has_more) = self
+                .read_page(streams::conversation(id), "computer.acted", before, limit)
+                .await?;
+            let earlier = has_more
+                .then(|| events.first().map(|e| e.stream_seq))
+                .flatten();
+            let actions: Vec<_> = events
+                .iter()
+                .filter_map(|event| match decode(event) {
+                    Ok(DomainEvent::ComputerActed {
+                        task_id: of,
+                        action,
+                        ..
+                    }) if &of == task_id => Some(Ok(action)),
+                    Ok(_) => None,
+                    Err(err) => Some(Err(err)),
+                })
+                .collect::<Result<_>>()?;
+            if !actions.is_empty() || earlier.is_none() {
+                return Ok(ComputerPage { actions, earlier });
+            }
+            before = earlier;
+        }
     }
 
     /// A page of the orchestrator log, oldest first.
@@ -2453,6 +2461,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(mine(&before), ["b0:0", "b0:1", "b1:0", "b1:1"]);
+        // Newer events of another worker only: the page reads past them.
+        let mut others = Vec::new();
+        for b in 3..9 {
+            others.push(acted("task-2", &format!("b{b}"), 0));
+        }
+        core.record_conversation(&id, others).await.unwrap();
+        let last = core.list_computer_actions(&id, &t1, None, 4).await.unwrap();
+        assert_eq!(mine(&last), ["b2:1"]);
+        assert!(last.earlier.is_some());
         let _ = std::fs::remove_dir_all(dir);
     }
 
