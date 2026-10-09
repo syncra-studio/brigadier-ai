@@ -92,10 +92,13 @@ export function ActionCardTitle({ children, detail }: { children: ReactNode; det
 export function ActionCardQuestion({
   children,
   detail,
+  aside,
   onDismiss,
 }: {
   children: ReactNode;
   detail?: ReactNode;
+  /** Beside the dismiss button (a round's pager). */
+  aside?: ReactNode;
   onDismiss: () => void;
 }) {
   return (
@@ -103,6 +106,7 @@ export function ActionCardQuestion({
       <div role="alert" aria-atomic="true" className="flex min-w-0 flex-1">
         <ActionCardTitle detail={detail}>{children}</ActionCardTitle>
       </div>
+      {aside}
       <button
         type="button"
         aria-label="Dismiss"
@@ -291,7 +295,7 @@ export function ActionOption({
       {...props}
     >
       <Marker chosen={chosen}>{number}</Marker>
-      <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5 @max-5xl/request-card:flex-col @max-5xl/request-card:items-stretch">
+      <span className="flex min-w-0 flex-1 flex-col gap-y-0.5">
         <span className="inline-flex min-w-0 items-center gap-1.5">
           <span className="min-w-0 font-medium wrap-anywhere" title={label}>
             {label}

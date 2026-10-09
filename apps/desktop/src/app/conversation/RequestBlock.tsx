@@ -39,6 +39,7 @@ import {
   isRunRequest,
   type SequenceEntry as Entry,
   turnTime,
+  waitsOnCard,
 } from "@/app/conversation/blocks";
 import { type PhaseView, phaseViewOf, splitReport } from "@/app/conversation/phaseView";
 import { TeamSentence } from "@/app/conversation/activity/TeamSentence";
@@ -91,6 +92,8 @@ export type BlockMeta = {
   worked: WorkSpan[];
   /** It waits only for quota, not for the user. */
   quotaWait: boolean;
+  /** It waits for the answer to its own question card, so it still works. */
+  cardWait: boolean;
   /** The model the user picked, to flag a fallback. */
   picked: ModelChoice | null;
   /** A session's block always says it works; a Chat's only until its reply streams. */
@@ -171,7 +174,9 @@ const WorkHeader: FC<{
   const now = useTicking(!phase && isLive(meta.state));
   const elapsed = phase ? phaseElapsed : turnTime(meta, now);
   if (!phase && meta.state === "working" && !foldable && !quota && elapsed < HEADER_AFTER_MS) return null;
-  const label = phase ? phaseLabel(phase, elapsed) : headerLabel(meta.state, elapsed, quota || meta.quotaWait);
+  // Waiting on its own question card, the turn still works: the card says it waits.
+  const state = waitsOnCard(meta) ? "working" : meta.state;
+  const label = phase ? phaseLabel(phase, elapsed) : headerLabel(state, elapsed, quota || meta.quotaWait);
   const text = (
     <span
       className={cn(

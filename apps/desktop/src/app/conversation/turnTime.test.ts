@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { type BoardDigest, buildBlocks, requestSpans, turnTime, workedMs } from "@/app/conversation/blocks";
+import { type BoardDigest, buildBlocks, requestSpans, requestWaitsOnCard, turnTime, waitsOnCard, workedMs } from "@/app/conversation/blocks";
 import type { Message, RequestState, UserRequest, WorkSpan } from "@/ipc/generated";
 
 const span = (fromMs: number, toMs: number | null): WorkSpan => ({ fromMs, toMs });
@@ -81,7 +81,7 @@ test("a span left open on a request that is over ends with the request", () => {
 });
 
 test("a turn shows its worked time, or how long it has waited for the user", () => {
-  const base = { worked: [span(0, 10), span(30, 40)], quotaWait: false, endedAtMs: 40 };
+  const base = { worked: [span(0, 10), span(30, 40)], quotaWait: false, cardWait: false, endedAtMs: 40 };
   assert.equal(turnTime({ ...base, state: "done" }, 1000), 20);
   assert.equal(turnTime({ ...base, state: "stopped" }, 1000), 20);
   assert.equal(turnTime({ ...base, state: "working", worked: [span(0, 10), span(30, null)] }, 100), 80);
@@ -89,6 +89,14 @@ test("a turn shows its worked time, or how long it has waited for the user", () 
   assert.equal(turnTime({ ...base, state: "waiting" }, 100), 60);
   // Waiting only for quota still counts as work.
   assert.equal(turnTime({ ...base, state: "waiting", quotaWait: true, worked: [span(0, null)] }, 100), 100);
+  // So does waiting on its own question card: its span stays open, and it reads as working.
+  const card = { ...base, state: "waiting" as const, cardWait: true, worked: [span(0, null)] };
+  assert.ok(waitsOnCard(card));
+  assert.equal(turnTime(card, 40_000), 40_000);
+  assert.ok(!waitsOnCard({ ...base, state: "waiting" }));
+  assert.ok(requestWaitsOnCard(request("r", { type: "waiting" }, { worked: [span(0, null)] })));
+  assert.ok(!requestWaitsOnCard(request("r", { type: "waiting" }, { worked: [span(0, null)], quotaWait: true })));
+  assert.ok(!requestWaitsOnCard(request("r", { type: "waiting" }, { worked: [span(0, 10)] })));
 });
 
 test("a follow-up steered into a turn keeps the turn's start and adds its own work", () => {
