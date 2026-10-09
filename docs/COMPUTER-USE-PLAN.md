@@ -862,6 +862,8 @@ disables the capabilities that need it (`unsupported_capability`) without affect
 | make-key records | 0xf8-byte records | `[0x04]=0xf8`, `[0x08]` = 1 then 2, `[0x20..0x30]=0xff`, `[0x3a]=0x10`, `[0x3c..0x40]` = window id | the target window becomes key inside its app |
 | `_SLPSGetFrontProcess` | function (SkyLight) | `OSStatus (ProcessSerialNumber *)` | the window server's front process, for the focus checks (F1) |
 | `GetProcessForPID` | function (deprecated, public) | `OSStatus (pid_t, ProcessSerialNumber *)` | the PSN for the record call |
+| `_SLPSSetFrontProcessWithOptions` | function (SkyLight) | `OSStatus (const ProcessSerialNumber *, CGWindowID, uint32 mode)`, mode `0x200` | the foreground rung's raise and give-back; `AXFrontmost` reports success but moves nothing (measured). Missing: the rung is `unsupported_capability` |
+| `GetProcessPID` | function (deprecated, public) | `OSStatus (const ProcessSerialNumber *, pid_t *)` | the pid of `_SLPSGetFrontProcess`'s answer; `NSWorkspace.frontmostApplication` is stale off a running main run loop |
 
 The spike adds a row for anything else it needs, with the ABI it verified.
 
