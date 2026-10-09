@@ -28,7 +28,12 @@ use super::private::Private;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 /// The pauses before a failed capture is asked for again.
-const RETRY_PAUSES: [Duration; 2] = [Duration::from_millis(100), Duration::from_millis(250)];
+const RETRY_PAUSES: [Duration; 4] = [
+    Duration::from_millis(100),
+    Duration::from_millis(250),
+    Duration::from_millis(500),
+    Duration::from_millis(1000),
+];
 
 /// The shareable windows, cached: listing them costs tens of milliseconds (§2).
 #[derive(Default)]
@@ -159,8 +164,8 @@ impl Shareable {
         Ok(move || {
             let mut got = rx.recv_timeout(TIMEOUT);
             // The system now and then fails to start a capture ("Failed to start stream due to
-            // audio/video capture failure", measured 2026-10-09: 2 of 12 runs of 10 boards), and
-            // the same request a moment later succeeds.
+            // audio/video capture failure", measured 2026-10-09: 2 of 12 runs of 10 boards, and
+            // once for over 350 ms), and the same request a moment later succeeds.
             for pause in RETRY_PAUSES {
                 if !matches!(got, Ok(Err(_))) {
                     break;
