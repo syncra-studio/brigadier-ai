@@ -655,7 +655,8 @@ pub(crate) fn remove_test_data_folder(dir: &Path) -> std::io::Result<()> {
     }
 }
 
-#[cfg(test)]
+// For the flow tests, which run on Unix only.
+#[cfg(all(test, unix))]
 impl CleanupLedger {
     /// What a test's daemon still holds, for a test that ends without disposing of it: ends
     /// at once every process recorded and anything running in `dir` or a recorded test data
