@@ -421,6 +421,27 @@ async fn a_missing_permission_lists_one_item_until_both_are_granted() {
     let items = permission_items(&board);
     assert_eq!(items.len(), 1, "{items:?}");
     assert_eq!(items[0].request_id, None);
+    // The thread relaying the worker's report doesn't list it a second time; other asks it does.
+    let note = |what: &str| crate::tools::NoteForUser {
+        kind: crate::tools::NoteKind::Waiting,
+        what: what.into(),
+        why: None,
+    };
+    let again = flow
+        .manager
+        .note_for_user(
+            &flow.conversation,
+            note("Grant Brigadier the macOS Accessibility and Screen Recording permissions."),
+        )
+        .await
+        .unwrap();
+    assert!(again.contains("already listed"), "{again}");
+    flow.manager
+        .note_for_user(&flow.conversation, note("Add STRIPE_KEY to .env."))
+        .await
+        .unwrap();
+    let board = flow.board().await;
+    assert_eq!(board.waiting.len(), 2, "{:?}", board.waiting);
     // Accessibility granted, Screen Recording not yet: still asked.
     lock(&helper.desktop).permissions = missing(true, false);
     assert!(turn.computer(ComputerCall::Apps).await.is_error);

@@ -643,7 +643,7 @@ impl SessionManager {
 
     /// `note_for_user`: a judgement call for "Decided for you", or something only the user
     /// can do for "Waiting on you", under the request the orchestrator serves.
-    async fn note_for_user(
+    pub(crate) async fn note_for_user(
         &self,
         id: &ConversationId,
         args: crate::tools::NoteForUser,
@@ -667,6 +667,11 @@ impl SessionManager {
                 Ok("Noted under Decided for you.".into())
             }
             NoteKind::Waiting => {
+                if self.computer_permission_asked(id, what).await {
+                    return Ok("It is already listed under Waiting on you: Brigadier asked for \
+                               computer use's permissions itself and closes that item once they're in."
+                        .into());
+                }
                 let added = self
                     .wait_on_user(id, request, WaitingSource::Orchestrator, what)
                     .await?;

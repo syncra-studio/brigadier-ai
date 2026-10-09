@@ -626,6 +626,28 @@ impl SessionManager {
         }
     }
 
+    /// Whether the orchestrator's `what` for "Waiting on you" repeats the conversation's open
+    /// computer-permission item: a worker's report that names the missing permissions.
+    pub(crate) async fn computer_permission_asked(
+        &self,
+        conversation_id: &ConversationId,
+        what: &str,
+    ) -> bool {
+        let what = what.to_lowercase();
+        let about = ["accessibility", "screen recording", "computer use"]
+            .iter()
+            .any(|word| what.contains(word));
+        if !about {
+            return false;
+        }
+        self.core.board(conversation_id).await.is_ok_and(|board| {
+            board
+                .waiting
+                .values()
+                .any(|item| matches!(item.source, WaitingSource::Computer))
+        })
+    }
+
     /// Both permissions are in: every open permission item is over.
     async fn computer_permissions_in(&self) {
         let conversations: Vec<ConversationId> = lock(&self.computer.state)
