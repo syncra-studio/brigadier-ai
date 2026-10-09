@@ -78,7 +78,7 @@ fn handle(mut s: TcpStream, log: &Mutex<PathBuf>) -> Result<()> {
         let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
         let path = path.split('?').next().unwrap_or("/").to_owned();
         let method = method.to_owned();
-        let mut length = 0usize;
+        let (mut length, mut close) = (0usize, false);
         loop {
             let mut h = String::new();
             if r.read_line(&mut h)? == 0 || h.trim().is_empty() {
@@ -88,6 +88,10 @@ fn handle(mut s: TcpStream, log: &Mutex<PathBuf>) -> Result<()> {
                 && k.trim().eq_ignore_ascii_case("content-length")
             {
                 length = v.trim().parse().unwrap_or(0);
+            } else if let Some((k, v)) = h.split_once(':')
+                && k.trim().eq_ignore_ascii_case("connection")
+            {
+                close = v.trim().eq_ignore_ascii_case("close");
             }
         }
         let mut body = vec![0; length.min(MAX_BODY)];
@@ -123,5 +127,66 @@ fn handle(mut s: TcpStream, log: &Mutex<PathBuf>) -> Result<()> {
         )?;
         s.write_all(content)?;
         s.flush()?;
+        if close {
+            return Ok(());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(port: u16, req: &str) -> String {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        s.write_all(req.as_bytes()).unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn it_serves_the_pages_and_appends_each_logged_event() {
+        // Removed when the test ends, passed or not.
+        struct Dir(PathBuf);
+        impl Drop for Dir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = Dir(std::env::temp_dir().join(format!("cu-web-fixture-{}", std::process::id())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let (log, port_file) = (dir.0.join("log.jsonl"), dir.0.join("port"));
+        let (l, p) = (log.clone(), port_file.clone());
+        std::thread::spawn(move || serve(l, &p));
+        let mut port = None;
+        for _ in 0..200 {
+            if let Ok(t) = std::fs::read_to_string(&port_file)
+                && let Ok(n) = t.trim().parse::<u16>()
+            {
+                port = Some(n);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let port = port.expect("the server wrote its port");
+        let page = request(
+            port,
+            "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
+        assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+        assert!(page.contains("Web Range"));
+        let body = r#"{"id":"name","ev":"input","v":"Ada","trusted":true}"#;
+        let req = format!(
+            "POST /log HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        assert!(request(port, &req).starts_with("HTTP/1.1 2"));
+        let logged = std::fs::read_to_string(&log).unwrap();
+        assert!(logged.contains(r#""id":"name""#), "{logged}");
+        assert!(
+            request(port, "GET /nope HTTP/1.1\r\nConnection: close\r\n\r\n")
+                .starts_with("HTTP/1.1 404")
+        );
     }
 }

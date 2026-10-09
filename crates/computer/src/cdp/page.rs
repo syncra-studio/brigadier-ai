@@ -1064,3 +1064,69 @@ impl Page {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn viewport() -> Viewport {
+        Viewport {
+            origin: Point::new(0.0, 87.0),
+            zoom: 1.25,
+            css_w: 960.0,
+            css_h: 714.0,
+        }
+    }
+
+    #[test]
+    fn a_css_point_maps_to_the_window_and_back_through_zoom() {
+        let v = viewport();
+        let p = v.to_window(100.0, 40.0);
+        assert_eq!(p, Point::new(125.0, 137.0));
+        assert_eq!(v.to_css(p), (100.0, 40.0));
+        assert_eq!(v.rect(), Rect::new(0.0, 87.0, 1200.0, 892.5));
+    }
+
+    fn dialog(kind: &str) -> Dialog {
+        Dialog {
+            kind: kind.into(),
+            message: "Delete Report.txt?".into(),
+            default_prompt: "Report.txt".into(),
+            text: None,
+            paused: None,
+        }
+    }
+
+    fn shown(d: &Dialog) -> Vec<(String, Option<String>, Option<String>)> {
+        let mut out = Vec::new();
+        dialog_nodes(d, &viewport(), &mut out);
+        assert!(out.iter().all(|n| n.element.is_dialog()));
+        out.into_iter()
+            .map(|n| (n.role, n.label, n.value))
+            .collect()
+    }
+
+    #[test]
+    fn a_confirm_offers_accept_and_dismiss_and_an_alert_only_ok() {
+        let confirm = shown(&dialog("confirm"));
+        let roles: Vec<&str> = confirm.iter().map(|n| n.0.as_str()).collect();
+        assert_eq!(roles, ["dialog", "button", "button"]);
+        assert_eq!(
+            confirm[0].1.as_deref(),
+            Some("confirm from the page: Delete Report.txt?")
+        );
+        let alert = shown(&dialog("alert"));
+        assert_eq!(alert.len(), 2);
+        assert_eq!(alert[1].1.as_deref(), Some("OK"));
+    }
+
+    #[test]
+    fn a_prompt_has_a_field_holding_its_default_until_text_is_set() {
+        let mut d = dialog("prompt");
+        let nodes = shown(&d);
+        assert_eq!(nodes[1].0, "textfield");
+        assert_eq!(nodes[1].2.as_deref(), Some("Report.txt"));
+        d.text = Some("Summary.txt".into());
+        assert_eq!(shown(&d)[1].2.as_deref(), Some("Summary.txt"));
+    }
+}
