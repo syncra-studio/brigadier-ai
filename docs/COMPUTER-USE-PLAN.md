@@ -1198,7 +1198,105 @@ the protocol path needs none)
     a second press while AppKit blinks the item, and a look through the window's menus on every poll.
   - Limited to pop-ups inside a page, S3p is back to 368.0 / 373.9 ms; native and page pop-up tasks still pass.
 
-### Phase 6: Windows and Linux backends
+### Phases 4 and 5: combined verification (2026-10-09)
+
+The two Phase 5 streams were merged into `computer-use` and the merged tree was verified once, as a whole. All live
+evidence ran from the cmux terminal, so the release helper used **the terminal's inherited grants** (the
+helper-bundle gate below is the exception, and its answer is that the grants aren't given yet). No privacy setting
+was touched.
+
+**The merge.** Stream B (`cu-quirks`) was rebased onto `computer-use` and fast-forwarded, then stream A
+(`cu-browser`) on top: linear history, both branches and worktrees removed. Conflicts were in `engine.rs` (A moved
+an observation's rendering into `render_observation`; B's "structure may be incomplete" line now goes through it),
+`macos/mod.rs`, the suite's registry (one `suite::all_tasks()` lists native, grounding, quirk, web and web-grounding
+tasks), its teardown (B's executable check, A's web server and scratch profile: the teardown no longer returns
+before ending them), and this plan.
+
+**One first-contact path** (`macos/quirks.rs`). The two streams each had one, and a browser window waited twice:
+once in the observe's settle, then again, blocking and uncancellable, inside every first tree read. Now:
+- **once per process instance, on the application element**: Electron gets `AXManualAccessibility`; Chromium
+  browsers get it and `AXEnhancedUserInterface`. Setting a flag again would restart the app's build, so it never is;
+- **one settle per window**, polled by the engine's own cancellable wait: where the window holds a page (or will:
+  Electron and Chromium windows always do), its page elements until the count holds for 250 ms and the page has
+  content inside the window, **up to 4.5 s**, past the ≈2 s these apps take to build it; otherwise every element,
+  up to 2.5 s; an app launched under 2 s ago, no sooner than 2 s after its launch; an empty view that may be a web
+  view waits up to 1 s for its page. A page that never comes is reported as incomplete;
+- `web.rs` keeps only the page probes. All six first-contact tasks pass on it (Electron, SwiftUI, Catalyst,
+  Chrome's accessibility page, a WKWebView, the native form).
+
+**Two regressions the merged suite caught.** Neither stream had run the whole native suite after its last change.
+- *Background scrolls missed their view* (from stream B's display mapping): the scroll's window-local point had
+  been shadowed by its global point, so a click on a row scrolled out of view failed (`row-173`, `last-row`).
+- *The find bar's search ran twice* (from stream B's set-then-edit for fields): the extra edit on a search field
+  searched again, and the found-text highlight windows ended the batch as if it had navigated (`find-replace`).
+  Search fields now get the set alone; text fields and combo boxes keep the edit a SwiftUI binding needs.
+
+**Codex's review** (base `5c16a3ad`, six findings, all valid, all fixed):
+- page actions now wait for the user's pause, as native ones do;
+- the page's password check follows shadow roots and asks every out-of-process frame when the focus rests on one;
+  a frame that can't answer counts as a password field;
+- every page key is checked, so paste, Delete and Backspace no longer bypass it;
+- a launch stopped while the browser starts makes no page (a browser it started is still reported, owned and quit);
+- the scroll point (also found by the suite, above);
+- a cleared page field equals `""` in a value expectation instead of reading as its label.
+Live: in the web fixture, Backspace in the page's password field and paste, type and Delete in a PIN field inside
+the cross-origin frame were refused (the PIN logged no input), while typing into that frame's Code field worked;
+clearing "Name" with `value_equals ""` was confirmed.
+
+**The safety rule from the live finding.** A trial had run `find /` and `pkill`. The Operate brief now says it in
+plain words: use only the computer tools and the files and apps the task names; never kill or signal a process; never
+search the whole disk. `observe`'s description, which every worker sees, says the last two. Tests check both.
+
+**Results on the merged tree**
+
+| Gate or check | Result | Evidence |
+|---|---|---|
+| Full bench, 200 reps, `--no-foreground` | **every gate passes** | 1360 s, load average 1.7–2.9 (one-minute, sampled each minute), nothing else of ours running; the bench ran under `nice -n 10`. `bench-1791560210.json` |
+| S1 / S2 | pass | observe 6.5 / 7.0 ms; with a screenshot 46.6 / 50.0 ms (p50 / p95) |
+| S3 / S3p | pass | set_value 3.6 / 4.4 ms effect; menu-bar pick 6.4 / 8.3 ms; press 2.8 / 3.7 ms; pop-up item 370.2 / 377.4 ms, 200/200 |
+| S4 / S5 / SEL | pass | background pixel click 14.6 / 36.7 ms effect; 100 characters 8.4 ms set, 16.8 ms as keys; select and type over 20/20 |
+| P1 / P2 / P2r / P4 | pass | 1600/1600; 1600/1600 inside, worst error 0.00 pt; 200/200 refusals; 0 wrong-target effects |
+| SA | pass | 600/600 inactive NSButton, NSTextView and SwiftUI button clicks landed, 0 focus changes |
+| F1 | **pass: 0** | the clean rerun stream B asked for, with no other worker driving the Mac |
+| Scripted suite, every task | **PASS: 35/35** | `brigadier-computer suite scripted <out>`: 18 native, 4 grounding sets, 5 quirk, 6 web, 2 web-grounding sets. The focus monitor saw one front change, 200 ms during `web-ax-form`'s setup (Chrome launched without a port, as stream A reported), before the task began |
+| Model sanity run, Claude (Opus, medium) | **4/4** | `row-173`, `find-replace`, `catalyst-order`, `web-form`; 0 shortcuts; F1 0; E1 median 1.5 |
+| Model sanity run, Codex (gpt-6.1-sol, medium) | **4/4** | the same tasks; 0 shortcuts; F1 0; E1 median 2.25 |
+| P3 | **PASS** (measured before) | Phase 4: 50/50 at 8, 12, 16 and 24 pt; stream A: 50/50 at 8 and 16 px on a page |
+| E1 (≤ 1.3) | **MISS for both** | one small run each: Claude 1.5 (1.0–1.8), Codex 2.25 (1.8–2.5). Phase 4's pooled medians were Claude 1.0 and Codex 2.25 |
+| Signed build | **PASS** | `APPLE_SIGNING_IDENTITY=… pnpm tauri:debug-app`; `codesign -dvv`: `Brigadier Dev.app` (`ai.brigadier.dev`), `Brigadier Computer Use.app` (`ai.brigadier.dev.computer-use`) and `brigadierd` all "Developer ID Application: SYNCRA, SRL (7JQSPMWT79)", TeamIdentifier 7JQSPMWT79, hardened runtime; `codesign --verify --deep --strict` passes |
+| Helper-bundle gate | **Not verified: no grant yet** | A scratch daemon from the signed bundle (no helper override) launched the bundled helper through LaunchServices (parent pid 1, its own responsible process); `getComputerAccess` answered accessibility **false**, screen recording **false**. The helper exited when the daemon did |
+
+**Not done or open** (Phases 4 and 5 together)
+- **The helper-bundle gate.** Every live result used the terminal's grants. Once the user grants Brigadier Computer
+  Use: check that System Settings lists it (not Brigadier or a terminal), that the dev daemon's helper reports both
+  grants and passes the scripted suite, that the grants survive a helper restart and a rebuild signed by the same
+  team, and, as a user check, that revoking one gives `permission_missing` with the fix.
+- **E1 misses for both providers** in the small runs. Workers observe once more than the reference, to verify;
+  Codex adds its own tool discovery and one-action batches (Phase 4's list of fixes still stands: accept Codex's
+  `submit_report` shapes, give their call shape in its brief, accept the argument spellings it uses).
+- **The six dev trials** of Phase 4 never ran.
+- **The comparisons** with other computer-use tools, once they are turned on and granted (a future build).
+- **A save panel on another Space** keeps Save disabled; `save-panel` can't finish while the user is on another
+  Space or in a full-screen app. Suggested: report `background_unavailable` with that reason.
+- **Several displays**: unit-tested only; this Mac has one display.
+- **Chrome without a debugging port**: background key events don't reach its page; `set_value` and presses do.
+  Only Chrome for Testing was driven; Arc and Dia never were.
+- **A plain launch of Chrome flicks the front** for 0.1–0.2 s (only the suite's setup does this; workers launch
+  through `launch`).
+- **A menu pick took the front once** while a system "quit unexpectedly" alert was the front app (stream B's quick
+  bench). 200/200 menu picks changed nothing in a full bench.
+- **`AXEnhancedUserInterface` stays set** on a Chromium process once looked at, which costs it some speed.
+- **A search field's value is set without an edit**, so a SwiftUI `.searchable` binding might not hear it.
+- **A launch stopped mid-start** was reviewed, not reproduced live.
+- **`launch` puts the new window on top** (without keeping the front), and **a background app's window flashes
+  once per batch** under synthetic activation (Phase 4).
+- **Contention between terminal-granted processes** (Phase 3) bites only in development.
+- **Quota steers Operate to Codex** when Claude's window is projected high; Codex takes about twice the calls.
+
+### Phase 6: Windows and Linux backends (a future build)
+
+**Not in this build.** The user ruled on 2026-10-09 that computer use ships macOS-only; Windows and Linux are a
+future build. The scope below stays as the plan for it.
 
 **Scope**
 - §6 backends behind the same trait and tools.
