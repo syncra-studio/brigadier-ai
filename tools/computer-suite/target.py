@@ -104,6 +104,12 @@ def prepare(d, task, trial):
     ws = [w for w in windows(t["pid"]) if w.get("id") == t["window"]]
     if not ws:
         raise SystemExit("target: the dev app's window is gone")
+    # A window closed with its red button stays listed while the app runs, with no accessibility
+    # element: the worker would find nothing to act on.
+    o = subprocess.run([HELPER, "observe", str(t["window"]), "never"], capture_output=True, text=True)
+    if o.returncode or not re.search(r"^\s*e2 ", o.stdout, re.M):
+        raise SystemExit(f"target: the dev app's window {t['window']} has no accessibility tree (closed?): "
+                         f"{(o.stderr or o.stdout).strip()[:200]}")
     os.makedirs(trial, exist_ok=True)
     json.dump({"task": task, "pid": t["pid"], "window": t["window"], "window_title": ws[0].get("title", ""),
                "ready_ms": int(time.time() * 1000)}, open(os.path.join(trial, "setup.json"), "w"), indent=1)
