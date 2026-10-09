@@ -1236,6 +1236,14 @@ impl Flow {
 
     pub async fn stop(self) {
         self.manager.shutdown().await;
+        // A daemon that quits keeps its live tasks' test data folders; a test's tasks end
+        // with it.
+        for conversation in self.core.catalog().conversations {
+            for task in self.core.tasks(&conversation.id).await.unwrap_or_default() {
+                let folder = crate::manager::workers::test_data_dir(&task.id);
+                let _ = crate::ledger::remove_test_data_folder(&folder);
+            }
+        }
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
