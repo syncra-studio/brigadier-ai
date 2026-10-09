@@ -102,9 +102,8 @@ fn refused() -> ErrorData {
 
 fn text_result(text: String, is_error: bool) -> CallToolResult {
     reply_result(ToolReply {
-        text,
         is_error,
-        images: Vec::new(),
+        ..ToolReply::ok(text)
     })
 }
 
@@ -122,12 +121,20 @@ fn reply_result(reply: ToolReply) -> CallToolResult {
         })
         .collect();
     content.push(ContentBlock::text(reply.text));
-    let is_error = reply.is_error;
-    if is_error {
+    let mut result = if reply.is_error {
         CallToolResult::error(content)
     } else {
         CallToolResult::success(content)
+    };
+    if let Some(us) = reply.engine_us {
+        let mut meta = rmcp::model::JsonObject::new();
+        meta.insert(
+            "brigadier/engine_ms".into(),
+            serde_json::json!(us as f64 / 1000.0),
+        );
+        result.meta = Some(rmcp::model::MetaObject(meta));
     }
+    result
 }
 
 impl ServerHandler for BrigadierServer {
@@ -197,7 +204,9 @@ mod tests {
 
     #[test]
     fn a_reply_with_an_image_puts_it_first_as_base64() {
-        let reply = ToolReply::ok("window w2 · image i1").with_image("image/png", vec![1, 2, 3]);
+        let mut reply =
+            ToolReply::ok("window w2 · image i1").with_image("image/png", vec![1, 2, 3]);
+        reply.engine_us = Some(1_250);
         let result = serde_json::to_value(reply_result(reply)).unwrap();
         let content = result["content"].as_array().unwrap();
         assert_eq!(content.len(), 2);
@@ -206,5 +215,7 @@ mod tests {
         assert_eq!(content[0]["mimeType"], "image/png");
         assert_eq!(content[1]["type"], "text");
         assert_eq!(content[1]["text"], "window w2 · image i1");
+        // The engine's time rides in `_meta`, out of the model's content.
+        assert_eq!(result["_meta"]["brigadier/engine_ms"], 1.25);
     }
 }

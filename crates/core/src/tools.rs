@@ -1006,6 +1006,9 @@ pub struct ToolReply {
     pub is_error: bool,
     /// Shown to the model before the text (a screenshot reads best ahead of what it shows).
     pub images: Vec<ReplyImage>,
+    /// For a computer call, the time the helper's engine spent on it: the MCP result's
+    /// `_meta`, which models don't read, so the tool's own overhead can be measured (S6).
+    pub engine_us: Option<u64>,
 }
 
 impl ToolReply {
@@ -1014,6 +1017,7 @@ impl ToolReply {
             text: text.into(),
             is_error: false,
             images: Vec::new(),
+            engine_us: None,
         }
     }
 
@@ -1022,6 +1026,7 @@ impl ToolReply {
             text: text.into(),
             is_error: true,
             images: Vec::new(),
+            engine_us: None,
         }
     }
 

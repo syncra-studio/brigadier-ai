@@ -757,10 +757,12 @@ fn reply_of(a: Answer) -> ToolReply {
             None => a.reply.text,
         })
     };
-    match (a.image, a.reply.image) {
+    let mut reply = match (a.image, a.reply.image) {
         (Some(png), Some(meta)) => reply.with_image(meta.mime, png),
         _ => reply,
-    }
+    };
+    reply.engine_us = Some((a.reply.engine_ms * 1000.0).round() as u64);
+    reply
 }
 
 /// Where the helper lives and how it starts, from the daemon's own place.
