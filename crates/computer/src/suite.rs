@@ -61,7 +61,7 @@ pub const TASKS: [Task; 20] = [
     Task {
         id: "menu",
         setup: Setup::Fixture,
-        goal: "Pick Targets › Level 1 › Level 2 › Pick Me 3 in the app's menu bar.",
+        goal: "In the app's menu bar, choose the item at Targets › Level 1 › Level 2 › Pick Me 3.",
         end_state: "Pick Me 3 was picked, and no other menu item.",
     },
     Task {
