@@ -778,7 +778,7 @@ fn operate_rules(task: &Task) -> String {
         ""
     };
     format!(
-        "\n\nTarget: {target}\nEnd state: {end_state}\n\nHow to operate:{tools}\n- Use code, files and app APIs when they can do the job, unless the task says to do it through the UI: then the UI is the job. Read structure (observe's refs) before pixels.\n- Batch the steps you are sure of in one act, and put an expect on every step that changes state. Read the changes act returns instead of observing again.\n- Zoom before clicking a small target by its pixels.\n- Never act on a window the task didn't name or you didn't launch.\n- Finish by checking the end state: an expect that held, or an observe. Report what you did, whether the end state is verified and how, and anything refused or blocked.",
+        "\n\nTarget: {target}\nEnd state: {end_state}\n\nHow to operate:{tools}\n- Use only the computer tools and the files and apps this task names. Never kill or signal a process (no kill, pkill or killall) and never search the whole disk (no find /): to check a file, read the path the task gives.\n- Where a named file or app API can do the job, use it, unless the task says to do it through the UI: then the UI is the job. Read structure (observe's refs) before pixels.\n- Batch the steps you are sure of in one act, and put an expect on every step that changes state. Read the changes act returns instead of observing again.\n- Zoom before clicking a small target by its pixels.\n- Never act on a window the task didn't name or you didn't launch.\n- Finish by checking the end state: an expect that held, or an observe. Report what you did, whether the end state is verified and how, and anything refused or blocked.",
         target = task.target.as_deref().unwrap_or("(named in the task)"),
         end_state = task.end_state.as_deref().unwrap_or("(named in the task)"),
     )
@@ -1088,6 +1088,12 @@ mod tests {
         );
         assert!(brief.contains("put an expect on every step that changes state"));
         assert!(brief.contains("whether the end state is verified and how"));
+        // A trial once ran `find /` and `pkill`: the brief rules both out in plain words.
+        assert!(
+            brief.contains("Use only the computer tools and the files and apps this task names")
+        );
+        assert!(brief.contains("Never kill or signal a process (no kill, pkill or killall)"));
+        assert!(brief.contains("never search the whole disk (no find /)"));
         assert!(brief.contains("Don't change files in the repository"));
         assert!(!brief.contains("How to write code"));
         assert!(!brief.contains("tools.mcp__computer__act"));
