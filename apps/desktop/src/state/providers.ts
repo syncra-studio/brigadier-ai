@@ -18,6 +18,7 @@ export const WORKER_CATEGORIES: readonly TaskCategory[] = [
   "review",
   "merge",
   "verify",
+  "operate",
 ];
 
 /** The part of the settings that says what's available. */

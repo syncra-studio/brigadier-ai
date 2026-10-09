@@ -709,6 +709,9 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String 
         TaskKind::Verify => {
             "verify: prove each \"done when\" criterion of the task with your own evidence, run the checks the task's brief asks for on this worktree, and report exactly what passed and failed. Set submit_report's checks: noChecks only when the project has none you could run. Fix nothing."
         }
+        TaskKind::Operate => {
+            "operate: operate apps on this Mac through the computer tools to reach the end state the brief names, and report what you did and whether the end state is verified."
+        }
     };
     let write_rules = if task.kind.writes() {
         let commits = if task.route.choice.provider == brigadier_providers::ProviderKind::Codex {

@@ -694,7 +694,7 @@ fn default_true() -> bool {
 
 /// The settings' shape: each step up converts saved settings once (see
 /// [`crate::routing::availability::migrate`]).
-pub const SETTINGS_VERSION: u32 = 1;
+pub const SETTINGS_VERSION: u32 = 2;
 
 /// A model named by its CLI's id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]

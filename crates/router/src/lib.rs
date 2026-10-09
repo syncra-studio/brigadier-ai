@@ -113,6 +113,7 @@
 //! | Review         | Codex, Claude |
 //! | Merge          | Claude, Codex |
 //! | Verify         | Codex, Claude |
+//! | Operate        | Claude, Codex |
 //! | Chat           | Claude, Codex |
 //! | Orchestrate    | Claude, Codex |
 
@@ -177,6 +178,8 @@ pub enum TaskCategory {
     Merge,
     /// Runs the project's checks.
     Verify,
+    /// Operates apps on the user's Mac through the computer tools; writes nothing that lands.
+    Operate,
     /// A plain conversation with the model (no orchestrator, no workers).
     Chat,
     /// A session's orchestrator: plans, delegates and reviews, never does the work itself.
@@ -184,13 +187,14 @@ pub enum TaskCategory {
 }
 
 impl TaskCategory {
-    pub const ALL: [TaskCategory; 8] = [
+    pub const ALL: [TaskCategory; 9] = [
         TaskCategory::Scout,
         TaskCategory::Research,
         TaskCategory::Implement,
         TaskCategory::Review,
         TaskCategory::Merge,
         TaskCategory::Verify,
+        TaskCategory::Operate,
         TaskCategory::Chat,
         TaskCategory::Orchestrate,
     ];

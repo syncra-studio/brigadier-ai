@@ -78,6 +78,14 @@ impl SessionManager {
                     }
                 };
                 let subject = match (&args.subject, args.kind) {
+                    // An operator works on apps, not on another task's change.
+                    (Some(_), TaskKind::Operate) => {
+                        return Err(Error::Invalid(
+                            "an operate task takes no `subject`: name the app, dev build or \
+                             files it works on in its spec"
+                                .into(),
+                        ));
+                    }
                     (Some(reference), _) => Some(self.find_task(id, reference).await?),
                     (None, TaskKind::Review) => {
                         return Err(Error::Invalid(

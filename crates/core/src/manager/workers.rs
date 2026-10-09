@@ -929,7 +929,7 @@ impl SessionManager {
                 category,
                 areas: &areas,
                 floor,
-                needs: needs_of(&attachments, &needs),
+                needs: needs_of(kind, &attachments, &needs),
                 pin: pin.clone(),
                 hold_pin: false,
                 avoid,
@@ -4077,15 +4077,18 @@ impl SessionManager {
     }
 }
 
-/// What a task needs from its model: its attachments, and the capabilities it asked for.
+/// What a task needs from its model: its attachments, the capabilities it asked for, and what
+/// its kind takes (an operator looks at the screen, so only a model that reads images can).
 pub(crate) fn needs_of(
+    kind: TaskKind,
     attachments: &[AttachmentRef],
     capabilities: &[brigadier_router::Capability],
 ) -> brigadier_router::Needs {
     brigadier_router::Needs {
-        image_input: attachments
-            .iter()
-            .any(|attachment| attachment.mime.starts_with("image/")),
+        image_input: kind == TaskKind::Operate
+            || attachments
+                .iter()
+                .any(|attachment| attachment.mime.starts_with("image/")),
         image_generation: capabilities.contains(&brigadier_router::Capability::ImageGeneration),
         context_tokens: None,
     }
@@ -4120,6 +4123,7 @@ pub(crate) fn category(kind: TaskKind) -> brigadier_router::TaskCategory {
         TaskKind::Review => TaskCategory::Review,
         TaskKind::Merge => TaskCategory::Merge,
         TaskKind::Verify => TaskCategory::Verify,
+        TaskKind::Operate => TaskCategory::Operate,
     }
 }
 
@@ -4247,7 +4251,7 @@ fn stopped_state(task: &Task) -> TaskState {
 pub(crate) fn access_for(kind: TaskKind, permission: PermissionLevel) -> WorkerAccess {
     WorkerAccess {
         repo: match kind {
-            TaskKind::Research => RepoAccess::None,
+            TaskKind::Research | TaskKind::Operate => RepoAccess::None,
             TaskKind::Implement | TaskKind::Merge => RepoAccess::Write,
             TaskKind::Scout | TaskKind::Review | TaskKind::Verify => RepoAccess::Read,
         },
@@ -4634,6 +4638,22 @@ mod tests {
                 .contains(&PathBuf::from("packed-refs.lock"))
         );
         assert_eq!(roots(&main, ProviderKind::Codex), vec![PathBuf::new()]);
+    }
+
+    #[test]
+    fn an_operator_needs_a_model_that_takes_images_and_no_checkout() {
+        assert!(needs_of(TaskKind::Operate, &[], &[]).image_input);
+        assert!(!needs_of(TaskKind::Research, &[], &[]).image_input);
+        assert_eq!(
+            category(TaskKind::Operate),
+            brigadier_router::TaskCategory::Operate
+        );
+        for permission in [PermissionLevel::AskForApproval, PermissionLevel::FullAccess] {
+            assert_eq!(
+                access_for(TaskKind::Operate, permission).repo,
+                RepoAccess::None
+            );
+        }
     }
 
     #[test]

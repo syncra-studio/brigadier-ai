@@ -72,6 +72,8 @@ pub enum TaskKind {
     Merge,
     /// Runs the project's checks.
     Verify,
+    /// Operates apps on the user's Mac through the computer tools; writes nothing that lands.
+    Operate,
 }
 
 impl TaskKind {

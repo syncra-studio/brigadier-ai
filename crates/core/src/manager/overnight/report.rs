@@ -1360,6 +1360,7 @@ fn worker_lines(run: &OvernightRun, board: &Board) -> Vec<String> {
                 TaskKind::Scout | TaskKind::Research => "scout",
                 TaskKind::Review => "review",
                 TaskKind::Verify => "verifier",
+                TaskKind::Operate => "operator",
             },
         };
         let named = |task: &Task| {
@@ -1399,6 +1400,7 @@ fn worker_lines(run: &OvernightRun, board: &Board) -> Vec<String> {
         for (kind, one, many) in [
             ("review", "review", "reviews"),
             ("scout", "scout", "scouts"),
+            ("operator", "app run", "app runs"),
             ("judge", "judge", "judges"),
         ] {
             let members: Vec<&Task> = of

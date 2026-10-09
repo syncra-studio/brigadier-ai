@@ -164,7 +164,7 @@ pub fn default_floor(category: TaskCategory) -> QualityTier {
         TaskCategory::Implement | TaskCategory::Review | TaskCategory::Merge => {
             QualityTier::Frontier
         }
-        TaskCategory::Orchestrate => QualityTier::Strong,
+        TaskCategory::Orchestrate | TaskCategory::Operate => QualityTier::Strong,
         TaskCategory::Research => QualityTier::Standard,
         TaskCategory::Scout | TaskCategory::Verify | TaskCategory::Chat => QualityTier::Light,
     }
@@ -199,7 +199,10 @@ fn at_least(category: TaskCategory, effort: &'static str) -> &'static str {
 fn category_effort(category: TaskCategory) -> Option<&'static str> {
     match category {
         TaskCategory::Scout => Some("low"),
-        TaskCategory::Research | TaskCategory::Verify | TaskCategory::Orchestrate => Some("medium"),
+        TaskCategory::Research
+        | TaskCategory::Verify
+        | TaskCategory::Operate
+        | TaskCategory::Orchestrate => Some("medium"),
         TaskCategory::Implement | TaskCategory::Review | TaskCategory::Merge => Some("high"),
         TaskCategory::Chat => None,
     }
@@ -1978,6 +1981,80 @@ mod tests {
         assert_eq!(default_floor(TaskCategory::Scout), QualityTier::Light);
         assert_eq!(category_effort(TaskCategory::Scout), Some("low"));
         assert_eq!(at_least(TaskCategory::Scout, "medium"), "low");
+    }
+
+    #[test]
+    fn an_operator_runs_on_a_strong_model_at_medium() {
+        assert_eq!(default_floor(TaskCategory::Operate), QualityTier::Strong);
+        assert_eq!(category_effort(TaskCategory::Operate), Some("medium"));
+        assert_eq!(at_least(TaskCategory::Operate, "medium"), "medium");
+        assert!(!allows_trials(TaskCategory::Operate));
+    }
+
+    /// An operator looks at the screen: a model that takes no images can't run it, and when
+    /// one vendor is used up the work goes to the other's next model that takes images.
+    #[test]
+    fn an_operator_falls_back_to_the_next_model_that_takes_images() {
+        let registry = Registry::bundled();
+        let claude = [info("opus[1m]", "Opus 5.5", Some("claude-opus-5-5[1m]"))];
+        let codex = [
+            brigadier_providers::ModelInfo {
+                input_modalities: vec!["text".into()],
+                ..info("gpt-6-astra", "GPT-6-Astra", None)
+            },
+            info("gpt-6.1-sol", "GPT-6.1-Sol", None),
+        ];
+        let models = crate::merge(
+            &registry,
+            &[
+                (ProviderKind::Claude, claude.as_slice()),
+                (ProviderKind::Codex, codex.as_slice()),
+            ],
+            &[],
+            &[],
+        );
+        let used_up = ProviderQuota {
+            provider: ProviderKind::Claude,
+            windows: Vec::new(),
+            limit: Some(brigadier_providers::LimitHit {
+                window: None,
+                resets_at_ms: Some(60_000),
+                kind: LimitKind::UsageWindow,
+            }),
+            heat: Heat::Limited,
+            observed_at_ms: Some(0),
+        };
+        let providers = [
+            ProviderState {
+                provider: ProviderKind::Claude,
+                logged_in: true,
+                quota: Some(used_up),
+            },
+            ProviderState {
+                provider: ProviderKind::Codex,
+                logged_in: true,
+                quota: None,
+            },
+        ];
+        let mut q = query(&registry, &models, &providers);
+        q.category = TaskCategory::Operate;
+        q.floor = default_floor(TaskCategory::Operate);
+        q.needs = Needs {
+            image_input: true,
+            ..Needs::default()
+        };
+        let astra = preview(&q)
+            .candidates
+            .into_iter()
+            .find(|candidate| candidate.model == "gpt-6-astra")
+            .expect("astra is listed");
+        assert_eq!(astra.blocked.as_deref(), Some("doesn't take images"));
+        let route = routed(&q);
+        assert_eq!(
+            (route.provider, route.model.as_str()),
+            (ProviderKind::Codex, "gpt-6.1-sol")
+        );
+        assert_eq!(route.effort.as_deref(), Some("medium"));
     }
 
     fn info(id: &str, name: &str, resolved: Option<&str>) -> brigadier_providers::ModelInfo {
