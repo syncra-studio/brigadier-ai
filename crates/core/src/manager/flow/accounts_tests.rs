@@ -622,3 +622,401 @@ async fn a_model_window_used_up_on_one_account_sends_that_models_work_to_another
     assert_eq!(runtime.switch_target(&own, Some("opus")), None);
     flow.stop().await;
 }
+
+async fn chat_on(flow: &Flow, provider: ProviderKind, account: Option<&str>) -> ConversationId {
+    flow.manager
+        .create_conversation(
+            ConversationKind::Chat,
+            None,
+            Some("Account cleanup".into()),
+            Some(SetupRequest::Chat {
+                model: ModelChoice {
+                    provider,
+                    model: None,
+                    effort: None,
+                    fast: None,
+                    account: account.map(Into::into),
+                },
+            }),
+        )
+        .await
+        .unwrap()
+        .id
+}
+
+async fn say_to(flow: &Flow, chat: &ConversationId, text: &str) {
+    flow.manager
+        .send_message(chat.clone(), text.into(), vec![], vec![], false, None)
+        .await
+        .unwrap();
+    tokio::time::timeout(super::PATIENCE, async {
+        loop {
+            let board = flow.core.board(chat).await.unwrap();
+            if !board.requests.is_empty()
+                && board
+                    .requests
+                    .values()
+                    .all(|request| request.state == RequestState::Done)
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the chat answered");
+}
+
+/// Both native artifact kinds must retain the home of each run, even after the setup points
+/// at the new account. Unrelated accounts may hold files with the same native id.
+#[tokio::test]
+async fn archiving_or_deleting_a_chat_cleans_each_accounts_own_artifacts() {
+    for provider in ProviderKind::ALL {
+        for switched in [false, true] {
+            for delete in [false, true] {
+                let log = Log::default();
+                let flow = Flow::start(
+                    "accounts-cleanup",
+                    Options {
+                        behavior: Arc::new(super::FakeBehavior {
+                            cleanup: true,
+                            ..Default::default()
+                        }),
+                        ..Options::default()
+                    },
+                    logging(&log, move |turn| {
+                        if switched && turn.account.is_none() {
+                            Reply::limited()
+                        } else {
+                            Reply::text("Done.")
+                        }
+                    }),
+                )
+                .await;
+                flow.add_accounts(&[(provider, "acct-b"), (provider, "unrelated")], true)
+                    .await;
+                let chat = chat_on(
+                    &flow,
+                    provider,
+                    if switched { None } else { Some("acct-b") },
+                )
+                .await;
+                say_to(&flow, &chat, "Clean this chat.").await;
+                let owner = format!("chat:{chat}");
+                let ledger = flow.manager.runtime.ledger();
+                let artifacts = ledger.artifacts(&owner);
+                let native: Vec<_> = artifacts
+                    .iter()
+                    .filter(|artifact| {
+                        matches!(
+                            artifact,
+                            brigadier_providers::Artifact::ClaudeSession { .. }
+                                | brigadier_providers::Artifact::CodexThread { .. }
+                        )
+                    })
+                    .cloned()
+                    .collect();
+                assert_eq!(native.len(), if switched { 2 } else { 1 }, "{native:?}");
+                let id = seen(&log)[0].native_id.clone();
+                let own = flow.dir.join("data/own").join(provider.to_string());
+                let extra = flow.manager.runtime.account_home("acct-b");
+                let unrelated = flow.manager.runtime.account_home("unrelated");
+                // Same-id files in a home the chat never ran on must stay untouched.
+                let mut kept = Vec::new();
+                for home in [unrelated.as_path()]
+                    .into_iter()
+                    .chain((!switched).then_some(own.as_path()))
+                {
+                    for path in super::fake_files(home, &id) {
+                        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                        std::fs::write(&path, "unrelated").unwrap();
+                        kept.push(path);
+                    }
+                }
+                for artifact in &native {
+                    let home = match artifact {
+                        brigadier_providers::Artifact::ClaudeSession { home, .. }
+                        | brigadier_providers::Artifact::CodexThread { home, .. } => home,
+                        _ => unreachable!(),
+                    };
+                    assert!(
+                        home.as_deref()
+                            .is_none_or(|home| home == extra.to_str().unwrap())
+                    );
+                    for path in super::fake_files(
+                        home.as_ref().map(std::path::Path::new).unwrap_or(&own),
+                        &id,
+                    ) {
+                        assert!(path.exists(), "{} was created", path.display());
+                    }
+                }
+                if delete {
+                    flow.manager.delete(chat.clone()).await.unwrap();
+                } else {
+                    flow.manager.archive(chat.clone()).await.unwrap();
+                }
+                flow.manager.cleanup_finished(&chat).await;
+                assert!(ledger.artifacts(&owner).is_empty(), "cleanup acknowledged");
+                let removals = flow.behavior.removals.lock().unwrap().clone();
+                for artifact in &native {
+                    let home = match artifact {
+                        brigadier_providers::Artifact::ClaudeSession { home, .. }
+                        | brigadier_providers::Artifact::CodexThread { home, .. } => home,
+                        _ => unreachable!(),
+                    };
+                    let account = home.as_ref().map(|_| "acct-b".to_owned());
+                    assert_eq!(
+                        removals
+                            .iter()
+                            .filter(|(kind, on, batch)| *kind == provider
+                                && *on == account
+                                && batch.contains(artifact))
+                            .count(),
+                        1,
+                        "{removals:?}"
+                    );
+                    for path in super::fake_files(
+                        home.as_ref().map(std::path::Path::new).unwrap_or(&own),
+                        &id,
+                    ) {
+                        assert!(!path.exists(), "{} was cleaned", path.display());
+                    }
+                }
+                assert!(
+                    kept.iter()
+                        .all(|path| std::fs::read_to_string(path).unwrap() == "unrelated")
+                );
+                flow.stop().await;
+            }
+        }
+    }
+}
+
+/// An interrupted disposal retains both homes durably. The startup sweep must resolve extra
+/// adapters before attempting cleanup, rather than send the extra artifact to the own CLI.
+#[tokio::test]
+async fn a_restart_finishes_account_cleanup_in_the_recorded_homes() {
+    for provider in ProviderKind::ALL {
+        let log = Log::default();
+        let mut flow = Flow::start(
+            "accounts-cleanup-restart",
+            Options {
+                behavior: Arc::new(super::FakeBehavior {
+                    cleanup: true,
+                    ..Default::default()
+                }),
+                ..Options::default()
+            },
+            logging(&log, |turn| {
+                if turn.account.is_none() {
+                    Reply::limited()
+                } else {
+                    Reply::text("Done.")
+                }
+            }),
+        )
+        .await;
+        flow.add_accounts(&[(provider, "acct-b")], true).await;
+        let chat = chat_on(&flow, provider, None).await;
+        say_to(&flow, &chat, "Before the restart.").await;
+        let owner = format!("chat:{chat}");
+        let native: Vec<_> = flow
+            .manager
+            .runtime
+            .ledger()
+            .artifacts(&owner)
+            .into_iter()
+            .filter(|artifact| {
+                matches!(
+                    artifact,
+                    brigadier_providers::Artifact::ClaudeSession { .. }
+                        | brigadier_providers::Artifact::CodexThread { .. }
+                )
+            })
+            .collect();
+        assert_eq!(native.len(), 2, "both runs recorded: {native:?}");
+        flow.behavior
+            .fail_cleanup
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            !flow
+                .manager
+                .runtime
+                .ledger()
+                .dispose(&owner)
+                .await
+                .is_clean()
+        );
+        assert!(flow.manager.runtime.ledger().disposing().contains(&owner));
+        flow.behavior.removals.lock().unwrap().clear();
+        flow.behavior
+            .fail_cleanup
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        flow.restart().await;
+        assert!(
+            flow.manager.runtime.ledger().artifacts(&owner).is_empty(),
+            "startup sweep completed the disposal"
+        );
+        assert!(!flow.manager.runtime.ledger().disposing().contains(&owner));
+        let removals = flow.behavior.removals.lock().unwrap().clone();
+        for artifact in native {
+            let (id, home) = match &artifact {
+                brigadier_providers::Artifact::ClaudeSession { session_id, home } => {
+                    (session_id, home)
+                }
+                brigadier_providers::Artifact::CodexThread { thread_id, home } => (thread_id, home),
+                other => panic!("unexpected artifact: {other:?}"),
+            };
+            let account = home.as_ref().map(|_| "acct-b".to_owned());
+            let sent: Vec<_> = removals
+                .iter()
+                .filter(|(_, _, batch)| batch.contains(&artifact))
+                .collect();
+            assert_eq!(sent.len(), 1, "{removals:?}");
+            assert_eq!(
+                (sent[0].0, &sent[0].1),
+                (provider, &account),
+                "{removals:?}"
+            );
+            let own = flow.dir.join("data/own").join(provider.to_string());
+            for path in
+                super::fake_files(home.as_ref().map(std::path::Path::new).unwrap_or(&own), id)
+            {
+                assert!(!path.exists(), "{} survived", path.display());
+            }
+        }
+        flow.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn an_extra_login_makes_a_signed_out_provider_ready_and_starts_its_chat() {
+    for provider in ProviderKind::ALL {
+        let log = Log::default();
+        let flow = Flow::start(
+            "accounts-signed-out-own",
+            Options {
+                behavior: Arc::new(super::FakeBehavior {
+                    signed_out: Mutex::default(),
+                    ..Default::default()
+                }),
+                ..Options::default()
+            },
+            logging(&log, |_| Reply::text("Signed in here.")),
+        )
+        .await;
+        flow.behavior.signed_out.lock().unwrap().push(provider);
+        flow.manager.runtime.refresh_providers(Some(provider));
+        flow.until("the own login is checked as signed out", |_| {
+            !flow.manager.runtime.provider_signed_in(provider)
+        })
+        .await;
+        assert!(!flow.manager.runtime.provider_signed_in(provider));
+        assert!(
+            !flow
+                .manager
+                .runtime
+                .overview(provider)
+                .unwrap()
+                .status
+                .unwrap()
+                .logged_in
+        );
+        flow.add_accounts(&[(provider, "acct-b")], true).await;
+        assert!(flow.manager.runtime.provider_signed_in(provider));
+        let chat = chat_on(&flow, provider, None).await;
+        say_to(&flow, &chat, "Use the signed-in account.").await;
+        let turns = seen(&log);
+        assert_eq!(turns.len(), 1, "{turns:?}");
+        assert_eq!(turns[0].provider, provider);
+        assert_eq!(turns[0].account.as_deref(), Some("acct-b"));
+        assert!(flow.core.conversation(&chat).unwrap().fallback.is_none());
+        flow.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn an_unsent_steer_survives_an_account_switch_without_repeating_landed_messages() {
+    for provider in ProviderKind::ALL {
+        let log = Log::default();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let script: Script = {
+            let (log, release) = (log.clone(), release.clone());
+            Arc::new(move |turn: Turn| {
+                let (log, release) = (log.clone(), release.clone());
+                Box::pin(async move {
+                    log.lock().unwrap().push(Seen {
+                        provider: turn.provider,
+                        account: turn.account.clone(),
+                        native_id: turn.native_id.clone(),
+                        input: turn.input.clone(),
+                    });
+                    if turn.account.is_none() {
+                        release.notified().await;
+                        Reply::limited()
+                    } else {
+                        Reply::text("Both requests done.")
+                    }
+                })
+            })
+        };
+        let flow = Flow::start(
+            "accounts-unsent-steer",
+            Options {
+                thread: provider,
+                behavior: Arc::new(super::FakeBehavior {
+                    refuse_steers: true,
+                    ..Default::default()
+                }),
+                ..Options::default()
+            },
+            script,
+        )
+        .await;
+        flow.add_accounts(&[(provider, "acct-b")], true).await;
+        flow.say("Landed first.").await;
+        flow.until("the first CLI takes the message", |_| seen(&log).len() == 1)
+            .await;
+        flow.manager
+            .send_message(
+                flow.conversation.clone(),
+                "Never landed steer.".into(),
+                vec![],
+                vec![],
+                true,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            seen(&log).len(),
+            1,
+            "the refused steer did not start a turn"
+        );
+        release.notify_one();
+        flow.settled().await;
+        let turns = seen(&log);
+        assert_eq!(turns.len(), 2, "{turns:?}");
+        assert_eq!(turns[1].account.as_deref(), Some("acct-b"));
+        assert_eq!(turns[1].native_id, turns[0].native_id);
+        assert!(turns[1].input.contains("Never landed steer."), "{turns:?}");
+        assert!(turns[1].input.contains(CONTINUE_ON_ACCOUNT), "{turns:?}");
+        assert!(!turns[1].input.contains("Landed first."), "{turns:?}");
+        let injections = flow
+            .core
+            .list_orchestrator_log(&flow.conversation, None, 200)
+            .await
+            .unwrap()
+            .entries
+            .into_iter()
+            .filter(|logged| {
+                matches!(&logged.entry,
+                    crate::work::OrchestratorEntry::Injection { injection }
+                        if injection.kind == crate::work::InjectionKind::UserMessage
+                )
+            })
+            .count();
+        assert_eq!(injections, 2, "each delivered message logged once");
+        flow.stop().await;
+    }
+}
