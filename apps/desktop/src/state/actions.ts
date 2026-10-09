@@ -681,12 +681,13 @@ export async function answerCard(
   await request({ method: "answerCard", conversationId, cardId, decision });
 }
 
+/** Answers a question card: one answer per question of its round. */
 export async function answerQuestion(
   conversationId: string,
   cardId: string,
-  answer: string,
+  answers: string[],
 ): Promise<void> {
-  await request({ method: "answerQuestion", conversationId, cardId, answer });
+  await request({ method: "answerQuestion", conversationId, cardId, answers });
 }
 
 export async function decidePlan(

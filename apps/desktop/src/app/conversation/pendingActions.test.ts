@@ -29,7 +29,7 @@ const approval: ShownApproval = {
 const question: Question = {
   id: "question", conversationId: conversation.id, taskId: null, requestId: null,
   position: 1, kind: { type: "orchestrator" }, text: "Which branch?", options: [], recommended: null,
-  answer: null, createdAtMs: 0, answeredAtMs: null,
+  items: [], answer: null, answers: [], createdAtMs: 0, answeredAtMs: null,
 };
 const board = {
   conversationId: conversation.id, approvals: { approval }, questions: { question },

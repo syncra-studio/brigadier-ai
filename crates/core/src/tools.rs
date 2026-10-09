@@ -247,21 +247,53 @@ pub struct ReportRef {
     pub task: String,
 }
 
-/// `ask_user`: a question only the user can answer (a product choice, an unclear requirement).
+/// `ask_user`: a round of questions only the user can answer (product choices, unclear
+/// requirements), shown as one card they answer at once.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AskUser {
-    /// The question, self-contained: the user may read it later, out of context.
-    pub question: String,
-    /// Suggested answers shown as buttons; the user can always type their own.
-    #[serde(default)]
-    pub options: Vec<String>,
-    /// The option you recommend, by its 0-based index in `options` (shown as "Recommended").
-    #[serde(default)]
-    pub recommended: Option<u32>,
-    /// The task that waits for the answer, if any (other tasks continue).
+    /// The round's questions, 1 to 6, each self-contained: the user may read them later,
+    /// out of context.
+    pub questions: Vec<AskQuestion>,
+    /// The task that waits for the answers, if any (other tasks continue).
     #[serde(default)]
     pub task: Option<String>,
+}
+
+/// One question of an `ask_user` round.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AskQuestion {
+    /// The question, one short sentence.
+    pub question: String,
+    /// 2 to 4 suggested answers; the user can always type their own instead.
+    #[serde(default)]
+    pub options: Vec<AskOption>,
+    /// The option you recommend, by its 0-based index in `options` (shown as
+    /// "Recommended" and picked at first). Required when there are options.
+    #[serde(default)]
+    pub recommended: Option<u32>,
+}
+
+/// One suggested answer.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AskOption {
+    /// A few words ("Throw an error").
+    pub label: String,
+    /// One short line on what it means, when the label alone doesn't say it.
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// `propose_merge`: ask the user once, on a card, whether to merge the session branch into
+/// its base.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProposeMerge {
+    /// One short line under the question: what the merge brings, and what the reviews found.
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 /// `read_artifact`: page through a stored artifact (transcript, diff, command output, note).
@@ -568,8 +600,9 @@ pub struct ReviewPlan {
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FinishSession {
-    /// The user's own words that ask for the merge or agree to the one you proposed, quoted
-    /// exactly from their latest message ("yes, merge it").
+    /// The user's own words that ask for the merge, quoted exactly from their latest message
+    /// ("yes, merge it"). Leave it out when the user chose "Merge" on your propose_merge card.
+    #[serde(default)]
     pub user_words: String,
     /// The merge commit message, when a merge commit is needed.
     #[serde(default)]
@@ -692,6 +725,7 @@ pub enum OrchestratorCall {
     RequestApproval(RequestApproval),
     LandPhase(LandPhase),
     FinishSession(FinishSession),
+    ProposeMerge(ProposeMerge),
     NoteForUser(NoteForUser),
     ListTasks,
     SettleStep(SettleStep),
@@ -730,6 +764,7 @@ impl OrchestratorCall {
             Self::RequestApproval(_) => "request_approval",
             Self::LandPhase(_) => "land_phase",
             Self::FinishSession(_) => "finish_session",
+            Self::ProposeMerge(_) => "propose_merge",
             Self::NoteForUser(_) => "note_for_user",
             Self::ListTasks => "list_tasks",
             Self::SettleStep(_) => "settle_step",

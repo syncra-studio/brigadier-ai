@@ -6,10 +6,11 @@ use std::sync::{Arc, OnceLock};
 use brigadier_core::tools::{
     AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch,
     DelegateTask, EndRun, FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser,
-    OrchestratorCall, PlanPhases, PreviewLog, ProposeOvernight, QueryBrain, ReadArtifact,
-    RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCheck,
-    RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, StartPreview,
-    StopPreview, StopWorker, SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
+    OrchestratorCall, PlanPhases, PreviewLog, ProposeMerge, ProposeOvernight, QueryBrain,
+    ReadArtifact, RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role,
+    RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript,
+    SettleStep, StartPreview, StopPreview, StopWorker, SubmitOutline, SubmitReport, TaskRef,
+    ToolCall, WorkerCall,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
@@ -46,10 +47,12 @@ const STOP_WORKER: &str = "Stop a running worker, e.g. when its task is no longe
 went wrong. Nothing of it lands. `reason` is required: one plain line on why, which the user \
 reads on the thread's \"Stopped\" row (e.g. \"No longer needed: the user dropped the export\").";
 
-const ASK_USER: &str = "Ask the user a question only they can answer (a product choice, an \
-unclear requirement). Returns at once; the answer arrives later as a message. Name the task that \
-waits for the answer in `task` so other work continues; `options` become numbered answers (the \
-user can always type their own answer), and `recommended` marks the one you recommend.";
+const ASK_USER: &str = "Ask the user what only they can decide (a product choice, an unclear \
+requirement), as one card they answer at once: a round of 1 to 6 questions, each with 2 to 4 \
+options and the one you recommend (`recommended`). The user can always type their own answer \
+instead. This is the only way to ask the user anything: never ask in your reply's text. Returns \
+at once; reply with exactly [quiet] after it. The answers arrive as an [answer] message in the \
+same request. Name the task that waits for them in `task` so other work continues.";
 
 const READ_REPORT: &str = "Read a task's final report again: summary, changes, decisions, \
 verification, open questions and artifact ids. A report from another session of this project \
@@ -133,12 +136,19 @@ quick self-check first; then they land on their own and you hear when. Conflicts
 you: delegate a merge task.";
 
 const FINISH_SESSION: &str = "New-worktree sessions only: merge the session branch into its \
-base branch, once the user's latest message asks for it (\"merge it\", also together with the \
-work: then merge as soon as it has landed, without asking again) or plainly agrees to the merge \
-your reply right before proposed, as a question naming the base (\"yes\"). Pass their \
-words in user_words, quoted exactly from that message. Brigadier checks them against it and \
-refuses on a question, a condition, a \"no\" or a \"wait\", or words already used for a merge; \
-then propose it and wait for their answer. Never merge on silence. Returns when merged.";
+base branch, once the user consented: they chose \"Merge\" on your propose_merge card (leave \
+user_words out), or their latest message asks for it in words (\"merge it\", also together with \
+the work: then merge as soon as it has landed, without asking again). Pass such words in \
+user_words, quoted exactly from that message. Brigadier checks the consent and refuses on a \
+question, a condition, a \"no\" or a \"wait\", or consent already used for a merge. Never merge \
+on silence. Returns when merged.";
+
+const PROPOSE_MERGE: &str = "New-worktree sessions only: once the work has landed, ask the \
+user on a card whether to merge the session branch into its base (\"Merge into main\" / \"Not \
+yet\"). Ask it once: Brigadier refuses a second card while one is open, or after \"Not yet\" until \
+the user writes again. `note` is one short line on what the merge brings and what the reviews \
+found. Returns at once; reply with exactly [quiet] or your final answer. The answer arrives as \
+an [answer] message: on \"Merge\", call finish_session without user_words.";
 
 const NOTE_FOR_USER: &str = "Keep the user's session summary current. kind \"decided\": a \
 judgement call you made on the user's behalf that they would want to know (a product or scope \
@@ -346,6 +356,11 @@ fn orchestrator_tools() -> Vec<Tool> {
             input_schema::<FinishSession>(),
         ),
         tool(
+            "propose_merge",
+            PROPOSE_MERGE,
+            input_schema::<ProposeMerge>(),
+        ),
+        tool(
             "note_for_user",
             NOTE_FOR_USER,
             input_schema::<NoteForUser>(),
@@ -472,6 +487,7 @@ pub fn parse_call(
                 "request_approval" => OrchestratorCall::RequestApproval(args(name, arguments)?),
                 "land_phase" => OrchestratorCall::LandPhase(args(name, arguments)?),
                 "finish_session" => OrchestratorCall::FinishSession(args(name, arguments)?),
+                "propose_merge" => OrchestratorCall::ProposeMerge(args(name, arguments)?),
                 "note_for_user" => OrchestratorCall::NoteForUser(args(name, arguments)?),
                 "list_tasks" => OrchestratorCall::ListTasks,
                 "settle_step" => OrchestratorCall::SettleStep(args(name, arguments)?),

@@ -1445,10 +1445,10 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::AnswerQuestion {
             conversation_id,
             card_id,
-            answer,
+            answers,
         } => {
             sessions
-                .answer_question(conversation_id, card_id, answer)
+                .answer_question(conversation_id, card_id, answers)
                 .await?;
             Response::AnswerQuestion
         }

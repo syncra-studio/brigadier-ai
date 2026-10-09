@@ -893,7 +893,7 @@ function QuestionAction({
     question.kind.type === "uncommittedChanges" ? question.kind.files : null;
   const answer = (text: string) =>
     action.run(() =>
-      answerQuestion(question.conversationId, question.id, text),
+      answerQuestion(question.conversationId, question.id, [text]),
     );
   return (
     <ChoiceCard

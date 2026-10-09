@@ -11,7 +11,8 @@ use crate::model::{ConversationId, DomainEvent};
 use crate::tools::{NoteKind, OrchestratorCall, ToolReply, WorkerCall};
 use crate::work::{
     ApprovalSubject, ArtifactRef, AttachmentRef, DecisionSource, InjectionKind, OrchestratorStep,
-    OrchestratorStepKind, QuestionKind, Task, TaskId, TaskKind, WaitingSource, WorkerRole,
+    OrchestratorStepKind, QuestionItem, QuestionKind, QuestionOption, Task, TaskId, TaskKind,
+    WaitingSource, WorkerRole,
 };
 use crate::{Error, Result, now_ms};
 
@@ -297,20 +298,23 @@ impl SessionManager {
                 Ok(format!("Stopped task-{}.", task.number))
             }
             OrchestratorCall::AskUser(args) => {
+                let items = ask_round(args.questions)?;
                 let task_id = match &args.task {
                     Some(reference) => Some(self.find_task(id, reference).await?.id),
                     None => None,
                 };
-                self.open_question(
-                    id,
-                    task_id,
-                    QuestionKind::Orchestrator,
-                    args.question,
-                    args.options,
-                    args.recommended,
-                )
-                .await?;
-                Ok("Asked the user. The answer arrives later as a message; carry on with anything that doesn't depend on it.".into())
+                let asked = items.len();
+                self.open_round(id, task_id, QuestionKind::Orchestrator, items)
+                    .await?;
+                Ok(format!(
+                    "Asked the user {} on one card. Reply with exactly {} now. The answers arrive as an [answer] message in this request; carry on with anything that doesn't depend on them.",
+                    if asked == 1 {
+                        "1 question".to_owned()
+                    } else {
+                        format!("{asked} questions")
+                    },
+                    prompts::QUIET
+                ))
             }
             OrchestratorCall::ReadReport(args) => {
                 let (task, here) = self.find_report(id, &args.task).await?;
@@ -417,6 +421,10 @@ impl SessionManager {
                 self.check_plan_mode(id).await?;
                 self.finish_session(id, &args.user_words, args.message)
                     .await
+            }
+            OrchestratorCall::ProposeMerge(args) => {
+                self.check_plan_mode(id).await?;
+                self.propose_merge(id, args.note).await
             }
             OrchestratorCall::NoteForUser(args) => self.note_for_user(id, args).await,
             OrchestratorCall::SettleStep(args) => self.settle_step(id, args).await,
@@ -847,6 +855,58 @@ fn messaged(task: &mut Task, text: String, answered: bool) {
     if !answered {
         task.landing = None;
     }
+}
+
+/// The most questions one card asks, and the most options one question offers.
+const ROUND_MAX: usize = 6;
+const OPTIONS_MAX: usize = 4;
+
+/// An `ask_user` round as the card's questions, or why it can't be asked as it is.
+fn ask_round(questions: Vec<crate::tools::AskQuestion>) -> Result<Vec<QuestionItem>> {
+    if questions.is_empty() || questions.len() > ROUND_MAX {
+        return Err(Error::Invalid(format!(
+            "ask_user takes 1 to {ROUND_MAX} questions in one round; ask the rest in the next round."
+        )));
+    }
+    questions
+        .into_iter()
+        .map(|question| {
+            let text = question.question.trim().to_owned();
+            if text.is_empty() {
+                return Err(Error::Invalid("a question of the round is empty".into()));
+            }
+            let options: Vec<QuestionOption> = question
+                .options
+                .into_iter()
+                .filter(|option| !option.label.trim().is_empty())
+                .map(|option| QuestionOption {
+                    label: option.label.trim().to_owned(),
+                    description: option
+                        .description
+                        .map(|line| line.trim().to_owned())
+                        .filter(|line| !line.is_empty()),
+                })
+                .collect();
+            if options.len() == 1 || options.len() > OPTIONS_MAX {
+                return Err(Error::Invalid(format!(
+                    "\"{text}\": give 2 to {OPTIONS_MAX} options (or none, for a free answer)."
+                )));
+            }
+            let recommended = question
+                .recommended
+                .filter(|&index| (index as usize) < options.len());
+            if !options.is_empty() && recommended.is_none() {
+                return Err(Error::Invalid(format!(
+                    "\"{text}\": say which option you recommend in `recommended` (its 0-based index)."
+                )));
+            }
+            Ok(QuestionItem {
+                text,
+                options,
+                recommended,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

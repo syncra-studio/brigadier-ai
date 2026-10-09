@@ -928,6 +928,30 @@ pub enum QuestionKind {
     Orchestrator,
     /// Local checkout with uncommitted changes: should workers start from them?
     UncommittedChanges { files: Vec<String> },
+    /// The thread asks once whether to merge the session branch into its base
+    /// (`propose_merge`); the answer "Merge into {base}" is the user's consent.
+    Merge { branch: String, base: String },
+}
+
+/// One answer a question suggests: a short label, and a line on what it means.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionOption {
+    pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// One question of a round the user answers at once.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionItem {
+    pub text: String,
+    #[serde(default)]
+    pub options: Vec<QuestionOption>,
+    /// The option the asker recommends, by its index in `options`.
+    #[serde(default)]
+    pub recommended: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -942,15 +966,50 @@ pub struct Question {
     pub request_id: Option<String>,
     pub position: i64,
     pub kind: QuestionKind,
+    /// The question; for a round, its questions one per line.
     pub text: String,
-    /// Suggested answers; the user may also type one.
+    /// Suggested answers; the user may also type one. A round's are in its `items`.
     pub options: Vec<String>,
     /// The suggested answer the asker recommends, by its index in `options`.
     #[serde(default)]
     pub recommended: Option<u32>,
+    /// A round's questions, answered together. Empty for a single question (`text` and
+    /// `options`), as every card stored before rounds is.
+    #[serde(default)]
+    pub items: Vec<QuestionItem>,
+    /// The answer as the asker reads it; for a round, each question with its answer.
     pub answer: Option<String>,
+    /// A round's answers, one per item, once answered.
+    #[serde(default)]
+    pub answers: Vec<String>,
     pub created_at_ms: i64,
     pub answered_at_ms: Option<i64>,
+}
+
+impl Question {
+    /// Its questions: a round's items, or the single question it asks.
+    pub fn round(&self) -> Vec<QuestionItem> {
+        if !self.items.is_empty() {
+            return self.items.clone();
+        }
+        vec![QuestionItem {
+            text: self.text.clone(),
+            options: self
+                .options
+                .iter()
+                .map(|label| QuestionOption {
+                    label: label.clone(),
+                    description: None,
+                })
+                .collect(),
+            recommended: self.recommended,
+        }]
+    }
+
+    /// Whether it still waits for the user.
+    pub fn is_open(&self) -> bool {
+        self.answer.is_none() && self.answered_at_ms.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]

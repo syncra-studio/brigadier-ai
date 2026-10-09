@@ -273,7 +273,7 @@ impl SessionManager {
         }
         for question in board.questions.values() {
             if of(&question.request_id)
-                && question.kind == QuestionKind::Orchestrator
+                && !matches!(question.kind, QuestionKind::UncommittedChanges { .. })
                 && question.answered_at_ms.is_none()
             {
                 self.withdraw_question(question).await;

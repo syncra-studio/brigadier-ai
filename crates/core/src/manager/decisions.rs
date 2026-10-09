@@ -1603,7 +1603,9 @@ mod tests {
             text: "Which region?".into(),
             options: Vec::new(),
             recommended: None,
+            items: Vec::new(),
             answer: None,
+            answers: Vec::new(),
             created_at_ms: 0,
             answered_at_ms: None,
         };

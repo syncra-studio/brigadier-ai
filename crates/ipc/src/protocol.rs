@@ -533,10 +533,12 @@ pub enum Request {
         card_id: CardId,
         decision: ApprovalDecision,
     },
+    /// Answers a question card's round: one answer per question, the picked option's label or
+    /// the user's own words.
     AnswerQuestion {
         conversation_id: ConversationId,
         card_id: CardId,
-        answer: String,
+        answers: Vec<String>,
     },
     DecidePlan {
         conversation_id: ConversationId,

@@ -293,6 +293,7 @@ pub(crate) fn stuck_cards(board: &Board, now: i64, after: i64) -> Vec<StuckCard>
             QuestionKind::UncommittedChanges { .. } => {
                 "Answer whether workers see your uncommitted changes".to_owned()
             }
+            QuestionKind::Merge { base, .. } => format!("Answer whether to merge into {base}"),
         };
         stuck.push(StuckCard {
             card_id: question.id.clone(),

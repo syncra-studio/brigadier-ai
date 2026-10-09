@@ -256,6 +256,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "request_approval" => ToolCall::Orchestrator(O::RequestApproval(arg(name, args))),
         "land_phase" => ToolCall::Orchestrator(O::LandPhase(arg(name, args))),
         "finish_session" => ToolCall::Orchestrator(O::FinishSession(arg(name, args))),
+        "propose_merge" => ToolCall::Orchestrator(O::ProposeMerge(arg(name, args))),
         "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
         "list_tasks" => ToolCall::Orchestrator(O::ListTasks),
         "settle_step" => ToolCall::Orchestrator(O::SettleStep(arg(name, args))),
