@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { sessionTabKey } from "./sessionTabKeys";
 import { localTerminalFolder } from "./terminalPaths";
+import { abandonedSideChats } from "./sideChats";
 
 const data = new Map<string, string>();
 Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
@@ -11,8 +12,39 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
 } });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage } });
 const { CHAT_TAB, newSessionTab, sessionTabs, selectTab, closeTab, reopenTab, moveTab,
-  selectTabNumber, stepTab, changeSessionTab, restoreSessionTabs, useSessionTabs } = await import("./sessionTabs");
+  selectTabNumber, stepTab, changeSessionTab, restoreSessionTabs, useSessionTabs, useTabCloseAsk } = await import("./sessionTabs");
 const { editDocument, documentText, flushDocument, noteDocumentSave, documentIsSaved, documentRelativePath, discardDocument } = await import("./documentDrafts");
+
+test("side chat pruning preserves plain chats, unknown parents and referenced session chats", () => {
+  const conversations = [
+    { id: "session", kind: "session" as const, sideOf: null },
+    { id: "plain", kind: "chat" as const, sideOf: null },
+    ...[["orphan", "session"], ["kept", "session"], ["legacy", "plain"], ["unknown", "missing"]]
+      .map(([id, sideOf]) => ({ id: id!, sideOf: sideOf!, kind: "chat" as const })),
+  ];
+  assert.deepEqual(abandonedSideChats([], new Set()), []);
+  assert.deepEqual(abandonedSideChats(conversations.slice(2), new Set()), []);
+  assert.deepEqual(abandonedSideChats(conversations, new Set(["kept"])), ["orphan"]);
+});
+
+test("empty new files close without confirmation while edited files ask", () => {
+  const id = newSessionTab("empty", "document");
+  assert.equal(documentIsSaved(id), true);
+  assert.equal(documentIsSaved(id, "/saved.txt"), false);
+  closeTab("empty", id);
+  assert.equal(useTabCloseAsk.getState().confirm, null);
+  assert.equal(sessionTabs("empty").tabs.length, 0);
+  const edited = newSessionTab("empty", "document");
+  editDocument(edited, "unsaved"); flushDocument(edited);
+  closeTab("empty", edited);
+  assert.equal(typeof useTabCloseAsk.getState().confirm, "function");
+  assert.equal(sessionTabs("empty").tabs.length, 1);
+  useTabCloseAsk.setState({ confirm: null });
+  editDocument(edited, ""); flushDocument(edited);
+  closeTab("empty", edited);
+  assert.equal(useTabCloseAsk.getState().confirm, null);
+  assert.equal(sessionTabs("empty").tabs.length, 0);
+});
 
 test("multiple tools insert after the front tab; closing returns to the opener and undo restores the position", () => {
   const a = newSessionTab("order", "terminal");

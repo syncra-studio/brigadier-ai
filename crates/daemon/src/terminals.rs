@@ -187,6 +187,12 @@ impl Terminals {
             return Ok(terminal.info());
         }
 
+        // Reattaching above does not need the original folder to still exist.
+        if !std::path::Path::new(&cwd).is_absolute() || !std::path::Path::new(&cwd).is_dir() {
+            return Err(Error::Invalid(
+                "terminal folder is not an existing absolute directory".into(),
+            ));
+        }
         let shell = default_shell();
         let mut command = CommandBuilder::new(&shell);
         if cfg!(unix) {
@@ -668,6 +674,33 @@ mod tests {
         assert!(terminals.get(&other.id).is_ok());
         terminals.close_all();
         assert_eq!(terminals.count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reattach_survives_a_removed_folder_but_new_shells_require_one() {
+        let folder =
+            Temp(std::env::temp_dir().join(format!("brig-removed-cwd-{}", std::process::id())));
+        std::fs::create_dir_all(&*folder).unwrap();
+        let cwd = folder.display().to_string();
+        let terminals = Terminals::new();
+        for session in [Some("tab"), None] {
+            let first = terminals
+                .open_session("removed-cwd", session, cwd.clone(), 80, 24)
+                .unwrap();
+            std::fs::remove_dir(&*folder).unwrap();
+            let reattached = terminals
+                .open_session("removed-cwd", session, cwd.clone(), 100, 30)
+                .unwrap();
+            assert_eq!(first.id, reattached.id);
+            terminals.close_all();
+            assert!(
+                terminals
+                    .open_session("removed-cwd", session, cwd.clone(), 80, 24)
+                    .is_err()
+            );
+            std::fs::create_dir(&*folder).unwrap();
+        }
     }
 
     /// A worker's terminal runs its program directly with exactly the environment given; a

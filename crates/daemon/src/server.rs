@@ -595,12 +595,6 @@ impl Session {
                 path.is_absolute() && path.is_dir()
             })
             .unwrap_or(cwd);
-        if !std::path::Path::new(&cwd).is_absolute() || !std::path::Path::new(&cwd).is_dir() {
-            return Err(brigadier_core::Error::Invalid(
-                "terminal folder is not an existing absolute directory".into(),
-            )
-            .into());
-        }
         // Subscribed first, so no output between the scrollback and the feed is lost.
         if self.terminal_feed.is_none() {
             self.terminal_feed = Some(self.daemon.terminals.subscribe());

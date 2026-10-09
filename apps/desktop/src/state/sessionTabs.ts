@@ -77,7 +77,7 @@ export const useSessionTabs = create<{ sessions: Record<string, SessionTabs> }>(
       try {
         localStorage.setItem("brigadier.sessionTabs", JSON.stringify({ state: { sessions }, version: 1 }));
         for (const session of Object.values(previous)) for (const tab of session.tabs)
-          if (tab.kind === "document" && tab.savedPath && documentIsSaved(tab.id)) discardDocument(tab.id);
+          if (tab.kind === "document" && tab.savedPath && documentIsSaved(tab.id, tab.savedPath)) discardDocument(tab.id);
         pruneDocumentDrafts(new Set(Object.values(sessions).flatMap((session) =>
           session.tabs.filter((tab) => tab.kind === "document").map((tab) => tab.id))));
       } catch { /* Retain draft keys when storage is unavailable. */ }
@@ -244,7 +244,7 @@ function remember(conversationId: string, gone: SessionTab[]): void {
 export const useTabCloseAsk = create<{ confirm: (() => void) | null }>(() => ({ confirm: null }));
 
 function askToClose(tabs: SessionTab[], confirm: () => void): boolean {
-  if (!tabs.some((tab) => tab.kind === "document" && !documentIsSaved(tab.id))) return false;
+  if (!tabs.some((tab) => tab.kind === "document" && !documentIsSaved(tab.id, tab.savedPath))) return false;
   useTabCloseAsk.setState({ confirm });
   return true;
 }
@@ -341,13 +341,13 @@ export function selectTabNumber(conversationId: string, number: number): void {
 }
 
 /** Only clean saved documents return as checkout files. Dirty drafts need a new native save grant. */
-export function restoreSessionTabs(sessions: Record<string, SessionTabs>, isSaved: (id: string) => boolean = () => false): Record<string, SessionTabs> {
+export function restoreSessionTabs(sessions: Record<string, SessionTabs>, isSaved: (id: string, savedPath: string | null) => boolean = () => false): Record<string, SessionTabs> {
   return Object.fromEntries(Object.entries(sessions).map(([id, session]) => {
     const remapped = new Map<string, string>();
     const tabs = session.tabs.flatMap((tab): SessionTab[] => {
       if (tab.kind === "terminal") return [{ ...tab, title: "" }];
       if (tab.kind !== "document" || !tab.savedPath) return [tab];
-      if (!isSaved(tab.id)) return [{ ...tab, savedPath: null, relativePath: null }];
+      if (!isSaved(tab.id, tab.savedPath)) return [{ ...tab, savedPath: null, relativePath: null }];
       if (!tab.relativePath) return [];
       const file = { kind: "file" as const, id: fileId(tab.relativePath), path: tab.relativePath, preview: false, line: null, reveal: 0, opener: tab.opener };
       remapped.set(tab.id, file.id);

@@ -150,7 +150,7 @@ export function BrowserTab({
     collect();
     // Menus, popovers and dialogs mount in portals at the end of the body.
     const observer = new MutationObserver(collect);
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body, { childList: true });
     let placed = "";
     let frame = 0;
     // The side panel clips its contents while it opens, closes or hides; the page, drawn over

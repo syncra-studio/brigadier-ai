@@ -4,6 +4,7 @@ import { closePage, useBrowsers } from "@/state/browsers";
 import { discardDocument } from "@/state/documentDrafts";
 import { changeSessionTab, discardTab, onDiscardTab, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
+import { abandonedSideChats } from "@/state/sideChats";
 
 // Lives across ConversationView remounts, but not a real app reload. The stable tab ID is
 // the daemon session ID; its first attachment in this app lifetime replaces the old shell.
@@ -78,11 +79,12 @@ onDiscardTab((tab) => {
 });
 let pruned = false;
 export function pruneSideChats(conversations: Conversation[]): void {
+  // Called by loadCatalog only after the conversation list has loaded.
   if (pruned) return;
   pruned = true;
   const referenced = new Set(Object.values(useSessionTabs.getState().sessions).flatMap((session) =>
     session.tabs.flatMap((tab) => tab.kind === "sideChat" && tab.conversationId ? [tab.conversationId] : [])));
-  for (const conversation of conversations) if (conversation.sideOf && !referenced.has(conversation.id)) deleteSideChat(conversation.id);
+  for (const id of abandonedSideChats(conversations, referenced)) deleteSideChat(id);
 }
 
 useApp.subscribe(({ conversations }) => {

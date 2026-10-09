@@ -23,8 +23,11 @@ export function noteDocumentSave(id: string, text: string): void {
   catch (error) { console.error("Could not preserve the document save state", error); }
 }
 
-export function documentIsSaved(id: string): boolean {
-  try { return localStorage.getItem(PREFIX + id + ".saved") === documentText(id); }
+export function documentIsSaved(id: string, savedPath: string | null = null): boolean {
+  try {
+    const saved = localStorage.getItem(PREFIX + id + ".saved");
+    return (savedPath === null ? saved ?? "" : saved) === documentText(id);
+  }
   catch { return false; }
 }
 
