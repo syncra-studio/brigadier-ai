@@ -70,7 +70,8 @@ async fn a_scout_reports_and_the_answer_ends_the_request() {
     std::fs::create_dir_all(folder.join("data")).unwrap();
     let mut flow = flow;
     flow.restart().await;
-    assert!(!folder.exists());
+    flow.until("the launch to sweep it", |_| !folder.exists())
+        .await;
     flow.stop().await;
 }
 

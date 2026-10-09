@@ -181,7 +181,8 @@ impl SessionManager {
     /// goes when it ends, but a crash, an older build or a deleted data folder leaves them
     /// behind. Several data folders (dev builds, smoke runs) share the temp directory, so a
     /// folder goes only if this data folder's task for it is over, or if no task here claims
-    /// it and nothing in it changed for `UNCLAIMED_TEST_DATA_AGE`.
+    /// it and nothing in it changed for `UNCLAIMED_TEST_DATA_AGE`. The folders are read and
+    /// removed in the background: a big one must not hold up the launch.
     async fn sweep_test_data(&self) {
         let mut tasks = HashMap::new();
         for conversation in self.core.catalog().conversations {
@@ -210,16 +211,18 @@ impl SessionManager {
             })
             .collect();
         let cutoff = SystemTime::now() - UNCLAIMED_TEST_DATA_AGE;
-        let swept = blocking(move || {
-            let folders = test_folders(&test_data_root());
-            Ok(sweep_test_folders(folders, &tasks, &claimed, cutoff))
-        })
-        .await;
-        match swept {
-            Ok(0) => {}
-            Ok(removed) => tracing::info!(removed, "removed test data folders no task needs"),
-            Err(err) => tracing::warn!(error = %err, "could not sweep the test data folders"),
-        }
+        self.spawn(async move {
+            let swept = blocking(move || {
+                let folders = test_folders(&test_data_root());
+                Ok(sweep_test_folders(folders, &tasks, &claimed, cutoff))
+            })
+            .await;
+            match swept {
+                Ok(0) => {}
+                Ok(removed) => tracing::info!(removed, "removed test data folders no task needs"),
+                Err(err) => tracing::warn!(error = %err, "could not sweep the test data folders"),
+            }
+        });
     }
 
     /// A write task whose commits were rebased during its landing, cut off by the restart
@@ -1108,13 +1111,12 @@ mod tests {
     use super::*;
 
     /// A test data folder in the temp directory, named for a new task, with a file in it,
-    /// all last changed `age` ago.
-    fn test_folder(age: Duration) -> PathBuf {
+    /// all last changed `then`.
+    fn test_folder(then: SystemTime) -> PathBuf {
         let folder = test_data_dir(&crate::work::TaskId::generate());
         std::fs::create_dir_all(&folder).unwrap();
         let file = folder.join("data.txt");
         std::fs::write(&file, "test data").unwrap();
-        let then = SystemTime::now() - age;
         for path in [&file, &folder] {
             set_changed(path, then);
         }
@@ -1138,19 +1140,21 @@ mod tests {
 
     #[test]
     fn the_launch_sweep_removes_test_data_no_task_needs_and_keeps_the_rest() {
+        // The sweep runs two days from now, so the folders made now are old by then while
+        // the sweeps of tests running alongside, today, still see them all as recent.
         let day = Duration::from_secs(24 * 60 * 60);
-        let ended = test_folder(Duration::ZERO);
-        let live = test_folder(2 * day);
-        let recent = test_folder(Duration::from_secs(60));
-        let stale = test_folder(2 * day);
-        let claimed = test_folder(2 * day);
-        let held_after_end = test_folder(Duration::ZERO);
-        // Another data folder's task wrote into its folder a minute ago.
-        let in_use = test_folder(2 * day);
-        set_changed(
-            &in_use.join("data.txt"),
-            SystemTime::now() - Duration::from_secs(60),
-        );
+        let now = SystemTime::now();
+        let later = now + 2 * day;
+        let minute_before = later - Duration::from_secs(60);
+        let ended = test_folder(later);
+        let live = test_folder(now);
+        let recent = test_folder(minute_before);
+        let stale = test_folder(now);
+        let claimed = test_folder(now);
+        let held_after_end = test_folder(later);
+        // Another data folder's task wrote into its folder a minute before.
+        let in_use = test_folder(now);
+        set_changed(&in_use.join("data.txt"), minute_before);
         let tasks = HashMap::from([
             (ended.clone(), true),
             (live.clone(), false),
@@ -1166,7 +1170,7 @@ mod tests {
             held_after_end.clone(),
             in_use.clone(),
         ];
-        let removed = sweep_test_folders(folders, &tasks, &held, SystemTime::now() - day);
+        let removed = sweep_test_folders(folders, &tasks, &held, later - day);
         assert_eq!(removed, 2);
         assert!(!ended.exists());
         assert!(!stale.exists());
