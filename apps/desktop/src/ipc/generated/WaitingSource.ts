@@ -7,4 +7,4 @@ import type { TaskId } from "./TaskId";
  * Where something only the user can do came from, which also says when it is over without
  * them.
  */
-export type WaitingSource = { "type": "card", cardId: CardId, } | { "type": "task", taskId: TaskId, } | { "type": "landing", taskId: TaskId, } | { "type": "orchestrator" } | { "type": "run", runId: OvernightRunId, taskId: TaskId | null, };
+export type WaitingSource = { "type": "card", cardId: CardId, } | { "type": "task", taskId: TaskId, } | { "type": "landing", taskId: TaskId, } | { "type": "orchestrator" } | { "type": "run", runId: OvernightRunId, taskId: TaskId | null, } | { "type": "computer" };

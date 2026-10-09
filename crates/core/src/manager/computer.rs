@@ -34,7 +34,7 @@ use super::SessionManager;
 use super::cards::CardAnswer;
 use crate::model::{ConversationId, DomainEvent, PermissionLevel};
 use crate::tools::{ComputerCall, ToolReply};
-use crate::work::{ApprovalSubject, CardState, ComputerAction, TaskId};
+use crate::work::{ApprovalSubject, CardState, ComputerAction, TaskId, WaitingSource};
 use brigadier_providers::{ApprovalDecision, Decider};
 
 /// The environment variable holding a worker's computer grant, for `brigadierd computer` in
@@ -51,6 +51,9 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(unix)]
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 /// What the model is told when a permission is missing.
+/// The "Waiting on you" line for missing permissions.
+const PERMISSION_ASK: &str =
+    "Allow computer use: workers need to see and control apps on this Mac.";
 const PERMISSION_FIX: &str =
     "Ask the user to open Brigadier's Settings, Computer use, and allow what's missing.";
 
@@ -126,6 +129,8 @@ struct State {
     /// Processes and windows each worker's `launch` created.
     launched: HashMap<TaskId, Vec<Launched>>,
     host_pid: Option<i32>,
+    /// Conversations with an open "Waiting on you" item for missing permissions.
+    permission_waits: HashSet<ConversationId>,
 }
 
 pub(crate) struct Computer {
@@ -238,6 +243,19 @@ impl Computer {
         let answer = rx.await;
         guard.link = None;
         match answer {
+            // A missing permission ends the call whatever it asked, so the caller's own
+            // reading of the reply never hides it (and the user is asked, once).
+            Ok(Ok(answer))
+                if answer
+                    .reply
+                    .error
+                    .as_ref()
+                    .is_some_and(|e| e.code == ErrorCode::PermissionMissing) =>
+            {
+                Err(answer.reply.error.unwrap_or_else(|| {
+                    CuError::new(ErrorCode::PermissionMissing, "a permission is missing")
+                }))
+            }
             Ok(Ok(answer)) => Ok(answer),
             _ => Err(CuError::new(
                 ErrorCode::AppNotResponding,
@@ -410,9 +428,14 @@ impl SessionManager {
             )
             .await
             .map_err(|e| e.detail)?;
-        a.reply
+        let p = a
+            .reply
             .permissions
-            .ok_or_else(|| "Brigadier Computer Use didn't say".into())
+            .ok_or_else(|| "Brigadier Computer Use didn't say".to_owned())?;
+        if p.accessibility && p.screen_recording {
+            self.computer_permissions_in().await;
+        }
+        Ok(p)
     }
 
     /// Registers the helper with the system for `grant` (the system's own prompt), so it is
@@ -561,9 +584,62 @@ impl SessionManager {
             .computer_call_inner(grant, &conversation_id, &task_id, call)
             .await
         {
-            Ok(reply) => reply,
-            Err(e) => ToolReply::error(error_text(&e)),
+            Ok(reply) => {
+                // It reached the engine, so the permissions are in.
+                self.computer_permissions_in().await;
+                reply
+            }
+            Err(e) => {
+                if e.code == ErrorCode::PermissionMissing {
+                    self.ask_for_computer_permissions(&conversation_id).await;
+                }
+                ToolReply::error(error_text(&e))
+            }
         }
+    }
+
+    /// Lists the missing permissions under "Waiting on you", once per conversation. It holds
+    /// up no request: the worker got its error and goes on.
+    async fn ask_for_computer_permissions(&self, conversation_id: &ConversationId) {
+        lock(&self.computer.state)
+            .permission_waits
+            .insert(conversation_id.clone());
+        if let Err(err) = self
+            .wait_on_user(
+                conversation_id,
+                None,
+                WaitingSource::Computer,
+                PERMISSION_ASK,
+            )
+            .await
+        {
+            tracing::warn!(error = %err, "could not list computer use's missing permissions");
+        }
+    }
+
+    /// Both permissions are in: every open permission item is over.
+    async fn computer_permissions_in(&self) {
+        let conversations: Vec<ConversationId> = lock(&self.computer.state)
+            .permission_waits
+            .drain()
+            .collect();
+        for conversation_id in conversations {
+            self.resolve_computer_waits(&conversation_id).await;
+        }
+    }
+
+    /// Forgets which conversations have a permission item, as a restart does.
+    #[cfg(test)]
+    pub(crate) fn forget_computer_waits(&self) {
+        lock(&self.computer.state).permission_waits.clear();
+    }
+
+    /// A conversation's open permission item, after a restart: kept until the permissions are
+    /// read granted.
+    pub(crate) fn computer_wait_found(&self, conversation_id: &ConversationId) {
+        lock(&self.computer.state)
+            .permission_waits
+            .insert(conversation_id.clone());
     }
 
     async fn computer_call_inner(
@@ -665,13 +741,7 @@ impl SessionManager {
                         Op::Describe { window: act.window },
                     )
                 };
-                let d = describe(policy.clone())
-                    .await?
-                    .reply
-                    .described
-                    .ok_or_else(|| {
-                        CuError::new(ErrorCode::Failed, "the helper didn't describe the window")
-                    })?;
+                let d = described(describe(policy.clone()).await?)?;
                 if let Some(why) = &d.blocked {
                     return Err(CuError::new(ErrorCode::Blocked, why.clone()));
                 }
@@ -688,13 +758,7 @@ impl SessionManager {
                     )
                     .await?;
                     // The window may have changed hands while the card waited.
-                    let now = describe(policy_now())
-                        .await?
-                        .reply
-                        .described
-                        .ok_or_else(|| {
-                            CuError::new(ErrorCode::Failed, "the helper didn't describe the window")
-                        })?;
+                    let now = described(describe(policy_now()).await?)?;
                     if now.instance != d.instance {
                         return Err(CuError::new(
                             ErrorCode::StaleRef,
@@ -877,6 +941,18 @@ impl SessionManager {
     }
 }
 
+/// What `describe` answered: the window, or the helper's own error for it.
+fn described(a: Answer) -> Result<Described, CuError> {
+    match (a.reply.described, a.reply.error) {
+        (Some(d), _) if a.reply.ok => Ok(d),
+        (_, Some(e)) => Err(e),
+        _ => Err(CuError::new(
+            ErrorCode::Failed,
+            "the helper didn't describe the window",
+        )),
+    }
+}
+
 /// An enum's name as it reads on the wire (`background_activated`).
 fn wire_name(v: &impl serde::Serialize) -> Option<String> {
     serde_json::to_value(v)
@@ -1041,7 +1117,7 @@ pub(crate) mod fake {
 
     use brigadier_computer::desktop::WindowInfo;
     use brigadier_computer::geom::Rect;
-    use brigadier_computer::wire::Reply;
+    use brigadier_computer::wire::{Permissions, Reply};
 
     use super::*;
 
@@ -1053,6 +1129,9 @@ pub(crate) mod fake {
     pub(crate) struct Desktop {
         pub windows: HashMap<u32, Instance>,
         pub launch: Option<(Instance, u32)>,
+        /// The permissions it reports; `None` for both granted. With one missing, engine work
+        /// answers `permission_missing`.
+        pub permissions: Option<Permissions>,
     }
 
     /// A helper connection that answers pings, cancels, session ends, describes of the
@@ -1112,7 +1191,21 @@ pub(crate) mod fake {
                 ok: true,
                 ..Default::default()
             };
+            let permissions = lock(&self.desktop).permissions.unwrap_or(Permissions {
+                accessibility: true,
+                screen_recording: true,
+            });
+            if !op.is_control() && !(permissions.accessibility && permissions.screen_recording) {
+                return done(answer(Reply::error(
+                    id,
+                    CuError::new(ErrorCode::PermissionMissing, "Accessibility is missing"),
+                )));
+            }
             match op {
+                Op::Permissions => done(answer(Reply {
+                    permissions: Some(permissions),
+                    ..ok
+                })),
                 Op::Ping | Op::Cancel { .. } | Op::EndSession | Op::Act(_) => done(answer(ok)),
                 Op::CloseWindows { .. } => done(answer(Reply {
                     text: "closed".into(),

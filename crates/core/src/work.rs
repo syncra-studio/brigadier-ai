@@ -1537,6 +1537,10 @@ pub enum WaitingSource {
         run_id: crate::model::OvernightRunId,
         task_id: Option<TaskId>,
     },
+    /// A worker's computer use found a system permission missing: one item per conversation,
+    /// over once Brigadier reads both permissions granted (computer use's Settings page, the
+    /// item's own card, or a worker's next call that works).
+    Computer,
 }
 
 /// Something only the user can do, listed under "Waiting on you" until they mark it done or

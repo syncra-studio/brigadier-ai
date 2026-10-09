@@ -280,6 +280,15 @@ impl SessionManager {
                 }
             }
         }
+        // A permission item from before the restart closes once the permissions are read
+        // granted.
+        if board
+            .waiting
+            .values()
+            .any(|item| matches!(item.source, WaitingSource::Computer))
+        {
+            self.computer_wait_found(conversation_id);
+        }
         let (listed, gone) =
             reconciled_waits(&board, now_ms(), || uuid::Uuid::now_v7().to_string());
         let events: Vec<DomainEvent> = listed
@@ -382,6 +391,29 @@ impl SessionManager {
         }
     }
 
+    /// Closes the conversation's open computer-permission items: the permissions are in.
+    pub(crate) async fn resolve_computer_waits(&self, conversation_id: &ConversationId) {
+        let _held = self.waiting.lock().await;
+        let Ok(board) = self.core.board(conversation_id).await else {
+            return;
+        };
+        let over: Vec<DomainEvent> = board
+            .waiting
+            .values()
+            .filter(|item| matches!(item.source, WaitingSource::Computer))
+            .map(|item| DomainEvent::WaitingResolved {
+                id: item.id.clone(),
+                by: ResolvedBy::Brigadier,
+            })
+            .collect();
+        if over.is_empty() {
+            return;
+        }
+        if let Err(err) = self.core.record_conversation(conversation_id, over).await {
+            tracing::warn!(error = %err, "could not close the computer-permission item");
+        }
+    }
+
     /// The user marked an item done (Done on the summary card): the orchestrator hears it.
     pub async fn resolve_waiting(&self, conversation_id: ConversationId, id: String) -> Result<()> {
         let (item, board) = {
@@ -421,6 +453,7 @@ impl SessionManager {
                 .unwrap_or_default(),
             WaitingSource::Card { .. }
             | WaitingSource::Orchestrator
+            | WaitingSource::Computer
             | WaitingSource::Run { task_id: None, .. } => String::new(),
         };
         // Clearing an item of a run that ended, or of a phase that settled, wakes nobody:
@@ -478,6 +511,7 @@ pub(crate) fn waiting_key(source: &WaitingSource, text: &str) -> String {
         WaitingSource::Task { task_id } => format!("task:{task_id}"),
         WaitingSource::Landing { task_id } => format!("landing:{task_id}"),
         WaitingSource::Orchestrator => "orchestrator".to_owned(),
+        WaitingSource::Computer => "computer".to_owned(),
         WaitingSource::Run { run_id, .. } => format!("run:{run_id}"),
     };
     let words: Vec<String> = text
@@ -498,9 +532,10 @@ fn ended_with(source: &WaitingSource, task: &TaskId, state: TaskState) -> bool {
         WaitingSource::Landing { task_id } => task_id == task && state.is_final(),
         WaitingSource::Task { task_id } => task_id == task && state == TaskState::Stopped,
         // Kept for the run's report until the user marks it done.
-        WaitingSource::Card { .. } | WaitingSource::Orchestrator | WaitingSource::Run { .. } => {
-            false
-        }
+        WaitingSource::Card { .. }
+        | WaitingSource::Orchestrator
+        | WaitingSource::Computer
+        | WaitingSource::Run { .. } => false,
     }
 }
 
@@ -518,9 +553,10 @@ fn lists_still(source: &WaitingSource, synced: &Task, now: &Task) -> bool {
         }
         // Listed by the per-change checks, which are gone: nothing lists them again.
         WaitingSource::Landing { .. } => false,
-        WaitingSource::Card { .. } | WaitingSource::Orchestrator | WaitingSource::Run { .. } => {
-            true
-        }
+        WaitingSource::Card { .. }
+        | WaitingSource::Orchestrator
+        | WaitingSource::Computer
+        | WaitingSource::Run { .. } => true,
     }
 }
 
@@ -537,9 +573,10 @@ fn reconciled_waits(
             .tasks
             .get(task_id)
             .is_some_and(|task| ended_with(&item.source, task_id, task.state)),
-        WaitingSource::Card { .. } | WaitingSource::Orchestrator | WaitingSource::Run { .. } => {
-            false
-        }
+        WaitingSource::Card { .. }
+        | WaitingSource::Orchestrator
+        | WaitingSource::Computer
+        | WaitingSource::Run { .. } => false,
     };
     let mut gone: Vec<String> = board
         .waiting
@@ -841,6 +878,7 @@ pub(crate) fn waiting_run(
             .run
             .as_ref()
             .map(|context| context.run_id.clone()),
+        WaitingSource::Computer => None,
         WaitingSource::Card { .. } | WaitingSource::Orchestrator => {
             let request = request_id?;
             board

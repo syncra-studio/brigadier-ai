@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use brigadier_computer::action::ActRequest;
-use brigadier_computer::wire::{Instance, LaunchRequest, Op};
+use brigadier_computer::wire::{Instance, LaunchRequest, Op, Permissions};
 use brigadier_providers::ApprovalDecision;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
@@ -16,7 +16,7 @@ use crate::board::Board;
 use crate::manager::computer::fake::FakeHelper;
 use crate::model::PermissionLevel;
 use crate::tools::{ComputerCall, ToolReply};
-use crate::work::{Approval, ApprovalSubject, CardState};
+use crate::work::{Approval, ApprovalSubject, CardState, WaitingItem, WaitingSource};
 
 /// Pids no process has, so nothing a test records can ever end a real one.
 const TEXTEDIT: Instance = Instance {
@@ -380,4 +380,85 @@ async fn a_dropped_call_expires_its_card() {
     assert!(pending(&board).is_none());
     assert_eq!(ops(&helper), ["describe 5"]);
     finish(flow, worker).await;
+}
+
+/// The open "Waiting on you" items for missing permissions.
+fn permission_items(board: &Board) -> Vec<&WaitingItem> {
+    board
+        .waiting
+        .values()
+        .filter(|item| matches!(item.source, WaitingSource::Computer))
+        .collect()
+}
+
+fn missing(accessibility: bool, screen_recording: bool) -> Option<Permissions> {
+    Some(Permissions {
+        accessibility,
+        screen_recording,
+    })
+}
+
+/// A missing permission fails the call with `permission_missing` (an act's describe too) and
+/// lists one item for the user, however many calls hit it; it holds up no request. A partial
+/// grant keeps it; reading both granted closes it.
+#[tokio::test]
+async fn a_missing_permission_lists_one_item_until_both_are_granted() {
+    let (flow, worker, helper) = start("computer-permission", PermissionLevel::FullAccess).await;
+    let turn = &worker.turn;
+    lock(&helper.desktop).permissions = missing(false, false);
+    for call in [act(5), ComputerCall::Apps, act(6)] {
+        let reply = turn.computer(call).await;
+        assert!(reply.is_error);
+        assert!(reply.text.contains("permission_missing"), "{}", reply.text);
+    }
+    let board = flow.board().await;
+    let items = permission_items(&board);
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0].request_id, None);
+    // Accessibility granted, Screen Recording not yet: still asked.
+    lock(&helper.desktop).permissions = missing(true, false);
+    assert!(turn.computer(ComputerCall::Apps).await.is_error);
+    let p = flow.manager.computer_permissions().await.unwrap();
+    assert!(!p.screen_recording);
+    assert_eq!(permission_items(&flow.board().await).len(), 1);
+    // Both read granted (the card or Settings reading them): the item is over.
+    lock(&helper.desktop).permissions = None;
+    flow.manager.computer_permissions().await.unwrap();
+    assert!(permission_items(&flow.board().await).is_empty());
+    finish(flow, worker).await;
+}
+
+/// A worker's next call that works closes the item too, and an item from before a restart
+/// closes once the permissions are read granted.
+#[tokio::test]
+async fn a_working_call_or_a_read_after_a_restart_closes_the_item() {
+    let (flow, worker, helper) = start("computer-permission-2", PermissionLevel::FullAccess).await;
+    let turn = &worker.turn;
+    lock(&helper.desktop).permissions = missing(true, false);
+    assert!(turn.computer(ComputerCall::Apps).await.is_error);
+    assert_eq!(permission_items(&flow.board().await).len(), 1);
+    lock(&helper.desktop).permissions = None;
+    assert!(!turn.computer(act(5)).await.is_error);
+    assert!(permission_items(&flow.board().await).is_empty());
+
+    // An item the daemon didn't raise this run (a restart forgot it) is found by the
+    // reconcile and closed by the next read.
+    lock(&helper.desktop).permissions = missing(false, true);
+    assert!(turn.computer(ComputerCall::Apps).await.is_error);
+    flow.manager.forget_computer_waits();
+    lock(&helper.desktop).permissions = None;
+    flow.manager.computer_permissions().await.unwrap();
+    assert_eq!(
+        permission_items(&flow.board().await).len(),
+        1,
+        "stale until found"
+    );
+    flow.manager.reconcile_waiting(&flow.conversation).await;
+    flow.manager.computer_permissions().await.unwrap();
+    assert!(permission_items(&flow.board().await).is_empty());
+    finish(flow, worker).await;
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap()
 }
