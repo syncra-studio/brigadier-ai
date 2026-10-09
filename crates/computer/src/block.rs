@@ -53,6 +53,9 @@ const SETTINGS_PANES: &[&str] = &[
 ];
 const SETTINGS_BUNDLE: &str = "com.apple.systempreferences";
 
+/// Why a terminal is refused; a terminal the session launches itself is allowed.
+pub const TERMINAL_NOT_LAUNCHED: &str = "a terminal the session didn't launch";
+
 /// The installed app; dev builds the session launched are allowed (§5).
 const INSTALLED_BRIGADIER: &str = "/Applications/Brigadier.app";
 
@@ -86,7 +89,7 @@ impl BlockList {
             let launched = self.launched_pids.contains(&t.pid)
                 && t.window.is_none_or(|w| self.launched_windows.contains(&w));
             if !launched {
-                return Some("a terminal the session didn't launch");
+                return Some(TERMINAL_NOT_LAUNCHED);
             }
         }
         if self.host_pid == Some(t.pid) {

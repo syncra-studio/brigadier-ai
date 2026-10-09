@@ -79,6 +79,7 @@ impl Generations {
             global_at_start: self.global.load(Ordering::SeqCst),
             session_at_start: self.session(session),
             deadline: Instant::now() + deadline,
+            user: None,
         }
     }
 
@@ -110,6 +111,19 @@ pub struct CancelToken {
     global_at_start: u64,
     session_at_start: u64,
     deadline: Instant,
+    /// Set for the foreground rung: the user touched the mouse or keyboard since it began.
+    user: Option<UserActive>,
+}
+
+/// Tells whether the user has used the mouse or keyboard since a moment; checked between two
+/// events of the foreground rung, which gives way at once (§4.4).
+#[derive(Clone)]
+pub struct UserActive(pub Arc<dyn Fn() -> bool + Send + Sync>);
+
+impl std::fmt::Debug for UserActive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("UserActive")
+    }
 }
 
 impl CancelToken {
@@ -140,7 +154,21 @@ impl CancelToken {
                 "the request's deadline passed",
             ));
         }
+        if self.user.as_ref().is_some_and(|u| (u.0)()) {
+            return Err(CuError::new(
+                ErrorCode::BackgroundUnavailable,
+                "the user started using the computer, so the foreground fallback stopped",
+            ));
+        }
         Ok(())
+    }
+
+    /// The same token, also ended when `user` reports input from the user.
+    pub fn with_user(&self, user: UserActive) -> Self {
+        Self {
+            user: Some(user),
+            ..self.clone()
+        }
     }
 
     /// The same generations with a new deadline, `d` from now.

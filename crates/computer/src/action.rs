@@ -256,6 +256,9 @@ pub enum Rung {
     Background,
     /// Events posted to the app inside synthetic activation, the user's focus untouched.
     BackgroundActivated,
+    /// The window was raised to the front while the computer sat idle, then the front given
+    /// back: the last resort when the background can't reach it.
+    Foreground,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -319,10 +322,13 @@ pub struct ImageOut {
 }
 
 /// What `observe`, `act` and `zoom` return: text first, then at most one image.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Reply {
     pub text: String,
     pub image: Option<ImageOut>,
     /// Per-action results of an `act`, also rendered into `text`.
     pub results: Vec<ActionResult>,
+    /// An `act`'s image for the action log: the window after the batch with every point it
+    /// aimed at marked. Never shown to the model.
+    pub trajectory: Option<ImageOut>,
 }

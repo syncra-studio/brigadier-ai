@@ -1,7 +1,7 @@
 //! Redaction of images before they leave the engine (§4.3): secure fields are painted over in
 //! the pixels themselves, so no unredacted copy exists anywhere downstream.
 
-use crate::geom::{ImageTransform, Rect};
+use crate::geom::{ImageTransform, Point, Rect};
 
 /// An RGBA image, 8 bits per channel, rows packed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +33,28 @@ impl Rgba {
                 let i = ((y * self.width + x) * 4) as usize;
                 self.data[i..i + 4].copy_from_slice(&rgba);
             }
+        }
+    }
+
+    /// Draws a predicted point: a red ring and cross.
+    pub fn mark(&mut self, p: Point, label_box: Option<Rect>) {
+        let red = [230, 20, 40, 255];
+        for t in 0..360 {
+            let a = f64::from(t).to_radians();
+            for r in [7.0, 8.0] {
+                self.fill(
+                    Rect::new(p.x + r * a.cos(), p.y + r * a.sin(), 1.0, 1.0),
+                    red,
+                );
+            }
+        }
+        self.fill(Rect::new(p.x - 12.0, p.y, 24.0, 1.0), red);
+        self.fill(Rect::new(p.x, p.y - 12.0, 1.0, 24.0), red);
+        if let Some(b) = label_box {
+            self.fill(Rect::new(b.x, b.y, b.w, 1.0), red);
+            self.fill(Rect::new(b.x, b.y + b.h, b.w, 1.0), red);
+            self.fill(Rect::new(b.x, b.y, 1.0, b.h), red);
+            self.fill(Rect::new(b.x + b.w, b.y, 1.0, b.h), red);
         }
     }
 

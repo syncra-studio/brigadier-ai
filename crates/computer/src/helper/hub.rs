@@ -7,6 +7,7 @@
 //! or a cancel that comes while it waits ends it before it starts.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,8 +23,8 @@ use crate::engine::{Engine, REQUEST_DEADLINE};
 use crate::error::{CuError, CuResult, ErrorCode};
 use crate::geom::Provider;
 use crate::wire::{
-    Described, Event, Grant, Hello, HelperFrame, ImageMeta, Instance, Op, PROTOCOL, Permissions,
-    Reply, Request, read_frame, write_frame,
+    Described, Event, Grant, Hello, HelperFrame, ImageMeta, Instance, Launched, Op, PROTOCOL,
+    Permissions, Reply, Request, read_frame, write_frame,
 };
 
 /// How long a new connection has to send its hello.
@@ -448,34 +449,34 @@ fn engine_loop<D, F>(
                 let run = catch_unwind(AssertUnwindSafe(|| {
                     run(&mut engine, &mut make, &gens, system, &job)
                 }));
-                let (mut reply, image) = match run {
-                    Ok(Ok((reply, image))) => (reply, image),
-                    Ok(Err(e)) => (Reply::error(job.req.id, e), None),
+                let (mut reply, images) = match run {
+                    Ok(Ok((reply, images))) => (reply, images),
+                    Ok(Err(e)) => (Reply::error(job.req.id, e), Vec::new()),
                     Err(_) => {
                         // Its state can't be trusted after a panic; the next request makes a
                         // new one.
                         engine = None;
                         let e =
                             CuError::new(ErrorCode::Failed, "the engine failed on this request");
-                        (Reply::error(job.req.id, e), None)
+                        (Reply::error(job.req.id, e), Vec::new())
                     }
                 };
                 reply.engine_ms = (started.elapsed().as_secs_f64() * 1e5).round() / 100.0;
-                let images: Vec<&[u8]> = image.as_deref().into_iter().collect();
+                let images: Vec<&[u8]> = images.iter().map(Vec::as_slice).collect();
                 finish(&gens, &activity, &job, reply, &images);
             }
         }
     }
 }
 
-/// Runs one engine request: its reply, and the image that follows it.
+/// Runs one engine request: its reply, and the images that follow it.
 fn run<D: Desktop>(
     slot: &mut Option<Engine<D>>,
     make: &mut impl FnMut() -> CuResult<D>,
     gens: &Arc<Generations>,
     system: System,
     job: &Job,
-) -> CuResult<(Reply, Option<Vec<u8>>)> {
+) -> CuResult<(Reply, Vec<Vec<u8>>)> {
     let req = &job.req;
     // Cancelled or stopped while it waited: it never starts.
     job.token.with_deadline(REQUEST_DEADLINE).check()?;
@@ -499,14 +500,14 @@ fn run<D: Desktop>(
         ..Default::default()
     };
     let out = match &req.op {
-        Op::Apps => (reply(engine.apps_text()?), None),
+        Op::Apps => (reply(engine.apps_text()?), Vec::new()),
         Op::Observe(r) => from_engine(req.id, engine.observe(&req.worker, r)?),
         Op::Act(r) => {
             let done = engine.act_from(&req.worker, r, Some(&job.token));
             let records = std::mem::take(&mut engine.records);
-            let (mut reply, image) = from_engine(req.id, done?);
+            let (mut reply, images) = from_engine(req.id, done?);
             reply.records = records;
-            (reply, image)
+            (reply, images)
         }
         Op::Zoom(r) => from_engine(req.id, engine.zoom(&req.worker, r)?),
         Op::Describe { window } => {
@@ -524,13 +525,46 @@ fn run<D: Desktop>(
                     .unwrap_or_default()
             ));
             r.described = Some(described);
-            (r, None)
+            (r, Vec::new())
         }
-        Op::Launch(_) => {
-            return Err(CuError::new(
-                ErrorCode::UnsupportedCapability,
-                "launch is not built yet",
-            ));
+        Op::Launch(l) => {
+            let o = crate::launch::launch(engine, l, &job.token.with_deadline(REQUEST_DEADLINE))?;
+            let started_us = (system.process_start_us)(o.app.pid).ok_or_else(|| {
+                CuError::new(ErrorCode::NoSuchTarget, "the app quit as it opened")
+            })?;
+            let mut text = format!(
+                "{} pid {} · {}",
+                o.app.name,
+                o.app.pid,
+                if o.new_process {
+                    "started"
+                } else {
+                    "was already running"
+                }
+            );
+            if o.new_windows.is_empty() {
+                text.push_str(" · no new window");
+            } else {
+                let ids: Vec<String> = o.new_windows.iter().map(|w| format!("w{w}")).collect();
+                let _ = write!(text, " · new window {}", ids.join(", "));
+            }
+            if o.front_restored {
+                text.push_str(" · it took the front, which was given back");
+            }
+            text.push('\n');
+            let mut r = reply(text);
+            r.launched = Some(Launched {
+                instance: Instance {
+                    pid: o.app.pid,
+                    started_us,
+                },
+                app_name: o.app.name,
+                bundle_id: o.app.bundle_id,
+                new_process: o.new_process,
+                new_windows: o.new_windows,
+                front_restored: o.front_restored,
+            });
+            (r, Vec::new())
         }
         _ => {
             return Err(CuError::new(
@@ -544,37 +578,44 @@ fn run<D: Desktop>(
     Ok(out)
 }
 
-fn from_engine(id: u64, r: EngineReply) -> (Reply, Option<Vec<u8>>) {
-    let (meta, png) = match r.image {
-        Some(ImageOut {
-            id,
-            png,
-            width,
-            height,
-            tokens,
-            ..
-        }) => (
-            Some(ImageMeta {
-                id,
-                width,
-                height,
-                tokens,
-                bytes: png.len(),
-                mime: "image/png".into(),
-            }),
-            Some(png),
-        ),
-        None => (None, None),
+fn from_engine(id: u64, r: EngineReply) -> (Reply, Vec<Vec<u8>>) {
+    let mut pngs = Vec::new();
+    let mut meta = |img: Option<ImageOut>| {
+        img.map(
+            |ImageOut {
+                 id,
+                 png,
+                 width,
+                 height,
+                 tokens,
+                 ..
+             }| {
+                let m = ImageMeta {
+                    id,
+                    width,
+                    height,
+                    tokens,
+                    bytes: png.len(),
+                    mime: "image/png".into(),
+                };
+                pngs.push(png);
+                m
+            },
+        )
     };
+    // The model's image first, then the log's: the order the frames follow the reply.
+    let image = meta(r.image);
+    let trajectory = meta(r.trajectory);
     let reply = Reply {
         id,
         ok: true,
         text: r.text,
         results: r.results,
-        image: meta,
+        image,
+        trajectory,
         ..Default::default()
     };
-    (reply, png)
+    (reply, pngs)
 }
 
 fn describe<D: Desktop>(

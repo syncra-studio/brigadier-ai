@@ -479,5 +479,15 @@ fn describe_names_the_instance_and_sessions_decide_idleness() {
     );
     let (_, rx) = send(&c, Op::Launch(Default::default()));
     let e = answer(&rx).unwrap().reply.error.unwrap();
+    assert_eq!(e.code, ErrorCode::BadRequest);
+    // A backend that can't open apps says so.
+    let (_, rx) = send(
+        &c,
+        Op::Launch(crate::wire::LaunchRequest {
+            app: Some("Notes".into()),
+            open: None,
+        }),
+    );
+    let e = answer(&rx).unwrap().reply.error.unwrap();
     assert_eq!(e.code, ErrorCode::UnsupportedCapability);
 }

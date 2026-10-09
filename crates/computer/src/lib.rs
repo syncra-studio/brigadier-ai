@@ -15,6 +15,7 @@ pub mod geom;
 pub mod harness;
 #[cfg(all(target_os = "macos", feature = "engine"))]
 pub mod helper;
+pub mod launch;
 pub mod record;
 pub mod redact;
 pub mod tree;

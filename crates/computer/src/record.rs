@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::action::{Action, ActionResult, Effect, Expect, Rung, Status, Timings};
 use crate::desktop::WindowInfo;
 use crate::error::ErrorCode;
+use crate::geom::{Point, Rect};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionRecord {
@@ -24,6 +25,11 @@ pub struct ActionRecord {
     pub timings: Timings,
     /// The user's frontmost app, its key window and the cursor were the same after.
     pub user_focus_kept: bool,
+    /// Where the action aimed, in window points, and the element's box when it named one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point: Option<Point>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element_box: Option<Rect>,
 }
 
 impl ActionRecord {
@@ -62,6 +68,8 @@ impl ActionRecord {
             error: r.error.as_ref().map(|e| e.code),
             timings: r.timings,
             user_focus_kept,
+            point: None,
+            element_box: None,
         }
     }
 }

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::cancel::{CancelToken, InputGuard, Release};
-use crate::error::CuResult;
+use crate::error::{CuResult, ErrorCode, err};
 use crate::geom::{ImageTransform, Point, Rect};
 use crate::redact::Rgba;
 use crate::tree::RawNode;
@@ -204,4 +204,33 @@ pub trait Desktop {
     fn last_notification(&self, pid: i32) -> Option<Instant>;
 
     fn user_focus(&mut self) -> UserFocus;
+
+    /// Reads, from any thread, how many seconds ago the user last used a mouse, trackpad or
+    /// keyboard. Input this crate posts doesn't count. Zero when the backend can't tell, which
+    /// keeps the foreground rung off.
+    fn idle_source(&self) -> Arc<dyn Fn() -> f64 + Send + Sync> {
+        Arc::new(|| 0.0)
+    }
+    /// The foreground rung: shows the window if it's minimised, raises it and brings its app to
+    /// the front.
+    fn raise(&mut self, w: &WindowInfo) -> CuResult<()> {
+        let _ = w;
+        err(ErrorCode::UnsupportedCapability, "raising a window")
+    }
+    /// Brings an app to the front: the user's own, given back after the foreground rung or a
+    /// launch that took the front.
+    fn activate(&mut self, pid: i32) -> CuResult<()> {
+        let _ = pid;
+        err(ErrorCode::UnsupportedCapability, "activating an app")
+    }
+    fn minimize(&mut self, w: &WindowInfo) -> CuResult<()> {
+        let _ = w;
+        err(ErrorCode::UnsupportedCapability, "minimising a window")
+    }
+    /// Opens an app, a file or a URL (or a file or URL in an app) without bringing it to the
+    /// front, and returns once the system took the request; windows come later.
+    fn open(&mut self, app: Option<&str>, target: Option<&str>) -> CuResult<()> {
+        let _ = (app, target);
+        err(ErrorCode::UnsupportedCapability, "launching")
+    }
 }

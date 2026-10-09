@@ -14,7 +14,7 @@ use crate::action::{
     Screenshot, Status, Target, Timings, ZoomRequest,
 };
 use crate::block::{BlockList, TargetFacts};
-use crate::cancel::{CancelToken, Generations, InputGuard};
+use crate::cancel::{CancelToken, Generations, InputGuard, UserActive};
 use crate::desktop::{Chord, Desktop, Mods, WindowInfo};
 use crate::error::{CuError, CuResult, ErrorCode, err};
 use crate::geom::{self, ImageTransform, MapError, Point, Provider, Rect};
@@ -32,6 +32,12 @@ pub const SETTLE_BOUND: Duration = Duration::from_millis(1_500);
 pub const REQUEST_DEADLINE: Duration = Duration::from_secs(30);
 /// The longest one wait action may take.
 pub const MAX_WAIT: Duration = Duration::from_secs(300);
+/// The foreground rung needs this long without the user's input (§4.4).
+pub const FOREGROUND_IDLE: Duration = Duration::from_secs(60);
+/// A background change waits while the user used the target window this recently (§5).
+pub const USER_BUSY: Duration = Duration::from_secs(1);
+/// The action log's image: one point per pixel, at most this many pixels a side.
+const TRAJECTORY_SIDE: u32 = 1280;
 /// Characters per page of an element's full value.
 const VALUE_PAGE: usize = 4_000;
 /// Images kept for coordinate mapping and zoom, per engine.
@@ -65,6 +71,8 @@ pub struct Engine<D: Desktop> {
     next_image: u64,
     /// Action records not yet taken by the caller.
     pub records: Vec<ActionRecord>,
+    /// The password fields of the window observed last, painted over in the action log's image.
+    last_secure: (u32, Vec<Rect>),
 }
 
 /// Roles whose ordinary click is the element's press action.
@@ -93,6 +101,7 @@ impl<D: Desktop> Engine<D> {
             next_obs: 1,
             next_image: 1,
             records: Vec::new(),
+            last_secure: (0, Vec::new()),
         }
     }
 
@@ -360,6 +369,7 @@ impl<D: Desktop> Engine<D> {
                 let _ = writeln!(text, "selected: {}", tree::quote(&s, tree::VALUE_CLIP));
             }
         }
+        self.last_secure = (w.id, Self::secure_frames(&nodes));
         let want_image = match req.screenshot {
             Screenshot::Always => true,
             Screenshot::Never => false,
@@ -400,7 +410,7 @@ impl<D: Desktop> Engine<D> {
         Ok(Reply {
             text,
             image,
-            results: Vec::new(),
+            ..Default::default()
         })
     }
 
@@ -423,7 +433,7 @@ impl<D: Desktop> Engine<D> {
         Ok(Reply {
             text,
             image: None,
-            results: Vec::new(),
+            ..Default::default()
         })
     }
 
@@ -629,6 +639,7 @@ impl<D: Desktop> Engine<D> {
         let mut guard = InputGuard::new(&*releaser);
         let mut results: Vec<ActionResult> = Vec::with_capacity(req.actions.len());
         let mut stop: Option<CuError> = None;
+        let first_record = self.records.len();
         for (index, action) in req.actions.iter().enumerate() {
             if let Some(why) = &stop {
                 let e = match why.code {
@@ -641,7 +652,15 @@ impl<D: Desktop> Engine<D> {
                 results.push(skipped(index, action, e));
                 continue;
             }
-            let r = self.act_one(worker, req.window, index, action, &cancel, &mut guard);
+            let r = match self.act_one(worker, req.window, index, action, &cancel, &mut guard) {
+                Err(e)
+                    if e.code == ErrorCode::BackgroundUnavailable
+                        && !matches!(action, Action::Wait { .. }) =>
+                {
+                    self.foreground(worker, req.window, index, action, &cancel, &mut guard, e)
+                }
+                r => r,
+            };
             match r {
                 Ok((result, navigated)) => {
                     let failed = result.status == Status::Failed;
@@ -673,6 +692,10 @@ impl<D: Desktop> Engine<D> {
         }
         drop(guard);
         let mut text = render_results(&results);
+        let aims: Vec<(Point, Option<Rect>)> = self.records[first_record..]
+            .iter()
+            .filter_map(|r| Some((r.point?, r.element_box)))
+            .collect();
         // The closing observation: what changed, as a diff for this worker.
         match self.observe(
             worker,
@@ -688,18 +711,22 @@ impl<D: Desktop> Engine<D> {
         ) {
             Ok(obs) => {
                 text.push_str(&obs.text);
+                let trajectory = self.trajectory(req.window, &aims);
                 Ok(Reply {
                     text,
                     image: obs.image,
                     results,
+                    trajectory,
                 })
             }
             Err(e) => {
                 let _ = writeln!(text, "window: {e}");
+                let trajectory = None;
                 Ok(Reply {
                     text,
-                    image: None,
                     results,
+                    trajectory,
+                    ..Default::default()
                 })
             }
         }
@@ -722,8 +749,22 @@ impl<D: Desktop> Engine<D> {
         self.desktop.watch(w.pid);
         let before_windows: HashSet<u32> =
             self.desktop.windows(w.pid)?.iter().map(|x| x.id).collect();
-        let user_before = self.desktop.user_focus();
+        let mut user_before = self.desktop.user_focus();
         let target_is_front = user_before.frontmost_pid == w.pid;
+        // A change in the window the user is typing or clicking in waits until they pause.
+        if target_is_front
+            && !matches!(action, Action::Wait { .. })
+            && user_before.frontmost_window.as_deref() == Some(w.title.as_str())
+        {
+            let idle = self.desktop.idle_source();
+            if idle() < USER_BUSY.as_secs_f64() {
+                while idle() < USER_BUSY.as_secs_f64() {
+                    cancel.check()?;
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                user_before = self.desktop.user_focus();
+            }
+        }
         let caps = self.desktop.capabilities();
         // Activation only for a background app: a defocus afterwards would otherwise
         // deactivate the user's own frontmost app.
@@ -738,6 +779,8 @@ impl<D: Desktop> Engine<D> {
         let mut selected: Option<(D::Element, (usize, usize))> = None;
         // The action read its own effect back (text inserted and seen in the value).
         let mut read_back = false;
+        // Where it aims, in window points, and the element's box: for the action log.
+        let mut aim: Option<(Point, Option<Rect>)> = None;
         let start = Instant::now();
         let rung = match action {
             Action::Click {
@@ -758,6 +801,7 @@ impl<D: Desktop> Engine<D> {
                 if let Some((_, e)) = &el {
                     before_node = self.desktop.read(&w, e).ok();
                 }
+                aim = Some((p, el.as_ref().and_then(|(r, _)| self.ref_frame(w.id, *r))));
                 let plain = *count == 1
                     && *button == crate::desktop::Button::Left
                     && mods == Mods::default();
@@ -775,6 +819,7 @@ impl<D: Desktop> Engine<D> {
                 }
             }
             Action::SetValue { r#ref, text, .. } => {
+                aim = self.ref_aim(w.id, r#ref);
                 let el = self.resolve_ref(&w, Self::ref_of(r#ref)?, true)?;
                 let node = self.desktop.read(&w, &el)?;
                 if node.secure {
@@ -785,6 +830,7 @@ impl<D: Desktop> Engine<D> {
                 Rung::Element
             }
             Action::Type { text, r#ref, .. } => {
+                aim = r#ref.as_deref().and_then(|r| self.ref_aim(w.id, r));
                 let (rung, seen) = self.type_into(&w, r#ref.as_deref(), text, cancel)?;
                 read_back = seen;
                 rung
@@ -801,6 +847,7 @@ impl<D: Desktop> Engine<D> {
             }
             Action::Scroll { target, dx, dy, .. } => {
                 let (p, _, visible) = self.point_of(&w, target)?;
+                aim = Some((p, None));
                 if w.minimized {
                     return err(ErrorCode::BackgroundUnavailable, "the window is minimised");
                 }
@@ -814,11 +861,13 @@ impl<D: Desktop> Engine<D> {
                 if w.minimized {
                     return err(ErrorCode::BackgroundUnavailable, "the window is minimised");
                 }
+                aim = Some((a, None));
                 out_of_view(seen_a && seen_b)?;
                 self.desktop.drag(&w, a, b, activate, guard, cancel)?;
                 pointer_rung
             }
             Action::Perform { r#ref, action, .. } => {
+                aim = self.ref_aim(w.id, r#ref);
                 let el = self.resolve_ref(&w, Self::ref_of(r#ref)?, true)?;
                 before_node = self.desktop.read(&w, &el).ok();
                 self.desktop.perform(&el, action)?;
@@ -836,6 +885,7 @@ impl<D: Desktop> Engine<D> {
                 length,
                 ..
             } => {
+                aim = self.ref_aim(w.id, r#ref);
                 let el = self.resolve_ref(&w, Self::ref_of(r#ref)?, true)?;
                 if self.desktop.read(&w, &el)?.secure {
                     return err(ErrorCode::SecureField, "that is a password field");
@@ -970,14 +1020,113 @@ impl<D: Desktop> Engine<D> {
             },
             notes,
         };
-        self.records.push(ActionRecord::new(
-            worker,
-            &w,
-            action,
-            &result,
-            user_after == user_before,
-        ));
+        let mut record = ActionRecord::new(worker, &w, action, &result, user_after == user_before);
+        (record.point, record.element_box) = aim.map_or((None, None), |(p, b)| (Some(p), b));
+        self.records.push(record);
         Ok((result, navigated))
+    }
+
+    /// A ref's last seen box and its centre.
+    fn ref_aim(&self, window: u32, r: &str) -> Option<(Point, Option<Rect>)> {
+        let f = self.ref_frame(window, tree::parse_ref(r)?)?;
+        Some((f.center(), Some(f)))
+    }
+
+    /// The foreground rung (§4.4): when the background can't reach the window and the user has
+    /// left the computer alone for a minute, raise the window, act, and give the front back. Any
+    /// input from the user ends it at once; a front the user changed meanwhile is kept.
+    #[allow(clippy::too_many_arguments)]
+    fn foreground(
+        &mut self,
+        worker: &str,
+        window: u32,
+        index: usize,
+        action: &Action,
+        cancel: &CancelToken,
+        guard: &mut InputGuard<'_>,
+        why: CuError,
+    ) -> CuResult<(ActionResult, bool)> {
+        let idle = self.desktop.idle_source();
+        let floor = FOREGROUND_IDLE.as_secs_f64();
+        if idle() < floor {
+            return Err(CuError::new(
+                why.code,
+                format!(
+                    "{}; the foreground fallback waits until nobody has used this computer for a minute",
+                    why.detail
+                ),
+            ));
+        }
+        let w = self.desktop.window(window)?;
+        self.check_block(&w)?;
+        let user_before = self.desktop.user_focus();
+        let watch = UserActive(Arc::new(move || idle() < floor));
+        let fg = cancel.with_user(watch);
+        // Checked right before raising, and between every two events after.
+        fg.check()?;
+        let raised = self.desktop.raise(&w);
+        let r = raised.and_then(|()| self.act_one(worker, window, index, action, &fg, guard));
+        // Give the front back, unless the user took it meanwhile.
+        let now = self.desktop.user_focus();
+        let ours = now.frontmost_pid == w.pid;
+        let mut gave_back = false;
+        if ours && user_before.frontmost_pid != w.pid && user_before.frontmost_pid != 0 {
+            gave_back = self.desktop.activate(user_before.frontmost_pid).is_ok();
+            if w.minimized
+                && let Ok(again) = self.desktop.window(window)
+            {
+                let _ = self.desktop.minimize(&again);
+            }
+        }
+        let (mut result, navigated) = r?;
+        result.delivered = Some(Rung::Foreground);
+        result.notes.push(if gave_back {
+            "raised the window while the computer was idle, then gave the front back".into()
+        } else {
+            "raised the window while the computer was idle".into()
+        });
+        if let Some(last) = self.records.last_mut() {
+            last.rung = Some(Rung::Foreground);
+        }
+        Ok((result, navigated))
+    }
+
+    /// The action log's image of a batch: the window as it ended, password fields painted
+    /// over, every point the batch aimed at marked. `None` when nothing aimed at a point.
+    fn trajectory(&mut self, window: u32, aims: &[(Point, Option<Rect>)]) -> Option<ImageOut> {
+        if aims.is_empty() {
+            return None;
+        }
+        let w = self.desktop.window(window).ok()?;
+        let crop = Rect::new(0.0, 0.0, w.frame.w, w.frame.h);
+        let scale = geom::fitting_scale(w.frame.w, w.frame.h, 1.0, TRAJECTORY_SIDE);
+        let mut cap = self
+            .desktop
+            .capture(&w, crop, scale, TRAJECTORY_SIDE)
+            .ok()?;
+        let secure: &[Rect] = if self.last_secure.0 == window {
+            &self.last_secure.1
+        } else {
+            &[]
+        };
+        redact(&mut cap.image, &cap.transform, secure);
+        let t = &cap.transform;
+        for (p, b) in aims {
+            let b = b.map(|b| {
+                let a = t.to_image(Point::new(b.x, b.y));
+                Rect::new(a.x, a.y, b.w * t.scale, b.h * t.scale)
+            });
+            cap.image.mark(t.to_image(*p), b);
+        }
+        let (width, height) = (cap.image.width, cap.image.height);
+        Some(ImageOut {
+            id: "trajectory".into(),
+            png: cap.image.encode_png(),
+            width,
+            height,
+            tokens: 0,
+            provider: self.provider,
+        })
     }
 
     /// Keys and menu commands only go to the leased window's focused element, and never into a
@@ -1089,7 +1238,7 @@ impl<D: Desktop> Engine<D> {
         Ok(Reply {
             text,
             image: Some(img),
-            results: Vec::new(),
+            ..Default::default()
         })
     }
 }
@@ -1210,6 +1359,19 @@ mod tests {
         /// The selected range of each element, in characters; text inserted replaces it.
         selections: HashMap<u32, (usize, usize)>,
         log: Vec<String>,
+        /// Seconds since the user's last input, shared so a test can change it mid-action.
+        idle: Arc<std::sync::Mutex<f64>>,
+        /// The user's frontmost app.
+        front: i32,
+        /// The user moves the mouse halfway through a drag.
+        user_moves_mid_drag: bool,
+        /// The user brings this app to the front during a scroll.
+        user_takes_front: Option<i32>,
+        /// Other apps, and what a launch opens.
+        others: Vec<AppInfo>,
+        on_open: Option<AppInfo>,
+        /// A launch takes the front.
+        open_takes_front: bool,
     }
 
     fn node(id: u32, depth: u16, role: &str, label: &str, frame: Rect) -> RawNode<u32> {
@@ -1239,7 +1401,18 @@ mod tests {
                 retitle_on_press: None,
                 selections: HashMap::new(),
                 log: Vec::new(),
+                idle: Arc::new(std::sync::Mutex::new(0.0)),
+                front: 99,
+                user_moves_mid_drag: false,
+                user_takes_front: None,
+                others: Vec::new(),
+                on_open: None,
+                open_takes_front: false,
             }
+        }
+
+        fn set_idle(&self, secs: f64) {
+            *self.idle.lock().unwrap() = secs;
         }
 
         fn node_mut(&mut self, id: u32) -> &mut RawNode<u32> {
@@ -1265,7 +1438,14 @@ mod tests {
         fn apps(&mut self) -> CuResult<Vec<AppInfo>> {
             let mut a = self.app(10)?;
             a.windows = vec![self.window.clone()];
-            Ok(vec![a])
+            let mut all = vec![a];
+            for o in &self.others {
+                match all.iter_mut().find(|a| a.pid == o.pid) {
+                    Some(a) => a.windows.extend(o.windows.iter().cloned()),
+                    None => all.push(o.clone()),
+                }
+            }
+            Ok(all)
         }
         fn windows(&mut self, _: i32) -> CuResult<Vec<WindowInfo>> {
             Ok(vec![self.window.clone()])
@@ -1397,6 +1577,9 @@ mod tests {
         }
         fn scroll(&mut self, _: &WindowInfo, _: Point, _: i32, _: i32) -> CuResult<()> {
             self.log.push("scroll".into());
+            if let Some(pid) = self.user_takes_front {
+                self.front = pid;
+            }
             Ok(())
         }
         fn drag(
@@ -1406,9 +1589,14 @@ mod tests {
             _: Point,
             _: bool,
             _: &mut InputGuard<'_>,
-            _: &CancelToken,
+            cancel: &CancelToken,
         ) -> CuResult<()> {
-            self.log.push("drag".into());
+            self.log.push("drag start".into());
+            if self.user_moves_mid_drag {
+                self.set_idle(0.0);
+            }
+            cancel.check()?;
+            self.log.push("drag end".into());
             Ok(())
         }
         fn key(&mut self, _: i32, c: &Chord, _: &mut InputGuard<'_>) -> CuResult<()> {
@@ -1426,11 +1614,45 @@ mod tests {
         }
         fn user_focus(&mut self) -> UserFocus {
             UserFocus {
-                frontmost_pid: 99,
-                frontmost_window: Some("The user's own window".into()),
+                frontmost_pid: self.front,
+                frontmost_window: Some(if self.front == self.window.pid {
+                    self.window.title.clone()
+                } else {
+                    "The user's own window".into()
+                }),
                 cursor: Point::new(5.0, 5.0),
                 server_front: None,
             }
+        }
+        fn idle_source(&self) -> Arc<dyn Fn() -> f64 + Send + Sync> {
+            let idle = self.idle.clone();
+            Arc::new(move || *idle.lock().unwrap())
+        }
+        fn raise(&mut self, w: &WindowInfo) -> CuResult<()> {
+            self.log.push("raise".into());
+            self.window.minimized = false;
+            self.front = w.pid;
+            Ok(())
+        }
+        fn activate(&mut self, pid: i32) -> CuResult<()> {
+            self.log.push(format!("activate {pid}"));
+            self.front = pid;
+            Ok(())
+        }
+        fn minimize(&mut self, _: &WindowInfo) -> CuResult<()> {
+            self.log.push("minimize".into());
+            self.window.minimized = true;
+            Ok(())
+        }
+        fn open(&mut self, app: Option<&str>, target: Option<&str>) -> CuResult<()> {
+            self.log.push(format!("open {app:?} {target:?}"));
+            if let Some(a) = self.on_open.take() {
+                if self.open_takes_front {
+                    self.front = a.pid;
+                }
+                self.others.push(a);
+            }
+            Ok(())
         }
     }
 
@@ -1919,5 +2141,215 @@ mod tests {
         let r = act(&mut e, vec![click(&name)]);
         assert_eq!(code(&r[0]), Some(ErrorCode::BackgroundUnavailable));
         assert!(e.desktop.log.is_empty());
+    }
+
+    fn scroll_on(r: &str) -> Action {
+        serde_json::from_value(serde_json::json!({"do": "scroll", "ref": r, "dy": 3})).unwrap()
+    }
+
+    #[test]
+    fn the_foreground_rung_refuses_while_the_user_is_active() {
+        let mut fake = Fake::new(basic());
+        fake.window.minimized = true;
+        fake.set_idle(5.0);
+        let mut e = engine(fake);
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let r = act(&mut e, vec![scroll_on(&ref_of(&text, "Name"))]);
+        assert_eq!(code(&r[0]), Some(ErrorCode::BackgroundUnavailable));
+        assert!(
+            r[0].error.as_ref().unwrap().detail.contains("for a minute"),
+            "{:?}",
+            r[0].error
+        );
+        assert!(e.desktop.log.is_empty(), "{:?}", e.desktop.log);
+    }
+
+    #[test]
+    fn the_foreground_rung_raises_acts_and_gives_the_front_back_when_idle() {
+        let mut fake = Fake::new(basic());
+        fake.window.minimized = true;
+        fake.set_idle(120.0);
+        let mut e = engine(fake);
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let r = act(&mut e, vec![scroll_on(&ref_of(&text, "Name"))]);
+        assert_eq!(r[0].status, Status::Done, "{:?}", r[0].error);
+        assert_eq!(r[0].delivered, Some(Rung::Foreground));
+        assert_eq!(
+            e.desktop.log,
+            vec!["raise", "scroll", "activate 99", "minimize"]
+        );
+        assert_eq!(e.desktop.front, 99);
+        assert_eq!(e.records.last().unwrap().rung, Some(Rung::Foreground));
+    }
+
+    #[test]
+    fn the_foreground_rung_keeps_a_front_the_user_changed() {
+        let mut fake = Fake::new(basic());
+        fake.window.minimized = true;
+        fake.set_idle(120.0);
+        fake.user_takes_front = Some(77);
+        let mut e = engine(fake);
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let r = act(&mut e, vec![scroll_on(&ref_of(&text, "Name"))]);
+        assert_eq!(r[0].delivered, Some(Rung::Foreground));
+        assert_eq!(e.desktop.log, vec!["raise", "scroll"]);
+        assert_eq!(e.desktop.front, 77);
+    }
+
+    #[test]
+    fn the_foreground_rung_stops_between_two_events_when_the_user_comes_back() {
+        let mut fake = Fake::new(basic());
+        fake.window.minimized = true;
+        fake.set_idle(120.0);
+        fake.user_moves_mid_drag = true;
+        let mut e = engine(fake);
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let (a, b) = (ref_of(&text, "Next"), ref_of(&text, "Name"));
+        let drag: Action = serde_json::from_value(
+            serde_json::json!({"do": "drag", "from": {"ref": a}, "to": {"ref": b}}),
+        )
+        .unwrap();
+        let r = act(&mut e, vec![drag]);
+        assert_eq!(code(&r[0]), Some(ErrorCode::BackgroundUnavailable));
+        assert!(
+            r[0].error
+                .as_ref()
+                .unwrap()
+                .detail
+                .contains("started using")
+        );
+        // Stopped after the first event; the front still went back.
+        assert_eq!(
+            e.desktop.log,
+            vec!["raise", "drag start", "activate 99", "minimize"]
+        );
+    }
+
+    #[test]
+    fn a_background_change_waits_while_the_user_works_in_the_target_window() {
+        let mut fake = Fake::new(basic());
+        fake.front = 10;
+        fake.set_idle(0.1);
+        let idle = fake.idle.clone();
+        let mut e = engine(fake);
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let name = ref_of(&text, "Name");
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            *idle.lock().unwrap() = 2.0;
+        });
+        let started = Instant::now();
+        let r = act(&mut e, vec![scroll_on(&name)]);
+        t.join().unwrap();
+        assert_eq!(r[0].status, Status::Done);
+        assert!(started.elapsed() >= Duration::from_millis(150));
+        assert_eq!(r[0].delivered, Some(Rung::Background));
+    }
+
+    #[test]
+    fn an_act_keeps_a_marked_image_for_the_log_and_not_for_the_model() {
+        let mut e = engine(Fake::new(basic()));
+        let text = observe(&mut e, Screenshot::Never, None).text;
+        let reply = e
+            .act(
+                "w",
+                &ActRequest {
+                    window: 1,
+                    actions: vec![click(&ref_of(&text, "Next"))],
+                    screenshot: Screenshot::Never,
+                },
+            )
+            .unwrap();
+        assert!(reply.image.is_none());
+        let t = reply.trajectory.expect("a trajectory image");
+        let img = crate::harness::decode_png(&t.png).unwrap();
+        // "Next" is at 10,10 40×20 in window points; the image is one pixel per point.
+        assert_eq!(img.pixel(30, 20), [230, 20, 40, 255]);
+        assert_eq!(e.records[0].point, Some(Point::new(30.0, 20.0)));
+        // Nothing aimed at a point: no image.
+        let reply = e
+            .act(
+                "w",
+                &ActRequest {
+                    window: 1,
+                    actions: vec![Action::Wait {
+                        expect: Expect::TitleContains { text: "Doc".into() },
+                        timeout_ms: 10,
+                    }],
+                    screenshot: Screenshot::Never,
+                },
+            )
+            .unwrap();
+        assert!(reply.trajectory.is_none());
+    }
+
+    fn other_app(pid: i32, name: &str, bundle: &str, window: u32) -> AppInfo {
+        AppInfo {
+            pid,
+            name: name.into(),
+            bundle_id: Some(bundle.into()),
+            bundle_path: Some(format!("/Applications/{name}.app")),
+            frontmost: false,
+            windows: vec![WindowInfo {
+                id: window,
+                pid,
+                title: "Untitled".into(),
+                frame: Rect::new(0.0, 0.0, 300.0, 200.0),
+                on_screen: true,
+                minimized: false,
+            }],
+        }
+    }
+
+    fn launch(
+        e: &mut Engine<Fake>,
+        app: Option<&str>,
+        open: Option<&str>,
+    ) -> CuResult<crate::launch::Opened> {
+        let req = crate::wire::LaunchRequest {
+            app: app.map(str::to_owned),
+            open: open.map(str::to_owned),
+        };
+        let token = e.gens.token("w", Duration::from_secs(5));
+        crate::launch::launch(e, &req, &token)
+    }
+
+    #[test]
+    fn a_launch_tells_a_new_process_from_one_that_was_running() {
+        let mut fake = Fake::new(basic());
+        fake.on_open = Some(other_app(20, "Notes", "dev.example.notes", 5));
+        fake.open_takes_front = true;
+        let mut e = engine(fake);
+        let o = launch(&mut e, Some("Notes"), None).unwrap();
+        assert_eq!(o.app.pid, 20);
+        assert!(o.new_process);
+        assert_eq!(o.new_windows, vec![5]);
+        // It took the front; the user's app got it back.
+        assert!(o.front_restored);
+        assert_eq!(e.desktop.front, 99);
+
+        // A file opened in the app that's already running: a new window, not a new process.
+        e.desktop.on_open = Some(other_app(20, "Notes", "dev.example.notes", 6));
+        e.desktop.open_takes_front = false;
+        let o = launch(&mut e, None, Some("/tmp/a.txt")).unwrap();
+        assert_eq!(o.app.pid, 20);
+        assert!(!o.new_process);
+        assert_eq!(o.new_windows, vec![6]);
+        assert!(!o.front_restored);
+    }
+
+    #[test]
+    fn a_launch_of_a_blocked_app_is_refused_before_it_opens() {
+        let mut e = engine(Fake::new(basic()));
+        let r = launch(&mut e, Some("com.apple.keychainaccess"), None);
+        assert_eq!(r.unwrap_err().code, ErrorCode::Blocked);
+        assert!(e.desktop.log.is_empty(), "{:?}", e.desktop.log);
+        // A terminal is allowed when the launch starts it: it's the session's.
+        e.desktop.on_open = Some(other_app(30, "Terminal", "com.apple.Terminal", 7));
+        let o = launch(&mut e, Some("Terminal"), None).unwrap();
+        assert!(o.new_process);
+        // The same terminal again is the one already running: refused.
+        let r = launch(&mut e, Some("Terminal"), None);
+        assert_eq!(r.unwrap_err().code, ErrorCode::Blocked);
     }
 }

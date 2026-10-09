@@ -54,28 +54,6 @@ pub fn decode_png(bytes: &[u8]) -> Result<Rgba> {
     })
 }
 
-/// Draws a predicted point: a red ring and cross.
-pub fn mark(img: &mut Rgba, p: Point, label_box: Option<Rect>) {
-    let red = [230, 20, 40, 255];
-    for t in 0..360 {
-        let a = f64::from(t).to_radians();
-        for r in [7.0, 8.0] {
-            img.fill(
-                Rect::new(p.x + r * a.cos(), p.y + r * a.sin(), 1.0, 1.0),
-                red,
-            );
-        }
-    }
-    img.fill(Rect::new(p.x - 12.0, p.y, 24.0, 1.0), red);
-    img.fill(Rect::new(p.x, p.y - 12.0, 1.0, 24.0), red);
-    if let Some(b) = label_box {
-        img.fill(Rect::new(b.x, b.y, b.w, 1.0), red);
-        img.fill(Rect::new(b.x, b.y + b.h, b.w, 1.0), red);
-        img.fill(Rect::new(b.x, b.y, 1.0, b.h), red);
-        img.fill(Rect::new(b.x + b.w, b.y, 1.0, b.h), red);
-    }
-}
-
 fn print_reply(reply: &Reply, out: Option<&Path>) -> Result<()> {
     print!("{}", reply.text);
     if let (Some(img), Some(dir)) = (&reply.image, out) {
@@ -123,7 +101,7 @@ pub fn run_script<D: Desktop>(engine: &mut Engine<D>, script: &Value, out: &Path
             if let (Some((id, _)), Some(canvas)) = (&last_full, annotated.as_mut()) {
                 for act in &req.actions {
                     if let Some((p, b)) = predicted(engine, req.window, id, act) {
-                        mark(canvas, p, b);
+                        canvas.mark(p, b);
                     }
                 }
             }

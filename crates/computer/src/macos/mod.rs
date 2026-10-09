@@ -24,9 +24,10 @@ use objc2_core_foundation::{
     CGPoint as CgPoint, kCFRunLoopDefaultMode,
 };
 use objc2_core_graphics::{
-    CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGEvent, CGGetActiveDisplayList,
-    CGGetDisplaysWithPoint, CGWindowListCopyWindowInfo, CGWindowListOption, kCGWindowBounds,
-    kCGWindowIsOnscreen, kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerPID,
+    CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGEvent, CGEventSource,
+    CGEventSourceStateID, CGEventType, CGGetActiveDisplayList, CGGetDisplaysWithPoint,
+    CGWindowListCopyWindowInfo, CGWindowListOption, kCGWindowBounds, kCGWindowIsOnscreen,
+    kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerPID,
 };
 
 pub use ax::AxEl;
@@ -601,6 +602,80 @@ impl Desktop for MacDesktop {
             cursor,
             server_front,
         }
+    }
+
+    fn idle_source(&self) -> Arc<dyn Fn() -> f64 + Send + Sync> {
+        // The HID system's state counts the hardware only: events this crate posts to an app
+        // don't reset it. `!0` is the system's "any input" event type.
+        Arc::new(|| {
+            CGEventSource::seconds_since_last_event_type(
+                CGEventSourceStateID::HIDSystemState,
+                CGEventType(!0),
+            )
+        })
+    }
+
+    fn raise(&mut self, w: &WindowInfo) -> CuResult<()> {
+        let el = self.ax_window(w)?;
+        if el.bool("AXMinimized") == Some(true) {
+            el.set("AXMinimized", CFBoolean::new(false))?;
+        }
+        el.perform("AXRaise")?;
+        let _ = el.set("AXMain", CFBoolean::new(true));
+        self.activate(w.pid)
+    }
+
+    fn activate(&mut self, pid: i32) -> CuResult<()> {
+        // Through accessibility: the system lets a background process bring another app to
+        // the front this way, where its activation calls would be declined.
+        AxEl::app(pid).set("AXFrontmost", CFBoolean::new(true))?;
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline {
+            let front = NSWorkspace::sharedWorkspace()
+                .frontmostApplication()
+                .map(|a| a.processIdentifier());
+            if front == Some(pid) {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        err(
+            ErrorCode::Failed,
+            format!("pid {pid} didn't come to the front"),
+        )
+    }
+
+    fn minimize(&mut self, w: &WindowInfo) -> CuResult<()> {
+        self.ax_window(w)?.set("AXMinimized", CFBoolean::new(true))
+    }
+
+    fn open(&mut self, app: Option<&str>, target: Option<&str>) -> CuResult<()> {
+        // open(1): -g keeps the app out of the foreground; -b names a bundle id, -a a name or a
+        // path.
+        let mut cmd = std::process::Command::new("/usr/bin/open");
+        cmd.arg("-g");
+        if let Some(app) = app {
+            let bundle_id = !app.contains('/')
+                && !app.contains(' ')
+                && !app.ends_with(".app")
+                && app.split('.').count() >= 3;
+            cmd.arg(if bundle_id { "-b" } else { "-a" }).arg(app);
+        }
+        if let Some(t) = target {
+            cmd.arg(t);
+        }
+        let out = cmd
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| CuError::new(ErrorCode::Failed, format!("open: {e}")))?;
+        if out.status.success() {
+            return Ok(());
+        }
+        let why = String::from_utf8_lossy(&out.stderr);
+        err(
+            ErrorCode::NoSuchTarget,
+            format!("couldn't open it: {}", why.trim()),
+        )
     }
 }
 
