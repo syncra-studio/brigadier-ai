@@ -382,10 +382,10 @@ impl SessionManager {
         if answers.iter().any(String::is_empty) {
             return Err(Error::Invalid("an answer is empty".into()));
         }
-        let answer = if question.items.is_empty() {
-            answers[0].clone()
-        } else {
-            round_answer(&round, &answers)
+        // A single question's answer is the answer itself; a round's lists each question.
+        let answer = match answers.as_slice() {
+            [only] => only.clone(),
+            _ => round_answer(&round, &answers),
         };
         question.answer = Some(answer.clone());
         if !question.items.is_empty() {
@@ -413,10 +413,10 @@ impl SessionManager {
                         ),
                     );
                 }
-                let text = if question.items.is_empty() {
+                let text = if round.len() == 1 {
                     format!(
                         "[answer] You asked the user: \"{}\"\nThe user answered: {answer}",
-                        question.text
+                        round[0].text
                     )
                 } else {
                     format!("[answer] You asked the user:\n{answer}")

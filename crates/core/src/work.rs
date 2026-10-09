@@ -2143,6 +2143,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_question_card_stored_before_rounds_reads_as_a_round_of_one() {
+        let stored = serde_json::json!({
+            "id": "q1",
+            "conversationId": "c1",
+            "taskId": null,
+            "requestId": "r1",
+            "position": 0,
+            "kind": { "type": "orchestrator" },
+            "text": "Which region?",
+            "options": ["eu-west", "us-east"],
+            "recommended": 1,
+            "answer": null,
+            "createdAtMs": 0,
+            "answeredAtMs": null
+        });
+        let question: Question = serde_json::from_value(stored).unwrap();
+        assert!(question.items.is_empty() && question.answers.is_empty());
+        assert!(question.is_open());
+        let round = question.round();
+        assert_eq!(round.len(), 1);
+        assert_eq!(round[0].text, "Which region?");
+        let labels: Vec<_> = round[0].options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(labels, ["eu-west", "us-east"]);
+        assert!(round[0].options.iter().all(|o| o.description.is_none()));
+        assert_eq!(round[0].recommended, Some(1));
+    }
+
+    #[test]
     fn a_report_stored_before_done_when_still_reads() {
         let report: Report = serde_json::from_value(serde_json::json!({
             "summary": "Done.",
