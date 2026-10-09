@@ -615,6 +615,14 @@ impl SessionManager {
         {
             tracing::warn!(error = %err, "could not list computer use's missing permissions");
         }
+        // Another worker's call may have found the permissions in while the item was written:
+        // it closed what was open then, so this one is closed here.
+        let closed = !lock(&self.computer.state)
+            .permission_waits
+            .contains(conversation_id);
+        if closed {
+            self.resolve_computer_waits(conversation_id).await;
+        }
     }
 
     /// Both permissions are in: every open permission item is over.
