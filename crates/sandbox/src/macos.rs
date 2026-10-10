@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use security_framework::passwords;
 
-use crate::machine::{heat_from_thermal_state, memory_tight_from_pressure_level};
+use crate::machine::{heat_from_thermal_state, memory_from_pressure_level};
 use crate::unix::{self, UnixPrivateFs};
 use crate::{
     APP_ID, AppPaths, CredentialStore, DetachedChild, Error, Machine, MachineLoad, Platform,
@@ -383,7 +383,9 @@ impl Machine for MacMachine {
             heat: thermal_state()
                 .map(heat_from_thermal_state)
                 .unwrap_or_default(),
-            memory_tight: memory_pressure_level().is_some_and(memory_tight_from_pressure_level),
+            memory: memory_pressure_level()
+                .map(memory_from_pressure_level)
+                .unwrap_or_default(),
         }
     }
 }

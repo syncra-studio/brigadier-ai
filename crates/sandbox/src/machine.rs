@@ -25,20 +25,34 @@ pub enum Heat {
     Critical,
 }
 
+/// Memory pressure in the OS's levels.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MemoryPressure {
+    #[default]
+    Normal,
+    Warning,
+    Critical,
+}
+
 /// How hard the machine is working right now.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MachineLoad {
     pub heat: Heat,
-    /// The OS reports memory pressure (macOS: warning or critical).
-    pub memory_tight: bool,
+    pub memory: MemoryPressure,
 }
 
 impl MachineLoad {
-    /// Whether new heavy work (a new worker, a new build or test run) should wait.
-    pub fn strained(&self) -> bool {
-        self.heat >= Heat::Serious || self.memory_tight
+    /// Workers can start under a memory warning; only critical pressure holds them.
+    pub fn workers_held(&self) -> bool {
+        self.heat >= Heat::Serious || self.memory == MemoryPressure::Critical
     }
 
+    /// Builds and tests are memory-heavy, so even a warning holds new runs.
+    pub fn builds_held(&self) -> bool {
+        self.heat >= Heat::Serious || self.memory >= MemoryPressure::Warning
+    }
+
+    /// Only sustained critical heat escalates to pausing already running builds.
     pub fn critical(&self) -> bool {
         self.heat == Heat::Critical
     }
@@ -61,11 +75,14 @@ pub(crate) fn heat_from_thermal_state(state: isize) -> Heat {
     }
 }
 
-/// `kern.memorystatus_vm_pressure_level` (1 normal, 2 warning, 4 critical): whether memory is
-/// tight.
+/// `kern.memorystatus_vm_pressure_level` (1 normal, 2 warning, 4 critical).
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) fn memory_tight_from_pressure_level(level: i32) -> bool {
-    level >= 2
+pub(crate) fn memory_from_pressure_level(level: i32) -> MemoryPressure {
+    match level {
+        4.. => MemoryPressure::Critical,
+        2.. => MemoryPressure::Warning,
+        _ => MemoryPressure::Normal,
+    }
 }
 
 /// A share of stalled time (`some`, `full`; `avg10`, in percent) from a pressure stall file.
@@ -78,12 +95,20 @@ fn psi_avg10(text: &str, line: &str) -> Option<f64> {
         .ok()
 }
 
-/// Whether `/proc/pressure/memory` shows memory tight: some task stalled on memory for a
-/// quarter of the last 10 s, or every task for a tenth of it.
+/// Memory PSI over ten seconds: warning at `some >= 25%` or `full >= 10%`.
+/// Critical at `full >= 25%`: all non-idle tasks stalled together for a quarter of the
+/// window, indicating sustained thrashing rather than just some busy tasks reclaiming.
+/// See <https://docs.kernel.org/accounting/psi.html> for the OS signal's meaning.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub(crate) fn memory_tight_from_psi(text: &str) -> bool {
-    psi_avg10(text, "some").is_some_and(|some| some >= 25.0)
-        || psi_avg10(text, "full").is_some_and(|full| full >= 10.0)
+pub(crate) fn memory_from_psi(text: &str) -> MemoryPressure {
+    let full = psi_avg10(text, "full").unwrap_or_default();
+    if full >= 25.0 {
+        MemoryPressure::Critical
+    } else if full >= 10.0 || psi_avg10(text, "some").is_some_and(|some| some >= 25.0) {
+        MemoryPressure::Warning
+    } else {
+        MemoryPressure::Normal
+    }
 }
 
 /// The heat of the hottest thermal zone under `thermal` (`/sys/class/thermal`), each against
@@ -132,10 +157,14 @@ pub(crate) fn heat_from_thermal_zones(thermal: &Path) -> Heat {
     heat
 }
 
-/// Whether a Windows memory load (percent of physical memory in use) is tight.
+/// Windows physical memory in use: warning at 90%, critical at 95%.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) fn memory_tight_from_load(percent: u32) -> bool {
-    percent >= 90
+pub(crate) fn memory_from_load(percent: u32) -> MemoryPressure {
+    match percent {
+        95.. => MemoryPressure::Critical,
+        90.. => MemoryPressure::Warning,
+        _ => MemoryPressure::Normal,
+    }
 }
 
 #[cfg(test)]
@@ -162,29 +191,33 @@ mod tests {
     }
 
     #[test]
-    fn strained_means_serious_heat_or_tight_memory() {
-        let calm = MachineLoad::default();
-        assert!(!calm.strained() && !calm.critical());
-        let fair = MachineLoad {
-            heat: Heat::Fair,
-            memory_tight: false,
-        };
-        assert!(!fair.strained());
-        let serious = MachineLoad {
-            heat: Heat::Serious,
-            memory_tight: false,
-        };
-        assert!(serious.strained() && !serious.critical());
-        let tight = MachineLoad {
-            heat: Heat::Nominal,
-            memory_tight: true,
-        };
-        assert!(tight.strained());
-        let critical = MachineLoad {
-            heat: Heat::Critical,
-            memory_tight: false,
-        };
-        assert!(critical.strained() && critical.critical());
+    fn workers_and_builds_use_different_memory_thresholds() {
+        for (level, memory, workers, builds) in [
+            (1, MemoryPressure::Normal, false, false),
+            (2, MemoryPressure::Warning, false, true),
+            (4, MemoryPressure::Critical, true, true),
+        ] {
+            let load = MachineLoad {
+                heat: Heat::Nominal,
+                memory: memory_from_pressure_level(level),
+            };
+            assert_eq!(load.memory, memory);
+            assert_eq!(load.workers_held(), workers);
+            assert_eq!(load.builds_held(), builds);
+            assert!(
+                !load.critical(),
+                "memory never escalates to pausing running builds"
+            );
+        }
+        for heat in [Heat::Nominal, Heat::Fair, Heat::Serious, Heat::Critical] {
+            let load = MachineLoad {
+                heat,
+                ..Default::default()
+            };
+            assert_eq!(load.workers_held(), heat >= Heat::Serious);
+            assert_eq!(load.builds_held(), heat >= Heat::Serious);
+            assert_eq!(load.critical(), heat == Heat::Critical);
+        }
     }
 
     #[test]
@@ -193,22 +226,33 @@ mod tests {
         assert_eq!(heat_from_thermal_state(1), Heat::Fair);
         assert_eq!(heat_from_thermal_state(2), Heat::Serious);
         assert_eq!(heat_from_thermal_state(3), Heat::Critical);
-        assert!(!memory_tight_from_pressure_level(1));
-        assert!(memory_tight_from_pressure_level(2));
-        assert!(memory_tight_from_pressure_level(4));
-        assert!(!memory_tight_from_load(70));
-        assert!(memory_tight_from_load(95));
+        assert_eq!(memory_from_load(89), MemoryPressure::Normal);
+        assert_eq!(memory_from_load(90), MemoryPressure::Warning);
+        assert_eq!(memory_from_load(94), MemoryPressure::Warning);
+        assert_eq!(memory_from_load(95), MemoryPressure::Critical);
     }
 
     #[test]
     fn pressure_stall_files_are_read() {
-        let calm = "some avg10=1.50 avg60=0.80 avg300=0.10 total=1234\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n";
-        assert!(!memory_tight_from_psi(calm));
-        let some = "some avg10=31.00 avg60=12.00 avg300=3.00 total=99\nfull avg10=2.00 avg60=1.00 avg300=0.00 total=9\n";
-        assert!(memory_tight_from_psi(some));
-        let full = "some avg10=12.00 avg60=12.00 avg300=3.00 total=99\nfull avg10=11.00 avg60=1.00 avg300=0.00 total=9\n";
-        assert!(memory_tight_from_psi(full));
-        assert!(!memory_tight_from_psi(""));
+        for (text, expected) in [
+            ("some avg10=24.99\nfull avg10=9.99", MemoryPressure::Normal),
+            ("some avg10=25.00\nfull avg10=0.00", MemoryPressure::Warning),
+            (
+                "some avg10=12.00\nfull avg10=10.00",
+                MemoryPressure::Warning,
+            ),
+            (
+                "some avg10=40.00\nfull avg10=24.99",
+                MemoryPressure::Warning,
+            ),
+            (
+                "some avg10=40.00\nfull avg10=25.00",
+                MemoryPressure::Critical,
+            ),
+            ("", MemoryPressure::Normal),
+        ] {
+            assert_eq!(memory_from_psi(text), expected, "{text}");
+        }
     }
 
     #[test]

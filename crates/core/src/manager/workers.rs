@@ -1203,7 +1203,7 @@ impl SessionManager {
         origin: Origin,
         first: TurnInput,
     ) -> Result<()> {
-        // A new worker waits while the machine is hot or short on memory (PLAN.md §10.7).
+        // A new worker waits for serious heat or critical memory pressure (PLAN.md §10.7).
         // An overnight run's worker starts once its run has a worker free (§10.7). A new
         // session doesn't start at all once its run winds down (§10.9); a resumed one may
         // still hand off.

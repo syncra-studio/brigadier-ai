@@ -768,12 +768,34 @@ pub struct Notice {
     pub at_ms: i64,
 }
 
+/// Why work is waiting for the machine. Old stored rows described every hold as heat.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum MachineStepReason {
+    #[default]
+    Heat,
+    Memory,
+}
+
+impl MachineStepReason {
+    /// Heat takes precedence when both limits hold work.
+    pub(crate) fn from_load(load: brigadier_sandbox::MachineLoad) -> Self {
+        if load.heat >= brigadier_sandbox::Heat::Serious {
+            Self::Heat
+        } else {
+            Self::Memory
+        }
+    }
+}
+
 /// A grey thread row about the machine (PLAN.md §10.7): a worker or a build waiting for the
-/// machine to cool down, or for another build; a build paused for the heat, or going on again.
+/// machine to ease, or for another build; a build paused for the heat, or going on again.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MachineStep {
     pub kind: MachineStepKind,
+    #[serde(default)]
+    pub reason: MachineStepReason,
     /// The request the worker (or the orchestrator's turn) serves.
     #[serde(default)]
     pub request_id: Option<String>,
@@ -1911,6 +1933,23 @@ pub mod streams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_machine_events_default_to_heat_and_memory_round_trips() {
+        let event: DomainEvent = serde_json::from_value(serde_json::json!({
+            "type": "machineStepped", "conversationId": "c",
+            "step": { "kind": "waitingToCool", "atMs": 123 }
+        }))
+        .unwrap();
+        let DomainEvent::MachineStepped { mut step, .. } = event else {
+            panic!("expected a machine step");
+        };
+        assert_eq!(step.reason, MachineStepReason::Heat);
+        step.reason = MachineStepReason::Memory;
+        let restored: MachineStep =
+            serde_json::from_value(serde_json::to_value(&step).unwrap()).unwrap();
+        assert_eq!(restored, step);
+    }
 
     #[test]
     fn saved_settings_with_the_old_usage_switches_still_load() {

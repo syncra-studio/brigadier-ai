@@ -769,6 +769,7 @@ Kind: {kind}
 
 Rules for this task:
 - {alone}{write_rules}
+- Brigadier may suspend your build or test processes while the machine is hot or short on memory and resumes them itself; never send SIGCONT or any other signal to resume them, and simply wait or rerun the check.
 - {needs_user}{code_rules}{extra}
 
 The task:
@@ -1113,6 +1114,7 @@ mod tests {
         let brief = worker_brief(&task("claude", Some("lead")), "Your worktree: /w/t1", "");
         assert!(brief.starts_with("Today is "));
         assert!(brief.contains("Task task-1: Add the flag"));
+        assert!(brief.contains("never send SIGCONT or any other signal to resume them"));
         assert!(brief.contains("Your worktree: /w/t1"));
         assert!(brief.ends_with("The task:\nAdd the flag."));
         // A lead stops once its checks and the review are green (THREAD-UX-PLAN.md §4.1 a).
@@ -1147,6 +1149,7 @@ mod tests {
             brief.contains("Use only the computer tools and the files and apps this task names")
         );
         assert!(brief.contains("Never kill or signal a process (no kill, pkill or killall)"));
+        assert!(brief.contains("never send SIGCONT or any other signal to resume them"));
         assert!(brief.contains("never search the whole disk (no find /)"));
         assert!(brief.contains("Don't change files in the repository"));
         assert!(!brief.contains("How to write code"));

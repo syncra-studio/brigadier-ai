@@ -1,9 +1,10 @@
 //! The machine guard: Brigadier holds back its own heavy work while the machine struggles,
 //! automatically and with no setting (PLAN.md §10.7).
 //!
-//! - While the OS reports serious heat or memory pressure, no new worker starts and no new
-//!   build or test run goes ahead; they wait, with a grey row in the thread, and start when it
-//!   eases. Work already running is left alone.
+//! - Serious heat or critical memory pressure holds new workers, builds and test runs.
+//!   Memory warnings hold only new builds and tests, for at most two minutes before a free
+//!   build lease may proceed. They wait with a grey row in the thread
+//!   and start when it eases. Work already running is left alone.
 //! - Heavy commands run one at a time daemon-wide (the build lease, see [`builds`]).
 //! - Critical heat held for a minute pauses Brigadier's own running builds, newest first,
 //!   until it drops back; nothing is ever killed. The user's own apps and terminals, and the
@@ -20,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use brigadier_sandbox::{Heat, MachineLoad, Platform};
+use brigadier_sandbox::{Heat, MachineLoad, MemoryPressure, Platform};
 use tokio::sync::watch;
 
 use self::builds::{Action, Builds, Note, Proc, Seen};
@@ -178,11 +179,11 @@ impl MachineWatch {
         self.stopped.sweep(&*self.platform);
     }
 
-    /// Waits until the machine isn't strained, at most `max`; whether it is eased.
+    /// Waits until workers can start, at most `max`; whether the machine eased.
     pub(crate) async fn eased_within(&self, max: Duration) -> bool {
         let mut changes = self.guard.subscribe();
-        let _ = tokio::time::timeout(max, changes.wait_for(|load| !load.strained())).await;
-        !self.guard.current().strained()
+        let _ = tokio::time::timeout(max, changes.wait_for(|load| !load.workers_held())).await;
+        !self.guard.current().workers_held()
     }
 }
 
@@ -192,7 +193,8 @@ pub(crate) struct MachineGuard {
     /// A load set in place of the OS's (tests).
     fake: Mutex<Option<MachineLoad>>,
     /// A development build's stand-in for the OS: a file naming the load (`calm`, `hot`,
-    /// `memory`, `critical`), from `BRIGADIER_FAKE_MACHINE`, so the guard can be tried live.
+    /// `memory` (warning), `memory-critical`, `critical`), from `BRIGADIER_FAKE_MACHINE`,
+    /// so the guard can be tried live.
     fake_file: Option<PathBuf>,
     load: watch::Sender<MachineLoad>,
 }
@@ -252,15 +254,19 @@ fn parse_fake(text: &str) -> MachineLoad {
     match text.trim() {
         "hot" => MachineLoad {
             heat: Heat::Serious,
-            memory_tight: false,
+            memory: MemoryPressure::Normal,
         },
         "memory" => MachineLoad {
             heat: Heat::Nominal,
-            memory_tight: true,
+            memory: MemoryPressure::Warning,
+        },
+        "memory-critical" => MachineLoad {
+            heat: Heat::Nominal,
+            memory: MemoryPressure::Critical,
         },
         "critical" => MachineLoad {
             heat: Heat::Critical,
-            memory_tight: false,
+            memory: MemoryPressure::Normal,
         },
         _ => MachineLoad::default(),
     }
@@ -712,11 +718,11 @@ mod tests {
 
     const HOT: MachineLoad = MachineLoad {
         heat: Heat::Serious,
-        memory_tight: false,
+        memory: MemoryPressure::Normal,
     };
     const CRITICAL: MachineLoad = MachineLoad {
         heat: Heat::Critical,
-        memory_tight: false,
+        memory: MemoryPressure::Normal,
     };
 
     /// Whether `pid` shows as stopped: a stop lands when the process is next scheduled, which a
@@ -795,7 +801,7 @@ mod tests {
             vec![Row {
                 owner: "task:b".into(),
                 command: "cargo test -p core".into(),
-                note: Note::WaitingToCool,
+                note: Note::WaitingToCool(crate::model::MachineStepReason::Heat),
             }]
         );
         assert!(stopped(waiting.pid));
@@ -891,6 +897,20 @@ mod tests {
         end(&*platform, worker);
     }
 
+    #[tokio::test]
+    async fn memory_warning_allows_workers_but_critical_holds_them() {
+        let dir = TempDir::new();
+        let watch = MachineWatch::new(platform(dir.path()), dir.path().join("stopped.json"));
+        watch.guard.fake(parse_fake("memory"));
+        assert!(watch.eased_within(Duration::ZERO).await);
+        watch.guard.fake(parse_fake("memory-critical"));
+        assert!(!watch.eased_within(Duration::ZERO).await);
+        watch.guard.fake(parse_fake("hot"));
+        assert!(!watch.eased_within(Duration::ZERO).await);
+        watch.guard.fake(parse_fake("calm"));
+        assert!(watch.eased_within(Duration::ZERO).await);
+    }
+
     #[test]
     fn a_fake_load_stands_in_for_the_os() {
         let dir = TempDir::new();
@@ -898,12 +918,16 @@ mod tests {
         let changes = guard.subscribe();
         guard.fake(MachineLoad {
             heat: Heat::Serious,
-            memory_tight: false,
+            memory: MemoryPressure::Normal,
         });
-        assert!(guard.current().strained());
+        assert!(guard.current().workers_held());
         assert!(changes.has_changed().unwrap());
         assert_eq!(parse_fake("critical\n").heat, Heat::Critical);
-        assert!(parse_fake("memory").memory_tight);
+        assert_eq!(parse_fake("memory").memory, MemoryPressure::Warning);
+        assert_eq!(
+            parse_fake("memory-critical").memory,
+            MemoryPressure::Critical
+        );
         assert_eq!(parse_fake("calm"), MachineLoad::default());
     }
 }

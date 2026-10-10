@@ -459,6 +459,43 @@ fn real(path: &std::path::Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_owned())
 }
 
+#[tokio::test]
+async fn memory_warning_starts_overnight_workers_without_readmission_loops() {
+    let thread = Arc::new(Thread {
+        order: vec![1],
+        ..Default::default()
+    });
+    let flow = flow_with("overnight-memory-warning", thread).await;
+    flow.manager
+        .machine
+        .guard
+        .fake(brigadier_sandbox::MachineLoad {
+            memory: brigadier_sandbox::MemoryPressure::Warning,
+            ..Default::default()
+        });
+    assert!(!flow.manager.machine_strained());
+    let run = start_run(&flow, "/overnight Make one file.", 1).await;
+    let board = finished(&flow, &run.id).await;
+    let run = run_of(&board, &run.id);
+    assert!(board.tasks.values().any(|task| {
+        task.run
+            .as_ref()
+            .is_some_and(|context| context.run_id == run.id)
+    }));
+    assert!(board.machine_steps.is_empty());
+    let files = super::git(
+        &flow.repo,
+        &[
+            "ls-tree",
+            "-r",
+            "--name-only",
+            &run.workspace.as_ref().unwrap().branch,
+        ],
+    );
+    assert!(files.contains("p1.txt"), "{files}");
+    flow.stop().await;
+}
+
 /// "stop after phase 2" on a plan of three: the thread works on its own session, its
 /// workspace switched to the run's worktree (its tiny edit lands on the run's branch, the
 /// session's branch stays as it was) and back after; phase 3 never starts; Merge takes the

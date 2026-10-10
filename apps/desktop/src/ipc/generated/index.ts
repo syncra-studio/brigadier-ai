@@ -150,6 +150,7 @@ export type { LimitKind } from "./LimitKind";
 export type { LineRange } from "./LineRange";
 export type { MachineStep } from "./MachineStep";
 export type { MachineStepKind } from "./MachineStepKind";
+export type { MachineStepReason } from "./MachineStepReason";
 export type { MemoryChange } from "./MemoryChange";
 export type { Mention } from "./Mention";
 export type { MergedModel } from "./MergedModel";

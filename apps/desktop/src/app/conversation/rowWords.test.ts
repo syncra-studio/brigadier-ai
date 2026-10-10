@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import { decisionWords, namedTasks, shortWorkerName, workerName } from "@/app/conversation/rowWords";
+import { decisionWords, machineWords, namedTasks, shortWorkerName, workerName } from "@/app/conversation/rowWords";
 import type { Decision, Task } from "@/ipc/generated";
 
 const tasks = night.tasks as unknown as Record<string, Task>;
@@ -57,4 +57,11 @@ test("a decision recorded in older, longer words reads in the board's short ones
   // One that arrived since the board was read is in the short words already.
   const live = { ...sentBack, short: null, what: "Sent task-5 back: 2 review findings (fix 1 of 2)", why: "" };
   assert.deepEqual(decisionWords(live), { what: live.what, why: "" });
+});
+
+test("machine holds name memory separately from heat, while pauses remain heat-only", () => {
+  assert.equal(machineWords("waitingToCool", null, "the Mac", "memory"), "Waiting for memory to free up");
+  assert.equal(machineWords("waitingToCool", null, "the Mac", "heat"), "Waiting for the Mac to cool down");
+  assert.equal(machineWords("waitingToCool", null, "the Mac"), "Waiting for the Mac to cool down");
+  assert.equal(machineWords("paused", "cargo test", "the Mac", "heat"), "Paused cargo test to let the Mac cool down");
 });

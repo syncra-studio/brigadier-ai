@@ -8,7 +8,7 @@ use super::SessionManager;
 use super::watchdog::WorkerWatch;
 use crate::machine::builds::{Note, Proc};
 use crate::machine::{RECHECK, Row, TICK, proc_of};
-use crate::model::{ConversationId, DomainEvent, MachineStep, MachineStepKind};
+use crate::model::{ConversationId, DomainEvent, MachineStep, MachineStepKind, MachineStepReason};
 use crate::work::{Task, TaskId};
 use crate::{Error, Result, now_ms};
 
@@ -93,11 +93,23 @@ impl SessionManager {
 
     /// Files a row in the thread of the command's CLI's conversation.
     async fn machine_row(&self, row: Row) {
-        let (kind, verb) = match row.note {
-            Note::WaitingToCool => (MachineStepKind::WaitingToCool, "waits for the machine"),
-            Note::WaitingForBuild => (MachineStepKind::WaitingForBuild, "waits for another build"),
-            Note::Paused => (MachineStepKind::Paused, "paused for the heat"),
-            Note::Resumed => (MachineStepKind::Resumed, "resumed"),
+        let (kind, reason, verb) = match row.note {
+            Note::WaitingToCool(reason) => (
+                MachineStepKind::WaitingToCool,
+                reason,
+                "waits for the machine",
+            ),
+            Note::WaitingForBuild => (
+                MachineStepKind::WaitingForBuild,
+                MachineStepReason::Heat,
+                "waits for another build",
+            ),
+            Note::Paused => (
+                MachineStepKind::Paused,
+                MachineStepReason::Heat,
+                "paused for the heat",
+            ),
+            Note::Resumed => (MachineStepKind::Resumed, MachineStepReason::Heat, "resumed"),
         };
         tracing::info!(owner = %row.owner, command = %row.command, "{verb}");
         let Some((kind_of, id)) = row.owner.split_once(':') else {
@@ -128,6 +140,7 @@ impl SessionManager {
             &conversation_id,
             MachineStep {
                 kind,
+                reason,
                 request_id,
                 task_id,
                 command: Some(row.command),
@@ -152,27 +165,38 @@ impl SessionManager {
         }
     }
 
-    /// Holds a new worker while the machine is hot or short on memory, with a row in the
+    /// Holds a new worker during serious heat or critical memory pressure, with a row in the
     /// thread, until it eases. Fails when the task ends meanwhile.
     pub(crate) async fn hold_while_strained(&self, task: &Task) -> Result<()> {
         if self.machine.eased_within(Duration::ZERO).await {
             return Ok(());
         }
-        let reason = format!("Waiting for {} to cool down", machine_name());
-        self.set_task_blocked(&task.id, Some(reason)).await;
-        self.record_machine_step(
-            &task.conversation_id,
-            MachineStep {
-                kind: MachineStepKind::WaitingToCool,
-                request_id: task.request_id.clone(),
-                task_id: Some(task.id.clone()),
-                command: None,
-                at_ms: now_ms(),
-                position: 0,
-            },
-        )
-        .await;
+        let mut previous_reason = None;
         loop {
+            let reason = MachineStepReason::from_load(self.machine.guard.current());
+            if previous_reason != Some(reason) {
+                let words = match reason {
+                    MachineStepReason::Heat => {
+                        format!("Waiting for {} to cool down", machine_name())
+                    }
+                    MachineStepReason::Memory => "Waiting for memory to free up".to_owned(),
+                };
+                self.set_task_blocked(&task.id, Some(words)).await;
+                self.record_machine_step(
+                    &task.conversation_id,
+                    MachineStep {
+                        kind: MachineStepKind::WaitingToCool,
+                        reason,
+                        request_id: task.request_id.clone(),
+                        task_id: Some(task.id.clone()),
+                        command: None,
+                        at_ms: now_ms(),
+                        position: 0,
+                    },
+                )
+                .await;
+                previous_reason = Some(reason);
+            }
             let eased = self.machine.eased_within(RECHECK).await;
             // Stopped meanwhile, or the daemon quits: it doesn't start, eased or not.
             let now = self.task_by_id(&task.conversation_id, &task.id).await?;
@@ -188,9 +212,9 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Whether the machine is hot or short on memory now.
+    /// Whether serious heat or critical memory pressure holds new workers now.
     pub(crate) fn machine_strained(&self) -> bool {
-        self.machine.guard.current().strained()
+        self.machine.guard.current().workers_held()
     }
 
     /// `watch` with the time its worker's commands were held for the machine counted as

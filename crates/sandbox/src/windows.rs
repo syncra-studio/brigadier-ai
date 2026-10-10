@@ -35,7 +35,7 @@ use windows_sys::Win32::System::Threading::{
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, TerminateProcess,
 };
 
-use crate::machine::memory_tight_from_load;
+use crate::machine::memory_from_load;
 use crate::{
     AppPaths, CredentialStore, DetachedChild, Machine, MachineLoad, Platform, PrivateFs, Processes,
     Result, Sandbox, SandboxPolicy, Shell, SpawnSpec, unsupported,
@@ -94,7 +94,11 @@ impl Machine for WindowsMachine {
         let read = unsafe { GlobalMemoryStatusEx(&mut status) } != 0;
         MachineLoad {
             heat: crate::Heat::Nominal,
-            memory_tight: read && memory_tight_from_load(status.dwMemoryLoad),
+            memory: if read {
+                memory_from_load(status.dwMemoryLoad)
+            } else {
+                Default::default()
+            },
         }
     }
 }

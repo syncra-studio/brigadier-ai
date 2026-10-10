@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use nix::unistd::{SysconfVar, sysconf};
 
-use crate::machine::{heat_from_thermal_zones, memory_tight_from_psi};
+use crate::machine::{heat_from_thermal_zones, memory_from_psi};
 use crate::unix::{self, UnixPrivateFs};
 use crate::{
     AppPaths, CredentialStore, DetachedChild, Machine, MachineLoad, Platform, PrivateFs, Processes,
@@ -61,8 +61,9 @@ impl Machine for LinuxMachine {
     fn load(&self) -> MachineLoad {
         MachineLoad {
             heat: heat_from_thermal_zones(std::path::Path::new("/sys/class/thermal")),
-            memory_tight: std::fs::read_to_string("/proc/pressure/memory")
-                .is_ok_and(|text| memory_tight_from_psi(&text)),
+            memory: std::fs::read_to_string("/proc/pressure/memory")
+                .map(|text| memory_from_psi(&text))
+                .unwrap_or_default(),
         }
     }
 }

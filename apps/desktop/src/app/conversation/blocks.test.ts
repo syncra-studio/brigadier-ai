@@ -223,8 +223,9 @@ test("a normal session includes helper workers and keeps approved plans out of t
 test("machine rows show in their request's block, each on its own line", () => {
   const request = "machine-request";
   const user = { ...messages[0]!, id: request, seq: 320, requestId: request, text: "Build it" };
-  const step = (kind: MachineStep["kind"], at: number, command: string | null): MachineStep => ({
+  const step = (kind: MachineStep["kind"], at: number, command: string | null, reason: MachineStep["reason"] = "heat"): MachineStep => ({
     kind,
+    reason,
     requestId: request,
     taskId: null,
     command,
@@ -238,19 +239,20 @@ test("machine rows show in their request's block, each on its own line", () => {
     requests: { [request]: { ...Object.values(board.requests)[0]!, id: request, startedAtMs: user.createdAtMs, state: { type: "done" } } },
     orchestratorSteps: [],
     decisions: [],
-    machineSteps: [step("waitingToCool", 1, null), step("paused", 2, "cargo test"), step("resumed", 3, "cargo test")],
+    machineSteps: [step("waitingToCool", 1, null), step("paused", 2, "cargo test"), step("resumed", 3, "cargo test"), step("waitingToCool", 4, "cargo test", "memory")],
   };
   const block = buildBlocks([user], {}, false, digest, []).find((candidate) => candidate.key === request);
   assert.ok(block);
   const rows = sequence(block).flatMap((entry) =>
     entry.kind === "orchestrator"
-      ? [entry.steps.map((s) => (s.kind.type === "machine" ? machineWords(s.kind.machine, s.kind.command, "the Mac") : ""))]
+      ? [entry.steps.map((s) => (s.kind.type === "machine" ? machineWords(s.kind.machine, s.kind.command, "the Mac", s.kind.reason) : ""))]
       : [],
   );
   assert.deepEqual(rows, [
     ["Waiting for the Mac to cool down"],
     ["Paused cargo test to let the Mac cool down"],
     ["Resumed cargo test"],
+    ["Waiting for memory to free up"],
   ]);
 });
 

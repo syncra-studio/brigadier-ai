@@ -68,6 +68,7 @@ export type DecidedStep = { type: "decided"; what: string; why: string };
 export type MachineWords = {
   type: "machine";
   machine: MachineStepKind;
+  reason: MachineStep["reason"];
   command: string | null;
   taskId: string | null;
 };
@@ -412,7 +413,7 @@ export function buildBlocks(
       position: step.position,
       requestId: step.requestId,
       step: {
-        kind: { type: "machine", machine: step.kind, command: step.command, taskId: step.taskId },
+        kind: { type: "machine", machine: step.kind, reason: step.reason, command: step.command, taskId: step.taskId },
         position: step.position,
       },
       atMs: step.atMs,

@@ -15,7 +15,7 @@ where
 }
 
 #[tokio::test]
-async fn a_scout_reports_and_the_answer_ends_the_request() {
+async fn a_scout_reports_under_memory_warning_and_the_answer_ends_the_request() {
     let flow = Flow::start(
         "scout",
         Options::default(),
@@ -52,10 +52,19 @@ async fn a_scout_reports_and_the_answer_ends_the_request() {
         }),
     )
     .await;
+    flow.manager
+        .machine
+        .guard
+        .fake(brigadier_sandbox::MachineLoad {
+            memory: brigadier_sandbox::MemoryPressure::Warning,
+            ..Default::default()
+        });
+    assert!(!flow.manager.machine_strained());
     flow.say("What is in the repository?").await;
     let board = flow.settled().await;
     let task = Flow::task(&board, 1);
     assert_eq!(task.state, TaskState::Done);
+    assert!(board.machine_steps.is_empty());
     assert!(
         board
             .requests
@@ -72,6 +81,59 @@ async fn a_scout_reports_and_the_answer_ends_the_request() {
     flow.restart().await;
     flow.until("the launch to sweep it", |_| !folder.exists())
         .await;
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn critical_memory_names_the_worker_hold_and_warning_releases_it() {
+    let flow = Flow::start(
+        "memory-hold", Options::default(), script(|turn| async move {
+            if turn.is_orchestrator() {
+                if turn.input.contains("[report task-1") {
+                    return Reply::text("Finished.");
+                }
+                let reply = turn.call("delegate_task", json!({
+                    "effort": "high", "title": "Read files", "kind": "scout", "spec": "Read the files."
+                })).await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            let reply = turn.call("submit_report", json!({"summary": "Read the files."})).await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        }),
+    ).await;
+    flow.manager
+        .machine
+        .guard
+        .fake(brigadier_sandbox::MachineLoad {
+            memory: brigadier_sandbox::MemoryPressure::Critical,
+            ..Default::default()
+        });
+    flow.say("Read the files.").await;
+    let board = flow
+        .until("the memory hold to be recorded", |board| {
+            board
+                .tasks
+                .values()
+                .any(|task| task.blocked_reason.as_deref() == Some("Waiting for memory to free up"))
+                && !board.machine_steps.is_empty()
+        })
+        .await;
+    assert_eq!(
+        board.machine_steps[0].reason,
+        crate::model::MachineStepReason::Memory
+    );
+    flow.manager
+        .machine
+        .guard
+        .fake(brigadier_sandbox::MachineLoad {
+            memory: brigadier_sandbox::MemoryPressure::Warning,
+            ..Default::default()
+        });
+    let board = flow.settled().await;
+    assert_eq!(Flow::task(&board, 1).state, TaskState::Done);
+    assert!(Flow::task(&board, 1).blocked_reason.is_none());
     flow.stop().await;
 }
 

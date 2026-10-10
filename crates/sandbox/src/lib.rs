@@ -30,7 +30,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub use machine::{Heat, Machine, MachineLoad};
+pub use machine::{Heat, Machine, MachineLoad, MemoryPressure};
 pub use paths::{AppPaths, IpcEndpoint, OWNER_MARKER, default_data_dir};
 pub use process::{DetachedChild, InstanceLock, SpawnSpec};
 

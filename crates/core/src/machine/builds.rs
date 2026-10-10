@@ -5,8 +5,8 @@
 //! - **One build at a time.** The first heavy command takes the daemon-wide lease; one that
 //!   starts while another holds it, or while the machine is strained, is stopped where it
 //!   stands (never asked about, denied or killed) and goes on, oldest first, once the lease is
-//!   free and the machine eased. The lease belongs to the command, not to its worker: it is
-//!   given back the moment the command ends or leaves its worker's tree, so a worker waiting
+//!   free and the machine eased (memory warnings alone hold at most [`MEMORY_WARNING_HOLD`]).
+//!   The lease belongs to the command, not to its worker: it is given back the moment the command ends or leaves its worker's tree, so a worker waiting
 //!   on another one (a nested review) never holds it, and a crashed worker can't keep it.
 //! - **Bounded.** A command holding the lease for [`LEASE_MAX`] is taken for a server or
 //!   watcher the classifier missed: it keeps running and no longer holds the lease. One that
@@ -20,9 +20,14 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use brigadier_sandbox::MachineLoad;
+use brigadier_sandbox::{MachineLoad, MemoryPressure};
 use serde::{Deserialize, Serialize};
 
+use crate::model::MachineStepReason;
+
+/// Maximum delay for a new build held only by a memory warning. Heat and critical memory
+/// pressure never time out; an occupied lease still waits for its holder.
+pub(crate) const MEMORY_WARNING_HOLD: Duration = Duration::from_secs(2 * 60);
 /// How long a command may hold the lease before it counts as long-running.
 pub(crate) const LEASE_MAX: Duration = Duration::from_secs(10 * 60);
 /// How long the lease holder may use no CPU while others wait before the next one goes on.
@@ -59,7 +64,7 @@ pub(crate) struct Seen {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Note {
     /// It waits for the machine to cool down (or free memory) before it starts.
-    WaitingToCool,
+    WaitingToCool(MachineStepReason),
     /// It waits for another build to finish.
     WaitingForBuild,
     /// It was paused to let the machine cool down.
@@ -106,6 +111,8 @@ struct Build {
     /// Arrival order: the oldest waiting goes first, the newest running is paused first.
     seq: u64,
     state: State,
+    /// When this waiting build first saw warning-only memory pressure.
+    warning_since: Option<Instant>,
 }
 
 #[derive(Debug, Default)]
@@ -165,7 +172,7 @@ impl Builds {
                 .builds
                 .values()
                 .any(|build| build.state == State::Waiting);
-            let state = if self.lease.is_none() && !load.strained() && !waiting_before {
+            let state = if self.lease.is_none() && !load.builds_held() && !waiting_before {
                 self.lease = Some(seen.root);
                 State::Running {
                     since: now,
@@ -177,8 +184,8 @@ impl Builds {
                     proc: seen.root,
                     owner: seen.owner.clone(),
                     command: seen.command.clone(),
-                    note: if load.strained() {
-                        Note::WaitingToCool
+                    note: if load.builds_held() {
+                        Note::WaitingToCool(MachineStepReason::from_load(load))
                     } else {
                         Note::WaitingForBuild
                     },
@@ -192,6 +199,7 @@ impl Builds {
                     command: seen.command,
                     seq,
                     state,
+                    warning_since: None,
                 },
             );
         }
@@ -238,14 +246,33 @@ impl Builds {
             self.last_pause = None;
             actions.extend(self.resume_paused(now));
         }
-        // The oldest waiting command takes a free lease once the machine eased.
+        // A persistent warning must not starve builds on an otherwise healthy machine.
+        // Reset the grace period whenever heat or critical memory also holds them.
+        let warning_only = load.memory == MemoryPressure::Warning && !load.workers_held();
+        for build in self
+            .builds
+            .values_mut()
+            .filter(|build| build.state == State::Waiting)
+        {
+            if warning_only {
+                build.warning_since.get_or_insert(now);
+            } else {
+                build.warning_since = None;
+            }
+        }
+        // The oldest waiting command takes a free lease once the machine eased, or its
+        // memory-warning grace period elapsed. Critical memory and heat keep holding it.
         if self.lease.is_none()
-            && !load.strained()
             && let Some((&proc, build)) = self
                 .builds
                 .iter_mut()
                 .filter(|(_, build)| build.state == State::Waiting)
                 .min_by_key(|(_, build)| build.seq)
+            && (!load.builds_held()
+                || (warning_only
+                    && build
+                        .warning_since
+                        .is_some_and(|since| now.duration_since(since) >= MEMORY_WARNING_HOLD)))
         {
             build.state = State::Running {
                 since: now,
@@ -359,19 +386,19 @@ mod tests {
 
     const CALM: MachineLoad = MachineLoad {
         heat: Heat::Nominal,
-        memory_tight: false,
+        memory: MemoryPressure::Normal,
     };
     const HOT: MachineLoad = MachineLoad {
         heat: Heat::Serious,
-        memory_tight: false,
+        memory: MemoryPressure::Normal,
     };
     const TIGHT: MachineLoad = MachineLoad {
         heat: Heat::Nominal,
-        memory_tight: true,
+        memory: MemoryPressure::Warning,
     };
     const CRITICAL: MachineLoad = MachineLoad {
         heat: Heat::Critical,
-        memory_tight: false,
+        memory: MemoryPressure::Normal,
     };
 
     fn proc(pid: u32) -> Proc {
@@ -557,7 +584,14 @@ mod tests {
 
     #[test]
     fn while_strained_new_builds_wait_and_running_ones_are_untouched() {
-        for strained in [HOT, TIGHT] {
+        for strained in [
+            HOT,
+            TIGHT,
+            MachineLoad {
+                memory: MemoryPressure::Critical,
+                ..CALM
+            },
+        ] {
             let mut builds = Builds::default();
             let t0 = Instant::now();
             builds.tick(vec![seen(10, "task:a")], CALM, t0);
@@ -569,7 +603,10 @@ mod tests {
             assert_eq!(stops(&actions), vec![20], "only the new one");
             assert_eq!(
                 notes(&actions),
-                vec![("task:b".into(), Note::WaitingToCool)]
+                vec![(
+                    "task:b".into(),
+                    Note::WaitingToCool(MachineStepReason::from_load(strained))
+                )]
             );
             // a ends while still hot: b keeps waiting.
             let actions = builds.tick(
@@ -582,6 +619,71 @@ mod tests {
             let actions = builds.tick(vec![seen(20, "task:b")], CALM, t0 + Duration::from_secs(6));
             assert_eq!(continues(&actions), vec![20]);
         }
+    }
+
+    #[test]
+    fn memory_warning_yields_after_two_minutes_but_heat_and_critical_memory_do_not() {
+        let t0 = Instant::now();
+        for load in [
+            TIGHT,
+            HOT,
+            CRITICAL,
+            MachineLoad {
+                memory: MemoryPressure::Critical,
+                ..CALM
+            },
+        ] {
+            let mut builds = Builds::default();
+            assert_eq!(
+                stops(&builds.tick(vec![seen(10, "task:a")], load, t0)),
+                vec![10]
+            );
+            assert!(
+                builds
+                    .tick(
+                        vec![seen(10, "task:a")],
+                        load,
+                        t0 + MEMORY_WARNING_HOLD - Duration::from_secs(1)
+                    )
+                    .is_empty()
+            );
+            let actions = builds.tick(vec![seen(10, "task:a")], load, t0 + MEMORY_WARNING_HOLD);
+            assert_eq!(
+                continues(&actions),
+                if load == TIGHT { vec![10] } else { vec![] }
+            );
+            // Memory warning's admitted build continues running even after the heat pause timer.
+            assert!(
+                builds
+                    .tick(
+                        vec![seen(10, "task:a")],
+                        load,
+                        t0 + MEMORY_WARNING_HOLD + CRITICAL_HOLD
+                    )
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn warning_timeout_keeps_the_lease_and_resets_after_stronger_pressure() {
+        let t0 = Instant::now();
+        let all = || vec![seen(10, "task:a"), seen(20, "task:b")];
+        let mut builds = Builds::default();
+        builds.tick(vec![seen(10, "task:a")], CALM, t0);
+        builds.tick(all(), TIGHT, t0);
+        assert!(continues(&builds.tick(all(), TIGHT, t0 + MEMORY_WARNING_HOLD)).is_empty());
+        let critical = MachineLoad {
+            memory: MemoryPressure::Critical,
+            ..CALM
+        };
+        builds.tick(all(), critical, t0 + MEMORY_WARNING_HOLD);
+        let t1 = t0 + MEMORY_WARNING_HOLD + Duration::from_secs(1);
+        assert!(builds.tick(vec![seen(20, "task:b")], TIGHT, t1).is_empty());
+        assert_eq!(
+            continues(&builds.tick(vec![seen(20, "task:b")], TIGHT, t1 + MEMORY_WARNING_HOLD)),
+            vec![20]
+        );
     }
 
     #[test]

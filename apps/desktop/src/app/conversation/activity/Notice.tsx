@@ -31,7 +31,7 @@ const MachineRow: FC<{ kind: MachineWords }> = ({ kind }) => {
       <Icon aria-hidden className="size-4 shrink-0" />
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         {kind.taskId && <WorkerName taskId={kind.taskId} />}
-        <span className="min-w-0 truncate">{machineWords(kind.machine, kind.command, mac ? "the Mac" : "the computer")}</span>
+        <span className="min-w-0 truncate">{machineWords(kind.machine, kind.command, mac ? "the Mac" : "the computer", kind.reason)}</span>
       </span>
     </div>
   );
