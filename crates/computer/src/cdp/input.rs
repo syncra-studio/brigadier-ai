@@ -59,31 +59,42 @@ pub fn drag(
     to: (f64, f64),
     cancel: &CancelToken,
 ) -> CuResult<()> {
-    let s = Some(page.session.as_str());
+    drag_in(conn, &page.session, from, to, cancel)
+}
+
+fn drag_in(
+    conn: &mut Conn,
+    session: &str,
+    from: (f64, f64),
+    to: (f64, f64),
+    cancel: &CancelToken,
+) -> CuResult<()> {
+    let s = Some(session);
     let ev = |conn: &mut Conn, kind: &str, (x, y): (f64, f64), buttons: u32| {
         conn.call(
             s,
             "Input.dispatchMouseEvent",
             json!({"type": kind, "x": x, "y": y, "button": "left", "buttons": buttons, "clickCount": 1}),
         )
+        .map(drop)
     };
     ev(conn, "mouseMoved", from, 0)?;
     ev(conn, "mousePressed", from, 1)?;
     let steps = 10;
     let mut result = Ok(());
     for i in 1..=steps {
-        if let Err(e) = cancel.check() {
-            result = Err(e);
-            break;
-        }
         let t = f64::from(i) / f64::from(steps);
         let p = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
-        ev(conn, "mouseMoved", p, 1)?;
+        result = cancel.check().and_then(|()| ev(conn, "mouseMoved", p, 1));
+        if result.is_err() {
+            break;
+        }
         std::thread::sleep(Duration::from_millis(8));
     }
-    // The button is let go on every path, as a person's hand would be.
-    ev(conn, "mouseReleased", to, 0)?;
-    result
+    // The button is let go on every path, as a person's hand would be. When the drag already
+    // failed, the release is best effort and the first error is the one reported.
+    let released = ev(conn, "mouseReleased", to, 0);
+    result.and(released)
 }
 
 /// Wheel lines: positive `dy` scrolls towards the end, as elsewhere in the engine.
@@ -482,4 +493,62 @@ pub fn select_range(conn: &mut Conn, el: &WebEl, start: usize, length: usize) ->
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::TcpListener;
+    use std::thread;
+
+    use tungstenite::Message;
+
+    use super::*;
+    use crate::cancel::Generations;
+
+    /// A browser endpoint on a local port that answers every command, except that it fails
+    /// mouse moves made with the button down. It returns the commands it was sent.
+    fn browser_failing_held_moves() -> (u16, thread::JoinHandle<Vec<Value>>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            let mut sent = Vec::new();
+            while let Ok(msg) = ws.read() {
+                let Message::Text(text) = msg else { continue };
+                let cmd: Value = serde_json::from_str(&text).unwrap();
+                let p = &cmd["params"];
+                let reply = if p["type"] == "mouseMoved" && p["buttons"] == 1 {
+                    json!({"id": cmd["id"], "error": {"message": "the target closed"}})
+                } else {
+                    json!({"id": cmd["id"], "result": {}})
+                };
+                sent.push(cmd);
+                ws.send(Message::text(reply.to_string())).unwrap();
+            }
+            sent
+        });
+        (port, server)
+    }
+
+    #[test]
+    fn a_drag_whose_move_fails_still_lets_the_button_go_and_reports_the_move() {
+        let (port, server) = browser_failing_held_moves();
+        let mut conn = Conn::connect(port, "/").unwrap();
+        let cancel = Generations::new().token("s", Duration::from_secs(60));
+        let e = drag_in(&mut conn, "page", (10.0, 10.0), (50.0, 50.0), &cancel).unwrap_err();
+        assert_eq!(e.code, ErrorCode::Failed);
+        assert!(e.detail.contains("the target closed"), "{}", e.detail);
+        drop(conn);
+        let kinds: Vec<String> = server
+            .join()
+            .unwrap()
+            .iter()
+            .map(|c| c["params"]["type"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(
+            kinds,
+            ["mouseMoved", "mousePressed", "mouseMoved", "mouseReleased"]
+        );
+    }
 }
