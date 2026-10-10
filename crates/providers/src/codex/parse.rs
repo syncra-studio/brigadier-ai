@@ -74,8 +74,9 @@ pub struct Parser {
     turn_id: Option<String>,
     /// An error was already reported for the running turn.
     turn_error: bool,
-    /// Files of file-change items, which their approval requests do not repeat.
-    file_items: HashMap<String, Vec<FileChange>>,
+    /// Files of file-change items, which their approval requests do not repeat: each
+    /// changed file, and where a renamed one moves to.
+    file_items: HashMap<String, Vec<String>>,
     quota: Option<QuotaSnapshot>,
     /// The context size last reported.
     context_used: Option<i64>,
@@ -369,6 +370,16 @@ impl Parser {
                 changes,
                 status,
             } => {
+                let paths = changes
+                    .iter()
+                    .flat_map(|change| {
+                        let moved = match &change.kind {
+                            p::PatchChangeKind::Update { move_path } => move_path.clone(),
+                            _ => None,
+                        };
+                        std::iter::once(change.path.clone()).chain(moved)
+                    })
+                    .collect();
                 let changes: Vec<FileChange> = changes
                     .into_iter()
                     .map(|change| FileChange {
@@ -382,7 +393,7 @@ impl Parser {
                         },
                     })
                     .collect();
-                self.file_items.insert(id.clone(), changes.clone());
+                self.file_items.insert(id.clone(), paths);
                 ProviderEvent::FileChanges {
                     item_id: id,
                     changes,
@@ -562,7 +573,7 @@ impl Parser {
                 };
                 // An approved command runs outside the sandbox (see the adapter's docs).
                 let reason = ask.reason.clone();
-                // "Allow similar commands": Brigadier allows later commands with the same first
+                // "Allow … for this session": Brigadier allows later commands with the same first
                 // words itself; Codex's session cache (`acceptForSession`) holds this one.
                 let grant = ask
                     .command
@@ -595,11 +606,13 @@ impl Parser {
                 else {
                     return self.unsupported(rpc_id, method, out);
                 };
-                let paths = self
+                let mut paths = self
                     .file_items
                     .get(&ask.item_id)
-                    .map(|changes| changes.iter().map(|change| change.path.clone()).collect())
+                    .cloned()
                     .unwrap_or_default();
+                // Asking to write a whole folder: a session grant must cover it too.
+                paths.extend(ask.grant_root.clone());
                 (
                     ApprovalRequest {
                         id: approval_id.clone(),
@@ -1263,6 +1276,78 @@ mod tests {
             events(&mut parser, &line).as_slice(),
             [ProviderEvent::MessageDelta { text, .. }] if text == "hello"
         ));
+    }
+
+    #[test]
+    fn file_approvals_use_session_grants_without_covering_renames_outside() {
+        let workspace =
+            std::env::temp_dir().join(format!("codex-file-grant-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let ask = |path: &std::path::Path, moved: Option<&std::path::Path>| {
+            let mut parser = Parser::live();
+            events(
+                &mut parser,
+                &json!({ "method": "item/started", "params": {
+                    "item": { "id": "f1", "type": "fileChange", "status": "inProgress", "changes": [
+                        { "path": path, "kind": { "type": "update", "move_path": moved }, "diff": "" }
+                    ]}, "startedAtMs": 0, "threadId": "t1", "turnId": "u1"
+                }}),
+            );
+            events(
+                &mut parser,
+                &json!({ "id": 7, "method": "item/fileChange/requestApproval", "params": {
+                    "itemId": "f1", "startedAtMs": 0, "threadId": "t1", "turnId": "u1"
+                }}),
+            )
+            .into_iter()
+            .find_map(|event| match event {
+                ProviderEvent::ApprovalRequested { request } => Some(request),
+                _ => None,
+            })
+            .unwrap()
+        };
+        let mut first = ask(&workspace.join("a.txt"), None);
+        first.grant = crate::policy::workspace_grant(&first, &workspace);
+        let mut similar = crate::policy::Similar::default();
+        similar.allow(&first);
+        assert!(similar.covers(&ask(&workspace.join("new/b.txt"), None)));
+        let outside = workspace.parent().unwrap().join("outside.txt");
+        assert!(!similar.covers(&ask(&outside, None)));
+        assert!(!similar.covers(&ask(&workspace.join("a.txt"), Some(&outside))));
+        std::fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn a_file_change_approval_names_where_a_rename_goes_and_the_root_asked_for() {
+        let mut parser = Parser::live();
+        let started = json!({ "method": "item/started", "params": {
+            "item": { "id": "f1", "type": "fileChange", "status": "inProgress", "changes": [
+                { "path": "/w/a.rs", "kind": { "type": "update", "move_path": "/elsewhere/a.rs" },
+                  "diff": "" },
+                { "path": "/w/b.rs", "kind": { "type": "add" }, "diff": "+x" },
+            ]},
+            "startedAtMs": 0, "threadId": "t1", "turnId": "u1",
+        }});
+        events(&mut parser, &started);
+        let asked = json!({ "id": 7, "method": "item/fileChange/requestApproval", "params": {
+            "itemId": "f1", "grantRoot": "/root", "startedAtMs": 0, "threadId": "t1",
+            "turnId": "u1",
+        }});
+        let paths = events(&mut parser, &asked)
+            .into_iter()
+            .find_map(|event| match event {
+                ProviderEvent::ApprovalRequested { request } => Some(request.paths),
+                _ => None,
+            });
+        assert_eq!(
+            paths,
+            Some(vec![
+                "/w/a.rs".into(),
+                "/elsewhere/a.rs".into(),
+                "/w/b.rs".into(),
+                "/root".into()
+            ])
+        );
     }
 
     #[test]

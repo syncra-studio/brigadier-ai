@@ -291,8 +291,11 @@ A session's permission level is picked in the composer; a project remembers the 
 
 - **Ask for approval**: you approve every plan and every change before it lands. Workers run
   in the OS sandbox without network; each step outside it (another folder, a host to reach)
-  asks you on a card. "Allow similar commands" allows the same kind of command (its first
-  words, such as `git push` or `curl`) or the same host for the rest of the conversation.
+  asks you on a card. The visible "Allow … for this session" button allows commands with the
+  same first words (such as `git push` or `curl`), connections to the same host, or file changes
+  inside the asker’s own checkout/worktree for the rest of the conversation, including worker
+  handoffs. File changes outside that folder or in Git metadata still ask. These grants stay
+  in memory only; nothing is saved across sessions. Full access is the persistent alternative.
 - **Approve for me**: Brigadier approves plans and changes on your behalf (a risky plan gets an
   independent review first) and asks you only what only you can answer. Workers run in the OS
   sandbox with network; when a command needs more, the CLI's own reviewer decides (Claude's

@@ -866,7 +866,7 @@ pub enum CardState {
     Pending,
     Allowed {
         by: Decider,
-        /// The CLI keeps allowing the request's session grant (similar commands).
+        /// Brigadier keeps allowing the request's scope for this conversation.
         #[serde(default)]
         similar: bool,
     },

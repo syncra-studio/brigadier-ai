@@ -4,8 +4,8 @@
 //! Full access runs without a sandbox and never asks; Approve for me runs inside the CLI's OS
 //! sandbox and lets the CLI's own reviewer settle what leaves it; Ask for approval asks the
 //! user each time a command needs more than the sandbox allows. Requests that still reach
-//! Brigadier are routed by [`route`]; the user's "Allow similar commands" covers later requests
-//! with the same [`similar_key`] for the rest of the conversation ([`Similar`]).
+//! Brigadier are routed by [`route`]; the user's "for this session" answer covers similar later
+//! requests for the rest of the conversation ([`Similar`]).
 
 use crate::model::{Access, ApprovalKind, ApprovalRequest};
 
@@ -356,7 +356,7 @@ const NEUTRAL: &[&str] = &[
     "echo",
 ];
 
-/// What "Allow similar commands" covers for `command`: its first program and, when the next
+/// What "Allow … for this session" covers for `command`: its first program and, when the next
 /// word is a plain subcommand, that word too (`git push origin main` → `git push`, `curl -sI
 /// https://…` → `curl`, `cargo test -p core` → `cargo test`). `None` for a line with no
 /// program in it.
@@ -390,21 +390,34 @@ fn program_name(word: &str) -> &str {
     word.rsplit('/').next().unwrap_or(word)
 }
 
-/// What the user allowed with "Allow similar commands" in one conversation: commands that
-/// start with the same words, and network access to the same hosts. Never persisted.
+/// What the user allowed "for this session" in one conversation: commands that start with the
+/// same words, network access to the same hosts, and file changes inside a session's own
+/// workspace (its checkout or worktree). Never persisted.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Similar {
     prefixes: Vec<Vec<String>>,
     hosts: Vec<String>,
+    folders: Vec<std::path::PathBuf>,
 }
 
 impl Similar {
     /// Allows what is similar to `request` from now on. Does nothing for a request that has
-    /// nothing to be similar to (a file change, a permissions request).
+    /// nothing to be similar to (a permissions request, a file change without a
+    /// [`workspace_grant`]).
     pub fn allow(&mut self, request: &ApprovalRequest) {
         if let Some(host) = network_host(request) {
             if !self.hosts.contains(&host) {
                 self.hosts.push(host);
+            }
+        } else if request.kind == ApprovalKind::FileChange {
+            let Some(folder) = request.grant.as_deref() else {
+                return;
+            };
+            let Some(folder) = resolved_path(std::path::Path::new(folder)) else {
+                return;
+            };
+            if !self.folders.contains(&folder) {
+                self.folders.push(folder);
             }
         } else if let Some(prefix) = request.command.as_deref().and_then(command_prefix) {
             let words: Vec<String> = prefix.split(' ').map(str::to_owned).collect();
@@ -426,13 +439,25 @@ impl Similar {
                 self.hosts.push(host);
             }
         }
+        for folder in other.folders {
+            if !self.folders.contains(&folder) {
+                self.folders.push(folder);
+            }
+        }
     }
 
     /// Whether `request` is similar to one the user allowed: network access to an allowed
-    /// host, or a command line whose every command starts with allowed words.
+    /// host, a file change inside an allowed workspace, or a command line whose every command
+    /// starts with allowed words.
     pub fn covers(&self, request: &ApprovalRequest) -> bool {
         if let Some(host) = network_host(request) {
             return self.hosts.contains(&host);
+        }
+        if request.kind == ApprovalKind::FileChange {
+            return self
+                .folders
+                .iter()
+                .any(|folder| workspace_grant(request, folder).is_some());
         }
         if request.kind != ApprovalKind::Command || self.prefixes.is_empty() {
             return false;
@@ -552,6 +577,96 @@ fn redirects_to_file(command: &str) -> bool {
         }
     }
     false
+}
+
+/// What "for this session" would allow for a file change asked for in `workspace`: the
+/// workspace itself, when every path the request names lies inside it as the file system
+/// resolves them (a symlink leading out is outside). `None` for anything else, and for a path
+/// in a `.git` folder, whose hooks and config run code: those ask every time.
+pub fn workspace_grant(request: &ApprovalRequest, workspace: &std::path::Path) -> Option<String> {
+    use std::path::Component;
+    if request.kind != ApprovalKind::FileChange || request.paths.is_empty() {
+        return None;
+    }
+    let root = resolved_path(workspace)?;
+    let git_dirs = git_metadata_dirs(&root)?;
+    let in_git = |path: &std::path::Path| {
+        path.components()
+            .any(|part| matches!(part, Component::Normal(name) if name == ".git"))
+    };
+    let inside = |path: &str| {
+        let path = std::path::Path::new(path);
+        !in_git(path)
+            && resolved_path(path).is_some_and(|real| {
+                !git_dirs.iter().any(|git| real.starts_with(git))
+                    && real.strip_prefix(&root).is_ok_and(|rest| !in_git(rest))
+            })
+    };
+    request
+        .paths
+        .iter()
+        .all(|path| inside(path))
+        .then(|| workspace.display().to_string())
+}
+
+/// Git can keep its administrative folders under names other than `.git`. Follow the
+/// checkout's gitfile and optional `commondir`; unreadable metadata grants nothing.
+fn git_metadata_dirs(workspace: &std::path::Path) -> Option<Vec<std::path::PathBuf>> {
+    let mut dirs = Vec::new();
+    for ancestor in workspace.ancestors() {
+        let dotgit = ancestor.join(".git");
+        match dotgit.symlink_metadata() {
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return None,
+            Ok(_) => {}
+        }
+        let git = if dotgit.is_dir() {
+            dotgit.canonicalize().ok()?
+        } else {
+            let text = std::fs::read_to_string(&dotgit).ok()?;
+            ancestor
+                .join(text.trim().strip_prefix("gitdir: ")?)
+                .canonicalize()
+                .ok()?
+        };
+        match std::fs::read_to_string(git.join("commondir")) {
+            Ok(common) => dirs.push(git.join(common.trim()).canonicalize().ok()?),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+        dirs.push(git);
+        break;
+    }
+    Some(dirs)
+}
+
+/// [`real_path`] for a grant: only what is missing may stay unresolved. A symlink that leads
+/// nowhere (a write through it lands wherever it points) or a part that can't be read gives
+/// `None`.
+fn resolved_path(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    use std::path::Component;
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
+    {
+        return None;
+    }
+    let mut rest = Vec::new();
+    let mut existing = path;
+    loop {
+        match existing.symlink_metadata() {
+            Ok(_) => {
+                let real = existing.canonicalize().ok()?;
+                return Some(rest.iter().rev().fold(real, |path, part| path.join(part)));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                rest.push(existing.file_name()?);
+                existing = existing.parent()?;
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 /// The host of a request for network access from inside the sandbox.
@@ -803,5 +918,85 @@ mod tests {
         // A file change has nothing to be similar to.
         similar.allow(&write(Path::new("/x")));
         assert!(!similar.covers(&write(Path::new("/x"))));
+    }
+
+    #[test]
+    fn session_file_grants_exclude_git_common_dirs_with_custom_names() {
+        let dirs = Linked::new("git-common");
+        let workspace = dirs.real();
+        let admin = workspace.join("admin");
+        let common = workspace.join("metadata");
+        std::fs::create_dir_all(&admin).unwrap();
+        std::fs::create_dir_all(&common).unwrap();
+        std::fs::write(workspace.join(".git"), "gitdir: admin\n").unwrap();
+        std::fs::write(admin.join("commondir"), "../metadata\n").unwrap();
+        assert!(workspace_grant(&write(&workspace.join("new.txt")), &workspace).is_some());
+        for path in [admin.join("config"), common.join("hooks/pre-commit")] {
+            assert_eq!(workspace_grant(&write(&path), &workspace), None);
+        }
+    }
+
+    #[test]
+    fn a_session_file_grant_covers_edits_inside_its_workspace_only() {
+        let dirs = Linked::new("files");
+        let workspace = dirs.link().join("scratch");
+        let other = dirs.real().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::create_dir_all(workspace.join(".git/hooks")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&other, workspace.join("out")).unwrap();
+
+        let inside = workspace.join("outputs/a.md");
+        let mut asked = write(&inside);
+        asked.grant = workspace_grant(&asked, &workspace);
+        assert_eq!(asked.grant, Some(workspace.display().to_string()));
+        let mut similar = Similar::default();
+        similar.allow(&asked);
+
+        // In the workspace, also a new file in new folders, and through either spelling.
+        assert!(similar.covers(&write(&inside)));
+        assert!(similar.covers(&write(&workspace.join("new/dir/b.md"))));
+        assert!(similar.covers(&write(&dirs.real().join("scratch/c.md"))));
+        // Outside it, climbing out, relative, through a symlink leading out, or in `.git`.
+        for path in [
+            other.join("a.md"),
+            dirs.real().join("x.md"),
+            workspace.join("outputs/../../x.md"),
+            PathBuf::from("scratch/x.md"),
+            workspace.join(".git/hooks/pre-commit"),
+            workspace.join("sub/.git/config"),
+        ] {
+            assert!(!similar.covers(&write(&path)), "{}", path.display());
+            assert_eq!(workspace_grant(&write(&path), &workspace), None);
+        }
+        #[cfg(unix)]
+        {
+            assert!(!similar.covers(&write(&workspace.join("out/a.md"))));
+            // A symlink leading to a file outside that doesn't exist yet.
+            std::os::unix::fs::symlink(other.join("missing.md"), workspace.join("dangling.md"))
+                .unwrap();
+            assert!(!similar.covers(&write(&workspace.join("dangling.md"))));
+            std::os::unix::fs::symlink(other.join("gone"), workspace.join("gone")).unwrap();
+            assert!(!similar.covers(&write(&workspace.join("gone/x.md"))));
+        }
+        // One path outside makes the whole request ask.
+        let mut both = write(&inside);
+        both.paths.push(other.join("a.md").display().to_string());
+        assert!(!similar.covers(&both));
+        // Another session's workspace is not this one's.
+        let mut elsewhere = Similar::default();
+        let mut asked = write(&other.join("a.md"));
+        asked.grant = workspace_grant(&asked, &other);
+        elsewhere.allow(&asked);
+        assert!(!elsewhere.covers(&write(&inside)));
+        // Handed over with the other grants.
+        let mut merged = Similar::default();
+        merged.merge(similar);
+        assert!(merged.covers(&write(&inside)));
+        // Commands and permissions requests are no file grant.
+        assert_eq!(
+            workspace_grant(&command("ls", None, false), &workspace),
+            None
+        );
     }
 }

@@ -197,6 +197,103 @@ async fn under_ask_the_threads_request_is_the_users_card() {
     flow.stop().await;
 }
 
+/// "For this session" on the thread's file change in its workspace allows its later changes
+/// there, never one outside it or in its `.git`; on a host it asked to reach, later requests
+/// for that host. Each card offers the grant only where it is safe.
+#[tokio::test]
+async fn a_session_grant_allows_later_edits_in_the_workspace_only() {
+    let answered: Arc<Mutex<Vec<Option<ApprovalDecision>>>> = Arc::default();
+    let log = answered.clone();
+    let flow = Flow::start(
+        "thread-session-grant",
+        Options {
+            permission: PermissionLevel::AskForApproval,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                let workspace = turn.add_dirs[0].clone();
+                for paths in [
+                    vec![workspace.join("a.txt")],
+                    vec![workspace.join("new/b.txt"), workspace.join("c.txt")],
+                    vec![turn.cwd.join("outside.txt")],
+                    vec![workspace.join("d.txt"), turn.cwd.join("outside.txt")],
+                    vec![workspace.join(".git")],
+                ] {
+                    let paths: Vec<&std::path::Path> = paths.iter().map(|p| p.as_path()).collect();
+                    let decision = turn.ask_file_approval(&paths).await;
+                    log.lock().unwrap().push(decision);
+                }
+                for _ in 0..2 {
+                    let decision = turn.ask_network_approval("example.com").await;
+                    log.lock().unwrap().push(decision);
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Edit the files.").await;
+    let mut grants = Vec::new();
+    for done in 0..5 {
+        let board = flow
+            .until("the next card", |board| {
+                board
+                    .approvals
+                    .values()
+                    .filter(|approval| approval.state != CardState::Pending)
+                    .count()
+                    == done
+                    && board
+                        .approvals
+                        .values()
+                        .any(|approval| approval.state == CardState::Pending)
+            })
+            .await;
+        let card = board
+            .approvals
+            .values()
+            .find(|approval| approval.state == CardState::Pending)
+            .unwrap();
+        let ApprovalSubject::Cli { request } = &card.subject else {
+            panic!("{:?}", card.subject);
+        };
+        grants.push(request.grant.clone());
+        let decision = if request.grant.is_some() {
+            ApprovalDecision::AllowSimilar
+        } else {
+            ApprovalDecision::Allow
+        };
+        flow.manager
+            .answer_card(flow.conversation.clone(), card.id.clone(), decision)
+            .await
+            .unwrap();
+    }
+    let board = flow.settled().await;
+    let workspace = session_worktree(&flow).display().to_string();
+    assert_eq!(
+        grants,
+        vec![
+            Some(workspace),
+            None,
+            None,
+            None,
+            Some("example.com".into())
+        ]
+    );
+    assert_eq!(
+        board.approvals.len(),
+        5,
+        "two requests were allowed by the grants"
+    );
+    assert_eq!(
+        *answered.lock().unwrap(),
+        vec![Some(ApprovalDecision::Allow); 7]
+    );
+    flow.stop().await;
+}
+
 /// A new workspace or permission level restarts the thread between turns: the same native
 /// session resumes with the new folder and access, and its next turn says what changed.
 #[tokio::test]

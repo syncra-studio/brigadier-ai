@@ -32,7 +32,7 @@ pub(crate) enum CardAnswer {
 #[derive(Default)]
 pub(crate) struct Waiters {
     cards: Mutex<HashMap<CardId, Vec<oneshot::Sender<CardAnswer>>>>,
-    /// What the user allowed with "Allow similar commands", per conversation: every worker of
+    /// What the user allowed with "Allow … for this session", per conversation: every worker of
     /// the conversation, a successor after a handoff included, gets it without asking.
     similar: Mutex<HashMap<ConversationId, Similar>>,
 }
@@ -101,7 +101,7 @@ impl Waiters {
 }
 
 impl SessionManager {
-    /// The conversation's "Allow similar commands" grants, to carry over (a worker handoff
+    /// The conversation's "Allow … for this session" grants, to carry over (a worker handoff
     /// keeps them anyway: they belong to the conversation, not to a CLI session).
     pub fn snapshot_grants(&self, conversation_id: &ConversationId) -> Similar {
         self.waiters

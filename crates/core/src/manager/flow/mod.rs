@@ -155,11 +155,8 @@ impl Turn {
         command: &str,
         grant: Option<&str>,
     ) -> Option<ApprovalDecision> {
-        let id = uuid::Uuid::new_v4().to_string();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.answers.lock().unwrap().insert(id.clone(), tx);
-        let request = brigadier_providers::ApprovalRequest {
-            id,
+        self.ask(brigadier_providers::ApprovalRequest {
+            id: String::new(),
             kind: brigadier_providers::model::ApprovalKind::Command,
             tool: tool.into(),
             command: Some(command.into()),
@@ -171,7 +168,55 @@ impl Turn {
             escalation: true,
             input: None,
             grant: grant.map(Into::into),
-        };
+        })
+        .await
+    }
+
+    /// Asks to change `paths` outside the sandbox, as Codex does, and waits for the answer.
+    pub async fn ask_file_approval(&self, paths: &[&Path]) -> Option<ApprovalDecision> {
+        self.ask(brigadier_providers::ApprovalRequest {
+            id: String::new(),
+            kind: brigadier_providers::model::ApprovalKind::FileChange,
+            tool: "fileChange".into(),
+            command: None,
+            cwd: None,
+            paths: paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect(),
+            reason: None,
+            escalation: true,
+            input: None,
+            grant: None,
+        })
+        .await
+    }
+
+    /// Asks to reach `host` from a sandbox without network, as Claude does.
+    pub async fn ask_network_approval(&self, host: &str) -> Option<ApprovalDecision> {
+        self.ask(brigadier_providers::ApprovalRequest {
+            id: String::new(),
+            kind: brigadier_providers::model::ApprovalKind::Tool,
+            tool: brigadier_providers::policy::NETWORK_TOOL.into(),
+            command: None,
+            cwd: None,
+            paths: Vec::new(),
+            reason: None,
+            escalation: false,
+            input: None,
+            grant: Some(host.into()),
+        })
+        .await
+    }
+
+    /// Sends `request` (under a fresh id) as the CLI's and waits for the answer.
+    async fn ask(
+        &self,
+        mut request: brigadier_providers::ApprovalRequest,
+    ) -> Option<ApprovalDecision> {
+        request.id = uuid::Uuid::new_v4().to_string();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.answers.lock().unwrap().insert(request.id.clone(), tx);
         self.events
             .send(ProviderEvent::ApprovalRequested { request })
             .await

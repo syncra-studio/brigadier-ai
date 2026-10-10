@@ -1662,7 +1662,7 @@ async fn a_reviews_news_leaves_a_workers_question_open() {
 
 /// Done when (3): a worker whose context passes the hand-off size ends its turn with a handoff
 /// note, and a fresh session of the same model carries on from it: with the note, the
-/// orchestrator's earlier answer and the user's "Allow similar commands" grant, so nothing is
+/// orchestrator's earlier answer and the user's "Allow … for this session" grant, so nothing is
 /// asked again.
 #[tokio::test]
 async fn a_worker_past_the_handoff_size_continues_in_a_fresh_session_that_keeps_its_grants() {
@@ -1743,6 +1743,10 @@ async fn a_worker_past_the_handoff_size_continues_in_a_fresh_session_that_keeps_
                         ),
                         "{decision:?}"
                     );
+                    assert_eq!(
+                        turn.ask_file_approval(&[&turn.cwd.join("b.txt")]).await,
+                        Some(ApprovalDecision::Allow)
+                    );
                     turn.write("b.txt", "b\n");
                     turn.git(&["add", "b.txt"]);
                     turn.git(&["commit", "-qm", "Add b.txt"]);
@@ -1756,8 +1760,8 @@ async fn a_worker_past_the_handoff_size_continues_in_a_fresh_session_that_keeps_
                     assert!(!reply.is_error, "{}", reply.text);
                     return Reply::text("Reported.");
                 }
-                // The first session: it starts small, asks one card (allowed for similar
-                // commands) and a question, commits a step and grows past the size.
+                // The first session: it starts small, grants commands and workspace edits,
+                // asks a question, commits a step and grows past the size.
                 turn.report_context(20_000).await;
                 let decision = turn
                     .ask_approval("curl -sI https://example.com", "curl")
@@ -1768,6 +1772,10 @@ async fn a_worker_past_the_handoff_size_continues_in_a_fresh_session_that_keeps_
                         Some(ApprovalDecision::Allow | ApprovalDecision::AllowSimilar)
                     ),
                     "{decision:?}"
+                );
+                assert_eq!(
+                    turn.ask_file_approval(&[&turn.cwd.join("a.txt")]).await,
+                    Some(ApprovalDecision::Allow)
                 );
                 let answer = turn
                     .call(
@@ -1789,29 +1797,31 @@ async fn a_worker_past_the_handoff_size_continues_in_a_fresh_session_that_keeps_
     )
     .await;
     flow.say("Add a.txt and b.txt.").await;
-    let board = flow
-        .until("the approval card", |board| {
-            board
-                .approvals
-                .values()
-                .any(|card| card.state == CardState::Pending)
-        })
-        .await;
-    let card = board
-        .approvals
-        .values()
-        .find(|card| card.state == CardState::Pending)
-        .unwrap()
-        .id
-        .clone();
-    flow.manager
-        .answer_card(
-            flow.conversation.clone(),
-            card,
-            brigadier_providers::ApprovalDecision::AllowSimilar,
-        )
-        .await
-        .unwrap();
+    for _ in 0..2 {
+        let board = flow
+            .until("the approval card", |board| {
+                board
+                    .approvals
+                    .values()
+                    .any(|card| card.state == CardState::Pending)
+            })
+            .await;
+        let card = board
+            .approvals
+            .values()
+            .find(|card| card.state == CardState::Pending)
+            .unwrap()
+            .id
+            .clone();
+        flow.manager
+            .answer_card(
+                flow.conversation.clone(),
+                card,
+                brigadier_providers::ApprovalDecision::AllowSimilar,
+            )
+            .await
+            .unwrap();
+    }
     let board = flow.settled().await;
     assert!(
         continued.load(std::sync::atomic::Ordering::SeqCst),
@@ -1819,7 +1829,11 @@ async fn a_worker_past_the_handoff_size_continues_in_a_fresh_session_that_keeps_
     );
     let lead = Flow::task(&board, 1);
     assert_eq!(lead.state, TaskState::Landed);
-    assert_eq!(board.approvals.len(), 1, "the grant spared a second card");
+    assert_eq!(
+        board.approvals.len(),
+        2,
+        "both grants spared successor cards"
+    );
     let target = lead.workspace.as_ref().unwrap().target.clone().unwrap();
     for file in ["a.txt", "b.txt"] {
         super::git(&flow.repo, &["cat-file", "-e", &format!("{target}:{file}")]);

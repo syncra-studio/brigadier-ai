@@ -1,10 +1,8 @@
 import {
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Commit,
   Globe,
-  InfoCircle,
   Key,
   PencilSquare,
   QuestionMarkCircle,
@@ -48,18 +46,13 @@ import {
 import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
 import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type {
   ApprovalDecision,
+  ApprovalRequest,
   Conversation,
   DiffStat,
 } from "@/ipc/generated";
@@ -411,7 +404,7 @@ export type ApprovalStep = { index: number; total: number; onStep: (index: numbe
 
 /**
  * An approval, compact: kind and asker, the reason as the title, the exact command, then
- * [Deny `Esc`] [Allow once `⏎` ⌄]. Allow takes focus so Enter allows; both keys work from
+ * [Deny `Esc`] [Allow … for this session] [Allow once `⏎`]. Allow takes focus so Enter allows; both keys work from
  * anywhere in the view. Several waiting step "1 of 3" as each is answered. In the composer's
  * place, "Reply…" brings the message field back.
  */
@@ -463,7 +456,7 @@ export function ApprovalAction({
   const shown = describe(approval, landingId, inSession);
   const request =
     approval.subject.type === "cli" ? approval.subject.request : null;
-  const grant = request?.grant ?? null;
+  const grant = request ? sessionGrant(request) : null;
   const allowLabel = (
     <>
       <span className="truncate">{shown.allow ?? "Allow once"}</span>
@@ -518,42 +511,35 @@ export function ApprovalAction({
           Deny
           <ActionKbd variant="outline">Esc</ActionKbd>
         </button>
-        {grant ? (
-          <div className="rounded-capsule inline-flex min-w-0 items-stretch self-start overflow-hidden @max-md/approval-card:w-full">
-            <button
-              ref={allow}
-              type="button"
-              className={actionButton(
-                "primary",
-                "min-w-0 rounded-e-none border-e-0 pe-1 @max-md/approval-card:flex-1 @max-md/approval-card:justify-center @max-md/approval-card:ps-6",
-              )}
-              disabled={action.busy}
-              onClick={() => answer({ type: "allow" })}
-            >
-              {allowLabel}
-            </button>
-            <GrantMenu
-              grant={grant}
-              network={request?.tool === "SandboxNetworkAccess"}
-              escalation={request?.escalation ?? false}
-              disabled={action.busy}
-              onAnswer={answer}
-            />
-          </div>
-        ) : (
-          <button
-            ref={allow}
-            type="button"
-            className={actionButton(
-              "primary",
-              "max-w-full @max-md/approval-card:justify-center",
-            )}
-            disabled={action.busy}
-            onClick={() => answer({ type: "allow" })}
-          >
-            {allowLabel}
-          </button>
+        {grant && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={`Allow ${grant.scope} for this session`}
+                className={actionButton("outline", "min-w-0 max-w-full @max-md/approval-card:justify-center")}
+                disabled={action.busy}
+                onClick={() => answer({ type: "allowSimilar" })}
+              >
+                <span className="flex min-w-0 items-center">
+                  <span className="shrink-0">Allow&nbsp;</span>
+                  <span className="truncate">{grant.scope}</span>
+                  <span className="shrink-0">&nbsp;for this session</span>
+                </span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>{grant.explanation}</TooltipContent>
+          </Tooltip>
         )}
+        <button
+          ref={allow}
+          type="button"
+          className={actionButton("primary", "max-w-full @max-md/approval-card:justify-center")}
+          disabled={action.busy}
+          onClick={() => answer({ type: "allow" })}
+        >
+          {allowLabel}
+        </button>
       </ActionCardActions>
       {footer}
     </ActionCard>
@@ -604,70 +590,30 @@ export function ApprovalSlot({ ids, onReply }: { ids: readonly string[]; onReply
   );
 }
 
-/**
- * The ⌄ half of the split "Allow once" button. "Allow similar commands" allows, for the rest
- * of this conversation and from any of its workers, commands that start with the same words
- * (`grant`), or connections to the same host; never saved.
- */
-function GrantMenu({
-  grant,
-  network,
-  escalation,
-  disabled,
-  onAnswer,
-}: {
-  grant: string;
-  network: boolean;
-  escalation: boolean;
-  disabled: boolean;
-  onAnswer: (decision: ApprovalDecision) => void;
-}) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label="Approval options"
-          className={actionButton(
-            "primary",
-            "gap-0 rounded-s-none border-s-0 ps-0.5 pe-1.5",
-          )}
-          disabled={disabled}
-        >
-          <ChevronDown className="size-icon-sm opacity-50" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="end">
-        <DropdownMenuItem onSelect={() => onAnswer({ type: "allow" })}>
-          Allow once
-        </DropdownMenuItem>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <DropdownMenuItem
-              onSelect={() => onAnswer({ type: "allowSimilar" })}
-            >
-              Allow similar commands
-              <InfoCircle className="ms-auto opacity-75" />
-            </DropdownMenuItem>
-          </TooltipTrigger>
-          <TooltipContent side="right">
-            {network ? (
-              <span>
-                Allow connections to <code className="font-mono break-all">{grant}</code> from
-                any worker in this conversation
-              </span>
-            ) : (
-              <span>
-                Allow commands that start with{" "}
-                <code className="font-mono break-all">{grant}</code>
-                {escalation && " outside the sandbox"} from any worker in this conversation
-              </span>
-            )}
-          </TooltipContent>
-        </Tooltip>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
+/** The scope supplied by approval routing; generic permission requests have no session grant. */
+function sessionGrant(request: ApprovalRequest): { scope: string; explanation: string } | null {
+  const { grant, kind, tool, escalation } = request;
+  if (!grant || kind === "permissions") return null;
+  const outside = escalation ? " outside the sandbox" : "";
+  if (tool === "SandboxNetworkAccess") {
+    return {
+      scope: grant,
+      explanation: `Allow connections to ${grant}${outside} from any worker in this conversation. Not saved across sessions.`,
+    };
+  }
+  if (kind === "fileChange") {
+    return {
+      scope: "workspace edits",
+      explanation: `Allow file changes inside ${grant}${outside} from any worker in this conversation. Edits outside this folder or in Git metadata still ask. Not saved across sessions.`,
+    };
+  }
+  if (kind === "command") {
+    return {
+      scope: grant,
+      explanation: `Allow commands that start with ${grant}${outside} from any worker in this conversation. Not saved across sessions.`,
+    };
+  }
+  return null;
 }
 
 // ----- question and plan -------------------------------------------------------------------

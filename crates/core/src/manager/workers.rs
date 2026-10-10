@@ -16,7 +16,7 @@
 //!   worker like the user's own terminal (no sandbox, nothing asks); Approve for me runs it in
 //!   the OS sandbox and lets the CLI's own reviewer settle what leaves it; Ask for approval
 //!   runs it in the sandbox without network and asks the user for each step outside, once per
-//!   kind of command with "Allow similar commands". The sandbox lets a worker write its
+//!   kind of command with "Allow … for this session". The sandbox lets a worker write its
 //!   worktree's git folder and the toolchains' caches, so builds and commits just work.
 //! - **Instructions**: the role and task prompt, plus the repository's `CLAUDE.md` and
 //!   `AGENTS.md` whichever vendor runs it ([`super::instructions`]).
@@ -34,8 +34,9 @@ use std::time::Duration;
 use brigadier_git::{Oid, PatchOutcome, WorktreeSpec};
 use brigadier_providers::policy::{self, ApprovalMode, Route as PolicyRoute};
 use brigadier_providers::{
-    Access, AllowedModels, ApprovalDecision, ApprovalRequest, Artifact, Decider, InputFile, Origin,
-    ProviderEvent, ProviderKind, SessionSpec, Started, ToolSet, TurnInput, TurnStatus,
+    Access, AllowedModels, ApprovalDecision, ApprovalKind, ApprovalRequest, Artifact, Decider,
+    InputFile, Origin, ProviderEvent, ProviderKind, SessionSpec, Started, ToolSet, TurnInput,
+    TurnStatus,
 };
 use brigadier_router::QualityTier;
 use tokio::sync::{mpsc, oneshot};
@@ -136,6 +137,8 @@ struct TaskLiveState {
     access: Option<Access>,
     /// Where the worker's CLI runs (a command without its own cwd runs here).
     cwd: Option<PathBuf>,
+    /// The task's worktree, whose file changes the user may allow for the session.
+    worktree: Option<PathBuf>,
     redactor: Option<Arc<brigadier_providers::redact::Redactor>>,
     /// Why the running model must stop and hand the task on, once its turn is over (a usage
     /// limit, or an error another model may not have).
@@ -1527,6 +1530,7 @@ impl SessionManager {
             outputs,
             redactor,
             allowed_models,
+            worktree,
             grant,
             ..
         } = self
@@ -1579,6 +1583,7 @@ impl SessionManager {
             state.cli = Some(cli.clone());
             state.access = Some(access);
             state.cwd = Some(cwd);
+            state.worktree = worktree;
             state.outputs = Some(outputs);
             state.redactor = redactor;
             state.begin_turn();
@@ -2627,23 +2632,28 @@ impl SessionManager {
     }
 
     /// B7 for worker approvals: routed by the task's access, then by what the user already
-    /// allowed with "Allow similar commands" in this conversation; anything else asks the user.
+    /// allowed "for this session" in this conversation; anything else asks the user.
     /// Under Full access and Approve for me hardly anything gets here: the CLI never asks, or
     /// its own reviewer answers.
     async fn route_worker_approval(
         &self,
         live: &Arc<TaskLive>,
         cli: &Arc<Cli>,
-        request: ApprovalRequest,
+        mut request: ApprovalRequest,
     ) {
-        let access = live
-            .state
-            .lock()
-            .await
-            .access
-            .clone()
-            .unwrap_or(Access::ReadOnly);
-        let (route, decider) = self.approval_route(&live.conversation_id, &request, &access);
+        let (access, worktree) = {
+            let state = live.state.lock().await;
+            (
+                state.access.clone().unwrap_or(Access::ReadOnly),
+                state.worktree.clone(),
+            )
+        };
+        let (route, decider) = self.approval_route(
+            &live.conversation_id,
+            &mut request,
+            &access,
+            worktree.as_deref(),
+        );
         match route {
             PolicyRoute::Allow | PolicyRoute::Deny => {
                 let decision = if route == PolicyRoute::Allow {
@@ -2688,21 +2698,28 @@ impl SessionManager {
 
     /// Who answers a CLI's approval request in a sandbox with `access` (a worker's or the
     /// thread's): what stays inside its access is allowed, what the user already allowed
-    /// something similar to in the conversation too; the rest asks the user.
+    /// something similar to in the conversation too; the rest asks the user. A file change
+    /// that asks, all inside the asker's own `workspace`, may be allowed for the session: its
+    /// card offers that (`request.grant`).
     pub(crate) fn approval_route(
         &self,
         conversation_id: &ConversationId,
-        request: &ApprovalRequest,
+        request: &mut ApprovalRequest,
         access: &Access,
+        workspace: Option<&Path>,
     ) -> (PolicyRoute, Decider) {
         let route = policy::route(request, access, ApprovalMode::Delegated);
         if route == PolicyRoute::AskUser && self.waiters.similar_allowed(conversation_id, request) {
             return (PolicyRoute::Allow, Decider::User);
         }
+        if request.kind == ApprovalKind::FileChange {
+            request.grant =
+                workspace.and_then(|workspace| policy::workspace_grant(request, workspace));
+        }
         (route, Decider::Policy)
     }
 
-    /// Passes the user's answer to the worker's CLI; "Allow similar commands" also allows
+    /// Passes the user's answer to the worker's CLI; "Allow … for this session" also allows
     /// similar requests from every worker of the conversation from now on.
     pub(crate) async fn answer_worker_approval(
         &self,

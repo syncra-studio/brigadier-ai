@@ -935,7 +935,7 @@ impl Parser {
             .or_else(|| {
                 str_of(&request, "blocked_path").map(|path| format!("needs access to {path}"))
             });
-        // Brigadier keeps "Allow similar commands" itself, for the whole conversation: the
+        // Brigadier keeps "Allow … for this session" itself, for the whole conversation: the
         // command's first words, or the host Claude's sandbox asks to reach.
         let grant = if tool == policy::NETWORK_TOOL {
             str_of(&input, "host").map(str::to_owned)
@@ -1354,6 +1354,37 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn file_and_network_approvals_keep_their_session_scopes() {
+        let workspace =
+            std::env::temp_dir().join(format!("claude-file-grant-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let ask =
+            |tool: &str, input: Value| {
+                Parser::live().feed(&json!({
+                "type": "control_request", "request_id": "a1",
+                "request": { "subtype": "can_use_tool", "tool_name": tool, "input": input }
+            }).to_string()).into_iter().find_map(|out| match out {
+                Output::Event(ProviderEvent::ApprovalRequested { request }) => Some(request),
+                _ => None,
+            }).unwrap()
+            };
+        let edit =
+            |path: &std::path::Path| ask("Write", json!({ "file_path": path, "content": "hello" }));
+        let mut first = edit(&workspace.join("a.txt"));
+        assert_eq!(first.kind, ApprovalKind::FileChange);
+        first.grant = policy::workspace_grant(&first, &workspace);
+        let mut similar = policy::Similar::default();
+        similar.allow(&first);
+        assert!(similar.covers(&edit(&workspace.join("new/b.txt"))));
+        assert!(!similar.covers(&edit(&workspace.parent().unwrap().join("outside.txt"))));
+        let network = ask("SandboxNetworkAccess", json!({ "host": "example.com" }));
+        assert_eq!(network.kind, ApprovalKind::Tool);
+        similar.allow(&network);
+        assert!(similar.covers(&network));
+        std::fs::remove_dir_all(workspace).unwrap();
+    }
 
     #[test]
     fn an_edit_carries_its_lines_out_and_in() {

@@ -362,7 +362,7 @@ pub struct ApprovalRequest {
     pub input: Option<String>,
     /// Set when the user may allow similar requests for the rest of the conversation
     /// ([`ApprovalDecision::AllowSimilar`]): what that covers, as shown (a command's first
-    /// words, such as `git push`, or a network host). See [`crate::policy::Similar`].
+    /// words, such as `git push`, a network host, or the workspace for file changes). See [`crate::policy::Similar`].
     #[serde(default)]
     pub grant: Option<String>,
 }
@@ -377,7 +377,7 @@ pub struct ApprovalRequest {
 pub enum ApprovalDecision {
     Allow,
     /// Allow, and allow similar requests (the same first words of a command, the same network
-    /// host) for the rest of the conversation without asking ("Allow similar commands").
+    /// host, or files inside the granted workspace) for the rest of the conversation without asking ("Allow … for this session").
     /// Never persisted.
     AllowSimilar,
     Deny {

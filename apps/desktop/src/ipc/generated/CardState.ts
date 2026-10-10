@@ -6,6 +6,6 @@ import type { Decider } from "./Decider";
  */
 export type CardState = { "type": "pending" } | { "type": "allowed", by: Decider, 
 /**
- * The CLI keeps allowing the request's session grant (similar commands).
+ * Brigadier keeps allowing the request's scope for this conversation.
  */
 similar: boolean, } | { "type": "denied", by: Decider, message: string | null, } | { "type": "expired", reason: string, };

@@ -331,7 +331,12 @@ impl SessionManager {
             .launch
             .as_ref()
             .map_or(Access::ReadOnly, |launch| launch.access.clone());
-        let (route, decider) = self.approval_route(&conv.id, &request, &access);
+        let workspace = cli
+            .launch
+            .as_ref()
+            .and_then(|launch| launch.workspace.as_ref())
+            .map(|workspace| workspace.path.as_path());
+        let (route, decider) = self.approval_route(&conv.id, &mut request, &access, workspace);
         let decision = match route {
             PolicyRoute::Allow => ApprovalDecision::Allow,
             PolicyRoute::Deny => ApprovalDecision::Deny {
@@ -360,7 +365,7 @@ impl SessionManager {
             .await;
     }
 
-    /// Passes the user's answer to the thread's CLI; "Allow similar commands" also allows
+    /// Passes the user's answer to the thread's CLI; "Allow … for this session" also allows
     /// similar requests in the conversation from now on.
     pub(crate) async fn answer_thread_approval(
         &self,

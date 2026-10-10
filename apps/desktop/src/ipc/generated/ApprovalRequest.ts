@@ -36,6 +36,6 @@ input: string | null,
 /**
  * Set when the user may allow similar requests for the rest of the conversation
  * ([`ApprovalDecision::AllowSimilar`]): what that covers, as shown (a command's first
- * words, such as `git push`, or a network host). See [`crate::policy::Similar`].
+ * words, such as `git push`, a network host, or the workspace for file changes). See [`crate::policy::Similar`].
  */
 grant: string | null, };
