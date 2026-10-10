@@ -870,3 +870,85 @@ async fn an_operate_task_brings_its_batches_and_last_screenshot_with_its_report(
     assert_eq!(reply.images[0].data, b"\x89PNG fake");
     flow.stop().await;
 }
+
+/// Q10: an observe with `save_as` takes a screenshot and keeps it in the worker's outputs
+/// folder under that name (a PNG), so its report brings the live capture to compare.
+#[tokio::test]
+async fn an_observe_saves_its_screenshot_in_the_outputs_folder_when_asked() {
+    let (flow, worker, helper) = start("computer-save-as", PermissionLevel::AskForApproval).await;
+    let observe = ComputerCall::Observe {
+        request: serde_json::from_value(json!({"window": 5})).unwrap(),
+        save_as: Some("live 1".into()),
+    };
+    let png = b"\x89PNG fake".to_vec();
+    let answered = async {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let (id, op) = loop {
+            let link = helper.links.lock().unwrap().first().cloned();
+            let sent = link.and_then(|l| {
+                l.sent
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|s| matches!(s.2, Op::Observe(_)))
+                    .map(|s| (s.0, s.2.clone()))
+            });
+            if let Some(sent) = sent {
+                break sent;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the observe reached the helper"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        let Op::Observe(request) = op else {
+            unreachable!()
+        };
+        assert_eq!(
+            request.screenshot,
+            brigadier_computer::action::Screenshot::Always,
+            "a screenshot to save is always taken"
+        );
+        let link = helper.links.lock().unwrap()[0].clone();
+        let done = link.held.lock().unwrap().remove(&id).unwrap();
+        done(Ok(Answer {
+            reply: WireReply {
+                id,
+                ok: true,
+                text: "Window 5".into(),
+                image: Some(brigadier_computer::wire::ImageMeta {
+                    id: "i1".into(),
+                    width: 2,
+                    height: 2,
+                    tokens: 1,
+                    bytes: png.len(),
+                    mime: "image/png".into(),
+                }),
+                ..Default::default()
+            },
+            image: Some(png.clone()),
+            trajectory: None,
+        }));
+    };
+    let reply = tokio::join!(worker.turn.computer(observe), answered).0;
+    assert!(!reply.is_error, "{}", reply.text);
+    assert!(
+        reply
+            .text
+            .ends_with("Saved the screenshot as live_1.png in your outputs folder."),
+        "{}",
+        reply.text
+    );
+    let board = flow.board().await;
+    let scratch = Flow::task(&board, 1)
+        .workspace
+        .as_ref()
+        .expect("a workspace")
+        .scratch
+        .clone();
+    let saved =
+        crate::manager::outputs::outputs_dir(std::path::Path::new(&scratch)).join("live_1.png");
+    assert_eq!(std::fs::read(&saved).unwrap(), png);
+    finish(flow, worker).await;
+}

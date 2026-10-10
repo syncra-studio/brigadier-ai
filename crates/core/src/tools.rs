@@ -1244,7 +1244,11 @@ pub enum ChatCall {
 pub enum ComputerCall {
     Apps,
     Launch(brigadier_computer::wire::LaunchRequest),
-    Observe(brigadier_computer::action::ObserveRequest),
+    /// `save_as`: also keep its screenshot under this file name in the worker's outputs folder.
+    Observe {
+        request: brigadier_computer::action::ObserveRequest,
+        save_as: Option<String>,
+    },
     Act(brigadier_computer::action::ActRequest),
     Zoom(brigadier_computer::action::ZoomRequest),
 }
@@ -1254,7 +1258,7 @@ impl ComputerCall {
         match self {
             Self::Apps => "apps",
             Self::Launch(_) => "launch",
-            Self::Observe(_) => "observe",
+            Self::Observe { .. } => "observe",
             Self::Act(_) => "act",
             Self::Zoom(_) => "zoom",
         }

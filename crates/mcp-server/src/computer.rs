@@ -111,7 +111,8 @@ pub fn tools() -> Vec<Tool> {
                     "since": {"type": "integer", "description": "The obs number to diff against."},
                     "element": {"type": "string", "description": "Only this ref's subtree."},
                     "find": {"type": "string", "description": "Only lines containing this, with their ancestors."},
-                    "value_page": {"type": "integer", "description": "With element: a page of its full value."}
+                    "value_page": {"type": "integer", "description": "With element: a page of its full value."},
+                    "save_as": {"type": "string", "description": "Also save the screenshot under this file name in your outputs folder (e.g. live-1.png), for your report."}
                 },
                 "required": ["window"]
             }),
@@ -470,7 +471,15 @@ pub fn parse(name: &str, mut arguments: Value) -> Result<ToolCall, ParseError> {
     let call = match name {
         "apps" => ComputerCall::Apps,
         "launch" => ComputerCall::Launch(serde_json::from_value(arguments.clone()).map_err(bad)?),
-        "observe" => ComputerCall::Observe(serde_json::from_value(arguments.clone()).map_err(bad)?),
+        "observe" => ComputerCall::Observe {
+            request: serde_json::from_value(arguments.clone()).map_err(bad)?,
+            save_as: arguments
+                .get("save_as")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned),
+        },
         "act" => ComputerCall::Act(serde_json::from_value(arguments.clone()).map_err(bad)?),
         "zoom" => ComputerCall::Zoom(serde_json::from_value(arguments.clone()).map_err(bad)?),
         _ => return Err(ParseError::UnknownTool(name.to_owned())),
@@ -607,7 +616,14 @@ mod tests {
         assert_eq!(zoom.region, [10.0, 20.0, 40.0, 60.0]);
         let observe = parse("observe", json!({"window_id": "1234"}));
         assert!(
-            matches!(observe, Ok(ToolCall::Computer(ComputerCall::Observe(o))) if o.window == 1234)
+            matches!(observe, Ok(ToolCall::Computer(ComputerCall::Observe { request, save_as: None })) if request.window == 1234)
+        );
+        let saved = parse(
+            "observe",
+            json!({"window": 1234, "save_as": " live-1.png "}),
+        );
+        assert!(
+            matches!(saved, Ok(ToolCall::Computer(ComputerCall::Observe { save_as: Some(name), .. })) if name == "live-1.png")
         );
     }
 

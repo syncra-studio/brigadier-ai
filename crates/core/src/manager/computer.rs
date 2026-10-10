@@ -24,7 +24,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use brigadier_computer::action::{ActRequest, Action};
+use brigadier_computer::action::{ActRequest, Action, Screenshot};
 use brigadier_computer::error::{CuError, ErrorCode};
 use brigadier_computer::geom::Provider;
 use brigadier_computer::wire::{Answer, Described, Event, Gone, Instance, Launched, Op, Policy};
@@ -799,11 +799,34 @@ impl SessionManager {
                     .await?;
                 Ok(reply_of(a))
             }
-            ComputerCall::Observe(req) => {
+            ComputerCall::Observe {
+                mut request,
+                save_as,
+            } => {
+                if save_as.is_some() {
+                    request.screenshot = Screenshot::Always;
+                }
                 let a = computer
-                    .request(task_id, provider, policy, Op::Observe(req))
+                    .request(task_id, provider, policy, Op::Observe(request))
                     .await?;
-                Ok(reply_of(a))
+                let saved = match (&save_as, &a.image) {
+                    (Some(name), Some(png)) => {
+                        Some(keep_screenshot(&task, name, png.clone()).await)
+                    }
+                    (Some(_), None) => Some(Err("no screenshot came back".to_owned())),
+                    (None, _) => None,
+                };
+                let mut reply = reply_of(a);
+                match saved {
+                    Some(Ok(name)) => reply.text.push_str(&format!(
+                        "\nSaved the screenshot as {name} in your outputs folder."
+                    )),
+                    Some(Err(why)) => reply
+                        .text
+                        .push_str(&format!("\nThe screenshot wasn't saved: {why}.")),
+                    None => {}
+                }
+                Ok(reply)
             }
             ComputerCall::Zoom(req) => {
                 let a = computer
@@ -1185,6 +1208,33 @@ fn wire_name(v: &impl serde::Serialize) -> Option<String> {
 }
 
 /// The model's reply: the image first, then the text.
+/// Keeps an observed screenshot in the worker's outputs folder as `name` (a PNG), so its report
+/// brings it: the live captures a mockup's real work compares with the mockup (Q10). Returns
+/// the file name it was kept under.
+async fn keep_screenshot(task: &Task, name: &str, png: Vec<u8>) -> Result<String, String> {
+    let scratch = task
+        .workspace
+        .as_ref()
+        .map(|workspace| workspace.scratch.clone())
+        .filter(|scratch| !scratch.is_empty())
+        .ok_or("this task has no outputs folder")?;
+    let mut name = super::conversation::safe_file_name(name);
+    if !name.to_ascii_lowercase().ends_with(".png") {
+        name.push_str(".png");
+    }
+    let path = super::outputs::outputs_dir(Path::new(&scratch)).join(&name);
+    super::blocking(move || {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|err| crate::Error::Invalid(err.to_string()))?;
+        }
+        std::fs::write(&path, png).map_err(|err| crate::Error::Invalid(err.to_string()))
+    })
+    .await
+    .map_err(|err| err.to_string())?;
+    Ok(name)
+}
+
 fn reply_of(a: Answer) -> ToolReply {
     let reply = if a.reply.ok {
         ToolReply::ok(a.reply.text)
