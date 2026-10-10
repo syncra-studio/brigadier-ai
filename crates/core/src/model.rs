@@ -1568,8 +1568,11 @@ pub enum DomainEvent {
     CleanupRequested {
         owner: String,
     },
-    /// Every artifact of `owner` was dealt with: the disposal is over. Older stores also hold
-    /// it from before artifacts were acknowledged one by one.
+    /// An empty disposal finished. Artifacts recorded meanwhile remain owned.
+    CleanupFinished {
+        owner: String,
+    },
+    /// Legacy completion: forgets every artifact of `owner` and ends its disposal.
     CleanupCompleted {
         owner: String,
         failures: Vec<String>,
@@ -1838,6 +1841,7 @@ impl DomainEvent {
             Self::BranchesKept { .. } => "branches.kept",
             Self::CleanupRequested { .. } => "cleanup.requested",
             Self::CleanupCompleted { .. } => "cleanup.completed",
+            Self::CleanupFinished { .. } => "cleanup.finished",
             Self::RankingsChanged => "rankings.changed",
             Self::ProviderChecked { .. } => "provider.checked",
             Self::AccountsChecked { .. } => "accounts.checked",

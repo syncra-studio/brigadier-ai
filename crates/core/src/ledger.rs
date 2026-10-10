@@ -89,6 +89,8 @@ pub struct CleanupLedger {
     accounts: Mutex<Option<AccountResolver>>,
     #[cfg(test)]
     test_providers: Mutex<Option<[Arc<dyn Provider>; 2]>>,
+    #[cfg(test)]
+    pub(crate) finish_pause: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
 impl CleanupLedger {
@@ -125,6 +127,9 @@ impl CleanupLedger {
                     DomainEvent::CleanupRequested { owner } => {
                         state.disposing.insert(owner);
                     }
+                    DomainEvent::CleanupFinished { owner } => {
+                        state.disposing.remove(&owner);
+                    }
                     DomainEvent::CleanupCompleted { owner, .. } => {
                         state.artifacts.remove(&owner);
                         state.disposing.remove(&owner);
@@ -147,6 +152,8 @@ impl CleanupLedger {
             accounts: Mutex::new(None),
             #[cfg(test)]
             test_providers: Mutex::new(None),
+            #[cfg(test)]
+            finish_pause: Mutex::new(None),
         })
     }
 
@@ -267,6 +274,9 @@ impl CleanupLedger {
     /// retried by the next sweep.
     pub async fn dispose(&self, owner: &str) -> Leftovers {
         let requested = self.state().disposing.contains(owner);
+        if !requested && self.artifacts(owner).is_empty() {
+            return Leftovers::default();
+        }
         if !requested {
             if let Err(err) = self
                 .append(DomainEvent::CleanupRequested {
@@ -279,6 +289,7 @@ impl CleanupLedger {
             self.state().disposing.insert(owner.to_owned());
         }
         let artifacts = self.artifacts(owner);
+        let was_empty = artifacts.is_empty();
         // Processes first, so nothing is still writing the files removed next.
         let (processes, files): (Vec<Artifact>, Vec<Artifact>) =
             artifacts.into_iter().partition(is_process);
@@ -286,13 +297,12 @@ impl CleanupLedger {
         leftovers
             .failures
             .extend(self.remove(owner, files).await.failures);
-        if self.artifacts(owner).is_empty() {
-            // Stored as well, so an owner that held nothing (no `cleanup.removed` follows) is
-            // not disposed of again at the next launch, with whatever it records by then.
+        if was_empty {
+            // No removal can finish this request. Keep any artifacts recorded while the
+            // finish is being stored, both here and on replay.
             if let Err(err) = self
-                .append(DomainEvent::CleanupCompleted {
+                .append(DomainEvent::CleanupFinished {
                     owner: owner.to_owned(),
-                    failures: Vec::new(),
                 })
                 .await
             {
@@ -626,6 +636,7 @@ impl CleanupLedger {
                         known.retain(|artifact| !removed.contains(artifact));
                         if known.is_empty() {
                             state.artifacts.remove(owner);
+                            state.disposing.remove(owner);
                         }
                     }
                 }
@@ -642,6 +653,14 @@ impl CleanupLedger {
     }
 
     async fn append(&self, event: DomainEvent) -> Result<()> {
+        #[cfg(test)]
+        if matches!(event, DomainEvent::CleanupFinished { .. }) {
+            let pause = self.finish_pause.lock().unwrap().clone();
+            if let Some((reached, release)) = pause {
+                reached.notify_one();
+                release.notified().await;
+            }
+        }
         let new = NewEvent::new(streams::CLEANUP, event.kind(), now_ms(), &event)?;
         self.core.store().append(vec![new]).await?;
         Ok(())

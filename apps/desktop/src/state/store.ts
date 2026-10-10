@@ -606,6 +606,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "branchesKept":
     case "cleanupRequested":
     case "cleanupCompleted":
+    case "cleanupFinished":
     case "conversationCleanup":
     // The daemon's own record of the thread engine's first start; its deletes arrive as
     // conversationDeleting.

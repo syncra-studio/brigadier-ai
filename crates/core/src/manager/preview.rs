@@ -2285,6 +2285,138 @@ while True:
         flow.stop().await;
     }
 
+    #[tokio::test]
+    async fn empty_disposal_preserves_a_record_during_finish_and_does_not_repeat_events() {
+        use crate::ledger::CleanupLedger;
+        use crate::manager::flow::{Flow, Options, Reply};
+        use crate::model::{DomainEvent, streams};
+        use brigadier_providers::{claude::Claude, codex::Codex};
+        use brigadier_store::NewEvent;
+
+        let flow = Flow::start(
+            "empty-disposal-race",
+            Options::default(),
+            Arc::new(|_| Box::pin(async { Reply::text("[quiet]") })),
+        )
+        .await;
+        let runtime = &flow.manager.runtime;
+        let owner = "preview-data:empty-disposal-race";
+        let store = flow.manager.core.store();
+        // A request left by an older daemon, with no artifacts to acknowledge.
+        let request = DomainEvent::CleanupRequested {
+            owner: owner.into(),
+        };
+        store
+            .append(vec![
+                NewEvent::new(streams::CLEANUP, request.kind(), 0, &request).unwrap(),
+            ])
+            .await
+            .unwrap();
+        let load = || {
+            CleanupLedger::load(
+                flow.manager.core.clone(),
+                runtime.platform().clone(),
+                Arc::new(Claude::new(
+                    runtime.platform().clone(),
+                    runtime.cli_env().clone(),
+                )),
+                Arc::new(Codex::new(
+                    runtime.platform().clone(),
+                    runtime.cli_env().clone(),
+                )),
+            )
+        };
+        let ledger = Arc::new(load().await.unwrap());
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        *ledger.finish_pause.lock().unwrap() = Some((reached.clone(), release.clone()));
+        let disposing = {
+            let ledger = ledger.clone();
+            tokio::spawn(async move { ledger.dispose(owner).await })
+        };
+        reached.notified().await;
+        let path = runtime.platform().paths().data_dir.join("race-artifact");
+        std::fs::create_dir_all(&path).unwrap();
+        let artifact = Artifact::ScratchDir {
+            path: path.to_string_lossy().into_owned(),
+        };
+        ledger.record(owner, artifact.clone()).await.unwrap();
+        release.notify_one();
+        assert!(disposing.await.unwrap().is_clean());
+        assert_eq!(ledger.artifacts(owner), vec![artifact.clone()]);
+        assert!(!ledger.disposing().contains(&owner.to_owned()));
+        let reloaded = load().await.unwrap();
+        assert_eq!(reloaded.artifacts(owner), ledger.artifacts(owner));
+        assert!(!reloaded.disposing().contains(&owner.to_owned()));
+        reloaded.sweep().await;
+        assert!(path.is_dir());
+        assert_eq!(reloaded.artifacts(owner), vec![artifact]);
+        assert!(reloaded.dispose(owner).await.is_clean());
+        assert!(!path.exists());
+        let events = store
+            .read_stream_since(streams::CLEANUP.into(), 0, 1000)
+            .await
+            .unwrap();
+        let kinds: Vec<_> = events
+            .iter()
+            .filter_map(|event| {
+                let decoded = crate::sessions::decode(event).unwrap();
+                match &decoded {
+                    DomainEvent::CleanupRequested { owner: held }
+                    | DomainEvent::CleanupRecorded { owner: held, .. }
+                    | DomainEvent::CleanupRemoved { owner: held, .. }
+                    | DomainEvent::CleanupCompleted { owner: held, .. }
+                    | DomainEvent::CleanupFinished { owner: held }
+                        if held == owner =>
+                    {
+                        Some(decoded.kind())
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "cleanup.requested",
+                "cleanup.recorded",
+                "cleanup.finished",
+                "cleanup.requested",
+                "cleanup.removed"
+            ]
+        );
+        for ledger in [&reloaded, &load().await.unwrap()] {
+            for _ in 0..3 {
+                assert!(ledger.dispose(owner).await.is_clean());
+                assert!(ledger.dispose("never-recorded").await.is_clean());
+            }
+        }
+        let after = store
+            .read_stream_since(
+                streams::CLEANUP.into(),
+                events.last().unwrap().stream_seq,
+                1000,
+            )
+            .await
+            .unwrap();
+        assert!(after.is_empty());
+
+        // A pending empty request also finishes when no record races with it.
+        store
+            .append(vec![
+                NewEvent::new(streams::CLEANUP, request.kind(), 0, &request).unwrap(),
+            ])
+            .await
+            .unwrap();
+        let pending = load().await.unwrap();
+        assert!(pending.disposing().contains(&owner.to_owned()));
+        assert!(pending.dispose(owner).await.is_clean());
+        let finished = load().await.unwrap();
+        assert!(!finished.disposing().contains(&owner.to_owned()));
+        assert!(finished.artifacts(owner).is_empty());
+        flow.stop().await;
+    }
+
     #[test]
     fn brigadiers_own_repository_needs_a_scratch_data_folder_and_a_dev_identity() {
         let root =

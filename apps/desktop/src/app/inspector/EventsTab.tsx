@@ -47,6 +47,7 @@ function summary(event: DomainEvent): string {
     case "branchesKept":
       return `${event.branches.length} kept`;
     case "cleanupRequested":
+    case "cleanupFinished":
       return event.owner;
     case "cleanupCompleted":
       return event.failures.length === 0 ? "removed" : `${event.failures.length} failed`;
