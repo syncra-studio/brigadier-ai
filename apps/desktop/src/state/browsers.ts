@@ -34,6 +34,25 @@ function update(id: string, patch: Partial<BrowserPage>): void {
   });
 }
 
+/**
+ * Whether a favicon sent from `url` belongs to the tab's `page`: the same document, also after a
+ * hash change, or a same-origin `pushState` once the page has loaded. While a new page loads, the
+ * previous one's late favicons are refused; another origin's always are.
+ */
+export function faviconFits(page: Pick<BrowserPage, "url" | "loading"> | undefined, url: string): boolean {
+  if (!page) return false;
+  if (url === page.url) return true;
+  try {
+    const sent = new URL(url);
+    const shown = new URL(page.url);
+    if (sent.origin !== shown.origin) return false;
+    sent.hash = shown.hash = "";
+    return sent.href === shown.href || !page.loading;
+  } catch {
+    return false;
+  }
+}
+
 /** Opens `url` in the conversation's Browser tab, over `bounds`. */
 export async function openPage(
   id: string,
@@ -58,7 +77,7 @@ export async function openPage(
           ...(event.url !== useBrowsers.getState().pages[id]?.url ? { favicon: null } : {}) });
       else if (event.type === "title") update(id, { title: event.title });
       else if (event.type === "favicon") {
-        if (event.url === useBrowsers.getState().pages[id]?.url) update(id, { favicon: event.dataUrl });
+        if (faviconFits(useBrowsers.getState().pages[id], event.url)) update(id, { favicon: event.dataUrl });
       }
       else update(id, { blocked: event.url, loading: false });
     });

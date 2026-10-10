@@ -13,6 +13,8 @@
 
 use brigadier_ipc::app::{BrowserBounds, BrowserEvent};
 use brigadier_ipc::protocol::{ErrorCode, IpcError};
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 
 fn failed(message: impl Into<String>) -> IpcError {
@@ -103,6 +105,76 @@ fn favicon_data(value: &str) -> bool {
             })
 }
 
+/// The least time between two favicons a tab's page gets to the app.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+const FAVICON_INTERVAL: Duration = Duration::from_millis(300);
+
+/// What to do with a favicon a tab's page sent.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[derive(Debug, PartialEq)]
+enum FaviconStep {
+    /// Send it now.
+    Send { url: String, data_url: String },
+    /// Hold it: `FaviconLimit::flush` sends the latest held one after this long.
+    Later(Duration),
+    /// Drop it: the app has it already, or a held one goes in its place.
+    Skip,
+}
+
+/// Keeps a page's favicons to the app to one per `FAVICON_INTERVAL`, the latest of those sent
+/// in between, and none the same as the one before, whatever its scripts post.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[derive(Default)]
+struct FaviconLimit {
+    sent: Option<String>,
+    at: Option<Instant>,
+    held: Option<(String, String)>,
+    flushing: bool,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+impl FaviconLimit {
+    fn offer(&mut self, url: String, data_url: String, now: Instant) -> FaviconStep {
+        if self.sent.as_ref() == Some(&data_url) {
+            self.held = None;
+            return FaviconStep::Skip;
+        }
+        match self.at.map(|at| now.saturating_duration_since(at)) {
+            Some(since) if since < FAVICON_INTERVAL => {
+                self.held = Some((url, data_url));
+                if std::mem::replace(&mut self.flushing, true) {
+                    FaviconStep::Skip
+                } else {
+                    FaviconStep::Later(FAVICON_INTERVAL - since)
+                }
+            }
+            _ => {
+                self.held = None;
+                self.sent = Some(data_url.clone());
+                self.at = Some(now);
+                FaviconStep::Send { url, data_url }
+            }
+        }
+    }
+
+    /// The held favicon, if any, once its `Later` wait is over.
+    fn flush(&mut self, now: Instant) -> Option<(String, String)> {
+        self.flushing = false;
+        let (url, data_url) = self.held.take()?;
+        self.sent = Some(data_url.clone());
+        self.at = Some(now);
+        Some((url, data_url))
+    }
+
+    /// A new page is loading: the app clears the tab's favicon, so the next one goes.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn reset(&mut self) {
+        self.sent = None;
+        self.at = None;
+        self.held = None;
+    }
+}
+
 /// Whether `url` is a web page, which the system browser may open.
 fn web_page(url: &str) -> bool {
     let scheme = url
@@ -115,6 +187,8 @@ fn web_page(url: &str) -> bool {
 mod embedded {
     use std::cell::RefCell;
     use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
 
     use brigadier_ipc::app::{BrowserBounds, BrowserEvent};
     use brigadier_ipc::protocol::IpcError;
@@ -126,7 +200,9 @@ mod embedded {
     use wry::dpi::{LogicalPosition, LogicalSize};
     use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder};
 
-    use super::{FAVICON, NO_CAPTURE, allowed, failed, favicon_data, web_page};
+    use super::{
+        FAVICON, FaviconLimit, FaviconStep, NO_CAPTURE, allowed, failed, favicon_data, web_page,
+    };
     use crate::shell::MAIN_WINDOW;
 
     /// A tab's page.
@@ -180,6 +256,8 @@ mod embedded {
             events.clone(),
             events,
         );
+        let limit = Arc::new(Mutex::new(FaviconLimit::default()));
+        let load_limit = limit.clone();
         // Windows keeps even a private page's browser process data in a folder; give this tab
         // its own, apart from the app's webview.
         #[cfg(target_os = "windows")]
@@ -203,8 +281,28 @@ mod embedded {
             .with_ipc_handler(move |request| {
                 let url = request.uri().to_string();
                 let data_url = request.into_body();
-                if web_page(&url) && favicon_data(&data_url) {
-                    let _ = on_favicon.send(BrowserEvent::Favicon { url, data_url });
+                if !web_page(&url) || !favicon_data(&data_url) {
+                    return;
+                }
+                let step = limit
+                    .lock()
+                    .expect("favicon lock")
+                    .offer(url, data_url, Instant::now());
+                match step {
+                    FaviconStep::Send { url, data_url } => {
+                        let _ = on_favicon.send(BrowserEvent::Favicon { url, data_url });
+                    }
+                    FaviconStep::Later(wait) => {
+                        let (limit, on_favicon) = (limit.clone(), on_favicon.clone());
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(wait).await;
+                            let held = limit.lock().expect("favicon lock").flush(Instant::now());
+                            if let Some((url, data_url)) = held {
+                                let _ = on_favicon.send(BrowserEvent::Favicon { url, data_url });
+                            }
+                        });
+                    }
+                    FaviconStep::Skip => {}
                 }
             })
             .with_back_forward_navigation_gestures(true)
@@ -221,6 +319,9 @@ mod embedded {
             })
             .with_on_page_load_handler(move |event, url| {
                 let loading = matches!(event, PageLoadEvent::Started);
+                if loading {
+                    load_limit.lock().expect("favicon lock").reset();
+                }
                 let _ = on_load.send(BrowserEvent::Load { url, loading });
             })
             .with_document_title_changed_handler(move |title| {
@@ -386,4 +487,62 @@ pub fn close_all() {
 #[tauri::command]
 pub fn browser_close(id: String) {
     embedded::close(&id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn offer(limit: &mut FaviconLimit, data_url: &str, now: Instant) -> FaviconStep {
+        limit.offer("https://example.com/".into(), data_url.into(), now)
+    }
+
+    fn send(data_url: &str) -> FaviconStep {
+        FaviconStep::Send {
+            url: "https://example.com/".into(),
+            data_url: data_url.into(),
+        }
+    }
+
+    #[test]
+    fn favicon_limit_drops_repeats_and_coalesces_bursts_to_the_latest() {
+        let start = Instant::now();
+        let mut limit = FaviconLimit::default();
+        assert_eq!(offer(&mut limit, "a", start), send("a"));
+        // The same icon again is dropped, however late.
+        assert_eq!(
+            offer(&mut limit, "a", start + FAVICON_INTERVAL * 2),
+            FaviconStep::Skip
+        );
+
+        // A burst within the interval: one wait, then only the latest goes.
+        let soon = start + FAVICON_INTERVAL / 3;
+        assert_eq!(
+            offer(&mut limit, "b", soon),
+            FaviconStep::Later(FAVICON_INTERVAL - FAVICON_INTERVAL / 3)
+        );
+        assert_eq!(offer(&mut limit, "c", soon), FaviconStep::Skip);
+        assert_eq!(offer(&mut limit, "d", soon), FaviconStep::Skip);
+        let flushed = start + FAVICON_INTERVAL;
+        assert_eq!(
+            limit.flush(flushed),
+            Some(("https://example.com/".into(), "d".into()))
+        );
+        assert_eq!(limit.flush(flushed), None);
+
+        // Settling back on the icon already sent cancels the held one.
+        let next = flushed + FAVICON_INTERVAL / 2;
+        assert!(matches!(
+            offer(&mut limit, "e", next),
+            FaviconStep::Later(_)
+        ));
+        assert_eq!(offer(&mut limit, "d", next), FaviconStep::Skip);
+        assert_eq!(limit.flush(flushed + FAVICON_INTERVAL), None);
+
+        // Once the interval has passed, a new icon goes at once.
+        assert_eq!(
+            offer(&mut limit, "f", flushed + FAVICON_INTERVAL * 2),
+            send("f")
+        );
+    }
 }
