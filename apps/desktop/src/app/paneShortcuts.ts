@@ -32,7 +32,8 @@ export const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?
 };
 
 /**
- * The panes' shortcuts, wherever the window is: ⌘J and ⌃` show or hide the bottom terminal,
+ * ⌘J shows or hides the bottom terminal. Sessions capture ⌃` to create a main terminal tab;
+ * outside sessions it retains the bottom-terminal toggle,
  * and in Settings ⌘⇧T brings back Home's last closed terminal tab (a view does that for its
  * own). On macOS the Panes menu owns the keys; its items arrive here and go on as
  * key presses, to the browser while it owns the keyboard.

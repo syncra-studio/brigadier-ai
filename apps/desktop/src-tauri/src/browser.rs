@@ -81,6 +81,9 @@ const FAVICON: &str = r#"(() => {
     };
     image.src = href;
   };
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) { previous = ""; read(); }
+  });
   document.addEventListener('DOMContentLoaded', () => {
     read();
     if (document.head) new MutationObserver(read).observe(document.head, {

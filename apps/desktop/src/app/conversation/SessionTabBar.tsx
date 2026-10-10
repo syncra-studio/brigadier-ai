@@ -292,7 +292,7 @@ export function SessionTabBar({
               className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
             >
               {archived ? <Archive aria-hidden className="size-icon-sm shrink-0" /> : <Chat aria-hidden className="size-icon-sm shrink-0" />}
-              <span className="session-tab-title min-w-0 whitespace-nowrap overflow-hidden">{title}</span>
+              <span className="session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap">{title}</span>
             </button>
             <ChatActions
               conversation={conversation}
@@ -361,7 +361,7 @@ export function SessionTabBar({
                         : tab.kind === "document" ? <Document className="size-icon-sm shrink-0" /> : (
                         <DiffGlyph className="size-icon-sm shrink-0" />
                       )}
-                      <span className={cn("session-tab-title min-w-0 whitespace-nowrap overflow-hidden", tab.kind === "file" && tab.preview && "italic")}>
+                      <span className={cn("session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap", tab.kind === "file" && tab.preview && "italic")}>
                         {name}
                       </span>
                     </button>

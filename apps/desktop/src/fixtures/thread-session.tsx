@@ -28,7 +28,7 @@ import { emptyThread, useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
 document.documentElement.dataset.density = query.get("density") === "compact" ? "compact" : "normal";
-export const id = recorded.conversationId;
+const id = recorded.conversationId;
 const tabFixture = query.has("tabs");
 const until = Number(query.get("at") ?? Number.POSITIVE_INFINITY);
 const events = (recorded.events as unknown as EventEnvelope[])
@@ -81,15 +81,15 @@ useApp.setState({
   connection: { status: "connected", daemon: null, reason: null },
 });
 
-export const fixtureCalls: { command: string; payload: unknown }[] = [];
+const fixtureCalls: { command: string; payload: unknown }[] = [];
 const browserChannels = new Map<string, Channel<BrowserEvent>>();
-export function finishBrowserLoad(tabId: string, url: string, favicon?: string) {
+function finishBrowserLoad(tabId: string, url: string, favicon?: string) {
   const channel = browserChannels.get(tabId);
   channel?.onmessage({ type: "load", url, loading: false });
   channel?.onmessage({ type: "title", title: "Example Domain" });
   if (favicon) channel?.onmessage({ type: "favicon", url, dataUrl: favicon });
 }
-export function menuShortcut(name: string) { return emit("pane-shortcut", name); }
+function menuShortcut(name: string) { return emit("pane-shortcut", name); }
 
 mockIPC((command, payload) => {
   if (tabFixture && command !== "browser_place") fixtureCalls.push({ command, payload });
@@ -121,6 +121,8 @@ mockIPC((command, payload) => {
       return { method: req.method };
   }
 }, { shouldMockEvents: true });
+
+if (tabFixture) Object.assign(window, { sessionTabFixture: { id, fixtureCalls, finishBrowserLoad, menuShortcut } });
 
 if (tabFixture && !sessionTabs(id).tabs.length && conversation.kind === "session") {
   const count = Number(query.get("tabs"));
