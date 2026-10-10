@@ -8,6 +8,11 @@
  *   tabs built (`boards/thread-grill-2026-10-09.events.json`), as this build settles it
  *   (`settledSession`: no "Waiting on you", the merge asked on a card); `recorded=1` replays it
  *   as stored.
+ * - `session=plan`: a plan-mode session of 2026-10-10 on a small CLI
+ *   (`boards/thread-plan-2026-10-10.events.json`): the plan written, proposed as a document and
+ *   built by two workers, one per phase. `at=1791603728000` is while it writes the plan,
+ *   `at=1791603740000` while "Implement this plan?" waits, `at=1791603900000` while phase 1
+ *   builds.
  *
  * Query: `density=compact`; `sidebar=0` (closed); `summary=1` (the side panel pinned); `at=<ms>`
  * (only the events up to that time, a live moment of the session); `done=1` (the turn that waits
@@ -21,6 +26,7 @@ import { AppSidebar, AppStrip, TitlebarNav } from "@/app/AppSidebar";
 import { ConversationView } from "@/app/ConversationView";
 import { SidebarFoot } from "@/app/SidebarFoot";
 import grill from "@/fixtures/boards/thread-grill-2026-10-09.events.json";
+import planned from "@/fixtures/boards/thread-plan-2026-10-10.events.json";
 import t1 from "@/fixtures/boards/thread-t1-2026-10-08.events.json";
 import { settledSession } from "@/fixtures/settledSession";
 import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
@@ -32,9 +38,14 @@ import { emptyThread, useApp } from "@/state/store";
 const query = new URLSearchParams(location.search);
 document.documentElement.dataset.density = query.get("density") === "compact" ? "compact" : "normal";
 const isGrill = query.get("session") === "grill";
-const recorded = isGrill ? grill : t1;
+const isPlan = query.get("session") === "plan";
+const recorded = isGrill ? grill : isPlan ? planned : t1;
 const id = recorded.conversationId;
-const branch = isGrill ? "brigadier/9a2b00c9/session" : "brigadier/01a11b0e/session";
+const branch = isGrill
+  ? "brigadier/9a2b00c9/session"
+  : isPlan
+    ? "brigadier/2ff82aa5/session"
+    : "brigadier/01a11b0e/session";
 const stored = recorded.events as unknown as EventEnvelope[];
 const replayed = isGrill && query.get("recorded") !== "1" ? settledSession(id, stored, { branch, base: "main" }) : stored;
 const until = Number(query.get("at") ?? Number.POSITIVE_INFINITY);
@@ -58,7 +69,11 @@ const conversation = {
   id,
   kind: "session",
   projectId: null,
-  title: isGrill ? "For our brigadier app, instead of having the toolbar icons" : "Sidebar toggle chevron",
+  title: isGrill
+    ? "For our brigadier app, instead of having the toolbar icons"
+    : isPlan
+      ? "Times and lang flags"
+      : "Sidebar toggle chevron",
   pinnedAtMs: null,
   createdAtMs: created,
   updatedAtMs: events.at(-1)?.atMs ?? created,
@@ -71,8 +86,11 @@ const conversation = {
     type: "session",
     repo: "/tmp/thread-fixture",
     environment: { type: "newWorktree", branch, base: "main" },
-    permission: isGrill ? "approveForMe" : "fullAccess",
-    planMode: false,
+    permission: isGrill ? "approveForMe" : isPlan ? "askForApproval" : "fullAccess",
+    // Plan mode is on until the user says yes to the plan.
+    planMode:
+      isPlan &&
+      !events.some((envelope) => envelope.event.type === "planUpdated" && envelope.event.plan.state.type === "approved"),
     workersSeeUncommitted: null,
     orchestrator: { provider: "claude", model: "opus", effort: "high" },
   },
