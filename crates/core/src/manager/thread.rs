@@ -183,7 +183,6 @@ impl SessionManager {
         &self,
         workspace: Option<&ThreadWorkspace>,
         scratch: &Path,
-        provider: ProviderKind,
         permission: PermissionLevel,
     ) -> (Access, bool) {
         let level = super::workers::access_for(TaskKind::Implement, permission);
@@ -194,7 +193,7 @@ impl SessionManager {
         if let Some(workspace) = workspace {
             writable_roots.push(workspace.path.clone());
             if let Ok(repo) = self.git.open(&workspace.path) {
-                for root in super::workers::commit_roots(&repo, provider) {
+                for root in super::workers::commit_roots(&repo, Some(&workspace.branch), true) {
                     if !writable_roots.contains(&root) {
                         writable_roots.push(root);
                     }
@@ -213,7 +212,6 @@ impl SessionManager {
         &self,
         id: &ConversationId,
         scratch: &Path,
-        provider: ProviderKind,
         make: bool,
     ) -> Result<(ThreadLaunch, bool)> {
         let workspace = if make {
@@ -222,8 +220,7 @@ impl SessionManager {
             self.planned_workspace(id)
         };
         let permission = self.permission(id);
-        let (access, auto_review) =
-            self.thread_access(workspace.as_ref(), scratch, provider, permission);
+        let (access, auto_review) = self.thread_access(workspace.as_ref(), scratch, permission);
         Ok((
             ThreadLaunch {
                 workspace,
@@ -250,10 +247,7 @@ impl SessionManager {
         let scratch = self.owned_dir("orch", &conv.id.0);
         // As planned: a merged session's next worktree is made by the user's next message,
         // at the same path, so it moves nothing.
-        let now = match self
-            .thread_launch(&conv.id, &scratch, cli.provider, false)
-            .await
-        {
+        let now = match self.thread_launch(&conv.id, &scratch, false).await {
             Ok((now, _)) => now,
             Err(err) => {
                 tracing::warn!(conversation = %conv.id, error = %err, "could not look at the thread's workspace");

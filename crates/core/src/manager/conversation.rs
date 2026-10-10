@@ -1783,9 +1783,7 @@ impl SessionManager {
             (Some(Setup::Session { orchestrator, .. }), _) => {
                 let choice = fallback.unwrap_or_else(|| orchestrator.clone());
                 // Its workspace exists before its CLI starts.
-                let (started_for, reviews) = self
-                    .thread_launch(&conv.id, &dir, choice.provider, true)
-                    .await?;
+                let (started_for, reviews) = self.thread_launch(&conv.id, &dir, true).await?;
                 auto_review = reviews;
                 let workspace = started_for.workspace.clone();
                 let permission = started_for.permission;

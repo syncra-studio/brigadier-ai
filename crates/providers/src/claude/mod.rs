@@ -616,7 +616,19 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
             // A writer may commit into a repository's git folder, but not plant hooks or
             // change its config: those run outside the sandbox the next time the user runs git.
             // Claude's file tools work outside the OS sandbox: deny them there too.
-            for root in writable_roots.iter().filter(|root| is_git_dir(root)) {
+            // A checkout among the writable folders (a thread on the user's own checkout) holds
+            // its git folder inside.
+            let writable_dirs = writable_roots.iter().map(PathBuf::as_path).chain(
+                write_cwd
+                    .then(|| std::iter::once(cwd).chain(spec.add_dirs.iter().map(PathBuf::as_path)))
+                    .into_iter()
+                    .flatten(),
+            );
+            let git_dirs: Vec<PathBuf> = writable_dirs
+                .flat_map(|root| [root.to_owned(), root.join(".git")])
+                .filter(|root| is_git_dir(root))
+                .collect();
+            for root in &git_dirs {
                 let root = resolved(root);
                 for tool in ["Edit", "Write", "NotebookEdit"] {
                     deny.push(format!("{tool}({})", rule_path(&root.join("hooks"))));
@@ -2200,6 +2212,35 @@ mod tests {
         assert_eq!(filesystem["allowWrite"], json!([git.display().to_string()]));
         assert_eq!(
             filesystem["denyWrite"],
+            json!([
+                git.join("hooks").display().to_string(),
+                git.join("config").display().to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_writable_checkout_keeps_its_git_hooks_and_config_out_of_reach() {
+        let cwd = Temp::new();
+        let checkout = cwd.path().join("checkout");
+        let git = checkout.join(".git");
+        std::fs::create_dir_all(git.join("objects")).expect("objects");
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD");
+        let spec = SessionSpec {
+            access: Access::Scoped {
+                write_cwd: true,
+                writable_roots: Vec::new(),
+                network: true,
+                deny_read: Vec::new(),
+                unix_sockets: Vec::new(),
+            },
+            add_dirs: vec![checkout.clone()],
+            ..spec(cwd.path(), &["claude-sonnet-5"])
+        };
+        let settings = settings(&spec, cwd.path(), &SubAgents::Any, false);
+        let git = resolved(&git);
+        assert_eq!(
+            settings["sandbox"]["filesystem"]["denyWrite"],
             json!([
                 git.join("hooks").display().to_string(),
                 git.join("config").display().to_string(),

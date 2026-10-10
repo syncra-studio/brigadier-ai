@@ -1757,13 +1757,13 @@ impl SessionManager {
             // Checks write build output inside the checkout; nothing from it lands.
             writable_roots.push(worktree.clone());
         }
-        // A writer commits: into its worktree's own git folder (index, HEAD) and the
-        // repository's objects, refs and logs, which a linked worktree shares.
+        // A writer commits: into its worktree's own git folder (index, HEAD), the repository's
+        // objects, and its own branch's ref and reflog, never another branch's.
         if task.kind.writes()
             && let Some(worktree) = &workspace.worktree
             && let Ok(repo) = self.git.open(worktree)
         {
-            writable_roots.extend(commit_roots(&repo, task.route.choice.provider));
+            writable_roots.extend(commit_roots(&repo, workspace.branch.as_deref(), false));
         }
         self.sandboxed(write_cwd, writable_roots, access.network)
     }
@@ -4204,32 +4204,85 @@ pub(crate) fn category(kind: TaskKind) -> brigadier_router::TaskCategory {
     }
 }
 
-/// The folders a commit in `repo`'s checkout writes. For a linked worktree, its own git folder
-/// and the shared objects, refs and logs, never the shared folder whole: Codex keeps a `.git`
-/// folder read-only even inside a writable root (so `index.lock` was denied), and the hooks
-/// and config there stay out of reach without a rule of their own. The main checkout's git
-/// folder holds its index at the top, so it stays one root. A commit also takes (and gives
-/// back) the shared `packed-refs.lock`: Codex gets that one file, or git prints "Unable to
-/// create '…/packed-refs.lock': Operation not permitted" on every commit. Claude's sandbox
-/// already lets a linked worktree write the shared git folder (but its hooks and config).
-pub(crate) fn commit_roots(repo: &brigadier_git::Repo, provider: ProviderKind) -> Vec<PathBuf> {
+/// The per-checkout state files git keeps in a checkout's own git folder. A local checkout
+/// (whose own folder is the shared one) is granted these, never the shared folder whole.
+const CHECKOUT_STATE: [&str; 17] = [
+    "HEAD",
+    "index",
+    "ORIG_HEAD",
+    "FETCH_HEAD",
+    "MERGE_HEAD",
+    "MERGE_MSG",
+    "MERGE_MODE",
+    "MERGE_RR",
+    "AUTO_MERGE",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "COMMIT_EDITMSG",
+    "logs/HEAD",
+    "rebase-merge",
+    "rebase-apply",
+    "sequencer",
+    "MERGE_AUTOSTASH",
+];
+
+/// The files a commit on `branch` in `repo`'s checkout writes, and nothing of another branch's
+/// (PLAN bug 6): its own git folder (index, HEAD; for a local checkout, those files one by
+/// one), the shared objects, and its own branch's ref, the ref's `.lock` and its reflog. Never
+/// the whole `refs` or `logs`, so `git branch -D` of another session's branch, or an update of
+/// the base, fails with "Operation not permitted"; never the shared folder whole, so its hooks
+/// and config stay out of reach. A commit in a linked worktree also takes (and gives back) the
+/// shared `packed-refs.lock`, or git prints "Unable to create '…/packed-refs.lock': Operation
+/// not permitted" on every commit; `packed-refs` itself stays read-only, and replacing it means
+/// renaming the lock over it. The thread (`pushes`) also writes the remote-tracking refs a push
+/// or fetch updates.
+pub(crate) fn commit_roots(
+    repo: &brigadier_git::Repo,
+    branch: Option<&str>,
+    pushes: bool,
+) -> Vec<PathBuf> {
     let common = repo.common_dir().to_owned();
     let own = repo.git_dir().unwrap_or_else(|_| common.clone());
+    let mut roots = Vec::new();
     if own == common {
-        return vec![common];
+        for name in CHECKOUT_STATE {
+            let path = common.join(name);
+            roots.push(lock_of(&path));
+            roots.push(path);
+        }
+    } else {
+        roots.push(own);
     }
-    // A clone always has `logs`; a missing one would leave git unable to write its reflog.
-    let _ = std::fs::create_dir_all(common.join("logs"));
-    let mut roots = vec![
-        own,
-        common.join("objects"),
-        common.join("refs"),
-        common.join("logs"),
-    ];
-    if provider == ProviderKind::Codex {
-        roots.push(common.join("packed-refs.lock"));
+    roots.push(common.join("objects"));
+    roots.push(common.join("packed-refs.lock"));
+    if let Some(branch) = branch {
+        let reference = common.join("refs/heads").join(branch);
+        let reflog = common.join("logs/refs/heads").join(branch);
+        // Git makes a missing parent folder, which it couldn't inside a read-only `refs`.
+        for path in [&reference, &reflog] {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
+        roots.push(lock_of(&reference));
+        roots.push(reference);
+        roots.push(reflog);
+    }
+    if pushes {
+        for folder in ["refs/remotes", "logs/refs/remotes"] {
+            let path = common.join(folder);
+            let _ = std::fs::create_dir_all(&path);
+            roots.push(path);
+        }
     }
     roots
+}
+
+/// `path` with git's `.lock` suffix, the file git writes first and renames over it.
+fn lock_of(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".lock");
+    PathBuf::from(name)
 }
 
 /// The cleanup owner of a conversation's worker folder ([`SessionManager::worker_home`]).
@@ -4662,32 +4715,45 @@ mod tests {
         }
     }
 
+    /// Runs git in `cwd`, failing the test when it fails.
+    fn git_ok(cwd: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
     #[test]
-    fn a_linked_worktree_commits_into_its_own_git_folder_and_the_shared_store() {
+    fn a_writer_is_granted_its_own_branch_and_never_another_ref() {
         let dir =
             Temp(std::env::temp_dir().join(format!("brigadier-roots-{}", uuid::Uuid::new_v4())));
         let main = dir.join("main");
         std::fs::create_dir_all(&main).unwrap();
-        let git = |cwd: &Path, args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
-                .args(args)
-                .current_dir(cwd)
-                .output()
-                .unwrap();
-            assert!(
-                out.status.success(),
-                "{}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        };
-        git(&main, &["init", "-q", "-b", "main"]);
-        git(&main, &["commit", "-q", "--allow-empty", "-m", "Start"]);
-        git(&main, &["worktree", "add", "-q", "-b", "task", "../task"]);
+        git_ok(&main, &["init", "-q", "-b", "main"]);
+        git_ok(&main, &["commit", "-q", "--allow-empty", "-m", "Start"]);
+        git_ok(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "brigadier/aa/task-1",
+                "../task",
+            ],
+        );
         let tool = brigadier_git::Git::new("git".into(), Vec::new());
         let common = main.join(".git").canonicalize().unwrap();
-        let roots = |path: &Path, provider| {
-            commit_roots(&tool.open(path).unwrap(), provider)
+        let roots = |path: &Path, branch: Option<&str>, pushes| {
+            commit_roots(&tool.open(path).unwrap(), branch, pushes)
                 .iter()
                 .map(|root| {
                     root.strip_prefix(&common)
@@ -4696,25 +4762,162 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        let linked = roots(&dir.join("task"), ProviderKind::Codex);
+        let linked = roots(&dir.join("task"), Some("brigadier/aa/task-1"), false);
         assert_eq!(
             linked,
             [
                 "worktrees/task",
                 "objects",
-                "refs",
-                "logs",
-                "packed-refs.lock"
+                "packed-refs.lock",
+                "refs/heads/brigadier/aa/task-1.lock",
+                "refs/heads/brigadier/aa/task-1",
+                "logs/refs/heads/brigadier/aa/task-1",
             ]
             .map(PathBuf::from)
             .to_vec(),
-            "never the shared folder whole, so its hooks and config stay out of reach"
+            "never the whole refs or logs, nor the shared folder whole (its hooks and config)"
+        );
+        let thread = roots(&dir.join("task"), Some("brigadier/aa/task-1"), true);
+        assert!(thread.contains(&PathBuf::from("refs/remotes")));
+        assert!(thread.contains(&PathBuf::from("logs/refs/remotes")));
+        // A local checkout gets its state files one by one, never its git folder whole.
+        let local = roots(&main, Some("main"), false);
+        for granted in [
+            "HEAD",
+            "index",
+            "index.lock",
+            "logs/HEAD",
+            "refs/heads/main",
+        ] {
+            assert!(local.contains(&PathBuf::from(granted)), "{granted}");
+        }
+        for never in ["", "refs", "logs", "packed-refs", "hooks", "config"] {
+            assert!(!local.contains(&PathBuf::from(never)), "{never:?}");
+        }
+    }
+
+    /// What a writer's sandbox lets git do, under Brigadier's own Seatbelt with exactly the
+    /// roots a writer gets (PLAN bug 6): a commit on its own branch works and prints no git
+    /// error; another branch's delete (loose and packed), an update of the base and a rename
+    /// over `packed-refs` fail.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn under_its_sandbox_a_writer_commits_on_its_branch_and_never_moves_another() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-roots-{}", uuid::Uuid::new_v4())));
+        let main = dir.join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        git_ok(&main, &["init", "-q", "-b", "main"]);
+        git_ok(&main, &["commit", "-q", "--allow-empty", "-m", "Start"]);
+        git_ok(&main, &["branch", "brigadier/bb/task-1"]);
+        git_ok(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "brigadier/aa/task-1",
+                "../task",
+            ],
+        );
+        let task = dir.join("task");
+        let tool = brigadier_git::Git::new("git".into(), Vec::new());
+        let mut writable_roots = vec![task.clone()];
+        writable_roots.extend(commit_roots(
+            &tool.open(&task).unwrap(),
+            Some("brigadier/aa/task-1"),
+            false,
+        ));
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.join("data")),
+        })
+        .unwrap();
+        let common = main.join(".git").canonicalize().unwrap();
+        let sandboxed = |script: &str| {
+            let spec = brigadier_sandbox::SpawnSpec {
+                program: PathBuf::from("/bin/sh"),
+                args: vec!["-c".into(), script.into()],
+                env: Vec::new(),
+                clear_env: false,
+                cwd: Some(task.clone()),
+                low_priority: false,
+            };
+            let spec = platform
+                .sandbox()
+                .confine(
+                    spec,
+                    &brigadier_sandbox::SandboxPolicy {
+                        writable_roots: writable_roots.clone(),
+                        network: false,
+                        deny_read: Vec::new(),
+                    },
+                )
+                .unwrap();
+            let out = std::process::Command::new(&spec.program)
+                .args(&spec.args)
+                .current_dir(&task)
+                .output()
+                .unwrap();
+            (
+                out.status.success(),
+                String::from_utf8_lossy(&out.stderr).into_owned(),
+            )
+        };
+        let commit = "echo hi > a && git add a && git -c user.name=t -c user.email=t@example.invalid commit -q -m Work";
+        let (ok, stderr) = sandboxed(commit);
+        assert!(
+            ok && stderr.is_empty(),
+            "a commit prints no git error: {stderr}"
+        );
+        let (ok, stderr) = sandboxed(
+            "git -c user.name=t -c user.email=t@example.invalid commit -q --amend -m Again",
         );
         assert!(
-            !roots(&dir.join("task"), ProviderKind::Claude)
-                .contains(&PathBuf::from("packed-refs.lock"))
+            ok && stderr.is_empty(),
+            "an amend of its own branch works: {stderr}"
         );
-        assert_eq!(roots(&main, ProviderKind::Codex), vec![PathBuf::new()]);
+        let other = git_ok(&main, &["rev-parse", "brigadier/bb/task-1"]);
+        let base = git_ok(&main, &["rev-parse", "main"]);
+        let survives = |what: &str| {
+            assert_eq!(
+                git_ok(&main, &["rev-parse", "brigadier/bb/task-1"]),
+                other,
+                "{what}"
+            );
+            assert_eq!(git_ok(&main, &["rev-parse", "main"]), base, "{what}");
+        };
+        let (ok, stderr) = sandboxed("git branch -D brigadier/bb/task-1");
+        assert!(
+            !ok && stderr.contains("Operation not permitted"),
+            "{stderr}"
+        );
+        survives("a loose ref's delete");
+        let (ok, _) = sandboxed("git update-ref refs/heads/main HEAD");
+        assert!(!ok);
+        survives("the base's update");
+        git_ok(&main, &["pack-refs", "--all"]);
+        assert!(!common.join("refs/heads/brigadier/bb/task-1").exists());
+        let (ok, stderr) = sandboxed("git branch -D brigadier/bb/task-1");
+        assert!(!ok, "a packed ref's delete fails too: {stderr}");
+        survives("a packed ref's delete");
+        // Holding the lock is harmless: renaming it over `packed-refs` is refused.
+        let (ok, _) = sandboxed(&format!(
+            "cp '{0}/packed-refs' '{0}/packed-refs.lock' && mv '{0}/packed-refs.lock' '{0}/packed-refs'",
+            common.display()
+        ));
+        assert!(!ok);
+        let _ = std::fs::remove_file(common.join("packed-refs.lock"));
+        // Packing pruned its ref's emptied folder, which a sandboxed git can't make again:
+        // the engine makes it whenever it grants the roots (a CLI's start, each ref check).
+        commit_roots(
+            &tool.open(&task).unwrap(),
+            Some("brigadier/aa/task-1"),
+            false,
+        );
+        let (ok, stderr) = sandboxed(commit.replace("hi", "again").as_str());
+        assert!(ok && stderr.is_empty(), "{stderr}");
+        survives("its own commit");
     }
 
     #[test]

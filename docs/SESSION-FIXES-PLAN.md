@@ -873,6 +873,11 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
      access to `packed-refs`, and that is not granted. Phase 1 proves both halves by test (a commit prints no git
      error; a rename of the lock over `packed-refs` fails). If the test shows a sandbox can't keep them apart, the
      alternative is chosen by test before the grant changes, never by dropping the lock.
+   - Checked by test (2026-10-11): Claude 2.1.296's sandbox, with the worktree as an added folder (a worker's or the
+     thread's cwd is never the worktree), grants exactly the listed files, a not-yet-existing `.lock` included; it
+     doesn't widen to the shared git folder as it does for a cwd that is a linked worktree. Codex 0.162.1's
+     profile does the same. `git pack-refs` prunes a packed ref's emptied folder, which a sandboxed git can't make
+     again: the engine makes it whenever it grants the roots (a CLI's start, each ref check).
    - Claude also gets the protected set as `filesystem.denyWrite`, plus `Edit`/`Write`/`NotebookEdit` deny rules, as
      already done for `hooks` and `config` (`P/claude/mod.rs:614-627`): its file tools work outside the OS sandbox.
    - Codex needs no deny list: no writable root covers a protected path.

@@ -686,13 +686,9 @@ impl Seatbelt {
         let mut args: Vec<OsString> = vec!["-p".into(), profile.into()];
         for (index, root) in policy.writable_roots.iter().enumerate() {
             // Seatbelt matches resolved paths, so symlinks such as /tmp must be resolved first.
-            let root = if preview_temp.is_some() {
-                // Scoped roots may not exist yet. Resolve existing ancestors without
-                // granting the parent directory any extra write access.
-                resolved_path(root)
-            } else {
-                root.canonicalize()?
-            };
+            // A root may not exist yet (a ref's `.lock`): its existing ancestors are resolved
+            // without granting the parent folder any extra write access.
+            let root = resolved_path(root);
             let mut define = OsString::from(format!("WRITABLE_ROOT_{index}="));
             define.push(root.as_os_str());
             args.push("-D".into());
