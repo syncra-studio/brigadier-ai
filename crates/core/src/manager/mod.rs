@@ -58,6 +58,7 @@ mod pull_request;
 mod quiet;
 pub(crate) mod reads;
 mod rebirth;
+mod refcheck;
 mod requests;
 mod research;
 mod review;
@@ -146,6 +147,8 @@ pub struct SessionManager {
     /// Commands a Codex thread's `run_unsandboxed` may run, each once: what the user (or their
     /// "allow similar") approved when Codex asked ([`run`]).
     run_passes: run::RunPasses,
+    /// The engine's branches and their tips, for the ref check (PLAN bug 6).
+    ref_records: refcheck::RefRecords,
     /// Each session's pre-warmed next worktree (THREAD-PLAN.md Q8 lever 6).
     prewarms: prewarm::Prewarms,
     /// The previews running now ([`preview`]).
@@ -246,6 +249,7 @@ impl SessionManager {
             reviews: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
             run_passes: run::RunPasses::default(),
+            ref_records: refcheck::RefRecords::default(),
             prewarms: prewarm::Prewarms::default(),
             previews: preview::Previews::default(),
             running_reviews: Mutex::default(),

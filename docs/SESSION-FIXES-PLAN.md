@@ -967,6 +967,11 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
     `main` moved by the user is never touched.
   - Serialization: a landing and a check started together never restore the landing's move (the recorded tip is
     updated under the same lock).
+  - The live-owner amend exception (outline-review correction #1): during task-1's landing check, task-2's amend
+    while its worker is live is recorded and told, never restored; with its worker gone, the same rewrite is put
+    back.
+  - At Full access `packed-refs` stays writable (correction #3): a hand edit of it deleting a protected ref is put
+    back by the check. Below Full access a rename over `packed-refs` fails (sandbox tests above).
 - Sandbox tests (macOS, with a real `git` and `sandbox-exec`), under the thread's Full-access profile and under each CLI's
   scoped sandbox settings:
   - `git branch -D brigadier/<other>/task-1` fails, with the ref loose and again with it packed; the ref survives.

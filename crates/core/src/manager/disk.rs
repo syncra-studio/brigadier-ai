@@ -497,6 +497,7 @@ impl SessionManager {
                 branch,
                 merged,
             } => {
+                self.forget_branch(&repo, &branch.name);
                 let git = self.git.clone();
                 blocking(move || {
                     delete_branch_checked(&git, &repo, &branch, merged)?;

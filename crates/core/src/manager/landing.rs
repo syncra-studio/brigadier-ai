@@ -221,7 +221,11 @@ impl SessionManager {
             task.title, task.number
         ));
         let omit_ai_coauthors = self.core.settings().omit_ai_coauthors;
+        // The ref check, for the landing task's worker: what others broke is put back first.
+        self.ref_check(&worktree, super::refcheck::Caller::Task(task.id.clone()))
+            .await;
         let git = self.git.clone();
+        let checkout = worktree.clone();
         let moved = blocking(move || {
             let repo = git.open(&repo).map_err(git_error)?;
             let worktree = git.open_worktree(&worktree).map_err(git_error)?;
@@ -468,6 +472,11 @@ impl SessionManager {
             }
         })
         .await?;
+        // The engine rewrote the task branch (replayed onto the target, co-authors left out):
+        // its new tip is the recorded one.
+        if let Some(branch) = &workspace.branch {
+            self.moved_branch(&checkout, branch);
+        }
         Ok(moved)
     }
 
@@ -754,6 +763,7 @@ impl SessionManager {
             let branch = landed.workspace.as_ref().and_then(|w| w.branch.clone());
             self.dispose_task(landed, TaskState::Landed).await;
             if let (Some(branch), Ok(repo)) = (branch, self.task_repo(landed)) {
+                self.forget_branch(&repo, &branch);
                 let git = self.git.clone();
                 let into = target.to_owned();
                 let deleted = blocking(move || {

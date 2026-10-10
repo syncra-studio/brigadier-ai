@@ -683,6 +683,7 @@ impl SessionManager {
         // not have; a restored session creates it again from the base otherwise.
         let mut deleted_branch = false;
         if branch.starts_with("brigadier/") {
+            self.forget_branch(Path::new(&repo), &branch);
             let (git, repo, branch, base) = (
                 self.git.clone(),
                 PathBuf::from(&repo),
@@ -983,6 +984,9 @@ impl SessionManager {
                 }
             }
             let (git, repo) = (self.git.clone(), PathBuf::from(repo));
+            for branch in &branches {
+                self.forget_branch(&repo, branch);
+            }
             let _lane = self.closing.lane.lock().await;
             blocking(move || {
                 let repo = git.open(&repo).map_err(git_error)?;

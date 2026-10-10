@@ -1787,6 +1787,9 @@ impl SessionManager {
                 auto_review = reviews;
                 let workspace = started_for.workspace.clone();
                 let permission = started_for.permission;
+                if let Some(workspace) = &workspace {
+                    self.record_session_refs(&conv.id, &workspace.path);
+                }
                 launch = Some(started_for);
                 let preferences = self.memory_lines(super::brain_jobs::MEMORY_BYTES).await;
                 let run = self.run_setting(&conv.id).await;
@@ -3143,6 +3146,18 @@ impl SessionManager {
             // What the thread committed in this turn gets its review, before a next turn can
             // take its commits for the user's.
             self.scan_thread_commits(&conv.id, true).await;
+            // The ref check, for the thread: its own commits are recorded, what it broke of
+            // others' is put back (PLAN bug 6). Beside the turn's ending, which it doesn't hold
+            // up: what it finds starts a turn of its own.
+            if let Some(workspace) = cli
+                .launch
+                .as_ref()
+                .and_then(|launch| launch.workspace.clone())
+            {
+                let manager = self.arc();
+                let caller = super::refcheck::Caller::Thread(conv.id.clone());
+                self.spawn(async move { manager.ref_check(&workspace.path, caller).await });
+            }
             // What its Codex auto-reviews used, which its own totals leave out.
             self.meter_child_threads(cli, TokenOwner::Conversation(&conv.id))
                 .await;

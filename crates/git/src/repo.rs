@@ -198,6 +198,34 @@ impl Repo {
         Ok(())
     }
 
+    /// Runs `work` holding the repository's ref lock, the one every landing and branch delete
+    /// takes: the engine's ref check sees no landing half done. `work` must not land or delete.
+    pub fn with_ref_lock<R>(&self, work: impl FnOnce() -> R) -> R {
+        let lock = self.landing_lock();
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        work()
+    }
+
+    /// Moves `name` back to `to` while it still points at `expected` (a branch rewritten
+    /// outside Brigadier, restored by the ref check).
+    pub fn reset_branch(&self, name: &str, to: &Oid, expected: &Oid) -> Result<()> {
+        self.validate_branch(name)?;
+        valid_oid(to)?;
+        valid_oid(expected)?;
+        self.cmd(
+            &[
+                "update-ref",
+                "-m",
+                "Brigadier restored a branch",
+                &format!("refs/heads/{name}"),
+                &to.0,
+                &expected.0,
+            ],
+            false,
+        )?;
+        Ok(())
+    }
+
     /// Delete a branch, refusing any branch currently held by a worktree, even with force.
     pub fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
         self.validate_branch(name)?;

@@ -1465,6 +1465,26 @@ impl SessionManager {
         // Its own branch is the only ref it moves; the branch its work lands on is the engine's.
         // A Full-access worker runs unwrapped (it builds and tests, and a Seatbelt profile
         // can't nest): the ref check guards the branches it could move.
+        // Its branch and the session's, recorded for the ref check, beside its start.
+        if let Some(worktree) = workspace.worktree.clone() {
+            let manager = self.arc();
+            let (branch, conversation, task) = (
+                workspace.branch.clone(),
+                conversation_id.clone(),
+                task.id.clone(),
+            );
+            // Git runs off the async threads.
+            self.spawn(async move {
+                let _ = blocking(move || {
+                    if let Some(branch) = &branch {
+                        manager.record_branch(&worktree, branch, &conversation, Some(&task));
+                    }
+                    manager.record_session_refs(&conversation, &worktree);
+                    Ok(())
+                })
+                .await;
+            });
+        }
         let worktree = workspace
             .worktree
             .as_ref()
@@ -4154,6 +4174,7 @@ impl SessionManager {
         let Ok(repo) = self.task_repo(task) else {
             return;
         };
+        self.forget_branch(&repo, &branch);
         let git = self.git.clone();
         let result = blocking(move || {
             let repo = git.open(&repo).map_err(git_error)?;
