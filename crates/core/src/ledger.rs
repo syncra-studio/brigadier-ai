@@ -1327,7 +1327,7 @@ mod tests {
             root: root.display().to_string(),
             path: path.display().to_string(),
             identity: bound.identity().parts(),
-            evidence: "it used Brigadier's tools".into(),
+            evidence: "they used its tools".into(),
             empty_only,
         }
     }

@@ -332,7 +332,13 @@ async fn an_unmerged_branch_is_kept_with_why() {
     let (items, _) = scan(&flow, context()).await;
     let kept = named(&items, &format!("Branch {branch}"));
     assert!(!kept.item.selectable && !kept.item.checked);
-    assert_eq!(kept.item.reason, "Has 1 commit not merged into main.");
+    assert!(
+        kept.item
+            .reason
+            .starts_with("Has 1 commit not merged into main. Repository: "),
+        "{}",
+        kept.item.reason
+    );
     // Cleaning it anyway (an id it isn't offered under) is refused by the daemon's pick; the
     // session manager can't remove what has no removal.
     assert!(matches!(kept.action, Action::External(_)));
@@ -628,9 +634,7 @@ async fn agent_files_go_only_with_proof_once_what_they_served_is_gone() {
         "{names:?}"
     );
     assert!(
-        names
-            .iter()
-            .any(|name| name.starts_with("Claude Code files of 1 session of a removed Brigadier")),
+        names.contains(&"Claude Code files of 1 session from a Brigadier data folder that's gone"),
         "{names:?}"
     );
     assert_eq!(agent.len(), 3, "{names:?}");

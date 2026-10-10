@@ -266,7 +266,7 @@ impl Scanner<'_> {
                 };
                 let (evidence, owner) = if ours {
                     let evidence = if self.records.native.contains_key(&found.id) {
-                        "Brigadier recorded starting them"
+                        "it recorded starting them"
                     } else if let Some(mark) = marked(&self.records.data_dir) {
                         mark.describe()
                     } else {
@@ -343,20 +343,21 @@ impl Scanner<'_> {
                 )
             } else {
                 format!(
-                    "{agent} files of {} of a removed Brigadier ({})",
-                    counted(sessions, "session", "sessions"),
-                    root.display()
+                    "{agent} files of {} from a Brigadier data folder that's gone",
+                    counted(sessions, "session", "sessions")
                 )
             };
             let evidence = group.evidence.join("; ");
             let reason = if ours {
                 format!(
-                    "Brigadier's own ({evidence}), and what they belonged to is gone. Their \
-                     conversations can't be opened again."
+                    "Left by Brigadier sessions that ended, so they can't be opened again. \
+                     Brigadier knows they're its own: {evidence}."
                 )
             } else {
                 format!(
-                    "Brigadier's own ({evidence}), and the data folder they belonged to is gone."
+                    "Left by Brigadier sessions whose data folder ({}) is gone. Brigadier knows \
+                     they're its own: {evidence}.",
+                    root.display()
                 )
             };
             let bytes = group.entries.iter().map(|entry| entry.bytes).sum();

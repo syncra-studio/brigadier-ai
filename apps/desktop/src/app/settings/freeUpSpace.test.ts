@@ -4,7 +4,7 @@ import React from "react";
 import ReactDOMServer from "react-dom/server";
 import { createServer } from "vite";
 
-import { action, confirmation, picked, result, summary, sweep } from "@/app/settings/freeUpSpace";
+import { action, confirmation, failure, picked, result, summary, sweep } from "@/app/settings/freeUpSpace";
 import type { CleanItem, StorageReport } from "@/ipc/generated";
 
 const GB = 1024 ** 3;
@@ -116,7 +116,24 @@ test("the summary, the button, the confirmation and the result say it plainly", 
   );
   assert.deepEqual(
     result({ removed: 3, reclaimedBytes: 2 * GB, trashedBytes: 0, failures: [], codexThreadsDeleted: 3 }).lines,
-    ["Deleted 3 Codex threads. The Codex app keeps its own list, so it may still show them until it refreshes."],
+    ["Deleted 3 Codex threads. The Codex app keeps its own list, so it may go on showing them."],
+  );
+});
+
+test("an item that stayed says why in a plain sentence, with the detail under it", () => {
+  const stayed = (error: string) => failure({ label: "x", path: null, error });
+  assert.deepEqual(stayed("something runs in it now"), {
+    plain: "Left in place: something is using it now.",
+    detail: "Something runs in it now",
+  });
+  assert.equal(stayed("brigadier/x/session changed since it was listed").plain, "Left in place: it changed since the scan.");
+  assert.equal(
+    stayed("its unsaved changes couldn't be kept on a branch, so it stays (no HEAD)").plain,
+    "Left in place: it has work that isn't on a branch.",
+  );
+  assert.equal(
+    stayed("Codex files: invalid thread id: invalid character").plain,
+    "Left in place: Brigadier couldn't remove it safely.",
   );
 });
 

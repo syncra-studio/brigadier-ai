@@ -1,4 +1,4 @@
-import type { CleanCategory, CleanItem, CleanReport, StorageReport } from "@/ipc/generated";
+import type { CleanCategory, CleanFailure, CleanItem, CleanReport, StorageReport } from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";
 
 /*
@@ -131,11 +131,26 @@ export function result(cleaned: CleanReport): { title: string; lines: string[] }
   }
   if (cleaned.codexThreadsDeleted > 0) {
     lines.push(
-      `Deleted ${count(cleaned.codexThreadsDeleted, "Codex thread", "Codex threads")}. The Codex app keeps its own list, so it may still show ${cleaned.codexThreadsDeleted === 1 ? "it" : "them"} until it refreshes.`,
+      `Deleted ${count(cleaned.codexThreadsDeleted, "Codex thread", "Codex threads")}. The Codex app keeps its own list, so it may go on showing ${cleaned.codexThreadsDeleted === 1 ? "it" : "them"}.`,
     );
   }
   if (cleaned.failures.length > 0) {
     lines.push(`${count(cleaned.failures.length, "item stays", "items stay")}, as below.`);
   }
   return { title, lines };
+}
+
+/** Why an item stayed, as a plain sentence; the daemon's own words are the detail under it. */
+export function failure(failed: CleanFailure): { plain: string; detail: string } {
+  const error = failed.error.toLowerCase();
+  const why =
+    error.includes("running") || error.includes("runs in it") || error.includes("uses it now") || error.includes("in use")
+      ? "something is using it now"
+      : error.includes("changed since") || error.includes("not what was shown") || error.includes("is back") || error.includes("again")
+        ? "it changed since the scan"
+        : error.includes("unsaved changes") || error.includes("no branch")
+          ? "it has work that isn't on a branch"
+          : "Brigadier couldn't remove it safely";
+  const detail = failed.error.charAt(0).toUpperCase() + failed.error.slice(1);
+  return { plain: `Left in place: ${why}.`, detail };
 }

@@ -7,6 +7,7 @@ import {
   action,
   confirmation,
   count,
+  failure,
   grouped,
   picked,
   result,
@@ -376,12 +377,16 @@ function Result({ cleaned, onScanAgain }: { cleaned: CleanReport; onScanAgain: (
         </div>
         {cleaned.failures.length > 0 && (
           <ul className="grid gap-2 px-4 py-3">
-            {cleaned.failures.map((failure, index) => (
-              <li key={index} className="grid gap-0.5">
-                <span className="text-label">{failure.label}</span>
-                <span className="text-destructive text-xs break-all">{failure.error}</span>
-              </li>
-            ))}
+            {cleaned.failures.map((failed, index) => {
+              const words = failure(failed);
+              return (
+                <li key={index} className="grid gap-0.5">
+                  <span className="text-label">{failed.label}</span>
+                  <span className="text-xs">{words.plain}</span>
+                  <span className="text-foreground/50 text-xs break-all">{words.detail}</span>
+                </li>
+              );
+            })}
           </ul>
         )}
         <div className="flex justify-end px-4 py-3">

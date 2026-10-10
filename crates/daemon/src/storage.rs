@@ -599,14 +599,20 @@ fn app_caches(roots: &CacheRoots, app: String) -> Option<(CleanItem, DaemonActio
             "Caches of {}",
             counted(
                 identifiers.len(),
-                "other Brigadier app",
-                "other Brigadier apps"
+                "another copy of Brigadier",
+                "other copies of Brigadier"
             )
         ),
         entries.first().map(|(bound, _)| bound.path()),
         format!(
-            "Rebuildable caches of {} (not running, unused for a week). Their settings and \
-             data stay.",
+            "{} Caches are made again when needed; settings and data stay. ({})",
+            if identifiers.len() == 1 {
+                "From a test or older build of Brigadier that isn't running and hasn't been \
+                 used for a week."
+            } else {
+                "From test or older builds of Brigadier that aren't running and haven't been \
+                 used for a week."
+            },
             identifiers.join(", ")
         ),
         true,

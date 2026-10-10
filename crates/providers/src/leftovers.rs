@@ -57,12 +57,13 @@ impl Fingerprint {
         }
     }
 
-    /// Why the files are Brigadier's, in plain words.
+    /// Why the files are Brigadier's, in plain words, of the sessions they belong to
+    /// ("Brigadier knows they're its own: …").
     pub fn describe(&self) -> &'static str {
         match self {
-            Self::BrigadierTools => "it used Brigadier's tools",
-            Self::BrigadierSocket { .. } => "it was connected to Brigadier",
-            Self::Originator => "Codex recorded Brigadier as the app that started it",
+            Self::BrigadierTools => "they used its tools",
+            Self::BrigadierSocket { .. } => "they were connected to it",
+            Self::Originator => "Codex recorded Brigadier as the app that started them",
         }
     }
 }

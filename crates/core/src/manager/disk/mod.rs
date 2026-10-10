@@ -857,7 +857,7 @@ pub(super) fn keep_changes(git: &brigadier_git::Git, path: &Path) -> Result<()> 
             ))),
         },
         Err(err) => Err(Error::Invalid(format!(
-            "its uncommitted changes could not be kept ({err}); it stays"
+            "its unsaved changes couldn't be kept on a branch, so it stays ({err})"
         ))),
     }
 }
@@ -1016,6 +1016,14 @@ fn worktree_places(artifacts: &[Artifact]) -> impl Iterator<Item = PathBuf> + '_
 }
 
 /// "1 old log file", "3 old log files".
+/// A folder's own name, for a label (its full path goes in the reason, or Reveal shows it).
+fn folder_name(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
 pub fn counted(count: usize, one: &str, many: &str) -> String {
     format!("{count} {}", if count == 1 { one } else { many })
 }
@@ -1378,17 +1386,25 @@ impl Scanner<'_> {
             let mut entry = item(
                 CleanCategory::FinishedWork,
                 format!(
-                    "Records of {mine} removed worktrees in {}",
-                    repo_path.display()
+                    "Git's notes on {} in “{}”",
+                    counted(mine, "removed work folder", "removed work folders"),
+                    folder_name(&repo_path)
                 ),
                 Some(repo_path.clone()),
                 0,
-                if all_mine {
-                    "Git still lists worktrees whose folders are gone; `git worktree prune` \
-                     forgets them."
+                &if all_mine {
+                    format!(
+                        "Git still lists work folders that are gone; this makes it forget them \
+                         (`git worktree prune` in {}).",
+                        repo_path.display()
+                    )
                 } else {
-                    "Git still lists worktrees whose folders are gone, but some of those records \
-                     aren't Brigadier's, so it leaves `git worktree prune` to you."
+                    format!(
+                        "Git still lists work folders that are gone, but some of them aren't \
+                         Brigadier's, so forgetting them is left to you (`git worktree prune` in \
+                         {}).",
+                        repo_path.display()
+                    )
                 },
                 all_mine,
             );
@@ -1492,16 +1508,17 @@ impl Scanner<'_> {
                 continue;
             }
             let target = &standing.target;
-            let label = format!("Branch {name} in {}", repo_path.display());
+            let label = format!("Branch {name} in “{}”", folder_name(&repo_path));
+            let place = format!("Repository: {}.", repo_path.display());
             // Work that isn't in its target is never deleted from here.
             if !standing.merged {
                 let reason = if standing.ahead > 0 {
                     format!(
-                        "Has {} not merged into {target}.",
+                        "Has {} not merged into {target}. {place}",
                         counted(standing.ahead as usize, "commit", "commits")
                     )
                 } else {
-                    format!("Isn't merged into {target}.")
+                    format!("Isn't merged into {target}. {place}")
                 };
                 let mut entry = item(
                     CleanCategory::FinishedWork,
@@ -1527,7 +1544,7 @@ impl Scanner<'_> {
                 label,
                 Some(repo_path.clone()),
                 0,
-                &format!("{why} Everything on it is in {target}."),
+                &format!("{why} Everything on it is in {target}. {place}"),
                 true,
             );
             self.push(
