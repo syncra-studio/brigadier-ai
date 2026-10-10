@@ -631,3 +631,25 @@ test("content added while hidden is followed once shown", () => {
   assert.equal(scroller.following, true);
   assert.equal(scroller.contentBelow(), false);
 });
+
+test("a conversation attached hidden reopens where it was left once shown", () => {
+  const id = key();
+  const first = new Fake();
+  conversation(first, 10);
+  userScroll(first, open(first, id), 2000);
+
+  const again = new Fake();
+  const { clientHeight, clientWidth } = again;
+  again.clientHeight = 0;
+  again.clientWidth = 0;
+  const scroller = open(again, id);
+  conversation(again, 10);
+  scroller.rowsChanged();
+  again.clientHeight = clientHeight;
+  again.clientWidth = clientWidth;
+  scroller.resized();
+  scroller.scrolled();
+  scroller.resized();
+  assert.equal(again.scrollTop, 2000);
+  assert.equal(scroller.following, false);
+});

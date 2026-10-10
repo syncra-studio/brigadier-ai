@@ -295,6 +295,9 @@ export class ThreadScroller {
     const layout = this.layout;
     if (!layout) return;
     this.started = true;
+    // It starts shown: a thread attached hidden is measured from here.
+    this.hidden = false;
+    this.size = { width: layout.viewport.clientWidth, height: layout.viewport.clientHeight };
     const key = this.key;
     if (key !== null && this.newestUser !== null && sentTurns.get(key) === this.newestUser) {
       sentTurns.delete(key);
