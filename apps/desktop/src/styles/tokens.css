@@ -279,7 +279,14 @@
   --spacing-panel-tab: 15rem;
   --spacing-panel-tab-min: 5.625rem;
   /* A session's tab keeps room for a short name beside its icon and button. */
-  --spacing-session-tab-min: 8rem;
+  --spacing-session-tab-min: 5.625rem;
+  --spacing-session-tab-separator: 1px;
+  --spacing-session-tab-max: 15rem;
+  --spacing-browser-controls: 6rem;
+  --spacing-browser-address: 40rem;
+  --container-new-tab-tools: 40rem;
+  --session-tab-title-mask: linear-gradient(to right, #000 calc(100% - 1rem), transparent);
+  --browser-toolbar-columns: minmax(var(--spacing-browser-controls), 1fr) minmax(0, var(--spacing-browser-address)) minmax(var(--spacing-browser-controls), 1fr);
   --spacing-setup: min(60rem, calc(100dvh - 2rem));
   --spacing-setup-card: 13rem;
   --spacing-user-message: 22.5rem;

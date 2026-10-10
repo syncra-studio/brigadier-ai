@@ -2,6 +2,8 @@ import { Archive, Chat, Globe, Terminal, Plus, Document, X } from "@openai/apps-
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type CSSProperties,
+  useState,
   useCallback,
   lazy,
   Suspense,
@@ -13,8 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TitlebarButton } from "@/components/titlebar-button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuShortcut, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { NEW_TAB_MENU, sessionTabKey } from "@/state/sessionTabKeys";
+import { sessionTabKey } from "@/state/sessionTabKeys";
 import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { takePaneClose } from "@/state/closedPanes";
 import { undoTabClose } from "@/state/terminalPlaces";
@@ -36,6 +37,7 @@ import { cn } from "@/lib/utils";
 import {
   CHAT_TAB,
   newSessionTab,
+  replaceNewTab,
   reopenTab,
   type NewTabKind,
   closeOtherTabs,
@@ -53,6 +55,8 @@ import {
   useTabCloseAsk,
 } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
+import { useBrowsers } from "@/state/browsers";
+import { NewTabTools } from "./NewTabTools";
 
 /** The names the daemon gives a conversation until its first message titles it. */
 const UNTITLED = new Set(["New session", "New chat"]);
@@ -65,6 +69,7 @@ export function tabTitle(tab: SessionTab): string {
   if (tab.kind === "review") {
     return tab.target.type === "all" ? "Review" : `${baseName(tab.target.path)} (diff)`;
   }
+  if (tab.kind === "newTab") return "New tab";
   if (tab.kind === "browser") return tab.title || tab.url || "New browser";
   if (tab.kind === "terminal") return tab.title || (tab.cwd ? baseName(tab.cwd) : "Terminal");
   if (tab.kind === "sideChat") return tab.title || "Side chat";
@@ -72,9 +77,9 @@ export function tabTitle(tab: SessionTab): string {
   return baseName(tab.path);
 }
 
-/** A tab's look: 32px and rounded, the one in front lifted, the others muted. */
+/** Tabs share the available row, then scroll once they reach their minimum width. */
 const TAB =
-  "group/tab relative flex h-8 w-panel-tab min-w-session-tab-min flex-[0_1_var(--spacing-panel-tab)] items-center gap-1 rounded-lg ps-2 pe-1 text-sm select-none";
+  "session-tab group/tab relative flex h-7 items-center gap-1 rounded-lg ps-2 pe-1 text-sm select-none";
 
 /** Mouse down with the middle button would start autoscroll. */
 function noAutoscroll(event: ReactMouseEvent): void {
@@ -235,7 +240,8 @@ export function SessionTabBar({
         aria-label="Session tabs"
         tabIndex={-1}
         data-tauri-drag-region
-        className="flex min-w-0 shrink items-center gap-0.5"
+        className="session-tab-list flex min-w-0 items-center gap-0.5"
+        style={{ "--session-tab-count": tabs.length + 1 } as CSSProperties}
         onKeyDown={(event) => {
           // Alt+←/→ moved the tab itself (its drag handle's keys).
           if (event.defaultPrevented || event.altKey) return;
@@ -265,11 +271,12 @@ export function SessionTabBar({
         <TabMenu conversationId={id} tab={null} onRename={archived ? undefined : onRename}>
           <div
             data-tab-id={CHAT_TAB}
+            data-separator={active !== CHAT_TAB && tabs.length > 0 && tabs[0]?.id !== active || undefined}
             data-active={active === CHAT_TAB || undefined}
             className={cn(
               TAB,
               active === CHAT_TAB
-                ? "bg-panel-tab shadow-panel-tab"
+                ? "bg-panel-tab text-foreground"
                 : "text-toolbar-foreground hover:bg-toolbar-hover",
             )}
           >
@@ -285,7 +292,7 @@ export function SessionTabBar({
               className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
             >
               {archived ? <Archive aria-hidden className="size-icon-sm shrink-0" /> : <Chat aria-hidden className="size-icon-sm shrink-0" />}
-              <span className="min-w-0 truncate">{title}</span>
+              <span className="session-tab-title min-w-0 whitespace-nowrap overflow-hidden">{title}</span>
             </button>
             <ChatActions
               conversation={conversation}
@@ -313,13 +320,14 @@ export function SessionTabBar({
                 <TabMenu key={tab.id} conversationId={id} tab={tab}>
                   <div
                     data-session-tab
+                    data-separator={!selected && index < tabs.length - 1 && tabs[index + 1]?.id !== active || undefined}
                     data-tab-id={tab.id}
                     data-active={selected || undefined}
                     data-dragging={dragging === tab.id || undefined}
                     className={cn(
                       TAB,
                       selected
-                        ? "bg-panel-tab shadow-panel-tab"
+                        ? "bg-panel-tab text-foreground"
                         : "text-toolbar-foreground hover:bg-toolbar-hover",
                       "data-dragging:z-10 data-dragging:opacity-80",
                     )}
@@ -346,19 +354,20 @@ export function SessionTabBar({
                     >
                       {tab.kind === "file" ? (
                         <FileTypeIcon name={tab.path} className="size-icon-sm shrink-0" />
-                      ) : tab.kind === "browser" ? <Globe className="size-icon-sm shrink-0" />
+                      ) : tab.kind === "newTab" ? <Globe className="size-icon-sm shrink-0" />
+                        : tab.kind === "browser" ? <BrowserIcon tabId={tab.id} />
                         : tab.kind === "terminal" ? <Terminal className="size-icon-sm shrink-0" />
                         : tab.kind === "sideChat" ? <Chat className="size-icon-sm shrink-0" />
                         : tab.kind === "document" ? <Document className="size-icon-sm shrink-0" /> : (
                         <DiffGlyph className="size-icon-sm shrink-0" />
                       )}
-                      <span className={cn("min-w-0 truncate", tab.kind === "file" && tab.preview && "italic")}>
+                      <span className={cn("session-tab-title min-w-0 whitespace-nowrap overflow-hidden", tab.kind === "file" && tab.preview && "italic")}>
                         {name}
                       </span>
                     </button>
                     <button
                       type="button"
-                      aria-label={`Close ${name}`}
+                      aria-label={`Close ${name} tab`}
                       onClick={(event) => {
                         event.stopPropagation();
                         closeTab(id, tab.id);
@@ -377,18 +386,7 @@ export function SessionTabBar({
           </div>
         </div>
       </div>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <TitlebarButton tooltip="New tab" aria-label="New tab"><Plus /></TitlebarButton>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
-          {NEW_TAB_MENU.filter((item) => !archived || (item.kind !== "terminal" && item.kind !== "sideChat")).map((item) => (
-            <DropdownMenuItem key={item.kind} onSelect={() => create(item.kind)}>
-              {item.label}<DropdownMenuShortcut>{shortcutLabel(item.shortcut, mac)}</DropdownMenuShortcut>
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <TitlebarButton tooltip="New tab" shortcut={shortcutLabel("⌘T", mac)} onClick={() => create("newTab")}><Plus /></TitlebarButton>
       {connection !== "connected" && (
         <Badge variant="warning" role="status" className="shrink-0">
           {connection === "connecting" ? "Connecting to core…" : "Reconnecting to core…"}
@@ -414,6 +412,14 @@ export function SessionTabBar({
       </Dialog>
     </header>
   );
+}
+
+function BrowserIcon({ tabId }: { tabId: string }) {
+  const favicon = useBrowsers((s) => s.pages[tabId]?.favicon);
+  const [failed, setFailed] = useState<string | null>(null);
+  return favicon && favicon !== failed
+    ? <img src={favicon} alt="" className="size-icon-sm shrink-0" onError={() => setFailed(favicon)} />
+    : <Globe aria-hidden className="size-icon-sm shrink-0" />;
 }
 
 const FileTabView = lazy(() =>
@@ -452,8 +458,11 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
                 <FileTabView conversationId={conversationId} tab={tab} active={shown} />
               ) : tab.kind === "review" ? (
                 <ReviewTab conversationId={conversationId} target={tab.target} active={shown} />
-              ) : tab.kind === "browser" ? (
-                <BrowserTab conversationId={tab.id} initialUrl={tab.url} active={shown} />
+              ) : tab.kind === "newTab" || tab.kind === "browser" ? (
+                <BrowserTab conversationId={tab.id} initialUrl={tab.kind === "browser" ? tab.url : undefined} active={shown}
+                  onNavigate={tab.kind === "newTab" ? (url) => replaceNewTab(conversationId, tab.id, "browser", null, url) : undefined}>
+                  {tab.kind === "newTab" ? <NewTabTools conversationId={conversationId} tabId={tab.id} /> : null}
+                </BrowserTab>
               ) : tab.kind === "sideChat" ? (
                 <SideChatTab conversationId={conversationId} tab={tab} />
               ) : tab.kind === "terminal" ? (

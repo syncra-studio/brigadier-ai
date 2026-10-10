@@ -548,3 +548,27 @@
     opacity: 0;
   }
 }
+
+/* Chat stays pinned while its siblings scroll, all at the same responsive width. */
+.session-tab-list {
+  container-type: inline-size;
+  flex: 0 1 calc(var(--session-tab-count) * var(--spacing-session-tab-max));
+}
+.session-tab {
+  flex: 0 0 clamp(var(--spacing-session-tab-min), calc((100cqw - (var(--session-tab-count) - 1) * var(--spacing) / 2) / var(--session-tab-count)), var(--spacing-session-tab-max));
+}
+.session-tab[data-separator]::after {
+  content: "";
+  position: absolute;
+  inset-inline-end: 0;
+  height: calc(var(--spacing) * 4);
+  width: var(--spacing-session-tab-separator);
+  background: var(--color-border);
+}
+.session-tab-title {
+  mask-image: var(--session-tab-title-mask);
+}
+.browser-toolbar {
+  display: grid;
+  grid-template-columns: var(--browser-toolbar-columns);
+}

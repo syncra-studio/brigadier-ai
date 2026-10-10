@@ -12,7 +12,8 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
 } });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage } });
 const { CHAT_TAB, newSessionTab, sessionTabs, selectTab, closeTab, reopenTab, moveTab,
-  selectTabNumber, stepTab, changeSessionTab, restoreSessionTabs, useSessionTabs, useTabCloseAsk } = await import("./sessionTabs");
+  selectTabNumber, stepTab, changeSessionTab, restoreSessionTabs, useSessionTabs, useTabCloseAsk,
+  replaceNewTab, replaceNewTabWithFile, openFileTab, openReviewTab } = await import("./sessionTabs");
 const { editDocument, documentText, flushDocument, noteDocumentSave, documentIsSaved, documentRelativePath, discardDocument } = await import("./documentDrafts");
 
 test("side chat pruning preserves plain chats, unknown parents and referenced session chats", () => {
@@ -129,7 +130,7 @@ test("OSC folders reject remote hosts and decode Windows drive paths", () => {
 
 test("shortcut modifiers match exactly on each platform and reject composition and AltGraph", () => {
   const key = { code: "KeyT", metaKey: true, ctrlKey: false, shiftKey: false, altKey: false, isComposing: false };
-  assert.deepEqual(sessionTabKey(key, true), { type: "new", kind: "terminal" });
+  assert.deepEqual(sessionTabKey(key, true), { type: "new", kind: "newTab" });
   assert.deepEqual(sessionTabKey({ ...key, code: "KeyB", shiftKey: true }, true), { type: "new", kind: "browser" });
   for (const [code, kind] of [["KeyN", "document"], ["KeyS", "sideChat"]]) {
     assert.deepEqual(sessionTabKey({ ...key, code: code!, altKey: true }, true), { type: "new", kind });
@@ -142,4 +143,83 @@ test("shortcut modifiers match exactly on each platform and reject composition a
   assert.equal(sessionTabKey({ ...key, code: "KeyF", shiftKey: true }, true), null);
   assert.deepEqual(sessionTabKey({ ...key, code: "Tab", metaKey: false, ctrlKey: true, shiftKey: true }, true), { type: "step", step: -1 });
   assert.deepEqual(sessionTabKey({ ...key, code: "Digit9" }, true), { type: "number", number: 9 });
+});
+
+
+test("New tab inserts after the current tab, restores as New tab, and reopens after closing", async () => {
+  const first = newSessionTab("new", "browser");
+  const last = newSessionTab("new", "document");
+  selectTab("new", first);
+  const id = newSessionTab("new", "newTab");
+  assert.deepEqual(sessionTabs("new").tabs.map((tab) => tab.id), [first, id, last]);
+  const saved = data.get("brigadier.sessionTabs")!;
+  useSessionTabs.setState({ sessions: {} });
+  data.set("brigadier.sessionTabs", saved);
+  await useSessionTabs.persist.rehydrate();
+  assert.equal(sessionTabs("new").active, id);
+  assert.equal(sessionTabs("new").tabs[1]?.kind, "newTab");
+  closeTab("new", id);
+  assert.equal(sessionTabs("new").active, first);
+  assert.equal(useTabCloseAsk.getState().confirm, null);
+  reopenTab("new");
+  assert.equal(sessionTabs("new").tabs[1]?.kind, "newTab");
+});
+
+test("New tab tools replace in place, preserving identity and opener", () => {
+  for (const kind of ["terminal", "sideChat", "document", "browser"] as const) {
+    const session = `replace-${kind}`;
+    const opener = newSessionTab(session, "browser");
+    const id = newSessionTab(session, "newTab");
+    const last = newSessionTab(session, "browser");
+    selectTab(session, id);
+    replaceNewTab(session, id, kind, "/workspace", "https://example.com");
+    assert.deepEqual(sessionTabs(session).tabs.map((tab) => tab.id), [opener, id, last]);
+    assert.equal(sessionTabs(session).active, id);
+    assert.equal(sessionTabs(session).tabs[1]?.kind, kind);
+    assert.equal(sessionTabs(session).tabs[1]?.opener, opener);
+    const restored = restoreSessionTabs({ [session]: sessionTabs(session) })[session]!;
+    assert.deepEqual(restored, sessionTabs(session));
+    // A stale callback must not replace a tool, especially a document with unsaved edits.
+    replaceNewTab(session, id, "terminal");
+    assert.equal(sessionTabs(session).tabs[1]?.kind, kind);
+  }
+});
+
+test("Review replaces a placeholder in place, or consumes it and selects the existing Review", () => {
+  const first = newSessionTab("review-new", "browser");
+  const placeholder = newSessionTab("review-new", "newTab");
+  const last = newSessionTab("review-new", "browser");
+  openReviewTab("review-new", { type: "all" }, placeholder);
+  assert.deepEqual(sessionTabs("review-new").tabs.map((tab) => tab.id), [first, "review", last]);
+  assert.equal(sessionTabs("review-new").active, "review");
+  selectTab("review-new", last);
+  const duplicate = newSessionTab("review-new", "newTab");
+  openReviewTab("review-new", { type: "all" }, duplicate);
+  assert.deepEqual(sessionTabs("review-new").tabs.map((tab) => tab.id), [first, "review", last]);
+  assert.equal(sessionTabs("review-new").active, "review");
+});
+
+test("Find file replaces its originating New tab without consuming an unrelated preview; duplicates focus the existing file", () => {
+  openFileTab("find-new", "preview.ts", { preview: true });
+  const placeholder = newSessionTab("find-new", "newTab");
+  const last = newSessionTab("find-new", "browser");
+  assert.equal(replaceNewTabWithFile("find-new", placeholder, "picked.ts"), true);
+  assert.deepEqual(sessionTabs("find-new").tabs.map((tab) => tab.id), ["file:preview.ts", "file:picked.ts", last]);
+  assert.equal(sessionTabs("find-new").active, "file:picked.ts");
+  const duplicate = newSessionTab("find-new", "newTab");
+  assert.equal(replaceNewTabWithFile("find-new", duplicate, "picked.ts"), true);
+  assert.deepEqual(sessionTabs("find-new").tabs.map((tab) => tab.id), ["file:preview.ts", "file:picked.ts", last]);
+  assert.equal(replaceNewTabWithFile("find-new", duplicate, "missing.ts"), false);
+});
+
+test("Cmd+T opens New tab; the native Ctrl+Backquote event opens Terminal", () => {
+  const key = { code: "KeyT", metaKey: true, ctrlKey: false, shiftKey: false, altKey: false, isComposing: false };
+  assert.deepEqual(sessionTabKey(key, true), { type: "new", kind: "newTab" });
+  assert.deepEqual(sessionTabKey({ ...key, metaKey: false, ctrlKey: true }, false), { type: "new", kind: "newTab" });
+  const terminal = { ...key, code: "Backquote", metaKey: false, ctrlKey: true };
+  for (const mac of [true, false]) {
+    assert.deepEqual(sessionTabKey(terminal, mac), { type: "new", kind: "terminal" });
+    for (const modifier of ["shiftKey", "altKey", "metaKey"])
+      assert.equal(sessionTabKey({ ...terminal, [modifier]: true }, mac), null);
+  }
 });

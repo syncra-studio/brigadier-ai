@@ -13,6 +13,7 @@ export type BrowserPage = {
   title: string;
   loading: boolean;
   ready?: boolean;
+  favicon?: string | null;
   /** The last navigation or download the tab refused, offered to the system browser. */
   blocked: string | null;
 };
@@ -53,8 +54,12 @@ export async function openPage(
     }
     await browserOpen(id, url, bounds, (event) => {
       if (event.type === "load")
-        update(id, { url: event.url, loading: event.loading });
+        update(id, { url: event.url, loading: event.loading,
+          ...(event.url !== useBrowsers.getState().pages[id]?.url ? { favicon: null } : {}) });
       else if (event.type === "title") update(id, { title: event.title });
+      else if (event.type === "favicon") {
+        if (event.url === useBrowsers.getState().pages[id]?.url) update(id, { favicon: event.dataUrl });
+      }
       else update(id, { blocked: event.url, loading: false });
     });
     if (!useBrowsers.getState().pages[id]) { await browserClose(id); return; }

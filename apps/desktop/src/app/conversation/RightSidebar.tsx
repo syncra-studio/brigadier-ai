@@ -43,17 +43,22 @@ export function useRightSidebar(conversationId: string | null, enabled: boolean)
   const { open, setOpen, toggleSidebar } = useSidebarChoice(wideOpen, setRightSidebarOpen, false, fold);
   const { width, setWidth, resizing, setResizing } = useSidebarWidth("brigadier.rightSidebarWidth");
   const [searchRequest, setSearchRequest] = useState(0);
+  const [filePlaceholder, setFilePlaceholder] = useState<{ conversationId: string; tabId: string } | null>(null);
+  const fileOpened = useCallback(() => setFilePlaceholder(null), []);
   const searchHandled = useCallback(() => setSearchRequest(0), []);
   const mac = useApp((s) => s.info?.platform === "macos");
   const selectTab = useCallback((tab: RightSidebarTab) => {
     if (enabled && conversationId) selectRightSidebarTab(conversationId, tab);
   }, [conversationId, enabled]);
-  const openTab = useCallback((tab: RightSidebarTab, search = false) => {
+  const openTab = useCallback((tab: RightSidebarTab, search = false, replaceTabId?: string) => {
     if (!enabled) return;
     selectTab(tab);
     setOpen(true);
-    if (search) setSearchRequest((value) => value + 1);
-  }, [enabled, selectTab, setOpen]);
+    if (search) {
+      setSearchRequest((value) => value + 1);
+      setFilePlaceholder(replaceTabId && conversationId ? { conversationId, tabId: replaceTabId } : null);
+    }
+  }, [enabled, selectTab, setOpen, conversationId]);
   useEffect(() => {
     if (!enabled) return;
     const onKey = (event: KeyboardEvent) => {
@@ -67,8 +72,9 @@ export function useRightSidebar(conversationId: string | null, enabled: boolean)
   return useMemo(() => ({
     width, setWidth, resizing, setResizing, enabled, open: enabled && open, active,
     setOpen, toggleSidebar, selectTab, openTab, searchRequest, searchHandled,
+    filePlaceholder: filePlaceholder?.conversationId === conversationId ? filePlaceholder.tabId : undefined, fileOpened,
   }), [width, setWidth, resizing, setResizing, enabled, open, active, setOpen,
-    toggleSidebar, selectTab, openTab, searchRequest, searchHandled]);
+    toggleSidebar, selectTab, openTab, searchRequest, searchHandled, filePlaceholder, conversationId, fileOpened]);
 }
 
 export const RightSidebarContext = createContext<ReturnType<typeof useRightSidebar> | null>(null);
@@ -178,7 +184,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
             )}
           >
             {mounted && <Suspense fallback={null}>
-              {panel.active === "files" ? <FilesTab conversationId={conversationId} searchRequest={panel.searchRequest} onSearchHandled={panel.searchHandled} />
+              {panel.active === "files" ? <FilesTab conversationId={conversationId} searchRequest={panel.searchRequest} onSearchHandled={panel.searchHandled} replaceTabId={panel.filePlaceholder} onFileOpened={panel.fileOpened} />
                 : panel.active === "source" ? <SourcePanel conversationId={conversationId} />
                   : <WorkersTab conversationId={conversationId} />}
             </Suspense>}

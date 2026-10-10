@@ -2,8 +2,9 @@
 //!
 //! It is a plain `wry` webview, not a Tauri one: Tauri gives each of its webviews the app's IPC
 //! bridge, init scripts and custom protocols, and a web page must get none of that. This one
-//! has no IPC handler and no custom protocols, and its one script of ours only takes the
-//! microphone, camera and speech APIs away (`NO_CAPTURE`); it keeps its cookies and
+//! has no app IPC bridge or custom protocols. Its metadata-only handler accepts a bounded PNG
+//! favicon for this tab, with no commands or access to the app. `NO_CAPTURE` takes the
+//! microphone, camera and speech APIs away; it keeps its cookies and
 //! storage in memory only, separate from the app's own webview; it opens only web pages, sends
 //! popups to the system browser, and on macOS denies the page the camera and microphone (wry's
 //! own delegate would grant them; see `browser_ui`). It is made when the tab first loads a page and dropped
@@ -55,6 +56,50 @@ const NO_CAPTURE: &str = r#"(() => {
   }
 })();"#;
 
+/// Rasterize in the page's own security context. CSP or CORS failures leave the globe icon;
+/// no app-side network fetch, credentials, remote image CSP allowance or privileged bridge.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+const FAVICON: &str = r#"(() => {
+  if (window !== window.top) return;
+  const send = window.ipc.postMessage.bind(window.ipc);
+  let previous = "";
+  const read = () => {
+    const href = document.querySelector('link[rel~="icon"]')?.href || new URL('/favicon.ico', location.href).href;
+    if (href === previous) return;
+    previous = href;
+    if (!/^(https?:|data:image\/)/i.test(href)) return;
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => {
+      if (href !== previous) return;
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 32;
+        canvas.getContext('2d').drawImage(image, 0, 0, 32, 32);
+        send(canvas.toDataURL('image/png'));
+      } catch {}
+    };
+    image.src = href;
+  };
+  document.addEventListener('DOMContentLoaded', () => {
+    read();
+    if (document.head) new MutationObserver(read).observe(document.head, {
+      childList: true, subtree: true, attributes: true, attributeFilter: ['href', 'rel']
+    });
+  }, { once: true });
+})();"#;
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn favicon_data(value: &str) -> bool {
+    value.len() <= 16 * 1024
+        && value
+            .strip_prefix("data:image/png;base64,iVBORw0KGgo")
+            .is_some_and(|data| {
+                data.bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
+            })
+}
+
 /// Whether `url` is a web page, which the system browser may open.
 fn web_page(url: &str) -> bool {
     let scheme = url
@@ -78,7 +123,7 @@ mod embedded {
     use wry::dpi::{LogicalPosition, LogicalSize};
     use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder};
 
-    use super::{NO_CAPTURE, allowed, failed, web_page};
+    use super::{FAVICON, NO_CAPTURE, allowed, failed, favicon_data, web_page};
     use crate::shell::MAIN_WINDOW;
 
     /// A tab's page.
@@ -125,8 +170,13 @@ mod embedded {
             .get_webview_window(MAIN_WINDOW)
             .ok_or_else(|| failed("the window is gone"))?;
         let opener = app.clone();
-        let (on_load, on_title, on_blocked, on_download) =
-            (events.clone(), events.clone(), events.clone(), events);
+        let (on_load, on_title, on_blocked, on_download, on_favicon) = (
+            events.clone(),
+            events.clone(),
+            events.clone(),
+            events.clone(),
+            events,
+        );
         // Windows keeps even a private page's browser process data in a folder; give this tab
         // its own, apart from the app's webview.
         #[cfg(target_os = "windows")]
@@ -146,6 +196,14 @@ mod embedded {
             .with_visible(false)
             .with_incognito(true)
             .with_initialization_script_for_main_only(NO_CAPTURE, false)
+            .with_initialization_script_for_main_only(FAVICON, true)
+            .with_ipc_handler(move |request| {
+                let url = request.uri().to_string();
+                let data_url = request.into_body();
+                if web_page(&url) && favicon_data(&data_url) {
+                    let _ = on_favicon.send(BrowserEvent::Favicon { url, data_url });
+                }
+            })
             .with_back_forward_navigation_gestures(true)
             .with_navigation_handler(move |url| {
                 let ok = allowed(&url);

@@ -42,6 +42,9 @@ export type ReviewTabState = {
 export type BrowserTabState = {
   kind: "browser"; id: string; opener: string | null; url: string; title: string;
 };
+export type NewTabState = {
+  kind: "newTab"; id: string; opener: string | null;
+};
 export type TerminalTabState = {
   kind: "terminal"; id: string; opener: string | null; cwd: string | null; title: string;
 };
@@ -53,8 +56,8 @@ export type DocumentTab = {
   /** Display only. Rust owns the authority to save to this path. */
   savedPath: string | null; relativePath: string | null;
 };
-export type SessionTab = FileTab | ReviewTabState | BrowserTabState | TerminalTabState | SideChatTabState | DocumentTab;
-export type NewTabKind = "terminal" | "browser" | "sideChat" | "document";
+export type SessionTab = FileTab | ReviewTabState | BrowserTabState | TerminalTabState | SideChatTabState | DocumentTab | NewTabState;
+export type NewTabKind = "newTab" | "terminal" | "browser" | "sideChat" | "document";
 
 export type SessionTabs = {
   /** The tabs after Chat, in order. */
@@ -116,14 +119,43 @@ export function insertAfterActive(current: SessionTabs, tab: SessionTab): Sessio
 export function newSessionTab(conversationId: string, kind: NewTabKind, cwd: string | null = null): string {
   const id = `${kind}:${crypto.randomUUID()}`;
   update(conversationId, (current) => {
-    const base = { id, opener: current.active };
-    const tab: SessionTab = kind === "browser" ? { ...base, kind, url: "", title: "" }
-      : kind === "terminal" ? { ...base, kind, cwd, title: "" }
-      : kind === "sideChat" ? { ...base, kind, conversationId: crypto.randomUUID(), title: "" }
-      : { ...base, kind, name: "Untitled", savedPath: null, relativePath: null };
+    const tab = makeTab(id, current.active, kind, cwd);
     return { tabs: insertAfterActive(current, tab), active: id };
   });
   return id;
+}
+
+function makeTab(id: string, opener: string | null, kind: NewTabKind, cwd: string | null): SessionTab {
+  const base = { id, opener };
+  return kind === "newTab" ? { ...base, kind }
+    : kind === "browser" ? { ...base, kind, url: "", title: "" }
+    : kind === "terminal" ? { ...base, kind, cwd, title: "" }
+    : kind === "sideChat" ? { ...base, kind, conversationId: crypto.randomUUID(), title: "" }
+    : { ...base, kind, name: "Untitled", savedPath: null, relativePath: null };
+}
+
+/** Choosing a tool or entering an address consumes the placeholder, not a tab-close entry. */
+export function replaceNewTab(conversationId: string, id: string, kind: Exclude<NewTabKind, "newTab">, cwd: string | null = null, url = ""): void {
+  update(conversationId, (current) => ({
+    ...current,
+    tabs: current.tabs.map((tab) => {
+      if (tab.id !== id || tab.kind !== "newTab") return tab;
+      const next = makeTab(id, tab.opener, kind, cwd);
+      return next.kind === "browser" ? { ...next, url } : next;
+    }),
+  }));
+}
+
+/** File and Review keep their canonical IDs; an existing destination keeps its position. */
+function replacePlaceholder(current: SessionTabs, id: string | undefined, tab: SessionTab): SessionTabs | null {
+  const placeholder = current.tabs.find((entry) => entry.id === id && entry.kind === "newTab");
+  if (!placeholder) return null;
+  const exists = current.tabs.some((entry) => entry.id === tab.id);
+  const tabs = current.tabs.flatMap((entry) => {
+    if (entry.id === placeholder.id) return exists ? [] : [{ ...tab, opener: placeholder.opener }];
+    return [entry.id === tab.id ? tab : entry];
+  }).map((entry) => entry.opener === placeholder.id ? { ...entry, opener: entry.id === tab.id ? placeholder.opener : tab.id } : entry);
+  return { tabs, active: tab.id };
 }
 
 export function changeSessionTab(conversationId: string, id: string, change: (tab: SessionTab) => SessionTab): void {
@@ -178,6 +210,20 @@ export function openFileTab(
   });
 }
 
+/** A file picked from New tab never takes the unrelated preview tab's place. */
+export function replaceNewTabWithFile(conversationId: string, id: string, path: string): boolean {
+  let replaced = false;
+  update(conversationId, (current) => {
+    const existing = current.tabs.find((tab) => tab.kind === "file" && tab.path === path);
+    const tab: FileTab = existing?.kind === "file" ? { ...existing, preview: false }
+      : { kind: "file", id: fileId(path), path, line: null, reveal: 0, preview: false, opener: null };
+    const next = replacePlaceholder(current, id, tab);
+    replaced = next !== null;
+    return next ?? current;
+  });
+  return replaced;
+}
+
 /** Keeps a preview tab open for good. */
 export function keepTabOpen(conversationId: string, id: string): void {
   update(conversationId, (current) => ({
@@ -189,8 +235,13 @@ export function keepTabOpen(conversationId: string, id: string): void {
 }
 
 /** Opens the Review tab on `target`, in place of what it showed. */
-export function openReviewTab(conversationId: string, target: ReviewTarget): void {
+export function openReviewTab(conversationId: string, target: ReviewTarget, replace?: string): void {
   update(conversationId, (current) => {
+    const existing = current.tabs.find((tab) => tab.kind === "review");
+    const replaced = replacePlaceholder(current, replace, {
+      kind: "review", id: REVIEW_TAB, target, opener: existing?.opener ?? current.active,
+    });
+    if (replaced) return replaced;
     if (current.tabs.some((tab) => tab.id === REVIEW_TAB)) {
       return {
         tabs: current.tabs.map((tab) => (tab.kind === "review" ? { ...tab, target } : tab)),

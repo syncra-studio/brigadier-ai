@@ -59,6 +59,7 @@ useBrowsers.subscribe(({ pages }) => {
   for (const [id, session] of Object.entries(useSessionTabs.getState().sessions)) {
     for (const tab of session.tabs) {
       const page = pages[tab.id];
+      // A navigated New tab keeps its ID; resource ownership follows its kind, not the prefix.
       if (tab.kind === "browser" && page && (tab.url !== page.url || tab.title !== page.title))
         changeSessionTab(id, tab.id, (current) => current.kind === "browser" ? { ...current, url: page.url, title: page.title } : current);
     }

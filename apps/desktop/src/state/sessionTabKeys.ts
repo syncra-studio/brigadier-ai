@@ -8,6 +8,8 @@ export type TabAction = { type: "new"; kind: NewTabKind } | { type: "close" } |
 
 export function sessionTabKey(event: Key, mac: boolean): TabAction | null {
   if (event.isComposing || event.getModifierState?.("AltGraph")) return null;
+  if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.code === "Backquote")
+    return { type: "new", kind: "terminal" };
   if (event.ctrlKey && !event.metaKey && !event.altKey && event.code === "Tab")
     return { type: "step", step: event.shiftKey ? -1 : 1 };
   if (!(mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)) return null;
@@ -23,15 +25,8 @@ export function sessionTabKey(event: Key, mac: boolean): TabAction | null {
       return { type: "step", step: event.code === "BracketLeft" ? -1 : 1 };
     return null;
   }
-  if (event.code === "KeyT") return { type: "new", kind: "terminal" };
+  if (event.code === "KeyT") return { type: "new", kind: "newTab" };
   if (event.code === "KeyW") return { type: "close" };
   const digit = /^Digit([1-9])$/.exec(event.code);
   return digit ? { type: "number", number: Number(digit[1]) } : null;
 }
-
-export const NEW_TAB_MENU: readonly { kind: NewTabKind; label: string; shortcut: string }[] = [
-  { kind: "terminal", label: "New terminal tab", shortcut: "⌘T" },
-  { kind: "browser", label: "New browser tab", shortcut: "⌘⇧B" },
-  { kind: "sideChat", label: "New side chat", shortcut: "⌥⌘S" },
-  { kind: "document", label: "New file", shortcut: "⌥⌘N" },
-];

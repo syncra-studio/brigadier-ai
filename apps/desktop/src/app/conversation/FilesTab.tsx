@@ -11,7 +11,7 @@ import { useCheckoutFiles } from "@/app/conversation/Mentions";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { fuzzyMatch } from "@/components/assistant-ui/elements/fuzzy-match";
 import { listFiles } from "@/state/actions";
-import { openFileTab } from "@/state/sessionTabs";
+import { openFileTab, replaceNewTabWithFile } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 /**
@@ -84,10 +84,12 @@ function visibleRows(root: Folder, open: ReadonlySet<string>): Row[] {
 }
 
 /** The side panel's Files tab: the tree. */
-export function FilesTab({ conversationId, searchRequest = 0, onSearchHandled }: {
+export function FilesTab({ conversationId, searchRequest = 0, onSearchHandled, replaceTabId, onFileOpened }: {
   conversationId: string;
   searchRequest?: number;
   onSearchHandled?: (() => void) | undefined;
+  replaceTabId?: string | undefined;
+  onFileOpened?: (() => void) | undefined;
 }) {
   return (
     <FileBrowser
@@ -95,7 +97,9 @@ export function FilesTab({ conversationId, searchRequest = 0, onSearchHandled }:
       searchRequest={searchRequest}
       onSearchHandled={onSearchHandled}
       onOpen={(path, keep) => {
-        openFileTab(conversationId, path, { preview: !keep });
+        if (!replaceTabId || !replaceNewTabWithFile(conversationId, replaceTabId, path))
+          openFileTab(conversationId, path, { preview: !keep });
+        onFileOpened?.();
       }}
     />
   );
