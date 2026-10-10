@@ -212,7 +212,7 @@ impl SessionManager {
     }
 
     /// Whether a turn, work waiting for one, or a worker of the conversation is running.
-    async fn conversation_running(&self, id: &ConversationId) -> bool {
+    pub(super) async fn conversation_running(&self, id: &ConversationId) -> bool {
         let live = self.convs_lock().get(id).cloned();
         if let Some(conv) = live
             && conv.is_busy().await

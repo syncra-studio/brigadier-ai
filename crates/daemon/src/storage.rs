@@ -14,6 +14,8 @@ use brigadier_core::manager::disk::{Action, ScanContext, ScanItem};
 use brigadier_core::storage::{CleanCategory, CleanFailure, CleanItem, CleanReport, StorageReport};
 use brigadier_ipc::protocol::{ClientFrame, ClientInfo, Outcome, Request, Response, ServerFrame};
 use brigadier_sandbox::AppPaths;
+use brigadier_sandbox::footprint::CacheRoots;
+use brigadier_sandbox::removal::{self, Bound};
 
 use tokio_util::sync::CancellationToken;
 
@@ -35,6 +37,8 @@ const COMPACT_QUIET: Duration = Duration::from_secs(2 * 60);
 const COMPACT_DELAY: Duration = Duration::from_secs(2 * 60);
 /// How often it looks (and right after a delete has finished).
 const COMPACT_LOOK_EVERY: Duration = Duration::from_secs(30);
+/// Another Brigadier app's cache is offered once nothing in it changed for this long.
+const CACHE_MIN_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// A connection folder younger than this may belong to a daemon about to listen.
 #[cfg(unix)]
 const SOCKET_MIN_AGE: Duration = Duration::from_secs(10 * 60);
@@ -48,6 +52,13 @@ enum DaemonAction {
         data_dir: PathBuf,
         pid: u32,
         started_at: u64,
+    },
+    /// Other Brigadier apps' caches, deleted only while none of those apps runs.
+    DeleteCaches {
+        /// The asking app, never touched.
+        app: String,
+        identifiers: Vec<String>,
+        entries: Vec<(Bound, u64)>,
     },
     /// Shown only.
     None,
@@ -76,7 +87,11 @@ impl Storage {
         self.scans.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    pub async fn scan(&self, daemon: &Daemon) -> Result<StorageReport, String> {
+    pub async fn scan(
+        &self,
+        daemon: &Daemon,
+        app: Option<String>,
+    ) -> Result<StorageReport, String> {
         let (mut items, usage) = daemon
             .sessions
             .scan_storage(context(daemon))
@@ -84,12 +99,27 @@ impl Storage {
             .map_err(|err| err.to_string())?;
         let mut own = HashMap::new();
         let paths = daemon.runtime.platform().paths().clone();
-        let found =
-            tokio::task::spawn_blocking(move || (stale_sockets(&paths), other_daemons(&paths)))
-                .await
-                .map_err(|err| err.to_string())?;
-        let (sockets, daemons) = found;
+        let roots = cache_roots();
+        let found = tokio::task::spawn_blocking(move || {
+            (
+                stale_sockets(&paths),
+                other_daemons(&paths),
+                app.and_then(|app| app_caches(&roots, app)),
+            )
+        })
+        .await
+        .map_err(|err| err.to_string())?;
+        let (sockets, daemons, caches) = found;
         items.extend(sockets);
+        if let Some((item, action)) = caches {
+            let key = format!("caches-{}", own.len());
+            own.insert(key.clone(), action);
+            items.push(ScanItem {
+                item,
+                action: Action::External(key),
+                routine: false,
+            });
+        }
         for (item, action) in ask_daemons(daemons).await {
             let key = format!("daemon-{}", own.len());
             own.insert(key.clone(), action);
@@ -141,7 +171,25 @@ impl Storage {
             projects: usage.projects,
             shared: usage.shared,
             items: listed,
+            kept: usage.kept,
         })
+    }
+
+    /// The picked items of a live scan that can be removed, in the order they go; each can be
+    /// taken once. Ids the scan didn't give, and items kept on purpose, are left out.
+    fn take(&self, scan_id: &str, picked: &[String]) -> Result<Vec<Entry>, String> {
+        let mut scans = self.scans();
+        let scan = scans
+            .get_mut(scan_id)
+            .filter(|scan| scan.at.elapsed() < SCAN_LIFETIME)
+            .ok_or("This scan is too old; scan again.")?;
+        let mut entries: Vec<Entry> = picked
+            .iter()
+            .filter_map(|id| scan.entries.remove(id))
+            .filter(|entry| entry.item.selectable)
+            .collect();
+        entries.sort_by_key(|entry| rank(&entry.action));
+        Ok(entries)
     }
 
     /// Removes the picked items of a scan. Each is checked again first; what fails is
@@ -153,19 +201,7 @@ impl Storage {
         picked: Vec<String>,
     ) -> Result<CleanReport, String> {
         let _one = self.cleaning.lock().await;
-        let mut entries: Vec<Entry> = {
-            let mut scans = self.scans();
-            let scan = scans
-                .get_mut(scan_id)
-                .filter(|scan| scan.at.elapsed() < SCAN_LIFETIME)
-                .ok_or("This scan is too old; scan again.")?;
-            picked
-                .iter()
-                .filter_map(|id| scan.entries.remove(id))
-                .filter(|entry| entry.item.selectable)
-                .collect()
-        };
-        entries.sort_by_key(|entry| rank(&entry.action));
+        let entries = self.take(scan_id, &picked)?;
         let mut report = CleanReport::default();
         for entry in entries {
             let outcome = match (&entry.action, entry.own) {
@@ -179,6 +215,19 @@ impl Storage {
                 ) => quit_daemon(&data_dir, pid, started_at)
                     .await
                     .map(|()| Default::default()),
+                (
+                    Action::External(_),
+                    Some(DaemonAction::DeleteCaches {
+                        app,
+                        identifiers,
+                        entries,
+                    }),
+                ) => {
+                    tokio::task::spawn_blocking(move || delete_caches(&app, &identifiers, &entries))
+                        .await
+                        .map_err(|err| err.to_string())
+                        .and_then(|outcome| outcome)
+                }
                 (Action::External(_), _) => Err("This item can't be removed from here.".into()),
                 (action, _) => {
                     daemon
@@ -336,15 +385,70 @@ impl Storage {
     }
 }
 
-/// The order removals run in: processes first (nothing then writes what goes next), then what
-/// the ledger holds, worktrees before their records and branches, blobs and the database last.
 /// What the daemon knows now that the session manager doesn't.
 fn context(daemon: &Daemon) -> ScanContext {
+    let (agent_homes, build_idle) = debug_overrides();
     ScanContext {
         speech_busy: !daemon.dictation.work().is_empty(),
+        agent_homes,
+        build_idle,
     }
 }
 
+/// In a debug build, stand-ins an isolated run sets so it only ever sees what it seeded:
+/// `BRIGADIER_SWEEP_HOME` (a folder whose `.claude` and `.codex` are the CLI homes looked in,
+/// and under which apps' caches are looked for) and `BRIGADIER_BUILD_IDLE_SECS` (how long a
+/// session must be unused before its build files go).
+fn debug_overrides() -> (
+    Option<Vec<brigadier_core::manager::disk::AgentHome>>,
+    Option<Duration>,
+) {
+    #[cfg(debug_assertions)]
+    {
+        use brigadier_core::manager::disk::AgentHome;
+        use brigadier_providers::ProviderKind;
+        let homes = sweep_home().map(|home| {
+            [
+                (ProviderKind::Claude, ".claude"),
+                (ProviderKind::Codex, ".codex"),
+            ]
+            .into_iter()
+            .map(|(kind, dir)| AgentHome {
+                kind,
+                history: home.join(dir),
+                homes: vec![home.join(dir)],
+            })
+            .collect()
+        });
+        let idle = std::env::var("BRIGADIER_BUILD_IDLE_SECS")
+            .ok()
+            .and_then(|secs| secs.parse::<u64>().ok())
+            .map(Duration::from_secs);
+        (homes, idle)
+    }
+    #[cfg(not(debug_assertions))]
+    (None, None)
+}
+
+#[cfg(debug_assertions)]
+fn sweep_home() -> Option<PathBuf> {
+    std::env::var_os("BRIGADIER_SWEEP_HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Where apps' caches are looked for: this user's real places, or in a debug build those
+/// under `BRIGADIER_SWEEP_HOME`.
+fn cache_roots() -> CacheRoots {
+    #[cfg(debug_assertions)]
+    if let Some(home) = sweep_home() {
+        return CacheRoots::under(&home);
+    }
+    CacheRoots::system()
+}
+
+/// The order removals run in: processes first (nothing then writes what goes next), then what
+/// the ledger holds, worktrees before their records and branches, blobs and the database last.
 fn rank(action: &Action) -> u8 {
     match action {
         Action::External(_) => 0,
@@ -355,7 +459,9 @@ fn rank(action: &Action) -> u8 {
         Action::Delete(_)
         | Action::Trash(_)
         | Action::RemoveEmptyDir(_)
-        | Action::DeleteModel { .. } => 5,
+        | Action::DeleteModel { .. }
+        | Action::DeleteBuildFiles(_)
+        | Action::Adopt(_) => 5,
         Action::CollectBlobs => 6,
         Action::Compact => 7,
     }
@@ -434,7 +540,7 @@ fn stale_sockets(paths: &AppPaths) -> Vec<ScanItem> {
         return Vec::new();
     }
     let item = plain_item(
-        CleanCategory::Processes,
+        CleanCategory::Temporary,
         counted(
             stale.len(),
             "stale connection folder",
@@ -455,6 +561,164 @@ fn stale_sockets(paths: &AppPaths) -> Vec<ScanItem> {
 #[cfg(not(unix))]
 fn stale_sockets(_paths: &AppPaths) -> Vec<ScanItem> {
     Vec::new()
+}
+
+/// Other Brigadier apps' caches (development builds, older identities) untouched for
+/// [`CACHE_MIN_AGE`], as one item. Never the asking `app`'s or a running app's; nothing at all
+/// when which apps run can't be told.
+fn app_caches(roots: &CacheRoots, app: String) -> Option<(CleanItem, DaemonAction)> {
+    let running = running_identities()?;
+    let mut identifiers = Vec::new();
+    let mut entries = Vec::new();
+    for cache in brigadier_sandbox::footprint::identity_caches(roots) {
+        if cache.identifier == app || running.contains(&cache.identifier) {
+            continue;
+        }
+        if !untouched_for(&cache.path, CACHE_MIN_AGE) {
+            continue;
+        }
+        let Ok(bound) = removal::bind(&cache.root, &cache.path) else {
+            continue;
+        };
+        if !identifiers.contains(&cache.identifier) {
+            identifiers.push(cache.identifier.clone());
+        }
+        entries.push((bound, removal::allocated_size(&cache.path)));
+    }
+    if entries.is_empty() {
+        return None;
+    }
+    let mut item = plain_item(
+        CleanCategory::Temporary,
+        format!(
+            "Caches of {}",
+            counted(
+                identifiers.len(),
+                "other Brigadier app",
+                "other Brigadier apps"
+            )
+        ),
+        entries.first().map(|(bound, _)| bound.path()),
+        format!(
+            "Rebuildable caches of {} (not running, unused for a week). Their settings and \
+             data stay.",
+            identifiers.join(", ")
+        ),
+        true,
+        true,
+    );
+    item.bytes = entries.iter().map(|(_, bytes)| bytes).sum();
+    Some((
+        item,
+        DaemonAction::DeleteCaches {
+            app,
+            identifiers,
+            entries,
+        },
+    ))
+}
+
+/// Deletes listed caches, after checking again that none of their apps runs now.
+fn delete_caches(
+    app: &str,
+    identifiers: &[String],
+    entries: &[(Bound, u64)],
+) -> Result<brigadier_core::manager::disk::Cleaned, String> {
+    let running = running_identities().ok_or("which apps run can't be told now")?;
+    if let Some(busy) = identifiers
+        .iter()
+        .find(|id| id.as_str() == app || running.contains(*id))
+    {
+        return Err(format!("{busy} is running now"));
+    }
+    let mut cleaned = brigadier_core::manager::disk::Cleaned::default();
+    for (bound, bytes) in entries {
+        match removal::delete(bound) {
+            Ok(()) => cleaned.reclaimed += bytes,
+            Err(err) => cleaned.failures.push(err.to_string()),
+        }
+    }
+    Ok(cleaned)
+}
+
+/// Whether nothing in `path` changed for `age` (links not followed).
+fn untouched_for(path: &Path, age: Duration) -> bool {
+    let mut stack = vec![path.to_owned()];
+    while let Some(next) = stack.pop() {
+        let Ok(meta) = std::fs::symlink_metadata(&next) else {
+            continue;
+        };
+        let recent = meta
+            .modified()
+            .ok()
+            .and_then(|at| at.elapsed().ok())
+            .is_none_or(|elapsed| elapsed < age);
+        if recent {
+            return false;
+        }
+        if meta.is_dir()
+            && let Ok(entries) = std::fs::read_dir(&next)
+        {
+            stack.extend(entries.flatten().map(|entry| entry.path()));
+        }
+    }
+    true
+}
+
+/// The Brigadier apps running now, by bundle identifier: the apps the system lists, and any
+/// process naming one in its command line (a webview's data folder, a development build).
+/// `None` where that can't be told.
+#[cfg(any(target_os = "macos", windows))]
+fn running_identities() -> Option<std::collections::HashSet<String>> {
+    use brigadier_sandbox::footprint::is_brigadier_identifier;
+    let mut found = std::collections::HashSet::new();
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("/usr/bin/lsappinfo")
+            .arg("list")
+            .output()
+            .ok()
+            .filter(|output| output.status.success())?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        for part in text.split("bundleID=\"").skip(1) {
+            if let Some(id) = part.split('"').next()
+                && is_brigadier_identifier(id)
+            {
+                found.insert(id.to_owned());
+            }
+        }
+    }
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing()
+            .with_cmd(UpdateKind::Always)
+            .with_exe(UpdateKind::Always),
+    );
+    for process in system.processes().values() {
+        let words = process
+            .cmd()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .chain(process.exe().map(|exe| exe.display().to_string()));
+        for word in words {
+            // `ai.brigadier.<id>` anywhere in it, as a whole path part or argument value.
+            for part in word.split(['/', '\\', '=', '+', ' ', '"']) {
+                if is_brigadier_identifier(part) {
+                    found.insert(part.to_owned());
+                }
+            }
+        }
+    }
+    Some(found)
+}
+
+/// Linux lists no apps by identifier, and its webviews don't name theirs.
+#[cfg(not(any(target_os = "macos", windows)))]
+fn running_identities() -> Option<std::collections::HashSet<String>> {
+    None
 }
 
 /// Another data directory's daemon.
@@ -696,4 +960,147 @@ async fn quit_daemon(data_dir: &Path, pid: u32, started_at: u64) -> Result<(), S
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(id: &str, selectable: bool) -> Entry {
+        let mut item = plain_item(
+            CleanCategory::Temporary,
+            id.into(),
+            None,
+            String::new(),
+            selectable,
+            selectable,
+        );
+        item.id = id.into();
+        Entry {
+            item,
+            action: Action::External("none".into()),
+            own: Some(DaemonAction::None),
+        }
+    }
+
+    fn storage_with(scan_id: &str, at: Instant) -> Storage {
+        let storage = Storage::default();
+        storage.scans().insert(
+            scan_id.into(),
+            Scan {
+                at,
+                entries: [entry("item-0", true), entry("item-1", false)]
+                    .into_iter()
+                    .map(|entry| (entry.item.id.clone(), entry))
+                    .collect(),
+            },
+        );
+        storage
+    }
+
+    fn ids(entries: &[Entry]) -> Vec<&str> {
+        entries.iter().map(|entry| entry.item.id.as_str()).collect()
+    }
+
+    #[test]
+    fn only_items_of_a_live_scan_are_taken() {
+        let storage = storage_with("scan", Instant::now());
+        assert!(storage.take("other", &["item-0".into()]).is_err());
+        let taken = storage
+            .take(
+                "scan",
+                &[
+                    "item-0".into(),
+                    "item-1".into(),
+                    "item-9".into(),
+                    "../x".into(),
+                ],
+            )
+            .unwrap();
+        // The kept item and ids the scan never gave are left out.
+        assert_eq!(ids(&taken), ["item-0"]);
+        // Each item goes once.
+        assert!(storage.take("scan", &["item-0".into()]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_expired_scan_takes_nothing() {
+        let Some(old) = Instant::now().checked_sub(SCAN_LIFETIME + Duration::from_secs(1)) else {
+            return;
+        };
+        let storage = storage_with("scan", old);
+        assert!(storage.take("scan", &["item-0".into()]).is_err());
+    }
+
+    #[test]
+    fn caches_older_than_a_week_count_as_untouched() {
+        let dir = std::env::temp_dir().join(format!(
+            "brigadier-storage-untouched-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub").join("file"), b"x").unwrap();
+        assert!(!untouched_for(&dir, CACHE_MIN_AGE));
+        assert!(untouched_for(&dir, Duration::ZERO));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Sets `path`'s and everything in it's modification time back by `by`.
+    #[cfg(target_os = "macos")]
+    fn age(path: &Path, by: Duration) {
+        let at = std::time::SystemTime::now() - by;
+        for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
+            age(&entry.path(), by);
+        }
+        std::fs::File::open(path).unwrap().set_modified(at).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn only_idle_caches_of_other_apps_are_offered() {
+        let home = std::env::temp_dir().join(format!(
+            "brigadier-storage-caches-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let roots = CacheRoots::under(&home);
+        let caches = home.join("Library").join("Caches");
+        let (old, app, fresh) = (
+            "ai.brigadier.sweep-test-old",
+            "ai.brigadier.sweep-test-app",
+            "ai.brigadier.sweep-test-fresh",
+        );
+        for id in [old, app, fresh, "com.example.other"] {
+            std::fs::create_dir_all(caches.join(id).join("WebKit")).unwrap();
+            std::fs::write(caches.join(id).join("WebKit").join("cache"), b"x").unwrap();
+        }
+        for id in [old, app, "com.example.other"] {
+            age(&caches.join(id), CACHE_MIN_AGE * 2);
+        }
+        let (item, action) = app_caches(&roots, app.into()).unwrap_or_else(|| {
+            panic!(
+                "nothing offered; running: {:?}, caches: {:?}",
+                running_identities(),
+                brigadier_sandbox::footprint::identity_caches(&roots)
+            )
+        });
+        assert!(item.checked && item.selectable);
+        let DaemonAction::DeleteCaches {
+            app: asking,
+            identifiers,
+            entries,
+        } = action
+        else {
+            panic!("not a cache removal");
+        };
+        assert_eq!(identifiers, [old]);
+        let cleaned = delete_caches(&asking, &identifiers, &entries).unwrap();
+        assert!(cleaned.failures.is_empty());
+        assert!(!caches.join(old).exists());
+        for kept in [app, fresh, "com.example.other"] {
+            assert!(caches.join(kept).join("WebKit").join("cache").exists());
+        }
+        // The asking app's caches are never deleted, even when listed.
+        assert!(delete_caches(app, &[app.to_owned()], &[]).is_err());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
 }

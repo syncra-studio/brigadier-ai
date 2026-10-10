@@ -65,6 +65,24 @@ impl Runtime {
             .map(|live| live.provider.clone())
     }
 
+    /// Where each CLI keeps its files: its main home, which holds the history every account
+    /// shares, and each home with state of its own (the main home and every extra account's).
+    pub fn agent_homes(&self) -> Vec<crate::manager::disk::AgentHome> {
+        ProviderKind::ALL
+            .into_iter()
+            .filter_map(|kind| {
+                let main = brigadier_providers::accounts::main_home(kind, &self.env)?;
+                let mut homes = vec![main.clone()];
+                homes.extend(self.account_homes(kind));
+                Some(crate::manager::disk::AgentHome {
+                    kind,
+                    history: main,
+                    homes,
+                })
+            })
+            .collect()
+    }
+
     /// The homes of `provider`'s extra accounts set up now.
     pub fn account_homes(&self, provider: ProviderKind) -> Vec<PathBuf> {
         self.accounts()

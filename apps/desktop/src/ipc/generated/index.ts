@@ -137,6 +137,7 @@ export type { ItemStatus } from "./ItemStatus";
 export type { KeepAwake } from "./KeepAwake";
 export type { KeepAwakeStatus } from "./KeepAwakeStatus";
 export type { KeptBranch } from "./KeptBranch";
+export type { KeptLine } from "./KeptLine";
 export type { KeptWork } from "./KeptWork";
 export type { KindCount } from "./KindCount";
 export type { LanguageCount } from "./LanguageCount";

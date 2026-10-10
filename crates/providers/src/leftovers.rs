@@ -184,7 +184,13 @@ mod tests {
             {"type": "tool_use", "name": "mcp__brigadier__report", "input": {}}]}});
         let sandbox = json!({"type": "attachment", "attachment": {"type": "sandbox_instructions",
             "content": "Network: {\"allowUnixSockets\":[\"/data/x/run/brigadierd.sock\"]}"}});
-        transcript(&home, "/data/x/orch/a", A, "sdk-cli", &[tool_call.clone()]);
+        transcript(
+            &home,
+            "/data/x/orch/a",
+            A,
+            "sdk-cli",
+            std::slice::from_ref(&tool_call),
+        );
         transcript(&home, "/data/x/orch/b", B, "sdk-cli", &[sandbox]);
         // Only text that mentions the tools (the user's message above): no mark.
         transcript(&home, "/data/x/orch/c", C, "sdk-cli", &[]);

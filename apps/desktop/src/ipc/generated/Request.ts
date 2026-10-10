@@ -118,4 +118,9 @@ record: boolean, } | { "method": "resumeRawSession", id: RawSessionId, } | { "me
 /**
  * Only entries with a smaller `streamSeq` (for paging backwards).
  */
-before: number | null, limit: number, } | { "method": "replayFixture", fixtureId: string, } | { "method": "simulateUsageLimit", provider: ProviderKind, } | { "method": "getDaemonActivity" } | { "method": "scanStorage" } | { "method": "cleanStorage", scanId: string, items: Array<string>, } | { "method": "previewUninstall", app: UninstallApp, } | { "method": "uninstall", planId: string, keepData: boolean, deleteBranches: Array<BranchChoice>, } | { "method": "shutdown" };
+before: number | null, limit: number, } | { "method": "replayFixture", fixtureId: string, } | { "method": "simulateUsageLimit", provider: ProviderKind, } | { "method": "getDaemonActivity" } | { "method": "scanStorage", 
+/**
+ * The asking app's bundle identifier: its own caches are never offered. Without it, no
+ * app's caches are.
+ */
+app?: string, } | { "method": "cleanStorage", scanId: string, items: Array<string>, } | { "method": "previewUninstall", app: UninstallApp, } | { "method": "uninstall", planId: string, keepData: boolean, deleteBranches: Array<BranchChoice>, } | { "method": "shutdown" };

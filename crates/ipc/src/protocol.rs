@@ -950,7 +950,13 @@ pub enum Request {
     /// Whether this daemon is in use: another Brigadier asks before offering to stop it.
     GetDaemonActivity,
     /// What Brigadier keeps on disk and what it can clean up (Settings → Storage).
-    ScanStorage,
+    ScanStorage {
+        /// The asking app's bundle identifier: its own caches are never offered. Without it, no
+        /// app's caches are.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        app: Option<String>,
+    },
     /// Removes the picked items of a scan (by the ids it gave them), each checked again first.
     CleanStorage {
         scan_id: String,

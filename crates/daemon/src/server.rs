@@ -490,7 +490,7 @@ impl Session {
                 return Ok(Flow::Continue);
             }
             // Long: answered beside the connection's other requests.
-            request @ (Request::ScanStorage
+            request @ (Request::ScanStorage { .. }
             | Request::PreviewDelete { .. }
             | Request::CleanStorage { .. }
             | Request::PreviewRemoveProject { .. }
@@ -1952,8 +1952,8 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 overnight: daemon.sessions.overnight_active(),
             },
         },
-        Request::ScanStorage => Response::ScanStorage {
-            report: Box::new(daemon.storage.scan(daemon).await.map_err(invalid)?),
+        Request::ScanStorage { app } => Response::ScanStorage {
+            report: Box::new(daemon.storage.scan(daemon, app).await.map_err(invalid)?),
         },
         Request::CleanStorage { scan_id, items } => Response::CleanStorage {
             report: daemon

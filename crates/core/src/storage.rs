@@ -22,6 +22,20 @@ pub struct StorageReport {
     pub projects: Vec<ProjectUsage>,
     pub shared: Vec<SharedUsage>,
     pub items: Vec<CleanItem>,
+    /// What is kept on purpose without being an item: counted in one line each ("3 work
+    /// folders of open sessions").
+    pub kept: Vec<KeptLine>,
+}
+
+/// Things kept on purpose, counted in one line.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct KeptLine {
+    pub category: CleanCategory,
+    pub label: String,
+    pub bytes: u64,
+    /// Why they stay.
+    pub reason: String,
 }
 
 /// What one project takes.
@@ -74,26 +88,36 @@ pub struct CleanItem {
     pub bytes: u64,
     /// Why it can go (or, when it can't be picked, why not).
     pub reason: String,
-    /// Checked by default: safe to remove.
+    /// Part of the sweep (Free up space removes it): safe to remove.
     pub checked: bool,
-    /// False: shown for information only; it can't be removed from here.
+    /// False: kept on purpose (`reason` says why); it can't be removed from here.
     pub selectable: bool,
     /// Removing it moves it to the Trash: its space comes back once the Trash is emptied.
     pub to_trash: bool,
     pub badges: Vec<CleanBadge>,
 }
 
+/// The plain groups Free up space shows. The first six hold the sweep; the rest are only ever
+/// picked by hand (Advanced).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum CleanCategory {
-    Worktrees,
-    Branches,
-    SessionFiles,
+    /// Work folders of ended tasks and sessions, with what goes with them (their merged
+    /// branches, git's records of removed ones), and the ones kept on purpose.
+    FinishedWork,
+    /// Build output (git-ignored) in the work folders of sessions not used for a while.
+    BuildFiles,
+    /// Claude Code and Codex session files Brigadier's sessions left.
+    AgentFiles,
+    /// Working and temp folders, connection folders, other Brigadier apps' caches.
+    Temporary,
+    OldLogs,
+    /// Stored files and database space deleted conversations left.
+    DeletedLeftovers,
     Brains,
-    LogsAndData,
     Models,
+    Recordings,
     Processes,
-    Database,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

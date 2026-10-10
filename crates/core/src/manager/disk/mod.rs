@@ -1,4 +1,4 @@
-//! Settings → Storage: what Brigadier keeps on disk, and what it can clean up.
+//! Settings → Storage, Free up space: what Brigadier keeps on disk, and what it can clean up.
 //!
 //! A scan lists only what Brigadier can prove is its own, and nothing anything live uses:
 //!
@@ -10,8 +10,17 @@
 //! - each item is bound when it is listed (see [`brigadier_sandbox::removal`]) and checked
 //!   again before it goes; git worktrees and branches go only through git.
 //!
-//! Safe items come checked; the ones that cost something to lose (unmerged work, a Brain,
-//! models, recordings) are offered unchecked.
+//! Safe items are the sweep (checked); the ones that cost something to lose (a Brain, models,
+//! recordings) are only picked by hand. Work is never lost from here: unmerged branches are
+//! kept, and a work folder with changes goes only after they are committed on its branch,
+//! which stays. What is kept on purpose is listed too, with why.
+
+mod agent_files;
+mod build_files;
+#[cfg(test)]
+mod tests;
+
+pub use agent_files::AgentHome;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -26,7 +35,9 @@ use crate::model::{
     Conversation, ConversationId, Environment, KeptBranch, Lifecycle, Project, Setup, streams,
 };
 use crate::overnight::OvernightRun;
-use crate::storage::{CleanBadge, CleanCategory, CleanItem, ProjectUsage, SharedPart, SharedUsage};
+use crate::storage::{
+    CleanBadge, CleanCategory, CleanItem, KeptLine, ProjectUsage, SharedPart, SharedUsage,
+};
 use crate::work::Task;
 use crate::{Error, Result};
 
@@ -84,6 +95,11 @@ pub enum Action {
         folder: Bound,
         bytes: u64,
     },
+    /// Build output in a work folder of an idle session, checked again before it goes.
+    DeleteBuildFiles(build_files::BuildFiles),
+    /// CLI session files proven Brigadier's, taken on by the cleanup ledger with their bound
+    /// identities and removed through it.
+    Adopt(agent_files::Adoption),
     /// Stored content no event references.
     CollectBlobs,
     /// The database rebuilt without its free pages.
@@ -102,10 +118,16 @@ pub struct ScanItem {
 }
 
 /// What the daemon knows that the session manager doesn't.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ScanContext {
     /// Dictation, or the speech model's download, is running.
     pub speech_busy: bool,
+    /// The CLI homes to look in for agent files instead of the real ones (tests and isolated
+    /// runs only see what they seeded there).
+    pub agent_homes: Option<Vec<AgentHome>>,
+    /// How long a session must have been unused before its build files are swept (default
+    /// [`build_files::IDLE`]).
+    pub build_idle: Option<Duration>,
 }
 
 /// What one removal gave back.
@@ -126,6 +148,10 @@ struct Records {
     runs: HashMap<ConversationId, Vec<OvernightRun>>,
     owners: Vec<(String, Vec<Artifact>, bool)>,
     kept: Vec<(String, KeptBranch)>,
+    /// Conversations with a turn, waiting work or a worker running now.
+    running: HashSet<ConversationId>,
+    /// Every CLI session this data directory ever started.
+    native: HashMap<String, crate::ledger::NativeSession>,
 }
 
 impl Records {
@@ -148,12 +174,75 @@ impl Records {
         })
     }
 
+    /// What recorded this worktree: a task or session still open, or one that ended (its
+    /// label, and its repository).
+    fn recorded_worktree(&self, path: &Path) -> Recorded {
+        let key = path.display().to_string();
+        let mut ended = None;
+        for conversation in &self.conversations {
+            let archived = conversation.lifecycle == Lifecycle::Archived;
+            let repo = Records::repo_of(conversation);
+            if let Some(Setup::Session {
+                environment:
+                    Environment::NewWorktree {
+                        path: Some(worktree),
+                        ..
+                    },
+                ..
+            }) = &conversation.setup
+                && *worktree == key
+            {
+                if !archived {
+                    return Recorded::Open;
+                }
+                if let Some(repo) = &repo {
+                    ended.get_or_insert_with(|| Recorded::Ended {
+                        label: format!("Work folder of “{}”", conversation.title),
+                        repo: repo.clone(),
+                    });
+                }
+            }
+            for task in self.tasks.get(&conversation.id).into_iter().flatten() {
+                let recorded = task
+                    .workspace
+                    .as_ref()
+                    .and_then(|workspace| workspace.worktree.as_deref());
+                if recorded != Some(key.as_str()) {
+                    continue;
+                }
+                if !task.state.is_final() && !archived {
+                    return Recorded::Open;
+                }
+                if let Some(repo) = &repo {
+                    ended.get_or_insert_with(|| Recorded::Ended {
+                        label: format!(
+                            "Work folder of task-{} “{}” in “{}”",
+                            task.number, task.title, conversation.title
+                        ),
+                        repo: repo.clone(),
+                    });
+                }
+            }
+        }
+        ended.unwrap_or(Recorded::Unknown)
+    }
+
     fn repo_of(conversation: &Conversation) -> Option<PathBuf> {
         match &conversation.setup {
             Some(Setup::Session { repo, .. }) => Some(PathBuf::from(repo)),
             _ => None,
         }
     }
+}
+
+/// What recorded a worktree in the data directory.
+enum Recorded {
+    /// A task or session that is still open.
+    Open,
+    /// A task or session that ended.
+    Ended { label: String, repo: PathBuf },
+    /// Nothing Brigadier recorded.
+    Unknown,
 }
 
 /// How a ledger owner stands.
@@ -195,6 +284,11 @@ impl SessionManager {
         }
         let git = self.git.clone();
         let platform = self.runtime.platform().clone();
+        let agent_homes = context
+            .agent_homes
+            .clone()
+            .unwrap_or_else(|| self.runtime.agent_homes());
+        let build_idle = context.build_idle.unwrap_or(build_files::IDLE);
         let (mut items, usage) = blocking(move || {
             let mut scan = Scanner {
                 records: &records,
@@ -202,24 +296,28 @@ impl SessionManager {
                 git: &git,
                 platform: &*platform,
                 items: Vec::new(),
+                kept: Vec::new(),
             };
             scan.worktrees();
             scan.stale_worktree_records();
             scan.branches();
             scan.ledger_leftovers();
+            scan.build_files(build_idle);
+            scan.agent_files(&agent_homes);
             scan.working_folders();
             scan.session_temp_folders();
             scan.brains();
             scan.logs_and_recordings();
             scan.models(embeddings_busy, context.speech_busy);
-            let usage = scan.usage(&project_blobs);
+            let mut usage = scan.usage(&project_blobs);
+            usage.kept = scan.kept;
             Ok((scan.items, usage))
         })
         .await?;
         if blobs.0 > 0 {
             items.push(ScanItem {
                 item: item(
-                    CleanCategory::LogsAndData,
+                    CleanCategory::DeletedLeftovers,
                     format!(
                         "{} nothing uses any more",
                         counted(
@@ -242,7 +340,7 @@ impl SessionManager {
         {
             items.push(ScanItem {
                 item: item(
-                    CleanCategory::Database,
+                    CleanCategory::DeletedLeftovers,
                     "Compact the database".into(),
                     Some(self.data_dir.join("brigadier.db")),
                     space.free_bytes + space.wal_bytes,
@@ -261,7 +359,11 @@ impl SessionManager {
         let catalog = self.core.catalog();
         let mut tasks = HashMap::new();
         let mut runs = HashMap::new();
+        let mut running = HashSet::new();
         for conversation in &catalog.conversations {
+            if self.conversation_running(&conversation.id).await {
+                running.insert(conversation.id.clone());
+            }
             if let Ok(board) = self.core.board(&conversation.id).await {
                 tasks.insert(conversation.id.clone(), board.sorted_tasks());
                 runs.insert(
@@ -278,6 +380,8 @@ impl SessionManager {
             runs,
             owners: self.runtime.ledger().owners(),
             kept: self.kept_branches().await?,
+            running,
+            native: self.runtime.ledger().native_sessions(),
         })
     }
 
@@ -576,6 +680,8 @@ impl SessionManager {
                 })
                 .await
             }
+            Action::DeleteBuildFiles(files) => self.delete_build_files(files, context).await,
+            Action::Adopt(adoption) => self.adopt(adoption).await,
             Action::CollectBlobs => self
                 .core
                 .store()
@@ -709,6 +815,8 @@ pub struct ScanUsage {
     pub total_bytes: u64,
     pub projects: Vec<ProjectUsage>,
     pub shared: Vec<SharedUsage>,
+    /// What is kept on purpose, counted in lines rather than listed.
+    pub kept: Vec<KeptLine>,
 }
 
 /// Keeps a worktree's uncommitted changes as a WIP commit on its branch. Refuses when they
@@ -965,6 +1073,7 @@ struct Scanner<'a> {
     git: &'a brigadier_git::Git,
     platform: &'a dyn brigadier_sandbox::Platform,
     items: Vec<ScanItem>,
+    kept: Vec<KeptLine>,
 }
 
 impl Scanner<'_> {
@@ -1016,9 +1125,13 @@ impl Scanner<'_> {
         });
     }
 
-    /// Worktree folders in the data directory that nothing live uses.
+    /// Worktree folders in the data directory. Those of ended tasks and sessions are offered
+    /// (with unsaved changes, only by hand), those of open sessions are counted as kept, and a
+    /// folder no record names is left alone.
     fn worktrees(&mut self) {
         let held = self.held(|_| true);
+        let live = self.held(|state| state == OwnerState::Live);
+        let mut open = Vec::new();
         for project_dir in subdirs(&self.data("worktrees")) {
             let worktrees = subdirs(&project_dir);
             if worktrees.is_empty() {
@@ -1026,11 +1139,11 @@ impl Scanner<'_> {
                 if empty && let Some(bound) = self.bind_data(&project_dir) {
                     self.push_routine(
                         item(
-                            CleanCategory::Worktrees,
-                            "Empty worktree folder".into(),
+                            CleanCategory::FinishedWork,
+                            "Empty work folder of a project".into(),
                             Some(project_dir.clone()),
                             0,
-                            "A project's worktree folder with nothing left in it.",
+                            "A project's folder of work folders with nothing left in it.",
                             true,
                         ),
                         Action::RemoveEmptyDir(bound),
@@ -1040,61 +1153,92 @@ impl Scanner<'_> {
             }
             for path in worktrees {
                 let key = path.display().to_string();
-                // The ledger's own items (live ones are never offered) cover what it holds.
+                if live.contains(&key) {
+                    open.push(path);
+                    continue;
+                }
+                // The ledger's own items cover what its gone owners hold.
                 if held.contains(&key) {
                     continue;
                 }
-                let Some((label, repo)) = self.recorded_worktree(&path) else {
-                    let mut report = item(
-                        CleanCategory::Worktrees,
-                        "Worktree folder with no record".into(),
-                        Some(path.clone()),
-                        removal::allocated_size(&path),
-                        "Nothing Brigadier recorded names this folder, so it is left alone.",
-                        false,
+                let (label, repo) = match self.records.recorded_worktree(&path) {
+                    Recorded::Open => {
+                        open.push(path);
+                        continue;
+                    }
+                    Recorded::Unknown => {
+                        self.keep(
+                            CleanCategory::FinishedWork,
+                            "Work folder with no record".into(),
+                            &path,
+                            "Nothing Brigadier recorded names this folder, so it stays.",
+                            Vec::new(),
+                        );
+                        continue;
+                    }
+                    Recorded::Ended { label, repo } => (label, repo),
+                };
+                if !repo.exists() {
+                    self.keep(
+                        CleanCategory::FinishedWork,
+                        label,
+                        &path,
+                        "Its repository isn't where it was (moved, or on a drive that isn't \
+                         connected), so it stays.",
+                        Vec::new(),
                     );
-                    report.selectable = false;
-                    self.items.push(ScanItem {
-                        item: report,
-                        action: Action::External("none".into()),
-                        routine: false,
-                    });
                     continue;
+                }
+                let Some(state) = self.git.open(&path).and_then(|w| w.state()).ok() else {
+                    self.keep(
+                        CleanCategory::FinishedWork,
+                        label,
+                        &path,
+                        "Git couldn't read it, so it stays.",
+                        Vec::new(),
+                    );
+                    continue;
+                };
+                if self.busy(&path) {
+                    self.keep(
+                        CleanCategory::FinishedWork,
+                        label,
+                        &path,
+                        "Something is running in it.",
+                        Vec::new(),
+                    );
+                    continue;
+                }
+                let dirty = !state.dirty_files.is_empty();
+                let reason = match (&state.current_branch, dirty) {
+                    (_, false) => "Its session or task ended and nothing in it is unsaved. Its \
+                                   branch stays."
+                        .to_owned(),
+                    (Some(branch), true) => format!(
+                        "Has unsaved changes, so it isn't part of the sweep. Picked by hand, \
+                         its changes are first kept as a commit on {branch}, which stays."
+                    ),
+                    (None, true) => {
+                        self.keep(
+                            CleanCategory::FinishedWork,
+                            label,
+                            &path,
+                            "Has unsaved changes and no branch to keep them on.",
+                            vec![CleanBadge::HasChanges],
+                        );
+                        continue;
+                    }
                 };
                 let Some(bound) = self.bind_data(&path) else {
                     continue;
                 };
                 let bytes = removal::allocated_size(&path);
-                if !repo.exists() {
-                    let mut entry = item(
-                        CleanCategory::Worktrees,
-                        label,
-                        Some(path.clone()),
-                        bytes,
-                        "Its repository is gone, so git can't remove it; the folder goes to the \
-                         Trash.",
-                        false,
-                    );
-                    entry.to_trash = true;
-                    self.push(entry, Action::Trash(vec![(bound, bytes)]));
-                    continue;
-                }
-                let dirty = self
-                    .git
-                    .open(&path)
-                    .and_then(|worktree| worktree.state())
-                    .map_or(true, |state| !state.dirty_files.is_empty());
                 let mut entry = item(
-                    CleanCategory::Worktrees,
+                    CleanCategory::FinishedWork,
                     label,
                     Some(path.clone()),
                     bytes,
-                    if dirty {
-                        "Its conversation or task ended. Its uncommitted changes are kept as a \
-                         WIP commit on its branch before git removes it."
-                    } else {
-                        "Its conversation or task ended; git removes it."
-                    },
+                    &reason,
                     !dirty,
                 );
                 if dirty {
@@ -1110,54 +1254,45 @@ impl Scanner<'_> {
                 );
             }
         }
+        if !open.is_empty() {
+            let bytes = open.iter().map(|path| removal::allocated_size(path)).sum();
+            self.kept.push(KeptLine {
+                category: CleanCategory::FinishedWork,
+                label: counted(
+                    open.len(),
+                    "work folder of an open session",
+                    "work folders of open sessions",
+                ),
+                bytes,
+                reason: "Their sessions are still open.".into(),
+            });
+        }
     }
 
-    /// The task or session that recorded this worktree, and its repository.
-    fn recorded_worktree(&self, path: &Path) -> Option<(String, PathBuf)> {
-        let key = path.display().to_string();
-        for conversation in &self.records.conversations {
-            let repo = Records::repo_of(conversation);
-            if let Some(Setup::Session {
-                environment:
-                    Environment::NewWorktree {
-                        path: Some(worktree),
-                        ..
-                    },
-                ..
-            }) = &conversation.setup
-                && *worktree == key
-                && conversation.lifecycle == Lifecycle::Archived
-            {
-                return Some((
-                    format!("Session worktree of “{}”", conversation.title),
-                    repo?,
-                ));
-            }
-            for task in self
-                .records
-                .tasks
-                .get(&conversation.id)
-                .into_iter()
-                .flatten()
-            {
-                let recorded = task
-                    .workspace
-                    .as_ref()
-                    .and_then(|workspace| workspace.worktree.as_deref());
-                if recorded == Some(key.as_str())
-                    && (task.state.is_final() || conversation.lifecycle == Lifecycle::Archived)
-                {
-                    return Some((
-                        format!(
-                            "Worktree of task-{} “{}” in “{}”",
-                            task.number, task.title, conversation.title
-                        ),
-                        repo?,
-                    ));
-                }
-            }
-        }
-        None
+    /// Something kept on purpose, shown with why.
+    fn keep(
+        &mut self,
+        category: CleanCategory,
+        label: String,
+        path: &Path,
+        reason: &str,
+        badges: Vec<CleanBadge>,
+    ) {
+        let mut entry = item(
+            category,
+            label,
+            Some(path.to_owned()),
+            removal::allocated_size(path),
+            reason,
+            false,
+        );
+        entry.selectable = false;
+        entry.badges = badges;
+        self.items.push(ScanItem {
+            item: entry,
+            action: Action::External("none".into()),
+            routine: false,
+        });
     }
 
     /// Git's records of worktrees in the data directory whose folders are gone.
@@ -1192,7 +1327,7 @@ impl Scanner<'_> {
             }
             let all_mine = mine == stale.len();
             let mut entry = item(
-                CleanCategory::Worktrees,
+                CleanCategory::FinishedWork,
                 format!(
                     "Records of {mine} removed worktrees in {}",
                     repo_path.display()
@@ -1308,27 +1443,44 @@ impl Scanner<'_> {
                 continue;
             }
             let target = &standing.target;
-            let reason = if standing.merged {
-                format!("{why} Everything on it is in {target}.")
-            } else {
-                format!(
-                    "{why} It has {} {target} doesn't have.",
-                    counted(standing.ahead as usize, "commit", "commits")
-                )
-            };
-            let mut entry = item(
-                CleanCategory::Branches,
-                format!("{name} in {}", repo_path.display()),
-                Some(repo_path.clone()),
-                0,
-                &reason,
-                standing.merged,
-            );
+            let label = format!("Branch {name} in {}", repo_path.display());
+            // Work that isn't in its target is never deleted from here.
             if !standing.merged {
+                let reason = if standing.ahead > 0 {
+                    format!(
+                        "Has {} not merged into {target}.",
+                        counted(standing.ahead as usize, "commit", "commits")
+                    )
+                } else {
+                    format!("Isn't merged into {target}.")
+                };
+                let mut entry = item(
+                    CleanCategory::FinishedWork,
+                    label,
+                    Some(repo_path.clone()),
+                    0,
+                    &reason,
+                    false,
+                );
+                entry.selectable = false;
                 entry.badges.push(CleanBadge::NotMerged {
                     ahead: standing.ahead,
                 });
+                self.items.push(ScanItem {
+                    item: entry,
+                    action: Action::External("none".into()),
+                    routine: false,
+                });
+                continue;
             }
+            let entry = item(
+                CleanCategory::FinishedWork,
+                label,
+                Some(repo_path.clone()),
+                0,
+                &format!("{why} Everything on it is in {target}."),
+                true,
+            );
             self.push(
                 entry,
                 Action::DeleteBranch {
@@ -1366,17 +1518,26 @@ impl Scanner<'_> {
                     )
                 })
                 .count();
-            let dirty = artifacts.iter().any(|artifact| match artifact {
-                Artifact::Worktree { path, .. } => {
-                    Path::new(path).exists()
-                        && self
-                            .git
-                            .open(Path::new(path))
-                            .and_then(|worktree| worktree.state())
-                            .map_or(true, |state| !state.dirty_files.is_empty())
+            let worktrees: Vec<&str> = artifacts
+                .iter()
+                .filter_map(|artifact| match artifact {
+                    Artifact::Worktree { path, .. } if Path::new(path).exists() => {
+                        Some(path.as_str())
+                    }
+                    _ => None,
+                })
+                .collect();
+            // Unsaved changes are kept as a commit on the worktree's branch before it goes (and
+            // the branch stays); without a branch, or when git can't tell, it stays.
+            let mut dirty = false;
+            let mut unknown = false;
+            for path in &worktrees {
+                match self.git.open(Path::new(path)).and_then(|w| w.state()) {
+                    Ok(state) if state.dirty_files.is_empty() => {}
+                    Ok(state) if state.current_branch.is_some() => dirty = true,
+                    _ => unknown = true,
                 }
-                _ => false,
-            });
+            }
             let what = match owner.split_once(':') {
                 Some(("orch" | "session" | "workers", _)) => "a session",
                 Some(("chat", _)) => "a Chat",
@@ -1384,21 +1545,58 @@ impl Scanner<'_> {
                 Some(("brain", _)) => "a Brain job",
                 Some(("gen", _)) => "a commit message writer",
                 Some(("overnight", _)) => "an overnight run",
+                Some(("sweep", _)) => "an earlier Free up space",
                 _ => "an Inspector session",
             };
-            let (label, reason) = match state {
-                OwnerState::Unfinished => (
-                    format!("Cleanup of {what} that didn't finish ({files} items)"),
-                    "Removing these failed before; Brigadier tries again.",
+            let category = if worktrees.is_empty() {
+                CleanCategory::AgentFiles
+            } else {
+                CleanCategory::FinishedWork
+            };
+            let label = match state {
+                OwnerState::Unfinished => format!(
+                    "Cleanup of {what} that didn't finish ({})",
+                    counted(files, "item", "items")
                 ),
-                _ => (
-                    format!("Files left by {what} that is gone ({files} items)"),
-                    "Its worktrees, working folders and CLI session files, as Brigadier \
-                     recorded them.",
+                _ => format!(
+                    "Files left by {what} that is gone ({})",
+                    counted(files, "item", "items")
                 ),
             };
+            if unknown {
+                let mut entry = item(
+                    category,
+                    label,
+                    paths.first().cloned(),
+                    bytes,
+                    "Has a work folder git can't read, or with unsaved changes and no branch to \
+                     keep them on, so it stays.",
+                    false,
+                );
+                entry.selectable = false;
+                entry.badges.push(CleanBadge::HasChanges);
+                self.items.push(ScanItem {
+                    item: entry,
+                    action: Action::External("none".into()),
+                    routine: false,
+                });
+                continue;
+            }
+            let reason = match (state, dirty) {
+                (_, true) => {
+                    "Has unsaved changes, so it isn't part of the sweep. Picked by hand, they are \
+                     first kept as a commit on the work folder's branch, which stays."
+                }
+                (OwnerState::Unfinished, false) => {
+                    "Removing these failed before; Brigadier tries again."
+                }
+                _ => {
+                    "What it ran in and its agent session files, as Brigadier recorded them. \
+                     Branches stay."
+                }
+            };
             let mut entry = item(
-                CleanCategory::SessionFiles,
+                category,
                 label,
                 paths.first().cloned(),
                 bytes,
@@ -1472,7 +1670,7 @@ impl Scanner<'_> {
         let bytes = entries.iter().map(|(_, bytes)| bytes).sum();
         self.push(
             item(
-                CleanCategory::SessionFiles,
+                CleanCategory::Temporary,
                 counted(
                     entries.len(),
                     "working folder of an ended conversation or worker",
@@ -1518,7 +1716,7 @@ impl Scanner<'_> {
             let bytes = entries.iter().map(|(_, bytes)| bytes).sum();
             self.push_routine(
                 item(
-                    CleanCategory::SessionFiles,
+                    CleanCategory::Temporary,
                     counted(entries.len(), "session temp folder", "session temp folders"),
                     Some(base.to_owned()),
                     bytes,
@@ -1535,7 +1733,7 @@ impl Scanner<'_> {
                 .map(|path| removal::allocated_size(path))
                 .sum();
             let mut entry = item(
-                CleanCategory::SessionFiles,
+                CleanCategory::Temporary,
                 counted(
                     legacy.len(),
                     "older session temp folder",
@@ -1617,7 +1815,7 @@ impl Scanner<'_> {
             let bytes = logs.iter().map(|(_, bytes)| bytes).sum();
             self.push(
                 item(
-                    CleanCategory::LogsAndData,
+                    CleanCategory::OldLogs,
                     counted(logs.len(), "old log file", "old log files"),
                     Some(self.data("logs")),
                     bytes,
@@ -1637,7 +1835,7 @@ impl Scanner<'_> {
         if !recordings.is_empty() {
             let bytes = recordings.iter().map(|(_, bytes)| bytes).sum();
             let mut entry = item(
-                CleanCategory::LogsAndData,
+                CleanCategory::Recordings,
                 format!(
                     "{} older than 30 days",
                     counted(recordings.len(), "recording", "recordings")
@@ -1794,6 +1992,7 @@ impl Scanner<'_> {
             total_bytes,
             projects,
             shared,
+            kept: Vec::new(),
         }
     }
 }
@@ -1806,7 +2005,8 @@ fn artifact_path(artifact: &Artifact) -> Option<String> {
         | Artifact::PreviewDataDir { path, .. }
         | Artifact::ClaudeTempDir { path }
         | Artifact::ClaudeProjectDir { path }
-        | Artifact::CodexGeneratedImages { path } => Some(path.clone()),
+        | Artifact::CodexGeneratedImages { path }
+        | Artifact::Adopted { path, .. } => Some(path.clone()),
         _ => None,
     }
 }
