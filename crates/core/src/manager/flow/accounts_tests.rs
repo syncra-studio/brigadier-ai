@@ -1497,7 +1497,7 @@ async fn a_side_chat_whose_start_outlasts_its_parents_delete_stays_marked_until_
     .await;
     let parent = chat_on(&flow, ProviderKind::Claude, None).await;
     say_to(&flow, &parent, "Hello.").await;
-    let side = flow.manager.open_side_chat(&parent).await.unwrap().id;
+    let side = flow.manager.open_side_chat(&parent, None).await.unwrap().id;
     say_to(&flow, &side, "Side hello.").await;
     flow.manager.conv(&side).unwrap().close_cli().await;
     let (reached, release) = (
