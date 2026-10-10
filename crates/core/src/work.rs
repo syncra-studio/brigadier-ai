@@ -2118,6 +2118,9 @@ pub struct Told {
     pub short_replies: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission: Option<crate::model::PermissionLevel>,
+    /// Folder trust, which also controls the permission text's full-access suggestion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_trusted: Option<bool>,
     /// The overnight run's fingerprint (its branch, sandbox and restrictions); empty: no run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<String>,

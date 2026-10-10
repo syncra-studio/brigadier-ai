@@ -360,6 +360,7 @@ pub(crate) struct Current {
     pub today: String,
     pub short_replies: bool,
     pub permission: PermissionLevel,
+    pub folder_trusted: bool,
     /// Where accepted work lands and the permission level, as the instructions say them
     /// without a run.
     pub plain: (String, String),
@@ -400,6 +401,7 @@ impl Current {
             today: today(),
             short_replies,
             permission,
+            folder_trusted: trusted,
             plain: setting_texts(conversation, trusted, None),
             run,
             preferences,
@@ -414,6 +416,7 @@ impl Current {
             today: today(),
             short_replies: false,
             permission: PermissionLevel::ApproveForMe,
+            folder_trusted: true,
             plain: (String::new(), String::new()),
             run: None,
             preferences: memories,
@@ -435,6 +438,7 @@ impl Current {
             today: Some(self.today.clone()),
             short_replies: session.then_some(self.short_replies),
             permission: session.then_some(self.permission),
+            folder_trusted: session.then_some(self.folder_trusted),
             run: session.then(|| self.run_fingerprint()),
             preferences: Some(preferences_fingerprint(&self.preferences)),
             workspace: self.workspace.clone(),
@@ -532,19 +536,28 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
                     told: Told {
                         run: Some(String::new()),
                         permission: Some(now.permission),
+                        folder_trusted: Some(now.folder_trusted),
                         ..Told::default()
                     },
                 });
             }
-            None if told.permission != Some(now.permission) => {
+            None if told.permission != Some(now.permission)
+                || told.folder_trusted != Some(now.folder_trusted) =>
+            {
+                let reason = match (told.folder_trusted, now.folder_trusted) {
+                    (_, false) => {
+                        "This project's folder isn't trusted, so this session now asks first:"
+                    }
+                    (Some(false), true) => "This project's folder is trusted again. From now on:",
+                    (Some(true), true) => "The user changed the permission level. From now on:",
+                    (None, true) => "The session's permission settings are now:",
+                };
                 notes.push(Note {
-                    text: format!(
-                        "[settings] The user changed the permission level. From now on: {}",
-                        now.plain.1
-                    ),
+                    text: format!("[settings] {reason} {}", now.plain.1),
                     label: PERMISSION_LABEL,
                     told: Told {
                         permission: Some(now.permission),
+                        folder_trusted: Some(now.folder_trusted),
                         ..Told::default()
                     },
                 });
@@ -608,6 +621,7 @@ pub(crate) fn fill_told(told: &mut Told, older: &Told) {
     }
     told.short_replies = told.short_replies.or(older.short_replies);
     told.permission = told.permission.or(older.permission);
+    told.folder_trusted = told.folder_trusted.or(older.folder_trusted);
     if told.run.is_none() {
         told.run.clone_from(&older.run);
     }
@@ -1642,6 +1656,94 @@ mod environment_tests {
         assert!(sent[0].text.starts_with(
             "[settings] The user changed the permission level. From now on: Full access: you and the workers run without a sandbox"
         ));
+    }
+
+    #[test]
+    fn trust_changes_are_told_even_when_the_permission_level_stays_the_same() {
+        let conversation = session("askForApproval");
+        let trusted = Current::session(&conversation, true, None, true, vec![], None);
+        let untrusted = Current::session(&conversation, false, None, true, vec![], None);
+        assert_eq!(trusted.permission, untrusted.permission);
+        let mut told = trusted.told();
+        for now in [&untrusted, &trusted] {
+            let sent = notes(&told, now);
+            assert_eq!(labels(&sent), vec![PERMISSION_LABEL]);
+            assert!(sent[0].text.ends_with(&now.plain.1));
+            assert_eq!(
+                sent[0].text.contains("suggest_full_access"),
+                now.folder_trusted
+            );
+            // Persist and recover the note over the older role instructions.
+            let note = entry(PERMISSION_LABEL, Some(sent[0].told.clone()));
+            let note: ContextInjection =
+                serde_json::from_str(&serde_json::to_string(&note).unwrap()).unwrap();
+            let role = entry(ROLE_INSTRUCTIONS_SHORT, Some(told));
+            (told, _) = told_from_log([(2, &note), (1, &role)]);
+            assert_eq!(told, now.told());
+            assert!(notes(&told, now).is_empty());
+        }
+    }
+
+    #[test]
+    fn trust_changes_explain_why_the_permission_level_changed() {
+        for level in ["approveForMe", "fullAccess"] {
+            let conversation = session(level);
+            let trusted = Current::session(&conversation, true, None, true, vec![], None);
+            let untrusted = Current::session(&conversation, false, None, true, vec![], None);
+            assert_ne!(trusted.permission, untrusted.permission);
+            let mut told = trusted.told();
+            for (now, reason) in [
+                (
+                    &untrusted,
+                    "This project's folder isn't trusted, so this session now asks first:",
+                ),
+                (
+                    &trusted,
+                    "This project's folder is trusted again. From now on:",
+                ),
+            ] {
+                let sent = notes(&told, now);
+                assert_eq!(labels(&sent), vec![PERMISSION_LABEL]);
+                assert_eq!(sent[0].text, format!("[settings] {reason} {}", now.plain.1));
+                took(&mut told, &sent);
+                assert_eq!(told, now.told());
+                assert!(notes(&told, now).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_trust_is_told_once_and_run_end_restores_current_trust() {
+        let conversation = session("askForApproval");
+        let plain = Current::session(&conversation, false, None, true, vec![], None);
+        let mut legacy = serde_json::to_value(plain.told()).unwrap();
+        legacy.as_object_mut().unwrap().remove("folderTrusted");
+        let mut told: Told = serde_json::from_value(legacy).unwrap();
+        let sent = notes(&told, &plain);
+        assert_eq!(labels(&sent), vec![PERMISSION_LABEL]);
+        took(&mut told, &sent);
+        assert!(notes(&told, &plain).is_empty());
+
+        let workspace = workspace();
+        let run = |trusted| {
+            Current::session(
+                &conversation,
+                trusted,
+                Some((&workspace, String::new())),
+                true,
+                vec![],
+                None,
+            )
+        };
+        told = run(true).told();
+        // The run still supplies the permission text while it is active.
+        assert!(notes(&told, &run(false)).is_empty());
+        let sent = notes(&told, &plain);
+        assert_eq!(labels(&sent), vec![RUN_OVER_LABEL]);
+        assert!(sent[0].text.ends_with(&plain.plain.1));
+        took(&mut told, &sent);
+        assert_eq!(told, plain.told());
+        assert!(notes(&told, &plain).is_empty());
     }
 
     #[test]
