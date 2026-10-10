@@ -533,7 +533,15 @@ impl CleanupLedger {
                 Artifact::ScratchDir { path } => {
                     let data_dir = self.platform.paths().data_dir.clone();
                     let dir = PathBuf::from(path);
-                    match tokio::task::spawn_blocking(move || remove_scratch(&data_dir, &dir)).await
+                    let session = owner.starts_with("session:");
+                    match tokio::task::spawn_blocking(move || {
+                        if session && !dir.starts_with(&data_dir) && !test_data_folder(&dir) {
+                            remove_preview_data(&data_dir, &dir)
+                        } else {
+                            remove_scratch(&data_dir, &dir)
+                        }
+                    })
+                    .await
                     {
                         Ok(Ok(())) => removed.push(artifact),
                         Ok(Err(err)) => leftovers.failures.push(format!("{path}: {err}")),
@@ -649,6 +657,34 @@ fn remove_scratch(data_dir: &Path, dir: &Path) -> std::io::Result<()> {
     match std::fs::remove_dir_all(dir) {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         other => other,
+    }
+}
+
+/// Session-owned preview data can have a caller-chosen name, but must remain strictly
+/// inside /tmp and outside both app data directories. The ledger is the ownership proof.
+fn remove_preview_data(data_dir: &Path, dir: &Path) -> std::io::Result<()> {
+    let root = Path::new("/tmp").canonicalize()?;
+    if !dir.starts_with(&root) || dir == root {
+        return Err(std::io::Error::other("preview data is outside /tmp"));
+    }
+    for own in [
+        Some(data_dir.to_owned()),
+        brigadier_sandbox::default_data_dir().ok(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let own = own.canonicalize().unwrap_or(own);
+        if dir.starts_with(&own) || own.starts_with(dir) {
+            return Err(std::io::Error::other(
+                "preview data overlaps an app data directory",
+            ));
+        }
+    }
+    match brigadier_sandbox::removal::bind(&root, dir) {
+        Ok(bound) => brigadier_sandbox::removal::delete(&bound).map_err(std::io::Error::other),
+        Err(brigadier_sandbox::removal::RemovalError::Gone(_)) => Ok(()),
+        Err(err) => Err(std::io::Error::other(err)),
     }
 }
 

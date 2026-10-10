@@ -197,16 +197,13 @@ impl SessionManager {
             ));
         }
         let workdir = preview_workdir(args.workdir.as_deref(), &workspace)?;
-        let env = args.env.unwrap_or_default();
+        let mut env = args.env.unwrap_or_default();
         let installed = brigadier_sandbox::default_data_dir().ok();
-        check_env(
-            &env,
-            &workdir,
-            &[Some(self.data_dir.clone()), installed]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>(),
-        )?;
+        let protected = [Some(self.data_dir.clone()), installed]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        check_env(&env, &workdir, &protected)?;
         check_own_repo(&workspace, &env, &command)?;
         let scratch = self.owned_dir("orch", &id.0);
         let name = args
@@ -236,6 +233,27 @@ impl SessionManager {
                 },
             )
             .await?;
+        #[cfg(unix)]
+        let mut data = if let Some(value) = env.get(brigadier_sandbox::DATA_DIR_ENV) {
+            let owner = format!("session:{id}");
+            let data =
+                create_preview_data(&workdir.join(value), &protected, &ledger.artifacts(&owner))?;
+            ledger
+                .record(
+                    &owner,
+                    Artifact::ScratchDir {
+                        path: data.path.to_string_lossy().into_owned(),
+                    },
+                )
+                .await?;
+            env.insert(
+                brigadier_sandbox::DATA_DIR_ENV.into(),
+                data.path.to_string_lossy().into_owned(),
+            );
+            Some(data)
+        } else {
+            None
+        };
         #[cfg(target_os = "macos")]
         let (env, writable_roots, preview_temp) = {
             let mut env = env;
@@ -248,10 +266,8 @@ impl SessionManager {
                         .or_insert_with(|| temp.to_string_lossy().into_owned());
                 }
                 preview_temp = Some(temp);
-                if let Some(data) = env.get(brigadier_sandbox::DATA_DIR_ENV) {
-                    // Validation excludes protected folders; creation claims a new directory
-                    // atomically, so an existing folder can never become a new write grant.
-                    roots.push(create_preview_data(&workdir.join(data))?);
+                if let Some(data) = &data {
+                    roots.push(data.path.clone());
                 }
             }
             (env, roots, preview_temp)
@@ -341,7 +357,13 @@ impl SessionManager {
                 watched.ask_to_stop("it could not be recorded");
             }
             drop(starting);
+            #[cfg(unix)]
+            let recorded_ok = recorded.is_ok();
             let _ = recorded_tx.send(recorded);
+            #[cfg(unix)]
+            if recorded_ok && let Some(data) = &mut data {
+                data.created = false;
+            }
             this.watch_preview(watched, child, artifact).await;
         });
         let recorded = recorded_rx.await.unwrap_or_else(|_| {
@@ -924,33 +946,137 @@ fn check_env(env: &BTreeMap<String, String>, workdir: &Path, protected: &[PathBu
     Ok(())
 }
 
-/// A preview may gain a new data directory, never adopt another process's temp folder.
-#[cfg(target_os = "macos")]
-fn create_preview_data(path: &Path) -> Result<PathBuf> {
-    use std::os::unix::fs::DirBuilderExt as _;
+/// A newly claimed directory rolls back on failure or cancellation. A reused session
+/// directory survives failed starts, just as it survives a successful preview's exit.
+#[cfg(unix)]
+struct PreviewData {
+    path: PathBuf,
+    parent: std::os::fd::OwnedFd,
+    name: std::ffi::OsString,
+    created: bool,
+    bound: Option<brigadier_sandbox::removal::Bound>,
+}
 
-    let dir = resolved(path);
-    let reserved = dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| {
-            name.starts_with("brigadier-pv-") || name.starts_with("brigadier-test-")
-        });
-    if reserved {
-        return Err(Error::Invalid(
-            "BRIGADIER_DATA_DIR must not name a brigadier-pv- or brigadier-test- folder".into(),
-        ));
+#[cfg(unix)]
+impl Drop for PreviewData {
+    fn drop(&mut self) {
+        if self.created {
+            if let Some(bound) = &self.bound {
+                if let Err(err) = brigadier_sandbox::removal::delete(bound) {
+                    tracing::warn!(path = %self.path.display(), error = %err, "could not roll back preview data; the session ledger will retry");
+                }
+                return;
+            }
+            // Before binding the new leaf, it is empty. Never follow a replaced parent.
+            let _ = nix::unistd::unlinkat(
+                &self.parent,
+                self.name.as_os_str(),
+                nix::unistd::UnlinkatFlags::RemoveDir,
+            );
+        }
     }
-    std::fs::DirBuilder::new()
-        .mode(0o700)
-        .create(&dir)
-        .map_err(|err| {
-            Error::Invalid(format!(
-                "BRIGADIER_DATA_DIR must name a new folder with an existing parent; {}: {err}",
-                dir.display()
-            ))
-        })?;
-    Ok(dir)
+}
+
+#[cfg(unix)]
+fn directory_path(fd: &std::os::fd::OwnedFd) -> std::io::Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut path = PathBuf::new();
+        nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_GETPATH(&mut path))?;
+        Ok(path)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        use std::os::fd::AsRawFd as _;
+        std::fs::read_link(format!("/proc/self/fd/{}", fd.as_raw_fd()))
+    }
+}
+
+/// Walk from the temp root without following links, then claim the leaf through its
+/// parent's descriptor. Only this session's ledger grants permission to reuse a leaf.
+#[cfg(unix)]
+fn create_preview_data(
+    path: &Path,
+    protected: &[PathBuf],
+    owned: &[Artifact],
+) -> Result<PreviewData> {
+    use nix::fcntl::{OFlag, open, openat};
+    use nix::sys::stat::{Mode, mkdirat};
+    use std::path::Component;
+
+    let invalid = |why: String| {
+        Error::Invalid(format!(
+            "BRIGADIER_DATA_DIR needs an existing, non-symlink parent under /tmp \
+         (only this session's recorded folder may be reused); pick a fresh name: {why}"
+        ))
+    };
+    let check = |dir: &Path| {
+        check_env(
+            &BTreeMap::from([(
+                brigadier_sandbox::DATA_DIR_ENV.into(),
+                dir.to_string_lossy().into_owned(),
+            )]),
+            Path::new("/"),
+            protected,
+        )
+    };
+    check(path)?;
+    let temp = Path::new("/tmp")
+        .canonicalize()
+        .map_err(|err| invalid(err.to_string()))?;
+    let relative = path
+        .strip_prefix("/tmp")
+        .or_else(|_| path.strip_prefix(&temp))
+        .map_err(|err| invalid(err.to_string()))?;
+    let mut parts = relative.components().collect::<Vec<_>>();
+    let Some(Component::Normal(name)) = parts.pop() else {
+        return Err(invalid(path.display().to_string()));
+    };
+    if name.to_string_lossy().starts_with("brigadier-pv-")
+        || name.to_string_lossy().starts_with("brigadier-test-")
+    {
+        return Err(invalid("reserved folder name".into()));
+    }
+    let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+    let mut parent = open(&temp, flags, Mode::empty()).map_err(|err| invalid(err.to_string()))?;
+    for part in parts {
+        let Component::Normal(part) = part else {
+            return Err(invalid("invalid parent component".into()));
+        };
+        parent =
+            openat(&parent, part, flags, Mode::empty()).map_err(|err| invalid(err.to_string()))?;
+    }
+    let dir = directory_path(&parent)
+        .map_err(|err| invalid(err.to_string()))?
+        .join(name);
+    check(&dir)?;
+    let artifact = Artifact::ScratchDir {
+        path: dir.to_string_lossy().into_owned(),
+    };
+    let created = match mkdirat(&parent, name, Mode::S_IRWXU) {
+        Ok(()) => true,
+        Err(nix::errno::Errno::EEXIST) if owned.contains(&artifact) => false,
+        Err(err) => return Err(invalid(err.to_string())),
+    };
+    let mut data = PreviewData {
+        path: dir,
+        parent,
+        name: name.to_owned(),
+        created,
+        bound: None,
+    };
+    let leaf =
+        openat(&data.parent, name, flags, Mode::empty()).map_err(|err| invalid(err.to_string()))?;
+    let real = directory_path(&leaf).map_err(|err| invalid(err.to_string()))?;
+    check(&real)?;
+    if real != data.path || data.path.canonicalize().ok().as_ref() != Some(&real) {
+        return Err(invalid("parent changed while creating the folder".into()));
+    }
+    data.bound = Some(
+        brigadier_sandbox::removal::bind(&temp, &data.path)
+            .map_err(|err| invalid(err.to_string()))?,
+    );
+    Ok(data)
 }
 
 /// `path` as the file system resolves it (`/tmp` → `/private/tmp`), down to the part of it
@@ -1306,16 +1432,58 @@ mod tests {
         #[cfg(target_os = "macos")]
         {
             let fresh = root.join("fresh-data");
-            assert_eq!(create_preview_data(&fresh).unwrap(), resolved(&fresh));
-            assert!(create_preview_data(&fresh).is_err());
-            assert!(create_preview_data(&root.join("link")).is_err());
+            let mut data = create_preview_data(&fresh, &[], &[]).unwrap();
+            assert_eq!(data.path, resolved(&fresh));
+            data.created = false;
+            assert!(create_preview_data(&fresh, &[], &[]).is_err());
+            assert!(create_preview_data(&root.join("link"), &[], &[]).is_err());
             for name in ["brigadier-pv-new", "brigadier-test-new"] {
-                assert!(create_preview_data(&root.join(name)).is_err());
+                assert!(create_preview_data(&root.join(name), &[], &[]).is_err());
                 assert!(!root.join(name).exists());
             }
         }
         assert!(check_env(&env("1BAD", "x"), workdir, &protected).is_err());
         assert!(check_env(&env("A B", "x"), workdir, &protected).is_err());
+    }
+
+    #[test]
+    fn preview_data_refuses_symlink_parents_and_rechecks_protected_paths() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let root =
+            Temp(std::env::temp_dir().join(format!("preview-data-{}", uuid::Uuid::new_v4())));
+        std::fs::create_dir_all(root.join("parent")).unwrap();
+        std::fs::create_dir(root.join("protected")).unwrap();
+        let path = root.join("parent/data");
+        let env = BTreeMap::from([(
+            brigadier_sandbox::DATA_DIR_ENV.into(),
+            path.to_string_lossy().into_owned(),
+        )]);
+        let protected = [root.join("protected")];
+        check_env(&env, Path::new("/"), &protected).unwrap();
+        // Swap after the early validation, as a thread could while record().await runs.
+        std::fs::remove_dir(root.join("parent")).unwrap();
+        symlink(root.join("protected"), root.join("parent")).unwrap();
+        assert!(create_preview_data(&path, &protected, &[]).is_err());
+        assert!(!root.join("protected/data").exists());
+        // Even a symlink pointing to an otherwise allowed parent is refused.
+        assert!(create_preview_data(&path, &[], &[]).is_err());
+        assert!(create_preview_data(&root.join("protected/data"), &protected, &[]).is_err());
+        let fresh = root.join("fresh");
+        let data = create_preview_data(&fresh, &protected, &[]).unwrap();
+        assert_eq!(
+            std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        std::fs::write(
+            fresh.join("partial-start"),
+            "a child wrote before recording failed",
+        )
+        .unwrap();
+        drop(data);
+        assert!(
+            !fresh.exists(),
+            "a cancelled start rolls back its new directory"
+        );
     }
 
     #[test]

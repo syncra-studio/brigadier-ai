@@ -690,3 +690,123 @@ async fn a_sandboxed_preview_gets_a_private_writable_temp_directory() {
     assert!(!dir.exists());
     flow.stop().await;
 }
+
+/// Data belongs to the session: restarts retain it, other sessions cannot adopt it,
+/// archive sweeps it, and a failed OS spawn rolls back only the newly created folder.
+#[tokio::test]
+async fn preview_data_is_session_owned_and_failed_spawns_leave_no_folder() {
+    let tmp = scratch("data-lifecycle");
+    let data = tmp.join("app-data");
+    let failed = tmp.join("failed-data");
+    let replies = Replies::default();
+    let make_thread = |replies: Replies| {
+        let data = data.clone();
+        let failed = failed.clone();
+        script(move |turn| {
+            let (replies, data, failed) = (replies.clone(), data.clone(), failed.clone());
+            async move {
+                if !turn.is_orchestrator() {
+                    return Reply::text("Done.");
+                }
+                let fail = turn.input.contains("Fail the spawn");
+                let path = if fail { &failed } else { &data };
+                let mut env = json!({ "BRIGADIER_DATA_DIR": path });
+                if fail {
+                    // An embedded NUL reaches Command::spawn and is rejected by the OS API.
+                    env["BAD"] = json!("\0");
+                }
+                let result = turn.call("start_preview", json!({
+                    "command": "if test -f \"$BRIGADIER_DATA_DIR/probe\"; then cat \"$BRIGADIER_DATA_DIR/probe\"; else echo retained > \"$BRIGADIER_DATA_DIR/probe\"; echo created; fi",
+                    "env": env,
+                })).await;
+                replies
+                    .lock()
+                    .unwrap()
+                    .push(("start_preview".into(), result.text));
+                Reply::text("Called start_preview.")
+            }
+        })
+    };
+    let options = Options {
+        permission: if cfg!(target_os = "macos") {
+            crate::model::PermissionLevel::ApproveForMe
+        } else {
+            crate::model::PermissionLevel::FullAccess
+        },
+        ..Options::default()
+    };
+    let flow = Flow::start("preview-data", options, make_thread(replies.clone())).await;
+    flow.say("Start the preview.").await;
+    flow.until("first data start", |_| replies.lock().unwrap().len() == 1)
+        .await;
+    flow.settled().await;
+    assert!(
+        data.join("probe").is_file(),
+        "{:?}",
+        replies.lock().unwrap()
+    );
+    let ledger = flow.manager.runtime.ledger();
+    let artifact = Artifact::ScratchDir {
+        path: data.canonicalize().unwrap().to_string_lossy().into_owned(),
+    };
+    assert!(
+        ledger
+            .artifacts(&format!("session:{}", flow.conversation))
+            .contains(&artifact)
+    );
+    assert!(
+        !ledger
+            .artifacts(&format!("preview:{}", flow.conversation))
+            .contains(&artifact)
+    );
+
+    flow.say("Start it again.").await;
+    flow.until("reused data", |_| replies.lock().unwrap().len() == 2)
+        .await;
+    flow.settled().await;
+    assert!(
+        replies.lock().unwrap()[1].1.contains("retained"),
+        "{:?}",
+        replies.lock().unwrap()
+    );
+
+    let other_replies = Replies::default();
+    let other = Flow::start(
+        "preview-data-other",
+        Options::default(),
+        make_thread(other_replies.clone()),
+    )
+    .await;
+    other.say("Start the preview.").await;
+    other
+        .until("refused foreign data", |_| {
+            !other_replies.lock().unwrap().is_empty()
+        })
+        .await;
+    assert!(
+        other_replies.lock().unwrap()[0]
+            .1
+            .contains("pick a fresh name")
+    );
+    other.stop().await;
+
+    flow.say("Fail the spawn.").await;
+    flow.until("failed spawn", |_| replies.lock().unwrap().len() == 3)
+        .await;
+    flow.settled().await;
+    assert!(
+        replies.lock().unwrap()[2]
+            .1
+            .contains("could not start the preview"),
+        "{:?}",
+        replies.lock().unwrap()
+    );
+    assert!(!failed.exists());
+    assert!(data.join("probe").exists());
+    flow.manager
+        .archive(flow.conversation.clone())
+        .await
+        .unwrap();
+    super::eventually("session data swept", || !data.exists()).await;
+    flow.stop().await;
+}
