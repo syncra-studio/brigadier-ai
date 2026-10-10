@@ -27,7 +27,7 @@ import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
 import { type Activity, type LeadStep, turnActivity } from "@/app/conversation/activity/group";
 import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadStep";
-import { ROW } from "@/components/assistant-ui/elements/activity-row";
+import { CHEVRON, ROW, ROW_TOGGLE } from "@/components/assistant-ui/elements/activity-row";
 import {
   type BlockCard,
   type BlockCompaction,
@@ -279,9 +279,11 @@ const ReportText: FC<TextMessagePartProps> = (props) => {
   return (
     <div className="flex flex-col gap-3">
       <MarkdownBlock text={report.head} />
-      <details data-slot="report-details">
-        <summary className="text-muted-foreground rounded-control cursor-pointer text-sm">
+      <details data-slot="report-details" className="group/details">
+        {/* Folds like a work row: its words, then the same quiet chevron, never the browser's marker. */}
+        <summary className={cn(ROW, ROW_TOGGLE, "list-none [&::-webkit-details-marker]:hidden")}>
           Details
+          <ChevronRight aria-hidden className={cn(CHEVRON, "group-open/details:rotate-90")} />
         </summary>
         <div className="pt-2">
           <MarkdownBlock text={report.details} />
