@@ -1,4 +1,11 @@
-import type { CleanCategory, CleanFailure, CleanItem, CleanReport, StorageReport } from "@/ipc/generated";
+import type {
+  CleanCategory,
+  CleanFailure,
+  CleanItem,
+  CleanReport,
+  SharedPart,
+  StorageReport,
+} from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";
 
 /*
@@ -6,6 +13,35 @@ import { formatBytes } from "@/lib/format";
  * one button removes, what is kept on purpose and why, and the words of the confirmation and
  * the result.
  */
+
+/** One part of the disk use bar: what it is, its share, and its colour. */
+export type UsagePart = { key: string; label: string; bytes: number; color: string };
+
+/**
+ * What Brigadier's disk use is made of, for the bar and its legend, in a fixed order: work
+ * folders, conversations, Brains, models, logs and recordings, everything else. The parts add up
+ * to the scan's total (what no part counts is in "Other").
+ */
+export function usageParts(report: StorageReport): UsagePart[] {
+  const shared = (part: SharedPart) => report.shared.find((entry) => entry.part === part)?.bytes ?? 0;
+  const projects = (pick: (project: StorageReport["projects"][number]) => number) =>
+    report.projects.reduce((total, project) => total + pick(project), 0);
+  const parts: UsagePart[] = [
+    { key: "work", label: "Work folders", bytes: projects((p) => p.worktreesBytes), color: "bg-glyph-5" },
+    {
+      key: "conversations",
+      label: "Conversations",
+      bytes: projects((p) => p.blobsBytes) + shared("otherBlobs") + shared("database"),
+      color: "bg-glyph-1",
+    },
+    { key: "brains", label: "Brains", bytes: projects((p) => p.brainBytes) + shared("personalBrain"), color: "bg-glyph-7" },
+    { key: "models", label: "Models", bytes: shared("models"), color: "bg-glyph-3" },
+    { key: "logs", label: "Logs & recordings", bytes: shared("logs") + shared("recordings"), color: "bg-glyph-4" },
+  ];
+  const counted = sum(parts);
+  const other = Math.max(0, report.totalBytes - counted, projects((p) => p.scratchBytes) + shared("other"));
+  return [...parts, { key: "other", label: "Other", bytes: other, color: "bg-foreground/50" }];
+}
 
 /** The groups the sweep shows, in order. */
 export const SWEEP_GROUPS: readonly { category: CleanCategory; title: string }[] = [
@@ -86,6 +122,13 @@ export function picked(report: StorageReport, ids: ReadonlySet<string>): Sweep {
 
 export function count(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
+}
+
+/** The Free up space row's line: what the one button would free. */
+export function freeLine(plan: Sweep): string {
+  if (plan.ids.length === 0) return "Nothing to free up: Brigadier is tidy.";
+  if (plan.bytes === 0) return `${count(plan.ids.length, "small leftover", "small leftovers")} can be tidied up.`;
+  return `${formatBytes(plan.bytes)} can be freed. Review what goes before anything is removed.`;
 }
 
 /** The line under the page's heading. */

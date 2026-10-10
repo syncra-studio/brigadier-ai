@@ -4,7 +4,7 @@ import React from "react";
 import ReactDOMServer from "react-dom/server";
 import { createServer } from "vite";
 
-import { action, confirmation, failure, picked, result, summary, sweep } from "@/app/settings/freeUpSpace";
+import { action, confirmation, failure, freeLine, picked, result, summary, sweep, usageParts } from "@/app/settings/freeUpSpace";
 import type { CleanItem, StorageReport } from "@/ipc/generated";
 
 const GB = 1024 ** 3;
@@ -182,4 +182,38 @@ test("the screen shows the groups, what is kept, and one button", async () => {
   } finally {
     await server.close();
   }
+});
+
+test("the disk use parts add up to the scan's total, the rest in Other", () => {
+  const parts = usageParts({
+    ...report,
+    totalBytes: 20 * GB,
+    projects: [
+      { projectId: "p", name: "p", repoFound: true, worktreesBytes: 8 * GB, brainBytes: GB, blobsBytes: GB, scratchBytes: MB },
+    ],
+    shared: [
+      { part: "database", bytes: GB },
+      { part: "models", bytes: 2 * GB },
+      { part: "logs", bytes: MB },
+      { part: "personalBrain", bytes: GB },
+      { part: "other", bytes: GB },
+    ],
+  });
+  assert.deepEqual(
+    parts.map((part) => [part.label, part.bytes]),
+    [
+      ["Work folders", 8 * GB],
+      ["Conversations", 2 * GB],
+      ["Brains", 2 * GB],
+      ["Models", 2 * GB],
+      ["Logs & recordings", MB],
+      ["Other", 20 * GB - 14 * GB - MB],
+    ],
+  );
+  assert.equal(parts.reduce((total, part) => total + part.bytes, 0), 20 * GB);
+});
+
+test("the Free up space line says what the button frees", () => {
+  assert.equal(freeLine(sweep({ ...report, items: [] })), "Nothing to free up: Brigadier is tidy.");
+  assert.match(freeLine(sweep(report)), /^11\.\d GB can be freed\./);
 });
