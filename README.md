@@ -414,12 +414,15 @@ factors in its details).
 - **Outcomes.** Every model's run of a task is recorded per project in `routing.sqlite`
   (result, first review, rework, checks, time, tokens, quota share), and nudges that model's
   score for that kind of task in that project.
-- **Your routing.** Settings → Routing shows, for each kind of work, the models routing would
-  try next and why (Automatic), or lets you order them yourself with an effort for each
-  (Manual): the list is tried top-down, and with "Wait for these" work waits for those models
-  rather than going to others. Everywhere or per project, with area overrides. Rules there
-  (never, prefer or only a model, family or vendor) keep models from work, during fallback too.
-  No Fable, effort at most high, limits and cross-vendor review hold whatever you choose.
+- **Your routing.** Settings → Providers: each model has one "Use this model" switch (in the
+  pickers and given work), and "Who does what" picks a model per kind of work or leaves it on
+  Automatic. Under Advanced, each kind of work shows the models routing would try next and why
+  (Automatic), or lets you order them yourself with an effort for each (Manual): the list is
+  tried top-down, and with "Wait for these" work waits for those models rather than going to
+  others. Everywhere or per project, with area overrides. Rules there keep models from work,
+  during fallback too: "Don't give work" keeps a model from tasks while you can still pick it
+  for a chat or session, and never, prefer or only apply to a model, family or vendor. No
+  Fable, effort at most high, limits and cross-vendor review hold whatever you choose.
 - **Workers' sub-agents.** A Claude worker's own sub-agents run only on models its task could
   have gone to (your rules, hidden models, quality floors and limits included, never Fable).
   When Claude can't be held to exactly those, the worker has no sub-agents. Codex workers have
