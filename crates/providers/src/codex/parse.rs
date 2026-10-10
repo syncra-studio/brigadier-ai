@@ -1310,10 +1310,13 @@ mod tests {
         first.grant = crate::policy::workspace_grant(&first, &workspace);
         let mut similar = crate::policy::Similar::default();
         similar.allow(&first);
-        assert!(similar.covers(&ask(&workspace.join("new/b.txt"), None)));
+        assert!(similar.covers(&ask(&workspace.join("new/b.txt"), None), Some(&workspace)));
         let outside = workspace.parent().unwrap().join("outside.txt");
-        assert!(!similar.covers(&ask(&outside, None)));
-        assert!(!similar.covers(&ask(&workspace.join("a.txt"), Some(&outside))));
+        assert!(!similar.covers(&ask(&outside, None), Some(&workspace)));
+        assert!(!similar.covers(
+            &ask(&workspace.join("a.txt"), Some(&outside)),
+            Some(&workspace)
+        ));
         std::fs::remove_dir_all(workspace).unwrap();
     }
 

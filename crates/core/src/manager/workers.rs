@@ -2709,7 +2709,11 @@ impl SessionManager {
         workspace: Option<&Path>,
     ) -> (PolicyRoute, Decider) {
         let route = policy::route(request, access, ApprovalMode::Delegated);
-        if route == PolicyRoute::AskUser && self.waiters.similar_allowed(conversation_id, request) {
+        if route == PolicyRoute::AskUser
+            && self
+                .waiters
+                .similar_allowed(conversation_id, request, workspace)
+        {
             return (PolicyRoute::Allow, Decider::User);
         }
         if request.kind == ApprovalKind::FileChange {

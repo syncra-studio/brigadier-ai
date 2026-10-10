@@ -77,12 +77,13 @@ impl Waiters {
         &self,
         conversation_id: &ConversationId,
         request: &brigadier_providers::ApprovalRequest,
+        workspace: Option<&std::path::Path>,
     ) -> bool {
         self.similar
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .get(conversation_id)
-            .is_some_and(|similar| similar.covers(request))
+            .is_some_and(|similar| similar.covers(request, workspace))
     }
 
     /// Allows requests similar to `request` for the rest of the conversation.

@@ -291,6 +291,44 @@ async fn a_session_grant_allows_later_edits_in_the_workspace_only() {
         *answered.lock().unwrap(),
         vec![Some(ApprovalDecision::Allow); 7]
     );
+    // A worker in another workspace cannot borrow the thread's file grant.
+    let mut edit = board
+        .approvals
+        .values()
+        .find_map(|card| match &card.subject {
+            ApprovalSubject::Cli { request }
+                if request.kind == brigadier_providers::ApprovalKind::FileChange =>
+            {
+                Some(request.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    let workspace = session_worktree(&flow);
+    edit.paths = vec![workspace.join("later.txt").display().to_string()];
+    assert_eq!(
+        flow.manager
+            .approval_route(
+                &flow.conversation,
+                &mut edit,
+                &brigadier_providers::Access::ReadOnly,
+                Some(&workspace)
+            )
+            .0,
+        brigadier_providers::policy::Route::Allow
+    );
+    assert_eq!(
+        flow.manager
+            .approval_route(
+                &flow.conversation,
+                &mut edit,
+                &brigadier_providers::Access::ReadOnly,
+                Some(&flow.repo)
+            )
+            .0,
+        brigadier_providers::policy::Route::AskUser
+    );
+    assert_eq!(edit.grant, None);
     flow.stop().await;
 }
 

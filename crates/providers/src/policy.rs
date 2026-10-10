@@ -447,17 +447,18 @@ impl Similar {
     }
 
     /// Whether `request` is similar to one the user allowed: network access to an allowed
-    /// host, a file change inside an allowed workspace, or a command line whose every command
+    /// host, a file change inside the asker’s own allowed `workspace`, or a command whose every command
     /// starts with allowed words.
-    pub fn covers(&self, request: &ApprovalRequest) -> bool {
+    pub fn covers(&self, request: &ApprovalRequest, workspace: Option<&std::path::Path>) -> bool {
         if let Some(host) = network_host(request) {
             return self.hosts.contains(&host);
         }
         if request.kind == ApprovalKind::FileChange {
-            return self
-                .folders
-                .iter()
-                .any(|folder| workspace_grant(request, folder).is_some());
+            let Some(workspace) = workspace.and_then(resolved_path) else {
+                return false;
+            };
+            return self.folders.contains(&workspace)
+                && workspace_grant(request, &workspace).is_some();
         }
         if request.kind != ApprovalKind::Command || self.prefixes.is_empty() {
             return false;
@@ -583,6 +584,8 @@ fn redirects_to_file(command: &str) -> bool {
 /// workspace itself, when every path the request names lies inside it as the file system
 /// resolves them (a symlink leading out is outside). `None` for anything else, and for a path
 /// in a `.git` folder, whose hooks and config run code: those ask every time.
+/// This checks paths at approval time; the provider writes later, so it cannot prevent a
+/// concurrent process from replacing a checked path with a symlink before the write.
 pub fn workspace_grant(request: &ApprovalRequest, workspace: &std::path::Path) -> Option<String> {
     use std::path::Component;
     if request.kind != ApprovalKind::FileChange || request.paths.is_empty() {
@@ -835,7 +838,7 @@ mod tests {
             "cd /tmp && curl -L https://example.net",
             "/bin/zsh -lc 'curl -s https://example.com'",
         ] {
-            assert!(similar.covers(&command(line, None, true)), "{line}");
+            assert!(similar.covers(&command(line, None, true), None), "{line}");
         }
         for line in [
             "wget https://example.com",
@@ -843,12 +846,12 @@ mod tests {
             "cd /tmp",
             "",
         ] {
-            assert!(!similar.covers(&command(line, None, true)), "{line}");
+            assert!(!similar.covers(&command(line, None, true), None), "{line}");
         }
 
         similar.allow(&command("git push origin main", None, true));
-        assert!(similar.covers(&command("git push -u origin topic", None, true)));
-        assert!(!similar.covers(&command("git reset --hard", None, true)));
+        assert!(similar.covers(&command("git push -u origin topic", None, true), None));
+        assert!(!similar.covers(&command("git reset --hard", None, true), None));
     }
 
     #[test]
@@ -887,7 +890,7 @@ mod tests {
             "curl https://example.com | sort | uniq -c",
             "echo '>' && curl https://example.com",
         ] {
-            assert!(similar.covers(&command(line, None, true)), "{line}");
+            assert!(similar.covers(&command(line, None, true), None), "{line}");
         }
         for line in [
             "curl https://example.com && sort -o /outside/file /tmp/input",
@@ -898,7 +901,7 @@ mod tests {
             "curl https://example.com &> /outside/log",
             "curl https://example.com >&/outside/log",
         ] {
-            assert!(!similar.covers(&command(line, None, true)), "{line}");
+            assert!(!similar.covers(&command(line, None, true), None), "{line}");
         }
     }
 
@@ -911,13 +914,13 @@ mod tests {
             ..write(Path::new("/"))
         };
         let mut similar = Similar::default();
-        assert!(!similar.covers(&network("example.com")));
+        assert!(!similar.covers(&network("example.com"), None));
         similar.allow(&network("example.com"));
-        assert!(similar.covers(&network("example.com")));
-        assert!(!similar.covers(&network("example.org")));
+        assert!(similar.covers(&network("example.com"), None));
+        assert!(!similar.covers(&network("example.org"), None));
         // A file change has nothing to be similar to.
         similar.allow(&write(Path::new("/x")));
-        assert!(!similar.covers(&write(Path::new("/x"))));
+        assert!(!similar.covers(&write(Path::new("/x")), None));
     }
 
     #[test]
@@ -954,9 +957,9 @@ mod tests {
         similar.allow(&asked);
 
         // In the workspace, also a new file in new folders, and through either spelling.
-        assert!(similar.covers(&write(&inside)));
-        assert!(similar.covers(&write(&workspace.join("new/dir/b.md"))));
-        assert!(similar.covers(&write(&dirs.real().join("scratch/c.md"))));
+        assert!(similar.covers(&write(&inside), Some(&workspace)));
+        assert!(similar.covers(&write(&workspace.join("new/dir/b.md")), Some(&workspace)));
+        assert!(similar.covers(&write(&dirs.real().join("scratch/c.md")), Some(&workspace)));
         // Outside it, climbing out, relative, through a symlink leading out, or in `.git`.
         for path in [
             other.join("a.md"),
@@ -966,33 +969,44 @@ mod tests {
             workspace.join(".git/hooks/pre-commit"),
             workspace.join("sub/.git/config"),
         ] {
-            assert!(!similar.covers(&write(&path)), "{}", path.display());
+            assert!(
+                !similar.covers(&write(&path), Some(&workspace)),
+                "{}",
+                path.display()
+            );
             assert_eq!(workspace_grant(&write(&path), &workspace), None);
         }
         #[cfg(unix)]
         {
-            assert!(!similar.covers(&write(&workspace.join("out/a.md"))));
+            assert!(!similar.covers(&write(&workspace.join("out/a.md")), Some(&workspace)));
             // A symlink leading to a file outside that doesn't exist yet.
             std::os::unix::fs::symlink(other.join("missing.md"), workspace.join("dangling.md"))
                 .unwrap();
-            assert!(!similar.covers(&write(&workspace.join("dangling.md"))));
+            assert!(!similar.covers(&write(&workspace.join("dangling.md")), Some(&workspace)));
             std::os::unix::fs::symlink(other.join("gone"), workspace.join("gone")).unwrap();
-            assert!(!similar.covers(&write(&workspace.join("gone/x.md"))));
+            assert!(!similar.covers(&write(&workspace.join("gone/x.md")), Some(&workspace)));
         }
         // One path outside makes the whole request ask.
         let mut both = write(&inside);
         both.paths.push(other.join("a.md").display().to_string());
-        assert!(!similar.covers(&both));
+        assert!(!similar.covers(&both, Some(&workspace)));
         // Another session's workspace is not this one's.
         let mut elsewhere = Similar::default();
         let mut asked = write(&other.join("a.md"));
         asked.grant = workspace_grant(&asked, &other);
         elsewhere.allow(&asked);
-        assert!(!elsewhere.covers(&write(&inside)));
+        assert!(!elsewhere.covers(&write(&inside), Some(&workspace)));
+        // The same conversation may grant several workspaces, but an asker cannot borrow
+        // another worker's (or the thread's) grant to edit that other workspace.
+        similar.merge(elsewhere);
+        assert!(!similar.covers(&write(&inside), Some(&other)));
+        assert!(!similar.covers(&write(&other.join("a.md")), Some(&workspace)));
+        assert!(!similar.covers(&write(&inside), None));
+        assert!(similar.covers(&write(&other.join("a.md")), Some(&other)));
         // Handed over with the other grants.
         let mut merged = Similar::default();
         merged.merge(similar);
-        assert!(merged.covers(&write(&inside)));
+        assert!(merged.covers(&write(&inside), Some(&workspace)));
         // Commands and permissions requests are no file grant.
         assert_eq!(
             workspace_grant(&command("ls", None, false), &workspace),

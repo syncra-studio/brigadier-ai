@@ -115,3 +115,12 @@ permissions; nothing reaches a daemon or the system. `?state=missing` (the defau
 `restarting` or `problem` picks what they read as; `?press=See%20the%20screen` presses that row's
 Allow… once shown, so Start over and Open System Settings appear. Check again reads the faked state
 again. `ComputerUsePageRender.test.ts` drives the same page in headless Chromium with `?drive=1`.
+
+# Session approvals
+
+`/fixtures/approvals.html` renders the production approval card with synthetic command,
+network, workspace-file, outside-file and unscoped requests. It includes 320px cards and a
+long command scope to check stacking and truncation. Hover or focus the session button for
+its full scope. `?drive=1` exercises the session buttons and Enter/Esc and writes JSON into
+`#approvals-result`; `ApprovalRender.test.ts` checks it. IPC stays mocked and never reaches
+a daemon. This entry is absent from the production build.

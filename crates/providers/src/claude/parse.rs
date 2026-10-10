@@ -1377,12 +1377,15 @@ mod tests {
         first.grant = policy::workspace_grant(&first, &workspace);
         let mut similar = policy::Similar::default();
         similar.allow(&first);
-        assert!(similar.covers(&edit(&workspace.join("new/b.txt"))));
-        assert!(!similar.covers(&edit(&workspace.parent().unwrap().join("outside.txt"))));
+        assert!(similar.covers(&edit(&workspace.join("new/b.txt")), Some(&workspace)));
+        assert!(!similar.covers(
+            &edit(&workspace.parent().unwrap().join("outside.txt")),
+            Some(&workspace)
+        ));
         let network = ask("SandboxNetworkAccess", json!({ "host": "example.com" }));
         assert_eq!(network.kind, ApprovalKind::Tool);
         similar.allow(&network);
-        assert!(similar.covers(&network));
+        assert!(similar.covers(&network, Some(&workspace)));
         std::fs::remove_dir_all(workspace).unwrap();
     }
 

@@ -296,6 +296,8 @@ A session's permission level is picked in the composer; a project remembers the 
   inside the asker’s own checkout/worktree for the rest of the conversation, including worker
   handoffs. File changes outside that folder or in Git metadata still ask. These grants stay
   in memory only; nothing is saved across sessions. Full access is the persistent alternative.
+  File grants check paths and symlinks when approval is requested; they cannot prevent a
+  concurrent process from swapping a checked path for a symlink before the CLI writes.
 - **Approve for me**: Brigadier approves plans and changes on your behalf (a risky plan gets an
   independent review first) and asks you only what only you can answer. Workers run in the OS
   sandbox with network; when a command needs more, the CLI's own reviewer decides (Claude's
