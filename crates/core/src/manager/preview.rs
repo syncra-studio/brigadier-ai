@@ -882,14 +882,24 @@ impl SessionManager {
                 // Members from an earlier pause may have lost the parent that led to them,
                 // and a detached one is beyond the group signal: walk from each of them too.
                 // One whose identity no longer matches is not ours any more.
-                let known = {
+                // Dropped members' ledger records go too, as the stop path forgets them.
+                let (known, dropped): (Vec<_>, Vec<_>) = {
                     let mut members = live
                         .paused_members
                         .lock()
                         .unwrap_or_else(|p| p.into_inner());
-                    members.retain(|member| crate::machine::still(&**platform, *member));
-                    members.clone()
+                    let (known, dropped) = std::mem::take(&mut *members)
+                        .into_iter()
+                        .partition(|member| crate::machine::still(&**platform, *member));
+                    *members = known;
+                    (members.clone(), dropped)
                 };
+                for member in dropped {
+                    self.runtime
+                        .ledger()
+                        .forget(&owner, process_artifact(member))
+                        .await;
+                }
                 let mut queue: Vec<u32> = known.iter().map(|member| member.pid).collect();
                 queue.push(root.pid);
                 let mut visited = std::collections::HashSet::new();
@@ -906,10 +916,21 @@ impl SessionManager {
                         continue;
                     };
                     if !crate::machine::still(&**platform, member) {
-                        live.paused_members
-                            .lock()
-                            .unwrap_or_else(|p| p.into_inner())
-                            .retain(|tracked| *tracked != member);
+                        let tracked = {
+                            let mut members = live
+                                .paused_members
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner());
+                            let before = members.len();
+                            members.retain(|tracked| *tracked != member);
+                            members.len() != before
+                        };
+                        if tracked {
+                            self.runtime
+                                .ledger()
+                                .forget(&owner, process_artifact(member))
+                                .await;
+                        }
                         continue;
                     }
                     self.runtime
@@ -1774,7 +1795,27 @@ while True:
             parent_file.as_os_str().to_owned(),
             detached_file.as_os_str().to_owned(),
         ];
+        /// Kills what the test started however it ends: the grandchild loops forever. Only
+        /// a process that still is the one it was, so a reused PID is left alone.
+        struct Kill(
+            Arc<dyn brigadier_sandbox::Platform>,
+            Vec<crate::machine::builds::Proc>,
+        );
+
+        impl Drop for Kill {
+            fn drop(&mut self) {
+                for proc in &self.1 {
+                    if crate::machine::still(&*self.0, *proc) {
+                        let _ = self.0.processes().kill_tree(proc.pid);
+                    }
+                }
+            }
+        }
+
         let mut child = platform.processes().piped_command(&spec).spawn().unwrap();
+        let mut kill = Kill(platform.clone(), Vec::new());
+        kill.1
+            .extend(crate::machine::proc_of(&*platform, child.id()));
         eventually("the parent and detached preview processes", || {
             [&parent_file, &detached_file]
                 .iter()
@@ -1785,10 +1826,12 @@ while True:
             .unwrap()
             .parse()
             .unwrap();
+        kill.1.extend(crate::machine::proc_of(&*platform, parent));
         let detached: u32 = std::fs::read_to_string(&detached_file)
             .unwrap()
             .parse()
             .unwrap();
+        kill.1.extend(crate::machine::proc_of(&*platform, detached));
         let parent = crate::machine::proc_of(&*platform, parent).unwrap();
         let live = LivePreview {
             conversation: flow.conversation.clone(),
@@ -1805,6 +1848,15 @@ while True:
         };
         flow.manager.signal_preview(&live, true).await.unwrap();
         assert!(stopped(detached));
+        let owner = preview_owner(&flow.conversation);
+        let recorded = |proc| {
+            flow.manager
+                .runtime
+                .ledger()
+                .artifacts(&owner)
+                .contains(&process_artifact(proc))
+        };
+        assert!(recorded(parent));
         flow.manager.signal_preview(&live, false).await.unwrap();
         assert!(!stopped(detached));
         // The leader lives on, but nothing leads from it to the detached process any more.
@@ -1815,10 +1867,18 @@ while True:
         .await;
         flow.manager.signal_preview(&live, true).await.unwrap();
         assert!(stopped(detached));
+        // The dead parent is dropped from the members, and its ledger record with it.
+        assert!(!recorded(parent));
+        assert!(
+            live.paused_members
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|member| *member != parent)
+        );
 
         flow.manager.signal_preview(&live, false).await.unwrap();
-        let _ = platform.processes().terminate(detached);
-        child.kill().unwrap();
+        drop(kill);
         child.wait().unwrap();
         flow.stop().await;
     }
