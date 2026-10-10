@@ -163,6 +163,29 @@
   /* The one gap between a thread's activity items (groups, team sentences, commentary), the
      lead's and a worker's alike (THREAD-UX-PLAN.md §3.7). */
   --spacing-activity: 1rem;
+  /* An activity row (a step, a group, a thought, a team sentence) and its line: 21px; the rows of
+     an open group 4px apart; the chevron of a row, a work header or a tray that opens. */
+  --spacing-activity-row: 1.3125rem;
+  --spacing-activity-row-gap: 0.25rem;
+  --spacing-chevron: 0.875rem;
+  /* An open group lists its rows up to this, then scrolls under a fade of fold-fade; a command's
+     output shows this much of its end; a settled thought this much of its text. */
+  --spacing-group-list: 14rem;
+  --spacing-group-fade: 1.5rem;
+  --spacing-shell-output: 9rem;
+  --spacing-shell-fade: 2rem;
+  --spacing-thought: 8.75rem;
+  /* A plan's card in the thread: its header, the height it shows before it clips, and the fade
+     over its clipped end. */
+  --spacing-plan-header: 2.5rem;
+  --spacing-plan-clip: 12.5rem;
+  --spacing-plan-fade: 4rem;
+  /* A turn's work folding: the slide it opens from and closes to. */
+  --spacing-fold-slide: 0.5rem;
+  /* The answer's action bar: its gap under the answer, its buttons and their gap. */
+  --spacing-answer-actions-gap: 0.375rem;
+  --spacing-answer-action: 1.625rem;
+  --spacing-answer-actions-between: 0.125rem;
   /* A worker's expanded run of actions shows this many rows, then scrolls. */
   --spacing-action-list: calc(var(--spacing-row-sm) * 9);
   /* The composer's / menu shows ten rows and half of the next, so it reads as scrollable. */
@@ -330,6 +353,10 @@
   --radius-thread: 1rem;
   --radius-composer: 1.375rem;
   --radius-bubble: 1.375rem;
+  /* A command's Shell box in the thread. */
+  --radius-shell: 0.78125rem;
+  /* A plan's card in the thread. */
+  --radius-plan: 0.78125rem;
   --radius-rail: 1.25rem;
   /* Menus and tooltips: rounder than cards. */
   --radius-menu: 1.25rem;
@@ -374,6 +401,13 @@
   --text-code: 0.8125rem;
   --text-code--line-height: 1.25rem;
   --text-code-inline: 0.85em;
+  /* A plan document: its title, its section headings and its text. */
+  --text-plan-title: 1.3125rem;
+  --text-plan-title--line-height: 1.75rem;
+  --text-plan-heading: 1.09375rem;
+  --text-plan-heading--line-height: 1.53125rem;
+  --text-plan: 0.875rem;
+  --text-plan--line-height: 1.421875rem;
 
   --shadow-hairline: inset 0 0 1px 0 oklch(1 0 0 / 20%);
   --shadow-tooltip: 0 8px 18px oklch(0 0 0 / 25%);
@@ -458,6 +492,9 @@
   --color-toolbar-pressed-hover: var(--toolbar-pressed-hover);
   --color-panel-tab: var(--panel-tab);
   --color-divider: var(--divider);
+  --color-row-chevron: var(--row-chevron);
+  --color-row-object: var(--row-object);
+  --color-work-rule: var(--work-rule);
   --color-toggle-on: var(--toggle-on);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
@@ -534,6 +571,16 @@
   /* The page surface's hairline edge over the chrome (as its shadow-page ring draws it). */
   --page-edge: color-mix(in oklab, oklch(1 0 0) 6%, var(--chrome));
   --divider: oklch(0.985 0.002 var(--tint) / 8%);
+  /* An activity row's chevron: always there, quieter than the row's words; white with them on
+     hover. The rule under a turn's work header. */
+  --row-chevron: color-mix(in oklab, var(--foreground) 25%, transparent);
+  /* What an activity row acts on (the file in "Edited math.ts", the command in "Ran pnpm test"): a step
+     fainter than its verb's 60%, as measured on the target's rows. */
+  --row-object: color-mix(in oklab, var(--foreground) 48%, transparent);
+  --work-rule: oklch(1 0 0 / 8.2%);
+  /* Live words ("Thinking", a running step): dim, with a brighter band sweeping across. */
+  --live-text: color-mix(in oklab, var(--foreground) 38.5%, transparent);
+  --live-text-highlight: color-mix(in oklab, var(--foreground) 75%, transparent);
   /* The titlebar's icon buttons: the glyph at rest, and the wash while hovered, held down,
      switched on (aria-pressed) and switched on and hovered. All follow the foreground, so a
      light theme gets its own. */
@@ -618,6 +665,18 @@
   --spacing-row: 1.625rem;
   --spacing-row-sm: 1.375rem;
   --spacing-activity: 0.75rem;
+  --spacing-activity-row: 1.25rem;
+  --spacing-activity-row-gap: 0.1875rem;
+  --spacing-chevron: 0.75rem;
+  --spacing-group-list: 12rem;
+  --spacing-group-fade: 1.25rem;
+  --spacing-shell-output: 7.875rem;
+  --spacing-shell-fade: 1.5rem;
+  --spacing-thought: 7.5rem;
+  --spacing-fold-slide: 0.375rem;
+  --spacing-answer-actions-gap: 0.25rem;
+  --spacing-answer-action: 1.375rem;
+  --spacing-answer-actions-between: 0.125rem;
   --spacing-kbd: 0.9375rem;
   --spacing-menu: 7rem;
   --spacing-composer: 2.25rem;
@@ -660,6 +719,7 @@
   --radius-thread: 0.75rem;
   --radius-composer: 1.125rem;
   --radius-bubble: 1.125rem;
+  --radius-shell: 0.625rem;
   --radius-rail: 1rem;
   --radius-menu: 1rem;
   --radius-summary: 1rem;

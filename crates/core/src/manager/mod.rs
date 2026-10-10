@@ -24,6 +24,7 @@ mod cards;
 mod checks;
 mod closing;
 mod cold;
+mod computer;
 mod context_pack;
 mod conversation;
 pub(crate) mod decisions;
@@ -125,6 +126,8 @@ pub struct SessionManager {
     git: Git,
     data_dir: PathBuf,
     grants: Grants,
+    /// Workers' computer use: the helper, leases and approvals.
+    computer: computer::Computer,
     convs: Mutex<HashMap<ConversationId, Arc<ConvLive>>>,
     tasks: Mutex<HashMap<TaskId, Arc<TaskLive>>>,
     /// Held while a new-worktree session's own worktree is created, so parallel first tasks
@@ -216,6 +219,15 @@ impl SessionManager {
             runtime.platform().clone(),
             data_dir.join("stopped-processes.json"),
         ));
+        // A test's scripted session runs on a calm machine, whatever the host's heat or memory
+        // pressure: a test that wants it strained says so.
+        #[cfg(test)]
+        if runtime.faked() {
+            machine
+                .guard
+                .fake(brigadier_sandbox::MachineLoad::default());
+        }
+        let computer = computer::Computer::new(&config.daemon_exe, &data_dir);
         let manager = Arc::new_cyclic(|me| Self {
             me: me.clone(),
             core,
@@ -225,6 +237,7 @@ impl SessionManager {
             git,
             data_dir,
             grants: Grants::default(),
+            computer,
             convs: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
             session_worktrees: tokio::sync::Mutex::new(()),
@@ -633,6 +646,16 @@ enum EventSource<'a> {
     Conversation(&'a ConversationId),
 }
 
+impl SessionManager {
+    /// The Brigadier app that connected to this daemon: computer use never drives its
+    /// windows, which hold the cards workers must not answer.
+    pub fn set_computer_host(&self, pid: u32) {
+        if let Ok(pid) = i32::try_from(pid) {
+            self.computer.set_host_pid(pid);
+        }
+    }
+}
+
 impl ToolHost for SessionManager {
     fn role(&self, grant: &str) -> Option<Role> {
         self.grants.resolve(grant)
@@ -641,6 +664,7 @@ impl ToolHost for SessionManager {
     fn call(&self, grant: &str, call: ToolCall) -> BoxFuture<'_, ToolReply> {
         let role = self.grants.resolve(grant);
         let manager = self.arc();
+        let grant = grant.to_owned();
         Box::pin(async move {
             let Some(role) = role else {
                 return ToolReply::error("This grant is not valid (the session ended).");
@@ -665,6 +689,17 @@ impl ToolHost for SessionManager {
                 }
                 (Role::Chat { conversation_id }, ToolCall::Chat(call)) => {
                     manager.chat_call(conversation_id, call).await
+                }
+                (
+                    Role::Computer {
+                        conversation_id,
+                        task_id,
+                    },
+                    ToolCall::Computer(call),
+                ) => {
+                    manager
+                        .computer_call(&grant, conversation_id, task_id, call)
+                        .await
                 }
                 _ => ToolReply::error("This tool is not available to this session."),
             }

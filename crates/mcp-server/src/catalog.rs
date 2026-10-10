@@ -6,10 +6,11 @@ use std::sync::{Arc, OnceLock};
 use brigadier_core::tools::{
     AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch,
     DelegateTask, EndRun, FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser,
-    OrchestratorCall, PlanPhases, PreviewLog, ProposeOvernight, QueryBrain, ReadArtifact,
-    RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCheck,
-    RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, StartPreview,
-    StopPreview, StopWorker, SubmitOutline, SubmitReport, TaskRef, ToolCall, WorkerCall,
+    OrchestratorCall, PlanPhases, PreviewLog, ProposeMerge, ProposeOvernight, ProposePlan,
+    QueryBrain, ReadArtifact, RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role,
+    RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript,
+    SettleStep, StartPreview, StopPreview, StopWorker, SubmitOutline, SubmitReport, TaskRef,
+    ToolCall, WorkerCall,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
@@ -24,7 +25,8 @@ when the report or the user's next message arrives. You can delegate several ind
 at once. The worker sees nothing of this conversation but `spec` (and the listed attachments), \
 so make the spec self-contained. `implement` and `merge` tasks change code in their own git \
 worktree, commit their own steps and land only through land_phase; the other kinds only read \
-and report.";
+and report. An `operate` task uses apps on this Mac to reach `end_state` in `target`, and \
+reports what it did and how it checked.";
 
 const MESSAGE_WORKER: &str = "Send text to a worker: an instruction that steers its current \
 work, or sends a reported worker back to work. Answer a worker's question with answer_worker. \
@@ -45,10 +47,12 @@ const STOP_WORKER: &str = "Stop a running worker, e.g. when its task is no longe
 went wrong. Nothing of it lands. `reason` is required: one plain line on why, which the user \
 reads on the thread's \"Stopped\" row (e.g. \"No longer needed: the user dropped the export\").";
 
-const ASK_USER: &str = "Ask the user a question only they can answer (a product choice, an \
-unclear requirement). Returns at once; the answer arrives later as a message. Name the task that \
-waits for the answer in `task` so other work continues; `options` become numbered answers (the \
-user can always type their own answer), and `recommended` marks the one you recommend.";
+const ASK_USER: &str = "Ask the user what only they can decide (a product choice, an unclear \
+requirement), as one card they answer at once: a round of 1 to 6 questions, each with 2 to 4 \
+options and the one you recommend (`recommended`). The user can always type their own answer \
+instead. This is the only way to ask the user anything: never ask in your reply's text. Returns \
+at once; reply with exactly [quiet] after it. The answers arrive as an [answer] message in the \
+same request. Name the task that waits for them in `task` so other work continues.";
 
 const READ_REPORT: &str = "Read a task's final report again: summary, changes, decisions, \
 verification, open questions and artifact ids. A report from another session of this project \
@@ -82,11 +86,33 @@ lead. Records the phases for the user's progress pill; nothing is reviewed or ap
 Then delegate phase 1's lead (delegate_task, kind implement, phase 1), and each next phase once \
 the one before it has landed.";
 
+const PROPOSE_PLAN: &str = "Put your plan before the user, as a document on a card they read and \
+then accept (\"Yes, implement this plan\") or send back with the changes they want. Use it when \
+plan mode is on, or when the user asks for a plan. Look first (read the code yourself, or a scout \
+for more), so the plan names the real files and symbols; ask_user before it only what only the user \
+can decide. Call it once, then reply [quiet]: the card is your answer. A yes comes back as a \
+message: build it then. Changes come back too: propose the revised plan again.
+
+Write the body in markdown, in this shape:
+# A short title: what gets built, in a few words
+One sentence: what changes, in the user's terms.
+## Changes
+- One bullet per change: the file and symbol in `code` and what changes there, in one line.
+## Checks
+- How the work is verified: the tests added or run, the commands, what to look at in the app.
+## Assumptions
+- Each choice you made that the user might make otherwise: defaults, edge cases, what is left out.
+
+Each bullet is one short line: the reader scans it. Detail the code will show anyway (error \
+messages, exit codes, every case a test covers) stays out unless the user must decide it. Plain, \
+specific words; no preamble, no restating the request, no filler (\"This plan will…\", \
+\"robust\", \"seamless\"). Most plans fit in 8 to 15 lines; bigger work may need more, but never pad.";
+
 const APPROVE_OUTLINE: &str = "Give a lead the go-ahead on its outline as soon as you have \
 judged it: don't wait for its plan review, which runs in the background and may arrive after the \
 go-ahead (then send the lead the findings you agree with by message_worker). Put what the \
 outline gets wrong, and anything the brief implies, in `corrections`; the brief wins any \
-conflict. Under \"Ask for approval\" this shows the user a \"Start this plan?\" card and the \
+conflict. Under \"Ask for approval\" this shows the user an \"Implement this plan?\" card and the \
 go-ahead goes once they start it. Returns at once.";
 
 const START_VERIFIER: &str = "Your call, for big or risky work only: start a fresh verifier \
@@ -132,19 +158,27 @@ quick self-check first; then they land on their own and you hear when. Conflicts
 you: delegate a merge task.";
 
 const FINISH_SESSION: &str = "New-worktree sessions only: merge the session branch into its \
-base branch, once the user's latest message asks for it (\"merge it\", also together with the \
-work: then merge as soon as it has landed, without asking again) or plainly agrees to the merge \
-your reply right before proposed, as a question naming the base (\"yes\"). Pass their \
-words in user_words, quoted exactly from that message. Brigadier checks them against it and \
-refuses on a question, a condition, a \"no\" or a \"wait\", or words already used for a merge; \
-then propose it and wait for their answer. Never merge on silence. Returns when merged.";
+base branch, once the user consented: they chose \"Merge\" on your propose_merge card (leave \
+user_words out), or their latest message asks for it in words (\"merge it\", also together with \
+the work: then merge as soon as it has landed, without asking again). Pass such words in \
+user_words, quoted exactly from that message. Brigadier checks the consent and refuses on a \
+question, a condition, a \"no\" or a \"wait\", or consent already used for a merge. Never merge \
+on silence. Returns when merged.";
+
+const PROPOSE_MERGE: &str = "New-worktree sessions only: once the work has landed, ask the \
+user on a card whether to merge the session branch into its base (\"Merge into main\" / \"Not \
+yet\"). Ask it once: Brigadier refuses a second card while one is open, or after \"Not yet\" until \
+the user writes again. `note` is one short line on what the merge brings and what the reviews \
+found. Returns at once; reply with exactly [quiet] or your final answer. The answer arrives as \
+an [answer] message: on \"Merge\", call finish_session without user_words.";
 
 const NOTE_FOR_USER: &str = "Keep the user's session summary current. kind \"decided\": a \
 judgement call you made on the user's behalf that they would want to know (a product or scope \
 choice they didn't settle), with why; it shows under \"Decided for you\". kind \"waiting\": \
-something only the user can do (a key, a sign-in, an account, a push), in one line; it shows \
-under \"Waiting on you\" until they mark it done, and you hear when they do. Brigadier lists its \
-own decisions and the workers' needs_user items itself: don't repeat them. Returns at once.";
+during an overnight run only, something only the user can do (a key, a sign-in, an account, a \
+push), in one line, for the run's \"Waiting on you\" list; outside a run it is refused: say it \
+in your answer instead. Brigadier lists its own decisions and, in a run, the workers' needs_user \
+items itself: don't repeat them. Returns at once.";
 
 const RUN: &str = "Run a shell command and get its result: use it for builds, tests, logs and \
 long listings, anything that prints a lot. It runs with this session's access, in the same \
@@ -245,6 +279,7 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
     static CHECKER: OnceLock<Vec<Tool>> = OnceLock::new();
     static JOB: OnceLock<Vec<Tool>> = OnceLock::new();
     static CHAT: OnceLock<Vec<Tool>> = OnceLock::new();
+    static COMPUTER: OnceLock<Vec<Tool>> = OnceLock::new();
     match role {
         Role::Orchestrator { run, .. } => match run {
             RunTools::None => ORCHESTRATOR.get_or_init(orchestrator_tools),
@@ -279,6 +314,7 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
         Role::BrainJob { .. } => JOB.get_or_init(job_tools),
         Role::Chat { .. } => CHAT.get_or_init(chat_tools),
         Role::OutputHook { .. } => &[],
+        Role::Computer { .. } => COMPUTER.get_or_init(crate::computer::tools),
     }
 }
 
@@ -320,6 +356,7 @@ fn orchestrator_tools() -> Vec<Tool> {
             input_schema::<SearchTranscript>(),
         ),
         tool("plan_phases", PLAN_PHASES, input_schema::<PlanPhases>()),
+        tool("propose_plan", PROPOSE_PLAN, input_schema::<ProposePlan>()),
         tool(
             "approve_outline",
             APPROVE_OUTLINE,
@@ -341,6 +378,11 @@ fn orchestrator_tools() -> Vec<Tool> {
             "finish_session",
             FINISH_SESSION,
             input_schema::<FinishSession>(),
+        ),
+        tool(
+            "propose_merge",
+            PROPOSE_MERGE,
+            input_schema::<ProposeMerge>(),
         ),
         tool(
             "note_for_user",
@@ -464,11 +506,13 @@ pub fn parse_call(
                     OrchestratorCall::SearchTranscript(args::<SearchTranscript>(name, arguments)?)
                 }
                 "plan_phases" => OrchestratorCall::PlanPhases(args(name, arguments)?),
+                "propose_plan" => OrchestratorCall::ProposePlan(args(name, arguments)?),
                 "approve_outline" => OrchestratorCall::ApproveOutline(args(name, arguments)?),
                 "start_verifier" => OrchestratorCall::StartVerifier(args(name, arguments)?),
                 "request_approval" => OrchestratorCall::RequestApproval(args(name, arguments)?),
                 "land_phase" => OrchestratorCall::LandPhase(args(name, arguments)?),
                 "finish_session" => OrchestratorCall::FinishSession(args(name, arguments)?),
+                "propose_merge" => OrchestratorCall::ProposeMerge(args(name, arguments)?),
                 "note_for_user" => OrchestratorCall::NoteForUser(args(name, arguments)?),
                 "list_tasks" => OrchestratorCall::ListTasks,
                 "settle_step" => OrchestratorCall::SettleStep(args(name, arguments)?),
@@ -526,15 +570,32 @@ pub fn parse_call(
             _ => Err(unknown()),
         },
         Role::OutputHook { .. } => Err(unknown()),
+        Role::Computer { .. } => crate::computer::parse(name, arguments),
     }
 }
 
 fn args<T: DeserializeOwned>(tool: &str, arguments: Value) -> Result<T, ParseError> {
     serde_json::from_value(arguments).map_err(|err| ParseError::BadArguments {
         tool: tool.to_owned(),
-        reason: err.to_string(),
+        reason: match example(tool) {
+            Some(call) => format!("{err}. A well-formed call: {call}"),
+            None => err.to_string(),
+        },
     })
 }
+
+/// A well-formed call, added to an argument error where models guessed the shape: a Codex
+/// worker calling tools from code sees no schema, and spent 2–3 rejected calls a report
+/// (COMPUTER-USE-PLAN.md §8, Phase 4).
+fn example(tool: &str) -> Option<&'static str> {
+    match tool {
+        "submit_report" => Some(SUBMIT_REPORT_EXAMPLE),
+        _ => None,
+    }
+}
+
+/// A complete `submit_report` call: the list fields are text, one item per line.
+pub const SUBMIT_REPORT_EXAMPLE: &str = r#"{"summary": "Set Level to 37 through the slider.", "verification": "act's expect value_equals 37 held", "done_when": "[met] Level reads 37: the expect held", "risks": ""}"#;
 
 #[cfg(test)]
 mod tests {
@@ -549,19 +610,52 @@ mod tests {
     }
 
     #[test]
+    fn a_report_argument_error_shows_a_call_that_parses() {
+        let bad = serde_json::json!({"done_when": "[met] it works"});
+        let Err(err) = parse_call(&worker(false), "submit_report", bad.as_object().cloned()) else {
+            panic!("a report without a summary was taken");
+        };
+        let text = err.to_string();
+        let shown = text.split("A well-formed call: ").nth(1).expect(&text);
+        let example: Value = serde_json::from_str(shown).unwrap();
+        assert!(
+            parse_call(
+                &worker(false),
+                "submit_report",
+                example.as_object().cloned()
+            )
+            .is_ok(),
+            "{shown}"
+        );
+    }
+
+    #[test]
     fn phases_are_planned_and_outlines_approved_without_review_rounds() {
         let tools = orchestrator_tools();
         let names: Vec<_> = tools.iter().map(|tool| tool.name.to_string()).collect();
         assert!(names.contains(&"plan_phases".to_owned()));
         assert!(names.contains(&"approve_outline".to_owned()));
-        assert!(!names.contains(&"propose_plan".to_owned()));
+        // The plan the user decides is a document in a fixed shape, short lines first.
+        let propose = tools
+            .iter()
+            .find(|tool| tool.name == "propose_plan")
+            .unwrap();
+        let shape = propose.description.as_deref().unwrap();
+        for part in [
+            "## Changes",
+            "## Checks",
+            "## Assumptions",
+            "one short line",
+        ] {
+            assert!(shape.contains(part), "{part}");
+        }
         let approve = tools
             .iter()
             .find(|tool| tool.name == "approve_outline")
             .unwrap();
         let description = approve.description.as_deref().unwrap();
         assert!(description.contains("don't wait for its plan review"));
-        assert!(description.contains("Start this plan?"));
+        assert!(description.contains("Implement this plan?"));
         assert!(names.contains(&"start_verifier".to_owned()));
     }
 

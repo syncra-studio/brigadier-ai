@@ -13,10 +13,10 @@ use brigadier_core::storage::{
 };
 use brigadier_core::{
     AccountEntry, AccountsView, AttachmentRef, BrainJobKind, BrainOverview, CardId, Catalog,
-    CheckoutFile, CommitOutcome, ConventionsExport, Conversation, ConversationActivity,
-    ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat, FolderCheck,
-    FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, Message, MessagePage,
-    MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, ProbeBurst, Project,
+    CheckoutFile, CommitOutcome, ComputerPage, ConventionsExport, Conversation,
+    ConversationActivity, ConversationId, ConversationKind, ConversationStatus, ConversationView,
+    DiffStat, FolderCheck, FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, Message,
+    MessagePage, MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, ProbeBurst, Project,
     ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView, PullRequest,
     QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId, RepoInfo,
     RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, Settings, Setup, SetupRequest,
@@ -300,6 +300,22 @@ pub enum Request {
     CloseTerminal {
         terminal_id: String,
     },
+    /// Whether computer use has the system permissions it needs (Settings → Computer use).
+    GetComputerAccess,
+    /// Asks the system for one of computer use's permissions: registers Brigadier Computer
+    /// Use with it and opens that pane of System Settings, where the user turns it on.
+    AllowComputerAccess {
+        grant: ComputerGrant,
+        /// Start over: first forget Brigadier Computer Use's own entry for this permission,
+        /// left by an older build that the system no longer matches.
+        #[serde(default)]
+        start_over: bool,
+    },
+    /// Opens the pane of System Settings that lists Brigadier Computer Use for one permission,
+    /// without asking for it (to check it there, or turn it off).
+    OpenComputerSettings {
+        grant: ComputerGrant,
+    },
     /// Whether dictation (the composer's Dictate button) can run, and its speech model.
     GetDictation,
     /// Downloads the speech model into the data folder. Answered at once; progress and the
@@ -532,10 +548,12 @@ pub enum Request {
         card_id: CardId,
         decision: ApprovalDecision,
     },
+    /// Answers a question card's round: one answer per question, the picked option's label or
+    /// the user's own words.
     AnswerQuestion {
         conversation_id: ConversationId,
         card_id: CardId,
-        answer: String,
+        answers: Vec<String>,
     },
     DecidePlan {
         conversation_id: ConversationId,
@@ -639,6 +657,14 @@ pub enum Request {
     ListWorkerEvents {
         task_id: TaskId,
         /// Only entries with a smaller `streamSeq` (for paging backwards).
+        before: Option<i64>,
+        limit: u32,
+    },
+    /// A page of a worker's computer actions, oldest first (its computer timeline).
+    ListComputerActions {
+        conversation_id: ConversationId,
+        task_id: TaskId,
+        /// Only actions with a smaller `streamSeq` (for paging backwards).
         before: Option<i64>,
         limit: u32,
     },
@@ -1023,6 +1049,13 @@ pub enum Response {
     ResizeTerminal,
     ClearTerminal,
     CloseTerminal,
+    GetComputerAccess {
+        access: ComputerAccess,
+    },
+    AllowComputerAccess {
+        access: ComputerAccess,
+    },
+    OpenComputerSettings,
     GetDictation {
         dictation: DictationStatus,
     },
@@ -1158,6 +1191,9 @@ pub enum Response {
     ResolveWaiting,
     ListWorkerEvents {
         page: WorkerPage,
+    },
+    ListComputerActions {
+        page: ComputerPage,
     },
     ListOrchestratorLog {
         page: OrchestratorPage,
@@ -1539,6 +1575,30 @@ pub enum TerminalOutput {
         terminal_id: String,
         code: Option<u32>,
     },
+}
+
+/// Computer use's system permissions, as Brigadier Computer Use holds them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerAccess {
+    /// This system has computer use (macOS for now).
+    pub available: bool,
+    /// Control apps (Accessibility).
+    pub accessibility: bool,
+    /// See the screen (Screen Recording).
+    pub screen_recording: bool,
+    /// Screen recording was just allowed and Brigadier Computer Use is restarting to use it.
+    pub restarting: bool,
+    /// Why the permissions couldn't be read, in plain words.
+    pub problem: Option<String>,
+}
+
+/// One of computer use's system permissions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ComputerGrant {
+    Accessibility,
+    ScreenRecording,
 }
 
 /// Whether dictation can run here, as `getDictation` returns it.

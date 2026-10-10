@@ -29,7 +29,7 @@ const approval: ShownApproval = {
 const question: Question = {
   id: "question", conversationId: conversation.id, taskId: null, requestId: null,
   position: 1, kind: { type: "orchestrator" }, text: "Which branch?", options: [], recommended: null,
-  answer: null, createdAtMs: 0, answeredAtMs: null,
+  items: [], answer: null, answers: [], createdAtMs: 0, answeredAtMs: null,
 };
 const board = {
   conversationId: conversation.id, approvals: { approval }, questions: { question },
@@ -45,6 +45,16 @@ test("approval and plan modes include proposed plans in their original order", (
     assert.deepEqual(pendingActionKeys({ ...conversation, setup: { ...setup, ...change } }, board),
       ["question:question", "plan:plan", "approval:approval", "overnight:night"]);
   }
+});
+
+test("a plan written as a document, and a lead's outline, ask the user under any permission", () => {
+  const outline: ShownApproval = {
+    ...approval, id: "outline", position: 4,
+    subject: { type: "outline", taskId: "task", title: "Add a flag", outline: "Edit main.rs" },
+  };
+  assert.deepEqual(pendingActionKeys(conversation, {
+    ...board, plans: { plan: { ...plan, body: "# Add a flag\n\nOne line." } }, approvals: { approval, outline },
+  }), ["question:question", "plan:plan", "approval:approval", "outline:outline", "overnight:night"]);
 });
 
 test("settled decisions and runs leave the rail", () => {

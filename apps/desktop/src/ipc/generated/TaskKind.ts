@@ -3,4 +3,4 @@
 /**
  * What a task does (PLAN.md §5).
  */
-export type TaskKind = "scout" | "research" | "implement" | "review" | "merge" | "verify";
+export type TaskKind = "scout" | "research" | "implement" | "review" | "merge" | "verify" | "operate";

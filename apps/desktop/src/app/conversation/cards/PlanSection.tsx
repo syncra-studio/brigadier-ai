@@ -1,7 +1,9 @@
-import { memo, useId, useState } from "react";
+import { Lightbulb } from "@openai/apps-sdk-ui/components/Icon";
+import { memo, useContext, useId, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { planStepStatus, planProgress } from "@/app/conversation/planProgress";
+import { planStepStatus, planProgress, stepStates } from "@/app/conversation/planProgress";
+import { RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { taskState } from "@/app/conversation/rowWords";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
 import { useAction } from "@/app/conversation/useAction";
@@ -12,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import type { Plan, TaskState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
+import { showPlanDoc } from "@/state/planDoc";
 import { useApp } from "@/state/store";
 import { decidePlan } from "@/state/actions";
 
@@ -129,20 +132,29 @@ export const PlanSection = memo(function PlanSection({
     if (setup?.type !== "session") return null;
     return setup.permission === "askForApproval" || setup.planMode ? "user" : "brigadier";
   });
+  const request = useBoard((s) => (plan?.requestId ? s.board?.requests[plan.requestId]?.state.type : undefined));
+  const rightSidebar = useContext(RightSidebarContext);
   if (!plan) return null;
 
-  const states = plan.steps.map((_, index) => (steps[index * 3 + 1] ?? undefined) as TaskState | undefined);
+  const states = stepStates(
+    plan,
+    plan.steps.map((_, index) => (steps[index * 3 + 1] ?? undefined) as TaskState | undefined),
+    request,
+  );
   const statuses = states.map(planStepStatus);
   const proposed = plan.state.type === "proposed";
   const allDone =
     plan.state.type === "approved" && statuses.length > 0 && statuses.every((status) => status === "done");
+  // A plan written as a document is one row that opens it; a single phase of it is the plan
+  // itself, not a row of its own.
+  const phaseRows = !plan.body || plan.steps.length > 1;
 
   return (
     <SummarySection
       foldKey="plan"
       title="Plan"
-      count={plan.steps.length}
-      defaultFolded={allDone}
+      count={phaseRows ? plan.steps.length : undefined}
+      defaultFolded={allDone && !plan.body}
       data-card="plan"
       id={`plan-${plan.id}`}
       tabIndex={-1}
@@ -163,9 +175,25 @@ export const PlanSection = memo(function PlanSection({
             </button>
           </p>
         )}
-        <p title={plan.title} className="line-clamp-2 text-label wrap-anywhere">
-          {plan.title}
-        </p>
+        {plan.body ? (
+          // A plan written as a document opens it in the right sidebar's Plan tab.
+          <button
+            type="button"
+            title={plan.title}
+            onClick={() => {
+              showPlanDoc(plan.conversationId, { type: "plan", id: plan.id });
+              rightSidebar?.openTab("plan");
+            }}
+            className={cn(summaryRowInteractive, "relative isolate flex min-w-0 items-start gap-2 py-1 text-start text-label")}
+          >
+            <Lightbulb aria-hidden className="size-icon-md h-(--text-label--line-height) shrink-0" />
+            <span className="line-clamp-2 min-w-0 flex-1 wrap-anywhere">{plan.title}</span>
+          </button>
+        ) : (
+          <p title={plan.title} className="line-clamp-2 text-label wrap-anywhere">
+            {plan.title}
+          </p>
+        )}
         <p
           className={cn(
             "text-xs",
@@ -181,7 +209,7 @@ export const PlanSection = memo(function PlanSection({
           {statusLine(plan, statuses)}
         </p>
       </div>
-      <ol className="flex flex-col">
+      <ol hidden={!phaseRows} className="flex flex-col">
         {plan.steps.map((step, index) => {
           const taskId = steps[index * 3] as string | null | undefined;
           const word = steps[index * 3 + 2] as string | null | undefined;
@@ -201,12 +229,14 @@ export const PlanSection = memo(function PlanSection({
       {plan.state.type === "rejected" && plan.state.message && (
         <p className="text-muted-foreground py-1 text-xs">Rejected: {plan.state.message}</p>
       )}
-      {proposed && decider === "user" && (
+      {/* A plan written as a document is decided by "Implement this plan?" in the composer's place. */}
+      {proposed && plan.body && <p className="text-muted-foreground py-1 text-xs">Waiting for your answer below.</p>}
+      {proposed && !plan.body && decider === "user" && (
         <div className="pt-1.5 pb-1">
           <PlanDecision plan={plan} />
         </div>
       )}
-      {proposed && decider === "brigadier" && (
+      {proposed && !plan.body && decider === "brigadier" && (
         <p className="text-muted-foreground py-1 text-xs">
           Brigadier decides this plan for you.
         </p>

@@ -1,62 +1,57 @@
-import { Check, QuestionMarkCircle } from "@openai/apps-sdk-ui/components/Icon";
+import { ChevronRight, QuestionMarkCircle } from "@openai/apps-sdk-ui/components/Icon";
 import { memo } from "react";
 
-import { WaitingRow } from "@/app/conversation/cards/common";
-import { WorkerChip } from "@/app/conversation/WorkerChip";
+import { CodeSpans } from "@/app/conversation/cards/codeSpans";
 import {
-  ApprovalCard,
-  ApprovalCardCode,
-} from "@/components/assistant-ui/elements/approval-card";
+  answerWords,
+  questionAnswers,
+  questionRound,
+  questionRowWords,
+} from "@/app/conversation/cards/questionRound";
+import { CHEVRON, OPENS, ROW, ROW_TOGGLE } from "@/components/assistant-ui/elements/activity-row";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 
 /**
- * A question only the user can answer, in the thread: a waiting row while its card is in the
- * composer, then the question and the answer given (or why it was withdrawn).
+ * A question card in the thread's work: one row. While its card waits in the composer's place,
+ * "Asking questions"; once answered, "Asked 3 questions", which opens to each question and the
+ * answer given; withdrawn when the user changed the request that asked.
  */
 export const QuestionCardView = memo(function QuestionCardView({ cardId }: { cardId: string }) {
   const question = useBoard((s) => s.board?.questions[cardId]);
-  const askerId = useBoard((s) =>
-    question?.taskId && s.board?.tasks[question.taskId] ? question.taskId : null,
-  );
   if (!question) return null;
-
-  // Closed without an answer when the user edited or redid the request that asked.
-  const pending = question.answer === null && question.answeredAtMs === null;
-  if (pending) return <WaitingRow icon={<QuestionMarkCircle />}>Waiting for your answer</WaitingRow>;
-  const uncommitted = question.kind.type === "uncommittedChanges" ? question.kind.files : null;
-
+  const words = questionRowWords(question);
+  const answers = questionAnswers(question);
+  const icon = <QuestionMarkCircle aria-hidden className="size-4 shrink-0" />;
+  if (answers.length === 0) {
+    return (
+      <div data-slot="question-row" className={ROW}>
+        {icon}
+        <span className="truncate">{words}</span>
+      </div>
+    );
+  }
+  const round = questionRound(question);
   return (
-    <ApprovalCard
-      data-card="question"
-      icon={<QuestionMarkCircle />}
-      title={uncommitted ? "Should workers see your uncommitted changes?" : "A question for you"}
-      subtitle={
-        uncommitted
-          ? "Brigadier asks once, before the first worker starts"
-          : askerId === null
-            ? "From the orchestrator"
-            : (
-                <>
-                  <WorkerChip taskId={askerId} /> waited for this
-                </>
-              )
-      }
-      pending={false}
-      resolution={
-        question.answer === null ? (
-          "Withdrawn: you changed the request that asked"
-        ) : (
-          <>
-            <Check className="text-success size-icon-sm" />
-            You answered: {question.answer}
-          </>
-        )
-      }
-    >
-      {question.text && <p className="text-sm whitespace-pre-wrap">{question.text}</p>}
-      {uncommitted && uncommitted.length > 0 && (
-        <ApprovalCardCode>{uncommitted.join("\n")}</ApprovalCardCode>
-      )}
-    </ApprovalCard>
+    <Collapsible data-slot="question-row">
+      <CollapsibleTrigger className={cn(ROW, ROW_TOGGLE)}>
+        {icon}
+        <span className="truncate">{words}</span>
+        <ChevronRight aria-hidden className={CHEVRON} />
+      </CollapsibleTrigger>
+      <CollapsibleContent className={OPENS}>
+        <dl className="flex flex-col gap-3 pt-2 pb-1 text-sm">
+          {round.map((item, index) => (
+            <div key={index} className="flex flex-col gap-1">
+              <dt className="text-foreground/60 whitespace-pre-wrap wrap-anywhere"><CodeSpans text={item.text} /></dt>
+              <dd className="text-foreground/30 whitespace-pre-wrap wrap-anywhere">
+                {answerWords(item, answers[index] ?? "")}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </CollapsibleContent>
+    </Collapsible>
   );
 });

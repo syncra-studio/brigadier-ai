@@ -5,10 +5,10 @@ to the /delegator arm (the watcher, through `dlg_say.sh`). Nothing else is said 
 
 | The arm asks | The answer |
 |---|---|
-| Any question (a question card; the coordinator asking the user something and waiting) | "Go with your recommendation." |
+| Any question (each question of a card's round; the coordinator asking the user something and waiting) | "Go with your recommendation." |
 | A plan or outline approval (plan card, outline card; "Go ahead?" in the tab) | "Go ahead." (a card: approve) |
 | Landing a task, or an action approval that doesn't push | approve |
-| A merge into the base asked of the user (in words, in either arm: Brigadier has no merge card) | never approved: left unanswered (Brigadier) or "Leave it on its branch; don't merge." (tab) |
+| A merge into the base asked of the user (Brigadier: its merge card; the tab: in words) | never approved: left unanswered (Brigadier) or "Leave it on its branch; don't merge." (tab) |
 | Anything that pushes or opens a PR | denied: "No push: leave the work on its branch." |
 
 - The Delegator's own run approvals inside /delegator (its workers' questions) are the coordinator's

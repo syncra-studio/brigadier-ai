@@ -10,6 +10,11 @@ export type Plan = { id: CardId, conversationId: ConversationId,
  */
 requestId: string | null, position: number, title: string, 
 /**
+ * The plan as the user reads it, in markdown: a title, a one-line summary, then its
+ * sections (`propose_plan`). Absent for a plan of phases alone (`plan_phases`).
+ */
+body: string | null, 
+/**
  * Its phases, in order.
  */
 steps: Array<PlanStep>, state: PlanState, createdAtMs: number, decidedAtMs: number | null, };

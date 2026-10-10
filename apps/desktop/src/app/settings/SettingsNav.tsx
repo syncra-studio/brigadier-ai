@@ -8,7 +8,7 @@ import { useState } from "react";
 import {
   searchSettings,
   SETTINGS_GROUPS,
-  SETTINGS_PAGES,
+  shownSettingsPages,
   type SettingsSearchResult,
 } from "@/app/settings/pages";
 import { navRow, NavHeader, NavList, NavSection } from "@/app/sidebar/nav";
@@ -55,6 +55,7 @@ export function SettingsNav() {
   const [query, setQuery] = useState("");
   // The result Enter opens; the arrow keys move it.
   const [active, setActive] = useState(0);
+  const pages = shownSettingsPages();
   const results = query.trim() ? searchSettings(query) : null;
 
   const search = (value: string) => {
@@ -148,7 +149,7 @@ export function SettingsNav() {
           SETTINGS_GROUPS.map((group) => (
             <NavSection key={group} title={group}>
               <NavList>
-                {SETTINGS_PAGES.filter((page) => page.group === group).map((page) => {
+                {pages.filter((page) => page.group === group).map((page) => {
                   const Icon = page.icon;
                   return (
                     <li key={page.id}>

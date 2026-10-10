@@ -232,7 +232,11 @@ impl SessionManager {
                     category,
                     areas: &areas,
                     floor: brigadier_router::default_floor(category),
-                    needs: brigadier_router::Needs::default(),
+                    // An operator looks at the screen, whatever it is sent.
+                    needs: brigadier_router::Needs {
+                        image_input: category == TaskCategory::Operate,
+                        ..brigadier_router::Needs::default()
+                    },
                     pin: None,
                     hold_pin: false,
                     avoid: None,

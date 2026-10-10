@@ -2,8 +2,8 @@
 //!
 //! A request works while its turn runs, while an envelope or message for it waits for a turn,
 //! or while a task it started runs. It waits while something it opened needs the user (a
-//! card, a paused worker, a landing on hold, something only the user can do), while its last
-//! turn ended asking the user something about a reported change still undecided, and, unless
+//! card, a paused worker, a landing on hold, in an overnight run something only the user can
+//! do), and, unless
 //! it was stopped or failed, while a plan of it waits for a revision the orchestrator did not
 //! make (it was asked for it again once). A waiting request holds back none of the user's
 //! queued messages. Otherwise it is done, or stopped or failed when its last turn ended that
@@ -14,25 +14,25 @@ use std::collections::HashSet;
 
 use super::SessionManager;
 use super::conversation::Envelope;
+use super::decisions::waiting_run;
 use super::prompts;
 use super::workers::relanding_pending;
 use crate::board::Board;
 use crate::model::{ConversationId, ConversationKind};
 use crate::overnight::{OvernightRun, OvernightState};
-use crate::work::{CardState, PlanState, RequestState, Task, TaskId, TaskState};
+use crate::work::{CardState, PlanState, QuestionKind, RequestState, Task, TaskId, TaskState};
 
 impl SessionManager {
-    /// Whether a request waits: `Some(true)` for the user, `Some(false)` only for quota (its
-    /// workers paused until a model is free). The orchestrator's question about a change it
-    /// has not decided on is the user's to answer (an offer at the end of a finished answer
-    /// is not).
-    async fn waiting_on(&self, board: &Board, request: &str, asked_user: bool) -> Option<bool> {
-        if waits_on_user(board, request)
-            || (asked_user && !self.undecided(board, request).await.is_empty())
-        {
-            return Some(true);
+    /// What a request waits for, if anything. A question in the thread's text makes nothing
+    /// wait: the user is asked on cards (THREAD-PARITY-PLAN §5 Q6).
+    fn waiting_on(board: &Board, request: &str) -> Option<Wait> {
+        if waits_on_user(board, request) {
+            return Some(Wait::User);
         }
-        tasks_waiting_for_quota(board, request).then_some(false)
+        if open_question_cards(board, request) {
+            return Some(Wait::Card);
+        }
+        tasks_waiting_for_quota(board, request).then_some(Wait::Quota)
     }
 
     /// The request new work is filed under: the task's, else the running turn's, else the
@@ -132,7 +132,7 @@ impl SessionManager {
             return;
         };
         // What waited on a card that is answered now is over.
-        if self.settle_card_waits(conversation_id, &board).await {
+        if self.settle_waits(conversation_id, &board).await {
             let Ok(now) = self.core.board(conversation_id).await else {
                 return;
             };
@@ -148,7 +148,7 @@ impl SessionManager {
         for request in board.requests.values() {
             let id = request.id.as_str();
             let outcome = activity.outcomes.get(id);
-            let mut quota_wait = false;
+            let mut wait = None;
             let state = if let Some(state) = ended_run_state(&board, request) {
                 // An overnight run's request is over with the run: its report is the answer,
                 // and nothing that comes later works or waits for it again.
@@ -168,13 +168,10 @@ impl SessionManager {
             {
                 // A fix Brigadier checks and lands once its worker's turn is over still works.
                 RequestState::Working
-            } else if let Some(on_user) = self
-                .waiting_on(&board, id, activity.asked_user.contains(id))
-                .await
-            {
-                quota_wait = !on_user;
+            } else if let Some(on) = Self::waiting_on(&board, id) {
+                wait = Some(on);
                 RequestState::Waiting
-            } else if tasks_in(&board, id, |state| state == TaskState::Blocked) {
+            } else if blocked_on_the_thread(&board, id) {
                 // Blocked on the orchestrator's answer (a gate's card makes it Waiting).
                 RequestState::Working
             } else if let Some(outcome) = outcome {
@@ -191,7 +188,13 @@ impl SessionManager {
             let done = state == RequestState::Done;
             if let Err(err) = self
                 .core
-                .update_request(conversation_id, id, state, quota_wait)
+                .update_request(
+                    conversation_id,
+                    id,
+                    state,
+                    wait == Some(Wait::Quota),
+                    wait == Some(Wait::Card),
+                )
                 .await
             {
                 tracing::debug!(conversation = %conversation_id, error = %err, "could not update a request");
@@ -352,6 +355,22 @@ fn tasks_in(board: &Board, request: &str, matches: impl Fn(TaskState) -> bool) -
         .any(|task| task.request_id.as_deref() == Some(request) && matches(task.state))
 }
 
+/// Whether a task of the request is blocked on the thread's answer. A lead whose outline is
+/// on a proposed plan's card waits for the user's yes instead, and that card holds nothing up
+/// (THREAD-PARITY-PLAN §8.5).
+fn blocked_on_the_thread(board: &Board, request: &str) -> bool {
+    let proposed = board.plans.values().any(|plan| {
+        plan.request_id.as_deref() == Some(request)
+            && plan.state == PlanState::Proposed
+            && plan.body.is_some()
+    });
+    board.tasks.values().any(|task| {
+        task.request_id.as_deref() == Some(request)
+            && task.state == TaskState::Blocked
+            && !(proposed && SessionManager::waits_for_go_ahead(task))
+    })
+}
+
 /// Whether a task of the request reported a fix Brigadier checks and lands on its own, once
 /// its worker's turn is over.
 fn relanding_in(board: &Board, request: &str) -> bool {
@@ -396,23 +415,49 @@ fn tasks_waiting_for_quota(board: &Board, request: &str) -> bool {
     })
 }
 
-/// What only the user can do holds the request up (a card, a question, a paused or held
-/// worker), quota aside.
+/// What a waiting request waits for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wait {
+    /// The user, with the request's work paused (an approval, a plan, a held worker).
+    User,
+    /// The user's answer to the request's own question card: the request goes on with it, so
+    /// its time keeps counting.
+    Card,
+    /// Quota only: its workers paused until a model is free.
+    Quota,
+}
+
+/// The request's thread asked the user a round of questions on a card that is open. Its merge
+/// card holds nothing up: it comes after the request's answer, so the request is done, with
+/// its work folded and its time stopped, while the card waits in the composer's place; the
+/// user's answer makes it work again (THREAD-PARITY-PLAN §5 Q9).
+fn open_question_cards(board: &Board, request: &str) -> bool {
+    board.questions.values().any(|q| {
+        q.request_id.as_deref() == Some(request)
+            && q.is_open()
+            && q.kind == QuestionKind::Orchestrator
+    })
+}
+
+/// What only the user can do holds the request up (a card, a worker's question, a paused or
+/// held worker, an overnight run's "Waiting on you" item), quota and the thread's own question
+/// cards aside. A session lists no items, and one listed before it stopped makes nothing wait.
+/// A proposed plan holds nothing up either: its card is the request's answer, and the user's
+/// yes makes the request work again (THREAD-PARITY-PLAN §6).
 fn waits_on_user(board: &Board, request: &str) -> bool {
     let of = |id: &Option<String>| id.as_deref() == Some(request);
-    board.waiting.values().any(|item| of(&item.request_id))
-        || board
-            .approvals
-            .values()
-            .any(|a| of(&a.request_id) && a.state == CardState::Pending)
-        || board
-            .questions
-            .values()
-            .any(|q| of(&q.request_id) && q.answer.is_none() && q.answered_at_ms.is_none())
-        || board
-            .plans
-            .values()
-            .any(|p| of(&p.request_id) && p.state == PlanState::Proposed)
+    board.waiting.values().any(|item| {
+        of(&item.request_id)
+            && waiting_run(&item.source, item.request_id.as_deref(), board).is_some()
+    }) || board
+        .approvals
+        .values()
+        .any(|a| of(&a.request_id) && a.state == CardState::Pending)
+        || board.questions.values().any(|q| {
+            of(&q.request_id)
+                && q.is_open()
+                && matches!(q.kind, QuestionKind::UncommittedChanges { .. })
+        })
         || board.tasks.values().any(|task| {
             of(&task.request_id)
                 && (task.state == TaskState::ReadyToLand
@@ -453,13 +498,13 @@ mod tests {
     #[test]
     fn a_request_works_in_spans_that_leave_out_waits_for_the_user_and_stops() {
         let mut stored = request("r", RequestState::Working);
-        stored.moved_to(RequestState::Working, false, 0);
-        stored.moved_to(RequestState::Waiting, false, 10);
+        stored.moved_to(RequestState::Working, false, false, 0);
+        stored.moved_to(RequestState::Waiting, false, false, 10);
         assert_eq!(stored.ended_at_ms, Some(10));
-        stored.moved_to(RequestState::Working, false, 30);
-        stored.moved_to(RequestState::Stopped, false, 40);
-        stored.moved_to(RequestState::Working, false, 100);
-        stored.moved_to(RequestState::Done, false, 110);
+        stored.moved_to(RequestState::Working, false, false, 30);
+        stored.moved_to(RequestState::Stopped, false, false, 40);
+        stored.moved_to(RequestState::Working, false, false, 100);
+        stored.moved_to(RequestState::Done, false, false, 110);
         assert_eq!(
             spans(&stored),
             [(0, Some(10)), (30, Some(40)), (100, Some(110))]
@@ -470,27 +515,162 @@ mod tests {
     #[test]
     fn waiting_for_quota_is_work_until_the_wait_turns_to_the_user() {
         let mut stored = request("r", RequestState::Working);
-        stored.moved_to(RequestState::Working, false, 0);
-        stored.moved_to(RequestState::Waiting, true, 10);
+        stored.moved_to(RequestState::Working, false, false, 0);
+        stored.moved_to(RequestState::Waiting, true, false, 10);
         assert!(stored.quota_wait);
         assert_eq!(spans(&stored), [(0, None)]);
         // Still waiting, now for the user: the span closes there.
-        stored.moved_to(RequestState::Waiting, false, 20);
+        stored.moved_to(RequestState::Waiting, false, false, 20);
         assert!(!stored.quota_wait);
         assert_eq!(stored.ended_at_ms, Some(10));
-        stored.moved_to(RequestState::Done, false, 40);
+        stored.moved_to(RequestState::Done, false, false, 40);
         assert_eq!(spans(&stored), [(0, Some(20))]);
+    }
+
+    #[test]
+    fn waiting_on_its_question_card_is_work_so_the_time_runs_on() {
+        // 10 s of work, 30 s on the card, 5 s more: it worked for 45 s.
+        let mut stored = request("r", RequestState::Working);
+        stored.moved_to(RequestState::Working, false, false, 0);
+        stored.moved_to(RequestState::Waiting, false, true, 10_000);
+        assert_eq!(spans(&stored), [(0, None)]);
+        assert!(!stored.quota_wait);
+        stored.moved_to(RequestState::Working, false, false, 40_000);
+        stored.moved_to(RequestState::Done, false, false, 45_000);
+        assert_eq!(spans(&stored), [(0, Some(45_000))]);
+        // A wait for anything else of the user's closes the span, as before.
+        stored.moved_to(RequestState::Working, false, false, 50_000);
+        stored.moved_to(RequestState::Waiting, false, true, 55_000);
+        stored.moved_to(RequestState::Waiting, false, false, 60_000);
+        stored.moved_to(RequestState::Done, false, false, 90_000);
+        assert_eq!(spans(&stored), [(0, Some(45_000)), (50_000, Some(60_000))]);
     }
 
     #[test]
     fn a_request_stored_before_spans_counts_from_its_start() {
         let mut waiting = request("r", RequestState::Waiting);
         waiting.ended_at_ms = Some(10);
-        waiting.moved_to(RequestState::Done, false, 20);
+        waiting.moved_to(RequestState::Done, false, false, 20);
         assert_eq!(spans(&waiting), [(0, Some(10))]);
         let mut working = request("r", RequestState::Working);
-        working.moved_to(RequestState::Done, false, 50);
+        working.moved_to(RequestState::Done, false, false, 50);
         assert_eq!(spans(&working), [(0, Some(50))]);
+    }
+
+    /// A task of `request` in `state`.
+    fn task_of(request: &str, state: TaskState) -> Task {
+        let mut task: Task = serde_json::from_value(serde_json::json!({
+            "id": format!("t-{request}"),
+            "conversationId": "c",
+            "number": 1,
+            "position": 0,
+            "title": "Add the flag",
+            "kind": "implement",
+            "spec": "Add the flag.",
+            "access": { "repo": "write", "network": false, "unsandboxed": false },
+            "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
+            "state": "running",
+            "requestId": request,
+            "attachments": [],
+            "createdAtMs": 0,
+            "updatedAtMs": 0
+        }))
+        .expect("a task");
+        task.state = state;
+        task
+    }
+
+    /// A "Waiting on you" item of `request`, from a worker's report.
+    fn item_of(request: &str, task: &str) -> crate::work::WaitingItem {
+        crate::work::WaitingItem {
+            id: format!("w-{request}"),
+            request_id: Some(request.into()),
+            source: crate::work::WaitingSource::Task {
+                task_id: TaskId(task.into()),
+            },
+            key: String::new(),
+            what: "Add STRIPE_KEY to .env".into(),
+            created_at_ms: 0,
+        }
+    }
+
+    /// A session's request listed for the user before sessions stopped listing anything is
+    /// not waiting for it; an overnight run's still is. Quota, a takeover, a paused worker
+    /// and an open card make either wait (THREAD-PARITY-PLAN §5 Q6).
+    #[test]
+    fn only_a_runs_list_and_what_truly_holds_it_make_a_request_wait() {
+        let wait = |board: &Board, request: &str| SessionManager::waiting_on(board, request);
+        let mut board = Board::default();
+        let reported = task_of("r1", TaskState::Reported);
+        board
+            .waiting
+            .insert("w-r1".into(), item_of("r1", &reported.id.0));
+        board.tasks.insert(reported.id.clone(), reported);
+        assert_eq!(wait(&board, "r1"), None);
+
+        let run = OvernightRun::for_test(ConversationId("c".into()), "Speed", Vec::new());
+        let phase = format!("run-{}-phase-1-g1", run.id.short());
+        let mut lead = task_of(&phase, TaskState::Reported);
+        lead.run = Some(crate::overnight::RunTaskContext {
+            run_id: run.id.clone(),
+            segment: 1,
+            generation: 1,
+            role: crate::overnight::RunRole::Worker,
+            rules_hash: String::new(),
+        });
+        board.runs.insert(run.id.clone(), run);
+        board
+            .waiting
+            .insert(format!("w-{phase}"), item_of(&phase, &lead.id.0));
+        board.tasks.insert(lead.id.clone(), lead);
+        assert_eq!(wait(&board, &phase), Some(Wait::User));
+
+        let held = |state: TaskState, quota: bool| {
+            let mut board = board.clone();
+            let mut task = task_of("r1", state);
+            task.id = TaskId("held".into());
+            task.quota_wait = quota.then(|| crate::work::QuotaWait {
+                reason: "The 5-hour window resets at 21:10".into(),
+                resets_at_ms: None,
+                rule: None,
+                ranking: None,
+                since_ms: 0,
+                messages: Vec::new(),
+            });
+            board.tasks.insert(task.id.clone(), task);
+            wait(&board, "r1")
+        };
+        assert_eq!(held(TaskState::Paused, true), Some(Wait::Quota));
+        assert_eq!(held(TaskState::TakenOver, false), Some(Wait::User));
+        assert_eq!(held(TaskState::Paused, false), Some(Wait::User));
+
+        let mut asked = board.clone();
+        let card: crate::work::Question = serde_json::from_value(serde_json::json!({
+            "id": "q1",
+            "conversationId": "c",
+            "taskId": null,
+            "requestId": "r1",
+            "position": 0,
+            "kind": { "type": "orchestrator" },
+            "text": "Which format?",
+            "options": ["CSV", "JSON"],
+            "answer": null,
+            "createdAtMs": 0,
+            "answeredAtMs": null
+        }))
+        .expect("a question");
+        let mut merge = card.clone();
+        merge.id = crate::model::CardId("q2".into());
+        merge.kind = QuestionKind::Merge {
+            branch: "brigadier/c/session".into(),
+            base: "main".into(),
+        };
+        asked.questions.insert(card.id.clone(), card);
+        assert_eq!(wait(&asked, "r1"), Some(Wait::Card));
+        // The merge card comes after the answer and holds nothing up.
+        let mut merging = board.clone();
+        merging.questions.insert(merge.id.clone(), merge);
+        assert_eq!(wait(&merging, "r1"), None);
     }
 
     #[test]

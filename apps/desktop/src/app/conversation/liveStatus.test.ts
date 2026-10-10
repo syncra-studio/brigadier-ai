@@ -115,10 +115,10 @@ test("only a card or a question for the user reads as needing them", () => {
   assert.equal(head(input({ approvals: byId([allowed]) }))?.tone, "busy");
   const question = { id: "q", requestId: "r1", answer: null, answeredAtMs: null } as unknown as Question;
   assert.deepEqual(head(input({ questions: byId([question]) }, { state: "waiting" })), { text: "Waiting for your answer", tone: "needsYou" });
+  // An overnight run's list or a question in the lead's text: nothing reads as needing them.
   const item = { id: "w", requestId: "r1", what: "Sign in to GitHub" } as unknown as WaitingItem;
-  assert.deepEqual(head(input({ waiting: { w: item } }, { state: "waiting" })), { text: "Waiting for you · Sign in to GitHub", tone: "needsYou" });
-  // The lead asked in its reply: no card, nothing paused.
-  assert.deepEqual(head(input({}, { state: "waiting" })), { text: "Waiting for your answer", tone: "needsYou" });
+  assert.equal(head(input({ waiting: { w: item } }, { state: "waiting" })), null);
+  assert.equal(head(input({}, { state: "waiting" })), null);
   // A change ready to land waits for the user once the lead's turn is over.
   assert.equal(head(input({ tasks: byId([task({ state: "readyToLand" })]) }, { state: "waiting" }))?.text, "Waiting for your approval");
 });

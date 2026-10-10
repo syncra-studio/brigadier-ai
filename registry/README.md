@@ -27,12 +27,12 @@ Don't confuse it with `crates/registry`, which is the MCP, plugin and skill regi
 | `models[].cli` | The CLI that runs it: `claude` or `codex`. |
 | `models[].match.ids` | The ids and aliases the CLI lists for this model (`opus`, `claude-opus-5-5`). A listed model whose id, or the concrete model its alias resolves to, is in this list is **curated**. |
 | `models[].match.family` | The family word (`opus`, `sol`). Put it only on a family's newest entry. A listed model with no entry of its own inherits that entry if its id contains the word and it is not older than the entry's own ids. So `gpt-6.2-sol` inherits the `sol` entry, and routing marks it **inherited**. |
-| `models[].tier` | `frontier`, `strong`, `standard` or `light`; `unrated` is kept for models nobody has placed yet. A task never runs below its quality floor: `strong` for implementation, reviews, merges and orchestration; `standard` for research; `light` for scouting, checks and chat. |
+| `models[].tier` | `frontier`, `strong`, `standard` or `light`; `unrated` is kept for models nobody has placed yet. A task never runs below its quality floor: `strong` for implementation, reviews, merges, orchestration and operating apps; `standard` for research; `light` for scouting, checks and chat. |
 | `models[].efforts` | The reasoning efforts it accepts, from `low`, `medium` and `high`. |
 | `models[].contextWindow` | The context window in tokens. |
 | `models[].knowledgeCutoff` | The vendor's reliable knowledge cutoff, `YYYY-MM`. Leave it out when the vendor hasn't published one. |
 | `models[].modalities` | `input` and `output` (`text`, `image`), and `tools` (`webSearch`, `imageGeneration`). |
-| `models[].strengths` | 0–10 for each task category: `scout`, `research`, `implement`, `review`, `merge`, `verify`, `chat`, `orchestrate`. This is how well suited the model is to that category, weighing quality against cost, so a frontier model scores low for scouting. A missing category counts as 5. |
+| `models[].strengths` | 0–10 for each task category: `scout`, `research`, `implement`, `review`, `merge`, `verify`, `operate`, `chat`, `orchestrate`. This is how well suited the model is to that category, weighing quality against cost, so a frontier model scores low for scouting. A missing category counts as 5. |
 | `models[].areaStrengths` | −2…+2 per area (`frontend`, `backend`, `infra`, `docs`, `tests`). The router adds it to the category strength for a task in that area. |
 | `models[].defaultEffort` | The effort to run the model at for each category. |
 | `models[].released` | The release date, `YYYY-MM-DD`. |

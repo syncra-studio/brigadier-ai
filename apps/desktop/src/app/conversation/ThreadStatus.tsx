@@ -38,9 +38,9 @@ export const ThreadStatus: FC<{
         data-slot="request-activity"
         className={cn(
           "w-fit max-w-full truncate text-sm",
-          head.tone === "busy" && "shimmer",
+          // Waiting on the user is live too: it shimmers as quietly as the work, the card itself asks.
+          (head.tone === "busy" || head.tone === "needsYou") && "shimmer",
           head.tone === "still" && "text-muted-foreground",
-          head.tone === "needsYou" && "text-foreground/80",
         )}
       >
         {words}

@@ -449,7 +449,7 @@ fn pending_approval(event: &EventEnvelope) -> Option<(String, String)> {
         }
         ApprovalSubject::Landing { branch, .. } => format!("Land a commit on {branch}?"),
         ApprovalSubject::Action { action, .. } => action,
-        ApprovalSubject::Outline { title, .. } => format!("Start this plan? {title}"),
+        ApprovalSubject::Outline { title, .. } => format!("Implement this plan? {title}"),
     };
     Some((approval.id.0, what))
 }
@@ -561,7 +561,7 @@ mod tests {
         };
         assert_eq!(
             pending_approval(&envelope(&approval(outline.clone(), CardState::Pending))),
-            Some(("a1".to_owned(), "Start this plan? Dark mode".to_owned()))
+            Some(("a1".to_owned(), "Implement this plan? Dark mode".to_owned()))
         );
         // A recorded merge card notifies no more: merging is asked for in words.
         let merge = ApprovalSubject::FinishSession {

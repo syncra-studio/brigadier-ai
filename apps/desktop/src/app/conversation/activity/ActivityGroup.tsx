@@ -2,9 +2,9 @@ import { ChevronRight, Globe } from "@openai/apps-sdk-ui/components/Icon";
 import type { ReactNode } from "react";
 
 import type { GroupItem, Thought as ThoughtItem } from "@/app/conversation/activity/group";
-import { stepLabel, type StepWords, summarize } from "@/app/conversation/activity/words";
+import { labelParts, stepLabel, type StepWords, summarize } from "@/app/conversation/activity/words";
 import { ThinkingRow } from "@/app/conversation/ThinkingRow";
-import { CHEVRON, OPENS, ROW, WORK_ICONS } from "@/components/assistant-ui/elements/activity-row";
+import { CHEVRON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE, WORK_ICONS } from "@/components/assistant-ui/elements/activity-row";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { ItemStatus } from "@/ipc/generated";
@@ -18,8 +18,21 @@ function StepIcon({ words }: { words: StepWords }) {
   return <Icon aria-hidden className="size-4 shrink-0" />;
 }
 
+/** A step's words in two tones: the verb in the row's, what it acts on a step fainter; white together on hover. */
+function Words({ words, label }: { words: StepWords; label: string }) {
+  const { verb, object, rest } = labelParts(words, label);
+  if (!object) return <>{label}</>;
+  return (
+    <>
+      {verb}
+      <span className="text-row-object group-hover:text-foreground group-focus-visible:text-foreground">{object}</span>
+      {rest}
+    </>
+  );
+}
+
 function Thought({ thought }: { thought: ThoughtItem }) {
-  return <ThinkingRow text={thought.text} startedAtMs={thought.startedAtMs} endedAtMs={thought.endedAtMs} live={false} />;
+  return <ThinkingRow text={thought.text} ms={thought.ms} live={false} />;
 }
 
 /**
@@ -32,10 +45,20 @@ export function StepRow({ words, status, exit = null, detail, suffix, slot }: De
   suffix?: ReactNode;
   slot?: string;
 }) {
+  const running = status === "inProgress";
   return (
-    <ThreadActivity data-slot={slot} data-kind={words.kind} detail={detail}>
+    // Its Shell box or diff spans the column, flush under the row.
+    // While it runs it has nothing to open yet, so no chevron: it opens once it has finished.
+    <ThreadActivity
+      data-slot={slot}
+      data-kind={words.kind}
+      detail={running ? undefined : detail}
+      detailClassName={cn(ROW_DETAIL, "ps-0")}
+    >
       <StepIcon words={words} />
-      <span className={cn("min-w-0 truncate", status === "inProgress" && "shimmer")}>{stepLabel(words, status, exit)}</span>
+      <span className={cn("min-w-0 truncate", running && "shimmer")}>
+        {running ? stepLabel(words, status, exit) : <Words words={words} label={stepLabel(words, status, exit)} />}
+      </span>
       {suffix && <span className="shrink-0 tabular-nums">{suffix}</span>}
     </ThreadActivity>
   );
@@ -63,26 +86,26 @@ export function ActivityGroup<S>({ items, live, describe, renderStep }: {
   const current = described.at(-1);
   const first = described[0];
   const head = live || described.length === 1 ? current : first;
-  const label = !current
-    ? ""
-    : live || described.length === 1
-      ? stepLabel(current.words, current.status, current.exit)
-      : summarize(described.map((step) => step.words));
+  const oneStep = live || described.length === 1;
+  const label = !current ? "" : oneStep ? stepLabel(current.words, current.status, current.exit) : summarize(described.map((step) => step.words));
+  // It says the step running now: like that step's own row, no chevron until it is open.
+  const running = live && current?.status === "inProgress";
   return (
     <Collapsible data-slot="work-group">
-      <CollapsibleTrigger className={cn(ROW, "group hover:text-foreground rounded-control w-full text-start")}>
+      <CollapsibleTrigger className={cn(ROW, ROW_TOGGLE)}>
         {head && <StepIcon words={head.words} />}
         {/* A live group's step changes in place: its words cross-fade, with no jump. */}
         <span
           key={live ? label : undefined}
-          className={cn("min-w-0 truncate", live && "animate-in fade-in duration-160 motion-reduce:animate-none", live && current?.status === "inProgress" && "shimmer")}
+          className={cn("min-w-0 truncate", live && "animate-in fade-in duration-160 motion-reduce:animate-none", running && "shimmer")}
         >
-          {label}
+          {current && oneStep && !running ? <Words words={current.words} label={label} /> : label}
         </span>
-        <ChevronRight aria-hidden className={CHEVRON} />
+        <ChevronRight aria-hidden className={cn(CHEVRON, running && "group-data-[state=closed]:hidden")} />
       </CollapsibleTrigger>
       <CollapsibleContent className={OPENS}>
-        <div className="flex min-w-0 flex-col gap-1 pt-1">
+        {/* Up to 224px of rows 4px apart, then it scrolls, its edges fading while there is more. */}
+        <div className="max-h-group-list scroll-edge-fade gap-activity-row-gap flex min-w-0 flex-col overflow-y-auto pt-1 [--spacing-scroll-fade-bottom:var(--spacing-group-fade)] [--spacing-scroll-fade-top:var(--spacing-group-fade)]">
           {items.map((item) =>
             item.type === "step" ? (
               renderStep(item.step, item.key)

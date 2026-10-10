@@ -40,7 +40,7 @@ import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgres
 import { useReviewLines } from "@/app/conversation/reviewStatus";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
-import { useAction } from "@/app/conversation/useAction";
+import { ComputerAccessRow } from "@/app/conversation/ComputerAccessRow";
 import { RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { useSessionTabsOf } from "@/state/sessionTabs";
 import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
@@ -79,7 +79,6 @@ import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import {
   getSessionDiff,
-  resolveWaiting,
   select,
   setPinnedSummary,
   setProjectExpanded,
@@ -201,12 +200,14 @@ function waitingFrom(
       return null;
     case "run":
       return "Declined during the overnight run";
+    case "computer":
+      return null;
   }
 }
 
 /**
  * One thing only the user can do, on one row that opens to its whole text and where it came
- * from; Done (or Show, for a card) at its end.
+ * from; Show at its end for a card. It ends without a Done: when it is over, or with its run.
  */
 function WaitingRow({
   item,
@@ -216,37 +217,25 @@ function WaitingRow({
   conversationId: string;
 }) {
   const tasks = useBoard((s) => s.board?.tasks ?? NO_TASKS);
-  const action = useAction();
   const from = waitingFrom(item, tasks);
   const [open, setOpen] = useState(false);
   const { source } = item;
+  if (source.type === "computer") return <ComputerAccessRow what={item.what} />;
   return (
     <div className="flex flex-col">
       <SummaryRow
         icon={<HandRaised />}
         description={open && from ? from : undefined}
         meta={
-          <>
-            {source.type === "card" && (
-              <Button
-                size="xs"
-                variant="ghost"
-                onClick={() => showCard(conversationId, source.cardId)}
-              >
-                Show
-              </Button>
-            )}
+          source.type === "card" && (
             <Button
               size="xs"
               variant="ghost"
-              disabled={action.busy}
-              onClick={() =>
-                action.run(() => resolveWaiting(conversationId, item.id))
-              }
+              onClick={() => showCard(conversationId, source.cardId)}
             >
-              Done
+              Show
             </Button>
-          </>
+          )
         }
       >
         <button
@@ -261,26 +250,33 @@ function WaitingRow({
           <WorkerLine text={item.what} />
         </button>
       </SummaryRow>
-      {action.error && (
-        <span role="alert" className="text-destructive ps-6 text-xs">
-          {action.error}
-        </span>
-      )}
     </div>
   );
 }
 
 /**
- * "Waiting on you": what only the user can do, oldest first, each until they mark it done. The
+ * Whether an item shows: an overnight run's, since only a run keeps a list for the morning, and
+ * computer use's permission ask, which closes by itself once allowed. A session lists nothing
+ * else (its thread says it in its answer), so one listed before that shows nowhere.
+ */
+function runItem(item: WaitingItem, tasks: Readonly<Record<string, Task>>): boolean {
+  const { source } = item;
+  if (source.type === "run" || source.type === "computer") return true;
+  if (source.type === "task" || source.type === "landing") return !!tasks[source.taskId]?.run;
+  return isRunRequest(item.requestId);
+}
+
+/**
+ * "Waiting on you": an overnight run's list of what only the user can do, oldest first. The
  * section is there only while something waits.
  */
 function WaitingOnYou({ conversationId }: { conversationId: string }) {
   const items = useBoard(
     useShallow((s) =>
       s.board?.conversationId === conversationId
-        ? Object.values(s.board.waiting).toSorted(
-            (a, b) => a.createdAtMs - b.createdAtMs,
-          )
+        ? Object.values(s.board.waiting)
+            .filter((item) => runItem(item, s.board?.tasks ?? NO_TASKS))
+            .toSorted((a, b) => a.createdAtMs - b.createdAtMs)
         : NO_WAITING,
     ),
   );

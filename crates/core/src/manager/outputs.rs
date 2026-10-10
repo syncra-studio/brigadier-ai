@@ -19,7 +19,7 @@ use brigadier_providers::redact::Redactor;
 
 use super::{SessionManager, blocking, secrets};
 use crate::tools::ArtifactInput;
-use crate::work::{ArtifactKind, ArtifactRef, Task};
+use crate::work::{ArtifactKind, ArtifactRef, Task, TaskKind};
 use crate::{Error, Result};
 
 /// The folder in a worker's scratch folder for files meant for the orchestrator or the user.
@@ -124,7 +124,13 @@ impl SessionManager {
             .as_ref()
             .map(|w| PathBuf::from(&w.scratch))
             .ok_or_else(|| Error::Invalid("the task has no workspace".into()))?;
-        let places = self.places(&scratch, task.created_at_ms);
+        let mut places = self.places(&scratch, task.created_at_ms);
+        if task.kind == TaskKind::Operate {
+            // An operate task changes files through apps: the document it edited and saved is
+            // the job's result, kept by the app, not an output lost with a temp folder. Asking
+            // for a copy cost a resubmitted report (and a model call) on every document task.
+            places.lost.clear();
+        }
         let listed = listed.to_vec();
         let outputs = places.outputs.clone();
         let found = blocking(move || {

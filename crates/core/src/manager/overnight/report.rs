@@ -297,6 +297,8 @@ impl SessionManager {
                 if saved.report_message_id.is_none() {
                     let notify = conversation.lifecycle != crate::model::Lifecycle::Archived;
                     self.write_run_report(saved, notify).await;
+                    // The report keeps the run's list now: it ends.
+                    self.settle_requests(&conversation.id).await;
                 }
             }
             let Ok(board) = self.core.board(&conversation.id).await else {
@@ -1360,6 +1362,7 @@ fn worker_lines(run: &OvernightRun, board: &Board) -> Vec<String> {
                 TaskKind::Scout | TaskKind::Research => "scout",
                 TaskKind::Review => "review",
                 TaskKind::Verify => "verifier",
+                TaskKind::Operate => "operator",
             },
         };
         let named = |task: &Task| {
@@ -1399,6 +1402,7 @@ fn worker_lines(run: &OvernightRun, board: &Board) -> Vec<String> {
         for (kind, one, many) in [
             ("review", "review", "reviews"),
             ("scout", "scout", "scouts"),
+            ("operator", "app run", "app runs"),
             ("judge", "judge", "judges"),
         ] {
             let members: Vec<&Task> = of
@@ -1674,6 +1678,7 @@ mod tests {
             request_id: Some(super::super::run::run_request(&run)),
             position: 0,
             title: "Speed".into(),
+            body: None,
             steps: vec![
                 crate::work::PlanStep {
                     title: "Measure".into(),

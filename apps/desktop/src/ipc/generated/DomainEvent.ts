@@ -5,6 +5,7 @@ import type { Artifact } from "./Artifact";
 import type { AttachmentRef } from "./AttachmentRef";
 import type { BrainJob } from "./BrainJob";
 import type { Compaction } from "./Compaction";
+import type { ComputerAction } from "./ComputerAction";
 import type { Conversation } from "./Conversation";
 import type { ConversationId } from "./ConversationId";
 import type { Decision } from "./Decision";
@@ -57,7 +58,7 @@ requestId: string | null, } | { "type": "requestUpdated", request: UserRequest, 
 /**
  * The answer: a message id, or `task:<id>` for a worker's report.
  */
-subject: string, rating: Rating, } | { "type": "branchSwitched", conversationId: ConversationId, head: string, } | { "type": "conversationNotice", conversationId: ConversationId, notice: Notice, } | { "type": "taskUpdated", task: Task, } | { "type": "approvalUpdated", approval: Approval, } | { "type": "questionUpdated", question: Question, } | { "type": "planUpdated", plan: Plan, } | { "type": "reviewUpdated", review: ReviewRun, } | { "type": "threadCommitsSeen", conversationId: ConversationId, branch: string, tip: string, } | { "type": "outputStored", conversationId: ConversationId, output: StoredOutput, } | { "type": "checkRan", conversationId: ConversationId, 
+subject: string, rating: Rating, } | { "type": "branchSwitched", conversationId: ConversationId, head: string, } | { "type": "conversationNotice", conversationId: ConversationId, notice: Notice, } | { "type": "taskUpdated", task: Task, } | { "type": "approvalUpdated", approval: Approval, } | { "type": "questionUpdated", question: Question, } | { "type": "planUpdated", plan: Plan, } | { "type": "reviewUpdated", review: ReviewRun, } | { "type": "threadCommitsSeen", conversationId: ConversationId, branch: string, tip: string, } | { "type": "outputStored", conversationId: ConversationId, output: StoredOutput, } | { "type": "computerActed", conversationId: ConversationId, taskId: TaskId, action: ComputerAction, } | { "type": "checkRan", conversationId: ConversationId, 
 /**
  * The worker's task; none for the thread.
  */

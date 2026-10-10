@@ -84,25 +84,26 @@ How to work:
 - Delegate by default: anything beyond a tiny edit goes to a worker (delegate_task), so you stay free to talk while it runs. Delegate early: at most a quick query_brain or code_search for pointers, then delegate_task; the worker reads the code. Title each worker with a plain 2–4 word job name, unique in this chat ("Fix file uploads"), never an id, role or phase number.
 - Split independent parts into workers that run at once (separate questions, writers on separate files, a check needing no other part's result), started in one batch: several delegate_task calls in one message, each one job with its own "done when". Dependent parts run one after another (plan_phases). Meanwhile do your own small work: reads, searches, checks, tiny edits.
 - Each delegate_task names its effort: "medium" for small, bounded work (a file or two, a UI tweak or small feature, copy, a bug in a known place); "low" for a mechanical edit; "high" only for cross-area, risky or unclear work.
-- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part (screenshots only if the user asked), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository and research tasks check current docs, when that is more than a quick look of your own.
-- Answer a worker's question ([question from task-N]) at once with answer_worker: take its recommendation when it fits, else what the brief, the plan, the user's words or the Brain settle. message_worker steers a running worker, or sends a reported one back with the exact gaps.
+- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part (screenshots only if the user asked), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository, research tasks check current docs and operate tasks use apps on screen (over about five GUI steps, or exploring an app), when that is more than a quick look by you or the worker on the task.
+- Answer a worker's question ([question from task-N]) at once with answer_worker. message_worker steers a running worker, or sends a reported one back with the exact gaps.
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
 - Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect.
 - You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
-- Land finished work with land_phase (a phase isn't needed). What it left unfixed goes to a fix task (role fix, subject that task) or, when only the user can settle it, to note_for_user.
+- Land finished work with land_phase (a phase isn't needed). What it left unfixed goes to a fix task (role fix, subject that task) or, when only the user can settle it, on a card (ask_user).
 - Every landing and every commit of your own gets one review by the other vendor in the background; nothing waits for it, and a tip already reviewed isn't reviewed again. Its findings arrive as a [review …] message, maybe after your answer or a merge: fix what you agree with (a fix worker, or a tiny fix) and say why not for the rest.
 - Your own edits stay tiny: a few lines, only in files you have already read, then a quick check of them. Anything else goes to a worker. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`.
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
 - Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, or you decide or answer something for them, keep it with remember (personal: true for a preference that holds in every project), silently; outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision. code_search, code_refs and project_map find code faster than grepping.
-- Ask the user only what only they can decide: one question at a time, with your recommendation (in your reply, or with ask_user when a task must wait). Note what only they can do (a key, an account, a paid signup) with note_for_user, kind waiting, and a judgement call you made for them with kind decided. Work that doesn't depend on it carries on.
-- Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise list them for the user. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
+- Ask the user only what only they can decide, only with ask_user (a card, never a question in your text), then reply {quiet}; the answers come back in this request. Note a judgement call you made for them with note_for_user, kind decided. Checking it in the app by hand is the workers' job and yours, never the user's.
+- Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise say so in your answer. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - Tools return at once; never wait or poll. Reports, questions, reviews and outcomes arrive later as messages from Brigadier, in blocks like [report task-3 …] … [/report].
-- Each worker has an outputs folder for files meant for you or the user. Never tell a worker to write anywhere outside its worktree and scratch folder.
+- Each worker has an outputs folder for files meant for you or the user. Never tell a worker to write anywhere outside its worktree and scratch folder.{GRILLING}
 
 How to talk to the user:
 - The user sees quiet worker lifecycle lines next to your replies and can open each worker's own thread. Don't announce what you delegated, don't repeat a task's spec, and don't restate reports.
-- Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show. This holds right after you delegate, too. Never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
-- When the request's work is done, or the user must decide something, write one final answer: what was found or done, what was checked and how, and what's next or the decision you need. What waits on the user shows as a short list under your answer by itself (from note_for_user and the workers' needs_user): don't repeat it. Don't repeat what you already told them.
+- Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show. This holds right after you delegate, too. Starting work that takes more than a moment, you may write one short opening line ("I'll check how tabs work, then ask you a few questions."); otherwise never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
+- When the request's work is done, write one final answer: at most about five short lines of what changed and what to know. Then, if any, one line "To check: …" for what nobody could check and one "You'll need to: …" for what only the user can do (a key, an account). Then the full report (checks run, review findings, what wasn't tested) under a last heading `### Details`, shown folded. A decision goes on a card (ask_user, propose_merge, propose_plan), never in text.
+- A late review's fix that lands after your answer: write the ending again, updated; the user sees only the newest. Never repeat a closing or ask the merge again.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.
 - A [follow-up …] block is a message the user sent while you work on their request; it waits in their queue until you sort it with route_follow_up, silently (the user sees where it goes). If it belongs to this work (a question about the same thing, a detail or a change for it), it joins it: it reaches you at once as the user's message, and your one final answer covers it too. If it is a request of its own, it waits and reaches you on its own once this work is done; don't act on it before.{voice}{orchestrator_voice}
 - {AUTHORITY}{short}{code_rules}{preferences}"#,
@@ -119,6 +120,11 @@ How to talk to the user:
         preferences = preference_lines(preferences),
     )
 }
+
+/// How the thread interviews the user: rounds of question cards over a tree of decisions.
+const GRILLING: &str = "
+
+Interview the user when they invite questions, in any words or language (\"grill me\", \"ask me\", \"interview me\", \"make sure we're on the same page\"), or a request is too vague to start. Map the decisions as a tree and ask it in rounds, one ask_user card each. A round holds every question whose prerequisites are settled; the rest wait for a later round. Look facts up yourself (query_brain, code_search, a scout), never ask them. When no question is left, answer with a short summary: what was decided, and what happens next.";
 
 /// How the thread's instructions start (tests find its sessions by it).
 pub(crate) const THREAD_OPENING: &str = "You lead a Brigadier session";
@@ -198,7 +204,7 @@ fn environment_text(environment: &Environment) -> String {
             "Local checkout: landed work goes, as the workers' own commits, directly onto `{branch}` in the user's own checkout."
         ),
         Environment::NewWorktree { base, branch, .. } => format!(
-            "New worktree: landed work goes, as the workers' own commits, onto the session branch `{branch}` (from `{base}`). Merging it into `{base}` is the user's call, in words, like the rest of the thread: there is no card. When the work has landed, you may propose it in your reply, as a question that names `{base}` (\"Merge `{branch}` into `{base}`?\"), with what the reviews found. When the user's latest message asks for the merge (\"merge it\", or \"… and merge it into `{base}`\" with the work itself), that is their consent: call finish_session as soon as the work has landed, with their words, without asking again. Otherwise call it only once their latest message plainly agrees to the merge you proposed; on silence, \"no\", \"wait\" or a condition (\"once the tests pass\"), don't, and never take an earlier yes for a later merge."
+            "New worktree: landed work goes, as the workers' own commits, onto the session branch `{branch}` (from `{base}`). Merging it into `{base}` is the user's call. When the work has landed, ask them once, on a card, with propose_merge (its note: what the merge brings and what the reviews found); never ask it in your text, and never ask it again once they answered. When they choose \"Merge into {base}\", call finish_session without user_words. When the user's latest message asks for the merge in words (\"merge it\", or \"… and merge it into `{base}`\" with the work itself), that is their consent too: call finish_session as soon as the work has landed, with their words, without asking. On \"Not yet\", silence, \"no\", \"wait\" or a condition (\"once the tests pass\"), don't merge, and never take an earlier yes for a later merge."
         ),
     }
 }
@@ -206,7 +212,7 @@ fn environment_text(environment: &Environment) -> String {
 fn permission_text(permission: PermissionLevel) -> &'static str {
     match permission {
         PermissionLevel::AskForApproval => {
-            "Ask for approval: you and the workers run in a sandbox, and anything that must leave it asks the user first, on a card. The user gives each outline's go-ahead (approve_outline shows them a \"Start this plan?\" card)."
+            "Ask for approval: you and the workers run in a sandbox, and anything that must leave it asks the user first, on a card. The user gives each outline's go-ahead (approve_outline shows them a plan card)."
         }
         PermissionLevel::ApproveForMe => {
             "Approve for me: you and the workers run in a sandbox; a command that must leave it is settled by an automatic reviewer. You give outlines their go-ahead on the user's behalf. Ask the user only what only they can answer (product choices, unclear requirements)."
@@ -301,8 +307,13 @@ pub(crate) fn short_replies_note(short: bool) -> String {
 /// version 2 a session's are the thread's ([`thread`]): a session whose CLI started on older
 /// ones, with a role no note can replace, starts over from its transcript instead of resuming
 /// ([`role_outdated`]). Version 3 adds how the thread splits and starts its workers
-/// (THREAD-UX-PLAN.md §4, §4.1).
-pub(crate) const CONTRACT: u32 = 3;
+/// (THREAD-UX-PLAN.md §4, §4.1). Version 4 asks the user only on cards, in rounds, with the
+/// interview, the opening line and the merge card (THREAD-PARITY-PLAN.md §5). Version 5 lists
+/// nothing for the user outside an overnight run, has workers check by hand themselves, and
+/// asks for the short ending with its folded Details, updated rather than repeated (§5 Q6, Q9).
+/// Version 6 proposes plans as documents on a plan card (`propose_plan`, §6). Version 7 starts the
+/// interview on any wording that invites questions, not only "grill me".
+pub(crate) const CONTRACT: u32 = 7;
 /// A Chat's contract: its instructions didn't change with the thread's.
 const CHAT_CONTRACT: u32 = 1;
 /// The first contract whose instructions say that notes replace them.
@@ -709,6 +720,9 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String 
         TaskKind::Verify => {
             "verify: prove each \"done when\" criterion of the task with your own evidence, run the checks the task's brief asks for on this worktree, and report exactly what passed and failed. Set submit_report's checks: noChecks only when the project has none you could run. Fix nothing."
         }
+        TaskKind::Operate => {
+            "operate: use apps on this Mac through the computer tools (apps, launch, observe, act, zoom) to reach the end state named below."
+        }
     };
     let write_rules = if task.kind.writes() {
         let commits = if task.route.choice.provider == brigadier_providers::ProviderKind::Codex {
@@ -733,16 +747,18 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String 
     } else {
         "You report to the orchestrator, who speaks for the user: treat its answers as the user's. Keep going on your own for anything the task, the project's docs and the Project Brain (query_brain) settle. When a question truly blocks you, call ask_orchestrator: one question at a time, with the options you see and the one you recommend. It waits for the answer."
     };
-    let code_rules = if matches!(task.kind, TaskKind::Implement | TaskKind::Merge) {
-        WORKER_CODE_RULES
-    } else {
-        ""
+    let code_rules = match task.kind {
+        TaskKind::Implement | TaskKind::Merge => WORKER_CODE_RULES.to_owned(),
+        TaskKind::Operate => operate_rules(task),
+        _ => String::new(),
     };
     // An overnight run's Waiting on you holds only what its done-when needs (PLAN.md §10.11).
+    // In a session the user is there, and the thread tells them in its answer: workers check
+    // by hand themselves (THREAD-PARITY-PLAN §5 Q6).
     let needs_user = if task.run.is_some() {
         "If a \"done when\" criterion can't be met without something only the user can do (a credential, a sign-in, an account, a paid signup), list exactly that under needs_user and finish everything else around it. Anything optional the user could add goes under risks, not needs_user."
     } else {
-        "If something only the user can do blocks part of the task (a credential, a sign-in, an account, a paid signup), don't stall on it: stub it (read it from an environment variable or config), list it under needs_user and finish everything else around it."
+        "A \"check it in the app\" or \"test it by hand\" step is yours, never the user's: run the app (its dev server, or a headless browser driving it, or the project's scripted UI checks) and check it yourself. What truly can't be checked goes under risks as \"Not checked: …\", never under needs_user.\n- needs_user is only for a key, an account or a paid signup that blocks part of the task: don't stall on it; stub it (read it from an environment variable or config), list it under needs_user and finish everything else around it."
     };
     format!(
         r#"Today is {today}.
@@ -761,6 +777,30 @@ The task:
         number = task.number,
         title = task.title,
         spec = task.spec,
+    )
+}
+
+/// An operate worker's target, end state and habits (COMPUTER-USE-PLAN.md §4.6): few model
+/// calls, each batch checked as it runs, and the end state proven before it reports.
+fn operate_rules(task: &Task) -> String {
+    // Codex calls tools from code without their schemas: told their names and complete shapes,
+    // it skips the calls that list them and the ones that guess argument names one error at a
+    // time, and it can act and report in one exec (measured 2026-10-09: 29 of a run's 128 calls).
+    let tools = if task.route.choice.provider == ProviderKind::Codex {
+        "\n- Call the tools from code with these shapes. They are complete: don't list ALL_TOOLS or print a schema. tools.mcp__computer__observe({window}); tools.mcp__computer__act({window, actions: [{do: \"set_value\", ref: \"e18\", text: \"37\", expect: {is: \"value_equals\", ref: \"e18\", text: \"37\"}}, {do: \"click\", ref: \"e5\", expect: {is: \"checked\", ref: \"e5\", on: true}}, {do: \"click\", ref: \"e7\", expect: {is: \"appears\", find: \"Saved\"}}, {do: \"key\", key: \"cmd+s\"}, {do: \"menu\", path: [\"File\", \"Save\"]}]}); tools.mcp__computer__zoom({image: \"i3\", region: [x0, y0, x1, y1]}); tools.mcp__brigadier__submit_report({summary: \"...\", verification: \"...\", done_when: \"[met] <criterion>: <evidence>\"}), whose list fields are text, one item a line.\n- One exec may make several calls. When the act's expects will prove the end state, act and report in the same exec: submit_report only if the act's text starts with \"All \" (every action done), else print the act's text.\n- An error is never the end: an argument error ran nothing, so send the call again as its example shows; a failed action, fix it from the reply. End only after submit_report."
+    } else {
+        ""
+    };
+    format!(
+        "\n\nTarget: {target}\nEnd state: {end_state}\n\nHow to operate (every model call counts, so use few):{tools}\n- Use only the computer tools and the files and apps this task names. Never kill or signal a process (no kill, pkill or killall) and never search the whole disk (no find /): to check a file, read the path the task gives.\n- Where a named file or app API can do the job, use it, unless the task says to do it through the UI: then the UI is the job. Read structure (observe's refs) before pixels.\n- Observe once, then do the whole job in one act: every step you can name from that look, in order, and put an expect on every step that changes state (value_equals, checked, appears, gone). Start a new act only for steps whose refs appear after an earlier step (a sheet, a menu, a new window).\n- act's reply is your check: each action's result and whether its expect held, then the window's changes since your last look (with a screenshot when the structure is poor). Don't observe again to confirm what an expect proved; observe again only after a failed or skipped action.\n- Zoom before clicking a small target by its pixels.\n- Never act on a window the task didn't name or you didn't launch.\n- As soon as the end state is proven (expects that held, or the one file read the task names), call {report} (the brigadier server's, not the computer server's): what you did, whether the end state is verified and how, and anything refused or blocked. Then end with one line.",
+        target = task.target.as_deref().unwrap_or("(named in the task)"),
+        end_state = task.end_state.as_deref().unwrap_or("(named in the task)"),
+        // A Claude worker once called mcp__computer__submit_report, beside the tools it had used.
+        report = if task.route.choice.provider == ProviderKind::Codex {
+            "tools.mcp__brigadier__submit_report"
+        } else {
+            "mcp__brigadier__submit_report"
+        },
     )
 }
 
@@ -857,11 +897,14 @@ pub(crate) fn report_envelope(task: &Task, report: &Report, route: &str) -> Stri
     list("Done when", &report.done_when, &mut text);
     list("Open questions", &report.open_questions, &mut text);
     list("Risks", &report.risks, &mut text);
-    // A worker's are listed for the user (a gate member's go to its gate).
-    let needs_user = if task.gate_link.is_none() {
+    // An overnight run's are listed for the user (a gate member's go to its gate); in a
+    // session the thread says them in its answer.
+    let needs_user = if task.gate_link.is_some() {
+        "Needs the user"
+    } else if task.run.is_some() {
         "Needs the user (already listed for them under Waiting on you)"
     } else {
-        "Needs the user"
+        "Needs the user (say it in your answer)"
     };
     list(needs_user, &report.needs_user, &mut text);
     if let Some(verdict) = report.verdict {
@@ -930,11 +973,14 @@ const CUT_HEAD: &str = "[…cut; read_artifact ";
 const CUT_TAIL: &str = " reads all ";
 
 /// What a worker wrote after its report (see [`report_envelope`]), shown as
-/// [`late_findings_text`] gives it.
+/// [`late_findings_text`] gives it. It often restates the report: then the thread says nothing,
+/// so its answer stays the request's ending instead of a line about the note.
 pub(crate) fn late_findings_envelope(task: &Task, shown: &str) -> String {
     format!(
         "[report task-{} · addendum] The worker wrote this after its report, which left it out; \
-         it is kept with the report:\n{shown}\n[/report]",
+         it is kept with the report:\n{shown}\n[/report] If it changes nothing you told the user \
+         or the work still to do, reply exactly {QUIET}. If your answer is already written and it \
+         changes it, write the ending again, updated.",
         task.number
     )
 }
@@ -984,6 +1030,29 @@ mod tests {
         assert!(
             shown.ends_with("[…cut; read_artifact blob1 reads all 9000 bytes]"),
             "{shown}"
+        );
+    }
+
+    /// A worker's note after its report often restates it: the thread then says nothing, so its
+    /// answer stays the request's ending rather than a line about the note.
+    #[test]
+    fn a_note_after_a_report_that_changes_nothing_is_answered_quietly() {
+        let envelope = late_findings_envelope(&task("claude", None), "All 4 tests pass.");
+        assert!(
+            envelope.starts_with("[report task-1 · addendum]"),
+            "{envelope}"
+        );
+        assert!(
+            envelope.contains("All 4 tests pass.\n[/report]"),
+            "{envelope}"
+        );
+        assert!(
+            envelope.contains("If it changes nothing you told the user or the work still to do, reply exactly [quiet]."),
+            "{envelope}"
+        );
+        assert!(
+            envelope.contains("write the ending again, updated"),
+            "{envelope}"
         );
     }
 
@@ -1052,6 +1121,50 @@ mod tests {
         ));
         // Its review runs while it gathers its evidence and runs its checks: no idle wait.
         assert!(brief.contains("As soon as your work is committed, call review_code once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks"));
+    }
+
+    #[test]
+    fn an_operator_hears_its_target_end_state_and_habits() {
+        let mut operator = task("claude", None);
+        operator.kind = TaskKind::Operate;
+        operator.target = Some("TextEdit, the window \"Notes\"".into());
+        operator.end_state = Some("The note reads \"hi\"".into());
+        let brief = worker_brief(&operator, "", "");
+        assert!(
+            brief.contains(
+                "Target: TextEdit, the window \"Notes\"\nEnd state: The note reads \"hi\""
+            )
+        );
+        assert!(brief.contains("put an expect on every step that changes state"));
+        // Few calls: one look, one batch, the batch's reply as the check, then the report.
+        assert!(brief.contains("Observe once, then do the whole job in one act"));
+        assert!(brief.contains("Don't observe again to confirm what an expect proved"));
+        assert!(brief.contains("As soon as the end state is proven"));
+        assert!(brief.contains("call mcp__brigadier__submit_report (the brigadier server's"));
+        assert!(brief.contains("whether the end state is verified and how"));
+        // A trial once ran `find /` and `pkill`: the brief rules both out in plain words.
+        assert!(
+            brief.contains("Use only the computer tools and the files and apps this task names")
+        );
+        assert!(brief.contains("Never kill or signal a process (no kill, pkill or killall)"));
+        assert!(brief.contains("never search the whole disk (no find /)"));
+        assert!(brief.contains("Don't change files in the repository"));
+        assert!(!brief.contains("How to write code"));
+        assert!(!brief.contains("tools.mcp__computer__act"));
+        operator.route.choice.provider = ProviderKind::Codex;
+        let codex = worker_brief(&operator, "", "");
+        assert!(codex.contains("tools.mcp__computer__observe({window})"));
+        assert!(codex.contains("actions: [{do: \"set_value\""));
+        // The report's shape too, so it never lists the tools or guesses the report.
+        assert!(codex.contains("They are complete: don't list ALL_TOOLS"));
+        assert!(codex.contains("tools.mcp__brigadier__submit_report({summary:"));
+        assert!(codex.contains("act and report in the same exec"));
+        assert!(codex.contains("An error is never the end"));
+        // An argument error has no "failed" line: only the batch's own verdict counts.
+        assert!(codex.contains("only if the act's text starts with \"All \""));
+        // Other kinds hear none of it.
+        let lead = worker_brief(&task("claude", Some("lead")), "", "");
+        assert!(!lead.contains("How to operate"));
     }
 }
 
@@ -1198,6 +1311,14 @@ mod environment_tests {
                     ] {
                         assert!(prompt.contains(tool), "{tool}");
                     }
+                    // The user is asked only on cards, in rounds; the merge too.
+                    assert!(
+                        prompt
+                            .contains("only with ask_user (a card, never a question in your text)")
+                    );
+                    assert!(prompt.contains("Interview the user when they invite questions"));
+                    assert!(prompt.contains("one short opening line"));
+                    assert!(!prompt.contains("in your reply, or with ask_user"));
                     // The old fixed pipeline is gone.
                     for step in [
                         "one loop per request",
@@ -1244,9 +1365,31 @@ mod environment_tests {
         assert!(claude.contains("run_unsandboxed"));
         assert!(claude.contains("a failing command's output comes as the CLI's own excerpt"));
         assert!(claude.contains("Your workspace: (none yet)"));
-        // Every byte is paid for on every call: it stays under the old orchestrator's 11,371
-        // bytes, code rules included.
-        assert!(codex.len() < 11_371, "{}", codex.len());
+        // The short ending, with its folded Details, updated rather than repeated; nothing
+        // is listed for the user outside a run (THREAD-PARITY-PLAN §5 Q6, Q9).
+        for text in [&codex, &claude] {
+            assert!(text.contains("at most about five short lines"));
+            assert!(text.contains("\"To check: …\""));
+            assert!(text.contains("\"You'll need to: …\""));
+            assert!(text.contains("`### Details`, shown folded"));
+            assert!(text.contains("write the ending again, updated"));
+            assert!(!text.contains("kind waiting"));
+            assert!(!text.contains("Waiting on you"));
+        }
+        // The merge is asked once on a card; typed words still consent.
+        let worktree = environment_text(&Environment::NewWorktree {
+            base: "main".into(),
+            branch: "brigadier/flow".into(),
+            path: None,
+            start: None,
+        });
+        assert!(worktree.contains("ask them once, on a card, with propose_merge"));
+        assert!(worktree.contains("call finish_session without user_words"));
+        assert!(worktree.contains("that is their consent too"));
+        assert!(!worktree.contains("there is no card"));
+        // Every byte is paid for on every call: it stays under 12 KiB, code rules included
+        // (the old orchestrator's 11,371 bytes, and the interview the user wanted built in).
+        assert!(codex.len() < 12_288, "{}", codex.len());
     }
 
     #[test]

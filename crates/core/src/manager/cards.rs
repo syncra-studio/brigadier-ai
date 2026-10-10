@@ -17,7 +17,7 @@ use super::conversation::Envelope;
 use crate::model::{ConversationId, DomainEvent, Setup};
 use crate::work::{
     Approval, ApprovalSubject, CardId, CardState, InjectionKind, Plan, PlanApprover, PlanState,
-    Question, QuestionKind, TaskId,
+    Question, QuestionItem, QuestionKind, TaskId,
 };
 use crate::{Error, Result, now_ms};
 
@@ -226,6 +226,8 @@ impl SessionManager {
                         .await?;
                 }
             },
+            // The call waiting on it gets the answer.
+            ApprovalSubject::Action { live: true, .. } => {}
             ApprovalSubject::Action { action, .. } => {
                 let text = match &decision {
                     ApprovalDecision::Allow | ApprovalDecision::AllowSimilar => {
@@ -272,6 +274,56 @@ impl SessionManager {
         options: Vec<String>,
         recommended: Option<u32>,
     ) -> Result<(Question, oneshot::Receiver<CardAnswer>)> {
+        // Only an index that names one of the options.
+        let recommended = recommended.filter(|&index| (index as usize) < options.len());
+        self.open_card(
+            conversation_id,
+            task_id,
+            kind,
+            text,
+            options,
+            recommended,
+            Vec::new(),
+        )
+        .await
+    }
+
+    /// Opens a card that asks a round of questions, answered together.
+    pub(crate) async fn open_round(
+        &self,
+        conversation_id: &ConversationId,
+        task_id: Option<TaskId>,
+        kind: QuestionKind,
+        items: Vec<QuestionItem>,
+    ) -> Result<(Question, oneshot::Receiver<CardAnswer>)> {
+        let text = items
+            .iter()
+            .map(|item| item.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.open_card(
+            conversation_id,
+            task_id,
+            kind,
+            text,
+            Vec::new(),
+            None,
+            items,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn open_card(
+        &self,
+        conversation_id: &ConversationId,
+        task_id: Option<TaskId>,
+        kind: QuestionKind,
+        text: String,
+        options: Vec<String>,
+        recommended: Option<u32>,
+        items: Vec<QuestionItem>,
+    ) -> Result<(Question, oneshot::Receiver<CardAnswer>)> {
         let request_id = self.request_for(conversation_id, task_id.as_ref()).await;
         let question = Question {
             id: CardId::generate(),
@@ -281,10 +333,11 @@ impl SessionManager {
             position: 0,
             kind,
             text,
-            // Only an index that names one of the options.
-            recommended: recommended.filter(|&index| (index as usize) < options.len()),
+            recommended,
             options,
+            items,
             answer: None,
+            answers: Vec::new(),
             created_at_ms: now_ms(),
             answered_at_ms: None,
         };
@@ -301,12 +354,12 @@ impl SessionManager {
         Ok((question, rx))
     }
 
-    /// The user answered a question card.
+    /// The user answered a question card: one answer per question of its round.
     pub async fn answer_question(
         &self,
         conversation_id: ConversationId,
         card_id: CardId,
-        answer: String,
+        answers: Vec<String>,
     ) -> Result<()> {
         let board = self.core.board(&conversation_id).await?;
         let mut question = board
@@ -314,14 +367,30 @@ impl SessionManager {
             .get(&card_id)
             .cloned()
             .ok_or_else(|| Error::NotFound(format!("question {card_id}")))?;
-        if question.answer.is_some() || question.answered_at_ms.is_some() {
+        if !question.is_open() {
             return Err(Error::Invalid("this question was already answered".into()));
         }
-        let answer = answer.trim().to_owned();
-        if answer.is_empty() {
-            return Err(Error::Invalid("the answer is empty".into()));
+        let round = question.round();
+        let answers: Vec<String> = answers.iter().map(|a| a.trim().to_owned()).collect();
+        if answers.len() != round.len() {
+            return Err(Error::Invalid(format!(
+                "this card asks {} questions, and {} answers came",
+                round.len(),
+                answers.len()
+            )));
         }
+        if answers.iter().any(String::is_empty) {
+            return Err(Error::Invalid("an answer is empty".into()));
+        }
+        // A single question's answer is the answer itself; a round's lists each question.
+        let answer = match answers.as_slice() {
+            [only] => only.clone(),
+            _ => round_answer(&round, &answers),
+        };
         question.answer = Some(answer.clone());
+        if !question.items.is_empty() {
+            question.answers = answers.clone();
+        }
         question.answered_at_ms = Some(now_ms());
         self.core
             .record_conversation(
@@ -333,25 +402,55 @@ impl SessionManager {
             .await?;
         match &question.kind {
             QuestionKind::Orchestrator => {
-                self.learn_user_decision(
-                    &conversation_id,
-                    format!("question:{}", question.id),
-                    format!("{} → {answer}", question.text),
+                for (item, answer) in round.iter().zip(&answers) {
+                    self.learn_user_decision(
+                        &conversation_id,
+                        format!("question:{}:{}", question.id, item.text),
+                        format!("{} → {answer}", item.text),
+                        format!(
+                            "The orchestrator asked the user: {}\nThe user answered: {answer}",
+                            item.text
+                        ),
+                    );
+                }
+                let text = if round.len() == 1 {
                     format!(
-                        "The orchestrator asked the user: {}\nThe user answered: {answer}",
-                        question.text
-                    ),
-                );
+                        "[answer] You asked the user: \"{}\"\nThe user answered: {answer}",
+                        round[0].text
+                    )
+                } else {
+                    format!("[answer] You asked the user:\n{answer}")
+                };
                 self.deliver_for(
                     &conversation_id,
                     Envelope {
                         kind: InjectionKind::Decision,
                         label: "user answer".into(),
                         task_id: question.task_id.clone(),
-                        text: format!(
-                            "[answer] You asked the user: \"{}\"\nThe user answered: {answer}",
-                            question.text
-                        ),
+                        text,
+                    },
+                    question.request_id.clone(),
+                )
+                .await;
+            }
+            QuestionKind::Merge { branch, base } => {
+                let text = if merge_chosen(&answers[0], base) {
+                    format!(
+                        "[answer] The user chose to merge `{branch}` into `{base}`. Call finish_session now, without user_words."
+                    )
+                } else {
+                    format!(
+                        "[answer] The user doesn't want `{branch}` merged into `{base}` yet: \"{}\". Don't merge, and don't ask again until they bring it up.",
+                        answers[0]
+                    )
+                };
+                self.deliver_for(
+                    &conversation_id,
+                    Envelope {
+                        kind: InjectionKind::Decision,
+                        label: "user answer".into(),
+                        task_id: None,
+                        text,
                     },
                     question.request_id.clone(),
                 )
@@ -479,19 +578,62 @@ impl SessionManager {
                 steps.join("\n")
             ),
         );
+        // A lead that outlined in plan mode has its go-ahead in the user's yes: one answer.
+        let mut started = Vec::new();
+        if approve {
+            let board = self.core.board(&conversation_id).await?;
+            let mut waiting: Vec<_> = board
+                .tasks
+                .values()
+                .filter(|task| {
+                    task.request_id == plan.request_id
+                        && task.state == crate::work::TaskState::Blocked
+                        && task.blocked_reason.as_deref()
+                            == Some(super::phases::WAITING_FOR_GO_AHEAD)
+                })
+                .cloned()
+                .collect();
+            waiting.sort_by_key(|task| task.number);
+            // The plan the user said yes to may differ from the outline: revised on their
+            // changes, or with checks and assumptions the outline left out. It wins.
+            let approved = plan.body.as_deref().map(|body| {
+                format!("The plan the user approved, which wins over your outline:\n{body}")
+            });
+            for lead in waiting {
+                match self.go_ahead(&lead, approved.clone()).await {
+                    Ok(()) => started.push(format!("task-{}", lead.number)),
+                    Err(err) => {
+                        tracing::warn!(task = %lead.id, error = %err, "could not start an outline");
+                    }
+                }
+            }
+        }
         let text = if approve {
+            let how = if !started.is_empty() {
+                format!(
+                    "Brigadier gave {} the go-ahead on its outline: it builds now.",
+                    started.join(" and ")
+                )
+            } else if plan.steps.len() > 1 {
+                "Delegate each phase's lead in order (delegate_task, kind implement, `phase` its number), each once the one before it has landed.".to_owned()
+            } else {
+                "Delegate its lead with `phase: 1` (delegate_task, kind implement), or make a tiny change yourself.".to_owned()
+            };
             format!(
-                "[decision] The user approved the plan \"{}\". Go ahead, and pass each phase's number as `phase` when you delegate its lead.",
+                "[decision] The user chose \u{201c}Yes, implement this plan\u{201d} for \u{201c}{}\u{201d}, and plan mode is off. Build it now, as the plan says. {how}",
                 plan.title
             )
         } else {
-            format!(
-                "[decision] The user rejected the plan \"{}\"{}",
-                plan.title,
-                message
-                    .map(|m| format!(": {m}"))
-                    .unwrap_or_else(|| ".".into())
-            )
+            match message.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+                Some(changes) => format!(
+                    "[decision] The user did not take the plan \u{201c}{}\u{201d} as it is. What they want changed: \u{201c}{changes}\u{201d}. Revise the plan to match and propose it again with propose_plan; build nothing yet.",
+                    plan.title
+                ),
+                None => format!(
+                    "[decision] The user did not take the plan \u{201c}{}\u{201d}. Build nothing; wait for what they say next.",
+                    plan.title
+                ),
+            }
         };
         self.deliver_for(
             &conversation_id,
@@ -518,7 +660,7 @@ impl SessionManager {
             }
             match &approval.subject {
                 // Answering it delivers the decision itself; nothing needs to wait.
-                ApprovalSubject::Action { .. } => continue,
+                ApprovalSubject::Action { live: false, .. } => continue,
                 // The landing that asked is gone; `recover` tells the orchestrator to accept
                 // the task again.
                 ApprovalSubject::Landing { .. } => {}
@@ -547,7 +689,7 @@ impl SessionManager {
                             label: "finish session".into(),
                             task_id: None,
                             text: format!(
-                                "[not finished] The user had not answered whether to merge `{branch}` into `{base}` when Brigadier restarted; nothing was merged. Ask them in your reply, and call finish_session once they say yes."
+                                "[not finished] The user had not answered whether to merge `{branch}` into `{base}` when Brigadier restarted; nothing was merged. Ask them again with propose_merge."
                             ),
                         },
                         approval.request_id.clone(),
@@ -589,4 +731,25 @@ impl SessionManager {
 fn answer_is_yes(answer: &str) -> bool {
     let answer = answer.trim().to_lowercase();
     answer.starts_with("yes") || answer.starts_with("include") || answer.starts_with("show")
+}
+
+/// The label of a merge card's yes.
+pub(crate) fn merge_label(base: &str) -> String {
+    format!("Merge into {base}")
+}
+
+/// Whether a merge card's answer chose the merge.
+pub(crate) fn merge_chosen(answer: &str, base: &str) -> bool {
+    answer.trim() == merge_label(base)
+}
+
+/// A round's answers as the asker reads them: each question, then its answer.
+fn round_answer(round: &[QuestionItem], answers: &[String]) -> String {
+    round
+        .iter()
+        .zip(answers)
+        .enumerate()
+        .map(|(index, (item, answer))| format!("{}. {}\n   → {answer}", index + 1, item.text))
+        .collect::<Vec<_>>()
+        .join("\n")
 }

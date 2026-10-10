@@ -20,6 +20,9 @@ export type StepWords = {
   kind: WorkKind;
   doing: string;
   done: string;
+  /** What it acts on, as both its words end with it (a file, a command, a pattern, a host): told a
+   * step fainter than its verb. */
+  object?: string;
   /** For `other`: the summary's words for it ("Asked for a review"). */
   phrase?: string;
   /** It reaches the network (a web page, `curl`, `git fetch`). */
@@ -61,6 +64,7 @@ const PLUMBING = new Set([
   "stop_worker",
   "start_verifier",
   "ask_user",
+  "propose_merge",
   "submit_report",
 ]);
 
@@ -73,6 +77,7 @@ export function isPlumbing(name: string): boolean {
 const OTHER: Record<string, [doing: string, done: string]> = {
   search_transcript: ["Searching earlier messages", "Searched earlier messages"],
   plan_phases: ["Planning the work", "Planned the work"],
+  propose_plan: ["Writing plan", "Wrote a plan"],
   propose_overnight: ["Planning the work", "Planned the work"],
   approve_outline: ["Reviewing an outline", "Reviewed an outline"],
   settle_step: ["Settling a phase", "Settled a phase"],
@@ -132,16 +137,17 @@ function lastPath(words: readonly string[]): string | null {
 }
 
 /** "Read notes.py" / "Reading notes.py". */
-const read = (what: string): StepWords => ({ kind: "read", doing: `Reading ${what}`, done: `Read ${what}` });
+const read = (what: string): StepWords => ({ kind: "read", doing: `Reading ${what}`, done: `Read ${what}`, object: what });
 
 const listed = (folder: string | null): StepWords =>
   folder
-    ? { kind: "code", doing: `Listing files in ${folder}`, done: `Listed files in ${folder}` }
+    ? { kind: "code", doing: `Listing files in ${folder}`, done: `Listed files in ${folder}`, object: folder }
     : { kind: "code", doing: "Listing files", done: "Listed files" };
 
 const searchedCode = (pattern: string | null): StepWords => {
-  const what = pattern ? ` for “${pattern}”` : "";
-  return { kind: "code", doing: `Searching code${what}`, done: `Searched code${what}` };
+  if (!pattern) return { kind: "code", doing: "Searching code", done: "Searched code" };
+  const object = `“${pattern}”`;
+  return { kind: "code", doing: `Searching code for ${object}`, done: `Searched code for ${object}`, object };
 };
 
 /** A command, told as what it does: a read, a listing, a search, or a run of its first line. */
@@ -152,7 +158,7 @@ function commandWords(raw: string, kind: "run" | "checks" = "run"): StepWords {
   const words = wordsOf(command);
   const program = basename(words[0] ?? "");
   const web = NETWORK.has(program) || (program === "git" && NETWORK_GIT.has(words[1] ?? ""));
-  const ran: StepWords = { kind, doing: `Running ${firstLine}`, done: `Ran ${firstLine}`, ...(web && { web }) };
+  const ran: StepWords = { kind, doing: `Running ${firstLine}`, done: `Ran ${firstLine}`, object: firstLine, ...(web && { web }) };
   // A compound command, or a check, is told as what it runs.
   if (kind === "checks" || /[;&|<>`$(]/.test(command.replace(/\s\|\|\s.*$/, ""))) return ran;
   if (program === "rg" && words.includes("--files")) return listed(null);
@@ -194,12 +200,12 @@ function otherWords(short: string): StepWords {
 export function stepWords(call: StepCall, tasks: Readonly<Record<string, Task>> = {}): StepWords {
   const short = toolName(call.name);
   const detail = call.detail?.trim() ? namedTasks(call.detail.trim(), tasks) : null;
-  if (READS.has(short)) return read(detail ? basename(detail) : "a file");
+  if (READS.has(short)) return detail ? read(basename(detail)) : { kind: "read", doing: "Reading a file", done: "Read a file" };
   if (EDITS.has(short)) {
     if (!detail) return { kind: "edit", doing: "Editing a file", done: "Edited a file" };
     const [path, more] = detail.split(/ (and \d+ more)$/);
     const what = `${basename(path ?? detail)}${more ? ` ${more}` : ""}`;
-    return { kind: "edit", doing: `Editing ${what}`, done: `Edited ${what}` };
+    return { kind: "edit", doing: `Editing ${what}`, done: `Edited ${what}`, object: what };
   }
   if (COMMANDS.has(short)) {
     return detail ? commandWords(detail) : { kind: "run", doing: "Running a command", done: "Ran a command" };
@@ -210,16 +216,18 @@ export function stepWords(call: StepCall, tasks: Readonly<Record<string, Task>> 
   if (CODE_SEARCH.has(short)) return searchedCode(detail);
   if (LISTINGS.has(short)) return listed(detail ? basename(detail) : null);
   if (short === "query_brain") {
-    const what = detail ? ` for “${detail}”` : "";
-    return { kind: "memory", doing: `Checking project memory${what}`, done: `Checked project memory${what}` };
+    if (!detail) return { kind: "memory", doing: "Checking project memory", done: "Checked project memory" };
+    const object = `“${detail}”`;
+    return { kind: "memory", doing: `Checking project memory for ${object}`, done: `Checked project memory for ${object}`, object };
   }
   if (WEB_SEARCH.has(short)) {
-    const what = detail ? ` for ${detail}` : "";
-    return { kind: "web", doing: `Searching the web${what}`, done: `Searched the web${what}`, web: true };
+    if (!detail) return { kind: "web", doing: "Searching the web", done: "Searched the web", web: true };
+    return { kind: "web", doing: `Searching the web for ${detail}`, done: `Searched the web for ${detail}`, object: detail, web: true };
   }
   if (WEB_FETCH.has(short)) {
-    const page = detail ? hostOf(detail) : "a web page";
-    return { kind: "web", doing: `Reading ${page}`, done: `Read ${page}`, web: true };
+    if (!detail) return { kind: "web", doing: "Reading a web page", done: "Read a web page", web: true };
+    const page = hostOf(detail);
+    return { kind: "web", doing: `Reading ${page}`, done: `Read ${page}`, object: page, web: true };
   }
   const preview = PREVIEWS[short];
   if (preview) return { kind: "preview", doing: preview[0], done: preview[1] };
@@ -359,6 +367,16 @@ export function stepLabel(words: StepWords, status: ItemStatus, exit: number | n
   if (exit !== null && exit !== 0) return `${words.done} — failed (exit ${exit})`;
   if (status === "failed") return `${words.done} — failed`;
   return words.done;
+}
+
+/**
+ * A row's words in two tones: its verb, then what it acts on (fainter), then how it ended.
+ * Words with no object are all verb.
+ */
+export function labelParts(words: StepWords, label: string): { verb: string; object: string; rest: string } {
+  const at = words.object ? label.indexOf(words.object, 1) : -1;
+  if (!words.object || at < 0) return { verb: label, object: "", rest: "" };
+  return { verb: label.slice(0, at), object: words.object, rest: label.slice(at + words.object.length) };
 }
 
 /** A lead's tool step's words, with its workers named. */

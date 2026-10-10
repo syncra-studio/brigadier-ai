@@ -348,7 +348,7 @@ async fn two_chats_on_two_accounts_run_at_the_same_time() {
             .unwrap();
     }
     // Both turns ran at once (each waited for the other), each on its own account.
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+    let deadline = tokio::time::Instant::now() + super::PATIENCE;
     loop {
         let mut done = true;
         for chat in &chats {
@@ -1019,4 +1019,547 @@ async fn an_unsent_steer_survives_an_account_switch_without_repeating_landed_mes
         assert_eq!(injections, 2, "each delivered message logged once");
         flow.stop().await;
     }
+}
+
+/// Holds the end of a limited turn of `chat` before its hand-over is chosen: the first is
+/// notified once a turn is held there, the second lets it go on.
+fn hold_hand_over(
+    flow: &Flow,
+    chat: &ConversationId,
+) -> (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    *flow
+        .manager
+        .conv(chat)
+        .unwrap()
+        .hand_over_pause
+        .lock()
+        .unwrap() = Some((reached.clone(), release.clone()));
+    (reached, release)
+}
+
+async fn send(flow: &Flow, chat: &ConversationId, text: &str) {
+    flow.manager
+        .send_message(chat.clone(), text.into(), vec![], vec![], false, None)
+        .await
+        .unwrap();
+}
+
+/// Each request of `chat` by its first message's text, with its state.
+async fn request_states(flow: &Flow, chat: &ConversationId) -> Vec<(String, RequestState)> {
+    let board = flow.core.board(chat).await.unwrap();
+    let messages = flow.core.all_messages(chat).await.unwrap();
+    let mut states: Vec<_> = board
+        .requests
+        .values()
+        .map(|request| {
+            let text = messages
+                .iter()
+                .find(|message| message.request_id.as_deref() == Some(request.id.as_str()))
+                .map(|message| message.text.clone())
+                .unwrap_or_default();
+            (text, request.state.clone())
+        })
+        .collect();
+    states.sort_by(|a, b| a.0.cmp(&b.0));
+    states
+}
+
+/// From the end of a turn cut short by a limit until its hand-over is chosen, its request
+/// still works, whatever settles the requests meanwhile. No turn starts on the CLI at its limit
+/// then, nor a compaction: a message sent meanwhile goes with the hand-over.
+#[tokio::test]
+async fn a_limited_turn_works_through_its_hand_over_and_nothing_starts_on_its_cli() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-hand-over",
+        Options::default(),
+        logging(&log, |turn| match &turn.account {
+            None if turn.input.contains("Hello.") => Reply::text("Hi."),
+            None => Reply::limited(),
+            Some(_) => Reply::text("Done."),
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let chat = chat_on(&flow, ProviderKind::Claude, None).await;
+    // Something to compact.
+    say_to(&flow, &chat, "Hello.").await;
+    let (reached, release) = hold_hand_over(&flow, &chat);
+    send(&flow, &chat, "First.").await;
+    reached.notified().await;
+    // Another source settles the requests (a card answer, a worker's report).
+    flow.manager.settle_requests(&chat).await;
+    assert_eq!(
+        request_states(&flow, &chat).await,
+        vec![
+            ("First.".to_owned(), RequestState::Working),
+            ("Hello.".to_owned(), RequestState::Done)
+        ]
+    );
+    let compacted = flow
+        .manager
+        .compact(chat.clone())
+        .await
+        .expect_err("no compaction during the hand-over");
+    assert!(
+        compacted
+            .to_string()
+            .contains("wait until the reply is done"),
+        "{compacted}"
+    );
+    send(&flow, &chat, "Second.").await;
+    let conv = flow.manager.conv(&chat).unwrap();
+    flow.manager.next_turn_now(&conv).await;
+    assert!(
+        !conv.turn_running().await,
+        "no turn on the CLI at its limit"
+    );
+    // Only this hand-over is held: a later limited turn would go on.
+    *flow
+        .manager
+        .conv(&chat)
+        .unwrap()
+        .hand_over_pause
+        .lock()
+        .unwrap() = None;
+    release.notify_one();
+    super::eventually_async("both requests done", || async {
+        request_states(&flow, &chat)
+            .await
+            .iter()
+            .all(|(_, state)| *state == RequestState::Done)
+    })
+    .await;
+    let turns = seen(&log);
+    let accounts: Vec<_> = turns.iter().map(|turn| turn.account.as_deref()).collect();
+    assert_eq!(accounts, [None, None, Some("acct-b")], "{turns:#?}");
+    assert!(turns[2].input.contains("Second."), "{turns:#?}");
+    assert_eq!(request_states(&flow, &chat).await.len(), 3);
+    flow.stop().await;
+}
+
+/// The user's Stop while a limited turn is handed over ends its request Stopped, and its
+/// messages don't go on their own on the other account; Resume continues it there, as after
+/// any Stop.
+#[tokio::test]
+async fn a_stop_during_a_hand_over_ends_the_request_and_nothing_goes_on_its_own() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-hand-over-stop",
+        Options::default(),
+        logging(&log, |turn| match &turn.account {
+            None => Reply::limited(),
+            Some(_) => Reply::text("Done."),
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let chat = chat_on(&flow, ProviderKind::Claude, None).await;
+    let (reached, release) = hold_hand_over(&flow, &chat);
+    send(&flow, &chat, "First.").await;
+    reached.notified().await;
+    flow.manager.interrupt(chat.clone()).await.unwrap();
+    assert_eq!(
+        request_states(&flow, &chat).await,
+        vec![("First.".to_owned(), RequestState::Stopped)]
+    );
+    release.notify_one();
+    // The chat moved to the other account, and nothing waits or runs.
+    let conv = flow.manager.conv(&chat).unwrap();
+    super::eventually_async("the hand-over to end", || async {
+        let moved = match flow.core.conversation(&chat).unwrap().setup {
+            Some(Setup::Chat { model }) => model.account.as_deref() == Some("acct-b"),
+            _ => false,
+        };
+        moved && !conv.is_busy().await && idle(&flow, &chat).await
+    })
+    .await;
+    assert_eq!(seen(&log).len(), 1, "{:#?}", seen(&log));
+    assert_eq!(
+        request_states(&flow, &chat).await,
+        vec![("First.".to_owned(), RequestState::Stopped)]
+    );
+    flow.manager.resume(chat.clone()).await.unwrap();
+    super::eventually_async("the resumed request done", || async {
+        request_states(&flow, &chat).await == vec![("First.".to_owned(), RequestState::Done)]
+    })
+    .await;
+    let turns = seen(&log);
+    assert_eq!(turns.len(), 2, "{turns:#?}");
+    assert_eq!(turns[1].account.as_deref(), Some("acct-b"));
+    flow.stop().await;
+}
+
+/// The same Stop while a limited turn is handed over to a stand-in model: nothing goes there
+/// on its own, and the chat no longer shows working.
+#[tokio::test]
+async fn a_stop_during_a_hand_over_to_a_stand_in_ends_the_request() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-hand-over-stop-stand-in",
+        Options::default(),
+        logging(&log, |turn| match turn.provider {
+            ProviderKind::Claude => Reply::limited(),
+            ProviderKind::Codex => Reply::text("Done on Codex."),
+        }),
+    )
+    .await;
+    let chat = chat_on(&flow, ProviderKind::Claude, None).await;
+    let (reached, release) = hold_hand_over(&flow, &chat);
+    send(&flow, &chat, "First.").await;
+    reached.notified().await;
+    flow.manager.interrupt(chat.clone()).await.unwrap();
+    release.notify_one();
+    let conv = flow.manager.conv(&chat).unwrap();
+    super::eventually_async("the hand-over to end", || async {
+        flow.core.conversation(&chat).unwrap().fallback.is_some()
+            && !conv.is_busy().await
+            && idle(&flow, &chat).await
+    })
+    .await;
+    assert_eq!(seen(&log).len(), 1, "{:#?}", seen(&log));
+    assert_eq!(
+        request_states(&flow, &chat).await,
+        vec![("First.".to_owned(), RequestState::Stopped)]
+    );
+    flow.stop().await;
+}
+
+/// Whether `chat` no longer shows working.
+async fn idle(flow: &Flow, chat: &ConversationId) -> bool {
+    flow.core.board(chat).await.unwrap().run == crate::work::RunState::Idle
+}
+
+/// The same Stop while a limited turn would wait for quota (no other account or model can take
+/// it): nothing waits, and a Resume sent before the hand-over ended goes on its own.
+#[tokio::test]
+async fn a_resume_after_a_stop_during_a_quota_hand_over_goes() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-hand-over-stop-wait",
+        Options::default(),
+        logging(&log, |turn| {
+            if turn.input.contains("asked you to resume") {
+                Reply::text("Done.")
+            } else {
+                Reply::limited()
+            }
+        }),
+    )
+    .await;
+    // Codex at its limit too: nothing can stand in.
+    let hour = brigadier_providers::LimitHit {
+        kind: brigadier_providers::LimitKind::UsageWindow,
+        window: Some("five_hour".into()),
+        resets_at_ms: Some(crate::now_ms() + 60 * 60 * 1000),
+    };
+    flow.manager
+        .runtime
+        .note_limit(&crate::accounts::AccountRef::own(ProviderKind::Codex), hour)
+        .await;
+    let chat = chat_on(&flow, ProviderKind::Claude, None).await;
+    let (reached, release) = hold_hand_over(&flow, &chat);
+    send(&flow, &chat, "First.").await;
+    reached.notified().await;
+    flow.manager.interrupt(chat.clone()).await.unwrap();
+    flow.manager.resume(chat.clone()).await.unwrap();
+    release.notify_one();
+    super::eventually_async("the resumed request done", || async {
+        request_states(&flow, &chat).await == vec![("First.".to_owned(), RequestState::Done)]
+    })
+    .await;
+    let turns = seen(&log);
+    assert_eq!(turns.len(), 2, "{turns:#?}");
+    assert_eq!(turns[1].provider, ProviderKind::Claude, "{turns:#?}");
+    flow.stop().await;
+}
+
+/// A chat whose next CLI start is held after "Again." passed its fence, with its cleanups
+/// waiting for nothing: what a start that hangs past the drain wait looks like. The second
+/// notify lets the start go on.
+async fn held_late_start(
+    name: &str,
+    log: &Log,
+) -> (Flow, ConversationId, Arc<tokio::sync::Notify>) {
+    let flow = Flow::start(
+        name,
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                cleanup: true,
+                ..Default::default()
+            }),
+            ..Options::default()
+        },
+        logging(log, |_| Reply::text("Done.")),
+    )
+    .await;
+    let chat = chat_on(&flow, ProviderKind::Claude, None).await;
+    say_to(&flow, &chat, "Hello.").await;
+    // The next message starts a CLI.
+    flow.manager.conv(&chat).unwrap().close_cli().await;
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    *flow.behavior.hold_start.lock().unwrap() = Some((reached.clone(), release.clone()));
+    *flow.manager.closing.drain_wait.lock().unwrap() = Some(std::time::Duration::ZERO);
+    send(&flow, &chat, "Again.").await;
+    reached.notified().await;
+    (flow, chat, release)
+}
+
+fn native_artifacts(flow: &Flow, chat: &ConversationId) -> Vec<brigadier_providers::Artifact> {
+    flow.manager
+        .runtime
+        .ledger()
+        .artifacts(&format!("chat:{chat}"))
+        .into_iter()
+        .filter(|artifact| {
+            matches!(
+                artifact,
+                brigadier_providers::Artifact::ClaudeSession { .. }
+            )
+        })
+        .collect()
+}
+
+/// An archive that stopped waiting for a start keeps its cleanup marked as not done, and
+/// cleans again once that start has ended: nothing it recorded is left behind, and its turn
+/// never runs.
+#[tokio::test]
+async fn an_archive_cleans_up_after_a_start_that_outlasted_it() {
+    let log = Log::default();
+    let (flow, chat, release) = held_late_start("late-start-archive", &log).await;
+    flow.manager.archive(chat.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&chat).await;
+    assert!(
+        flow.core.conversation(&chat).unwrap().cleanup_pending,
+        "the cleanup is not done while the start goes on"
+    );
+    release.notify_one();
+    flow.manager.drained(&chat).await;
+    super::eventually_async("the archive's cleanup to finish", || async {
+        !flow.core.conversation(&chat).unwrap().cleanup_pending
+    })
+    .await;
+    assert_eq!(native_artifacts(&flow, &chat), vec![]);
+    assert!(
+        flow.manager
+            .runtime
+            .ledger()
+            .artifacts(&format!("chat:{chat}"))
+            .is_empty()
+    );
+    assert!(seen(&log).iter().all(|turn| !turn.input.contains("Again.")));
+    flow.stop().await;
+}
+
+/// A start admitted before an archive ends, with what it recorded, even when the chat was
+/// restored before it got through: its turn never resumes, and the restored chat's own next
+/// session stays.
+#[tokio::test]
+async fn a_start_cut_off_by_an_archive_ends_even_after_a_restore() {
+    let log = Log::default();
+    let (flow, chat, release) = held_late_start("late-start-restore", &log).await;
+    flow.manager.archive(chat.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&chat).await;
+    flow.manager.restore(chat.clone()).await.unwrap();
+    release.notify_one();
+    flow.manager.drained(&chat).await;
+    assert_eq!(
+        native_artifacts(&flow, &chat),
+        vec![],
+        "the late session went"
+    );
+    super::eventually_async("the archive's mark to clear", || async {
+        !flow.core.conversation(&chat).unwrap().cleanup_pending
+    })
+    .await;
+    assert!(seen(&log).iter().all(|turn| !turn.input.contains("Again.")));
+    send(&flow, &chat, "After.").await;
+    super::eventually_async("the restored chat to answer", || async {
+        request_states(&flow, &chat)
+            .await
+            .contains(&("After.".to_owned(), RequestState::Done))
+    })
+    .await;
+    // "Again." is in the transcript the new session starts from, never a turn of its own.
+    let turns = seen(&log);
+    assert_eq!(turns.len(), 2, "{turns:#?}");
+    let after = &turns[1];
+    assert!(after.input.ends_with("After."), "{turns:#?}");
+    assert_eq!(
+        native_artifacts(&flow, &chat),
+        vec![brigadier_providers::Artifact::ClaudeSession {
+            session_id: after.native_id.clone(),
+            home: None,
+        }]
+    );
+    flow.stop().await;
+}
+
+/// A restored chat that started its own CLI while a start cut off by the archive was still
+/// going keeps its tools when that start ends: only what the late start made goes.
+#[tokio::test]
+async fn a_start_cut_off_by_an_archive_leaves_the_restored_chats_cli_alone() {
+    // Each turn's input and the grant its CLI's tools run under.
+    let turns: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let script: Script = {
+        let turns = turns.clone();
+        Arc::new(move |turn: Turn| {
+            turns
+                .lock()
+                .unwrap()
+                .push((turn.input.clone(), turn.grant.clone()));
+            Box::pin(async { Reply::text("Done.") })
+        })
+    };
+    let flow = Flow::start(
+        "late-start-restored-cli",
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                cleanup: true,
+                ..Default::default()
+            }),
+            ..Options::default()
+        },
+        script,
+    )
+    .await;
+    let chat = chat_on(&flow, ProviderKind::Claude, None).await;
+    say_to(&flow, &chat, "Hello.").await;
+    flow.manager.conv(&chat).unwrap().close_cli().await;
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    *flow.behavior.hold_start.lock().unwrap() = Some((reached.clone(), release.clone()));
+    *flow.manager.closing.drain_wait.lock().unwrap() = Some(std::time::Duration::ZERO);
+    send(&flow, &chat, "Again.").await;
+    reached.notified().await;
+    flow.manager.archive(chat.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&chat).await;
+    flow.manager.restore(chat.clone()).await.unwrap();
+    // The restored chat's own CLI, while the late start still goes.
+    say_to(&flow, &chat, "After.").await;
+    let grant = {
+        let turns = turns.lock().unwrap();
+        let (input, grant) = turns.last().unwrap();
+        assert!(input.ends_with("After."), "{turns:#?}");
+        grant.clone()
+    };
+    release.notify_one();
+    flow.manager.drained(&chat).await;
+    super::eventually_async("the archive's mark to clear", || async {
+        !flow.core.conversation(&chat).unwrap().cleanup_pending
+    })
+    .await;
+    assert!(
+        flow.manager.grants().resolve(&grant).is_some(),
+        "the restored chat's CLI keeps its tools"
+    );
+    let live = native_artifacts(&flow, &chat);
+    assert_eq!(live.len(), 1, "the restored chat's session stays: {live:?}");
+    assert!(
+        turns
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(input, _)| !input.ends_with("Again.")),
+        "the late start's turn never ran"
+    );
+    flow.stop().await;
+}
+
+/// A side chat going with its parent while a start of its own outlasts the wait is marked as
+/// being deleted, so a quit before that start ends leaves the delete to the next launch; it
+/// goes once the start has ended.
+#[tokio::test]
+async fn a_side_chat_whose_start_outlasts_its_parents_delete_stays_marked_until_it_goes() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "late-start-side-chat",
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                cleanup: true,
+                ..Default::default()
+            }),
+            ..Options::default()
+        },
+        logging(&log, |_| Reply::text("Done.")),
+    )
+    .await;
+    let parent = chat_on(&flow, ProviderKind::Claude, None).await;
+    say_to(&flow, &parent, "Hello.").await;
+    let side = flow.manager.open_side_chat(&parent).await.unwrap().id;
+    say_to(&flow, &side, "Side hello.").await;
+    flow.manager.conv(&side).unwrap().close_cli().await;
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    *flow.behavior.hold_start.lock().unwrap() = Some((reached.clone(), release.clone()));
+    *flow.manager.closing.drain_wait.lock().unwrap() = Some(std::time::Duration::ZERO);
+    send(&flow, &side, "Side again.").await;
+    reached.notified().await;
+    flow.manager.delete(parent.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&parent).await;
+    assert!(flow.core.conversation(&parent).is_err(), "the parent went");
+    assert!(
+        flow.core.conversation(&side).is_ok_and(|now| now.deleting),
+        "still there, marked, while its start goes on"
+    );
+    release.notify_one();
+    flow.manager.drained(&side).await;
+    super::eventually("the side chat to go", || {
+        flow.core.conversation(&side).is_err()
+    })
+    .await;
+    flow.manager.cleanup_finished(&side).await;
+    assert!(
+        flow.manager
+            .runtime
+            .ledger()
+            .artifacts(&format!("chat:{side}"))
+            .is_empty()
+    );
+    assert!(
+        seen(&log)
+            .iter()
+            .all(|turn| !turn.input.contains("Side again."))
+    );
+    flow.stop().await;
+}
+
+/// A delete that stopped waiting for a start deletes the chat only once that start has
+/// ended, so nothing it recorded outlives the chat.
+#[tokio::test]
+async fn a_delete_waits_for_a_start_that_outlasted_it() {
+    let log = Log::default();
+    let (flow, chat, release) = held_late_start("late-start-delete", &log).await;
+    flow.manager.delete(chat.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&chat).await;
+    assert!(
+        flow.core.conversation(&chat).is_ok_and(|now| now.deleting),
+        "still there, marked, while the start goes on"
+    );
+    release.notify_one();
+    flow.manager.drained(&chat).await;
+    super::eventually("the chat to go", || flow.core.conversation(&chat).is_err()).await;
+    flow.manager.cleanup_finished(&chat).await;
+    assert!(
+        flow.manager
+            .runtime
+            .ledger()
+            .artifacts(&format!("chat:{chat}"))
+            .is_empty()
+    );
+    assert!(seen(&log).iter().all(|turn| !turn.input.contains("Again.")));
+    flow.stop().await;
 }

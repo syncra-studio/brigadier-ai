@@ -348,11 +348,21 @@
   mask-image: linear-gradient(to bottom, transparent, black var(--spacing-row-sm));
 }
 
+/* A plan's card shows the start of the plan: clipped, and when the plan goes on past the
+   clip, its end fades out under the card's edge. */
+@utility plan-clip {
+  max-height: var(--spacing-plan-clip);
+  overflow: hidden;
+}
+@utility plan-clip-fade {
+  mask-image: linear-gradient(to bottom, black calc(100% - var(--spacing-plan-fade)), transparent);
+}
+
 /* Live text ("Thinking", a running step): muted text a highlight band sweeps across now and
    then, the first time 600ms after it shows, then every 4s. Still with less motion. */
 @utility shimmer {
-  --shimmer-base: color-mix(in oklab, var(--color-foreground) 55%, transparent);
-  --shimmer-highlight: color-mix(in oklab, var(--color-foreground) 75%, transparent);
+  --shimmer-base: var(--live-text);
+  --shimmer-highlight: var(--live-text-highlight);
   background-color: var(--shimmer-base);
   background-image: linear-gradient(
     to right,
@@ -506,10 +516,6 @@
 }
 
 /* Fade the older edge of a live summary while keeping its newest two lines visible. */
-@utility thinking-snippet {
-  mask-image: linear-gradient(to bottom, transparent, black 25%);
-}
-
 /* A settled thought taller than its box fades out at the bottom edge (THREAD-UX-PLAN.md §3.3). */
 @utility thinking-fade {
   mask-image: linear-gradient(to bottom, black calc(100% - 1.5rem), transparent);

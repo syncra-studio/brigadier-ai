@@ -265,7 +265,7 @@ impl SessionManager {
                 model: attempt.route.choice.model.clone(),
             })
             .collect();
-        let mut needs = super::workers::needs_of(&task.attachments, &task.needs);
+        let mut needs = super::workers::needs_of(task.kind, &task.attachments, &task.needs);
         if let Some(attempt) = task.attempts.last()
             && matches!(
                 attempt.end,

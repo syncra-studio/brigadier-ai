@@ -414,9 +414,7 @@ impl Parser {
                 },
                 output: error
                     .map(|error| error.message)
-                    .or_else(|| {
-                        result.and_then(|result| serde_json::to_string(&result.content).ok())
-                    })
+                    .or_else(|| result.map(|result| mcp_content_text(&result.content)))
                     .map(|output| clip(&output, OUTPUT_CLIP)),
             },
             ThreadItem::DynamicToolCall {
@@ -1003,6 +1001,31 @@ fn looked(item: &ThreadItem) -> Option<ProviderEvent> {
     })
 }
 
+/// An MCP result's content as the transcript shows it: text blocks as their text, an image as
+/// a short placeholder (its base64 would fill the clip and hide the text after it), anything
+/// else as its JSON.
+fn mcp_content_text(content: &[Value]) -> String {
+    content
+        .iter()
+        .map(|block| match block.get("type").and_then(Value::as_str) {
+            Some("text") => block
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            Some("image") => format!(
+                "[image {}]",
+                block
+                    .get("mimeType")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+            ),
+            _ => block.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn token_usage(usage: &p::TokenUsageBreakdown) -> TokenUsage {
     TokenUsage {
         input_tokens: usage.input_tokens - usage.cached_input_tokens,
@@ -1050,6 +1073,19 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn an_mcp_result_shows_its_text_and_a_placeholder_for_an_image() {
+        let content = [
+            json!({"type": "image", "data": "iVBORw0KGgo".repeat(2000), "mimeType": "image/png"}),
+            json!({"type": "text", "text": "window w7 \"Target Range\""}),
+            json!({"type": "resource_link", "uri": "file:///x"}),
+        ];
+        assert_eq!(
+            mcp_content_text(&content),
+            "[image image/png]\nwindow w7 \"Target Range\"\n{\"type\":\"resource_link\",\"uri\":\"file:///x\"}"
+        );
+    }
 
     #[test]
     fn commands_that_read_and_search_are_told_in_the_same_words_as_claude_s_tools() {

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Records every committed daemon event (Subscribe + EventsSince backfill, deduped by seq) and
 answers any card by the A/B response policy (POLICY.md), logging each answer with its time in
-cards.jsonl so it is counted: a question gets "Go with your recommendation."; a plan, an outline,
-a landing or an action gets approved ("Go ahead."), unless it would push; anything that pushes is
-denied. A merge into the base is asked of the user in words (no card): the recorder never answers
-in words, so nothing merges. Session transcripts are hard-linked into <out-dir>/../transcripts
+cards.jsonl so it is counted: each question of a card's round gets "Go with your
+recommendation."; a plan, an outline, a landing or an action gets approved ("Go ahead."), unless it
+would push; anything that pushes is denied. A merge into the base is never approved: its card is
+left unanswered, and the recorder never answers in words, so nothing merges. Session transcripts are hard-linked into <out-dir>/../transcripts
 as soon as they exist, because Brigadier deletes them when a task is cleaned up.
 usage: recorder.py <data-dir> <out-dir>"""
 import json, os, sys, time, threading
@@ -51,13 +51,17 @@ def handle(env):
                  "decision": decision})), daemon=True).start()
     elif t == "questionUpdated":
         q = ev["question"]
-        if q.get("answer") is None and q["id"] not in answered:
+        if q["kind"]["type"] == "merge":
+            pass
+        elif q.get("answeredAtMs") is None and q["id"] not in answered:
             answered.add(q["id"])
             text = "Go with your recommendation."
+            # One answer per question of the round; a card from before rounds is a round of one.
+            answers = [text] * max(1, len(q.get("items") or []))
             log_card("question", q, text)
             threading.Thread(target=lambda: log_card("question-answer", {"id": q["id"]}, answer(
                 {"method": "answerQuestion", "conversationId": q["conversationId"], "cardId": q["id"],
-                 "answer": text})), daemon=True).start()
+                 "answers": answers})), daemon=True).start()
     elif t == "planUpdated":
         p = ev["plan"]
         if p["state"].get("type") == "proposed" and p["id"] not in answered:

@@ -8,6 +8,7 @@ import {
   hunkDiff,
   isPlumbing,
   itemCall,
+  labelParts,
   stepLabel,
   stepWords,
   summarize,
@@ -51,7 +52,7 @@ test("a tool keeps its words across provider namespaces and never shows them", (
 });
 
 test("Brigadier's plumbing is never a row", () => {
-  for (const name of ["read_report", "read_artifact", "finish_session", "note_for_user", "remember", "delegate_task", "message_worker", "answer_worker", "stop_worker", "land_phase", "mcp__brigadier__submit_report", "ToolSearch"]) {
+  for (const name of ["read_report", "read_artifact", "finish_session", "note_for_user", "remember", "delegate_task", "message_worker", "answer_worker", "stop_worker", "land_phase", "ask_user", "mcp__brigadier__propose_merge", "mcp__brigadier__submit_report", "ToolSearch"]) {
     assert.ok(isPlumbing(name), name);
   }
   for (const name of ["Read", "run", "query_brain", "review_code"]) assert.ok(!isPlumbing(name), name);
@@ -158,4 +159,18 @@ test("an edit's diff text splits back into its files", () => {
     { path: "/r/b.md", diff: "@@ -1 +1 @@\n context\n+new" },
   ]);
   assert.equal(hunkDiff({ path: "f", removed: ["x"], added: ["y", "z"] }), "-x\n+y\n+z");
+});
+
+test("a row's words split into its verb and, a step fainter, what it acts on", () => {
+  const edited = stepWords({ name: "Edit", detail: "/r/src/math.ts", status: "completed" });
+  assert.deepEqual(labelParts(edited, stepLabel(edited, "completed")), { verb: "Edited ", object: "math.ts", rest: "" });
+  const ran = stepWords({ name: "Bash", detail: "pnpm test", status: "failed" });
+  assert.deepEqual(labelParts(ran, stepLabel(ran, "completed", 1)), { verb: "Ran ", object: "pnpm test", rest: " — failed (exit 1)" });
+  const searched = stepWords({ name: "Grep", detail: "sidebar", status: "completed" });
+  assert.deepEqual(labelParts(searched, stepLabel(searched, "completed")), { verb: "Searched code for ", object: "“sidebar”", rest: "" });
+  // Words with nothing to act on are all verb.
+  const listed = stepWords({ name: "Glob", detail: null, status: "completed" });
+  assert.deepEqual(labelParts(listed, stepLabel(listed, "completed")), { verb: "Listed files", object: "", rest: "" });
+  const read = stepWords({ name: "Read", detail: null, status: "completed" });
+  assert.deepEqual(labelParts(read, stepLabel(read, "completed")), { verb: "Read a file", object: "", rest: "" });
 });

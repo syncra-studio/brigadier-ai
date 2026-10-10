@@ -694,7 +694,7 @@ fn default_true() -> bool {
 
 /// The settings' shape: each step up converts saved settings once (see
 /// [`crate::routing::availability::migrate`]).
-pub const SETTINGS_VERSION: u32 = 1;
+pub const SETTINGS_VERSION: u32 = 2;
 
 /// A model named by its CLI's id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -992,6 +992,15 @@ pub enum FolderCheck {
 pub struct WorkerPage {
     pub entries: Vec<RawEntry>,
     pub has_more: bool,
+}
+
+/// A page of a worker's computer actions (its action log), oldest first.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerPage {
+    pub actions: Vec<crate::work::ComputerAction>,
+    /// Where the next older page starts (`before`), when there is one.
+    pub earlier: Option<i64>,
 }
 
 /// A page of the orchestrator log, oldest first.
@@ -1685,6 +1694,12 @@ pub enum DomainEvent {
         conversation_id: ConversationId,
         output: crate::work::StoredOutput,
     },
+    /// A worker acted on the desktop (computer use's action log).
+    ComputerActed {
+        conversation_id: ConversationId,
+        task_id: TaskId,
+        action: crate::work::ComputerAction,
+    },
     /// A `run_check` call ran its command, or answered from the check cache (THREAD-PLAN.md
     /// Q8 lever 3, [`crate::manager::checks`]).
     CheckRan {
@@ -1826,6 +1841,7 @@ impl DomainEvent {
             Self::ReviewUpdated { .. } => "review.updated",
             Self::ThreadCommitsSeen { .. } => "thread.seen",
             Self::OutputStored { .. } => "output.stored",
+            Self::ComputerActed { .. } => "computer.acted",
             Self::CheckRan { .. } => "check.ran",
             Self::ThreadLooked { .. } => "thread.looked",
             Self::PreviewUpdated { .. } => "preview.updated",

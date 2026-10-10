@@ -34,6 +34,10 @@ const QUIT_WAIT: Duration = Duration::from_secs(10);
 #[derive(Default)]
 pub(super) struct Closing {
     fences: Arc<Fences>,
+    /// Tests: how long a cleanup waits for work that passed the fence, in place of
+    /// [`DRAIN_WAIT`].
+    #[cfg(test)]
+    pub(super) drain_wait: Mutex<Option<Duration>>,
     /// Cleanups under way, tracked apart from other background work so a quit waits for them.
     jobs: TaskTracker,
     /// The cleanup under way for each conversation: `true` once it has finished.
@@ -56,6 +60,9 @@ struct Fence {
     closed: bool,
     /// Work that passed the fence and has not finished.
     inflight: usize,
+    /// How many times it closed: work admitted before a close is cut off by it, even once the
+    /// conversation is restored.
+    closings: u64,
 }
 
 impl Fences {
@@ -68,6 +75,20 @@ impl Fences {
 pub(crate) struct WorkGuard {
     fences: Arc<Fences>,
     id: ConversationId,
+    /// The fence's closings when it was admitted.
+    closings: u64,
+}
+
+impl WorkGuard {
+    /// Whether the conversation started closing since this work was admitted (it may have
+    /// been restored since): a cleanup that stopped waiting for it may have passed what it
+    /// made, so what it started is ended and nothing of it goes on.
+    pub(crate) fn cut_off(&self) -> bool {
+        self.fences
+            .lock()
+            .get(&self.id)
+            .is_none_or(|fence| fence.closed || fence.closings != self.closings)
+    }
 }
 
 impl Drop for WorkGuard {
@@ -126,6 +147,7 @@ impl SessionManager {
         Ok(WorkGuard {
             fences: fences.clone(),
             id: id.clone(),
+            closings: fence.closings,
         })
     }
 
@@ -140,12 +162,12 @@ impl SessionManager {
 
     /// Nothing new of conversation `id` starts from now on.
     pub(super) fn close_fence(&self, id: &ConversationId) {
-        self.closing
-            .fences
-            .lock()
-            .entry(id.clone())
-            .or_default()
-            .closed = true;
+        let mut state = self.closing.fences.lock();
+        let fence = state.entry(id.clone()).or_default();
+        if !fence.closed {
+            fence.closed = true;
+            fence.closings += 1;
+        }
     }
 
     /// Conversation `id` works again (restored, or its closing failed).
@@ -162,23 +184,51 @@ impl SessionManager {
     /// Waits until no work of conversation `id` that passed its fence is still going (at most
     /// [`DRAIN_WAIT`]). Whether it all finished.
     pub(super) async fn drain(&self, id: &ConversationId) -> bool {
+        #[cfg(test)]
+        let wait = self
+            .closing
+            .drain_wait
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or(DRAIN_WAIT);
+        #[cfg(not(test))]
+        let wait = DRAIN_WAIT;
+        tokio::time::timeout(wait, self.drained(id)).await.is_ok()
+    }
+
+    /// Waits until no work of conversation `id` that passed its fence is still going.
+    pub(super) async fn drained(&self, id: &ConversationId) {
         let fences = &self.closing.fences;
-        let settled = async {
-            loop {
-                let changed = fences.changed.notified();
-                tokio::pin!(changed);
-                changed.as_mut().enable();
-                if fences
-                    .lock()
-                    .get(id)
-                    .is_none_or(|fence| fence.inflight == 0)
-                {
-                    return;
-                }
-                changed.await;
+        loop {
+            let changed = fences.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if fences
+                .lock()
+                .get(id)
+                .is_none_or(|fence| fence.inflight == 0)
+            {
+                return;
             }
-        };
-        tokio::time::timeout(DRAIN_WAIT, settled).await.is_ok()
+            changed.await;
+        }
+    }
+
+    /// A cleanup of conversation `id` stopped waiting for work that passed its fence, and left
+    /// its mark: once that work has finished, `again` runs as a cleanup of its own, for what
+    /// the work made after the cleanup passed. Nothing waits for it meanwhile (a restore goes
+    /// ahead); a quit before then leaves the mark to the next launch.
+    pub(super) fn again_after_late_work<F, Fut>(&self, id: &ConversationId, again: F)
+    where
+        F: FnOnce(Arc<SessionManager>) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let (manager, id) = (self.arc(), id.clone());
+        self.spawn(async move {
+            manager.drained(&id).await;
+            let cleanup = again(manager.clone());
+            manager.start_cleanup(id, cleanup);
+        });
     }
 
     /// Takes the next place in the lifecycle order of each conversation in `ids` (call it in

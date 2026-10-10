@@ -41,6 +41,7 @@ export const CATEGORIES: readonly TaskCategory[] = [
   "review",
   "merge",
   "verify",
+  "operate",
   "chat",
   "orchestrate",
 ];
@@ -53,6 +54,7 @@ export const CATEGORY_LABELS: Record<TaskCategory, string> = {
   review: "review",
   merge: "merging",
   verify: "verification",
+  operate: "using apps",
   chat: "chat",
   orchestrate: "orchestration",
 };
@@ -65,6 +67,7 @@ export const RANKED_CATEGORIES: readonly TaskCategory[] = [
   "review",
   "merge",
   "verify",
+  "operate",
   "chat",
 ];
 
@@ -76,6 +79,7 @@ export const KIND_HINTS: Record<TaskCategory, string> = {
   review: "Reviews another task's change or a plan.",
   merge: "Resolves conflicts between a task and its target branch.",
   verify: "Runs the project's checks.",
+  operate: "Uses apps on this Mac to reach a result; changes no code.",
   chat: "Takes over a Chat whose model hits its limit.",
   orchestrate: "Plans and delegates a session's work.",
 };
@@ -88,6 +92,7 @@ export const PLAIN_KIND_NAMES: Record<TaskCategory, string> = {
   review: "Review changes",
   merge: "Resolve conflicts",
   verify: "Run checks",
+  operate: "Use apps",
   chat: "Take over a chat",
   orchestrate: "Plan and delegate",
 };
@@ -100,6 +105,7 @@ export const PLAIN_KIND_WORDS: Record<TaskCategory, string> = {
   review: "reviewing changes",
   merge: "resolving conflicts",
   verify: "running checks",
+  operate: "using apps",
   chat: "chat",
   orchestrate: "planning",
 };
@@ -121,6 +127,7 @@ export const DEFAULT_FLOORS: Record<TaskCategory, QualityTier> = {
   review: "strong",
   merge: "strong",
   verify: "light",
+  operate: "strong",
   chat: "light",
   orchestrate: "strong",
 };

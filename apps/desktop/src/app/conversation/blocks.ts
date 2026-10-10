@@ -1,4 +1,4 @@
-import { isPlumbing, toolHasOwnResult } from "@/app/conversation/activity/words";
+import { isPlumbing, toolHasOwnResult, toolName } from "@/app/conversation/activity/words";
 import type { CardType } from "@/app/conversation/cards/CardBody";
 import { decisionWords } from "@/app/conversation/rowWords";
 import type {
@@ -135,6 +135,8 @@ export type Block = {
   worked: WorkSpan[];
   /** It waits only for quota, not for the user. */
   quotaWait: boolean;
+  /** It waits for the answer to its own question card (and maybe quota), so it still works. */
+  cardWait: boolean;
 };
 
 /** The parts of the board the blocks depend on (not worker activity or transcripts). */
@@ -200,15 +202,30 @@ export function stoppedAtMs(spans: readonly WorkSpan[]): number | null {
 }
 
 /**
- * The time a turn shows: while it works or waits for quota, how long it worked so far; while it
- * waits for the user, how long it has waited; once over, how long it worked, its waits for the
- * user left out.
+ * Whether a request waits only for the user's answer to its own question card: the daemon keeps
+ * its work span open then, as it does for a quota wait, so it still reads as working.
+ */
+export function requestWaitsOnCard(request: UserRequest): boolean {
+  // Older records (stored boards, an older daemon) have no spans at all.
+  const stored: readonly WorkSpan[] | undefined = request.worked;
+  return request.state.type === "waiting" && !request.quotaWait && stored?.at(-1)?.toMs === null;
+}
+
+/** Whether a waiting turn waits only for the answer to its question card: it still works. */
+export function waitsOnCard(meta: { state: BlockState; cardWait: boolean }): boolean {
+  return meta.state === "waiting" && meta.cardWait;
+}
+
+/**
+ * The time a turn shows: while it works, waits for quota or for the answer to its question
+ * card, how long it worked so far; while it waits for the user otherwise, how long it has
+ * waited; once over, how long it worked, its other waits for the user left out.
  */
 export function turnTime(
-  meta: { state: BlockState; worked: readonly WorkSpan[]; quotaWait: boolean; endedAtMs: number | null },
+  meta: { state: BlockState; worked: readonly WorkSpan[]; quotaWait: boolean; cardWait: boolean; endedAtMs: number | null },
   now: number,
 ): number {
-  if (meta.state === "waiting" && !meta.quotaWait) {
+  if (meta.state === "waiting" && !meta.quotaWait && !waitsOnCard(meta)) {
     return Math.max(0, now - (stoppedAtMs(meta.worked) ?? meta.endedAtMs ?? now));
   }
   return workedMs(meta.worked, now);
@@ -272,7 +289,7 @@ function keepPlan(plan: Plan): boolean {
 
 type Placed =
   | { kind: "message"; position: number; message: Message; text: string }
-  | { kind: "card"; position: number; requestId: string | null; card: BlockCard }
+  | { kind: "card"; position: number; requestId: string | null; card: BlockCard; atMs?: number }
   | { kind: "thinking"; position: number; requestId: string | null; segment: ThinkingSegment; atMs: number }
   | { kind: "task"; position: number; requestId: string | null; id: string }
   | { kind: "row"; position: number; requestId: string | null; row: BlockRow; atMs: number }
@@ -295,15 +312,18 @@ type Placed =
 function createdAt(board: BoardDigest, item: Exclude<Placed, { kind: "message" }>): number {
   if (item.kind === "task") return board.tasks[item.id]?.createdAtMs ?? 0;
   if (item.kind === "row" || item.kind === "orchestrator" || item.kind === "compaction" || item.kind === "thinking") return item.atMs;
+  if (item.atMs !== undefined) return item.atMs;
   const { type, id } = item.card;
   const card =
     type === "task"
       ? board.tasks[id]
-      : type === "approval"
+      : type === "approval" || type === "outline"
         ? board.approvals[id]
         : type === "question"
           ? board.questions[id]
-          : board.plans[id];
+          : type === "plan"
+            ? board.plans[id]
+            : undefined;
   return card?.createdAtMs ?? 0;
 }
 
@@ -357,6 +377,22 @@ export function buildBlocks(
     })),
   ].toSorted((a, b) => a.position - b.position);
   for (const step of board.orchestratorSteps) {
+    // A plan being written shows as its card, "Writing plan", until the plan itself arrives.
+    if (step.kind.type === "tool" && toolName(step.kind.name) === "propose_plan") {
+      const written = Object.values(board.plans).some(
+        (plan) => !!plan.body && plan.requestId === step.requestId && plan.position > step.position,
+      );
+      if (step.kind.status === "inProgress" && !written) {
+        placed.push({
+          kind: "card",
+          position: step.position,
+          requestId: step.requestId,
+          card: { type: "writingPlan", id: `writing:${step.position}`, position: step.position, keep: true },
+          atMs: step.atMs,
+        });
+      }
+      continue;
+    }
     // Plumbing shows by what came of it: a worker's sentence, a card, the merge.
     if (step.kind.type === "tool" && isPlumbing(step.kind.name)) continue;
     if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "tool")) continue;
@@ -414,19 +450,51 @@ export function buildBlocks(
       atMs: compaction.startedAtMs,
     });
   }
-  // Approvals wait in the composer's place and leave nothing in the thread once answered.
+  // Approvals wait in the composer's place and leave nothing in the thread once answered. A
+  // question card is a row of the work, which folds with it once the request is done.
   for (const question of Object.values(board.questions)) {
     placed.push({
       kind: "card",
       position: question.position,
       requestId: question.requestId,
-      card: { type: "question", id: question.id, position: question.position, keep: true },
+      card: { type: "question", id: question.id, position: question.position, keep: false },
     });
   }
+  // A plan the user reads as a document (one proposed with a body, or a lead's outline) stays
+  // in the thread in any state, where it was proposed; a request's newest one stays in view, and
+  // the revisions it replaced fold into the work.
+  const documents: Placed[] = [];
   for (const plan of Object.values(board.plans)) {
-    // A session's plan at work lives in the side panel and the composer's phase pill; only one
-    // that waits on a decision shows in the thread. A superseded plan no longer shows; a
-    // plan of an overnight run's request keeps its row.
+    if (!plan.body) continue;
+    documents.push({
+      kind: "card",
+      position: plan.position,
+      requestId: plan.requestId,
+      card: { type: "plan", id: plan.id, position: plan.position, keep: false },
+    });
+  }
+  for (const approval of Object.values(board.approvals)) {
+    if (approval.subject.type !== "outline") continue;
+    documents.push({
+      kind: "card",
+      position: approval.position,
+      requestId: approval.requestId,
+      card: { type: "outline", id: approval.id, position: approval.position, keep: false },
+    });
+  }
+  const newest = new Map<string | null, BlockCard>();
+  for (const item of documents) {
+    if (item.kind !== "card") continue;
+    const shown = newest.get(item.requestId);
+    if (!shown || shown.position < item.card.position) newest.set(item.requestId, item.card);
+  }
+  for (const card of newest.values()) card.keep = true;
+  placed.push(...documents);
+  for (const plan of Object.values(board.plans)) {
+    if (plan.body) continue;
+    // A session's plan of phases alone lives in the side panel and the composer's phase pill;
+    // only one that waits on a decision shows in the thread. A superseded plan no longer
+    // shows; a plan of an overnight run's request keeps its row.
     if (plan.state.type === "superseded" || (!isRunRequest(plan.requestId) && !keepPlan(plan))) continue;
     placed.push({
       kind: "card",
@@ -469,6 +537,7 @@ export function buildBlocks(
         endedAtMs: request?.endedAtMs ?? null,
         worked: request ? requestSpans(request) : [{ fromMs: startedAtMs, toMs: null }],
         quotaWait: !!request?.quotaWait,
+        cardWait: !!request && requestWaitsOnCard(request),
       };
       blocks.set(key, block);
       order.push(key);
@@ -573,6 +642,7 @@ export function buildBlocks(
       endedAtMs: null,
       worked: [{ fromMs: entry.createdAtMs, toMs: null }],
       quotaWait: false,
+      cardWait: false,
     });
   }
   return result;
@@ -626,6 +696,11 @@ function joinSteered(blocks: Block[], requests: BoardDigest["requests"]): Block[
       startedAtMs: Math.min(previous.startedAtMs, block.startedAtMs),
       worked: [...previous.worked, ...block.worked],
       quotaWait: state === "waiting" && [previous, block].every((part) => part.state !== "waiting" || part.quotaWait),
+      // Waiting on a card while no part waits for the user otherwise.
+      cardWait:
+        state === "waiting" &&
+        [previous, block].every((part) => part.state !== "waiting" || part.quotaWait || part.cardWait) &&
+        [previous, block].some((part) => part.state === "waiting" && part.cardWait),
       endedAtMs:
         live.length > 0 ? null : Math.max(previous.endedAtMs ?? 0, block.endedAtMs ?? 0) || null,
     };
@@ -688,6 +763,36 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
     merged.push(entry);
   }
   return merged;
+}
+
+/**
+ * A finished block's answer, by its index in `texts`: the request's last reply, so an ending
+ * written again after a late fix replaces the earlier one in place, which folds into the work
+ * (THREAD-PARITY-PLAN §4.6). `null` while it works, or with no reply.
+ */
+export function answerIndex(texts: readonly unknown[], done: boolean): number | null {
+  return done && texts.length > 0 ? texts.length - 1 : null;
+}
+
+/**
+ * Whether a block ends with a plan the user reads (a kept plan or outline card after its last
+ * reply): the plan is its answer, and a line written before it folds into the work.
+ */
+export function endsWithPlan(sequence: readonly SequenceEntry[]): boolean {
+  for (const entry of sequence.toReversed()) {
+    if (entry.kind === "text") return false;
+    if (entry.kind === "card" && entry.card.keep && (entry.card.type === "plan" || entry.card.type === "outline")) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether an entry of a finished block folds under "Worked for …": everything but its answer
+ * and the cards that stay in view (decisions, failures, what needs the user).
+ */
+export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
+  if (entry.kind === "text") return entry.index !== answer;
+  return entry.kind !== "card" || !entry.card.keep;
 }
 
 /** Whether a block still has work running or waiting. */
@@ -941,5 +1046,5 @@ function settled(block: Block, chain: readonly Message[]): Block {
   const user = block.user?.kind === "message" ? block.user.message.createdAtMs : undefined;
   const start = user ?? times[0] ?? block.startedAtMs;
   const end = times.at(-1) ?? start;
-  return { ...block, state: "done", error: null, startedAtMs: start, endedAtMs: end, worked: [{ fromMs: start, toMs: end }], quotaWait: false };
+  return { ...block, state: "done", error: null, startedAtMs: start, endedAtMs: end, worked: [{ fromMs: start, toMs: end }], quotaWait: false, cardWait: false };
 }

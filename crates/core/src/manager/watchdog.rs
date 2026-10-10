@@ -37,6 +37,7 @@ use std::time::Duration;
 use brigadier_providers::{ErrorKind, NoticeLevel, ProviderEvent};
 
 use super::SessionManager;
+use super::decisions::waiting_run;
 use super::worker_handoff::Handover;
 use super::workers::TaskLive;
 use crate::board::Board;
@@ -293,6 +294,7 @@ pub(crate) fn stuck_cards(board: &Board, now: i64, after: i64) -> Vec<StuckCard>
             QuestionKind::UncommittedChanges { .. } => {
                 "Answer whether workers see your uncommitted changes".to_owned()
             }
+            QuestionKind::Merge { base, .. } => format!("Answer whether to merge into {base}"),
         };
         stuck.push(StuckCard {
             card_id: question.id.clone(),
@@ -599,7 +601,8 @@ impl SessionManager {
         .await;
     }
 
-    /// Lists the cards the user left unanswered for long under "Waiting on you".
+    /// Lists the cards of an overnight run the user left unanswered for long under its
+    /// "Waiting on you" (a session's card is in front of the user already).
     async fn watch_cards(
         &self,
         conversation_id: &ConversationId,
@@ -608,15 +611,14 @@ impl SessionManager {
         now: i64,
     ) {
         for card in stuck_cards(board, now, timing.card) {
+            let source = WaitingSource::Card {
+                card_id: card.card_id.clone(),
+            };
+            if waiting_run(&source, card.request_id.as_deref(), board).is_none() {
+                continue;
+            }
             let added = self
-                .wait_on_user(
-                    conversation_id,
-                    card.request_id.clone(),
-                    WaitingSource::Card {
-                        card_id: card.card_id.clone(),
-                    },
-                    &card.what,
-                )
+                .wait_on_user(conversation_id, card.request_id.clone(), source, &card.what)
                 .await;
             match added {
                 Ok(true) => {
@@ -914,6 +916,7 @@ mod tests {
             subject: ApprovalSubject::Action {
                 action: "Deploy to staging".into(),
                 details: String::new(),
+                live: false,
             },
             state,
             created_at_ms: created,

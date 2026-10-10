@@ -10,8 +10,9 @@ use super::workers::route_label;
 use crate::model::{ConversationId, DomainEvent};
 use crate::tools::{NoteKind, OrchestratorCall, ToolReply, WorkerCall};
 use crate::work::{
-    ApprovalSubject, AttachmentRef, DecisionSource, InjectionKind, OrchestratorStep,
-    OrchestratorStepKind, QuestionKind, Task, TaskId, TaskKind, WaitingSource, WorkerRole,
+    ApprovalSubject, ArtifactRef, AttachmentRef, DecisionSource, InjectionKind, OrchestratorStep,
+    OrchestratorStepKind, QuestionItem, QuestionKind, QuestionOption, Task, TaskId, TaskKind,
+    WaitingSource, WorkerRole,
 };
 use crate::{Error, Result, now_ms};
 
@@ -28,9 +29,18 @@ impl SessionManager {
     ) -> ToolReply {
         let name = call.name();
         let is_artifact = matches!(call, OrchestratorCall::ReadArtifact(_));
-        let reply = match self.run_orchestrator_call(&conversation_id, call).await {
-            Ok(text) => ToolReply::ok(text),
-            Err(err) => ToolReply::error(err.to_string()),
+        let image = match &call {
+            OrchestratorCall::ReadArtifact(args) => {
+                self.read_image_artifact(&conversation_id, &args.id).await
+            }
+            _ => None,
+        };
+        let reply = match image {
+            Some(reply) => reply,
+            None => match self.run_orchestrator_call(&conversation_id, call).await {
+                Ok(text) => ToolReply::ok(text),
+                Err(err) => ToolReply::error(err.to_string()),
+            },
         };
         self.log_injection(
             &conversation_id,
@@ -78,6 +88,14 @@ impl SessionManager {
                     }
                 };
                 let subject = match (&args.subject, args.kind) {
+                    // An operator works on apps, not on another task's change.
+                    (Some(_), TaskKind::Operate) => {
+                        return Err(Error::Invalid(
+                            "an operate task takes no `subject`: name the app, dev build or \
+                             files it works on in its spec"
+                                .into(),
+                        ));
+                    }
                     (Some(reference), _) => Some(self.find_task(id, reference).await?),
                     (None, TaskKind::Review) => {
                         return Err(Error::Invalid(
@@ -96,6 +114,30 @@ impl SessionManager {
                     }
                     (None, _) => None,
                 };
+                let given = |field: &Option<String>| {
+                    field
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .map(str::to_owned)
+                };
+                let (target, end_state) = (given(&args.target), given(&args.end_state));
+                if args.kind == TaskKind::Operate {
+                    if target.is_none() || end_state.is_none() {
+                        return Err(Error::Invalid(
+                            "an operate task needs `target` (the app, dev build or URL it works \
+                             in, and the window if known) and `end_state` (what must be true at \
+                             the end, checkable on screen)"
+                                .into(),
+                        ));
+                    }
+                } else if args.target.is_some() || args.end_state.is_some() {
+                    return Err(Error::Invalid(format!(
+                        "`target` and `end_state` are for operate tasks; a {:?} task takes its \
+                         goal from its spec",
+                        args.kind
+                    )));
+                }
                 if args.kind == TaskKind::Review
                     && subject
                         .as_ref()
@@ -159,6 +201,8 @@ impl SessionManager {
                         super::workers::TaskExtra {
                             role,
                             phase: args.phase,
+                            target,
+                            end_state,
                             ..Default::default()
                         },
                     )
@@ -254,20 +298,23 @@ impl SessionManager {
                 Ok(format!("Stopped task-{}.", task.number))
             }
             OrchestratorCall::AskUser(args) => {
+                let items = ask_round(args.questions)?;
                 let task_id = match &args.task {
                     Some(reference) => Some(self.find_task(id, reference).await?.id),
                     None => None,
                 };
-                self.open_question(
-                    id,
-                    task_id,
-                    QuestionKind::Orchestrator,
-                    args.question,
-                    args.options,
-                    args.recommended,
-                )
-                .await?;
-                Ok("Asked the user. The answer arrives later as a message; carry on with anything that doesn't depend on it.".into())
+                let asked = items.len();
+                self.open_round(id, task_id, QuestionKind::Orchestrator, items)
+                    .await?;
+                Ok(format!(
+                    "Asked the user {} on one card. Reply with exactly {} now. The answers arrive as an [answer] message in this request; carry on with anything that doesn't depend on them.",
+                    if asked == 1 {
+                        "1 question".to_owned()
+                    } else {
+                        format!("{asked} questions")
+                    },
+                    prompts::QUIET
+                ))
             }
             OrchestratorCall::ReadReport(args) => {
                 let (task, here) = self.find_report(id, &args.task).await?;
@@ -346,6 +393,7 @@ impl SessionManager {
             OrchestratorCall::Remember(args) => self.remember_tool(id, args).await,
             OrchestratorCall::SearchTranscript(args) => self.search_transcript_tool(id, args).await,
             OrchestratorCall::PlanPhases(args) => self.plan_phases(id, args).await,
+            OrchestratorCall::ProposePlan(args) => self.propose_plan(id, args).await,
             OrchestratorCall::ApproveOutline(args) => self.approve_outline(id, args).await,
             OrchestratorCall::StartVerifier(args) => {
                 // A verifier changes code: in plan mode nothing does.
@@ -359,6 +407,7 @@ impl SessionManager {
                     ApprovalSubject::Action {
                         action: args.action,
                         details: args.details,
+                        live: false,
                     },
                 )
                 .await?;
@@ -373,6 +422,10 @@ impl SessionManager {
                 self.check_plan_mode(id).await?;
                 self.finish_session(id, &args.user_words, args.message)
                     .await
+            }
+            OrchestratorCall::ProposeMerge(args) => {
+                self.check_plan_mode(id).await?;
+                self.propose_merge(id, args.note).await
             }
             OrchestratorCall::NoteForUser(args) => self.note_for_user(id, args).await,
             OrchestratorCall::SettleStep(args) => self.settle_step(id, args).await,
@@ -524,8 +577,8 @@ impl SessionManager {
     /// `read_artifact` reads what a report of this project stored (its artifacts and
     /// outputs, a kept patch), from this session or another of the project; nothing else in
     /// the store.
-    async fn check_artifact(&self, id: &ConversationId, artifact: &str) -> Result<()> {
-        let names = |task: &Task| {
+    async fn check_artifact(&self, id: &ConversationId, artifact: &str) -> Result<ArtifactRef> {
+        let named = |task: &Task| {
             task.report
                 .iter()
                 .flat_map(|report| &report.artifacts)
@@ -534,18 +587,43 @@ impl SessionManager {
                     crate::work::KeptWork::Diff { artifact, .. } => Some(artifact),
                     _ => None,
                 }))
-                .any(|known| known.id == artifact)
+                .find(|known| known.id == artifact)
+                .cloned()
         };
         for conversation in std::iter::once(id.clone()).chain(self.project_conversations(id)) {
             if let Ok(board) = self.core.board(&conversation).await
-                && board.tasks.values().any(names)
+                && let Some(known) = board.tasks.values().find_map(named)
             {
-                return Ok(());
+                return Ok(known);
             }
         }
         Err(Error::Invalid(format!(
             "{artifact} is not an artifact of a report in this project. Use an id a report, read_report or query_brain gave you."
         )))
+    }
+
+    /// `read_artifact` on a report's image (an operate worker's last screenshot): the image
+    /// itself, which the model reads; `None` for anything else.
+    async fn read_image_artifact(&self, id: &ConversationId, artifact: &str) -> Option<ToolReply> {
+        let known = self.check_artifact(id, artifact.trim()).await.ok()?;
+        if !known.mime.starts_with("image/") {
+            return None;
+        }
+        let reply = match self
+            .core
+            .read_blob_range(known.id.clone(), 0, u32::MAX)
+            .await
+        {
+            Ok((bytes, total)) => ToolReply::ok(format!(
+                "[artifact {} · {} · {total} bytes]",
+                known.id, known.title
+            ))
+            .with_image(known.mime.clone(), bytes),
+            Err(err) => ToolReply::error(err.to_string()),
+        };
+        self.orchestrator_step(id, OrchestratorStepKind::ReadArtifact { name: known.title })
+            .await;
+        Some(reply)
     }
 
     /// The project's other conversations (sessions of the same project), newest first.
@@ -640,9 +718,10 @@ impl SessionManager {
         Ok(())
     }
 
-    /// `note_for_user`: a judgement call for "Decided for you", or something only the user
-    /// can do for "Waiting on you", under the request the orchestrator serves.
-    async fn note_for_user(
+    /// `note_for_user`: a judgement call for "Decided for you", or, in an overnight run,
+    /// something only the user can do for its "Waiting on you", under the request the
+    /// orchestrator serves (refused outside a run).
+    pub(crate) async fn note_for_user(
         &self,
         id: &ConversationId,
         args: crate::tools::NoteForUser,
@@ -666,13 +745,18 @@ impl SessionManager {
                 Ok("Noted under Decided for you.".into())
             }
             NoteKind::Waiting => {
+                if self.computer_permission_asked(id, what).await {
+                    return Ok("It is already listed under Waiting on you: Brigadier asked for \
+                               computer use's permissions itself and closes that item once they're in."
+                        .into());
+                }
                 let added = self
                     .wait_on_user(id, request, WaitingSource::Orchestrator, what)
                     .await?;
                 Ok(if added {
-                    "Listed under Waiting on you. You hear when the user marks it done; carry on with anything that doesn't depend on it."
+                    "Listed under the run's Waiting on you; carry on with anything that doesn't depend on it."
                 } else {
-                    "It is already listed under Waiting on you."
+                    "It is already listed under the run's Waiting on you."
                 }
                 .into())
             }
@@ -775,6 +859,62 @@ fn messaged(task: &mut Task, text: String, answered: bool) {
     }
 }
 
+/// The most questions one card asks, and the most options one question offers.
+const ROUND_MAX: usize = 6;
+const OPTIONS_MAX: usize = 4;
+
+/// An `ask_user` round as the card's questions, or why it can't be asked as it is.
+fn ask_round(questions: Vec<crate::tools::AskQuestion>) -> Result<Vec<QuestionItem>> {
+    if questions.is_empty() || questions.len() > ROUND_MAX {
+        return Err(Error::Invalid(format!(
+            "ask_user takes 1 to {ROUND_MAX} questions in one round; ask the rest in the next round."
+        )));
+    }
+    questions
+        .into_iter()
+        .map(|question| {
+            let text = question.question.trim().to_owned();
+            if text.is_empty() {
+                return Err(Error::Invalid("a question of the round is empty".into()));
+            }
+            // A blank option goes; the recommendation keeps pointing at the option it named.
+            let mut recommended = None;
+            let mut options: Vec<QuestionOption> = Vec::new();
+            for (index, option) in question.options.into_iter().enumerate() {
+                let label = option.label.trim();
+                if label.is_empty() {
+                    continue;
+                }
+                if question.recommended == Some(index as u32) {
+                    recommended = Some(options.len() as u32);
+                }
+                options.push(QuestionOption {
+                    label: label.to_owned(),
+                    description: option
+                        .description
+                        .map(|line| line.trim().to_owned())
+                        .filter(|line| !line.is_empty()),
+                });
+            }
+            if options.len() == 1 || options.len() > OPTIONS_MAX {
+                return Err(Error::Invalid(format!(
+                    "\"{text}\": give 2 to {OPTIONS_MAX} options (or none, for a free answer)."
+                )));
+            }
+            if !options.is_empty() && recommended.is_none() {
+                return Err(Error::Invalid(format!(
+                    "\"{text}\": say which option you recommend in `recommended` (its 0-based index)."
+                )));
+            }
+            Ok(QuestionItem {
+                text,
+                options,
+                recommended,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -808,5 +948,30 @@ mod tests {
         messaged(&mut task, "Stop and use the old API instead.".into(), false);
         assert_eq!(task.landing, None);
         assert_eq!(task.messages.len(), 2);
+    }
+
+    #[test]
+    fn a_blank_option_leaves_the_recommendation_on_the_option_it_named() {
+        let round = |options: serde_json::Value, recommended: u32| {
+            ask_round(vec![
+                serde_json::from_value(serde_json::json!({
+                    "question": "Which format?",
+                    "options": options,
+                    "recommended": recommended,
+                }))
+                .unwrap(),
+            ])
+        };
+        let options =
+            serde_json::json!([{ "label": " " }, { "label": "CSV" }, { "label": "JSON" }]);
+        let [item] = &round(options.clone(), 1).unwrap()[..] else {
+            panic!("one question")
+        };
+        assert_eq!(item.options.len(), 2);
+        assert_eq!(item.recommended, Some(0));
+        assert_eq!(item.options[0].label, "CSV");
+        // Recommending the blank one recommends nothing: the thread is asked to say which.
+        let blank = round(options, 0).unwrap_err().to_string();
+        assert!(blank.contains("recommend"), "{blank}");
     }
 }

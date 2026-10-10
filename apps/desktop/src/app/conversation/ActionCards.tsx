@@ -25,7 +25,9 @@ import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
 import { pendingActionKeys, type PendingAction } from "@/app/conversation/pendingActions";
+import { CodeSpans } from "@/app/conversation/cards/codeSpans";
 import { PlanCardLink } from "@/app/conversation/cards/PlanCardLink";
+import { questionRound } from "@/app/conversation/cards/questionRound";
 import { revealOvernight } from "@/app/conversation/summaryState";
 import { useAction } from "@/app/conversation/useAction";
 import { ViewContext } from "@/app/conversation/viewContext";
@@ -64,6 +66,7 @@ import type {
 import { shownCommand } from "@/components/transcript/activity";
 import { answerCard, answerQuestion, decidePlan } from "@/state/actions";
 import { type ShownApproval, useBoard } from "@/state/board";
+import { type PlanDocRef, planDoc } from "@/state/planDoc";
 import { useApp } from "@/state/store";
 
 /* Pending decisions sit on the rail above the full composer. Their shortcuts leave
@@ -224,6 +227,17 @@ export function PendingActionCard({
             id={action.id}
             onDismiss={onDismiss}
             footer={footer}
+            stagger={follows}
+          />
+        );
+      case "outline":
+        return (
+          <ImplementPlanAction
+            key={action.id}
+            docRef={{ type: "outline", id: action.id }}
+            onDismiss={onDismiss}
+            footer={footer}
+            stagger={follows}
           />
         );
       case "overnight":
@@ -664,7 +678,8 @@ const COMMIT_MS = 180;
 /**
  * The card shared by questions and "Implement this plan?": numbered answers (1–9 pick, ↑/↓
  * move, Enter picks the lit one; a pick shows its dot, then goes), then the free-text row
- * with Skip, which turns into Submit once something is typed. Esc or × puts it aside.
+ * with Skip, which turns into Submit once something is typed (Next, before a round's last
+ * question; ←/→ page through the round). Esc or × puts it aside.
  */
 function ChoiceCard({
   name,
@@ -673,9 +688,14 @@ function ChoiceCard({
   extra,
   choices,
   initial,
+  initialText = "",
   placeholder,
+  pager,
+  last = true,
+  onPage,
   onChoose,
   onText,
+  onTyped,
   onSkip,
   onDismiss,
   busy,
@@ -688,12 +708,22 @@ function ChoiceCard({
   detail?: ReactNode;
   /** Between the question and the answers (the files asked about). */
   extra?: ReactNode;
-  choices: { label: string; recommended?: boolean }[];
+  choices: { label: string; description?: ReactNode; recommended?: boolean }[];
   /** The answer lit at first. */
   initial: number;
+  /** What the free-text row holds at first (an answer typed before paging back). */
+  initialText?: string;
   placeholder: string;
+  /** A round's "‹ 1 of 3 ›", beside the dismiss button. */
+  pager?: ReactNode;
+  /** The round's last question: its button submits the round. */
+  last?: boolean;
+  /** ←/→ to the round's previous or next question. */
+  onPage?: (step: -1 | 1) => void;
   onChoose: (index: number) => void;
   onText: (text: string) => void;
+  /** What the free-text row holds as it is typed, so paging away and back keeps it. */
+  onTyped?: (text: string) => void;
   onSkip: () => void;
   onDismiss: () => void;
   busy: boolean;
@@ -705,7 +735,7 @@ function ChoiceCard({
   // The lit answer; -1 is the free-text row.
   const [highlight, setHighlight] = useState(choices.length > 0 ? initial : -1);
   const [chosen, setChosen] = useState<number | null>(null);
-  const [typed, setTyped] = useState("");
+  const [typed, setTyped] = useState(initialText);
   const card = useRef<HTMLElement>(null);
   const field = useRef<HTMLInputElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -750,7 +780,7 @@ function ChoiceCard({
     )
       return;
     const digit = Number(event.key);
-    const last = choices.length - 1;
+    const lastChoice = choices.length - 1;
     if (
       Number.isInteger(digit) &&
       digit >= 1 &&
@@ -763,12 +793,15 @@ function ChoiceCard({
       field.current?.focus();
     } else if (event.key === "ArrowDown") {
       event.preventDefault();
-      if (highlight >= last) field.current?.focus();
+      if (highlight >= lastChoice) field.current?.focus();
       else setHighlight(highlight + 1);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      if (highlight === -1) setHighlight(last);
+      if (highlight === -1) setHighlight(lastChoice);
       else if (highlight > 0) setHighlight(highlight - 1);
+    } else if (onPage && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+      event.preventDefault();
+      onPage(event.key === "ArrowLeft" ? -1 : 1);
     }
   };
 
@@ -783,7 +816,7 @@ function ChoiceCard({
       onKeyDown={onKeyDown}
     >
       <div {...row(0)}>
-        <ActionCardQuestion onDismiss={onDismiss} detail={detail}>
+        <ActionCardQuestion onDismiss={onDismiss} detail={detail} aside={pager}>
           {title}
         </ActionCardQuestion>
       </div>
@@ -803,6 +836,7 @@ function ChoiceCard({
                   aria-checked={index === highlight}
                   number={index + 1}
                   label={choice.label}
+                  description={choice.description ?? undefined}
                   recommended={choice.recommended}
                   highlighted={index === highlight}
                   chosen={index === chosen}
@@ -825,6 +859,7 @@ function ChoiceCard({
             onFocus={() => setHighlight(-1)}
             onChange={(event) => {
               setTyped(event.target.value);
+              onTyped?.(event.target.value);
               if (event.target.value) setHighlight(-1);
             }}
             onKeyDown={(event) => {
@@ -853,7 +888,7 @@ function ChoiceCard({
               disabled={busy}
               onClick={send}
             >
-              {text ? "Submit" : "Skip"}
+              {!text ? "Skip" : last ? "Submit" : "Next"}
             </button>
           </ActionFreeText>
         </div>
@@ -868,7 +903,11 @@ function ChoiceCard({
   );
 }
 
-/** A question from Brigadier or a worker; Skip tells the asker to use its judgment. */
+/**
+ * A question card from Brigadier, the thread or a worker: its round, one question at a time with
+ * a "‹ 1 of 3 ›" pager, and every answer sent at once after the last. Skip tells the asker to
+ * use its judgment.
+ */
 function QuestionAction({
   id,
   onDismiss,
@@ -887,21 +926,57 @@ function QuestionAction({
       : null,
   );
   const action = useAction();
+  const [page, setPage] = useState(0);
+  const [answers, setAnswers] = useState<(string | null)[]>([]);
+  // Text typed on a question but not sent yet, kept while the user pages through the round.
+  const [drafts, setDrafts] = useState<(string | undefined)[]>([]);
   if (!question) return null;
 
+  const round = questionRound(question);
+  const at = Math.min(page, round.length - 1);
+  const item = round[at]!;
   const uncommitted =
     question.kind.type === "uncommittedChanges" ? question.kind.files : null;
-  const answer = (text: string) =>
+  // Back to any question answered so far, or on to the first one still open.
+  const reachable = (to: number) =>
+    to >= 0 && to < round.length && to <= answers.filter((answer) => answer !== null).length;
+  const draft = (text: string | undefined) =>
+    setDrafts((kept) => round.map((_, index) => (index === at ? text : kept[index])));
+  const answer = (text: string) => {
+    const next = round.map((_, index) => (index === at ? text : (answers[index] ?? null)));
+    setAnswers(next);
+    draft(undefined);
+    const open = next.findIndex((given) => given === null);
+    if (open >= 0) {
+      setPage(open);
+      return;
+    }
     action.run(() =>
-      answerQuestion(question.conversationId, question.id, text),
+      answerQuestion(question.conversationId, question.id, next.map((given) => given ?? SKIPPED)),
     );
+  };
+  const given = answers[at] ?? null;
+  const picked = given === null ? -1 : item.options.findIndex((option) => option.label === given);
+  const pager =
+    round.length > 1 ? (
+      <RoundPager
+        at={at}
+        count={round.length}
+        canBack={reachable(at - 1)}
+        canForward={reachable(at + 1)}
+        onPage={(step) => setPage(at + step)}
+      />
+    ) : undefined;
   return (
     <ChoiceCard
+      // A question of the round starts fresh, but keeps an answer given, or text typed, before
+      // paging away.
+      key={at}
       name="question"
       title={
         uncommitted
           ? "Should workers see your uncommitted changes?"
-          : question.text
+          : <CodeSpans text={item.text} />
       }
       detail={
         uncommitted ? (
@@ -918,19 +993,102 @@ function QuestionAction({
           <ActionFileList files={uncommitted.map((path) => ({ path }))} />
         )
       }
-      choices={question.options.map((label, index) => ({
-        label,
-        recommended: question.recommended === index,
+      choices={item.options.map((option, index) => ({
+        label: option.label,
+        description: option.description && <CodeSpans text={option.description} />,
+        recommended: item.recommended === index,
       }))}
-      initial={question.recommended ?? 0}
+      initial={picked >= 0 ? picked : (item.recommended ?? 0)}
+      initialText={drafts[at] ?? (given !== null && picked < 0 && given !== SKIPPED ? given : "")}
       placeholder={
-        question.options.length > 0
+        item.options.length > 0
           ? "No, and tell Brigadier what to do differently"
           : "Type here"
       }
-      onChoose={(index) => answer(question.options[index] ?? "")}
+      pager={pager}
+      last={answers.filter((other, index) => index !== at && other !== null).length === round.length - 1}
+      onPage={(step) => reachable(at + step) && setPage(at + step)}
+      onChoose={(index) => answer(item.options[index]?.label ?? "")}
       onText={answer}
+      onTyped={draft}
       onSkip={() => answer(SKIPPED)}
+      onDismiss={onDismiss}
+      busy={action.busy}
+      error={action.error}
+      footer={footer}
+      stagger={stagger && at === 0}
+    />
+  );
+}
+
+/** A round's "‹ 1 of 3 ›": back to a question answered, on to the next one open. */
+function RoundPager({
+  at,
+  count,
+  canBack,
+  canForward,
+  onPage,
+}: {
+  at: number;
+  count: number;
+  canBack: boolean;
+  canForward: boolean;
+  onPage: (step: -1 | 1) => void;
+}) {
+  const button =
+    "text-foreground/50 hover:bg-foreground/8 rounded-capsule size-icon-button-sm [&_svg]:size-icon-sm flex shrink-0 items-center justify-center transition-colors disabled:opacity-40";
+  return (
+    <div data-slot="round-pager" className="text-foreground/50 -mt-0.5 flex shrink-0 items-center gap-1 text-xs tabular-nums">
+      <button type="button" aria-label="Previous question" className={button} disabled={!canBack} onClick={() => onPage(-1)}>
+        <ChevronLeft />
+      </button>
+      <span>
+        {at + 1} of {count}
+      </span>
+      <button type="button" aria-label="Next question" className={button} disabled={!canForward} onClick={() => onPage(1)}>
+        <ChevronRight />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * "Implement this plan?" for a plan the user reads as a document: Yes builds it; typed words
+ * send it back. A thread's own plan is decided as a plan (the thread revises it); a lead's
+ * outline answers its approval (Yes starts the lead, words go to it as corrections). Skip and
+ * × put it aside; the plan stays proposed.
+ */
+function ImplementPlanAction({
+  docRef,
+  onDismiss,
+  footer,
+  stagger,
+}: {
+  docRef: PlanDocRef;
+  onDismiss: () => void;
+  footer: ReactNode;
+  stagger: boolean;
+}) {
+  const conversationId = useBoard((s) => s.board?.conversationId ?? null);
+  const shown = useBoard((s) => planDoc(s.board, docRef) !== null);
+  const action = useAction();
+  if (!shown || !conversationId) return null;
+  const decide = (yes: boolean, text: string | null) =>
+    action.run(() =>
+      docRef.type === "plan"
+        ? decidePlan(conversationId, docRef.id, yes, text)
+        : answerCard(conversationId, docRef.id, yes ? { type: "allow" } : { type: "deny", message: text ?? "" }),
+    );
+  return (
+    <ChoiceCard
+      name="plan"
+      title="Implement this plan?"
+      choices={[{ label: "Yes, implement this plan" }]}
+      initial={0}
+      placeholder="No, and tell Brigadier what to do differently"
+      onChoose={() => decide(true, null)}
+      onText={(text) => decide(false, text)}
+      onSkip={onDismiss}
       onDismiss={onDismiss}
       busy={action.busy}
       error={action.error}
@@ -940,8 +1098,31 @@ function QuestionAction({
   );
 }
 
-/** The rail points to the single plan card and keeps message entry available. */
+/**
+ * A proposed plan: one written as a document asks "Implement this plan?"; one of phases alone
+ * keeps its rail link to the plan card, with message entry available.
+ */
 function PlanAction({
+  id,
+  onDismiss,
+  footer,
+  stagger,
+}: {
+  id: string;
+  onDismiss: () => void;
+  footer: ReactNode;
+  stagger: boolean;
+}) {
+  const document = useBoard((s) => !!s.board?.plans[id]?.body);
+  return document ? (
+    <ImplementPlanAction docRef={{ type: "plan", id }} onDismiss={onDismiss} footer={footer} stagger={stagger} />
+  ) : (
+    <PhasePlanAction id={id} onDismiss={onDismiss} footer={footer} />
+  );
+}
+
+/** The rail points to the single plan card and keeps message entry available. */
+function PhasePlanAction({
   id,
   onDismiss,
   footer,

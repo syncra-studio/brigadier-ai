@@ -6,9 +6,15 @@
 // For `universal-apple-darwin` both architectures are built and merged with `lipo`; the
 // per-architecture binaries are staged too because each architecture's build script
 // copies its own sidecar.
+//
+// On macOS it also assembles the computer-use helper, src-tauri/binaries/Brigadier Computer
+// Use.app, which bundle.macOS.files puts in Contents/Helpers. Its bundle id is the build's own
+// (`--helper-id`, from the dev config for dev builds) so the system's permissions name it, not
+// Brigadier or a terminal. It is signed ad hoc, or with APPLE_SIGNING_IDENTITY when a release
+// build sets it.
 
 import { execFileSync } from "node:child_process";
-import { copyFileSync, chmodSync, mkdirSync } from "node:fs";
+import { copyFileSync, chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -41,16 +47,16 @@ const target = process.env.TAURI_ENV_TARGET_TRIPLE || flag("--target") || host;
 const release = process.env.TAURI_ENV_DEBUG !== "true" && !args.includes("--debug");
 const profile = release ? "release" : "debug";
 
-/** Builds the daemon for `triple` and returns the path of the produced binary. */
-function build(triple) {
-  const cargoArgs = ["build", "--locked", "-p", "brigadier-daemon", "--bin", name];
+/** Builds `bin` of `pkg` for `triple` and returns the path of the produced binary. */
+function build(triple, pkg = "brigadier-daemon", bin = name) {
+  const cargoArgs = ["build", "--locked", "-p", pkg, "--bin", bin];
   if (release) cargoArgs.push("--release");
   // Building for the host without --target shares its build cache with other cargo commands.
   const crossTarget = triple !== host;
   if (crossTarget) cargoArgs.push("--target", triple);
   run("cargo", cargoArgs);
   const exe = triple.includes("windows") ? ".exe" : "";
-  return join(targetDir, crossTarget ? triple : "", profile, `${name}${exe}`);
+  return join(targetDir, crossTarget ? triple : "", profile, `${bin}${exe}`);
 }
 
 function stage(source, triple) {
@@ -72,4 +78,73 @@ if (target === "universal-apple-darwin") {
   console.log(`staged ${universal}`);
 } else {
   stage(build(target), target);
+}
+
+const helperName = "Brigadier Computer Use";
+const helperBin = "brigadier-computer";
+
+function plist(entries) {
+  const body = Object.entries(entries)
+    .map(([key, value]) => {
+      const v = typeof value === "boolean" ? `<${value}/>` : `<string>${value}</string>`;
+      return `  <key>${key}</key>\n  ${v}`;
+    })
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+${body}
+</dict>
+</plist>
+`;
+}
+
+/** Assembles and signs the computer-use helper bundle around `binary`. */
+function stageHelper(binary) {
+  const id = flag("--helper-id") || "ai.brigadier.computer-use";
+  const version = JSON.parse(readFileSync(resolve(here, "../package.json"), "utf8")).version;
+  const app = join(binariesDir, `${helperName}.app`);
+  rmSync(app, { recursive: true, force: true });
+  mkdirSync(join(app, "Contents/MacOS"), { recursive: true });
+  mkdirSync(join(app, "Contents/Resources"), { recursive: true });
+  copyFileSync(binary, join(app, "Contents/MacOS", helperBin));
+  chmodSync(join(app, "Contents/MacOS", helperBin), 0o755);
+  copyFileSync(resolve(here, "../src-tauri/icons/icon.icns"), join(app, "Contents/Resources/AppIcon.icns"));
+  writeFileSync(
+    join(app, "Contents/Info.plist"),
+    plist({
+      CFBundleDevelopmentRegion: "en",
+      CFBundleExecutable: helperBin,
+      CFBundleIconFile: "AppIcon",
+      CFBundleIdentifier: id,
+      CFBundleName: helperName,
+      CFBundleDisplayName: helperName,
+      CFBundlePackageType: "APPL",
+      CFBundleShortVersionString: version,
+      CFBundleVersion: version,
+      LSMinimumSystemVersion: "14.0",
+      LSUIElement: true,
+      NSHighResolutionCapable: true,
+    }),
+  );
+  const identity = process.env.APPLE_SIGNING_IDENTITY || "-";
+  execFileSync(
+    "codesign",
+    ["--force", "--sign", identity, "--identifier", id, "--options", "runtime", "--timestamp=none", app],
+    { stdio: "inherit" },
+  );
+  console.log(`staged ${app} (${id})`);
+}
+
+if (target.includes("apple-darwin")) {
+  if (target === "universal-apple-darwin") {
+    const arm = build("aarch64-apple-darwin", "brigadier-computer", helperBin);
+    const intel = build("x86_64-apple-darwin", "brigadier-computer", helperBin);
+    const universal = join(targetDir, `${helperBin}-universal`);
+    execFileSync("lipo", ["-create", "-output", universal, arm, intel], { stdio: "inherit" });
+    stageHelper(universal);
+  } else {
+    stageHelper(build(target, "brigadier-computer", helperBin));
+  }
 }

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "revision": 1,
-  "updated": "2026-09-29",
+  "revision": 3,
+  "updated": "2026-10-09",
   "models": [
     {
       "key": "claude-opus-5-5",
@@ -42,7 +42,8 @@
         "merge": 9,
         "verify": 6,
         "chat": 8.5,
-        "orchestrate": 9
+        "orchestrate": 9,
+        "operate": 9
       },
       "defaultEffort": {
         "scout": "low",
@@ -51,7 +52,8 @@
         "review": "high",
         "merge": "high",
         "verify": "medium",
-        "orchestrate": "medium"
+        "orchestrate": "medium",
+        "operate": "medium"
       },
       "released": "2026-09-22",
       "sources": [
@@ -109,7 +111,8 @@
         "review": "high",
         "merge": "high",
         "verify": "medium",
-        "orchestrate": "medium"
+        "orchestrate": "medium",
+        "operate": "medium"
       },
       "released": "2026-09-28",
       "sources": [
@@ -212,7 +215,8 @@
         "review": "high",
         "merge": "high",
         "verify": "medium",
-        "orchestrate": "medium"
+        "orchestrate": "medium",
+        "operate": "medium"
       },
       "released": "2026-07-24",
       "sources": [
@@ -270,7 +274,8 @@
         "review": "high",
         "merge": "high",
         "verify": "medium",
-        "orchestrate": "medium"
+        "orchestrate": "medium",
+        "operate": "medium"
       },
       "released": "2026-06-30",
       "sources": [
@@ -328,7 +333,8 @@
         "review": "high",
         "merge": "high",
         "verify": "medium",
-        "orchestrate": "medium"
+        "orchestrate": "medium",
+        "operate": "medium"
       },
       "released": "2026-05-28",
       "sources": [
@@ -385,7 +391,8 @@
         "review": "high",
         "merge": "high",
         "verify": "medium",
-        "orchestrate": "medium"
+        "orchestrate": "medium",
+        "operate": "medium"
       },
       "released": "2026-04-16",
       "sources": [
@@ -441,7 +448,8 @@
         "review": "high",
         "merge": "high",
         "verify": "medium",
-        "orchestrate": "medium"
+        "orchestrate": "medium",
+        "operate": "medium"
       },
       "released": "2026-02-05",
       "sources": [
@@ -497,7 +505,8 @@
         "review": "high",
         "merge": "high",
         "verify": "medium",
-        "orchestrate": "medium"
+        "orchestrate": "medium",
+        "operate": "medium"
       },
       "released": "2026-02-17",
       "sources": [
@@ -556,7 +565,8 @@
         "review": "high",
         "merge": "high",
         "verify": "medium",
-        "orchestrate": "medium"
+        "orchestrate": "medium",
+        "operate": "medium"
       },
       "released": "2026-09-03",
       "sources": [
@@ -607,7 +617,8 @@
         "merge": 9,
         "verify": 7.5,
         "chat": 8,
-        "orchestrate": 8
+        "orchestrate": 8,
+        "operate": 8.5
       },
       "defaultEffort": {
         "scout": "low",
@@ -616,7 +627,8 @@
         "review": "high",
         "merge": "high",
         "verify": "medium",
-        "orchestrate": "medium"
+        "orchestrate": "medium",
+        "operate": "medium"
       },
       "released": "2026-09-29",
       "sources": [
@@ -674,7 +686,8 @@
         "review": "high",
         "merge": "high",
         "verify": "medium",
-        "orchestrate": "medium"
+        "orchestrate": "medium",
+        "operate": "medium"
       },
       "released": "2026-09-22",
       "sources": [
@@ -734,7 +747,8 @@
         "review": "high",
         "merge": "high",
         "verify": "medium",
-        "orchestrate": "medium"
+        "orchestrate": "medium",
+        "operate": "medium"
       },
       "released": "2026-09-22",
       "sources": [
@@ -792,7 +806,8 @@
         "review": "high",
         "merge": "high",
         "verify": "medium",
-        "orchestrate": "medium"
+        "orchestrate": "medium",
+        "operate": "medium"
       },
       "released": "2026-07-09",
       "sources": [
@@ -853,7 +868,8 @@
         "review": "high",
         "merge": "high",
         "verify": "medium",
-        "orchestrate": "medium"
+        "orchestrate": "medium",
+        "operate": "medium"
       },
       "released": "2026-07-09",
       "sources": [
@@ -912,7 +928,8 @@
         "review": "high",
         "merge": "high",
         "verify": "medium",
-        "orchestrate": "medium"
+        "orchestrate": "medium",
+        "operate": "medium"
       },
       "released": "2026-07-09",
       "sources": [
@@ -971,7 +988,8 @@
         "review": "high",
         "merge": "high",
         "verify": "medium",
-        "orchestrate": "medium"
+        "orchestrate": "medium",
+        "operate": "medium"
       },
       "released": "2026-04-24",
       "sources": [

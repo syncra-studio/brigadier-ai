@@ -1,4 +1,4 @@
-import { Agent, Branch, Folders, SidebarFloatingRight, SidebarRight } from "@openai/apps-sdk-ui/components/Icon";
+import { Agent, Branch, Folders, Lightbulb, SidebarFloatingRight, SidebarRight } from "@openai/apps-sdk-ui/components/Icon";
 import { type CSSProperties, createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { WorkersTab } from "@/app/conversation/Agents";
@@ -9,15 +9,19 @@ import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { isRightSidebarKey, rightSidebarFolds, rightSidebarToggleLabel, type RightSidebarTab, selectRightSidebarTab, setRightSidebarOpen, useRightSidebarState } from "@/state/rightSidebar";
 import { useApp } from "@/state/store";
+import { usePlanTab } from "@/state/planDoc";
 import { CHAT_TAB, useSessionTabs } from "@/state/sessionTabs";
 
 const FilesTab = lazy(() => import("@/app/conversation/FilesTab").then((m) => ({ default: m.FilesTab })));
 const SourcePanel = lazy(() => import("@/app/conversation/SourcePanel").then((m) => ({ default: m.SourcePanel })));
+const PlanTab = lazy(() => import("@/app/conversation/PlanTab").then((m) => ({ default: m.PlanTab })));
 const TABS = [
   { id: "files", title: "Files", Icon: Folders },
   { id: "source", title: "Source", Icon: Branch },
   { id: "workers", title: "Workers", Icon: Agent },
 ] as const;
+/** Plan joins the tabs once a plan has been opened in it, from its card or the context card. */
+const WITH_PLAN = [...TABS, { id: "plan", title: "Plan", Icon: Lightbulb }] as const;
 
 export function useRightSidebar(conversationId: string | null, enabled: boolean) {
   const left = useSidebar();
@@ -113,6 +117,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
   const panel = useContext(RightSidebarContext);
   const content = useRef<HTMLDivElement>(null);
   const column = useRef<HTMLDivElement>(null);
+  const tabs: readonly (typeof WITH_PLAN)[number][] = usePlanTab((s) => s.shown[conversationId] !== undefined) ? WITH_PLAN : TABS;
   useLayoutEffect(() => {
     const element = column.current;
     const left = element?.closest<HTMLElement>('[data-slot="sidebar-wrapper"]');
@@ -150,7 +155,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
         <div ref={content} className="right-sidebar-panel-width flex h-full flex-col">
           <div role="tablist" aria-label="Right sidebar" data-tauri-drag-region className="h-titlebar flex shrink-0 items-center gap-1 ps-2 pe-icon-button-lg">
             <TitlebarTips>
-              {TABS.map(({ id, title, Icon }, index) => (
+              {tabs.map(({ id, title, Icon }, index) => (
                 <TitlebarButton
                   key={id}
                   role="tab"
@@ -162,12 +167,12 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
                   tooltip={title}
                   onClick={() => panel.selectTab(id)}
                   onKeyDown={(event) => {
-                    const next = event.key === "ArrowRight" ? (index + 1) % TABS.length
-                      : event.key === "ArrowLeft" ? (index + TABS.length - 1) % TABS.length
-                        : event.key === "Home" ? 0 : event.key === "End" ? TABS.length - 1 : null;
+                    const next = event.key === "ArrowRight" ? (index + 1) % tabs.length
+                      : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length
+                        : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : null;
                     if (next === null) return;
                     event.preventDefault();
-                    const tab = TABS[next]!;
+                    const tab = tabs[next]!;
                     panel.selectTab(tab.id);
                     document.getElementById(`right-sidebar-${tab.id}`)?.focus();
                   }}
@@ -190,6 +195,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
             {mounted && <Suspense fallback={null}>
               {panel.active === "files" ? <FilesTab conversationId={conversationId} searchRequest={panel.searchRequest} onSearchHandled={panel.searchHandled} replaceTabId={panel.filePlaceholder} onFileOpened={panel.fileOpened} />
                 : panel.active === "source" ? <SourcePanel conversationId={conversationId} />
+                  : panel.active === "plan" ? <PlanTab conversationId={conversationId} />
                   : <WorkersTab conversationId={conversationId} />}
             </Suspense>}
           </div>

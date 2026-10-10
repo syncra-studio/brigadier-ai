@@ -8,6 +8,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+brigadier-computer.workspace = true
+base64.workspace = true
 brigadier-core.workspace = true
 rmcp = { version = "3.4.1", default-features = false, features = ["server"] }
 schemars.workspace = true

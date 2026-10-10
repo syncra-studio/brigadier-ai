@@ -100,6 +100,7 @@ const plans: Plan[] = states.map((item, index) => ({
   requestId: null,
   position: index,
   title: "Windows support",
+  body: null,
   state: item.state,
   createdAtMs: now,
   decidedAtMs: null,

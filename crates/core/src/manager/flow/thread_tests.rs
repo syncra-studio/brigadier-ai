@@ -403,7 +403,7 @@ async fn the_threads_plan_review_runs_in_the_background() {
 }
 
 /// Commits a file in the thread's workspace, as the thread's own tiny edit would.
-fn commit_in_workspace(turn: &Turn, file: &str, text: &str, message: &str) -> String {
+pub(super) fn commit_in_workspace(turn: &Turn, file: &str, text: &str, message: &str) -> String {
     let workspace = &turn.add_dirs[0];
     std::fs::write(workspace.join(file), text).unwrap();
     git(workspace, &["add", file]);
@@ -527,8 +527,7 @@ async fn a_thread_commit_before_a_landing_in_the_same_turn_is_reviewed_on_its_ow
                         let landed = turn.call("land_phase", json!({"task": "task-1"})).await;
                         assert!(!landed.is_error, "{}", landed.text);
                         assert!(landed.text.contains("rebased"), "{}", landed.text);
-                        let deadline =
-                            std::time::Instant::now() + std::time::Duration::from_secs(30);
+                        let deadline = std::time::Instant::now() + super::PATIENCE;
                         loop {
                             let tasks = turn.call("list_tasks", json!({})).await;
                             if tasks.text.contains("Landed") {
@@ -717,11 +716,23 @@ async fn a_merge_counts_the_review_of_the_threads_own_commit() {
 /// since it would keep its old rules: it starts over from the transcript with the current ones.
 #[tokio::test]
 async fn a_thread_started_on_older_instructions_starts_over_instead_of_resuming() {
+    starts_over_on_older_instructions(ProviderKind::Claude).await;
+}
+
+#[tokio::test]
+async fn a_codex_thread_started_on_older_instructions_starts_over_instead_of_resuming() {
+    starts_over_on_older_instructions(ProviderKind::Codex).await;
+}
+
+async fn starts_over_on_older_instructions(thread: ProviderKind) {
     let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
     let log = inputs.clone();
     let mut flow = Flow::start(
-        "thread-old-role",
-        Options::default(),
+        &format!("thread-old-role-{thread:?}"),
+        Options {
+            thread,
+            ..Options::default()
+        },
         script(move |turn| {
             let log = log.clone();
             async move {
@@ -773,6 +784,15 @@ async fn a_thread_started_on_older_instructions_starts_over_instead_of_resuming(
         .clone()
         .unwrap();
     assert!(rules.contains("started in one batch"), "{rules}");
+    assert!(
+        rules.contains("Interview the user when they invite questions"),
+        "{rules}"
+    );
+    assert!(rules.contains("propose_merge, propose_plan"), "{rules}");
+    assert!(
+        specs.iter().all(|(provider, _)| *provider == thread),
+        "{specs:#?}"
+    );
     // Its new start is logged on the thread's contract: the next restart resumes it.
     flow.restart().await;
     flow.say("Third.").await;
@@ -1270,7 +1290,7 @@ async fn finish(turn: &Turn, words: &str, replies: &MergeReplies) -> bool {
     !reply.is_error
 }
 
-fn on_main(flow: &Flow, path: &str) -> bool {
+pub(super) fn on_main(flow: &Flow, path: &str) -> bool {
     std::process::Command::new("git")
         .args(["cat-file", "-e", &format!("main:{path}")])
         .current_dir(&flow.repo)

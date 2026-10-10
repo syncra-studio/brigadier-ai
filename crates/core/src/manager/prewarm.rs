@@ -32,16 +32,16 @@ use crate::work::{Task, TaskKind};
 use crate::{Error, Result};
 
 /// How long an unused pre-warm is kept.
-#[cfg(not(test))]
-pub(crate) const PREWARM_TTL: Duration = Duration::from_secs(10 * 60);
-#[cfg(test)]
-pub(crate) const PREWARM_TTL: Duration = Duration::from_secs(4);
+const PREWARM_TTL: Duration = Duration::from_secs(10 * 60);
 
 /// The sessions' pre-warms: the one each session may still use, and those a new task took and
 /// its worker hasn't started from yet.
 #[derive(Default)]
 pub(crate) struct Prewarms {
     inner: std::sync::Mutex<PrewarmState>,
+    /// Ends every unused pre-warm's life at once, as if it had reached [`PREWARM_TTL`].
+    #[cfg(test)]
+    expired: CancellationToken,
 }
 
 #[derive(Default)]
@@ -86,6 +86,25 @@ impl Prewarms {
     /// Whether task `id` took a pre-warm its worker hasn't started from yet.
     pub(crate) fn took(&self, id: &TaskId) -> bool {
         self.lock().claimed.contains_key(id)
+    }
+
+    /// Waits out an unused pre-warm's life.
+    async fn unused_for_ttl(&self) {
+        #[cfg(test)]
+        let expired = self.expired.cancelled();
+        #[cfg(not(test))]
+        let expired = std::future::pending::<()>();
+        tokio::select! {
+            () = tokio::time::sleep(PREWARM_TTL) => {}
+            () = expired => {}
+        }
+    }
+
+    /// Every unused pre-warm reaches the end of its life now, and each one made later as soon
+    /// as it is made.
+    #[cfg(all(test, unix))]
+    pub(crate) fn expire(&self) {
+        self.expired.cancel();
     }
 }
 
@@ -158,7 +177,7 @@ impl SessionManager {
                 manager.drop_prewarm_if(&id, &slot, "it could not be made");
                 return;
             }
-            tokio::time::sleep(PREWARM_TTL).await;
+            manager.prewarms.unused_for_ttl().await;
             manager.drop_prewarm_if(&id, &slot, "unused for 10 minutes");
         });
     }

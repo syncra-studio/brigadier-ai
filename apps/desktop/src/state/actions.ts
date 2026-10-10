@@ -41,7 +41,9 @@ import {
   updateBoard,
   useBoard,
   WORKER_ENTRIES,
+  withAction,
   workingRequest,
+  type ComputerLog,
   type WorkerTranscript,
 } from "@/state/board";
 import {
@@ -683,12 +685,13 @@ export async function answerCard(
   await request({ method: "answerCard", conversationId, cardId, decision });
 }
 
+/** Answers a question card: one answer per question of its round. */
 export async function answerQuestion(
   conversationId: string,
   cardId: string,
-  answer: string,
+  answers: string[],
 ): Promise<void> {
-  await request({ method: "answerQuestion", conversationId, cardId, answer });
+  await request({ method: "answerQuestion", conversationId, cardId, answers });
 }
 
 export async function decidePlan(
@@ -798,11 +801,6 @@ export async function restoreKeptWork(taskId: string): Promise<RestoreOutcome> {
   return outcome;
 }
 
-/** The user did something only they could do ("Waiting on you"); the orchestrator hears it. */
-export async function resolveWaiting(conversationId: string, id: string): Promise<void> {
-  await request({ method: "resolveWaiting", conversationId, id });
-}
-
 export async function readArtifact(id: string, offset: number, limit: number) {
   const { text } = await request({ method: "readArtifact", id, offset, limit });
   return text;
@@ -885,6 +883,63 @@ export async function loadEarlierWorkerEntries(
     updateWorkerTranscript(conversationId, taskId, (current) => ({ ...current, loading: false }));
     throw error;
   }
+}
+
+/** How many of the conversation's computer actions one read covers. */
+const COMPUTER_PAGE = 500;
+
+function updateComputerLog(conversationId: string, taskId: string, update: (log: ComputerLog) => ComputerLog) {
+  updateBoard(conversationId, (board) => ({
+    ...board,
+    computer: { ...board.computer, [taskId]: update(board.computer[taskId] ?? { actions: [], earlier: null, loading: false }) },
+  }));
+}
+
+/** Reads a worker's computer actions once, for its timeline; live events keep them up. */
+export async function openComputerLog(conversationId: string, taskId: string): Promise<void> {
+  const board = useBoard.getState().board;
+  if (board?.conversationId !== conversationId || board.computer[taskId]) return;
+  updateComputerLog(conversationId, taskId, (log) => ({ ...log, loading: true }));
+  try {
+    const { page } = await request({ method: "listComputerActions", conversationId, taskId, before: null, limit: COMPUTER_PAGE });
+    updateComputerLog(conversationId, taskId, (log) => ({
+      actions: log.actions.reduce(withAction, page.actions),
+      earlier: page.earlier,
+      loading: false,
+    }));
+  } catch (error) {
+    // Forget it, so opening the worker again retries the read.
+    updateBoard(conversationId, (current) => {
+      const { [taskId]: _failed, ...computer } = current.computer;
+      return { ...current, computer };
+    });
+    throw error;
+  }
+}
+
+/** The worker's older computer actions, before the ones read so far. */
+export async function loadEarlierComputerActions(conversationId: string, taskId: string): Promise<void> {
+  const log = useBoard.getState().board?.computer[taskId];
+  if (!log || log.earlier === null || log.loading) return;
+  updateComputerLog(conversationId, taskId, (current) => ({ ...current, loading: true }));
+  try {
+    const { page } = await request({ method: "listComputerActions", conversationId, taskId, before: log.earlier, limit: COMPUTER_PAGE });
+    updateComputerLog(conversationId, taskId, (current) => ({
+      actions: current.actions.reduce(withAction, page.actions),
+      earlier: page.earlier,
+      loading: false,
+    }));
+  } catch (error) {
+    updateComputerLog(conversationId, taskId, (current) => ({ ...current, loading: false }));
+    throw error;
+  }
+}
+
+/** A stored image (a computer action's marked screenshot) as a blob, for an `<img>`. */
+export async function readStoredImage(hash: string): Promise<Blob> {
+  const { data } = await request({ method: "readAttachment", id: hash });
+  const binary = atob(data);
+  return new Blob([Uint8Array.from(binary, (char) => char.charCodeAt(0))], { type: "image/png" });
 }
 
 // ----- lifecycle -------------------------------------------------------------------------

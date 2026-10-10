@@ -69,7 +69,7 @@ use crate::{Error, Result, now_ms};
 const DELTA_WINDOW: Duration = Duration::from_millis(30);
 /// The CLIs' own limit on a worker's MCP calls: as long as `ask_orchestrator` waits for its
 /// answer ([`QUESTION_TIMEOUT`]); no other worker tool waits that long.
-const WORKER_TOOL_TIMEOUT_SECS: u64 = QUESTION_TIMEOUT.as_secs();
+pub(crate) const WORKER_TOOL_TIMEOUT_SECS: u64 = QUESTION_TIMEOUT.as_secs();
 /// How long the watchdog's nudge may take to reach a silent worker's CLI.
 const NUDGE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a fix Brigadier lands waits for the worker's turn that reported it to end.
@@ -110,6 +110,8 @@ pub(crate) struct WorkerSession {
     pub allowed_models: AllowedModels,
     /// The task's worktree, if it has one.
     pub worktree: Option<PathBuf>,
+    /// The grant its Brigadier tools run under.
+    pub grant: String,
 }
 
 #[derive(Default)]
@@ -852,7 +854,7 @@ impl SessionManager {
         extra: TaskExtra,
     ) -> Result<Task> {
         self.admit()?;
-        let _fence = self.enter(conversation_id)?;
+        let fence = self.enter(conversation_id)?;
         let conversation = self.core.conversation(conversation_id)?;
         if !matches!(conversation.setup, Some(Setup::Session { .. })) {
             return Err(Error::Invalid("tasks belong to a session".into()));
@@ -927,7 +929,7 @@ impl SessionManager {
                 category,
                 areas: &areas,
                 floor,
-                needs: needs_of(&attachments, &needs),
+                needs: needs_of(kind, &attachments, &needs),
                 pin: pin.clone(),
                 hold_pin: false,
                 avoid,
@@ -1065,6 +1067,8 @@ impl SessionManager {
                 .map(|wait| format!("Waiting for quota: {}", wait.reason)),
             quota_wait: wait,
             subject: subject.as_ref().map(|task| task.id.clone()),
+            target: extra.target,
+            end_state: extra.end_state,
             plan: None,
             attachments,
             workspace: None,
@@ -1092,6 +1096,14 @@ impl SessionManager {
             task: Box::new(task.clone()),
         }];
         events.extend(worker_step(&task, None, false));
+        // A cleanup that stopped waiting for this has already passed the session's tasks (it
+        // may have been restored since): the task isn't made.
+        if fence.cut_off() {
+            if prewarmed.is_some() {
+                self.release_prewarm(&task.id);
+            }
+            return Err(super::closing::closing_error());
+        }
         if let Err(err) = self.core.record_conversation(conversation_id, events).await {
             if prewarmed.is_some() {
                 self.release_prewarm(&task.id);
@@ -1209,19 +1221,19 @@ impl SessionManager {
         }
         // Held until its CLI session is registered, where the session's cleanup finds it.
         let launched = match self.enter(&task.conversation_id) {
-            Ok(_fence) => {
-                self.launch_admitted(live, task, subject, origin, first)
-                    .await
+            Ok(fence) => {
+                let launched = self
+                    .launch_admitted(live, task, subject, origin, first, &fence)
+                    .await;
+                // A cleanup that stopped waiting for it has already passed this task.
+                if launched.is_ok() && fence.cut_off() {
+                    live.close_cli().await;
+                    Err(super::closing::closing_error())
+                } else {
+                    launched
+                }
             }
             Err(err) => Err(err),
-        };
-        // A cleanup that stopped waiting for this launch has already passed this task.
-        let launched = match launched {
-            Ok(()) if self.is_closing(&task.conversation_id) => {
-                live.close_cli().await;
-                Err(super::closing::closing_error())
-            }
-            launched => launched,
         };
         if launched.is_err() {
             self.release_run_task(&task.id);
@@ -1401,6 +1413,37 @@ impl SessionManager {
         );
         // B7: the grant is a secret too.
         secret_values.push(worker_grant.clone());
+        let mut mcp_servers =
+            vec![self.brigadier_server(worker_grant.clone(), WORKER_TOOL_TIMEOUT_SECS, true)];
+        let mut env = worker_env(&workspace.scratch);
+        // Computer use (COMPUTER-USE-PLAN.md §4.6): its own grant, which can call the computer
+        // tools and nothing else, for the `computer` server and `brigadierd computer`.
+        if cfg!(target_os = "macos") {
+            let computer_grant = self.grants.issue(
+                grant_owner,
+                Role::Computer {
+                    conversation_id: conversation_id.clone(),
+                    task_id: task.id.clone(),
+                },
+            );
+            secret_values.push(computer_grant.clone());
+            env.push((super::computer::GRANT_ENV.into(), computer_grant.clone()));
+            env.extend([
+                (
+                    "BRIGADIER_COMPUTER_DATA_DIR".into(),
+                    self.data_dir.to_string_lossy().into_owned(),
+                ),
+                (
+                    "BRIGADIER_COMPUTER_CLI".into(),
+                    self.config.daemon_exe.to_string_lossy().into_owned(),
+                ),
+            ]);
+            mcp_servers.push(self.computer_server(
+                computer_grant,
+                WORKER_TOOL_TIMEOUT_SECS,
+                task.kind == TaskKind::Operate,
+            ));
+        }
         let redactor = secrets::redactor(secret_values);
         let allowed_models = self.allowed_models(task).await;
         let spec = SessionSpec {
@@ -1411,13 +1454,13 @@ impl SessionManager {
             origin,
             access: access.clone(),
             append_system_prompt: Some(prompt),
-            mcp_servers: vec![self.brigadier_server(worker_grant, WORKER_TOOL_TIMEOUT_SECS, true)],
+            mcp_servers,
             tools: ToolSet::Lean,
             add_dirs: match (&home, &workspace.worktree) {
                 (Some(_), Some(worktree)) => vec![worktree.clone()],
                 _ => Vec::new(),
             },
-            env: worker_env(&workspace.scratch),
+            env,
             unset_env: Vec::new(),
             low_priority: true,
             record_to: None,
@@ -1438,6 +1481,7 @@ impl SessionManager {
             redactor,
             allowed_models,
             worktree,
+            grant: worker_grant,
         })
     }
 
@@ -1449,6 +1493,7 @@ impl SessionManager {
         subject: Option<&Task>,
         origin: Origin,
         first: TurnInput,
+        fence: &super::closing::WorkGuard,
     ) -> Result<()> {
         let conversation_id = task.conversation_id.clone();
         let owner = format!("task:{}", task.id);
@@ -1469,6 +1514,7 @@ impl SessionManager {
             outputs,
             redactor,
             allowed_models,
+            grant,
             ..
         } = self
             .worker_session(task, subject, origin, Some(&mut first), &owner)
@@ -1483,6 +1529,16 @@ impl SessionManager {
                     return Err(err);
                 }
             };
+        // A cleanup that stopped waiting for this start has already ended the task (its
+        // session may have been restored since, and the task launched again): this session
+        // ends unused, and only what it made goes.
+        if fence.cut_off() {
+            let native_id = session.native_id();
+            session.close().await;
+            self.grants.revoke(&[grant]);
+            self.release_session_files(&owner, &native_id).await;
+            return Err(super::closing::closing_error());
+        }
         let cli = Arc::new(Cli {
             provider,
             meter: TokenMeter::new(continues).on_account(account.account.clone()),
@@ -2858,6 +2914,15 @@ impl SessionManager {
         if let Some(message) = self.keep_last_message(&live, task.number).await {
             artifacts.push(message);
         }
+        // An operate worker's actions on the desktop, read from the action log rather than
+        // its own account, and its last screenshot.
+        let computer = if task.kind == TaskKind::Operate {
+            let (line, screenshot) = self.computer_report(conversation_id, &task).await;
+            artifacts.extend(screenshot);
+            Some(line)
+        } else {
+            None
+        };
         let outputs = files.outputs;
         // A gate member's report goes to its gate, not to the orchestrator.
         let reviewing = task.gate_link.is_some();
@@ -2924,6 +2989,9 @@ impl SessionManager {
             let mut shown = task.clone();
             reported(&mut shown);
             let mut text = prompts::report_envelope(&shown, &report, &route_label(&shown));
+            if let Some(line) = &computer {
+                text.push_str(&format!("\n{line}"));
+            }
             if unchanged {
                 text.push_str(&format!(
                     "\n[nothing to land task-{}] It changed no files, so it is done; there is nothing to land.",
@@ -3872,6 +3940,7 @@ impl SessionManager {
         self.task_ended_waiting(task, state).await;
         let owner = format!("task:{}", task.id);
         self.grants.revoke_owner(&owner);
+        self.computer.end_worker(&task.id).await;
         let leftovers = self.runtime.ledger().dispose(&owner).await;
         if !leftovers.is_clean() {
             tracing::warn!(task = %task.id, ?leftovers, "some of the task's leftovers will be retried at the next launch");
@@ -4026,15 +4095,18 @@ impl SessionManager {
     }
 }
 
-/// What a task needs from its model: its attachments, and the capabilities it asked for.
+/// What a task needs from its model: its attachments, the capabilities it asked for, and what
+/// its kind takes (an operator looks at the screen, so only a model that reads images can).
 pub(crate) fn needs_of(
+    kind: TaskKind,
     attachments: &[AttachmentRef],
     capabilities: &[brigadier_router::Capability],
 ) -> brigadier_router::Needs {
     brigadier_router::Needs {
-        image_input: attachments
-            .iter()
-            .any(|attachment| attachment.mime.starts_with("image/")),
+        image_input: kind == TaskKind::Operate
+            || attachments
+                .iter()
+                .any(|attachment| attachment.mime.starts_with("image/")),
         image_generation: capabilities.contains(&brigadier_router::Capability::ImageGeneration),
         context_tokens: None,
     }
@@ -4058,6 +4130,9 @@ pub(crate) struct TaskExtra {
     pub role: Option<WorkerRole>,
     /// The phase of the request's plan it works on.
     pub phase: Option<u32>,
+    /// An operate task's target and end state.
+    pub target: Option<String>,
+    pub end_state: Option<String>,
 }
 
 pub(crate) fn category(kind: TaskKind) -> brigadier_router::TaskCategory {
@@ -4069,6 +4144,7 @@ pub(crate) fn category(kind: TaskKind) -> brigadier_router::TaskCategory {
         TaskKind::Review => TaskCategory::Review,
         TaskKind::Merge => TaskCategory::Merge,
         TaskKind::Verify => TaskCategory::Verify,
+        TaskKind::Operate => TaskCategory::Operate,
     }
 }
 
@@ -4196,7 +4272,7 @@ fn stopped_state(task: &Task) -> TaskState {
 pub(crate) fn access_for(kind: TaskKind, permission: PermissionLevel) -> WorkerAccess {
     WorkerAccess {
         repo: match kind {
-            TaskKind::Research => RepoAccess::None,
+            TaskKind::Research | TaskKind::Operate => RepoAccess::None,
             TaskKind::Implement | TaskKind::Merge => RepoAccess::Write,
             TaskKind::Scout | TaskKind::Review | TaskKind::Verify => RepoAccess::Read,
         },
@@ -4583,6 +4659,22 @@ mod tests {
                 .contains(&PathBuf::from("packed-refs.lock"))
         );
         assert_eq!(roots(&main, ProviderKind::Codex), vec![PathBuf::new()]);
+    }
+
+    #[test]
+    fn an_operator_needs_a_model_that_takes_images_and_no_checkout() {
+        assert!(needs_of(TaskKind::Operate, &[], &[]).image_input);
+        assert!(!needs_of(TaskKind::Research, &[], &[]).image_input);
+        assert_eq!(
+            category(TaskKind::Operate),
+            brigadier_router::TaskCategory::Operate
+        );
+        for permission in [PermissionLevel::AskForApproval, PermissionLevel::FullAccess] {
+            assert_eq!(
+                access_for(TaskKind::Operate, permission).repo,
+                RepoAccess::None
+            );
+        }
     }
 
     #[test]

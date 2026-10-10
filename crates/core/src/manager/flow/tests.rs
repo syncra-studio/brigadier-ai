@@ -99,7 +99,7 @@ async fn a_real_store_is_cleared_on_the_first_start() {
         1,
         "only the session made after the first start"
     );
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
+    let deadline = tokio::time::Instant::now() + super::PATIENCE;
     while flow.core.catalog().conversations.len() > 1 {
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -218,7 +218,7 @@ async fn an_outline_gets_its_go_ahead_at_once_and_a_plan_review_in_the_backgroun
     .await;
     flow.say("Rework the parser.").await;
     reviews_ended(&flow, 1).await;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + super::PATIENCE;
     while !heard
         .lock()
         .unwrap()
@@ -618,16 +618,23 @@ async fn a_review_still_running_at_the_merge_reports_its_findings_after_it() {
     )
     .await;
     flow.say("Add a greeting file and merge it.").await;
-    let repo = flow.repo.clone();
+    // The merge's step, recorded once its answer has read the review's state (the merge is in
+    // `main` a moment before that).
     let board = flow
-        .until("the merge", |_| {
-            std::process::Command::new("git")
-                .args(["cat-file", "-e", "main:hello.txt"])
-                .current_dir(&repo)
-                .status()
-                .is_ok_and(|status| status.success())
+        .until("the merge", |board| {
+            board
+                .orchestrator_steps
+                .iter()
+                .any(|step| matches!(step.kind, crate::work::OrchestratorStepKind::Merged { .. }))
         })
         .await;
+    assert!(
+        std::process::Command::new("git")
+            .args(["cat-file", "-e", "main:hello.txt"])
+            .current_dir(&flow.repo)
+            .status()
+            .is_ok_and(|status| status.success())
+    );
     assert_eq!(board.reviews.len(), 1);
     assert_eq!(
         board.reviews.values().next().unwrap().state,
@@ -1417,6 +1424,78 @@ async fn archiving_a_session_ends_its_running_review() {
     );
     flow.until("the review's checkout to go", |_| !dir.exists())
         .await;
+    flow.stop().await;
+}
+
+/// A worker's launch that outlasted an archive's wait ends once it gets through, and what it
+/// recorded after the archive ended its task goes with it.
+#[tokio::test]
+async fn a_workers_launch_cut_off_by_an_archive_leaves_nothing_behind() {
+    let behavior = Arc::new(super::FakeBehavior {
+        cleanup: true,
+        ..Default::default()
+    });
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let hold = (behavior.clone(), reached.clone(), release.clone());
+    let flow = Flow::start(
+        "archived-mid-launch",
+        Options {
+            behavior: behavior.clone(),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let hold = hold.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    return Reply::text("Reported.");
+                }
+                // The worker's start is held.
+                *hold.0.hold_start.lock().unwrap() = Some((hold.1.clone(), hold.2.clone()));
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"effort": "high", "title": "Look around", "kind": "scout", "spec": "List the files."}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+    *flow.manager.closing.drain_wait.lock().unwrap() = Some(std::time::Duration::ZERO);
+    flow.say("Look around.").await;
+    reached.notified().await;
+    let task = flow.board().await.tasks.keys().next().unwrap().clone();
+    flow.manager
+        .archive(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.manager.cleanup_finished(&flow.conversation).await;
+    assert!(flow.board().await.tasks[&task].state.is_final());
+    release.notify_one();
+    flow.manager.drained(&flow.conversation).await;
+    let owner = format!("task:{task}");
+    assert_eq!(
+        flow.manager.runtime.ledger().artifacts(&owner),
+        vec![],
+        "the late launch's session went"
+    );
+    assert!(
+        flow.board().await.tasks[&task].state.is_final(),
+        "the archive's end of the task stands"
+    );
+    super::eventually("the archive's cleanup to finish", || {
+        !flow
+            .core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .cleanup_pending
+    })
+    .await;
     flow.stop().await;
 }
 

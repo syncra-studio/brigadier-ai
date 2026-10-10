@@ -27,13 +27,14 @@ use brigadier_git::{
     PrepareOutcome, SeriesOutcome, litter,
 };
 
+use super::cards::{merge_chosen, merge_label};
 use super::conversation::Envelope;
 use super::workers::Workspace;
 use super::{SessionManager, blocking, git_error, merge_consent};
 use crate::model::{ConversationId, Environment, MessageRole, Setup};
 use crate::work::{
     DecisionKind, DecisionSource, DiffStat, ExcludedFile, FileStat, InjectionKind,
-    OrchestratorStepKind, PhaseStage, Task, TaskState,
+    OrchestratorStepKind, PhaseStage, QuestionItem, QuestionKind, QuestionOption, Task, TaskState,
 };
 use crate::{Error, Result};
 
@@ -1044,8 +1045,118 @@ impl SessionManager {
         Ok(run)
     }
 
-    /// `finish_session`: merges the session branch into its base, when the user's latest message
-    /// asks for it (`user_words`, quoted from it; [`merge_consent`]). No card: the user said so.
+    /// `propose_merge`: asks the user once, on a card, whether to merge the session branch into
+    /// its base. A second card is refused while one is open, after "Merge" (finish_session is
+    /// what's next), or after "Not yet" until the user writes again.
+    pub(crate) async fn propose_merge(
+        &self,
+        id: &ConversationId,
+        note: Option<String>,
+    ) -> Result<String> {
+        if self.overnight.active.get(id).is_some() {
+            return Err(Error::Invalid(
+                "An overnight run is going in this session: its verified work merges by the user's Merge on the run's card, in the morning.".into(),
+            ));
+        }
+        let Some(Setup::Session {
+            environment: Environment::NewWorktree { base, branch, .. },
+            ..
+        }) = self.core.conversation(id)?.setup
+        else {
+            return Err(Error::Invalid(
+                "this session works on a local checkout: its commits are already on the picked branch, and there is nothing to merge".into(),
+            ));
+        };
+        let board = self.core.board(id).await?;
+        let latest = self.latest_user_message_at(id, &board).await?;
+        let cards: Vec<_> = board
+            .questions
+            .values()
+            .filter(|question| matches!(&question.kind, QuestionKind::Merge { .. }))
+            .collect();
+        if cards.iter().any(|card| card.is_open()) {
+            return Err(Error::Invalid(
+                "A merge card is already open: wait for the user's answer, which arrives as a message.".into(),
+            ));
+        }
+        // A card withdrawn (its request was edited) has no answer and doesn't count.
+        let since = |card: &&crate::work::Question| {
+            card.answer.is_some()
+                && card
+                    .answered_at_ms
+                    .is_some_and(|answered| latest.is_none_or(|latest| answered >= latest))
+        };
+        if let Some(card) = cards
+            .iter()
+            .copied()
+            .filter(since)
+            .max_by_key(|card| card.answered_at_ms)
+        {
+            let merge = card
+                .answer
+                .as_deref()
+                .is_some_and(|answer| merge_chosen(answer, &base));
+            let used = board.orchestrator_steps.iter().any(|step| {
+                matches!(&step.kind, OrchestratorStepKind::Merged { asked_in: Some(asked), .. } if *asked == card.id.to_string())
+            });
+            if merge && !used {
+                return Err(Error::Invalid(
+                    "The user already chose \"Merge\" on the card: call finish_session, without user_words.".into(),
+                ));
+            }
+            if !merge {
+                return Err(Error::Invalid(
+                    "The user answered \"Not yet\" on the merge card and hasn't written since: don't ask again until they bring it up.".into(),
+                ));
+            }
+        }
+        let note = note
+            .map(|line| line.trim().to_owned())
+            .filter(|line| !line.is_empty());
+        let item = QuestionItem {
+            text: format!("Merge `{branch}` into `{base}`?"),
+            options: vec![
+                QuestionOption {
+                    label: merge_label(&base),
+                    description: note,
+                },
+                QuestionOption {
+                    label: "Not yet".into(),
+                    description: Some(format!("The work stays on `{branch}`.")),
+                },
+            ],
+            recommended: None,
+        };
+        let kind = QuestionKind::Merge {
+            branch: branch.clone(),
+            base: base.clone(),
+        };
+        self.open_round(id, None, kind, vec![item]).await?;
+        Ok(format!(
+            "Asked the user whether to merge `{branch}` into `{base}`. The card shows under your final answer: write it now, unless you already did. The answer arrives as an [answer] message."
+        ))
+    }
+
+    /// When the user last wrote on the branch shown, if ever.
+    async fn latest_user_message_at(
+        &self,
+        id: &ConversationId,
+        board: &crate::board::Board,
+    ) -> Result<Option<i64>> {
+        let messages = match &board.head {
+            Some((head, _)) => self.core.branch(id, head).await?,
+            None => self.core.all_messages(id).await?,
+        };
+        Ok(messages
+            .iter()
+            .rev()
+            .find(|message| message.role == MessageRole::User)
+            .map(|message| message.created_at_ms))
+    }
+
+    /// `finish_session`: merges the session branch into its base once the user consented: on the
+    /// thread's merge card, or in their latest message's words (`user_words`, quoted from it;
+    /// [`merge_consent`]).
     pub(crate) async fn finish_session(
         &self,
         id: &ConversationId,
@@ -1191,7 +1302,25 @@ impl SessionManager {
             }
         };
         let reviews = match self.core.board(id).await {
-            Ok(board) => merged_reviews(&board),
+            Ok(board) => {
+                // A merge card the user left open (they asked in words instead) has nothing
+                // left to ask: it goes, so its request doesn't wait on it.
+                let open: Vec<_> = board
+                    .questions
+                    .values()
+                    .filter(|question| {
+                        question.is_open() && matches!(&question.kind, QuestionKind::Merge { .. })
+                    })
+                    .cloned()
+                    .collect();
+                for question in &open {
+                    self.withdraw_question(question).await;
+                }
+                if !open.is_empty() {
+                    self.settle_requests(id).await;
+                }
+                merged_reviews(&board)
+            }
             Err(_) => String::new(),
         };
         self.orchestrator_step(
@@ -1227,7 +1356,7 @@ impl SessionManager {
     ) -> Result<String> {
         let refuse = |why: String| {
             Error::Invalid(format!(
-                "[not merged] {why}. Nothing was merged. Merge only when the user's latest message asks for it: propose it in your reply, as a question that names `{base}`, and wait for their answer."
+                "[not merged] {why}. Nothing was merged. Merge only once the user consents: ask with propose_merge and wait for their answer, or when their latest message asks for it in words."
             ))
         };
         let board = self.core.board(id).await?;
@@ -1235,29 +1364,73 @@ impl SessionManager {
             Some((head, _)) => self.core.branch(id, head).await?,
             None => self.core.all_messages(id).await?,
         };
-        let Some(at) = messages
+        let at = messages
             .iter()
-            .rposition(|message| message.role == MessageRole::User)
-        else {
+            .rposition(|message| message.role == MessageRole::User);
+        let latest = at.map(|at| &messages[at]);
+        let wrote_since = |since: i64| {
+            board
+                .queue
+                .items
+                .iter()
+                .any(|item| item.queued_at_ms.max(item.edited_at_ms.unwrap_or(0)) >= since)
+        };
+        let used = |asked: &str| {
+            board.orchestrator_steps.iter().any(|step| {
+                matches!(&step.kind, OrchestratorStepKind::Merged { asked_in: Some(done), .. } if done == asked)
+            })
+        };
+        // The user's latest answer on a merge card, after their latest message, decides: its
+        // "Merge" is consent, anything else revokes what their message said.
+        let card = board
+            .questions
+            .values()
+            .filter(|question| {
+                matches!(&question.kind, QuestionKind::Merge { branch: b, base: a } if b == branch && a == base)
+                    && question.answer.is_some()
+            })
+            .max_by_key(|question| question.answered_at_ms);
+        if let Some(card) = card
+            && let Some(answered) = card.answered_at_ms
+            && latest.is_none_or(|latest| answered >= latest.created_at_ms)
+        {
+            if !card
+                .answer
+                .as_deref()
+                .is_some_and(|answer| merge_chosen(answer, base))
+            {
+                return Err(refuse(
+                    "the user answered \"Not yet\" on the merge card after their latest message; don't ask again until they bring it up".into(),
+                ));
+            }
+            let asked = card.id.to_string();
+            if used(&asked) {
+                return Err(refuse(
+                    "the user's Merge on the card was already used for a merge; another merge needs their fresh consent".into(),
+                ));
+            }
+            if wrote_since(answered) {
+                return Err(refuse(
+                    "the user wrote again since (it waits in the queue): read it first".into(),
+                ));
+            }
+            return Ok(asked);
+        }
+        let Some(latest) = latest else {
             return Err(refuse("the user hasn't written anything".into()));
         };
-        let latest = &messages[at];
-        if board.queue.items.iter().any(|item| {
-            item.queued_at_ms.max(item.edited_at_ms.unwrap_or(0)) >= latest.created_at_ms
-        }) {
+        if wrote_since(latest.created_at_ms) {
             return Err(refuse(
                 "the user wrote again since (it waits in the queue): read it first".into(),
             ));
         }
-        if board.orchestrator_steps.iter().any(|step| {
-            matches!(&step.kind, OrchestratorStepKind::Merged { asked_in: Some(asked), .. } if *asked == latest.id)
-        }) {
+        if used(&latest.id) {
             return Err(refuse(
                 "the user's latest message already asked for a merge, and it is done; another merge needs their fresh words".into(),
             ));
         }
         let before = at
-            .checked_sub(1)
+            .and_then(|at| at.checked_sub(1))
             .map(|before| &messages[before])
             .filter(|message| message.role == MessageRole::Assistant)
             .map(|message| message.text.as_str());

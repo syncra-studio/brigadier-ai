@@ -241,7 +241,7 @@ impl MachineGuard {
     }
 
     /// Stands in for the OS from now on (tests).
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     pub(crate) fn fake(&self, load: MachineLoad) {
         *self.fake.lock().unwrap_or_else(|p| p.into_inner()) = Some(load);
         self.read();
@@ -568,14 +568,20 @@ mod tests {
         (child, cargo)
     }
 
+    /// How long a process the test started may take to get where it waits for. Only a hang
+    /// takes this long: a process starting, stopping or going on is quick on a calm machine,
+    /// but each step is many times slower on one loaded far past its cores.
+    const PATIENCE: Duration = Duration::from_secs(300);
+
     fn wait_for<T>(mut found: impl FnMut() -> Option<T>) -> T {
-        for _ in 0..100 {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
             if let Some(value) = found() {
                 return value;
             }
+            assert!(Instant::now() < deadline, "timed out");
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        panic!("timed out");
     }
 
     #[test]
@@ -713,25 +719,28 @@ mod tests {
         memory_tight: false,
     };
 
-    /// Whether `pid` shows as stopped within a few seconds: a stop lands when the process is
-    /// next scheduled, which a loaded machine can put a moment after the signal.
+    /// Whether `pid` shows as stopped: a stop lands when the process is next scheduled, which a
+    /// loaded machine can put a while after the signal.
     fn stopped(pid: u32) -> bool {
         settles(pid, |state| state.starts_with('T'))
     }
 
-    /// Whether `pid` shows as alive and not stopped within a few seconds.
+    /// Whether `pid` shows as alive and not stopped.
     fn running(pid: u32) -> bool {
         settles(pid, |state| !state.is_empty() && !state.starts_with('T'))
     }
 
     fn settles(pid: u32, ok: impl Fn(&str) -> bool) -> bool {
-        for _ in 0..100 {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
             if ok(&state(pid)) {
                 return true;
             }
+            if Instant::now() >= deadline {
+                return false;
+            }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        false
     }
 
     fn end(platform: &dyn Platform, mut worker: Child) {
@@ -749,6 +758,8 @@ mod tests {
             platform.clone(),
             dir.path().join("stopped.json"),
         ));
+        // Calm, whatever the host's heat or memory pressure now.
+        watch.guard.fake(MachineLoad::default());
         let t0 = Instant::now();
         // A build runs while the machine is calm.
         let (first, _) = worker_with_build(&dir.path().join("a"));
@@ -813,6 +824,8 @@ mod tests {
         let platform = platform(dir.path());
         let file = dir.path().join("stopped.json");
         let watch = MachineWatch::new(platform.clone(), file.clone());
+        // Calm, whatever the host's heat or memory pressure now.
+        watch.guard.fake(MachineLoad::default());
         let t0 = Instant::now();
         let (worker, _) = worker_with_build(dir.path());
         let cli = proc_of(&*platform, worker.id()).unwrap();

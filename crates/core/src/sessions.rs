@@ -11,10 +11,10 @@ use ts_rs::TS;
 
 use crate::board::{self, Board};
 use crate::model::{
-    Catalog, ContextUsage, Conversation, ConversationId, ConversationKind, ConversationView,
-    DomainEvent, EnvironmentKind, ForkOrigin, Lifecycle, Message, MessagePage, MessageRole,
-    ModelChoice, OrchestratorLogEntry, OrchestratorPage, Project, ProjectId, ProjectPatch,
-    ProjectRepo, RawEntry, Settings, Setup, ThreadItem, WorkerPage, streams,
+    Catalog, ComputerPage, ContextUsage, Conversation, ConversationId, ConversationKind,
+    ConversationView, DomainEvent, EnvironmentKind, ForkOrigin, Lifecycle, Message, MessagePage,
+    MessageRole, ModelChoice, OrchestratorLogEntry, OrchestratorPage, Project, ProjectId,
+    ProjectPatch, ProjectRepo, RawEntry, Settings, Setup, ThreadItem, WorkerPage, streams,
 };
 use crate::projection::Projection;
 use crate::work::{
@@ -1045,6 +1045,46 @@ impl Core {
         Ok(WorkerPage { entries, has_more })
     }
 
+    /// A page of a worker's computer actions, oldest first: the conversation's action log
+    /// read back before `before` (a `streamSeq`), this worker's only. Each action's batch and
+    /// index identify it, so a page and the live events that arrive meanwhile dedupe.
+    pub async fn list_computer_actions(
+        &self,
+        id: &ConversationId,
+        task_id: &TaskId,
+        before: Option<i64>,
+        limit: u32,
+    ) -> Result<ComputerPage> {
+        self.conversation(id)?;
+        // A page counts the conversation's events, every worker's: read on past pages that hold
+        // none of this worker's, so a page with earlier ones is never empty.
+        let mut before = before;
+        loop {
+            let (events, has_more) = self
+                .read_page(streams::conversation(id), "computer.acted", before, limit)
+                .await?;
+            let earlier = has_more
+                .then(|| events.first().map(|e| e.stream_seq))
+                .flatten();
+            let actions: Vec<_> = events
+                .iter()
+                .filter_map(|event| match decode(event) {
+                    Ok(DomainEvent::ComputerActed {
+                        task_id: of,
+                        action,
+                        ..
+                    }) if &of == task_id => Some(Ok(action)),
+                    Ok(_) => None,
+                    Err(err) => Some(Err(err)),
+                })
+                .collect::<Result<_>>()?;
+            if !actions.is_empty() || earlier.is_none() {
+                return Ok(ComputerPage { actions, earlier });
+            }
+            before = earlier;
+        }
+    }
+
     /// A page of the orchestrator log, oldest first.
     pub async fn list_orchestrator_log(
         &self,
@@ -1430,6 +1470,7 @@ impl Core {
         request_id: &str,
         state: RequestState,
         quota_wait: bool,
+        card_wait: bool,
     ) -> Result<bool> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
@@ -1443,10 +1484,11 @@ impl Core {
         else {
             return Ok(false);
         };
-        if request.state == state && request.quota_wait == quota_wait {
+        let before = request.clone();
+        request.moved_to(state, quota_wait, card_wait, now_ms());
+        if request == before {
             return Ok(false);
         }
-        request.moved_to(state, quota_wait, now_ms());
         let event = DomainEvent::RequestUpdated { request };
         let stored = self
             .record(vec![(streams::conversation(id), event.clone())])
@@ -2345,6 +2387,92 @@ mod tests {
             "前[image][image][image:unknown][image:row][image:svg][Image:a][image:broken[image]後[image:unclosed"
         );
         assert_eq!(display_text(text, &[]), text);
+    }
+
+    #[tokio::test]
+    async fn a_workers_computer_actions_read_back_in_pages_and_only_its_own() {
+        let dir = std::env::temp_dir().join(format!("brigadier-cu-{}", uuid::Uuid::now_v7()));
+        let store = Store::open(brigadier_store::StoreConfig {
+            db_path: dir.join("test.db"),
+            blobs_dir: dir.join("blobs"),
+            readers: 1,
+        })
+        .unwrap();
+        let core = Core::load(store).await.unwrap();
+        let id = core
+            .create_conversation(
+                ConversationId::generate(),
+                ConversationKind::Chat,
+                None,
+                None,
+                None,
+                Origin::default(),
+            )
+            .await
+            .unwrap()
+            .id;
+        let acted = |task: &str, batch: &str, index: u32| DomainEvent::ComputerActed {
+            conversation_id: id.clone(),
+            task_id: TaskId(task.into()),
+            action: crate::work::ComputerAction {
+                batch: batch.into(),
+                index,
+                at_ms: 1,
+                kind: "click".into(),
+                app: "Fixture".into(),
+                app_window: "Target Range".into(),
+                target: Some("button \"OK\"".into()),
+                pid: 7,
+                window: 3,
+                status: "done".into(),
+                rung: Some("element".into()),
+                effect: Some("confirmed".into()),
+                error: None,
+                detail: None,
+                dispatch_ms: 2.0,
+                record: String::new(),
+                image: None,
+            },
+        };
+        let mut events = Vec::new();
+        for b in 0..3 {
+            for i in 0..2 {
+                events.push(acted("task-1", &format!("b{b}"), i));
+                events.push(acted("task-2", &format!("b{b}"), i));
+            }
+        }
+        core.record_conversation(&id, events).await.unwrap();
+        let mine = |p: &ComputerPage| {
+            p.actions
+                .iter()
+                .map(|a| format!("{}:{}", a.batch, a.index))
+                .collect::<Vec<_>>()
+        };
+        let t1 = TaskId("task-1".into());
+        let all = core
+            .list_computer_actions(&id, &t1, None, 100)
+            .await
+            .unwrap();
+        assert_eq!(mine(&all), ["b0:0", "b0:1", "b1:0", "b1:1", "b2:0", "b2:1"]);
+        assert_eq!(all.earlier, None);
+        // A page holds the newest events of the conversation; the earlier ones come next.
+        let last = core.list_computer_actions(&id, &t1, None, 4).await.unwrap();
+        assert_eq!(mine(&last), ["b2:0", "b2:1"]);
+        let before = core
+            .list_computer_actions(&id, &t1, last.earlier, 100)
+            .await
+            .unwrap();
+        assert_eq!(mine(&before), ["b0:0", "b0:1", "b1:0", "b1:1"]);
+        // Newer events of another worker only: the page reads past them.
+        let mut others = Vec::new();
+        for b in 3..9 {
+            others.push(acted("task-2", &format!("b{b}"), 0));
+        }
+        core.record_conversation(&id, others).await.unwrap();
+        let last = core.list_computer_actions(&id, &t1, None, 4).await.unwrap();
+        assert_eq!(mine(&last), ["b2:1"]);
+        assert!(last.earlier.is_some());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

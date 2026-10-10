@@ -19,13 +19,14 @@ use crate::model::{ModelChoice, ModelRef, SETTINGS_VERSION, Settings};
 
 /// The kinds of work the orchestrator hands to workers: what the Routing page's switch is
 /// about. Not `chat` (a Chat's stand-in) or `orchestrate`.
-pub const WORKER_CATEGORIES: [TaskCategory; 6] = [
+pub const WORKER_CATEGORIES: [TaskCategory; 7] = [
     TaskCategory::Scout,
     TaskCategory::Research,
     TaskCategory::Implement,
     TaskCategory::Review,
     TaskCategory::Merge,
     TaskCategory::Verify,
+    TaskCategory::Operate,
 ];
 
 /// The agent isn't switched off.
@@ -201,6 +202,9 @@ pub fn wakes_waiting_work(before: &Settings, after: &Settings) -> bool {
 /// Version 1: an agent switched off before used to be a `never` rule for the whole agent,
 /// everywhere, for all work; such a rule becomes the agent switched off. Every other rule
 /// stays as it is.
+///
+/// Version 2: a model's worker switch saved before operate work existed covers it too, so a
+/// model kept from worker tasks stays kept from all of them.
 pub fn migrate(settings: &Settings) -> Option<Settings> {
     if settings.settings_version >= SETTINGS_VERSION {
         return None;
@@ -220,6 +224,22 @@ pub fn migrate(settings: &Settings) -> Option<Settings> {
             }
             !off
         });
+    }
+    if settings.settings_version < 2 {
+        let before = &WORKER_CATEGORIES[..WORKER_CATEGORIES.len() - 1];
+        for rule in &mut next.routing_overrides {
+            let switch = rule.effect == OverrideEffect::Never
+                && matches!(rule.target, OverrideTarget::Model { .. })
+                && rule.categories.len() == before.len()
+                && before
+                    .iter()
+                    .all(|category| rule.categories.contains(category))
+                && rule.areas.is_empty()
+                && rule.project_id.is_none();
+            if switch {
+                rule.categories.push(TaskCategory::Operate);
+            }
+        }
     }
     next.settings_version = SETTINGS_VERSION;
     Some(next)
@@ -336,6 +356,26 @@ mod tests {
         assert_eq!(next.disabled_providers, vec![ProviderKind::Codex]);
         assert_eq!(next.routing_overrides, vec![scoped]);
         assert_eq!(next.settings_version, SETTINGS_VERSION);
+        assert!(migrate(&next).is_none());
+    }
+
+    #[test]
+    fn an_old_worker_switch_covers_operate_work() {
+        let old = OverrideRule {
+            categories: WORKER_CATEGORIES[..6].to_vec(),
+            ..worker_rule(ProviderKind::Claude, "haiku", 0)
+        };
+        let settings = Settings {
+            routing_overrides: vec![old],
+            settings_version: 1,
+            ..Settings::default()
+        };
+        let next = migrate(&settings).expect("version 1 converts");
+        assert!(is_worker_rule(
+            &next.routing_overrides[0],
+            ProviderKind::Claude,
+            "haiku"
+        ));
         assert!(migrate(&next).is_none());
     }
 

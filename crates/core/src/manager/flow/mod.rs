@@ -27,11 +27,15 @@ use crate::model::{
     PermissionLevel, SetupRequest,
 };
 use crate::runtime::{Runtime, Spawner};
-use crate::tools::{OrchestratorCall, ToolCall, ToolHost, ToolReply, WorkerCall};
+use crate::tools::{ComputerCall, OrchestratorCall, ToolCall, ToolHost, ToolReply, WorkerCall};
 use crate::work::{RequestState, Task};
 
-/// How long a scripted run may take before the test fails.
-const PATIENCE: Duration = Duration::from_secs(60);
+/// How long a scripted run may take before the test fails: only a hang takes this long. Every
+/// wait under it is for the condition the test needs, so this only turns a hang into a failure.
+/// A scripted run is CPU-bound, and the machine running the tests may be loaded far past its
+/// cores: the longest flows take 5 to 10 s on a calm 14-core Mac, and took 66 to 81 s (and
+/// then passed) with six suites and sixty busy loops running beside them (load ~200).
+const PATIENCE: Duration = Duration::from_secs(300);
 
 /// One turn a scripted CLI is asked to take.
 pub(crate) struct Turn {
@@ -53,6 +57,8 @@ pub(crate) struct Turn {
     /// Its CLI session.
     pub native_id: String,
     grant: String,
+    /// A worker's computer-use grant (macOS only).
+    computer_grant: String,
     host: Arc<SessionManager>,
     events: mpsc::Sender<ProviderEvent>,
     answers: Answers,
@@ -129,6 +135,11 @@ impl Turn {
     pub async fn call(&self, name: &str, args: Value) -> ToolReply {
         let call = tool_call(name, args, self.is_orchestrator());
         ToolHost::call(&*self.host, &self.grant, call).await
+    }
+
+    /// Calls a computer tool with the worker's computer grant, as its `computer` server would.
+    pub async fn computer(&self, call: ComputerCall) -> ToolReply {
+        ToolHost::call(&*self.host, &self.computer_grant, ToolCall::Computer(call)).await
     }
 
     /// Asks for approval to run `command` outside the sandbox, as a CLI would, and waits for
@@ -245,7 +256,10 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "request_approval" => ToolCall::Orchestrator(O::RequestApproval(arg(name, args))),
         "land_phase" => ToolCall::Orchestrator(O::LandPhase(arg(name, args))),
         "finish_session" => ToolCall::Orchestrator(O::FinishSession(arg(name, args))),
+        "propose_merge" => ToolCall::Orchestrator(O::ProposeMerge(arg(name, args))),
+        "propose_plan" => ToolCall::Orchestrator(O::ProposePlan(arg(name, args))),
         "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
+        "route_follow_up" => ToolCall::Orchestrator(O::RouteFollowUp(arg(name, args))),
         "list_tasks" => ToolCall::Orchestrator(O::ListTasks),
         "settle_step" => ToolCall::Orchestrator(O::SettleStep(arg(name, args))),
         "end_run" => ToolCall::Orchestrator(O::EndRun(arg(name, args))),
@@ -344,6 +358,9 @@ pub(crate) struct FakeBehavior {
     pub cleanup: bool,
     pub fail_cleanup: std::sync::atomic::AtomicBool,
     pub removals: Mutex<Vec<Removal>>,
+    /// The next CLI start signals the first and waits for the second before it records
+    /// anything.
+    pub hold_start: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
 /// Files a scripted CLI keeps in its own home, even when a session is shared.
@@ -387,7 +404,11 @@ impl FakeCli {
                 efforts: vec!["medium".into(), "high".into()],
                 default_effort: Some("high".into()),
                 is_default: true,
-                input_modalities: vec!["text".into()],
+                // Claude's takes images, so operate work has a model.
+                input_modalities: match self.kind {
+                    ProviderKind::Claude => vec!["text".into(), "image".into()],
+                    ProviderKind::Codex => vec!["text".into()],
+                },
                 fast: None,
                 legacy: false,
             })
@@ -459,15 +480,23 @@ impl Provider for FakeCli {
                     "no session {native_id}"
                 )));
             }
+            let held = self.behavior.hold_start.lock().unwrap().take();
+            if let Some((reached, release)) = held {
+                reached.notify_one();
+                release.notified().await;
+            }
             self.specs.lock().unwrap().push((self.kind, spec.clone()));
             let (tx, events) = mpsc::channel(256);
-            let grant = spec
-                .mcp_servers
-                .iter()
-                .flat_map(|server| &server.env)
-                .find(|(key, _)| key == "BRIGADIER_MCP_GRANT")
-                .map(|(_, value)| value.clone())
-                .unwrap_or_default();
+            let env = |name: &str| {
+                spec.mcp_servers
+                    .iter()
+                    .flat_map(|server| &server.env)
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value.clone())
+                    .unwrap_or_default()
+            };
+            let grant = env("BRIGADIER_MCP_GRANT");
+            let computer_grant = env(crate::manager::computer::GRANT_ENV);
             let native_id = match &spec.origin {
                 brigadier_providers::model::Origin::Resume { native_id } => native_id.clone(),
                 _ => uuid::Uuid::new_v4().to_string(),
@@ -517,6 +546,7 @@ impl Provider for FakeCli {
                 cwd: spec.cwd.clone(),
                 add_dirs: spec.add_dirs.clone(),
                 grant,
+                computer_grant,
                 script,
                 host: self.host.clone(),
                 events: Mutex::new(Some(tx)),
@@ -646,6 +676,7 @@ struct FakeSession {
     cwd: PathBuf,
     add_dirs: Vec<PathBuf>,
     grant: String,
+    computer_grant: String,
     script: Script,
     host: Arc<OnceLock<Weak<SessionManager>>>,
     events: Mutex<Option<mpsc::Sender<ProviderEvent>>>,
@@ -726,6 +757,7 @@ impl ProviderSession for FakeSession {
                 account: self.account.clone(),
                 native_id: self.native_id.clone(),
                 grant: self.grant.clone(),
+                computer_grant: self.computer_grant.clone(),
                 host,
                 events: tx.clone(),
                 answers: self.answers.clone(),
@@ -947,6 +979,34 @@ async fn boot(
     .await
     .expect("the scripted CLIs are checked");
     (manager, core)
+}
+
+/// Waits until `done` holds, failing after [`PATIENCE`] with `what`.
+pub(crate) async fn eventually(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    while !done() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// [`eventually`] for a condition that has to wait to be read.
+pub(crate) async fn eventually_async<F, Fut>(what: &str, mut done: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    while !done().await {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 // ----- what a test leaves -----------------------------------------------------------------
@@ -1210,6 +1270,8 @@ impl Flow {
     /// folder: what was recorded carries on.
     pub async fn restart(&mut self) {
         self.manager.shutdown().await;
+        // The daemon's quit: nothing more of the old one is written, as its process ends.
+        self.core.store().shutdown().await.unwrap();
         let data = self.dir.join("data");
         let store = open_store(&data).await;
         let (manager, core) = boot(
@@ -1381,13 +1443,21 @@ impl Flow {
 #[cfg(test)]
 mod accounts_tests;
 #[cfg(test)]
+mod card_tests;
+#[cfg(test)]
 mod checks_tests;
+#[cfg(all(test, target_os = "macos"))]
+mod computer_tests;
+#[cfg(test)]
+mod ending_tests;
 #[cfg(test)]
 mod engine_tests;
 #[cfg(test)]
 mod litter_tests;
 #[cfg(test)]
 mod overnight_tests;
+#[cfg(test)]
+mod plan_tests;
 mod preview_tests;
 #[cfg(test)]
 mod prewarm_tests;

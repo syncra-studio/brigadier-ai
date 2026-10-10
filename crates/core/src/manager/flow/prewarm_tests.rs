@@ -5,7 +5,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use serde_json::json;
 
@@ -56,18 +55,10 @@ fn delegating(seen: Arc<Mutex<Vec<PathBuf>>>) -> Script {
 
 /// Waits until `owner` has nothing left in the cleanup ledger and `path` is gone.
 async fn removed(flow: &Flow, owner: &str, path: &Path) {
-    for _ in 0..100 {
-        if flow.manager.runtime.ledger().artifacts(owner).is_empty() && !path.exists() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    panic!(
-        "{owner} still holds {:?}; {} exists: {}",
-        flow.manager.runtime.ledger().artifacts(owner),
-        path.display(),
-        path.exists()
-    );
+    super::eventually(&format!("{owner}'s pre-warm to go"), || {
+        flow.manager.runtime.ledger().artifacts(owner).is_empty() && !path.exists()
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -213,7 +204,7 @@ async fn an_unused_pre_warm_is_removed_when_it_expires() {
         .prewarm_made(&flow.conversation)
         .await
         .expect("a pre-warm");
-    tokio::time::sleep(super::super::prewarm::PREWARM_TTL).await;
+    flow.manager.prewarms.expire();
     removed(&flow, &format!("task:{reserved}"), &worktree).await;
     assert!(flow.manager.prewarm_id(&flow.conversation).is_none());
     flow.stop().await;

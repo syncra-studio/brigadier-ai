@@ -14,6 +14,7 @@ members = [
   "crates/sandbox",
   "crates/mcp-server",
   "crates/daemon",
+  "crates/computer",
   "apps/desktop/src-tauri",
 ]
 default-members = ["crates/*"]
@@ -38,6 +39,7 @@ brigadier-review = { path = "crates/review" }
 brigadier-mcp-server = { path = "crates/mcp-server" }
 brigadier-brain = { path = "crates/brain" }
 brigadier-index = { path = "crates/index" }
+brigadier-computer = { path = "crates/computer", default-features = false }
 
 anyhow = "1.0.104"
 base64 = "0.23.1"

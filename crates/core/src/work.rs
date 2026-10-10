@@ -72,6 +72,8 @@ pub enum TaskKind {
     Merge,
     /// Runs the project's checks.
     Verify,
+    /// Operates apps on the user's Mac through the computer tools; writes nothing that lands.
+    Operate,
 }
 
 impl TaskKind {
@@ -435,6 +437,51 @@ pub struct StoredOutput {
     pub at_ms: i64,
 }
 
+/// One computer-use action of a worker (COMPUTER-USE-PLAN.md §5): the session's action log.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerAction {
+    /// The batch (one `act` call) it ran in; with `index`, the action's id.
+    #[serde(default)]
+    pub batch: String,
+    /// Its place in the batch, from 0. Every action of a batch has an event, the ones that
+    /// failed before acting and the ones skipped after a failure too.
+    #[serde(default)]
+    pub index: u32,
+    pub at_ms: i64,
+    /// `click`, `type`, `menu`…
+    pub kind: String,
+    /// The app's name.
+    #[serde(default)]
+    pub app: String,
+    /// The window's title when it acted.
+    pub app_window: String,
+    /// What it aimed at, in words: `button "Save"`, a menu path, a key chord; none for a
+    /// point (the image marks it).
+    #[serde(default)]
+    pub target: Option<String>,
+    pub pid: i32,
+    pub window: u32,
+    /// `done`, `failed` or `skipped`.
+    pub status: String,
+    /// How it was delivered: `element`, `background`, `background_activated`, `foreground`.
+    pub rung: Option<String>,
+    /// `confirmed`, `unverified`, `no_change`, `background_unavailable`.
+    pub effect: Option<String>,
+    /// The error code, when it failed or was skipped.
+    pub error: Option<String>,
+    /// The error's detail.
+    #[serde(default)]
+    pub detail: Option<String>,
+    pub dispatch_ms: f64,
+    /// The whole record as the engine wrote it (JSON), typed text left out.
+    pub record: String,
+    /// The batch's screenshot with every predicted point marked, in the blob store; on the
+    /// batch's first action.
+    #[serde(default)]
+    pub image: Option<String>,
+}
+
 /// A file the session's thread read with its own tools (THREAD-PLAN.md Q8 lever 1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -673,6 +720,14 @@ pub struct Task {
     pub quota_wait: Option<QuotaWait>,
     /// The task this one reviews or merges.
     pub subject: Option<TaskId>,
+    /// An operate task's app, dev build or URL, and the window if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub target: Option<String>,
+    /// What an operate task must leave true, checkable on screen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub end_state: Option<String>,
     /// The plan this one reviews.
     pub plan: Option<CardId>,
     pub attachments: Vec<AttachmentRef>,
@@ -829,8 +884,16 @@ pub enum ApprovalSubject {
         diff_stat: DiffStat,
     },
     /// An action the orchestrator asked the user to approve.
-    Action { action: String, details: String },
-    /// Ask for approval: start a phase from its lead's outline ("Start this plan?").
+    Action {
+        action: String,
+        details: String,
+        /// A running computer-use call waits on it: the answer goes to that call, and the
+        /// card expires with it.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[ts(skip)]
+        live: bool,
+    },
+    /// Ask for approval: start a phase from its lead's outline ("Implement this plan?").
     Outline {
         task_id: TaskId,
         title: String,
@@ -865,6 +928,30 @@ pub enum QuestionKind {
     Orchestrator,
     /// Local checkout with uncommitted changes: should workers start from them?
     UncommittedChanges { files: Vec<String> },
+    /// The thread asks once whether to merge the session branch into its base
+    /// (`propose_merge`); the answer "Merge into {base}" is the user's consent.
+    Merge { branch: String, base: String },
+}
+
+/// One answer a question suggests: a short label, and a line on what it means.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionOption {
+    pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// One question of a round the user answers at once.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionItem {
+    pub text: String,
+    #[serde(default)]
+    pub options: Vec<QuestionOption>,
+    /// The option the asker recommends, by its index in `options`.
+    #[serde(default)]
+    pub recommended: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -879,15 +966,50 @@ pub struct Question {
     pub request_id: Option<String>,
     pub position: i64,
     pub kind: QuestionKind,
+    /// The question; for a round, its questions one per line.
     pub text: String,
-    /// Suggested answers; the user may also type one.
+    /// Suggested answers; the user may also type one. A round's are in its `items`.
     pub options: Vec<String>,
     /// The suggested answer the asker recommends, by its index in `options`.
     #[serde(default)]
     pub recommended: Option<u32>,
+    /// A round's questions, answered together. Empty for a single question (`text` and
+    /// `options`), as every card stored before rounds is.
+    #[serde(default)]
+    pub items: Vec<QuestionItem>,
+    /// The answer as the asker reads it; for a round, each question with its answer.
     pub answer: Option<String>,
+    /// A round's answers, one per item, once answered.
+    #[serde(default)]
+    pub answers: Vec<String>,
     pub created_at_ms: i64,
     pub answered_at_ms: Option<i64>,
+}
+
+impl Question {
+    /// Its questions: a round's items, or the single question it asks.
+    pub fn round(&self) -> Vec<QuestionItem> {
+        if !self.items.is_empty() {
+            return self.items.clone();
+        }
+        vec![QuestionItem {
+            text: self.text.clone(),
+            options: self
+                .options
+                .iter()
+                .map(|label| QuestionOption {
+                    label: label.clone(),
+                    description: None,
+                })
+                .collect(),
+            recommended: self.recommended,
+        }]
+    }
+
+    /// Whether it still waits for the user.
+    pub fn is_open(&self) -> bool {
+        self.answer.is_none() && self.answered_at_ms.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
@@ -1057,6 +1179,10 @@ pub struct Plan {
     pub request_id: Option<String>,
     pub position: i64,
     pub title: String,
+    /// The plan as the user reads it, in markdown: a title, a one-line summary, then its
+    /// sections (`propose_plan`). Absent for a plan of phases alone (`plan_phases`).
+    #[serde(default)]
+    pub body: Option<String>,
     /// Its phases, in order.
     pub steps: Vec<PlanStep>,
     pub state: PlanState,
@@ -1484,10 +1610,15 @@ pub enum WaitingSource {
         run_id: crate::model::OvernightRunId,
         task_id: Option<TaskId>,
     },
+    /// A worker's computer use found a system permission missing: one item per conversation,
+    /// over once Brigadier reads both permissions granted (computer use's Settings page, the
+    /// item's own card, or a worker's next call that works).
+    Computer,
 }
 
-/// Something only the user can do, listed under "Waiting on you" until they mark it done or
-/// it is over without them. Its request waits while it is open; other work goes on.
+/// Something only the user can do, on an overnight run's "Waiting on you" list until it is
+/// over without them (the run's end included) or they mark it done. Its request waits while
+/// it is open; other work goes on. A session lists nothing: its thread says it in its answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WaitingItem {
@@ -1603,8 +1734,9 @@ pub struct UserRequest {
     /// The user's Undo of what its workers landed, once they used it.
     #[serde(default)]
     pub undo: Option<RequestUndo>,
-    /// When it worked, oldest first; the last is open while it works. Waiting for quota is
-    /// work, waiting for the user is not. Absent on requests stored before it was kept.
+    /// When it worked, oldest first; the last is open while it works. Waiting for quota, or
+    /// for the user's answer to its question card, is work; other waits for the user are
+    /// not. Absent on requests stored before it was kept.
     #[serde(default)]
     pub worked: Vec<WorkSpan>,
     /// It is `Waiting` only for quota (a worker paused until a model is free), not for the
@@ -1624,8 +1756,9 @@ pub struct WorkSpan {
 
 impl UserRequest {
     /// Moves it to `state` at `now`: a span opens when it starts working (or waits only for
-    /// quota) and closes when it waits for the user or is over.
-    pub fn moved_to(&mut self, state: RequestState, quota_wait: bool, now: i64) {
+    /// quota, or for the user's answer to its question card, `card_wait`) and closes when it
+    /// waits for the user otherwise or is over.
+    pub fn moved_to(&mut self, state: RequestState, quota_wait: bool, card_wait: bool, now: i64) {
         if self.worked.is_empty() {
             // Stored before spans were kept: what it did so far counts from its start.
             let working = self.state == RequestState::Working || self.quota_wait;
@@ -1639,7 +1772,9 @@ impl UserRequest {
             });
         }
         let quota_wait = quota_wait && state == RequestState::Waiting;
-        let works = state == RequestState::Working || quota_wait;
+        let works = state == RequestState::Working
+            || quota_wait
+            || (card_wait && state == RequestState::Waiting);
         let open = self.worked.last_mut().filter(|span| span.to_ms.is_none());
         match open {
             Some(span) if !works => span.to_ms = Some(now.max(span.from_ms)),
@@ -2011,6 +2146,34 @@ pub enum OrchestratorEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_question_card_stored_before_rounds_reads_as_a_round_of_one() {
+        let stored = serde_json::json!({
+            "id": "q1",
+            "conversationId": "c1",
+            "taskId": null,
+            "requestId": "r1",
+            "position": 0,
+            "kind": { "type": "orchestrator" },
+            "text": "Which region?",
+            "options": ["eu-west", "us-east"],
+            "recommended": 1,
+            "answer": null,
+            "createdAtMs": 0,
+            "answeredAtMs": null
+        });
+        let question: Question = serde_json::from_value(stored).unwrap();
+        assert!(question.items.is_empty() && question.answers.is_empty());
+        assert!(question.is_open());
+        let round = question.round();
+        assert_eq!(round.len(), 1);
+        assert_eq!(round[0].text, "Which region?");
+        let labels: Vec<_> = round[0].options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(labels, ["eu-west", "us-east"]);
+        assert!(round[0].options.iter().all(|o| o.description.is_none()));
+        assert_eq!(round[0].recommended, Some(1));
+    }
 
     #[test]
     fn a_report_stored_before_done_when_still_reads() {

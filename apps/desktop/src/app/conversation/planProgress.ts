@@ -1,5 +1,5 @@
 import { isRunRequest } from "@/app/conversation/blocks";
-import type { Plan, TaskState, UserRequest } from "@/ipc/generated";
+import type { Plan, RequestState, TaskState, UserRequest } from "@/ipc/generated";
 
 export type PlanStepStatus = "pending" | "active" | "done" | "failed";
 export type PlanProgress = {
@@ -23,6 +23,22 @@ export function planStepStatus(state: TaskState | undefined): PlanStepStatus {
     default:
       return "active";
   }
+}
+
+/**
+ * Each step's task state, as its progress reads. A plan the user approved as a document, none of
+ * whose phases went to a worker, is the thread's own work: its phases follow the plan's request,
+ * the first at work while the request works, all done once the request is.
+ */
+export function stepStates(
+  plan: Plan,
+  states: readonly (TaskState | undefined)[],
+  request: RequestState["type"] | undefined,
+): (TaskState | undefined)[] {
+  if (!plan.body || plan.state.type !== "approved" || plan.steps.some((step) => step.taskId !== null)) return [...states];
+  if (request === "working" || request === "waiting") return plan.steps.map((_, index) => (index === 0 ? "running" : undefined));
+  if (request === "done") return plan.steps.map(() => "done");
+  return [...states];
 }
 
 /** Lifecycle comes first: a plan's steps only run once it is approved. */

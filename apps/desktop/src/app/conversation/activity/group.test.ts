@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { type Activity, groupActivity, type Sorted, turnActivity, workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
+import { type Activity, groupActivity, type Sorted, thoughtOf, thoughtTopic, turnActivity, workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
 import { blockSequence, buildBlocks } from "@/app/conversation/blocks";
 import type { ThreadEntry } from "@/components/transcript/activity";
 import type { TranscriptItem } from "@/components/transcript/transcript";
-import type { EventEnvelope, Message } from "@/ipc/generated";
+import { answerWords, questionAnswers, questionRound, questionRowWords } from "@/app/conversation/cards/questionRound";
+import type { EventEnvelope, Message, Question, UserRequest } from "@/ipc/generated";
 import { applyToBoard, emptyBoard } from "@/state/board";
 
 type Entry = { step: string } | { thought: string } | { text: string };
@@ -15,7 +16,7 @@ const sort = (entry: Entry): Sorted<string> =>
   "step" in entry
     ? { type: "step", key: entry.step, step: entry.step }
     : "thought" in entry
-      ? { type: "thought", thought: { key: entry.thought, text: entry.thought, startedAtMs: 0, endedAtMs: 4000 } }
+      ? { type: "thought", thought: { key: entry.thought, text: entry.thought, ms: 4000 } }
       : { type: "break" };
 
 /** The activity as letters: `[s1 t1]` a group, `"x"` an entry. */
@@ -135,6 +136,60 @@ test("T1's unfolded turn: one row per run of work, thinking inside its groups, n
   assert.ok(thoughts.length > 0, "the session's thinking is kept, inside the groups");
 });
 
+const segment = (text: string, startedAtMs: number, updatedAtMs: number) => ({
+  itemId: "r1",
+  requestId: "q1",
+  text,
+  position: 1,
+  startedAtMs,
+  updatedAtMs,
+  throughPosition: 1,
+  complete: true,
+});
+
+test("a thought with no words has no row, however long it took", () => {
+  assert.equal(thoughtOf(segment("", 0, 0)), null);
+  assert.equal(thoughtOf(segment("  \n ", 0, 9000)), null);
+  // A worker's empty reasoning is skipped the same way.
+  const [group] = workerActivity([
+    { kind: "actions", key: "a", items: [command("c1", "ls") as never] },
+    { kind: "item", item: reasoning("r1", "") },
+    { kind: "actions", key: "b", items: [command("c2", "pwd") as never] },
+  ], false);
+  assert.ok(group?.type === "group" && group.items.every((item) => item.type === "step"));
+});
+
+test("a thought's row says what it was about: its heading, else its first sentence", () => {
+  assert.equal(thoughtTopic("**Checking the tests**\n\nI should run them first."), "Checking the tests");
+  assert.equal(thoughtTopic("I want to analyze the panel before asking. Then I could delegate."), "I want to analyze the panel before asking.");
+  assert.equal(thoughtTopic("Reading `blocks.ts` and\nthe *fold* code"), "Reading blocks.ts and the fold code");
+  // Live, the newest heading; settled, the first.
+  const streamed = "**Reading the code**\n\nSome text.\n\n**Planning the fix**\n\nMore.";
+  assert.equal(thoughtTopic(streamed, "newest"), "Planning the fix");
+  assert.equal(thoughtTopic(streamed, "first"), "Reading the code");
+  assert.equal(thoughtTopic(""), "");
+  // Live, a first sentence still streaming shows its whole words so far.
+  assert.equal(thoughtTopic("I want to analyze the panel, so I'm th", "newest"), "I want to analyze the panel, so I'm…");
+  assert.equal(thoughtTopic("I want to analyze ", "newest"), "I want to analyze…");
+  assert.equal(thoughtTopic("Analyz", "newest"), "");
+});
+
+test("a thought's time is the provider's own: one that arrived whole has none", () => {
+  assert.equal(thoughtOf(segment("Whole at once.", 5000, 5000))?.ms, 0);
+  assert.equal(thoughtOf(segment("Streamed over four seconds.", 1000, 5000))?.ms, 4000);
+  // Two thoughts in a row add their own times, never the gap between them.
+  const [group] = groupActivity([{ step: "s1" }, { thought: "t1" }, { thought: "t2" }], sort);
+  assert.ok(group?.type === "group");
+  const thought = group.items.find((item) => item.type === "thought");
+  assert.equal(thought?.type === "thought" ? thought.thought.ms : null, 8000);
+});
+
+test("the live line is one line, whatever the thought streams", () => {
+  for (const text of ["", "line one\nline two\nline three", "**A**\n\nbody\n\n**B**\nmore", "x".repeat(500)]) {
+    assert.doesNotMatch(thoughtTopic(text, "newest") || "Thinking", /\n/);
+  }
+});
+
 function notice(key: string, cli?: "started" | "exited"): ThreadEntry {
   const item = { kind: "notice" as const, key, level: cli === "exited" ? ("warning" as const) : ("info" as const), text: key };
   return { kind: "item", item: cli ? { ...item, cli } : item };
@@ -147,4 +202,102 @@ test("a worker's CLI start and exit are plumbing, unless the worker failed", () 
   assert.equal(workerCliNotice(notice("CLI exited with code 1", "exited"), false), true);
   assert.equal(workerCliNotice(notice("CLI exited with code 1", "exited"), true), false);
   assert.equal(workerCliNotice(notice("Approval a1 answered"), false), false);
+});
+
+/** A thread's question card: a round of `count` questions, answered when `answers` is given. */
+function roundCard(id: string, requestId: string, position: number, count: number, answers: string[] | null): Question {
+  const items = Array.from({ length: count }, (_, index) => ({
+    text: `Question ${index + 1}?`,
+    options: [{ label: "Yes", description: null }, { label: "No", description: null }],
+    recommended: 0,
+  }));
+  return {
+    id,
+    conversationId: "c",
+    taskId: null,
+    requestId,
+    position,
+    kind: { type: "orchestrator" },
+    text: items.map((item) => item.text).join("\n"),
+    options: [],
+    recommended: null,
+    items,
+    answer: answers === null ? null : answers.join("\n"),
+    answers: answers ?? [],
+    createdAtMs: position,
+    answeredAtMs: answers === null ? null : position + 1,
+  };
+}
+
+const doneRequest = (id: string, fields: Partial<UserRequest>): UserRequest => ({
+  id,
+  conversationId: "c",
+  preview: id,
+  state: { type: "done" },
+  startedAtMs: 0,
+  endedAtMs: 100,
+  steeredInto: null,
+  steeredAfter: null,
+  undo: null,
+  worked: [{ fromMs: 0, toMs: 100 }],
+  quotaWait: false,
+  ...fields,
+});
+const userOf = (id: string, seq: number): Message => ({
+  id,
+  conversationId: "c",
+  seq,
+  role: "user",
+  text: id,
+  blob: null,
+  createdAtMs: seq,
+  attachments: [],
+  mentions: [],
+  model: null,
+  requestId: id,
+  parentId: null,
+});
+test("an interview is one block: two answered rounds and a steer, each round a row of the folded work", () => {
+  const first = roundCard("q1", "grill", 2, 3, ["Yes", "No", "Yes"]);
+  const second = roundCard("q2", "grill", 5, 3, ["No", "Yes", "Yes"]);
+  const board = {
+    ...emptyBoard("c"),
+    requests: {
+      grill: doneRequest("grill", {}),
+      steer: doneRequest("steer", { startedAtMs: 3, steeredInto: "grill", worked: [{ fromMs: 3, toMs: 4 }] }),
+    },
+    questions: { q1: first, q2: second },
+  };
+  const blocks = buildBlocks([userOf("grill", 1), userOf("steer", 3)], {}, false, board, []);
+  assert.equal(blocks.length, 1);
+  const [block] = blocks;
+  assert.ok(block);
+  assert.deepEqual(block.requestIds, ["grill", "steer"]);
+  const sequence = blockSequence({
+    ...block,
+    steers: block.steers.map((steer) => ({ position: steer.position, text: steer.text, atMs: 0, attachments: [] })),
+  });
+  const kinds = sequence.map((entry) => (entry.kind === "card" ? `card:${entry.card.id}` : entry.kind));
+  assert.deepEqual(kinds, ["card:q1", "steer", "card:q2"]);
+  // Neither round stays out of the fold: both fold with the work once it is done.
+  assert.ok(block.cards.every((card) => !card.keep));
+  assert.equal(turnActivity(sequence).length, 3);
+  assert.deepEqual([first, second].map(questionRowWords), ["Asked 3 questions", "Asked 3 questions"]);
+});
+
+test("a question card's row says what it asks, what it asked, and the recommended answer", () => {
+  const open = roundCard("q1", "r", 1, 2, null);
+  assert.equal(questionRowWords(open), "Asking questions");
+  const withdrawn = { ...open, answeredAtMs: 2 };
+  assert.equal(questionRowWords(withdrawn), "Asked 2 questions · withdrawn");
+  const single = { ...roundCard("q2", "r", 1, 1, ["No"]), items: [], text: "Ship it?", options: ["Yes", "No"], recommended: 0, answers: [], answer: "No" };
+  assert.equal(questionRowWords(single), "Asked a question");
+  const [item] = questionRound(single);
+  assert.ok(item);
+  assert.equal(item.text, "Ship it?");
+  assert.deepEqual(questionAnswers(single), ["No"]);
+  assert.equal(answerWords(item, "Yes"), "Yes (Recommended)");
+  assert.equal(answerWords(item, "No"), "No");
+  const merge = { ...single, kind: { type: "merge" as const, branch: "b", base: "main" }, answer: null, answeredAtMs: null };
+  assert.equal(questionRowWords(merge), "Asking whether to merge into main");
 });

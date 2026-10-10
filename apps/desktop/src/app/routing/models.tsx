@@ -55,6 +55,7 @@ const CATEGORY_HEADS: Record<TaskCategory, string> = {
   review: "Review",
   merge: "Merge",
   verify: "Verify",
+  operate: "Use apps",
   chat: "Chat",
   orchestrate: "Orchestrate",
 };

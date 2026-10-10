@@ -14,9 +14,9 @@ use brigadier_core::{
 };
 use brigadier_ipc::metrics::{DaemonMetrics, Diagnostics, budgets};
 use brigadier_ipc::protocol::{
-    ArtifactText, ClientFrame, ClientInfo, DaemonActivity, DaemonInfo, DictationUpdate, ErrorCode,
-    EventEnvelope, IpcError, LifecycleOutcome, Outcome, RawJson, Request, Response, SendOutcome,
-    ServerFrame, TerminalInfo, TerminalOutput,
+    ArtifactText, ClientFrame, ClientInfo, ComputerAccess, ComputerGrant, DaemonActivity,
+    DaemonInfo, DictationUpdate, ErrorCode, EventEnvelope, IpcError, LifecycleOutcome, Outcome,
+    RawJson, Request, Response, SendOutcome, ServerFrame, TerminalInfo, TerminalOutput,
 };
 use brigadier_ipc::{Accepted, Connection, Listener, Reader, Token, Writer};
 use brigadier_providers::ProviderKind;
@@ -177,6 +177,9 @@ pub async fn accept_loop(
 async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) {
     let id = daemon.next_connection.fetch_add(1, Ordering::Relaxed);
     tracing::info!(connection = id, client = %client.name, pid = client.pid, "client connected");
+    if client.name == "Brigadier" {
+        daemon.sessions.set_computer_host(client.pid);
+    }
     daemon.metrics.connection_opened(id, client);
     let (late_tx, late) = mpsc::channel(LATE_ANSWERS);
     let mut session = Session {
@@ -1132,6 +1135,16 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => Response::ListWorkerEvents {
             page: core.list_worker_events(&task_id, before, limit).await?,
         },
+        Request::ListComputerActions {
+            conversation_id,
+            task_id,
+            before,
+            limit,
+        } => Response::ListComputerActions {
+            page: core
+                .list_computer_actions(&conversation_id, &task_id, before, limit)
+                .await?,
+        },
         Request::ListOrchestratorLog {
             conversation_id,
             before,
@@ -1280,6 +1293,41 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::CloseTerminal { terminal_id } => {
             daemon.terminals.close(&terminal_id);
             Response::CloseTerminal
+        }
+        Request::GetComputerAccess => Response::GetComputerAccess {
+            access: computer_access(sessions.computer_permissions().await),
+        },
+        Request::AllowComputerAccess { grant, start_over } => {
+            use brigadier_computer::wire::Grant;
+            let wire = match grant {
+                ComputerGrant::Accessibility => Grant::Accessibility,
+                ComputerGrant::ScreenRecording => Grant::ScreenRecording,
+            };
+            let permissions = sessions.request_computer_permission(wire, start_over).await;
+            // The pane where the user turns Brigadier Computer Use on.
+            #[cfg(target_os = "macos")]
+            if permissions.is_ok() {
+                let _ = std::process::Command::new("/usr/bin/open")
+                    .arg(computer_pane_url(grant))
+                    .spawn();
+            }
+            Response::AllowComputerAccess {
+                access: computer_access(permissions),
+            }
+        }
+        Request::OpenComputerSettings { grant } => {
+            #[cfg(target_os = "macos")]
+            std::process::Command::new("/usr/bin/open")
+                .arg(computer_pane_url(grant))
+                .spawn()
+                .map_err(|e| {
+                    IpcError::from(brigadier_core::Error::Invalid(format!(
+                        "couldn't open System Settings: {e}"
+                    )))
+                })?;
+            #[cfg(not(target_os = "macos"))]
+            let _ = grant;
+            Response::OpenComputerSettings
         }
         Request::GetDictation
         | Request::DownloadDictationModel
@@ -1436,10 +1484,10 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::AnswerQuestion {
             conversation_id,
             card_id,
-            answer,
+            answers,
         } => {
             sessions
-                .answer_question(conversation_id, card_id, answer)
+                .answer_question(conversation_id, card_id, answers)
                 .await?;
             Response::AnswerQuestion
         }
@@ -1925,5 +1973,74 @@ fn shell_quote(path: &str) -> String {
         format!("& '{}'", path.replace('\'', "''"))
     } else {
         format!("'{}'", path.replace('\'', "'\"'\"'"))
+    }
+}
+
+/// The System Settings pane that lists apps for `grant`: Privacy & Security → Accessibility
+/// (named Device Control and Data Access from macOS 27), or → Screen & System Audio Recording.
+/// Both anchors are in the Privacy & Security extension, which takes its old pane id in
+/// `x-apple.systempreferences:` links.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn computer_pane_url(grant: ComputerGrant) -> &'static str {
+    match grant {
+        ComputerGrant::Accessibility => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        }
+        ComputerGrant::ScreenRecording => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        }
+    }
+}
+
+/// Computer use's permissions as Settings shows them.
+fn computer_access(
+    read: std::result::Result<brigadier_computer::wire::Permissions, String>,
+) -> ComputerAccess {
+    let available = cfg!(target_os = "macos");
+    match read {
+        Ok(p) => ComputerAccess {
+            available,
+            accessibility: p.accessibility,
+            screen_recording: p.screen_recording,
+            restarting: p.restarting,
+            problem: None,
+        },
+        Err(problem) => ComputerAccess {
+            available,
+            accessibility: false,
+            screen_recording: false,
+            restarting: false,
+            problem: Some(problem),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_grant_opens_its_own_privacy_pane() {
+        assert_eq!(
+            computer_pane_url(ComputerGrant::Accessibility),
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        );
+        assert_eq!(
+            computer_pane_url(ComputerGrant::ScreenRecording),
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        );
+    }
+
+    #[test]
+    fn a_restarting_helper_reads_as_allowed_and_a_failed_read_as_neither() {
+        let access = computer_access(Ok(brigadier_computer::wire::Permissions {
+            accessibility: true,
+            screen_recording: true,
+            restarting: true,
+        }));
+        assert!(access.accessibility && access.screen_recording && access.restarting);
+        let access = computer_access(Err("it didn't answer in time".into()));
+        assert!(!access.accessibility && !access.screen_recording && !access.restarting);
+        assert_eq!(access.problem.as_deref(), Some("it didn't answer in time"));
     }
 }

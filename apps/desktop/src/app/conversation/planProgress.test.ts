@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { activePlanRequest, capsuleMode, contextPlanId, currentRequestPlan, planProgress, planStepStatus } from "@/app/conversation/planProgress";
+import { activePlanRequest, capsuleMode, contextPlanId, currentRequestPlan, planProgress, planStepStatus, stepStates } from "@/app/conversation/planProgress";
 import type { Plan, PlanState, TaskState, UserRequest } from "@/ipc/generated";
 
 function plan(state: PlanState, id = "plan", createdAtMs = 1): Plan {
   return {
     id, conversationId: "session", requestId: "request", position: createdAtMs,
-    title: "Plan", steps: ["First", "Second", "Third"].map((title, index) => ({ title, detail: null, taskId: `task-${index}`, stage: "pending" as const, startedAtMs: null, endedAtMs: null, outline: null })),
+    title: "Plan", body: null, steps: ["First", "Second", "Third"].map((title, index) => ({ title, detail: null, taskId: `task-${index}`, stage: "pending" as const, startedAtMs: null, endedAtMs: null, outline: null })),
     state, createdAtMs, decidedAtMs: null,
   };
 }
@@ -130,4 +130,19 @@ test("the context card keeps the latest session plan after requests end, without
   }
   assert.equal(contextPlanId(plans, [], null), null);
   assert.equal(contextPlanId(plans, [older.id], request({ type: "working" })), null);
+});
+
+test("a plan document the thread builds itself follows its request; one with workers follows them", () => {
+  const own: Plan = {
+    ...approved,
+    body: "# Plan\n\nOne line.",
+    steps: approved.steps.map((step) => ({ ...step, taskId: null })),
+  };
+  assert.deepEqual(stepStates(own, [], "working"), ["running", undefined, undefined]);
+  assert.equal(planProgress(own, stepStates(own, [], "working")).label, "Step 1 of 3: First");
+  assert.equal(planProgress(own, stepStates(own, [], "done")).label, "3 of 3 done");
+  // Not yet approved, or with its phases at workers, or a plan of phases alone: the tasks say.
+  assert.deepEqual(stepStates({ ...own, state: { type: "proposed" } }, [], "done"), []);
+  assert.deepEqual(stepStates({ ...approved, body: own.body }, ["running"], "done"), ["running"]);
+  assert.deepEqual(stepStates({ ...own, body: null }, [], "done"), []);
 });

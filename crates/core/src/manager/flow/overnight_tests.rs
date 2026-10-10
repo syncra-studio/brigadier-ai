@@ -29,6 +29,9 @@ where
 const QUIET: &str = "[quiet]";
 const MORNING: &str = "Good morning: the run is over; the report follows.";
 
+/// What phase 1's lead needs from the user.
+const RELEASE_TOKEN: &str = "Add RELEASE_TOKEN to .env to publish p1.txt.";
+
 /// The task numbers of the reports in a thread's input, in order.
 fn reports_in(input: &str) -> Vec<u32> {
     input
@@ -306,7 +309,8 @@ impl Thread {
     }
 }
 
-/// A lead that commits its phase's file and reports.
+/// A lead that commits its phase's file and reports; phase 1's lists something only the user
+/// can do, which the run keeps for the morning.
 async fn build(turn: &Turn) -> Reply {
     let n = phase_of_lead(turn).expect("a phase lead");
     let file = format!("p{n}.txt");
@@ -320,7 +324,8 @@ async fn build(turn: &Turn) -> Reply {
         .call(
             "submit_report",
             json!({"summary": format!("Added {file}."), "changes": [file],
-                   "done_when": format!("[met] p{n}.txt exists: ls shows it")}),
+                   "done_when": format!("[met] p{n}.txt exists: ls shows it"),
+                   "needs_user": if n == 1 { vec![RELEASE_TOKEN] } else { Vec::new() }}),
         )
         .await;
     assert!(!reply.is_error, "{}", reply.text);
@@ -580,6 +585,7 @@ async fn a_run_told_to_stop_after_phase_2_settles_two_phases_and_stops() {
         "Named the files pN.txt.",
         "### Waiting on you",
         "Add the release key to .env.",
+        RELEASE_TOKEN,
         "How each phase was checked:",
         "Settled: Made p1.txt",
         "Usage: ",
@@ -591,6 +597,11 @@ async fn a_run_told_to_stop_after_phase_2_settles_two_phases_and_stops() {
         !shown.contains("task-"),
         "workers by name, not number:\n{report}"
     );
+    // The run's list ends with it: its report keeps it, and nothing asks for a Done.
+    flow.until("the run's Waiting on you to end with it", |board| {
+        board.waiting.is_empty()
+    })
+    .await;
 
     // After the run the same native session goes on, in the session's checkout.
     flow.say("Thanks.").await;
@@ -743,6 +754,55 @@ async fn at_the_deadline_the_thread_and_live_workers_end_cleanly() {
         text.contains("Nothing settled done to merge yet."),
         "{text}"
     );
+    flow.stop().await;
+}
+
+/// The user archives the session while the run's lead works: the run ends with its report, and
+/// its "Waiting on you" list ends with it (there is no Done to clear it).
+#[tokio::test]
+async fn archiving_mid_run_ends_the_runs_list_with_it() {
+    let thread = Arc::new(Thread {
+        order: vec![1],
+        ..Default::default()
+    });
+    let inner = thread.clone();
+    let flow = Flow::start(
+        "overnight-archived",
+        Options::default(),
+        script(move |turn| {
+            let inner = inner.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    return inner.turn(&turn).await;
+                }
+                // Still working when the session is archived.
+                std::future::pending::<()>().await;
+                Reply::text("Never.")
+            }
+        }),
+    )
+    .await;
+    let run = start_run(&flow, "/overnight Make one file.", 1).await;
+    flow.until(
+        "the lead to work and the list to hold the thread's note",
+        |board| {
+            !board.waiting.is_empty()
+                && board.tasks.values().any(|task| {
+                    task.role == Some(WorkerRole::Lead) && task.state == TaskState::Running
+                })
+        },
+    )
+    .await;
+    flow.manager
+        .archive(flow.conversation.clone())
+        .await
+        .unwrap();
+    let board = finished(&flow, &run.id).await;
+    assert!(run_of(&board, &run.id).report_message_id.is_some());
+    flow.until("the run's list to end with it", |board| {
+        board.waiting.is_empty()
+    })
+    .await;
     flow.stop().await;
 }
 
@@ -1256,13 +1316,10 @@ async fn a_runs_start_drops_the_sessions_pre_warm() {
     .await;
     assert!(flow.manager.prewarm_id(&flow.conversation).is_none());
     let owner = format!("task:{reserved}");
-    for _ in 0..100 {
-        if flow.manager.runtime.ledger().artifacts(&owner).is_empty() && !worktree.exists() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    assert!(!worktree.exists(), "{}", worktree.display());
+    super::eventually(&format!("{} to go", worktree.display()), || {
+        flow.manager.runtime.ledger().artifacts(&owner).is_empty() && !worktree.exists()
+    })
+    .await;
     finished(&flow, &run.id).await;
     flow.stop().await;
 }

@@ -50,6 +50,13 @@ pub enum Role {
     /// A Claude thread's output hook (`brigadierd hook post-tool-use`): it may only store the
     /// thread's command output, and calls no tools.
     OutputHook { conversation_id: ConversationId },
+    /// A worker's computer use (COMPUTER-USE-PLAN.md §4.6): the `computer` MCP server and
+    /// `brigadierd computer`. It can call the computer tools and nothing else; the worker's
+    /// own grant stays with the Brigadier server.
+    Computer {
+        conversation_id: ConversationId,
+        task_id: TaskId,
+    },
 }
 
 /// The command tools a thread has besides the orchestrator tools (THREAD-PLAN.md Q4): a Codex
@@ -94,6 +101,14 @@ impl Grants {
         self.lock().retain(|_, (held_by, _)| held_by != owner);
     }
 
+    /// Revokes `grants` alone: another session of their owner keeps its own.
+    pub fn revoke(&self, grants: &[String]) {
+        let mut live = self.lock();
+        for grant in grants {
+            live.remove(grant);
+        }
+    }
+
     /// Every live grant value, for scrubbing them out of logs and recordings.
     pub fn secrets(&self) -> Vec<String> {
         self.lock().keys().cloned().collect()
@@ -136,6 +151,12 @@ pub struct DelegateTask {
     /// lands it with its own.
     #[serde(default)]
     pub subject: Option<String>,
+    /// For `operate`: the app, dev build path or URL to work in, and the window if known.
+    #[serde(default)]
+    pub target: Option<String>,
+    /// For `operate`: what must be true at the end, checkable on screen.
+    #[serde(default)]
+    pub end_state: Option<String>,
     /// Ids of the user's attachments the worker should get as files.
     #[serde(default)]
     pub attachments: Vec<String>,
@@ -226,21 +247,53 @@ pub struct ReportRef {
     pub task: String,
 }
 
-/// `ask_user`: a question only the user can answer (a product choice, an unclear requirement).
+/// `ask_user`: a round of questions only the user can answer (product choices, unclear
+/// requirements), shown as one card they answer at once.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AskUser {
-    /// The question, self-contained: the user may read it later, out of context.
-    pub question: String,
-    /// Suggested answers shown as buttons; the user can always type their own.
-    #[serde(default)]
-    pub options: Vec<String>,
-    /// The option you recommend, by its 0-based index in `options` (shown as "Recommended").
-    #[serde(default)]
-    pub recommended: Option<u32>,
-    /// The task that waits for the answer, if any (other tasks continue).
+    /// The round's questions, 1 to 6, each self-contained: the user may read them later,
+    /// out of context.
+    pub questions: Vec<AskQuestion>,
+    /// The task that waits for the answers, if any (other tasks continue).
     #[serde(default)]
     pub task: Option<String>,
+}
+
+/// One question of an `ask_user` round.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AskQuestion {
+    /// The question, one short sentence.
+    pub question: String,
+    /// 2 to 4 suggested answers; the user can always type their own instead.
+    #[serde(default)]
+    pub options: Vec<AskOption>,
+    /// The option you recommend, by its 0-based index in `options` (shown as
+    /// "Recommended" and picked at first). Required when there are options.
+    #[serde(default)]
+    pub recommended: Option<u32>,
+}
+
+/// One suggested answer.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AskOption {
+    /// A few words ("Throw an error").
+    pub label: String,
+    /// One short line on what it means, when the label alone doesn't say it.
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// `propose_merge`: ask the user once, on a card, whether to merge the session branch into
+/// its base.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProposeMerge {
+    /// One short line under the question: what the merge brings, and what the reviews found.
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 /// `read_artifact`: page through a stored artifact (transcript, diff, command output, note).
@@ -497,6 +550,21 @@ pub struct PlanPhases {
     pub phases: Vec<PlanStepInput>,
 }
 
+/// `propose_plan`: the thread's plan, as a document on a card the user reads and decides on.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProposePlan {
+    /// What gets built, in a few words ("Add a --version flag"): the card's title.
+    pub title: String,
+    /// The plan in markdown: `# Title`, one summary sentence, then `## Changes`, `## Checks`
+    /// and `## Assumptions`, each a short list.
+    pub body: String,
+    /// Only for work in parts that must run one after another: the phases, in order, each
+    /// built by its own lead. Leave it out for work of one part.
+    #[serde(default)]
+    pub phases: Option<Vec<PlanStepInput>>,
+}
+
 /// `approve_outline`: let a lead build from its outline, with your corrections.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -547,8 +615,9 @@ pub struct ReviewPlan {
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FinishSession {
-    /// The user's own words that ask for the merge or agree to the one you proposed, quoted
-    /// exactly from their latest message ("yes, merge it").
+    /// The user's own words that ask for the merge, quoted exactly from their latest message
+    /// ("yes, merge it"). Leave it out when the user chose "Merge" on your propose_merge card.
+    #[serde(default)]
     pub user_words: String,
     /// The merge commit message, when a merge commit is needed.
     #[serde(default)]
@@ -561,8 +630,8 @@ pub struct FinishSession {
 pub enum NoteKind {
     /// A judgement call you made on the user's behalf: it shows under "Decided for you".
     Decided,
-    /// Something only the user can do: it shows under "Waiting on you" until they mark it
-    /// done.
+    /// During an overnight run, something only the user can do: it shows in the run's
+    /// "Waiting on you" list. Refused outside a run (say it in the answer instead).
     Waiting,
 }
 
@@ -666,11 +735,13 @@ pub enum OrchestratorCall {
     Remember(Remember),
     SearchTranscript(SearchTranscript),
     PlanPhases(PlanPhases),
+    ProposePlan(ProposePlan),
     ApproveOutline(ApproveOutline),
     StartVerifier(TaskRef),
     RequestApproval(RequestApproval),
     LandPhase(LandPhase),
     FinishSession(FinishSession),
+    ProposeMerge(ProposeMerge),
     NoteForUser(NoteForUser),
     ListTasks,
     SettleStep(SettleStep),
@@ -704,11 +775,13 @@ impl OrchestratorCall {
             Self::Remember(_) => "remember",
             Self::SearchTranscript(_) => "search_transcript",
             Self::PlanPhases(_) => "plan_phases",
+            Self::ProposePlan(_) => "propose_plan",
             Self::ApproveOutline(_) => "approve_outline",
             Self::StartVerifier(_) => "start_verifier",
             Self::RequestApproval(_) => "request_approval",
             Self::LandPhase(_) => "land_phase",
             Self::FinishSession(_) => "finish_session",
+            Self::ProposeMerge(_) => "propose_merge",
             Self::NoteForUser(_) => "note_for_user",
             Self::ListTasks => "list_tasks",
             Self::SettleStep(_) => "settle_step",
@@ -813,38 +886,121 @@ pub struct SubmitReport {
 
 /// A report list given as one text, one item per line, or as a list. The schema asks for text:
 /// a model writing long items full of quotes and backticks sometimes emits a list as bare text,
-/// which breaks the call's JSON, while it writes a text field reliably.
+/// which breaks the call's JSON, while it writes a text field reliably. A list may hold objects
+/// too (`{"criterion", "status", "evidence"}`): a Codex worker spent 2–3 rejected calls a report
+/// guessing the shape (COMPUTER-USE-PLAN.md §8, Phase 4), so every item becomes a line.
 fn lines<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum Lines {
         Text(String),
-        List(Vec<String>),
+        List(Vec<serde_json::Value>),
     }
     Ok(match Option::<Lines>::deserialize(deserializer)? {
         None => Vec::new(),
-        Some(Lines::List(items)) => items.into_iter().filter(|item| !empty_item(item)).collect(),
-        Some(Lines::Text(text)) => text
-            .lines()
-            .map(|line| {
-                let line = line.trim();
-                line.strip_prefix("- ")
-                    .or_else(|| line.strip_prefix("* "))
-                    .unwrap_or(line)
-            })
-            .filter(|line| !empty_item(line))
-            .map(str::to_owned)
+        Some(Lines::List(items)) => items
+            .iter()
+            .map(item_line)
+            .filter(|item| !empty_item(item))
             .collect(),
+        Some(Lines::Text(text)) => text_lines(&text),
     })
 }
 
-/// The changed paths, without a placeholder that says there are none.
+fn text_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|line| {
+            let line = line.trim();
+            line.strip_prefix("- ")
+                .or_else(|| line.strip_prefix("* "))
+                .unwrap_or(line)
+        })
+        .filter(|line| !empty_item(line))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// One report line from a list item: a text as it is; an object as its status in brackets, its
+/// criterion, then its evidence ("[met] Name reads Grace: the expect held"), with any other
+/// fields after them; anything else as JSON.
+fn item_line(item: &serde_json::Value) -> String {
+    use serde_json::Value;
+    let text = |v: &Value| match v {
+        Value::String(s) => s.trim().to_owned(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    };
+    let Value::Object(fields) = item else {
+        return text(item);
+    };
+    let pick = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|k| fields.get(*k).map(text))
+            .filter(|s| !s.is_empty())
+    };
+    const STATUS: [&str; 3] = ["status", "state", "met"];
+    const WHAT: [&str; 6] = ["criterion", "item", "text", "name", "title", "check"];
+    const WHY: [&str; 5] = ["evidence", "detail", "details", "how", "result"];
+    let mut line = String::new();
+    if let Some(status) = pick(&STATUS) {
+        let status = match status.as_str() {
+            "true" => "met".to_owned(),
+            "false" => "not met".to_owned(),
+            _ => status.trim_matches(['[', ']']).to_lowercase(),
+        };
+        line.push_str(&format!("[{status}] "));
+    }
+    if let Some(what) = pick(&WHAT) {
+        line.push_str(&what);
+    }
+    if let Some(why) = pick(&WHY) {
+        if !line.is_empty() && !line.ends_with("] ") {
+            line.push_str(": ");
+        }
+        line.push_str(&why);
+    }
+    for (key, value) in fields {
+        if STATUS.contains(&key.as_str())
+            || WHAT.contains(&key.as_str())
+            || WHY.contains(&key.as_str())
+        {
+            continue;
+        }
+        let value = text(value);
+        if !value.is_empty() {
+            line.push_str(&format!(
+                "{}{key}: {value}",
+                if line.is_empty() { "" } else { "; " }
+            ));
+        }
+    }
+    line.trim().to_owned()
+}
+
+/// The changed paths, without a placeholder that says there are none. One text, a path a line
+/// or comma-separated, is taken too.
 fn paths<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
-    Ok(Option::<Vec<String>>::deserialize(deserializer)?
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|path| !empty_item(path))
-        .collect())
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Paths {
+        Text(String),
+        List(Vec<serde_json::Value>),
+    }
+    Ok(match Option::<Paths>::deserialize(deserializer)? {
+        None => Vec::new(),
+        Some(Paths::List(items)) => items
+            .iter()
+            .map(|item| match item {
+                serde_json::Value::Object(o) => o
+                    .get("path")
+                    .or_else(|| o.get("file"))
+                    .map_or_else(|| item_line(item), item_line),
+                other => item_line(other),
+            })
+            .filter(|path| !empty_item(path))
+            .collect(),
+        Some(Paths::Text(text)) => text.split([',', '\n']).flat_map(text_lines).collect(),
+    })
 }
 
 /// Whether a report line only says the list is empty ("None.", "N/A", "-", "None for
@@ -944,6 +1100,28 @@ pub enum ChatCall {
     SaveMemory(SaveMemory),
 }
 
+/// A computer-use call (COMPUTER-USE-PLAN.md §4.6).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ComputerCall {
+    Apps,
+    Launch(brigadier_computer::wire::LaunchRequest),
+    Observe(brigadier_computer::action::ObserveRequest),
+    Act(brigadier_computer::action::ActRequest),
+    Zoom(brigadier_computer::action::ZoomRequest),
+}
+
+impl ComputerCall {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Apps => "apps",
+            Self::Launch(_) => "launch",
+            Self::Observe(_) => "observe",
+            Self::Act(_) => "act",
+            Self::Zoom(_) => "zoom",
+        }
+    }
+}
+
 /// A tool call, for any role.
 #[derive(Debug, Clone)]
 pub enum ToolCall {
@@ -951,14 +1129,27 @@ pub enum ToolCall {
     Worker(WorkerCall),
     Job(JobCall),
     Chat(ChatCall),
+    Computer(ComputerCall),
 }
 
-/// What a tool call returns to the model.
+/// An image in a tool's reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplyImage {
+    pub mime: String,
+    pub data: Vec<u8>,
+}
+
+/// What a tool call returns to the model: its images, then its text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolReply {
     pub text: String,
     /// The call failed or was refused; `text` says why.
     pub is_error: bool,
+    /// Shown to the model before the text (a screenshot reads best ahead of what it shows).
+    pub images: Vec<ReplyImage>,
+    /// For a computer call, the time the helper's engine spent on it: the MCP result's
+    /// `_meta`, which models don't read, so the tool's own overhead can be measured (S6).
+    pub engine_us: Option<u64>,
 }
 
 impl ToolReply {
@@ -966,6 +1157,8 @@ impl ToolReply {
         Self {
             text: text.into(),
             is_error: false,
+            images: Vec::new(),
+            engine_us: None,
         }
     }
 
@@ -973,7 +1166,17 @@ impl ToolReply {
         Self {
             text: text.into(),
             is_error: true,
+            images: Vec::new(),
+            engine_us: None,
         }
+    }
+
+    pub fn with_image(mut self, mime: impl Into<String>, data: Vec<u8>) -> Self {
+        self.images.push(ReplyImage {
+            mime: mime.into(),
+            data,
+        });
+        self
     }
 }
 
@@ -1039,6 +1242,39 @@ mod tests {
         );
         assert_eq!(report.risks, ["Assumes Node 22."]);
         assert_eq!(report.needs_user, ["Set STRIPE_KEY in .env"]);
+    }
+
+    #[test]
+    fn a_report_takes_the_shapes_a_codex_worker_sends() {
+        // Measured 2026-10-09: objects for done_when and a string for changes were rejected,
+        // 2–3 calls a report.
+        let report = report(serde_json::json!({
+            "summary": "Done.",
+            "changes": "src/a.ts, src/b.ts\nnotes/c.md",
+            "done_when": [
+                {"criterion": "Name reads Grace", "status": "met", "evidence": "the expect held"},
+                {"criterion": "Nothing else changed", "met": false},
+                {"status": "[not checked]", "evidence": "no screenshot"}
+            ],
+            "verification": [{"check": "observe", "result": "Level 37"}, 3, "Saved."],
+            "risks": [{"risk": "the window may move"}],
+        }));
+        assert_eq!(report.changes, ["src/a.ts", "src/b.ts", "notes/c.md"]);
+        assert_eq!(
+            report.done_when,
+            [
+                "[met] Name reads Grace: the expect held",
+                "[not met] Nothing else changed",
+                "[not checked] no screenshot"
+            ]
+        );
+        assert_eq!(report.verification, ["observe: Level 37", "3", "Saved."]);
+        assert_eq!(report.risks, ["risk: the window may move"]);
+        let listed = self::report(serde_json::json!({
+            "summary": "Done.",
+            "changes": [{"path": "src/a.ts", "change": "edited"}],
+        }));
+        assert_eq!(listed.changes, ["src/a.ts"]);
     }
 
     #[test]
