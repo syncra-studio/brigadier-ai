@@ -458,6 +458,8 @@ impl SessionManager {
         };
         self.wind_down(&conversation).await;
         self.close_runs(runs, true).await;
+        // Their reports keep their "Waiting on you" lists now: the lists end with the runs.
+        self.settle_requests(id).await;
         self.release_conversation_runs(id).await;
         if !drained {
             // What that work makes after this is removed once it has finished: the mark stays

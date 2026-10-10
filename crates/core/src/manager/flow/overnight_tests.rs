@@ -757,6 +757,55 @@ async fn at_the_deadline_the_thread_and_live_workers_end_cleanly() {
     flow.stop().await;
 }
 
+/// The user archives the session while the run's lead works: the run ends with its report, and
+/// its "Waiting on you" list ends with it (there is no Done to clear it).
+#[tokio::test]
+async fn archiving_mid_run_ends_the_runs_list_with_it() {
+    let thread = Arc::new(Thread {
+        order: vec![1],
+        ..Default::default()
+    });
+    let inner = thread.clone();
+    let flow = Flow::start(
+        "overnight-archived",
+        Options::default(),
+        script(move |turn| {
+            let inner = inner.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    return inner.turn(&turn).await;
+                }
+                // Still working when the session is archived.
+                std::future::pending::<()>().await;
+                Reply::text("Never.")
+            }
+        }),
+    )
+    .await;
+    let run = start_run(&flow, "/overnight Make one file.", 1).await;
+    flow.until(
+        "the lead to work and the list to hold the thread's note",
+        |board| {
+            !board.waiting.is_empty()
+                && board.tasks.values().any(|task| {
+                    task.role == Some(WorkerRole::Lead) && task.state == TaskState::Running
+                })
+        },
+    )
+    .await;
+    flow.manager
+        .archive(flow.conversation.clone())
+        .await
+        .unwrap();
+    let board = finished(&flow, &run.id).await;
+    assert!(run_of(&board, &run.id).report_message_id.is_some());
+    flow.until("the run's list to end with it", |board| {
+        board.waiting.is_empty()
+    })
+    .await;
+    flow.stop().await;
+}
+
 /// Brigadier restarts while phase 1's lead works: the thread hears so, leads the phase again,
 /// lands and settles it, and ends the run.
 #[tokio::test]
