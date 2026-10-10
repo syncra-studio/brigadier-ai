@@ -15,7 +15,7 @@ import {
   Stop,
   TextShorterConcise,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { type FC, lazy, Suspense, useEffect, useState } from "react";
+import { type ComponentProps, type ComponentType, type FC, lazy, Suspense, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { ThinkingRow } from "@/app/conversation/ThinkingRow";
@@ -71,7 +71,17 @@ import { readAloud, stopReading, useReading } from "@/state/readAloud";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
-const CardBody = lazy(() => import("@/app/conversation/cards/CardBody"));
+/**
+ * The card views load on first use, and once loaded render at once: a card in folded work must
+ * be whole the frame its work opens, or the row pops in after the fold has measured its height.
+ */
+let loadedCardBody: ComponentType<ComponentProps<typeof LazyCardBody>> | null = null;
+const loadCardBody = () =>
+  import("@/app/conversation/cards/CardBody").then((module) => {
+    loadedCardBody = module.default;
+    return module;
+  });
+const LazyCardBody = lazy(loadCardBody);
 
 /** What an assistant block carries in its message metadata (`custom.block`). */
 export type BlockMeta = {
@@ -239,6 +249,8 @@ function entryKey(entry: Entry): string {
 }
 
 function CardEntry({ card }: { card: BlockCard }) {
+  // Chosen once: a card shown through the lazy view keeps it, so it never remounts.
+  const [CardBody] = useState(() => loadedCardBody ?? LazyCardBody);
   return (
     <div data-slot="request-card">
       <Suspense fallback={null}>
@@ -465,6 +477,11 @@ export const RequestBlock: FC = () => {
     const id = meta?.answerId;
     return !!id && Object.values(s.board?.overnight ?? {}).some((run) => run.reportMessageId === id);
   });
+  // Its cards load before its work can open, so they are there the moment it does.
+  const hasCards = (meta?.cards.length ?? 0) > 0;
+  useEffect(() => {
+    if (hasCards) void loadCardBody();
+  }, [hasCards]);
   if (!meta) return null;
 
   // A run's block is live until the run is over, whatever still waits on the user: that waits in the panel.
