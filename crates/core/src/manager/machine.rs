@@ -92,7 +92,7 @@ impl SessionManager {
     }
 
     /// Files a row in the thread of the command's CLI's conversation.
-    async fn machine_row(&self, row: Row) {
+    pub(super) async fn machine_row(&self, row: Row) {
         let (kind, reason, verb) = match row.note {
             Note::WaitingToCool(reason) => (
                 MachineStepKind::WaitingToCool,

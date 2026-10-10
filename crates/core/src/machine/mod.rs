@@ -56,6 +56,8 @@ pub(crate) struct MachineWatch {
     cpu: Mutex<HashMap<u32, u64>>,
     /// When a command of each owner was last held, in ms since the epoch.
     held: Mutex<HashMap<String, i64>>,
+    /// Woken after every look, for the checks waiting for the lease.
+    looked: tokio::sync::Notify,
 }
 
 impl MachineWatch {
@@ -69,7 +71,71 @@ impl MachineWatch {
             quit: AtomicBool::new(false),
             cpu: Mutex::new(HashMap::new()),
             held: Mutex::new(HashMap::new()),
+            looked: tokio::sync::Notify::new(),
         }
+    }
+
+    /// A heavy `run_check` of `owner` asks for the build lease before it starts. Returns its
+    /// ticket, whether it may start now, and what its thread should say while it waits
+    /// ([`Self::wait_check`]). Once started, its processes are never stopped or paused.
+    pub(crate) fn ask_check(&self, owner: &str, command: &str) -> (u64, bool, Vec<Row>) {
+        let mut builds = self.builds.lock().unwrap_or_else(|p| p.into_inner());
+        if self.quit.load(Ordering::Acquire) {
+            return (u64::MAX, true, Vec::new());
+        }
+        let (ticket, now, actions) =
+            builds.ask(owner, command, self.guard.current(), Instant::now());
+        let rows = actions
+            .into_iter()
+            .filter_map(|action| match action {
+                Action::Note {
+                    owner,
+                    command,
+                    note,
+                    ..
+                } => Some(Row {
+                    owner,
+                    command,
+                    note,
+                }),
+                _ => None,
+            })
+            .collect();
+        (ticket, now, rows)
+    }
+
+    /// Waits until the check of `ticket` may start.
+    pub(crate) async fn wait_check(&self, ticket: u64) {
+        loop {
+            let looked = self.looked.notified();
+            if self.quit.load(Ordering::Acquire)
+                || self
+                    .builds
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .granted(ticket)
+            {
+                return;
+            }
+            looked.await;
+        }
+    }
+
+    /// The check of `ticket` started as process `pid`; call it before the process is in the
+    /// cleanup ledger.
+    pub(crate) fn attach_check(&self, ticket: u64, pid: u32) {
+        self.builds
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .attach(ticket, pid);
+    }
+
+    /// The check of `ticket` ended, or won't start: its lease is free.
+    pub(crate) fn end_check(&self, ticket: u64) {
+        self.builds
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .end(ticket);
     }
 
     /// At start: lets go on whatever an earlier daemon left stopped. Blocking.
@@ -111,7 +177,7 @@ impl MachineWatch {
                     command,
                     note,
                 } => {
-                    if !unstopped.contains(&proc) {
+                    if !proc.is_some_and(|proc| unstopped.contains(&proc)) {
                         rows.push(Row {
                             owner,
                             command,
@@ -130,6 +196,8 @@ impl MachineWatch {
         for owner in builds.held_owners() {
             held.insert(owner, stamp);
         }
+        drop(builds);
+        self.looked.notify_waiters();
         rows
     }
 
@@ -178,6 +246,7 @@ impl MachineWatch {
             }
         }
         self.stopped.sweep(&*self.platform);
+        self.looked.notify_waiters();
     }
 
     /// Waits until workers can start or what holds them changes (heat, memory), at most `max`;
@@ -325,6 +394,9 @@ pub(crate) fn heavy_under(platform: &dyn Platform, cli: u32, owner: &str) -> Vec
                 owner: owner.to_owned(),
                 command: heavy::label(&argv),
                 active: true,
+                test: heavy::is_test(&argv),
+                cli,
+                check: None,
             })
             .into_iter()
             .collect();
@@ -348,6 +420,9 @@ pub(crate) fn heavy_under(platform: &dyn Platform, cli: u32, owner: &str) -> Vec
                     owner: owner.to_owned(),
                     command: heavy::label(&argv),
                     active: true,
+                    test: heavy::is_test(&argv),
+                    cli,
+                    check: None,
                 });
             }
             continue;
@@ -573,6 +648,11 @@ pub(crate) mod tests {
 
     /// [`worker_with_build`] whose build's child runs `child` (a shell command line).
     fn worker_with_build_running(dir: &Path, child: &str) -> (Child, PathBuf) {
+        worker_running(dir, child, "test")
+    }
+
+    /// A stand-in worker running `cargo <subcommand> -p core`, whose child runs `child`.
+    fn worker_running(dir: &Path, child: &str, subcommand: &str) -> (Child, PathBuf) {
         let bin = dir.join("bin");
         std::fs::create_dir_all(dir).unwrap();
         std::fs::create_dir_all(&bin).unwrap();
@@ -589,7 +669,7 @@ pub(crate) mod tests {
         }
         let child = Command::new("/bin/sh")
             .arg("-c")
-            .arg(format!("{} test -p core; true", cargo.display()))
+            .arg(format!("{} {subcommand} -p core; true", cargo.display()))
             .spawn()
             .unwrap();
         wait_for(|| ready.exists().then_some(()));
@@ -855,7 +935,8 @@ pub(crate) mod tests {
         // Calm, whatever the host's heat or memory pressure now.
         watch.guard.fake(MachineLoad::default());
         let t0 = Instant::now();
-        let (worker, _) = worker_with_build(dir.path());
+        // A build: a test run is never paused.
+        let (worker, _) = worker_running(dir.path(), "/bin/sleep 300", "build");
         let cli = proc_of(&*platform, worker.id()).unwrap();
         let build = wait_for(|| {
             heavy_under(&*platform, worker.id(), "task:a")
@@ -881,7 +962,7 @@ pub(crate) mod tests {
         let rows = watch.tick(&clis, t0 + Duration::from_secs(64));
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].note, Note::Resumed);
-        assert_eq!(rows[0].command, "cargo test -p core");
+        assert_eq!(rows[0].command, "cargo build -p core");
         assert!(running(build.pid));
 
         // Critical again for a minute, and the daemon dies with the build paused.
@@ -917,6 +998,77 @@ pub(crate) mod tests {
         watch.quit();
         assert!(running(build.pid));
         end(&*platform, worker);
+    }
+
+    /// Bug 8: a heavy `run_check` waits for the lease before it starts, and once running is
+    /// never sent SIGSTOP: not when a later build would stop it, not at critical heat.
+    #[tokio::test]
+    async fn a_check_waits_before_it_starts_and_is_never_stopped_while_it_runs() {
+        let dir = TempDir::new();
+        let platform = platform(dir.path());
+        let watch = MachineWatch::new(platform.clone(), dir.path().join("stopped.json"));
+        watch.guard.fake(MachineLoad::default());
+        let t0 = Instant::now();
+        // A worker's build holds the lease.
+        let (first, _) = worker_running(&dir.path().join("a"), "/bin/sleep 300", "build");
+        let first_cli = proc_of(&*platform, first.id()).unwrap();
+        wait_for(|| heavy_under(&*platform, first.id(), "task:a").pop());
+        watch.tick(&[("task:a".to_owned(), first_cli)], t0);
+        // The check asks: it may not start, and its thread hears why.
+        let (ticket, now, rows) = watch.ask_check("task:b", "cargo test");
+        assert!(!now);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].note, Note::WaitingForBuild);
+        let waiting = tokio::time::timeout(Duration::from_millis(200), watch.wait_check(ticket));
+        assert!(waiting.await.is_err(), "it waits while the build runs");
+        // The build ends: the next look lets the check start.
+        end(&*platform, first);
+        watch.tick(&[], t0 + Duration::from_secs(2));
+        tokio::time::timeout(Duration::from_secs(5), watch.wait_check(ticket))
+            .await
+            .expect("the check may start");
+        // It starts (a stand-in `cargo test`), tagged before the ledger would list it.
+        let (check, _) = worker_running(&dir.path().join("b"), "/bin/sleep 300", "test");
+        watch.attach_check(ticket, check.id());
+        let check_cli = proc_of(&*platform, check.id()).unwrap();
+        let check_build = wait_for(|| {
+            heavy_under(&*platform, check.id(), "task:b")
+                .first()
+                .map(|seen| seen.root)
+        });
+        // A later build waits behind it; the check keeps running, at critical heat too.
+        let (later, _) = worker_running(&dir.path().join("c"), "/bin/sleep 300", "build");
+        let later_cli = proc_of(&*platform, later.id()).unwrap();
+        let later_build = wait_for(|| {
+            heavy_under(&*platform, later.id(), "task:c")
+                .first()
+                .map(|seen| seen.root)
+        });
+        let clis = vec![
+            ("task:b".to_owned(), check_cli),
+            ("task:c".to_owned(), later_cli),
+        ];
+        watch.tick(&clis, t0 + Duration::from_secs(4));
+        assert!(stopped(later_build.pid), "the later build waits");
+        watch.guard.fake(CRITICAL);
+        for step in 0..6 {
+            watch.tick(&clis, t0 + Duration::from_secs(10 + step * 30));
+            assert!(
+                !state(check_build.pid).starts_with('T'),
+                "the check was stopped"
+            );
+            assert!(!state(check.id()).starts_with('T'), "the check was stopped");
+        }
+        // The check ends: the later build goes on once it cools.
+        watch.end_check(ticket);
+        end(&*platform, check);
+        watch.guard.fake(MachineLoad::default());
+        watch.tick(
+            &[("task:c".to_owned(), later_cli)],
+            t0 + Duration::from_secs(400),
+        );
+        assert!(running(later_build.pid));
+        end(&*platform, later);
     }
 
     #[tokio::test]

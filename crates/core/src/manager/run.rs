@@ -388,6 +388,20 @@ pub(crate) async fn run_command(
     owner: &str,
     ledger: &Arc<crate::ledger::CleanupLedger>,
 ) -> Result<Ran> {
+    run_command_then(platform, spec, timeout, ended, owner, ledger, |_| {}).await
+}
+
+/// [`run_command`], telling `spawned` the command's pid as soon as it started, before it is
+/// recorded in the cleanup ledger (where the machine watch finds it).
+pub(crate) async fn run_command_then(
+    platform: Arc<dyn Platform>,
+    spec: &brigadier_sandbox::SpawnSpec,
+    timeout: Duration,
+    ended: tokio_util::sync::CancellationToken,
+    owner: &str,
+    ledger: &Arc<crate::ledger::CleanupLedger>,
+    spawned: impl FnOnce(u32),
+) -> Result<Ran> {
     let mut command = tokio::process::Command::from(platform.processes().piped_command(spec));
     command.stdin(Stdio::null());
     let mut child = command
@@ -396,6 +410,7 @@ pub(crate) async fn run_command(
     let pid = child
         .id()
         .ok_or_else(|| Error::Invalid("the command ended before it started".into()))?;
+    spawned(pid);
     let mut running = Running {
         platform: platform.clone(),
         pid,

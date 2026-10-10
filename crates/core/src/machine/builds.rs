@@ -16,7 +16,13 @@
 //!   shared target folder): it keeps running too, and the next command goes on.
 //! - **Critical heat.** At critical heat for [`CRITICAL_HOLD`], the newest running build is
 //!   paused, then another every [`STEP`], until the heat drops back to serious or below; then
-//!   every paused build goes on, in reverse order.
+//!   every paused build goes on, in reverse order. A test run is never paused: stopped mid-run,
+//!   it fails its timing assertions.
+//! - **Checks wait before they start.** A heavy `run_check` asks for the lease before it is
+//!   spawned ([`Builds::ask`]) and queues with the stopped commands, oldest first. Once
+//!   granted it starts, and its processes are never stopped or paused: it holds the lease as
+//!   a ticket until it ends, and gives it back like any holder when it runs too long or sits
+//!   idle while others wait.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -40,7 +46,7 @@ pub(crate) const STEP: Duration = Duration::from_secs(20);
 
 /// A process by its pid and start time, so a later process reusing the pid is never taken
 /// for it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Proc {
     pub pid: u32,
@@ -49,7 +55,7 @@ pub(crate) struct Proc {
 }
 
 /// A heavy command one of Brigadier's CLIs runs now.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Seen {
     /// Its topmost heavy process.
     pub root: Proc,
@@ -59,6 +65,12 @@ pub(crate) struct Seen {
     pub command: String,
     /// Its processes used CPU since the last look (or started), so it isn't blocked.
     pub active: bool,
+    /// It runs tests: never paused for the heat.
+    pub test: bool,
+    /// The pid of the Brigadier CLI or command it was found under.
+    pub cli: u32,
+    /// It runs under the `run_check` holding this ticket: never stopped or paused.
+    pub check: Option<u64>,
 }
 
 /// What a thread row says about a command.
@@ -82,7 +94,8 @@ pub(crate) enum Action {
     Continue(Proc),
     /// Tell the command's owner's thread.
     Note {
-        proc: Proc,
+        /// The stopped process the note is about; `None` for a check not started yet.
+        proc: Option<Proc>,
         owner: String,
         command: String,
         note: Note,
@@ -109,6 +122,8 @@ enum State {
 struct Build {
     owner: String,
     command: String,
+    /// It runs tests: never paused.
+    test: bool,
     /// Arrival order: the oldest waiting goes first, the newest running is paused first.
     seq: u64,
     state: State,
@@ -118,20 +133,154 @@ struct Build {
     held_for: Option<MachineStepReason>,
 }
 
+/// A `run_check` that asked for the lease before it starts.
+#[derive(Debug)]
+struct Ticket {
+    owner: String,
+    command: String,
+    seq: u64,
+    state: TicketState,
+    warning_since: Option<Instant>,
+    held_for: Option<MachineStepReason>,
+    /// The check's own process once it started ([`Builds::attach`]).
+    cli: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TicketState {
+    /// Waiting for the lease; the check isn't started.
+    Queued,
+    /// Holding the lease; `since` it was granted, `quiet_since` its processes last used no
+    /// CPU.
+    Holding {
+        since: Instant,
+        quiet_since: Option<Instant>,
+    },
+    /// Running on without the lease (too long, or idle while others waited).
+    LongRunning,
+}
+
+/// Who holds the build lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Holder {
+    Build(Proc),
+    Check(u64),
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Builds {
     builds: HashMap<Proc, Build>,
-    lease: Option<Proc>,
+    tickets: HashMap<u64, Ticket>,
+    lease: Option<Holder>,
     next: u64,
     critical_since: Option<Instant>,
     last_pause: Option<Instant>,
 }
 
 impl Builds {
+    /// A heavy `run_check` asks for the lease before it starts, at `now` under `load`. Returns
+    /// its ticket, whether it holds the lease at once, and the notes for its thread when it
+    /// waits. It goes when nothing holds the lease, nothing waits before it and the machine
+    /// isn't strained; otherwise it queues with the stopped commands, oldest first.
+    pub(crate) fn ask(
+        &mut self,
+        owner: &str,
+        command: &str,
+        load: MachineLoad,
+        now: Instant,
+    ) -> (u64, bool, Vec<Action>) {
+        let seq = self.next;
+        self.next += 1;
+        let held_for = load
+            .builds_held()
+            .then(|| MachineStepReason::from_load(load));
+        let free = self.lease.is_none() && held_for.is_none() && !self.anything_waiting();
+        let mut actions = Vec::new();
+        let state = if free {
+            self.lease = Some(Holder::Check(seq));
+            TicketState::Holding {
+                since: now,
+                quiet_since: None,
+            }
+        } else {
+            actions.push(Action::Note {
+                proc: None,
+                owner: owner.to_owned(),
+                command: command.to_owned(),
+                note: match held_for {
+                    Some(reason) => Note::WaitingToCool(reason),
+                    None => Note::WaitingForBuild,
+                },
+            });
+            TicketState::Queued
+        };
+        self.tickets.insert(
+            seq,
+            Ticket {
+                owner: owner.to_owned(),
+                command: command.to_owned(),
+                seq,
+                state,
+                warning_since: None,
+                held_for,
+                cli: None,
+            },
+        );
+        (seq, free, actions)
+    }
+
+    /// Whether the check of `ticket` may start: it holds the lease, or ran on past it.
+    pub(crate) fn granted(&self, ticket: u64) -> bool {
+        self.tickets
+            .get(&ticket)
+            .is_some_and(|ticket| ticket.state != TicketState::Queued)
+    }
+
+    /// The check of `ticket` started as process `pid`: what runs under it is the check's. Called
+    /// before the process is recorded in the cleanup ledger, so no look sees it untagged.
+    pub(crate) fn attach(&mut self, ticket: u64, pid: u32) {
+        if let Some(ticket) = self.tickets.get_mut(&ticket) {
+            ticket.cli = Some(pid);
+        }
+    }
+
+    /// The check of `ticket` ended (or never started): the lease it held is free.
+    pub(crate) fn end(&mut self, ticket: u64) {
+        self.tickets.remove(&ticket);
+        if self.lease == Some(Holder::Check(ticket)) {
+            self.lease = None;
+        }
+    }
+
     /// Takes in what runs now and the machine's load at `now`; returns what to do, stops and
     /// continues in the order they are to happen.
     pub(crate) fn tick(&mut self, seen: Vec<Seen>, load: MachineLoad, now: Instant) -> Vec<Action> {
         let mut actions = Vec::new();
+        // A check's processes are never stopped: they only say whether it is busy.
+        let checks_by_cli: HashMap<u32, u64> = self
+            .tickets
+            .values()
+            .filter_map(|ticket| ticket.cli.map(|cli| (cli, ticket.seq)))
+            .collect();
+        let (checks, seen): (Vec<Seen>, Vec<Seen>) = seen
+            .into_iter()
+            .map(|mut seen| {
+                seen.check = seen.check.or_else(|| checks_by_cli.get(&seen.cli).copied());
+                seen
+            })
+            .partition(|seen| seen.check.is_some());
+        for ticket in self.tickets.values_mut() {
+            if let TicketState::Holding { quiet_since, .. } = &mut ticket.state {
+                let busy = checks
+                    .iter()
+                    .any(|seen| seen.check == Some(ticket.seq) && seen.active);
+                *quiet_since = if busy {
+                    None
+                } else {
+                    Some(quiet_since.unwrap_or(now))
+                };
+            }
+        }
         // Ended, or left its CLI's tree (its shell gave up on it): forget it. One still stopped
         // goes on, so it can take whatever ended its shell and end too.
         let current: HashMap<Proc, Seen> = seen.into_iter().map(|seen| (seen.root, seen)).collect();
@@ -147,7 +296,7 @@ impl Builds {
             {
                 actions.push(Action::Continue(proc));
             }
-            if self.lease == Some(proc) {
+            if self.lease == Some(Holder::Build(proc)) {
                 self.lease = None;
             }
         }
@@ -171,15 +320,12 @@ impl Builds {
         for seen in new {
             let seq = self.next;
             self.next += 1;
-            let waiting_before = self
-                .builds
-                .values()
-                .any(|build| build.state == State::Waiting);
+            let waiting_before = self.anything_waiting();
             let held_for = load
                 .builds_held()
                 .then(|| MachineStepReason::from_load(load));
             let state = if self.lease.is_none() && held_for.is_none() && !waiting_before {
-                self.lease = Some(seen.root);
+                self.lease = Some(Holder::Build(seen.root));
                 State::Running {
                     since: now,
                     quiet_since: None,
@@ -187,7 +333,7 @@ impl Builds {
             } else {
                 actions.push(Action::Stop(seen.root));
                 actions.push(Action::Note {
-                    proc: seen.root,
+                    proc: Some(seen.root),
                     owner: seen.owner.clone(),
                     command: seen.command.clone(),
                     note: match held_for {
@@ -202,6 +348,7 @@ impl Builds {
                 Build {
                     owner: seen.owner,
                     command: seen.command,
+                    test: seen.test,
                     seq,
                     state,
                     warning_since: None,
@@ -211,18 +358,33 @@ impl Builds {
         }
         // The lease holder keeps running without the lease once it ran too long, or sat idle
         // while others wait.
-        let waiting = self
-            .builds
-            .values()
-            .any(|build| build.state == State::Waiting);
-        if let Some(holder) = self.lease
-            && let Some(build) = self.builds.get_mut(&holder)
-            && let State::Running { since, quiet_since } = build.state
-            && (now.duration_since(since) >= LEASE_MAX
-                || (waiting && quiet_since.is_some_and(|quiet| now.duration_since(quiet) >= IDLE)))
-        {
-            build.state = State::LongRunning;
-            self.lease = None;
+        let waiting = self.anything_waiting();
+        let overdue = |since: Instant, quiet_since: Option<Instant>| {
+            now.duration_since(since) >= LEASE_MAX
+                || (waiting && quiet_since.is_some_and(|quiet| now.duration_since(quiet) >= IDLE))
+        };
+        match self.lease {
+            Some(Holder::Build(holder)) => {
+                if let Some(build) = self.builds.get_mut(&holder)
+                    && let State::Running { since, quiet_since } = build.state
+                    && overdue(since, quiet_since)
+                {
+                    build.state = State::LongRunning;
+                    self.lease = None;
+                }
+            }
+            Some(Holder::Check(holder)) => match self.tickets.get_mut(&holder) {
+                Some(ticket) => {
+                    if let TicketState::Holding { since, quiet_since } = ticket.state
+                        && overdue(since, quiet_since)
+                    {
+                        ticket.state = TicketState::LongRunning;
+                        self.lease = None;
+                    }
+                }
+                None => self.lease = None,
+            },
+            None => {}
         }
         if load.critical() {
             let since = *self.critical_since.get_or_insert(now);
@@ -241,7 +403,7 @@ impl Builds {
                 self.last_pause = Some(now);
                 actions.push(Action::Stop(proc));
                 actions.push(Action::Note {
-                    proc,
+                    proc: Some(proc),
                     owner: build.owner.clone(),
                     command: build.command.clone(),
                     note: Note::Paused,
@@ -255,37 +417,73 @@ impl Builds {
         // A persistent warning must not starve builds on an otherwise healthy machine.
         // Reset the grace period whenever heat or critical memory also holds them.
         let warning_only = load.memory == MemoryPressure::Warning && !load.workers_held();
-        for build in self
+        let waits = self
             .builds
             .values_mut()
             .filter(|build| build.state == State::Waiting)
-        {
+            .map(|build| &mut build.warning_since)
+            .chain(
+                self.tickets
+                    .values_mut()
+                    .filter(|ticket| ticket.state == TicketState::Queued)
+                    .map(|ticket| &mut ticket.warning_since),
+            );
+        for warning_since in waits {
             if warning_only {
-                build.warning_since.get_or_insert(now);
+                warning_since.get_or_insert(now);
             } else {
-                build.warning_since = None;
+                *warning_since = None;
             }
         }
-        // The oldest waiting command takes a free lease once the machine eased, or its
-        // memory-warning grace period elapsed. Critical memory and heat keep holding it.
-        if self.lease.is_none()
-            && let Some((&proc, build)) = self
+        // The oldest waiting command or check takes a free lease once the machine eased, or
+        // its memory-warning grace period elapsed. Critical memory and heat keep holding it.
+        let may_go = |warning_since: Option<Instant>| {
+            !load.builds_held()
+                || (warning_only
+                    && warning_since
+                        .is_some_and(|since| now.duration_since(since) >= MEMORY_WARNING_HOLD))
+        };
+        if self.lease.is_none() {
+            let build = self
                 .builds
-                .iter_mut()
+                .iter()
                 .filter(|(_, build)| build.state == State::Waiting)
                 .min_by_key(|(_, build)| build.seq)
-            && (!load.builds_held()
-                || (warning_only
-                    && build
-                        .warning_since
-                        .is_some_and(|since| now.duration_since(since) >= MEMORY_WARNING_HOLD)))
-        {
-            build.state = State::Running {
-                since: now,
-                quiet_since: None,
+                .map(|(proc, build)| (build.seq, Holder::Build(*proc), build.warning_since));
+            let ticket = self
+                .tickets
+                .values()
+                .filter(|ticket| ticket.state == TicketState::Queued)
+                .min_by_key(|ticket| ticket.seq)
+                .map(|ticket| (ticket.seq, Holder::Check(ticket.seq), ticket.warning_since));
+            let oldest = match (build, ticket) {
+                (Some(build), Some(ticket)) => {
+                    Some(if build.0 < ticket.0 { build } else { ticket })
+                }
+                (build, ticket) => build.or(ticket),
             };
-            self.lease = Some(proc);
-            actions.push(Action::Continue(proc));
+            if let Some((_, holder, warning_since)) = oldest
+                && may_go(warning_since)
+            {
+                self.lease = Some(holder);
+                match holder {
+                    Holder::Build(proc) => {
+                        let build = self.builds.get_mut(&proc).expect("just found");
+                        build.state = State::Running {
+                            since: now,
+                            quiet_since: None,
+                        };
+                        actions.push(Action::Continue(proc));
+                    }
+                    Holder::Check(seq) => {
+                        let ticket = self.tickets.get_mut(&seq).expect("just found");
+                        ticket.state = TicketState::Holding {
+                            since: now,
+                            quiet_since: None,
+                        };
+                    }
+                }
+            }
         }
         // One still waiting for the machine, held now for another reason: its thread says so.
         if load.builds_held() {
@@ -296,9 +494,22 @@ impl Builds {
                 {
                     build.held_for = Some(reason);
                     actions.push(Action::Note {
-                        proc,
+                        proc: Some(proc),
                         owner: build.owner.clone(),
                         command: build.command.clone(),
+                        note: Note::WaitingToCool(reason),
+                    });
+                }
+            }
+            for ticket in self.tickets.values_mut() {
+                if ticket.state == TicketState::Queued
+                    && ticket.held_for.is_some_and(|held_for| held_for != reason)
+                {
+                    ticket.held_for = Some(reason);
+                    actions.push(Action::Note {
+                        proc: None,
+                        owner: ticket.owner.clone(),
+                        command: ticket.command.clone(),
                         note: Note::WaitingToCool(reason),
                     });
                 }
@@ -307,7 +518,8 @@ impl Builds {
         actions
     }
 
-    /// Every stopped command goes on (the daemon is quitting), and nothing is tracked after.
+    /// Every stopped command goes on and every waiting check may start (the daemon is
+    /// quitting), and nothing is tracked after.
     pub(crate) fn release_all(&mut self) -> Vec<Action> {
         let mut stopped: Vec<(u64, Proc)> = self
             .builds
@@ -319,7 +531,13 @@ impl Builds {
             })
             .collect();
         stopped.sort_by_key(|(order, _)| std::cmp::Reverse(*order));
+        let tickets = std::mem::take(&mut self.tickets);
         *self = Self::default();
+        // The tickets are kept, granted, so no check waits on a watch that is gone.
+        self.tickets = tickets;
+        for ticket in self.tickets.values_mut() {
+            ticket.state = TicketState::LongRunning;
+        }
         stopped
             .into_iter()
             .map(|(_, proc)| Action::Continue(proc))
@@ -331,17 +549,23 @@ impl Builds {
         if let Some(build) = self.builds.get_mut(&proc) {
             build.state = State::LongRunning;
         }
-        if self.lease == Some(proc) {
+        if self.lease == Some(Holder::Build(proc)) {
             self.lease = None;
         }
     }
 
-    /// The owners of the commands stopped now.
+    /// The owners of the commands stopped now, and of the checks waiting to start.
     pub(crate) fn held_owners(&self) -> Vec<String> {
         self.builds
             .values()
             .filter(|build| matches!(build.state, State::Waiting | State::Paused { .. }))
             .map(|build| build.owner.clone())
+            .chain(
+                self.tickets
+                    .values()
+                    .filter(|ticket| ticket.state == TicketState::Queued)
+                    .map(|ticket| ticket.owner.clone()),
+            )
             .collect()
     }
 
@@ -355,11 +579,24 @@ impl Builds {
             .collect()
     }
 
-    /// The running (or long-running) build that arrived last.
+    /// Whether a stopped command or a check waits for the lease.
+    fn anything_waiting(&self) -> bool {
+        self.builds
+            .values()
+            .any(|build| build.state == State::Waiting)
+            || self
+                .tickets
+                .values()
+                .any(|ticket| ticket.state == TicketState::Queued)
+    }
+
+    /// The running (or long-running) build that arrived last, test runs left out.
     fn newest_running(&self) -> Option<Proc> {
         self.builds
             .iter()
-            .filter(|(_, build)| matches!(build.state, State::Running { .. } | State::LongRunning))
+            .filter(|(_, build)| {
+                !build.test && matches!(build.state, State::Running { .. } | State::LongRunning)
+            })
             .max_by_key(|(_, build)| build.seq)
             .map(|(proc, _)| *proc)
     }
@@ -391,7 +628,7 @@ impl Builds {
             };
             actions.push(Action::Continue(proc));
             actions.push(Action::Note {
-                proc,
+                proc: Some(proc),
                 owner: build.owner.clone(),
                 command: build.command.clone(),
                 note: Note::Resumed,
@@ -437,6 +674,124 @@ mod tests {
             owner: owner.into(),
             command: format!("cargo test #{pid}"),
             active: true,
+            ..Seen::default()
+        }
+    }
+
+    fn check_seen(pid: u32, owner: &str, ticket: u64) -> Seen {
+        Seen {
+            check: Some(ticket),
+            test: true,
+            ..seen(pid, owner)
+        }
+    }
+
+    #[test]
+    fn a_check_waits_for_the_lease_before_it_starts_and_is_never_stopped_once_running() {
+        let mut builds = Builds::default();
+        let t0 = Instant::now();
+        builds.tick(vec![seen(10, "task:a")], CALM, t0);
+        // A check asks while a build holds the lease: it isn't started, and its thread says so.
+        let (ticket, now, actions) = builds.ask("task:b", "cargo test", CALM, t0);
+        assert!(!now && !builds.granted(ticket));
+        assert_eq!(
+            notes(&actions),
+            vec![("task:b".into(), Note::WaitingForBuild)]
+        );
+        assert_eq!(builds.held_owners(), vec!["task:b".to_owned()]);
+        // The build ends: the check may start. Nothing is stopped or continued for it.
+        let t1 = t0 + Duration::from_secs(2);
+        let actions = builds.tick(Vec::new(), CALM, t1);
+        assert!(builds.granted(ticket));
+        assert!(stops(&actions).is_empty() && continues(&actions).is_empty());
+        // Running, it holds the lease: a new build waits, and the check's own processes are
+        // never stopped, nor paused at critical heat held for minutes.
+        let t2 = t1 + Duration::from_secs(2);
+        let actions = builds.tick(
+            vec![check_seen(40, "task:b", ticket), seen(30, "task:c")],
+            CALM,
+            t2,
+        );
+        assert_eq!(stops(&actions), vec![30]);
+        let mut at = t2;
+        for _ in 0..20 {
+            at += Duration::from_secs(20);
+            let actions = builds.tick(
+                vec![check_seen(40, "task:b", ticket), seen(30, "task:c")],
+                CRITICAL,
+                at,
+            );
+            assert!(!stops(&actions).contains(&40), "{actions:?}");
+        }
+        // The check ends: the waiting build goes on.
+        builds.end(ticket);
+        let actions = builds.tick(vec![seen(30, "task:c")], CALM, at + STEP);
+        assert_eq!(continues(&actions), vec![30]);
+    }
+
+    #[test]
+    fn a_check_starts_at_once_on_a_free_lease_and_queues_in_arrival_order() {
+        let mut builds = Builds::default();
+        let t0 = Instant::now();
+        let (first, now, actions) = builds.ask("task:a", "cargo test", CALM, t0);
+        assert!(now && builds.granted(first) && actions.is_empty());
+        // A build seen meanwhile waits; a second check waits behind it.
+        builds.tick(
+            vec![check_seen(5, "task:a", first), seen(10, "task:b")],
+            CALM,
+            t0,
+        );
+        let (second, now, _) = builds.ask("task:c", "pnpm test", CALM, t0);
+        assert!(!now);
+        builds.end(first);
+        let actions = builds.tick(vec![seen(10, "task:b")], CALM, t0 + STEP);
+        assert_eq!(continues(&actions), vec![10]);
+        assert!(!builds.granted(second));
+        let _ = builds.tick(Vec::new(), CALM, t0 + STEP * 2);
+        assert!(builds.granted(second));
+        // While hot, a check waits for the machine, then starts once it cools.
+        builds.end(second);
+        let (third, now, actions) = builds.ask("task:d", "cargo test", HOT, t0 + STEP * 3);
+        assert!(!now);
+        assert!(matches!(notes(&actions)[..], [(_, Note::WaitingToCool(_))]));
+        let _ = builds.tick(Vec::new(), CALM, t0 + STEP * 4);
+        assert!(builds.granted(third));
+    }
+
+    #[test]
+    fn a_check_idle_while_others_wait_gives_the_lease_back_and_runs_on() {
+        let mut builds = Builds::default();
+        let t0 = Instant::now();
+        let (ticket, _, _) = builds.ask("task:a", "cargo test", CALM, t0);
+        let idle = Seen {
+            active: false,
+            ..check_seen(5, "task:a", ticket)
+        };
+        builds.tick(vec![idle.clone(), seen(10, "task:b")], CALM, t0);
+        let actions = builds.tick(
+            vec![idle.clone(), seen(10, "task:b")],
+            CALM,
+            t0 + IDLE + Duration::from_secs(1),
+        );
+        assert_eq!(continues(&actions), vec![10]);
+        assert!(!stops(&actions).contains(&5));
+        assert!(builds.granted(ticket));
+    }
+
+    #[test]
+    fn critical_heat_never_pauses_a_test_run() {
+        let mut builds = Builds::default();
+        let t0 = Instant::now();
+        let test = Seen {
+            test: true,
+            ..seen(10, "task:a")
+        };
+        builds.tick(vec![test.clone()], CALM, t0);
+        let mut at = t0;
+        for _ in 0..10 {
+            at += Duration::from_secs(30);
+            let actions = builds.tick(vec![test.clone()], CRITICAL, at);
+            assert!(stops(&actions).is_empty(), "{actions:?}");
         }
     }
 
@@ -514,7 +869,7 @@ mod tests {
             t0 + Duration::from_secs(2),
         );
         assert_eq!(stops(&actions), Vec::<u32>::new());
-        assert_eq!(builds.lease, Some(proc(11)));
+        assert_eq!(builds.lease, Some(Holder::Build(proc(11))));
         // While the parent's own build still runs, the reviewer's waits only for that build,
         // which needs nothing from the reviewer: it ends, and the reviewer's goes on.
         let mut builds = Builds::default();
@@ -566,7 +921,7 @@ mod tests {
         // Idle with nobody waiting: it keeps the lease.
         builds.tick(vec![quiet(10)], CALM, t0);
         builds.tick(vec![quiet(10)], CALM, t0 + IDLE * 2);
-        assert_eq!(builds.lease, Some(proc(10)));
+        assert_eq!(builds.lease, Some(Holder::Build(proc(10))));
         // Someone waits; the holder works again, then goes quiet (blocked on a lock the
         // waiting one took): after IDLE of quiet, the waiting one goes on; neither is stopped.
         builds.tick(

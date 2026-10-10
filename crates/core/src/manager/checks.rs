@@ -44,7 +44,9 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use super::SessionManager;
-use super::run::{RUN_TIMEOUT_DEFAULT, RUN_TIMEOUT_MAX, run_command, run_workdir, shell_command};
+use super::run::{
+    RUN_TIMEOUT_DEFAULT, RUN_TIMEOUT_MAX, run_command_then, run_workdir, shell_command,
+};
 use super::workers::ToolAccess;
 use super::{blocking, git_error};
 use crate::digest::TRIM_ABOVE;
@@ -52,6 +54,18 @@ use crate::model::{ConversationId, DomainEvent, Environment, ProjectId, Setup};
 use crate::tools::RunCheck;
 use crate::work::{OutputSource, TaskId};
 use crate::{Error, Result, now_ms};
+
+/// A heavy check's hold on the build lease: given back when the check ends or won't start.
+struct CheckLease {
+    machine: Arc<crate::machine::MachineWatch>,
+    ticket: u64,
+}
+
+impl Drop for CheckLease {
+    fn drop(&mut self) {
+        self.machine.end_check(self.ticket);
+    }
+}
 
 /// How long a toolchain's version is trusted before it is asked again.
 const TOOLCHAIN_TTL: Duration = Duration::from_secs(5 * 60);
@@ -439,16 +453,48 @@ impl SessionManager {
         key: std::result::Result<Key, String>,
     ) -> Result<String> {
         let spec = self.check_spec(caller, workdir, command)?;
+        // A heavy check waits for the build lease before it starts, and is never stopped or
+        // paused once running (a test stopped mid-run fails its timing assertions).
+        let lease = if crate::machine::heavy::line_is_heavy(command) {
+            let (ticket, now, rows) = self.machine.ask_check(&caller.owner, command);
+            let lease = CheckLease {
+                machine: self.machine.clone(),
+                ticket,
+            };
+            if !now {
+                for row in rows {
+                    self.machine_row(row).await;
+                }
+                tokio::select! {
+                    () = self.machine.wait_check(ticket) => {}
+                    () = caller.ended.cancelled() => {
+                        return Err(Error::Invalid(
+                            "stopped: the thread's session ended while the check waited for another build".into(),
+                        ));
+                    }
+                }
+            }
+            Some(lease)
+        } else {
+            None
+        };
         let started = Instant::now();
-        let ran = run_command(
+        let ran = run_command_then(
             self.runtime.platform().clone(),
             &spec,
             timeout,
             caller.ended.clone(),
             &caller.owner,
             self.runtime.ledger(),
+            |pid| {
+                if let Some(lease) = &lease {
+                    self.machine.attach_check(lease.ticket, pid);
+                }
+            },
         )
-        .await?;
+        .await;
+        drop(lease);
+        let ran = ran?;
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let (reply, alias) = self.check_reply(caller, &ran.status, ran.output).await?;
         let (key, bypassed) = match key {

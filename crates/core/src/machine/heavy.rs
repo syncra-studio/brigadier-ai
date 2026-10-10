@@ -143,11 +143,53 @@ fn subcommand(args: &[String]) -> Option<(usize, &String)> {
     None
 }
 
+/// Test runners among [`TOOLS`].
+const TEST_TOOLS: &[&str] = &["pytest", "jest", "vitest", "playwright"];
+
+/// Subcommands of [`SUBCOMMANDS`] and [`RUNTIMES`] that run tests.
+const TEST_SUBCOMMANDS: &[&str] = &["test", "t", "nextest", "bench", "llvm-cov", "miri"];
+
+/// Script words of [`SCRIPTS`] that run tests.
+const TEST_SCRIPTS: &[&str] = &["test", "tests", "vitest", "jest", "playwright", "e2e"];
+
+/// What kind of heavy command a process runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Heavy {
+    Build,
+    /// A test run: pausing it mid-run fails its timing assertions.
+    Test,
+}
+
 /// Whether a process running `argv` is a heavy command.
 pub(crate) fn is_heavy(argv: &[String]) -> bool {
-    let Some(first) = argv.first() else {
-        return false;
-    };
+    classify(argv).is_some()
+}
+
+/// Whether a process running `argv` is a heavy command that runs tests.
+pub(crate) fn is_test(argv: &[String]) -> bool {
+    classify(argv) == Some(Heavy::Test)
+}
+
+/// Whether a shell command line runs a heavy command anywhere in it (`ulimit -n 8192; cargo
+/// test`, `cd app && pnpm build`): what `run_check` asks the build lease for before it
+/// starts. Words are split on blanks only, so a quoted argument may read wrong; a command
+/// missed here is still found in the process tree once it runs.
+pub(crate) fn line_is_heavy(line: &str) -> bool {
+    line.split(['\n', ';', '|', '&', '(', ')'])
+        .map(|part| {
+            part.split_whitespace()
+                .skip_while(|word| {
+                    word.contains('=') && !word.starts_with(['-', '=']) || *word == "exec"
+                })
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .any(|argv| is_heavy(&argv))
+}
+
+fn classify(argv: &[String]) -> Option<Heavy> {
+    let kind = |test: bool| if test { Heavy::Test } else { Heavy::Build };
+    let first = argv.first()?;
     let mut name = program(first);
     let mut rest = &argv[1..];
     let long_running = |name: &str, rest: &[String]| {
@@ -160,11 +202,15 @@ pub(crate) fn is_heavy(argv: &[String]) -> bool {
     };
     if let Some((_, own)) = RUNTIMES.iter().find(|(runtime, _)| *runtime == name) {
         match subcommand(rest) {
-            Some((_, sub)) if own.contains(&sub.as_str()) => return !long_running(&name, rest),
+            Some((_, sub)) if own.contains(&sub.as_str()) => {
+                return (!long_running(&name, rest))
+                    .then_some(kind(TEST_SUBCOMMANDS.contains(&sub.as_str())));
+            }
             Some((index, sub)) if sub == "run" || sub == "x" => {
                 // `bun run build` is a package script, as `pnpm build`.
                 let script = &rest[index + 1..];
-                return !long_running(&name, script) && runs_a_build_script(script);
+                return (!long_running(&name, script) && runs_a_build_script(script))
+                    .then_some(kind(runs_a_test_script(script)));
             }
             _ => {}
         }
@@ -182,25 +228,26 @@ pub(crate) fn is_heavy(argv: &[String]) -> bool {
                 None => break None,
             }
         };
-        let Some((index, script)) = script else {
-            return false;
-        };
+        let (index, script) = script?;
         name = program(script);
         rest = &rest[index + 1..];
     }
     if long_running(&name, rest) {
-        return false;
+        return None;
     }
     if TOOLS.contains(&name.as_str()) {
-        return true;
+        return Some(kind(TEST_TOOLS.contains(&name.as_str())));
     }
     if let Some((_, subcommands)) = SUBCOMMANDS.iter().find(|(tool, _)| *tool == name) {
-        return subcommand(rest).is_some_and(|(_, sub)| subcommands.contains(&sub.as_str()));
+        let (_, sub) = subcommand(rest)?;
+        return subcommands
+            .contains(&sub.as_str())
+            .then_some(kind(TEST_SUBCOMMANDS.contains(&sub.as_str())));
     }
     if PACKAGE_MANAGERS.contains(&name.as_str()) {
-        return runs_a_build_script(rest);
+        return runs_a_build_script(rest).then_some(kind(runs_a_test_script(rest)));
     }
-    false
+    None
 }
 
 /// Whether a package manager's arguments name a build, test, typecheck or lint script.
@@ -208,6 +255,14 @@ fn runs_a_build_script(args: &[String]) -> bool {
     args.iter().any(|arg| {
         arg.split([':', '-', '_'])
             .any(|word| SCRIPTS.contains(&word))
+    })
+}
+
+/// Whether a package manager's arguments name a test script.
+fn runs_a_test_script(args: &[String]) -> bool {
+    args.iter().any(|arg| {
+        arg.split([':', '-', '_'])
+            .any(|word| TEST_SCRIPTS.contains(&word))
     })
 }
 
@@ -282,6 +337,55 @@ mod tests {
             "pnpm -w build",
         ] {
             assert!(is_heavy(&argv(line)), "{line}");
+        }
+    }
+
+    #[test]
+    fn test_runs_are_told_from_builds() {
+        for line in [
+            "cargo test -p brigadier-core",
+            "cargo nextest run",
+            "go test ./...",
+            "npm run test",
+            "yarn test:unit",
+            "npx vitest run",
+            "python3 -m pytest tests",
+            "bun test",
+            "deno test",
+            "pnpm e2e",
+        ] {
+            assert!(is_test(&argv(line)), "{line}");
+        }
+        for line in [
+            "cargo build",
+            "pnpm build",
+            "tsc --noEmit",
+            "make -j8",
+            "cargo clippy",
+        ] {
+            assert!(is_heavy(&argv(line)) && !is_test(&argv(line)), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_command_line_is_heavy_when_any_of_its_commands_is() {
+        for line in [
+            "cargo test",
+            "ulimit -n 8192; cargo test -p core",
+            "TMPDIR=/tmp/x cargo test",
+            "cd apps/desktop && pnpm build",
+            "exec 2>&1\ncargo clippy --workspace",
+            "export TMPDIR=/tmp/x; pnpm test",
+        ] {
+            assert!(line_is_heavy(line), "{line}");
+        }
+        for line in [
+            "git status",
+            "ls -la; echo done",
+            "pnpm dev",
+            "rg cargo test",
+        ] {
+            assert!(!line_is_heavy(line), "{line}");
         }
     }
 
