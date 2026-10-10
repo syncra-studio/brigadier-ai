@@ -879,15 +879,39 @@ impl SessionManager {
                 // can then kill even a detached member whose original parent has died.
                 let owner = preview_owner(&live.conversation);
                 let processes = platform.processes();
-                let mut queue = vec![root.pid];
+                // Members from an earlier pause may have lost the parent that led to them,
+                // and a detached one is beyond the group signal: walk from each of them too.
+                // One whose identity no longer matches is not ours any more.
+                let known = {
+                    let mut members = live
+                        .paused_members
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner());
+                    members.retain(|member| crate::machine::still(&**platform, *member));
+                    members.clone()
+                };
+                let mut queue: Vec<u32> = known.iter().map(|member| member.pid).collect();
+                queue.push(root.pid);
                 let mut visited = std::collections::HashSet::new();
                 while let Some(pid) = queue.pop() {
                     if !visited.insert(pid) || visited.len() > 2_000 {
                         continue;
                     }
-                    let Some(member) = crate::machine::proc_of(&**platform, pid) else {
+                    let Some(member) = known
+                        .iter()
+                        .find(|member| member.pid == pid)
+                        .copied()
+                        .or_else(|| crate::machine::proc_of(&**platform, pid))
+                    else {
                         continue;
                     };
+                    if !crate::machine::still(&**platform, member) {
+                        live.paused_members
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .retain(|tracked| *tracked != member);
+                        continue;
+                    }
                     self.runtime
                         .ledger()
                         .record(&owner, process_artifact(member))
@@ -1704,6 +1728,98 @@ while True: time.sleep(0.03)
         })
         .await;
         assert!(flow.manager.runtime.ledger().artifacts(&owner).is_empty());
+        flow.stop().await;
+    }
+
+    #[tokio::test]
+    async fn pausing_again_stops_a_detached_member_whose_parent_exited() {
+        use crate::manager::flow::{Flow, Options, Reply, eventually};
+
+        fn stopped(pid: u32) -> bool {
+            let out = std::process::Command::new("ps")
+                .args(["-o", "stat=", "-p", &pid.to_string()])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().starts_with('T')
+        }
+
+        let flow = Flow::start(
+            "preview-repause-orphan",
+            Options::default(),
+            Arc::new(|_| Box::pin(async { Reply::text("[quiet]") })),
+        )
+        .await;
+        let platform = flow.manager.runtime.platform().clone();
+        let parent_file = flow.repo.join("parent.pid");
+        let detached_file = flow.repo.join("detached.pid");
+        let mut spec = flow.manager.runtime.cli_env().spec(Path::new("python3"));
+        // The leader reaps its child, so an exited parent leaves no zombie behind.
+        spec.args = vec![
+            "-c".into(),
+            r#"
+import os, sys, time
+if os.fork() == 0:
+    if os.fork() == 0:
+        os.setsid()
+        with open(sys.argv[2], 'w') as f: f.write(str(os.getpid()))
+    else:
+        with open(sys.argv[1], 'w') as f: f.write(str(os.getpid()))
+    while True: time.sleep(0.03)
+while True:
+    try: os.waitpid(-1, os.WNOHANG)
+    except ChildProcessError: pass
+    time.sleep(0.03)
+"#
+            .into(),
+            parent_file.as_os_str().to_owned(),
+            detached_file.as_os_str().to_owned(),
+        ];
+        let mut child = platform.processes().piped_command(&spec).spawn().unwrap();
+        eventually("the parent and detached preview processes", || {
+            [&parent_file, &detached_file]
+                .iter()
+                .all(|file| std::fs::read_to_string(file).is_ok_and(|pid| !pid.is_empty()))
+        })
+        .await;
+        let parent: u32 = std::fs::read_to_string(&parent_file)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let detached: u32 = std::fs::read_to_string(&detached_file)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let parent = crate::machine::proc_of(&*platform, parent).unwrap();
+        let live = LivePreview {
+            conversation: flow.conversation.clone(),
+            id: "preview-1".into(),
+            pid: child.id(),
+            workspace: flow.repo.clone(),
+            log: flow.repo.join("unused.log"),
+            reason: Mutex::default(),
+            stop: CancellationToken::new(),
+            ended: CancellationToken::new(),
+            snapshot: Mutex::default(),
+            paused_members: Mutex::default(),
+            updating: tokio::sync::Mutex::default(),
+        };
+        flow.manager.signal_preview(&live, true).await.unwrap();
+        assert!(stopped(detached));
+        flow.manager.signal_preview(&live, false).await.unwrap();
+        assert!(!stopped(detached));
+        // The leader lives on, but nothing leads from it to the detached process any more.
+        platform.processes().terminate(parent.pid).unwrap();
+        eventually("the intermediate parent to exit", || {
+            !crate::machine::still(&*platform, parent)
+        })
+        .await;
+        flow.manager.signal_preview(&live, true).await.unwrap();
+        assert!(stopped(detached));
+
+        flow.manager.signal_preview(&live, false).await.unwrap();
+        let _ = platform.processes().terminate(detached);
+        child.kill().unwrap();
+        child.wait().unwrap();
         flow.stop().await;
     }
 
