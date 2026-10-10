@@ -143,7 +143,11 @@ pub fn run_script<D: Desktop>(engine: &mut Engine<D>, script: &Value, out: &Path
             let cancel = engine
                 .gens
                 .token(&worker, std::time::Duration::from_secs(30));
-            let o = crate::launch::launch(engine, &req, &cancel).map_err(|e| anyhow!("{e}"))?;
+            let o = crate::launch::launch(engine, &worker, &req, &cancel)
+                .map_err(|e| anyhow!("{e}"))?;
+            if let Some(f) = &o.failed {
+                return Err(anyhow!("{}", f.error));
+            }
             println!(
                 "launched {} pid {} (new process: {}) windows {:?}",
                 o.app.name, o.app.pid, o.new_process, o.new_windows

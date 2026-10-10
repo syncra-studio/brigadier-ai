@@ -16,6 +16,7 @@ mod web;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -989,6 +990,14 @@ impl Desktop for MacDesktop {
             ErrorCode::NoSuchTarget,
             format!("couldn't open it: {}", why.trim()),
         )
+    }
+
+    fn start_source(&self) -> Arc<dyn Fn(i32) -> Option<u64> + Send + Sync> {
+        Arc::new(process_start_us)
+    }
+
+    fn browser_on(&mut self, profile: &Path) -> Option<i32> {
+        crate::cdp::started_on(profile)
     }
 }
 

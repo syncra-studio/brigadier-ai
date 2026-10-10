@@ -271,6 +271,15 @@ pub fn teardown(prep: &Prepared) {
     }
 }
 
+/// A browser launch that failed after it started: its process and profile go in `prep`, so
+/// `teardown` ends the process by its identity and removes the profile.
+fn hand_back(prep: &mut Prepared, pid: i32, f: &crate::launch::Failed) {
+    prep.pid = pid;
+    prep.pid_start_us = f.started_us;
+    prep.exe = executable(pid).unwrap_or_default();
+    prep.browser_profile = Some(f.profile.display().to_string());
+}
+
 /// Whether `prep.pid` is still the fixture `setup` started: the same start time and a fixture's
 /// binary. After the fixture ends, its pid may name another process, which a signal would hit.
 fn is_ours(prep: &Prepared) -> bool {
@@ -369,8 +378,20 @@ fn web_setup(
             let browser = test_browser()?;
             let mut web = crate::cdp::Web::default();
             let cancel = crate::cancel::Generations::new().token(WORKER, Duration::from_secs(30));
-            let o = crate::launch::open_browser(desktop, &mut web, &browser, Some(&url), &cancel)
-                .map_err(|e| anyhow!("{e}"))?;
+            let o = crate::launch::open_browser(
+                desktop,
+                &mut web,
+                WORKER,
+                &browser,
+                Some(&url),
+                &cancel,
+            )
+            .map_err(|e| anyhow!("{e}"))?;
+            if let Some(f) = &o.failed {
+                hand_back(prep, o.app.pid, f);
+                teardown(prep);
+                bail!("{}", f.error);
+            }
             prep.pid = o.app.pid;
             prep.browser_profile = web
                 .browsers
@@ -1136,4 +1157,28 @@ fn solve_web(s: &mut Script, task: &Task) -> Result<()> {
         other => bail!("no scripted solution for {other}"),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::{CuError, ErrorCode};
+
+    #[test]
+    fn a_browser_launch_that_failed_after_it_started_is_torn_down_by_its_identity() {
+        let mut browser = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let pid = browser.id() as i32;
+        let profile = std::env::temp_dir().join(format!("cu-suite-failed-{}", std::process::id()));
+        std::fs::create_dir_all(&profile).unwrap();
+        let failed = crate::launch::Failed {
+            error: CuError::new(ErrorCode::AppNotResponding, "no debugging port"),
+            started_us: crate::macos::process_start_us(pid).unwrap(),
+            profile: profile.clone(),
+        };
+        let mut prep = Prepared::default();
+        hand_back(&mut prep, pid, &failed);
+        teardown(&prep);
+        assert!(browser.try_wait().unwrap().is_some());
+        assert!(!profile.exists());
+    }
 }

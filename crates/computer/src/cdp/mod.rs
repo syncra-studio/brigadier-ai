@@ -85,6 +85,31 @@ pub fn adoptable(pid: i32) -> Option<PathBuf> {
     (dir.parent() == Some(base.as_path()) && active_port(&dir).is_some()).then_some(dir)
 }
 
+/// The browser process running on `profile`, read from the command lines: the main process,
+/// not one of its helpers (`--type=…`), which name the profile too.
+pub fn started_on(profile: &Path) -> Option<i32> {
+    let out = std::process::Command::new("/bin/ps")
+        .args(["-ax", "-ww", "-o", "pid=,command="])
+        .output()
+        .ok()?;
+    let want = profile.display().to_string();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|line| {
+            let (pid, command) = line.trim_start().split_once(' ')?;
+            let args: Vec<&str> = command.split(" --").collect();
+            let on = args
+                .iter()
+                .any(|a| a.strip_prefix("user-data-dir=").map(str::trim) == Some(want.as_str()));
+            let helper = args.iter().any(|a| a.starts_with("type="));
+            if on && !helper {
+                pid.parse().ok()
+            } else {
+                None
+            }
+        })
+}
+
 /// A fresh scratch profile directory.
 pub fn scratch_profile() -> CuResult<PathBuf> {
     let base = profiles_base();
@@ -128,6 +153,9 @@ pub struct Browser {
     pub pid: i32,
     /// The app bundle it runs from.
     pub app_path: String,
+    /// The worker whose launch started it, the only one a launch opens pages in: another
+    /// worker's ends with that worker. `None` for one taken on from another helper.
+    pub owner: Option<String>,
     profile: PathBuf,
     conn: Conn,
     pages: HashMap<String, page::Page>,
@@ -158,6 +186,7 @@ impl Browser {
         Ok(Self {
             pid,
             app_path: app_path.to_owned(),
+            owner: None,
             profile,
             conn,
             pages: HashMap::new(),
