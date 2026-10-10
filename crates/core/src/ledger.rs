@@ -89,9 +89,18 @@ pub struct CleanupLedger {
     accounts: Mutex<Option<AccountResolver>>,
     #[cfg(test)]
     test_providers: Mutex<Option<[Arc<dyn Provider>; 2]>>,
+    /// Holds the next append of an event of this kind: signals the first `Notify` when it is
+    /// reached, then waits for the second.
     #[cfg(test)]
-    pub(crate) finish_pause: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    append_pause: Mutex<Option<AppendPause>>,
 }
+
+#[cfg(test)]
+type AppendPause = (
+    &'static str,
+    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Notify>,
+);
 
 impl CleanupLedger {
     pub(crate) async fn load(
@@ -153,7 +162,7 @@ impl CleanupLedger {
             #[cfg(test)]
             test_providers: Mutex::new(None),
             #[cfg(test)]
-            finish_pause: Mutex::new(None),
+            append_pause: Mutex::new(None),
         })
     }
 
@@ -297,14 +306,16 @@ impl CleanupLedger {
         leftovers
             .failures
             .extend(self.remove(owner, files).await.failures);
-        if was_empty {
-            // No removal can finish this request. Keep any artifacts recorded while the
-            // finish is being stored, both here and on replay.
-            if let Err(err) = self
-                .append(DomainEvent::CleanupFinished {
-                    owner: owner.to_owned(),
-                })
-                .await
+        if leftovers.is_clean() {
+            // Everything in the snapshot is gone. Artifacts recorded meanwhile stay, both here
+            // and on replay. When none did, the last removal already ended the request on
+            // replay, unless there was no removal at all.
+            if (was_empty || !self.artifacts(owner).is_empty())
+                && let Err(err) = self
+                    .append(DomainEvent::CleanupFinished {
+                        owner: owner.to_owned(),
+                    })
+                    .await
             {
                 tracing::warn!(owner, error = %err, "could not record a finished cleanup");
             }
@@ -654,9 +665,11 @@ impl CleanupLedger {
 
     async fn append(&self, event: DomainEvent) -> Result<()> {
         #[cfg(test)]
-        if matches!(event, DomainEvent::CleanupFinished { .. }) {
-            let pause = self.finish_pause.lock().unwrap().clone();
-            if let Some((reached, release)) = pause {
+        {
+            let pause = self.append_pause.lock().unwrap().clone();
+            if let Some((kind, reached, release)) = pause
+                && kind == event.kind()
+            {
                 reached.notify_one();
                 release.notified().await;
             }
@@ -916,6 +929,221 @@ mod test_folder_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use brigadier_providers::cli::CliEnv;
+    use brigadier_store::{Store, StoreConfig};
+    use tokio::sync::Notify;
+
+    /// A store and a platform of their own, to load ledgers from again and again.
+    struct Fixture {
+        dir: PathBuf,
+        core: Arc<Core>,
+        platform: Arc<dyn Platform>,
+    }
+
+    impl Fixture {
+        async fn new() -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("brigadier-ledger-{}", uuid::Uuid::now_v7()));
+            let store = Store::open(StoreConfig {
+                db_path: dir.join("test.db"),
+                blobs_dir: dir.join("blobs"),
+                readers: 1,
+            })
+            .unwrap();
+            let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+                data_dir: Some(dir.join("data")),
+            })
+            .unwrap();
+            Self {
+                core: Core::load(store).await.unwrap(),
+                platform,
+                dir,
+            }
+        }
+
+        async fn load(&self) -> Arc<CleanupLedger> {
+            let env = Arc::new(CliEnv::from_vars([]));
+            Arc::new(
+                CleanupLedger::load(
+                    self.core.clone(),
+                    self.platform.clone(),
+                    Arc::new(Claude::new(self.platform.clone(), env.clone())),
+                    Arc::new(Codex::new(self.platform.clone(), env)),
+                )
+                .await
+                .unwrap(),
+            )
+        }
+
+        /// A scratch folder in the data folder, and its artifact.
+        fn folder(&self, name: &str) -> (PathBuf, Artifact) {
+            let path = self.platform.paths().data_dir.join(name);
+            std::fs::create_dir_all(&path).unwrap();
+            let artifact = Artifact::ScratchDir {
+                path: path.to_string_lossy().into_owned(),
+            };
+            (path, artifact)
+        }
+
+        async fn append(&self, event: DomainEvent) {
+            let new = NewEvent::new(streams::CLEANUP, event.kind(), 0, &event).unwrap();
+            self.core.store().append(vec![new]).await.unwrap();
+        }
+
+        /// The kinds of `owner`'s cleanup events, in order, and the last event's position.
+        async fn kinds(&self, owner: &str) -> (Vec<&'static str>, i64) {
+            let events = self
+                .core
+                .store()
+                .read_stream_since(streams::CLEANUP.into(), 0, 1000)
+                .await
+                .unwrap();
+            let kinds = events
+                .iter()
+                .filter_map(|event| {
+                    let decoded = crate::sessions::decode(event).unwrap();
+                    match &decoded {
+                        DomainEvent::CleanupRequested { owner: held }
+                        | DomainEvent::CleanupRecorded { owner: held, .. }
+                        | DomainEvent::CleanupRemoved { owner: held, .. }
+                        | DomainEvent::CleanupCompleted { owner: held, .. }
+                        | DomainEvent::CleanupFinished { owner: held }
+                            if held == owner =>
+                        {
+                            Some(decoded.kind())
+                        }
+                        _ => None,
+                    }
+                })
+                .collect();
+            (kinds, events.last().map_or(0, |event| event.stream_seq))
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// Starts disposing of `owner` and holds its next append of a `kind` event until the
+    /// returned `Notify` is notified.
+    async fn pause_at(
+        ledger: &Arc<CleanupLedger>,
+        kind: &'static str,
+        owner: &'static str,
+    ) -> (tokio::task::JoinHandle<Leftovers>, Arc<Notify>) {
+        let (reached, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        *ledger.append_pause.lock().unwrap() = Some((kind, reached.clone(), release.clone()));
+        let disposing = {
+            let ledger = ledger.clone();
+            tokio::spawn(async move { ledger.dispose(owner).await })
+        };
+        reached.notified().await;
+        *ledger.append_pause.lock().unwrap() = None;
+        (disposing, release)
+    }
+
+    #[tokio::test]
+    async fn empty_disposal_preserves_a_record_during_finish_and_does_not_repeat_events() {
+        let fixture = Fixture::new().await;
+        let owner = "preview-data:empty-disposal-race";
+        // A request left by an older daemon, with no artifacts to acknowledge.
+        let request = DomainEvent::CleanupRequested {
+            owner: owner.into(),
+        };
+        fixture.append(request.clone()).await;
+        let ledger = fixture.load().await;
+        let (disposing, release) = pause_at(&ledger, "cleanup.finished", owner).await;
+        let (path, artifact) = fixture.folder("race-artifact");
+        ledger.record(owner, artifact.clone()).await.unwrap();
+        release.notify_one();
+        assert!(disposing.await.unwrap().is_clean());
+        assert_eq!(ledger.artifacts(owner), vec![artifact.clone()]);
+        assert!(!ledger.disposing().contains(&owner.to_owned()));
+        let reloaded = fixture.load().await;
+        assert_eq!(reloaded.artifacts(owner), ledger.artifacts(owner));
+        assert!(!reloaded.disposing().contains(&owner.to_owned()));
+        reloaded.sweep().await;
+        assert!(path.is_dir());
+        assert_eq!(reloaded.artifacts(owner), vec![artifact]);
+        assert!(reloaded.dispose(owner).await.is_clean());
+        assert!(!path.exists());
+        let (kinds, last) = fixture.kinds(owner).await;
+        assert_eq!(
+            kinds,
+            vec![
+                "cleanup.requested",
+                "cleanup.recorded",
+                "cleanup.finished",
+                "cleanup.requested",
+                "cleanup.removed"
+            ]
+        );
+        for ledger in [&reloaded, &fixture.load().await] {
+            for _ in 0..3 {
+                assert!(ledger.dispose(owner).await.is_clean());
+                assert!(ledger.dispose("never-recorded").await.is_clean());
+            }
+        }
+        let after = fixture
+            .core
+            .store()
+            .read_stream_since(streams::CLEANUP.into(), last, 1000)
+            .await
+            .unwrap();
+        assert!(after.is_empty());
+
+        // A pending empty request also finishes when no record races with it.
+        fixture.append(request).await;
+        let pending = fixture.load().await;
+        assert!(pending.disposing().contains(&owner.to_owned()));
+        assert!(pending.dispose(owner).await.is_clean());
+        let finished = fixture.load().await;
+        assert!(!finished.disposing().contains(&owner.to_owned()));
+        assert!(finished.artifacts(owner).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_record_made_while_a_disposal_removes_others_survives_a_restart() {
+        let fixture = Fixture::new().await;
+        let owner = "preview-data:removal-race";
+        let ledger = fixture.load().await;
+        let (old, held) = fixture.folder("old");
+        ledger.record(owner, held).await.unwrap();
+        // Say a preview re-records its data folder while the old one is being acknowledged.
+        let (disposing, release) = pause_at(&ledger, "cleanup.removed", owner).await;
+        let (path, artifact) = fixture.folder("new");
+        ledger.record(owner, artifact.clone()).await.unwrap();
+        release.notify_one();
+        assert!(disposing.await.unwrap().is_clean());
+        assert!(!old.exists());
+        assert_eq!(ledger.artifacts(owner), vec![artifact.clone()]);
+        assert!(!ledger.disposing().contains(&owner.to_owned()));
+        let reloaded = fixture.load().await;
+        assert!(!reloaded.disposing().contains(&owner.to_owned()));
+        reloaded.sweep().await;
+        assert!(path.is_dir());
+        assert_eq!(reloaded.artifacts(owner), vec![artifact]);
+
+        // When nothing is recorded meanwhile, the removal alone ends the request.
+        assert!(reloaded.dispose(owner).await.is_clean());
+        assert!(!path.exists());
+        let (kinds, _) = fixture.kinds(owner).await;
+        assert_eq!(
+            kinds,
+            vec![
+                "cleanup.recorded",
+                "cleanup.requested",
+                "cleanup.recorded",
+                "cleanup.removed",
+                "cleanup.finished",
+                "cleanup.requested",
+                "cleanup.removed"
+            ]
+        );
+        assert!(fixture.load().await.disposing().is_empty());
+    }
 
     fn worktree(path: &str) -> Artifact {
         Artifact::Worktree {
