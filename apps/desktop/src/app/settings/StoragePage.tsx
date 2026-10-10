@@ -378,12 +378,12 @@ function Result({ cleaned, onScanAgain }: { cleaned: CleanReport; onScanAgain: (
         {cleaned.failures.length > 0 && (
           <ul className="grid gap-2 px-4 py-3">
             {cleaned.failures.map((failed, index) => {
-              const words = failure(failed);
+              const why = failure(failed);
               return (
                 <li key={index} className="grid gap-0.5">
                   <span className="text-label">{failed.label}</span>
-                  <span className="text-xs">{words.plain}</span>
-                  <span className="text-foreground/50 text-xs break-all">{words.detail}</span>
+                  <span className="text-xs">{why.plain}</span>
+                  <span className="text-foreground/50 text-xs break-all">{why.detail}</span>
                 </li>
               );
             })}

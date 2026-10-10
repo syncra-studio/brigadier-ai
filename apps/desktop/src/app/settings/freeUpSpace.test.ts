@@ -120,8 +120,9 @@ test("the summary, the button, the confirmation and the result say it plainly", 
   );
 });
 
+const stayed = (error: string) => failure({ label: "x", path: null, error });
+
 test("an item that stayed says why in a plain sentence, with the detail under it", () => {
-  const stayed = (error: string) => failure({ label: "x", path: null, error });
   assert.deepEqual(stayed("something runs in it now"), {
     plain: "Left in place: something is using it now.",
     detail: "Something runs in it now",
