@@ -1,4 +1,5 @@
-import type { ModelRef, OverrideRule, ProviderKind, Settings, TaskCategory } from "@/ipc/generated";
+import type { ModelRef, OverrideRule, ProviderKind, Settings } from "@/ipc/generated";
+import { isNoWorkRule, WORKER_CATEGORIES } from "@/lib/workRules";
 import { editSettings } from "@/state/settings";
 
 /**
@@ -6,20 +7,12 @@ import { editSettings } from "@/state/settings";
  *
  * - An agent switched off (`disabledProviders`) and a model made unavailable (`hiddenModels`)
  *   are out of every picker and get no work at all. The Providers page sets these.
- * - Whether the orchestrator may give a model worker tasks is a `never` rule for the worker
- *   kinds of work only, so a model can still run a chat or a session. The Routing page sets it.
+ * - Whether the orchestrator may give a model worker tasks is a "Don't give work" rule (`never`
+ *   for the worker kinds of work only), so a model can still run a chat or a session. Rules,
+ *   under Providers' Advanced, set it.
  */
 
-/** The kinds of work the orchestrator hands to workers (not a chat or the orchestrator itself). */
-export const WORKER_CATEGORIES: readonly TaskCategory[] = [
-  "scout",
-  "research",
-  "implement",
-  "review",
-  "merge",
-  "verify",
-  "operate",
-];
+export { WORKER_CATEGORIES };
 
 /** The part of the settings that says what's available. */
 export type Availability = Pick<Settings, "disabledProviders" | "hiddenModels">;
@@ -39,28 +32,25 @@ export function modelAvailable(settings: Availability, model: ModelRef): boolean
   );
 }
 
-/** The rule the Routing page's switch writes: `model` gets no worker tasks, anywhere. */
+/** A "Don't give work" rule about `model`: it gets no worker tasks, anywhere. */
 export function isWorkerRule(rule: OverrideRule, model: ModelRef): boolean {
-  return (
-    rule.effect === "never" &&
-    rule.target.type === "model" &&
-    sameRef(rule.target, model) &&
-    rule.categories.length === WORKER_CATEGORIES.length &&
-    WORKER_CATEGORIES.every((category) => rule.categories.includes(category)) &&
-    rule.areas.length === 0 &&
-    rule.projectId === null
-  );
+  return rule.target.type === "model" && sameRef(rule.target, model) && isNoWorkRule(rule);
 }
 
 /**
  * How the id of a worker rule the core added for a model it just saw starts (the core's
- * `availability::NEW_MODEL_RULE`): Routing tags that model "New".
+ * `availability::NEW_MODEL_RULE`): Providers tags that model "New".
  */
 const NEW_MODEL_RULE = "new-model-";
 
+/** A "Don't give work" rule the core added for a model it saw after its agent's first list. */
+export function isNewModelRule(rule: OverrideRule): boolean {
+  return rule.id.startsWith(NEW_MODEL_RULE) && rule.target.type === "model" && isNoWorkRule(rule);
+}
+
 /** A model Brigadier saw after its agent's first list, not given work until the user allows it. */
 export function isNewModel(rules: readonly OverrideRule[], model: ModelRef): boolean {
-  return rules.some((rule) => rule.id.startsWith(NEW_MODEL_RULE) && isWorkerRule(rule, model));
+  return rules.some((rule) => isNewModelRule(rule) && isWorkerRule(rule, model));
 }
 
 /** A rule keeping a model from all work everywhere (what the old model switch wrote). */
@@ -88,7 +78,7 @@ export function setProviderOn(provider: ProviderKind, on: boolean): Promise<Sett
   });
 }
 
-/** Makes a model available (in every picker, and on Routing) or not. */
+/** Makes a model available (in every picker, and for work) or not: its "Use this model". */
 export function setModelAvailable(model: ModelRef, available: boolean): Promise<Settings> {
   return editSettings((settings) => {
     const others = settings.hiddenModels.filter((hidden) => !sameRef(hidden, model));

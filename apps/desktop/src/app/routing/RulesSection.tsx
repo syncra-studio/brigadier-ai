@@ -7,8 +7,14 @@ import { SettingsButton, SettingsCard, SettingsRow, SettingsSection } from "@/ap
 import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import { Button } from "@/components/ui/button";
 import type { OverrideRule, Ranking } from "@/ipc/generated";
-import { CATEGORY_LABELS, joinWords, RANKED_CATEGORIES, ruleSentence } from "@/lib/routing";
-import { isWorkerRule } from "@/state/providers";
+import {
+  CATEGORY_LABELS,
+  isNoWorkRule,
+  joinWords,
+  RANKED_CATEGORIES,
+  ruleSentence,
+} from "@/lib/routing";
+import { isNewModelRule } from "@/state/providers";
 import { removeOverride } from "@/state/routing";
 import { useApp } from "@/state/store";
 
@@ -16,8 +22,16 @@ import { useApp } from "@/state/store";
 export const RULES_ROW = {
   label: "Rules",
   description:
-    "Never and Only keep models from work, whether a row is Automatic or Manual. Prefer puts a model first where routing scores.",
+    "Don't give work keeps a model from tasks but lets you pick it. Never and Only keep models from work, whether a row is Automatic or Manual. Prefer puts a model first where routing scores.",
 } as const;
+
+/** What a "Don't give work" rule leaves the user, on its row. */
+function noWorkNote(rule: OverrideRule): string | null {
+  if (!isNoWorkRule(rule)) return null;
+  return isNewModelRule(rule)
+    ? "New model: Brigadier gives it no tasks until you remove this rule."
+    : "You can still pick it for a chat or session.";
+}
 
 /**
  * Where a `prefer` rule does nothing: the kinds of work it covers whose own row is Manual in its
@@ -41,15 +55,12 @@ function shadowedBy(rule: OverrideRule, rankings: readonly Ranking[]): string | 
 }
 
 /**
- * The user's rules: `never` and `only` keep models from work (Automatic and Manual alike),
- * `prefer` puts one first where routing scores. Adding or removing one applies at once.
+ * The user's rules: "Don't give work" keeps a model from tasks (a chat or session may still run
+ * on it), `never` and `only` keep models from work (Automatic and Manual alike), `prefer` puts
+ * one first where routing scores. Adding or removing one applies at once.
  */
 export function RulesSection({ groups }: { groups: readonly ModelGroup[] }) {
-  const all = useApp((s) => s.settings.routingOverrides);
-  // The "Models Brigadier can give work to" switches show their own rules.
-  const rules = all.filter(
-    (rule) => !(rule.target.type === "model" && isWorkerRule(rule, rule.target)),
-  );
+  const rules = useApp((s) => s.settings.routingOverrides);
   const rankings = useApp((s) => s.settings.routingRankings);
   const projects = useApp((s) => s.projects);
   const [adding, setAdding] = useState(false);
@@ -81,7 +92,11 @@ export function RulesSection({ groups }: { groups: readonly ModelGroup[] }) {
           rules.map((rule) => {
             const sentence = ruleSentence(rule, groups, projects);
             return (
-              <SettingsRow key={rule.id} label={sentence} description={shadowedBy(rule, rankings)}>
+              <SettingsRow
+                key={rule.id}
+                label={sentence}
+                description={noWorkNote(rule) ?? shadowedBy(rule, rankings)}
+              >
                 <Button
                   type="button"
                   size="icon-xs"

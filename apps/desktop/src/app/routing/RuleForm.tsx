@@ -31,6 +31,7 @@ import {
   EFFECT_LABELS,
   isFable,
   newRuleId,
+  noWorkRule,
   PROVIDERS,
   ruleSentence,
   targetName,
@@ -43,9 +44,15 @@ import { cn } from "@/lib/utils";
 import { useApp } from "@/state/store";
 import { loadUsage, useUsage } from "@/state/usage";
 
-const EFFECTS: readonly OverrideEffect[] = ["never", "prefer", "only"];
+/** What a rule does: "Don't give work" is a `never` for every worker kind of work, everywhere. */
+type Kind = OverrideEffect | "noWork";
 
-const EFFECT_HINTS: Record<OverrideEffect, string> = {
+const KINDS: readonly Kind[] = ["noWork", "never", "prefer", "only"];
+
+const KIND_LABELS: Record<Kind, string> = { noWork: "Don't give work", ...EFFECT_LABELS };
+
+const KIND_HINTS: Record<Kind, string> = {
+  noWork: "Brigadier gives it no tasks. You can still pick it for a chat or session.",
   never: "Routing never picks it.",
   prefer: "Routing picks it whenever it's available (where routing scores).",
   only: "Routing picks only it; work waits when it's at a limit.",
@@ -82,22 +89,19 @@ export function RuleForm({
   className?: string;
 }) {
   const projects = useApp((s) => s.projects);
-  const [effect, setEffect] = useState<OverrideEffect>("never");
+  const [kind, setKind] = useState<Kind>("noWork");
   const [target, setTarget] = useState<OverrideTarget | null>(null);
   const [categories, setCategories] = useState<TaskCategory[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
   const [projectId, setProjectId] = useState<string | null>(null);
   const add = useAction();
 
-  const rule: OverrideRule | null = target && {
-    id: "",
-    effect,
-    target,
-    categories,
-    areas,
-    projectId,
-    createdAtMs: 0,
-  };
+  const noWork = kind === "noWork";
+  const rule: OverrideRule | null =
+    target &&
+    (noWork
+      ? noWorkRule(target, "", 0)
+      : { id: "", effect: kind, target, categories, areas, projectId, createdAtMs: 0 });
   const submit = () => {
     if (!rule) return;
     add.run(async () => {
@@ -111,19 +115,19 @@ export function RuleForm({
       data-slot="routing-rule-form"
       className={cn("bg-card rounded-surface grid gap-3 border p-3", className)}
     >
-      <Field label="Effect" hint={EFFECT_HINTS[effect]}>
+      <Field label="Effect" hint={KIND_HINTS[kind]}>
         <ToggleGroup
           type="single"
           size="sm"
           variant="outline"
           spacing="tight"
           aria-label="Effect"
-          value={effect}
-          onValueChange={(value) => value && setEffect(value as OverrideEffect)}
+          value={kind}
+          onValueChange={(value) => value && setKind(value as Kind)}
         >
-          {EFFECTS.map((entry) => (
+          {KINDS.map((entry) => (
             <ToggleGroupItem key={entry} value={entry} className="text-xs">
-              {EFFECT_LABELS[entry]}
+              {KIND_LABELS[entry]}
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
@@ -131,45 +135,49 @@ export function RuleForm({
       <Field label="Model">
         <TargetPicker groups={groups} value={target} onChange={setTarget} />
       </Field>
-      <Field label="For" hint="None picked: any kind of work.">
-        <ToggleGroup
-          type="multiple"
-          size="sm"
-          variant="outline"
-          spacing="tight"
-          aria-label="Kinds of work"
-          className="flex-wrap"
-          value={categories}
-          onValueChange={(value) => setCategories(value as TaskCategory[])}
-        >
-          {CATEGORIES.map((category) => (
-            <ToggleGroupItem key={category} value={category} className="text-xs">
-              {CATEGORY_LABELS[category]}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-      </Field>
-      <Field label="Touching" hint="None picked: any part of the codebase.">
-        <ToggleGroup
-          type="multiple"
-          size="sm"
-          variant="outline"
-          spacing="tight"
-          aria-label="Areas"
-          className="flex-wrap"
-          value={areas}
-          onValueChange={(value) => setAreas(value as Area[])}
-        >
-          {AREAS.map((area) => (
-            <ToggleGroupItem key={area} value={area} className="text-xs">
-              {AREA_LABELS[area]}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-      </Field>
-      <Field label="Where">
-        <ScopePicker value={projectId} onChange={setProjectId} />
-      </Field>
+      {!noWork && (
+        <>
+          <Field label="For" hint="None picked: any kind of work.">
+            <ToggleGroup
+              type="multiple"
+              size="sm"
+              variant="outline"
+              spacing="tight"
+              aria-label="Kinds of work"
+              className="flex-wrap"
+              value={categories}
+              onValueChange={(value) => setCategories(value as TaskCategory[])}
+            >
+              {CATEGORIES.map((category) => (
+                <ToggleGroupItem key={category} value={category} className="text-xs">
+                  {CATEGORY_LABELS[category]}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          </Field>
+          <Field label="Touching" hint="None picked: any part of the codebase.">
+            <ToggleGroup
+              type="multiple"
+              size="sm"
+              variant="outline"
+              spacing="tight"
+              aria-label="Areas"
+              className="flex-wrap"
+              value={areas}
+              onValueChange={(value) => setAreas(value as Area[])}
+            >
+              {AREAS.map((area) => (
+                <ToggleGroupItem key={area} value={area} className="text-xs">
+                  {AREA_LABELS[area]}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          </Field>
+          <Field label="Where">
+            <ScopePicker value={projectId} onChange={setProjectId} />
+          </Field>
+        </>
+      )}
       {rule && (
         <p className="text-sm" aria-live="polite">
           {ruleSentence(rule, groups, projects)}

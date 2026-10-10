@@ -18,8 +18,10 @@ import type {
 } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { modelName } from "@/lib/setup";
+import { isNoWorkRule } from "@/lib/workRules";
 
 export { isFable } from "@/lib/setup";
+export { isNoWorkRule, noWorkRule, WORKER_CATEGORIES } from "@/lib/workRules";
 
 /**
  * Routing in words: the names the Usage page, worker cards, the Routing page and the
@@ -360,6 +362,7 @@ export function ruleSentence(
   groups: readonly ModelGroup[],
   projects: Record<string, Project>,
 ): string {
+  if (isNoWorkRule(rule)) return `Don't give ${targetName(rule.target, groups)} work`;
   const categories = rule.categories.map((category) => CATEGORY_LABELS[category]);
   const areas = rule.areas.map((area) => AREA_LABELS[area]);
   let scope = "";
