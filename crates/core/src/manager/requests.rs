@@ -20,7 +20,7 @@ use super::workers::relanding_pending;
 use crate::board::Board;
 use crate::model::{ConversationId, ConversationKind};
 use crate::overnight::{OvernightRun, OvernightState};
-use crate::work::{CardState, QuestionKind, RequestState, Task, TaskId, TaskState};
+use crate::work::{CardState, PlanState, QuestionKind, RequestState, Task, TaskId, TaskState};
 
 impl SessionManager {
     /// What a request waits for, if anything. A question in the thread's text makes nothing
@@ -171,7 +171,7 @@ impl SessionManager {
             } else if let Some(on) = Self::waiting_on(&board, id) {
                 wait = Some(on);
                 RequestState::Waiting
-            } else if tasks_in(&board, id, |state| state == TaskState::Blocked) {
+            } else if blocked_on_the_thread(&board, id) {
                 // Blocked on the orchestrator's answer (a gate's card makes it Waiting).
                 RequestState::Working
             } else if let Some(outcome) = outcome {
@@ -353,6 +353,22 @@ fn tasks_in(board: &Board, request: &str, matches: impl Fn(TaskState) -> bool) -
         .tasks
         .values()
         .any(|task| task.request_id.as_deref() == Some(request) && matches(task.state))
+}
+
+/// Whether a task of the request is blocked on the thread's answer. A lead whose outline is
+/// on a proposed plan's card waits for the user's yes instead, and that card holds nothing up
+/// (THREAD-PARITY-PLAN §8.5).
+fn blocked_on_the_thread(board: &Board, request: &str) -> bool {
+    let proposed = board.plans.values().any(|plan| {
+        plan.request_id.as_deref() == Some(request)
+            && plan.state == PlanState::Proposed
+            && plan.body.is_some()
+    });
+    board.tasks.values().any(|task| {
+        task.request_id.as_deref() == Some(request)
+            && task.state == TaskState::Blocked
+            && !(proposed && SessionManager::waits_for_go_ahead(task))
+    })
 }
 
 /// Whether a task of the request reported a fix Brigadier checks and lands on its own, once
