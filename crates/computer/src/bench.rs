@@ -784,7 +784,9 @@ impl Bench {
                     .push(res.timings.checks_ms + res.timings.dispatch_ms);
                 o.quiet.0.push(res.timings.settle_ms);
             } else {
-                o.miss(res.error.map_or("failed", |e| e.code.as_str()));
+                o.miss(res.error.map_or("failed".to_owned(), |e| {
+                    format!("{}: {}", e.code.as_str(), e.detail)
+                }));
             }
             let _ = self.log.read_new()?;
         }

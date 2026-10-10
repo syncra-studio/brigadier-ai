@@ -217,11 +217,22 @@ impl Private {
         (unsafe { f(&psn, &mut pid) } == 0 && pid > 0).then_some(pid)
     }
 
+    /// A running process's serial number, tried again on a failure: one background click in
+    /// 1,600 of a full bench (2026-10-10) ended in `unsupported_capability`, which during a
+    /// click only this lookup gives, while its process kept running.
     pub fn psn(&self, pid: i32) -> Option<Psn> {
         let f = self.get_process_for_pid?;
-        let mut psn = Psn::default();
-        // SAFETY: `psn` is a valid out pointer.
-        (unsafe { f(pid, &mut psn) } == 0).then_some(psn)
+        for attempt in 0..3 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            let mut psn = Psn::default();
+            // SAFETY: `psn` is a valid out pointer.
+            if unsafe { f(pid, &mut psn) } == 0 {
+                return Some(psn);
+            }
+        }
+        None
     }
 
     fn post(&self, psn: &Psn, record: &[u8; 0xf8]) -> bool {
