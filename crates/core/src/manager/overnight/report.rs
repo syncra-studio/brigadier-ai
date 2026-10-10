@@ -297,6 +297,8 @@ impl SessionManager {
                 if saved.report_message_id.is_none() {
                     let notify = conversation.lifecycle != crate::model::Lifecycle::Archived;
                     self.write_run_report(saved, notify).await;
+                    // The report keeps the run's list now: it ends.
+                    self.settle_requests(&conversation.id).await;
                 }
             }
             let Ok(board) = self.core.board(&conversation.id).await else {

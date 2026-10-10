@@ -353,19 +353,14 @@ impl SessionManager {
         .await;
     }
 
-    /// Items whose card was answered or expired are over, as are those of a run that ended
-    /// (its report keeps them) and those of no run (listed before sessions stopped listing
-    /// anything). Returns whether any was, before the conversation's requests are settled.
+    /// Items [`wait_settled`] calls over are marked done. Returns whether any was, before the
+    /// conversation's requests are settled.
     pub(crate) async fn settle_waits(
         &self,
         conversation_id: &ConversationId,
         board: &Board,
     ) -> bool {
-        let settled = |item: &WaitingItem| {
-            matches!(&item.source, WaitingSource::Card { card_id } if !card_open(board, card_id))
-                || waiting_run(&item.source, item.request_id.as_deref(), board)
-                    .is_none_or(|run| board.runs.get(&run).is_none_or(|run| run.state.is_final()))
-        };
+        let settled = |item: &WaitingItem| wait_settled(board, item);
         if !board.waiting.values().any(settled) {
             return false;
         }
@@ -500,6 +495,22 @@ fn over_for_the_lead(board: &Board, item: &WaitingItem) -> bool {
 }
 
 /// Whether a card still waits for the user.
+/// An item whose card was answered or expired is over, as is one of a run that ended once its
+/// report keeps it (a report a restart still owes reads the list first), and one of no run
+/// (listed before sessions stopped listing anything).
+fn wait_settled(board: &Board, item: &WaitingItem) -> bool {
+    if matches!(&item.source, WaitingSource::Card { card_id } if !card_open(board, card_id)) {
+        return true;
+    }
+    let Some(run) = waiting_run(&item.source, item.request_id.as_deref(), board) else {
+        return true;
+    };
+    board.runs.get(&run).is_none_or(|run| match run.state {
+        crate::overnight::OvernightState::Finished => run.report_message_id.is_some(),
+        state => state.is_final(),
+    })
+}
+
 fn card_open(board: &Board, card: &CardId) -> bool {
     board
         .approvals
@@ -1610,6 +1621,38 @@ mod tests {
         }
         // An item of no run always reaches the lead.
         assert!(!over_for_the_lead(
+            &board,
+            &item("w2", WaitingSource::Orchestrator, "Sign in to npm.")
+        ));
+    }
+
+    #[test]
+    fn a_runs_list_ends_once_its_report_keeps_it() {
+        use crate::overnight::{OvernightRun, OvernightState};
+        let mut run = OvernightRun::for_test(ConversationId("c".into()), "Speed", Vec::new());
+        let mut board = Board::default();
+        let ask = item(
+            "w1",
+            WaitingSource::Run {
+                run_id: run.id.clone(),
+                task_id: None,
+            },
+            "Set account_id.",
+        );
+        let mut settled = |state, report: Option<&str>| {
+            run.state = state;
+            run.report_message_id = report.map(str::to_owned);
+            board.runs.insert(run.id.clone(), run.clone());
+            wait_settled(&board, &ask)
+        };
+        assert!(!settled(OvernightState::Running, None));
+        assert!(!settled(OvernightState::Reporting, Some("run-report")));
+        // Finished before its report landed: a restart writes the report from the list first.
+        assert!(!settled(OvernightState::Finished, None));
+        assert!(settled(OvernightState::Finished, Some("run-report")));
+        assert!(settled(OvernightState::Superseded, None));
+        // An item of no run, listed before sessions stopped listing: over.
+        assert!(wait_settled(
             &board,
             &item("w2", WaitingSource::Orchestrator, "Sign in to npm.")
         ));
