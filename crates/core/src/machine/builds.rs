@@ -6,8 +6,9 @@
 //!   starts while another holds it, or while the machine is strained, is stopped where it
 //!   stands (never asked about, denied or killed) and goes on, oldest first, once the lease is
 //!   free and the machine eased (memory warnings alone hold at most [`MEMORY_WARNING_HOLD`]).
-//!   The lease belongs to the command, not to its worker: it is given back the moment the command ends or leaves its worker's tree, so a worker waiting
-//!   on another one (a nested review) never holds it, and a crashed worker can't keep it.
+//!   The lease belongs to the command, not to its worker: it is given back the moment the
+//!   command ends or leaves its worker's tree, so a worker waiting on another one (a nested
+//!   review) never holds it, and a crashed worker can't keep it.
 //! - **Bounded.** A command holding the lease for [`LEASE_MAX`] is taken for a server or
 //!   watcher the classifier missed: it keeps running and no longer holds the lease. One that
 //!   used no CPU for [`IDLE`] while others wait is blocked on something (the network, or a
@@ -113,6 +114,8 @@ struct Build {
     state: State,
     /// When this waiting build first saw warning-only memory pressure.
     warning_since: Option<Instant>,
+    /// What holds this waiting build, as its thread last read it (heat or memory).
+    held_for: Option<MachineStepReason>,
 }
 
 #[derive(Debug, Default)]
@@ -172,7 +175,10 @@ impl Builds {
                 .builds
                 .values()
                 .any(|build| build.state == State::Waiting);
-            let state = if self.lease.is_none() && !load.builds_held() && !waiting_before {
+            let held_for = load
+                .builds_held()
+                .then(|| MachineStepReason::from_load(load));
+            let state = if self.lease.is_none() && held_for.is_none() && !waiting_before {
                 self.lease = Some(seen.root);
                 State::Running {
                     since: now,
@@ -184,10 +190,9 @@ impl Builds {
                     proc: seen.root,
                     owner: seen.owner.clone(),
                     command: seen.command.clone(),
-                    note: if load.builds_held() {
-                        Note::WaitingToCool(MachineStepReason::from_load(load))
-                    } else {
-                        Note::WaitingForBuild
+                    note: match held_for {
+                        Some(reason) => Note::WaitingToCool(reason),
+                        None => Note::WaitingForBuild,
                     },
                 });
                 State::Waiting
@@ -200,6 +205,7 @@ impl Builds {
                     seq,
                     state,
                     warning_since: None,
+                    held_for,
                 },
             );
         }
@@ -280,6 +286,23 @@ impl Builds {
             };
             self.lease = Some(proc);
             actions.push(Action::Continue(proc));
+        }
+        // One still waiting for the machine, held now for another reason: its thread says so.
+        if load.builds_held() {
+            let reason = MachineStepReason::from_load(load);
+            for (&proc, build) in &mut self.builds {
+                if build.state == State::Waiting
+                    && build.held_for.is_some_and(|held_for| held_for != reason)
+                {
+                    build.held_for = Some(reason);
+                    actions.push(Action::Note {
+                        proc,
+                        owner: build.owner.clone(),
+                        command: build.command.clone(),
+                        note: Note::WaitingToCool(reason),
+                    });
+                }
+            }
         }
         actions
     }
@@ -684,6 +707,44 @@ mod tests {
             continues(&builds.tick(vec![seen(20, "task:b")], TIGHT, t1 + MEMORY_WARNING_HOLD)),
             vec![20]
         );
+    }
+
+    #[test]
+    fn a_build_held_for_heat_then_memory_gets_a_row_for_each() {
+        let hot_and_tight = MachineLoad {
+            memory: MemoryPressure::Warning,
+            ..HOT
+        };
+        let mut builds = Builds::default();
+        let t0 = Instant::now();
+        let actions = builds.tick(vec![seen(20, "task:b")], hot_and_tight, t0);
+        assert_eq!(stops(&actions), vec![20]);
+        assert_eq!(
+            notes(&actions),
+            vec![(
+                "task:b".into(),
+                Note::WaitingToCool(MachineStepReason::Heat)
+            )]
+        );
+        // Still held for the same reason: no new row.
+        let actions = builds.tick(
+            vec![seen(20, "task:b")],
+            hot_and_tight,
+            t0 + Duration::from_secs(2),
+        );
+        assert!(actions.is_empty());
+        // The heat drops; the memory warning keeps holding it, and its thread says so once.
+        let actions = builds.tick(vec![seen(20, "task:b")], TIGHT, t0 + Duration::from_secs(4));
+        assert_eq!(
+            notes(&actions),
+            vec![(
+                "task:b".into(),
+                Note::WaitingToCool(MachineStepReason::Memory)
+            )]
+        );
+        assert!(continues(&actions).is_empty());
+        let actions = builds.tick(vec![seen(20, "task:b")], TIGHT, t0 + Duration::from_secs(6));
+        assert!(actions.is_empty());
     }
 
     #[test]

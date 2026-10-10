@@ -166,7 +166,8 @@ impl SessionManager {
     }
 
     /// Holds a new worker during serious heat or critical memory pressure, with a row in the
-    /// thread, until it eases. Fails when the task ends meanwhile.
+    /// thread each time what holds it changes, until it eases. Fails when the task ends
+    /// meanwhile.
     pub(crate) async fn hold_while_strained(&self, task: &Task) -> Result<()> {
         if self.machine.eased_within(Duration::ZERO).await {
             return Ok(());
@@ -186,21 +187,19 @@ impl SessionManager {
                     MachineStepReason::Memory => "Waiting for memory to free up".to_owned(),
                 };
                 self.set_task_blocked(&task.id, Some(words)).await;
-                if previous_reason.is_none() {
-                    self.record_machine_step(
-                        &task.conversation_id,
-                        MachineStep {
-                            kind: MachineStepKind::WaitingToCool,
-                            reason,
-                            request_id: task.request_id.clone(),
-                            task_id: Some(task.id.clone()),
-                            command: None,
-                            at_ms: now_ms(),
-                            position: 0,
-                        },
-                    )
-                    .await;
-                }
+                self.record_machine_step(
+                    &task.conversation_id,
+                    MachineStep {
+                        kind: MachineStepKind::WaitingToCool,
+                        reason,
+                        request_id: task.request_id.clone(),
+                        task_id: Some(task.id.clone()),
+                        command: None,
+                        at_ms: now_ms(),
+                        position: 0,
+                    },
+                )
+                .await;
                 previous_reason = Some(reason);
             }
             let eased = self.machine.eased_within(RECHECK).await;

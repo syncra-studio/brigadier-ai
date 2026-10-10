@@ -85,7 +85,7 @@ async fn a_scout_reports_under_memory_warning_and_the_answer_ends_the_request() 
 }
 
 #[tokio::test]
-async fn critical_memory_names_the_worker_hold_and_warning_releases_it() {
+async fn a_worker_hold_moving_from_heat_to_memory_says_so_and_warning_releases_it() {
     let flow = Flow::start(
         "memory-hold", Options::default(), script(|turn| async move {
             if turn.is_orchestrator() {
@@ -107,23 +107,41 @@ async fn critical_memory_names_the_worker_hold_and_warning_releases_it() {
         .machine
         .guard
         .fake(brigadier_sandbox::MachineLoad {
-            memory: brigadier_sandbox::MemoryPressure::Critical,
+            heat: brigadier_sandbox::Heat::Serious,
             ..Default::default()
         });
     flow.say("Read the files.").await;
+    flow.until("the heat hold to be recorded", |board| {
+        !board.machine_steps.is_empty()
+    })
+    .await;
+    // The heat drops, but critical memory pressure keeps holding it: the card and a new row
+    // both say so.
+    flow.manager
+        .machine
+        .guard
+        .fake(brigadier_sandbox::MachineLoad {
+            memory: brigadier_sandbox::MemoryPressure::Critical,
+            ..Default::default()
+        });
     let board = flow
         .until("the memory hold to be recorded", |board| {
             board
                 .tasks
                 .values()
                 .any(|task| task.blocked_reason.as_deref() == Some("Waiting for memory to free up"))
-                && !board.machine_steps.is_empty()
+                && board.machine_steps.len() >= 2
         })
         .await;
-    assert_eq!(
-        board.machine_steps[0].reason,
-        crate::model::MachineStepReason::Memory
-    );
+    let reasons = |board: &crate::board::Board| {
+        board
+            .machine_steps
+            .iter()
+            .map(|step| step.reason)
+            .collect::<Vec<_>>()
+    };
+    use crate::model::MachineStepReason::{Heat, Memory};
+    assert_eq!(reasons(&board), vec![Heat, Memory]);
     flow.manager
         .machine
         .guard
@@ -134,6 +152,11 @@ async fn critical_memory_names_the_worker_hold_and_warning_releases_it() {
     let board = flow.settled().await;
     assert_eq!(Flow::task(&board, 1).state, TaskState::Done);
     assert!(Flow::task(&board, 1).blocked_reason.is_none());
+    assert_eq!(
+        reasons(&board),
+        vec![Heat, Memory],
+        "no row without a change"
+    );
     flow.stop().await;
 }
 

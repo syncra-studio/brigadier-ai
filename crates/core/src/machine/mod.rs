@@ -25,6 +25,7 @@ use brigadier_sandbox::{Heat, MachineLoad, MemoryPressure, Platform};
 use tokio::sync::watch;
 
 use self::builds::{Action, Builds, Note, Proc, Seen};
+use crate::model::MachineStepReason;
 
 /// How often the watch looks at the machine and at Brigadier's process trees.
 pub(crate) const TICK: Duration = Duration::from_secs(2);
@@ -179,10 +180,18 @@ impl MachineWatch {
         self.stopped.sweep(&*self.platform);
     }
 
-    /// Waits until workers can start, at most `max`; whether the machine eased.
+    /// Waits until workers can start or what holds them changes (heat, memory), at most `max`;
+    /// whether the machine eased.
     pub(crate) async fn eased_within(&self, max: Duration) -> bool {
         let mut changes = self.guard.subscribe();
-        let _ = tokio::time::timeout(max, changes.wait_for(|load| !load.workers_held())).await;
+        let reason = MachineStepReason::from_load(self.guard.current());
+        let _ = tokio::time::timeout(
+            max,
+            changes.wait_for(|load| {
+                !load.workers_held() || MachineStepReason::from_load(*load) != reason
+            }),
+        )
+        .await;
         !self.guard.current().workers_held()
     }
 }
