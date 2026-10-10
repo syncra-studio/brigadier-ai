@@ -548,6 +548,22 @@ pub enum Density {
     Normal,
 }
 
+/// How commit messages or pull requests are written (Settings › Git).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum GitStyle {
+    /// Like the repository's recent history.
+    #[default]
+    Repository,
+    /// By the Conventional Commits rules (`type(scope): subject`).
+    Conventional,
+    /// By the user's own instructions.
+    Custom,
+}
+
+/// The branch prefix unless the user sets another.
+pub const DEFAULT_BRANCH_PREFIX: &str = "brigadier/";
+
 /// When Brigadier keeps the computer from sleeping.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -588,6 +604,20 @@ pub struct Settings {
     /// own commits, what the agents write, and the commits Brigadier lands or keeps.
     #[serde(default = "default_true")]
     pub omit_ai_coauthors: bool,
+    /// The model that writes the git text Brigadier writes itself (a commit message the user
+    /// left blank). Absent: Automatic, routing's pick for git text.
+    pub git_writer: Option<ModelChoice>,
+    /// How commit messages are written: the generated ones and the agents' own.
+    pub commit_style: GitStyle,
+    /// The user's instructions for commit messages, kept while another style is chosen.
+    pub commit_instructions: String,
+    /// How an agent writes a pull request's title and body, when the user asks it to open one.
+    pub pr_style: GitStyle,
+    /// The user's instructions for pull requests, kept while another style is chosen.
+    pub pr_instructions: String,
+    /// What goes before the names of the branches Brigadier makes (sessions, forks, workers)
+    /// and the name Create branch suggests, unless the project has its own. Empty: none.
+    pub branch_prefix: String,
     /// Another vendor's model reviews the sessions' work in the background: each landing, the
     /// thread's own commits, a lead's outline, and a worker's own change when it asks. Off, no
     /// review starts and nothing waits for one (THREAD-PLAN.md §2 Q12).
@@ -734,6 +764,12 @@ impl Default for Settings {
             enrich_brain: true,
             short_replies: true,
             omit_ai_coauthors: true,
+            git_writer: None,
+            commit_style: GitStyle::default(),
+            commit_instructions: String::new(),
+            pr_style: GitStyle::default(),
+            pr_instructions: String::new(),
+            branch_prefix: DEFAULT_BRANCH_PREFIX.to_owned(),
             review_work: true,
             onboarded: false,
             keep_awake: KeepAwake::default(),

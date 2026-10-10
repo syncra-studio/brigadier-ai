@@ -127,6 +127,7 @@ export type { GateLink } from "./GateLink";
 export type { GateOwner } from "./GateOwner";
 export type { GateRole } from "./GateRole";
 export type { GitState } from "./GitState";
+export type { GitStyle } from "./GitStyle";
 export type { Heat } from "./Heat";
 export type { HookOutput } from "./HookOutput";
 export type { IndexRun } from "./IndexRun";
