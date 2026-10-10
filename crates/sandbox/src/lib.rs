@@ -163,6 +163,26 @@ pub struct SandboxPolicy {
     pub deny_read: Vec<PathBuf>,
 }
 
+/// What a process may not write, everything else left as in the user's own terminal: other
+/// sessions' branches and Brigadier's bookkeeping (PLAN bug 6). Every child inherits it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Protection {
+    /// Folders and files no write may touch, each with everything under it.
+    pub deny: Vec<PathBuf>,
+    /// Regular expressions over resolved paths no write may touch (folders named by a
+    /// pattern, such as other sessions' temp folders). Anchored by the caller.
+    pub deny_patterns: Vec<String>,
+    /// The process's own paths inside the denied ones, writable all the same (its branch's
+    /// ref, its own folders), each with everything under it.
+    pub allow: Vec<PathBuf>,
+}
+
+impl Protection {
+    pub fn is_empty(&self) -> bool {
+        self.deny.is_empty() && self.deny_patterns.is_empty()
+    }
+}
+
 /// Confines a process to a [`SandboxPolicy`] by rewriting its spawn spec.
 pub trait Sandbox: Send + Sync {
     /// Rewrites `spec` so that the spawned process runs inside the OS sandbox.
@@ -180,6 +200,14 @@ pub trait Sandbox: Send + Sync {
     ) -> Result<SpawnSpec> {
         let _ = (unix_sockets, preview_temp);
         self.confine(spec, policy)
+    }
+
+    /// Rewrites `spec` so the process may write anything but `protection`'s denied paths.
+    /// Where the OS can't say "everything but" (Linux and Windows today) the spec is
+    /// unchanged, and the engine's ref check is the only guard.
+    fn protect(&self, spec: SpawnSpec, protection: &Protection) -> Result<SpawnSpec> {
+        let _ = protection;
+        Ok(spec)
     }
 }
 

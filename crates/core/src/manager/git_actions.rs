@@ -263,6 +263,7 @@ impl SessionManager {
             auto_review: false,
             omit_ai_coauthors: false,
             output_hook: None,
+            protection: Default::default(),
         };
         let shown: String = patch.chars().take(PATCH_CHARS).collect();
         let cut = if shown.len() < patch.len() {

@@ -1462,6 +1462,17 @@ impl SessionManager {
         }
         let redactor = secrets::redactor(secret_values);
         let allowed_models = self.allowed_models(task).await;
+        // Its own branch is the only ref it moves; the branch its work lands on is the engine's.
+        let protection = workspace.worktree.as_ref().map(|worktree| {
+            let targets: Vec<String> = workspace.target.iter().cloned().collect();
+            self.session_protection(
+                &conversation_id,
+                worktree,
+                workspace.branch.as_deref(),
+                &targets,
+                access == Access::Full,
+            )
+        });
         let spec = SessionSpec {
             cwd: cwd.clone(),
             model: task.route.choice.model.clone(),
@@ -1494,6 +1505,7 @@ impl SessionManager {
             auto_review: self.permission(&conversation_id) == PermissionLevel::ApproveForMe,
             omit_ai_coauthors,
             output_hook: None,
+            protection: protection.unwrap_or_default(),
         };
         let worktree = workspace.worktree.clone();
         Ok(WorkerSession {

@@ -149,6 +149,7 @@ impl SessionManager {
             auto_review: false,
             omit_ai_coauthors: false,
             output_hook: None,
+            protection: Default::default(),
         };
         let account = self
             .runtime

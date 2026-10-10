@@ -339,6 +339,7 @@ impl SessionManager {
             auto_review: false,
             omit_ai_coauthors: false,
             output_hook: None,
+            protection: Default::default(),
         };
         let owner = format!("orch:{id}");
         let account = self.runtime.account_for(&choice);

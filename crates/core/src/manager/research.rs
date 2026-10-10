@@ -263,6 +263,7 @@ impl SessionManager {
             auto_review: false,
             omit_ai_coauthors: false,
             output_hook: None,
+            protection: Default::default(),
         };
         let account = self.runtime.launch_account(runs_on, spec.model.as_deref());
         let meter = TokenMeter::default().on_account(account.account.clone());

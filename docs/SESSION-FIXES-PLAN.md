@@ -880,6 +880,9 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
      again: the engine makes it whenever it grants the roots (a CLI's start, each ref check).
    - Claude also gets the protected set as `filesystem.denyWrite`, plus `Edit`/`Write`/`NotebookEdit` deny rules, as
      already done for `hooks` and `config` (`P/claude/mod.rs:614-627`): its file tools work outside the OS sandbox.
+     A deny wins over every allow in Claude's sandbox (sandbox-runtime 0.0.79 writes the denies after the allows),
+     so a deny that would cover the session's own ref (`refs/heads/brigadier` for a worker) is left out: its grant
+     never covered those refs anyway. It matters for a thread on the user's own checkout, which is writable whole.
    - Codex needs no deny list: no writable root covers a protected path.
    - Brigadier's own Seatbelt for `run` and `run_check` uses the same roots.
    - A ref update writes `<ref>.lock` and renames it over the ref. If a CLI's sandbox can't grant a path that

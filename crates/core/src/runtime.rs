@@ -1473,6 +1473,7 @@ fn spec_for(session: &RawSession, origin: Origin, record_to: Option<PathBuf>) ->
         auto_review: false,
         omit_ai_coauthors: false,
         output_hook: None,
+        protection: Default::default(),
     }
 }
 

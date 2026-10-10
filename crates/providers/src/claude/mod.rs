@@ -636,6 +636,27 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
                 }
                 deny_write.extend([root.join("hooks"), root.join("config")]);
             }
+            // Other sessions' branches and the branches its work lands on (PLAN bug 6): its
+            // sandbox grants none of them already, unless a checkout is writable whole (a
+            // thread on the user's own checkout). A deny wins over every allow in Claude's
+            // sandbox, so one that would cover the session's own ref is left to the grant.
+            for path in &spec.protection.deny {
+                if spec
+                    .protection
+                    .allow
+                    .iter()
+                    .any(|own| own.starts_with(path))
+                {
+                    continue;
+                }
+                let path = resolved(path);
+                // A rule names a file exactly and a folder's contents with `/**`.
+                for tool in ["Edit", "Write", "NotebookEdit"] {
+                    deny.push(format!("{tool}(/{})", path.display()));
+                    deny.push(format!("{tool}({})", rule_path(&path)));
+                }
+                deny_write.push(path);
+            }
             if !deny_write.is_empty() {
                 filesystem["denyWrite"] = json!(paths(&deny_write));
             }
@@ -1861,6 +1882,7 @@ mod tests {
             auto_review: false,
             omit_ai_coauthors: false,
             output_hook: None,
+            protection: Default::default(),
         }
     }
 
@@ -2245,6 +2267,52 @@ mod tests {
                 git.join("hooks").display().to_string(),
                 git.join("config").display().to_string(),
             ])
+        );
+    }
+
+    #[test]
+    fn protected_refs_are_denied_except_where_a_deny_would_cover_its_own_branch() {
+        let cwd = Temp::new();
+        let common = cwd.path().join("repo/.git");
+        let own = common.join("refs/heads/brigadier/aa/task-1");
+        let spec = SessionSpec {
+            access: Access::Scoped {
+                write_cwd: true,
+                writable_roots: vec![own.clone()],
+                network: true,
+                deny_read: Vec::new(),
+                unix_sockets: Vec::new(),
+            },
+            protection: brigadier_sandbox::Protection {
+                deny: vec![
+                    common.join("refs/heads/brigadier"),
+                    common.join("refs/heads/main"),
+                    common.join("packed-refs"),
+                ],
+                allow: vec![own.clone()],
+                ..Default::default()
+            },
+            ..spec(cwd.path(), &["claude-sonnet-5"])
+        };
+        let settings = settings(&spec, cwd.path(), &SubAgents::Any, false);
+        let common = resolved(&common);
+        assert_eq!(
+            settings["sandbox"]["filesystem"]["denyWrite"],
+            json!([
+                common.join("refs/heads/main").display().to_string(),
+                common.join("packed-refs").display().to_string(),
+            ]),
+            "a deny wins over every allow: one over its own ref would stop its commits"
+        );
+        let deny = settings["permissions"]["deny"].as_array().expect("deny");
+        for tool in ["Edit", "Write", "NotebookEdit"] {
+            let rule = format!("{tool}(/{})", common.join("packed-refs").display());
+            assert!(deny.contains(&json!(rule)), "{rule}");
+        }
+        assert!(
+            !deny
+                .iter()
+                .any(|rule| rule.as_str().unwrap().contains("refs/heads/brigadier"))
         );
     }
 

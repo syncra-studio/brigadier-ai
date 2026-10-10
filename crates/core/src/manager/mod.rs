@@ -53,6 +53,7 @@ mod preview;
 mod prewarm;
 mod project_removal;
 mod prompts;
+mod protection;
 mod pull_request;
 mod quiet;
 pub(crate) mod reads;

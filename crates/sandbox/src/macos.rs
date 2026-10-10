@@ -15,7 +15,7 @@ use crate::machine::{heat_from_thermal_state, memory_from_pressure_level};
 use crate::unix::{self, UnixPrivateFs};
 use crate::{
     APP_ID, AppPaths, CredentialStore, DetachedChild, Error, Machine, MachineLoad, Platform,
-    PrivateFs, Processes, Result, Sandbox, SandboxPolicy, Shell, SpawnSpec,
+    PrivateFs, Processes, Protection, Result, Sandbox, SandboxPolicy, Shell, SpawnSpec,
 };
 
 pub(crate) struct MacOs {
@@ -727,9 +727,69 @@ impl Seatbelt {
     }
 }
 
+impl Seatbelt {
+    /// Allow-all, then the protected writes taken back, then the process's own exceptions
+    /// given back: later rules win. A regex rule covers a path that doesn't exist yet (a
+    /// ref's `.lock`).
+    fn protection_profile(protection: &Protection) -> String {
+        let mut profile = String::from("(version 1)\n(allow default)\n");
+        if !protection.is_empty() {
+            profile.push_str("(deny file-write*");
+            for index in 0..protection.deny.len() {
+                profile.push_str(&format!(" (subpath (param \"DENY_WRITE_{index}\"))"));
+            }
+            for pattern in &protection.deny_patterns {
+                profile.push_str(&format!(" (regex #\"{pattern}\")"));
+            }
+            profile.push_str(")\n");
+        }
+        if !protection.allow.is_empty() {
+            profile.push_str("(allow file-write*");
+            for index in 0..protection.allow.len() {
+                profile.push_str(&format!(" (subpath (param \"ALLOW_WRITE_{index}\"))"));
+            }
+            profile.push_str(")\n");
+        }
+        profile
+    }
+}
+
 impl Sandbox for Seatbelt {
     fn confine(&self, spec: SpawnSpec, policy: &SandboxPolicy) -> Result<SpawnSpec> {
         Self::wrap(spec, policy, None, &[])
+    }
+
+    fn protect(&self, spec: SpawnSpec, protection: &Protection) -> Result<SpawnSpec> {
+        if protection.is_empty() {
+            return Ok(spec);
+        }
+        if let Some(pattern) = protection.deny_patterns.iter().find(|p| p.contains('"')) {
+            return Err(Error::Io(io::Error::other(format!(
+                "a protected pattern holds a quote: {pattern}"
+            ))));
+        }
+        let mut args: Vec<OsString> =
+            vec!["-p".into(), Self::protection_profile(protection).into()];
+        let params = (protection.deny.iter().enumerate())
+            .map(|(index, path)| (format!("DENY_WRITE_{index}="), path))
+            .chain(
+                (protection.allow.iter().enumerate())
+                    .map(|(index, path)| (format!("ALLOW_WRITE_{index}="), path)),
+            );
+        for (name, path) in params {
+            let mut define = OsString::from(name);
+            define.push(resolved_path(path).as_os_str());
+            args.push("-D".into());
+            args.push(define);
+        }
+        args.push("--".into());
+        args.push(spec.program.into_os_string());
+        args.extend(spec.args);
+        Ok(SpawnSpec {
+            program: PathBuf::from(SANDBOX_EXEC),
+            args,
+            ..spec
+        })
     }
 
     fn confine_preview(
@@ -793,6 +853,52 @@ mod tests {
         let denied = read("run/ipc.token");
         assert!(!denied.status.success(), "{denied:?}");
         assert!(denied.stdout.is_empty());
+    }
+
+    #[test]
+    fn protection_denies_only_its_paths_and_gives_back_the_exceptions() {
+        let dir = Temp(std::env::temp_dir().join(format!("brig-protect-{}", std::process::id())));
+        let refs = dir.join("refs/heads/brigadier");
+        std::fs::create_dir_all(refs.join("aa")).unwrap();
+        std::fs::create_dir_all(refs.join("bb")).unwrap();
+        std::fs::write(refs.join("bb/task-1"), "x").unwrap();
+        let real = dir.canonicalize().unwrap();
+        let protection = Protection {
+            deny: vec![refs.clone()],
+            deny_patterns: vec![format!(
+                "^{}/tmp-[0-9a-f]+(/|$)",
+                real.display().to_string().replace('.', "\\.")
+            )],
+            // Its own branch's ref and lock, neither existing yet.
+            allow: vec![refs.join("aa/task-1"), refs.join("aa/task-1.lock")],
+        };
+        std::fs::create_dir_all(dir.join("tmp-0a1b")).unwrap();
+        let sh = |script: &str| {
+            let spec = SpawnSpec {
+                program: PathBuf::from("/bin/sh"),
+                args: vec!["-c".into(), script.into()],
+                cwd: Some(dir.to_path_buf()),
+                ..SpawnSpec::default()
+            };
+            let spec = Seatbelt.protect(spec, &protection).unwrap();
+            Command::new(&spec.program)
+                .args(&spec.args)
+                .current_dir(&*dir)
+                .status()
+                .unwrap()
+                .success()
+        };
+        assert!(sh("echo a > refs/heads/brigadier/aa/task-1.lock"));
+        assert!(sh(
+            "mv refs/heads/brigadier/aa/task-1.lock refs/heads/brigadier/aa/task-1"
+        ));
+        assert!(!sh("rm refs/heads/brigadier/bb/task-1"));
+        assert!(!sh("echo b > refs/heads/brigadier/bb/task-2"));
+        assert!(!sh("rm -rf tmp-0a1b"));
+        assert!(sh("mkdir mine && echo c > mine/f && rm -rf mine"));
+        assert!(refs.join("bb/task-1").exists() && dir.join("tmp-0a1b").exists());
+        assert!(!sh(&format!("rm -rf '{}'", refs.display())));
+        assert!(refs.join("bb/task-1").exists());
     }
 
     #[test]

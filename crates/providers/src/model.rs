@@ -970,6 +970,12 @@ pub struct SessionSpec {
     pub omit_ai_coauthors: bool,
     /// A Claude thread's output hook; Codex runs no hooks.
     pub output_hook: Option<OutputHook>,
+    /// What the session may never write (other sessions' branches, the base, Brigadier's
+    /// bookkeeping; PLAN bug 6). Below Full access the CLI's sandbox grants none of it
+    /// already, and Claude also gets it as `denyWrite` and file-tool deny rules (its file
+    /// tools work outside the OS sandbox); under [`Access::Full`] the CLI runs inside
+    /// Brigadier's allow-all-but-these profile. Empty: nothing is added.
+    pub protection: brigadier_sandbox::Protection,
 }
 
 impl SessionSpec {

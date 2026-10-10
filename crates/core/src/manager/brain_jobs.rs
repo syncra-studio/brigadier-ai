@@ -570,6 +570,7 @@ impl SessionManager {
             auto_review: false,
             omit_ai_coauthors: false,
             output_hook: None,
+            protection: Default::default(),
         };
         let access = spec.access.clone();
         let time = match job.kind {

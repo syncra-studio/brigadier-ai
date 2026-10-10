@@ -2120,6 +2120,7 @@ mod tests {
             auto_review: false,
             omit_ai_coauthors: false,
             output_hook: None,
+            protection: Default::default(),
         }
     }
 
