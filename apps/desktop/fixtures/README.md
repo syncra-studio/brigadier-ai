@@ -140,3 +140,12 @@ sets at startup. `?drive=1` closes each one while shown, while hidden with every
 (as a covered macOS window runs no frames), and while visible with animations paused (the control,
 which stays stuck), and writes JSON into `#hidden-exit-result`; `pageHidden.test.ts` checks it.
 This entry is absent from the production build.
+
+# Mockup
+
+`http://localhost:1426/fixtures/mockup.html` shows a session's mockup (SESSION-FIXES-PLAN.md Q10) in the
+right sidebar's Mockup tab, opened from its chip, with screenshots drawn in the page. Query switches:
+`stage=building|ready|compared|stopped`, `full=1` (full view over the main area), `comment=1` (two
+notes already marked). `drive=1` runs the flow `src/app/conversation/MockupRender.test.ts` checks:
+Comment, two markers with notes, ⌘↩ sends one message with the marked screenshot, Working, the
+revision's See latest changes, full view and back. Requests never reach a daemon.

@@ -12,6 +12,8 @@ import { discardDocument, documentIsSaved, pruneDocumentDrafts } from "@/state/d
 
 export const CHAT_TAB = "chat";
 export const REVIEW_TAB = "review";
+/** The session's mockup in full view (SESSION-FIXES-PLAN.md Q10); split, it is the right sidebar's tab. */
+export const MOCKUP_TAB = "mockup";
 
 /** What the Review tab shows: every change (its scope picker), or one file's diff. */
 export type ReviewTarget =
@@ -56,7 +58,8 @@ export type DocumentTab = {
   /** Display only. Rust owns the authority to save to this path. */
   savedPath: string | null; relativePath: string | null;
 };
-export type SessionTab = FileTab | ReviewTabState | BrowserTabState | TerminalTabState | SideChatTabState | DocumentTab | NewTabState;
+export type MockupTabState = { kind: "mockup"; id: typeof MOCKUP_TAB; opener: string | null };
+export type SessionTab = FileTab | ReviewTabState | BrowserTabState | TerminalTabState | SideChatTabState | DocumentTab | MockupTabState | NewTabState;
 export type NewTabKind = "newTab" | "terminal" | "browser" | "sideChat" | "document";
 
 export type SessionTabs = {
@@ -256,6 +259,13 @@ export function openReviewTab(conversationId: string, target: ReviewTarget, repl
     };
     return { tabs: insertAfterActive(current, tab), active: REVIEW_TAB };
   });
+}
+
+/** Shows the session's mockup over its main area, after the tab in front; once. */
+export function openMockupTab(conversationId: string): void {
+  update(conversationId, (current) => current.tabs.some((tab) => tab.id === MOCKUP_TAB)
+    ? { ...current, active: MOCKUP_TAB }
+    : { tabs: insertAfterActive(current, { kind: "mockup", id: MOCKUP_TAB, opener: current.active }), active: MOCKUP_TAB });
 }
 
 export function selectTab(conversationId: string, id: string): void {

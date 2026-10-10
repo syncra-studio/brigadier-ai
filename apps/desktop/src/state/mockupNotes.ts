@@ -1,46 +1,93 @@
+import { create } from "zustand";
+
 /**
- * The user's notes on a mockup (SESSION-FIXES-PLAN.md Q10): each marks a region of one
- * screenshot and says what to change there; they are sent together, as one message with the
- * marked screenshots attached.
+ * The user's notes on a mockup (SESSION-FIXES-PLAN.md Q10), as the reference app comments on
+ * an image: a click drops a numbered marker on a screenshot and a note says what to change
+ * there. They are kept until sent together, as one message with the marked screenshots.
  */
 
-/** A region as fractions of the image's width and height, so it holds at any zoom. */
-export type Region = { x: number; y: number; width: number; height: number };
-
-export type MockupNote = { id: string; screen: number; region: Region; text: string };
+/** A note at a point of one screen's screenshot, as fractions of its width and height. */
+export type MockupNote = { id: string; screen: number; x: number; y: number; text: string };
 
 const clamp = (value: number) => Math.min(1, Math.max(0, value));
 
-/**
- * The region dragged from `start` to `end` (points in the image's displayed box of `size`),
- * normalised whatever the drag's direction and kept inside the image. A drag too small to be
- * meant (`min` px either way) is a click: null.
- */
-export function regionFrom(
-  start: { x: number; y: number },
-  end: { x: number; y: number },
-  size: { width: number; height: number },
-  min = 6,
-): Region | null {
-  if (Math.abs(end.x - start.x) < min && Math.abs(end.y - start.y) < min) return null;
-  const x0 = clamp(Math.min(start.x, end.x) / size.width);
-  const y0 = clamp(Math.min(start.y, end.y) / size.height);
-  const x1 = clamp(Math.max(start.x, end.x) / size.width);
-  const y1 = clamp(Math.max(start.y, end.y) / size.height);
-  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+/** A point in the image's displayed box of `size`, as fractions kept inside the image. */
+export function pointIn(point: { x: number; y: number }, size: { width: number; height: number }): { x: number; y: number } {
+  return { x: clamp(point.x / size.width), y: clamp(point.y / size.height) };
+}
+
+/** A fraction as a percent with at most one decimal: 0.3 → "30%", 1/3 → "33.3%". */
+export function percent(fraction: number): string {
+  return `${Math.round(clamp(fraction) * 1000) / 10}%`;
 }
 
 /** The file a screen's marked screenshot is sent as. */
 export const markedName = (screen: number) => `mockup-${screen}-notes.png`;
 
+/** Each screen with notes, in screen order, with its notes in the order they were made. */
+export function notesByScreen(notes: readonly MockupNote[]): { screen: number; notes: MockupNote[] }[] {
+  const screens = [...new Set(notes.map((note) => note.screen))].toSorted((a, b) => a - b);
+  return screens.map((screen) => ({ screen, notes: notes.filter((note) => note.screen === screen) }));
+}
+
+/** A note's marker number: its place among its screen's notes. */
+export function markerNumber(notes: readonly MockupNote[], note: MockupNote): number {
+  return notes.filter((other) => other.screen === note.screen).indexOf(note) + 1;
+}
+
 /**
- * The one message the notes are sent as: numbered as the markers on the screenshots, each with
- * its screen, so the thread can pass them to the mockup's worker with the marked files.
+ * The one message the notes are sent as: one `Image N:` block per marked screenshot (the
+ * reference app's shape), each note with its point and marker number, so the thread passes
+ * them to the mockup's worker with the files.
  */
-export function notesMessage(title: string, version: number, notes: readonly MockupNote[]): string {
-  const screens = new Set(notes.map((note) => note.screen));
-  const lines = notes.map((note, index) =>
-    `${index + 1}. ${screens.size > 1 ? `Screen ${note.screen}: ` : ""}${note.text.trim()}`);
-  const files = [...screens].toSorted((a, b) => a - b).map(markedName).join(", ");
-  return `Changes to the mockup "${title}" (version ${version}):\n${lines.join("\n")}\n\nThe numbered areas are marked on ${files}.`;
+export function notesMessage(version: number, notes: readonly MockupNote[]): string {
+  const blocks = notesByScreen(notes).map(({ screen, notes: own }, index) => [
+    `Image ${index + 1} (${markedName(screen)}):`,
+    ...own.map((note, at) => `${at + 1}. (x: ${percent(note.x)}, y: ${percent(note.y)}) ${note.text.trim()}`),
+  ].join("\n"));
+  return [`Notes on the mockup (version ${version}), numbered as the markers on the attached screenshots:`, ...blocks].join("\n\n");
+}
+
+type Box = { width: number; height: number };
+
+/**
+ * Where a note's box goes beside the point it is about, inside `surface` with `margin` to
+ * spare: right of the marker (`gap` from the point), else left of it, else centred below,
+ * else above.
+ */
+export function notePlacement(point: { x: number; y: number }, box: Box, surface: Box, gap: number, margin: number): { left: number; top: number } {
+  const fitsX = (left: number) => left >= margin && left + box.width <= surface.width - margin;
+  const fitsY = (top: number) => top >= margin && top + box.height <= surface.height - margin;
+  const keep = (value: number, size: number, room: number) => Math.max(margin, Math.min(value, room - margin - size));
+  const middle = point.y - box.height / 2;
+  if (fitsX(point.x + gap)) return { left: point.x + gap, top: keep(middle, box.height, surface.height) };
+  if (fitsX(point.x - gap - box.width)) return { left: point.x - gap - box.width, top: keep(middle, box.height, surface.height) };
+  const left = keep(point.x - box.width / 2, box.width, surface.width);
+  return fitsY(point.y + gap) ? { left, top: point.y + gap } : { left, top: keep(point.y - gap - box.height, box.height, surface.height) };
+}
+
+/**
+ * A session's notes while they are made, kept across the tab's split and full views. `sent`
+ * holds the screenshots shown when notes went, until the user moves to the revised ones
+ * (`dismissed`: not now, the next time the mockup opens).
+ */
+type SessionNotes = { notes: MockupNote[]; commenting: boolean; sent: { version: number; shots: string[]; dismissed: boolean } | null };
+
+const EMPTY: SessionNotes = { notes: [], commenting: false, sent: null };
+
+export const useMockupNotes = create<{ sessions: Record<string, SessionNotes> }>(() => ({ sessions: {} }));
+
+export function mockupNotesOf(conversationId: string): SessionNotes {
+  return useMockupNotes.getState().sessions[conversationId] ?? EMPTY;
+}
+
+export function useSessionNotes(conversationId: string): SessionNotes {
+  return useMockupNotes((s) => s.sessions[conversationId] ?? EMPTY);
+}
+
+export function changeNotes(conversationId: string, change: (current: SessionNotes) => Partial<SessionNotes>): void {
+  useMockupNotes.setState(({ sessions }) => {
+    const current = sessions[conversationId] ?? EMPTY;
+    return { sessions: { ...sessions, [conversationId]: { ...current, ...change(current) } } };
+  });
 }

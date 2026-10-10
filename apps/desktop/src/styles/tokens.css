@@ -222,6 +222,22 @@
   /* Attachments: an image thumbnail's side, a file card's width. */
   --spacing-attachment-thumb: 7.625rem;
   --spacing-attachment-card: 14rem;
+  /* A mockup's tab (SESSION-FIXES-PLAN.md Q10), as the reference app's image tab measures: its
+     header band, a floating control's height, a note's marker and the gap from it to the
+     note's box, the box's width and heights (writing, editing), the bottom toolbar, a canvas
+     tile's height, the file pill's longest name, the zoom menu and the notes list. */
+  --spacing-mockup-header: 3rem;
+  --spacing-mockup-control: 2rem;
+  --spacing-mockup-marker: 1.875rem;
+  --spacing-mockup-marker-gap: 0.75rem;
+  --spacing-mockup-note: 18.375rem;
+  --spacing-mockup-note-input: 2.75rem;
+  --spacing-mockup-note-edit: 7.5rem;
+  --spacing-mockup-toolbar: 2.5rem;
+  --spacing-mockup-tile: 18.25rem;
+  --spacing-mockup-pill-text: 10.5rem;
+  --spacing-mockup-menu: 10rem;
+  --spacing-mockup-list: 24rem;
   /* The composer rail: inset from the card's sides, tucked under its top edge. */
   --spacing-rail-inset: 0.8125rem;
   --spacing-rail-tuck: 0.25rem;
@@ -373,6 +389,8 @@
   --radius-summary: 1.25rem;
   --radius-tooltip: 1rem;
   --radius-capsule: 9999px;
+  /* A note's marker on a mockup: round but for the corner that points at its place. */
+  --radius-marker: 50% 50% 50% 0.1875rem;
   /* The page surface; sidebar and Settings navigation rows; a Settings card. */
   --radius-page: 0.75rem;
   /* The titlebar's icon buttons (the sidebar toggle, the side panel's buttons). */
@@ -427,6 +445,12 @@
   --shadow-page: 0 0 0 0.5px oklch(1 0 0 / 6%), 0 4px 16px oklch(0 0 0 / 5%);
   /* The side panel casting onto the thread beside it; its active tab lifted off the strip. */
   --shadow-side-panel: -8px 0 16px -8px oklch(0 0 0 / 18%);
+  /* A mockup's floating controls, its screenshot on the stage, its bottom toolbar, and the
+     white ring of a note's marker. */
+  --shadow-mockup-control: 0 0 0 1px oklch(1 0 0 / 6%), 0 4px 16px oklch(0 0 0 / 20%);
+  --shadow-mockup-image: 0 0 0 1px oklch(1 0 0 / 5%), 0 4px 8px -2px oklch(0 0 0 / 30%);
+  --shadow-mockup-toolbar: 0 0 0 1px oklch(1 0 0 / 8%), 0 4px 8px -2px oklch(0 0 0 / 35%);
+  --shadow-marker: 0 0 0 1px oklch(1 0 0);
   --shadow-panel-tab: inset 0 0 0 0.5px var(--panel-tab-border), 0 1px 2px oklch(0 0 0 / 8%);
 
   /* The pinned summary's motion: springs sampled for CSS. The thread's column moving aside
@@ -505,6 +529,8 @@
   --color-row-object: var(--row-object);
   --color-work-rule: var(--work-rule);
   --color-toggle-on: var(--toggle-on);
+  --color-marker: var(--marker);
+  --color-mockup-stage: var(--mockup-stage);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -611,6 +637,10 @@
   --panel-tab-border: color-mix(in oklab, var(--foreground) 10%, transparent);
   /* Blue: a switch that is on. */
   --toggle-on: oklch(0.63 0.18 259);
+  /* Blue: a note's marker on a mockup, and the ring of a picked canvas tile. */
+  --marker: oklch(0.63 0.18 259);
+  /* The stage a mockup's screenshot sits on: a step off the page, so a dark screenshot's edge shows. */
+  --mockup-stage: color-mix(in oklab, var(--foreground) 3%, var(--background));
   /* A see-through wash of the foreground over content: the terminal's selection. */
   --scrim: color-mix(in oklab, var(--foreground) 20%, transparent);
   /* The terminal's 16 colours, from the palette: the status colours for red, green, yellow

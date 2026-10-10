@@ -1,4 +1,4 @@
-import { Archive, Chat, Globe, Terminal, Plus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Archive, Chat, Globe, ImageSquare, Terminal, Plus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -21,6 +21,7 @@ import { takePaneClose } from "@/state/closedPanes";
 import { undoTabClose } from "@/state/terminalPlaces";
 import { ChatActions } from "@/app/conversation/ChatActions";
 import { PreviewChip } from "@/app/conversation/PreviewChip";
+import { MockupChip } from "@/app/conversation/MockupChip";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { Badge } from "@/components/ui/badge";
@@ -74,6 +75,7 @@ export function tabTitle(tab: SessionTab): string {
   if (tab.kind === "terminal") return tab.title || (tab.cwd ? baseName(tab.cwd) : "Terminal");
   if (tab.kind === "sideChat") return tab.title || "Side chat";
   if (tab.kind === "document") return tab.name;
+  if (tab.kind === "mockup") return "Mockup";
   return baseName(tab.path);
 }
 
@@ -359,7 +361,8 @@ export function SessionTabBar({
                         : tab.kind === "browser" ? <BrowserIcon tabId={tab.id} />
                         : tab.kind === "terminal" ? <Terminal className="size-icon-sm shrink-0" />
                         : tab.kind === "sideChat" ? <Chat className="size-icon-sm shrink-0" />
-                        : tab.kind === "document" ? <Document className="size-icon-sm shrink-0" /> : (
+                        : tab.kind === "document" ? <Document className="size-icon-sm shrink-0" />
+                        : tab.kind === "mockup" ? <ImageSquare className="size-icon-sm shrink-0" /> : (
                         <DiffGlyph className="size-icon-sm shrink-0" />
                       )}
                       <span className={cn("session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap", tab.kind === "file" && tab.preview && "italic")}>
@@ -394,6 +397,7 @@ export function SessionTabBar({
         </Badge>
       )}
       <PreviewChip conversationId={id} />
+      <MockupChip conversationId={id} />
       <div data-tauri-drag-region className="min-w-0 flex-1 self-stretch" />
       {children}
       <Dialog open={confirmClose !== null} onOpenChange={(open) => { if (!open) useTabCloseAsk.setState({ confirm: null }); }}>
@@ -433,6 +437,7 @@ const ReviewTab = lazy(() =>
 const BrowserTab = lazy(() => import("./BrowserTab").then((module) => ({ default: module.BrowserTab })));
 const SideChatTab = lazy(() => import("./SideChatTab").then((module) => ({ default: module.SideChatTab })));
 const MainTerminalTab = lazy(() => import("./MainTerminalTab").then((module) => ({ default: module.MainTerminalTab })));
+const MockupView = lazy(() => import("./MockupTab").then((module) => ({ default: module.MockupView })));
 const DocumentTabView = lazy(() => import("./DocumentTabView").then((module) => ({ default: module.DocumentTabView })));
 
 /**
@@ -468,7 +473,8 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
                 <SideChatTab conversationId={conversationId} tab={tab} />
               ) : tab.kind === "terminal" ? (
                 <div data-main-terminal className="flex min-h-0 flex-1 flex-col"><MainTerminalTab conversationId={conversationId} tab={tab} active={shown} /></div>
-              ) : <DocumentTabView conversationId={conversationId} tab={tab} active={shown} />}
+              ) : tab.kind === "mockup" ? <MockupView conversationId={conversationId} full />
+                : <DocumentTabView conversationId={conversationId} tab={tab} active={shown} />}
             </Suspense>
           </div>
         );

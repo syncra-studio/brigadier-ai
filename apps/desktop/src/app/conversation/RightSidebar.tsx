@@ -1,4 +1,4 @@
-import { Agent, Branch, Folders, Lightbulb, PlayCircle, SidebarFloatingRight, SidebarRight } from "@openai/apps-sdk-ui/components/Icon";
+import { Agent, Branch, Folders, ImageSquare, Lightbulb, PlayCircle, SidebarFloatingRight, SidebarRight } from "@openai/apps-sdk-ui/components/Icon";
 import { type CSSProperties, createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { WorkersTab } from "@/app/conversation/Agents";
@@ -17,6 +17,7 @@ import { CHAT_TAB, useSessionTabs } from "@/state/sessionTabs";
 const FilesTab = lazy(() => import("@/app/conversation/FilesTab").then((m) => ({ default: m.FilesTab })));
 const SourcePanel = lazy(() => import("@/app/conversation/SourcePanel").then((m) => ({ default: m.SourcePanel })));
 const PlanTab = lazy(() => import("@/app/conversation/PlanTab").then((m) => ({ default: m.PlanTab })));
+const MockupTab = lazy(() => import("@/app/conversation/MockupTab").then((m) => ({ default: m.MockupTab })));
 const RunningTab = lazy(() => import("@/app/conversation/RunningTab").then((m) => ({ default: m.RunningTab })));
 const TABS = [
   { id: "files", title: "Files", Icon: Folders },
@@ -25,7 +26,10 @@ const TABS = [
   { id: "running", title: "Running", Icon: PlayCircle },
 ] as const;
 /** Plan joins the tabs once a plan has been opened in it, from its card or the context card. */
-const WITH_PLAN = [...TABS, { id: "plan", title: "Plan", Icon: Lightbulb }] as const;
+const PLAN = { id: "plan", title: "Plan", Icon: Lightbulb } as const;
+/** Mockup joins them while the session has a mockup (SESSION-FIXES-PLAN.md Q10). */
+const MOCKUP = { id: "mockup", title: "Mockup", Icon: ImageSquare } as const;
+type Tab = (typeof TABS)[number] | typeof PLAN | typeof MOCKUP;
 
 export function useRightSidebar(conversationId: string | null, enabled: boolean) {
   const left = useSidebar();
@@ -121,7 +125,10 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
   const panel = useContext(RightSidebarContext);
   const content = useRef<HTMLDivElement>(null);
   const column = useRef<HTMLDivElement>(null);
-  const tabs: readonly (typeof WITH_PLAN)[number][] = usePlanTab((s) => s.shown[conversationId] !== undefined) ? WITH_PLAN : TABS;
+  const withPlan = usePlanTab((s) => s.shown[conversationId] !== undefined);
+  const withMockup = useBoard((s) => s.board?.conversationId === conversationId
+    && Object.values(s.board.tasks).some((task) => task.mockup?.type === "builds"));
+  const tabs: readonly Tab[] = [...TABS, ...(withPlan ? [PLAN] : []), ...(withMockup ? [MOCKUP] : [])];
   // Finished workers leave the composer's strip once answered; they stay here, counted.
   const done = useBoard((s) =>
     s.board?.conversationId === conversationId ? Object.values(s.board.tasks).filter(workerDone).length : 0);
@@ -147,6 +154,8 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
     }
   }, [panel?.open]);
   if (!panel?.enabled) return null;
+  // A tab restored or remembered for a session that no longer shows it falls back to Files.
+  const active = tabs.some((tab) => tab.id === panel.active) ? panel.active : "files";
   return (
     <div
       ref={column}
@@ -168,9 +177,9 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
                   role="tab"
                   id={`right-sidebar-${id}`}
                   aria-controls="right-sidebar-content"
-                  aria-selected={panel.active === id}
+                  aria-selected={active === id}
                   className="aria-selected:bg-toolbar-pressed aria-selected:text-foreground"
-                  tabIndex={panel.active === id ? 0 : -1}
+                  tabIndex={active === id ? 0 : -1}
                   tooltip={id === "workers" && done > 0 ? `${title} · ${done} done` : title}
                   onClick={() => panel.selectTab(id)}
                   onKeyDown={(event) => {
@@ -192,18 +201,19 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
           <div
             id="right-sidebar-content"
             role="tabpanel"
-            aria-labelledby={`right-sidebar-${panel.active}`}
-            data-pane={panel.active}
+            aria-labelledby={`right-sidebar-${active}`}
+            data-pane={active}
             className={cn(
               "bg-sidebar text-sidebar-foreground rounded-e-page flex min-h-0 flex-1 flex-col overflow-hidden transition-opacity duration-150 motion-reduce:transition-none",
               panel.open ? "opacity-100" : "opacity-0",
             )}
           >
             {mounted && <Suspense fallback={null}>
-              {panel.active === "files" ? <FilesTab conversationId={conversationId} searchRequest={panel.searchRequest} onSearchHandled={panel.searchHandled} replaceTabId={panel.filePlaceholder} onFileOpened={panel.fileOpened} />
-                : panel.active === "source" ? <SourcePanel conversationId={conversationId} />
-                  : panel.active === "plan" ? <PlanTab conversationId={conversationId} />
-                  : panel.active === "running" ? <RunningTab conversationId={conversationId} />
+              {active === "files" ? <FilesTab conversationId={conversationId} searchRequest={panel.searchRequest} onSearchHandled={panel.searchHandled} replaceTabId={panel.filePlaceholder} onFileOpened={panel.fileOpened} />
+                : active === "source" ? <SourcePanel conversationId={conversationId} />
+                  : active === "plan" ? <PlanTab conversationId={conversationId} />
+                  : active === "running" ? <RunningTab conversationId={conversationId} />
+                  : active === "mockup" ? <MockupTab conversationId={conversationId} />
                   : <WorkersTab conversationId={conversationId} />}
             </Suspense>}
           </div>
