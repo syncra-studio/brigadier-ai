@@ -478,6 +478,7 @@ export function ApprovalAction({
       </div>
       {shown.body}
       <ActionCardActions
+        className="flex-wrap justify-end"
         leading={
           <>
             {onReply && (
@@ -604,7 +605,7 @@ function sessionGrant(request: ApprovalRequest): { scope: string; explanation: s
   if (kind === "fileChange") {
     return {
       scope: "workspace edits",
-      explanation: `Allow file changes inside ${grant}${outside} from any worker in this conversation using this workspace. Edits outside this folder or in Git metadata still ask. Not saved across sessions.`,
+      explanation: `Allow file changes inside ${grant}${outside} from any worker in this conversation using this workspace. Edits outside this folder, in Git metadata or in CLI config (.claude, .codex, .agents, .vscode, .mcp.json) still ask. Not saved across sessions.`,
     };
   }
   if (kind === "command") {

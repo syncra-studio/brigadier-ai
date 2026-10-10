@@ -153,16 +153,24 @@ export function ActionKbd({ children, variant }: { children: ReactNode; variant:
  */
 export function ActionCardActions({
   leading,
+  className,
   children,
 }: {
   /** Before the choices, at the start (an error). */
   leading?: ReactNode;
+  /** Added to the choices' row. */
+  className?: string;
   children: ReactNode;
 }) {
   return (
     <div className="flex items-center gap-2 px-4 pt-2 pb-4 @max-md/approval-card:flex-col @max-md/approval-card:items-stretch">
       {leading}
-      <div className="ms-auto flex min-w-0 flex-wrap justify-end items-center gap-2 @max-md/approval-card:ms-0 @max-md/approval-card:w-full @max-md/approval-card:flex-col @max-md/approval-card:items-stretch">
+      <div
+        className={cn(
+          "ms-auto flex min-w-0 items-center gap-2 @max-md/approval-card:ms-0 @max-md/approval-card:w-full @max-md/approval-card:flex-col @max-md/approval-card:items-stretch",
+          className,
+        )}
+      >
         {children}
       </div>
     </div>

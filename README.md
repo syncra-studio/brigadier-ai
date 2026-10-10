@@ -294,7 +294,8 @@ A session's permission level is picked in the composer; a project remembers the 
   asks you on a card. The visible "Allow … for this session" button allows commands with the
   same first words (such as `git push` or `curl`), connections to the same host, or file changes
   inside the asker’s own checkout/worktree for the rest of the conversation, including worker
-  handoffs. File changes outside that folder or in Git metadata still ask. These grants stay
+  handoffs. File changes outside that folder, in Git metadata, or in the CLIs' own config
+  (`.claude`, `.codex`, `.agents`, `.vscode`, `.mcp.json`, in any letter case) still ask. These grants stay
   in memory only; nothing is saved across sessions. Full access is the persistent alternative.
   File grants check paths and symlinks when approval is requested; they cannot prevent a
   concurrent process from swapping a checked path for a symlink before the CLI writes.

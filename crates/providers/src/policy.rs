@@ -582,27 +582,22 @@ fn redirects_to_file(command: &str) -> bool {
 
 /// What "for this session" would allow for a file change asked for in `workspace`: the
 /// workspace itself, when every path the request names lies inside it as the file system
-/// resolves them (a symlink leading out is outside). `None` for anything else, and for a path
-/// in a `.git` folder, whose hooks and config run code: those ask every time.
+/// resolves them (a symlink leading out is outside). `None` for anything else, and for a
+/// [`protected`] path, whose hooks and config run code: those ask every time.
 /// This checks paths at approval time; the provider writes later, so it cannot prevent a
 /// concurrent process from replacing a checked path with a symlink before the write.
 pub fn workspace_grant(request: &ApprovalRequest, workspace: &std::path::Path) -> Option<String> {
-    use std::path::Component;
     if request.kind != ApprovalKind::FileChange || request.paths.is_empty() {
         return None;
     }
     let root = resolved_path(workspace)?;
     let git_dirs = git_metadata_dirs(&root)?;
-    let in_git = |path: &std::path::Path| {
-        path.components()
-            .any(|part| matches!(part, Component::Normal(name) if name == ".git"))
-    };
     let inside = |path: &str| {
         let path = std::path::Path::new(path);
-        !in_git(path)
+        !protected(path)
             && resolved_path(path).is_some_and(|real| {
                 !git_dirs.iter().any(|git| real.starts_with(git))
-                    && real.strip_prefix(&root).is_ok_and(|rest| !in_git(rest))
+                    && real.strip_prefix(&root).is_ok_and(|rest| !protected(rest))
             })
     };
     request
@@ -610,6 +605,24 @@ pub fn workspace_grant(request: &ApprovalRequest, workspace: &std::path::Path) -
         .iter()
         .all(|path| inside(path))
         .then(|| workspace.display().to_string())
+}
+
+/// Folders whose files run code or set permissions outside the sandbox: Git's hooks and
+/// config, Claude's settings and hooks, Codex's config, agent skills and editor tasks.
+const PROTECTED_DIRS: [&str; 5] = [".git", ".claude", ".codex", ".agents", ".vscode"];
+
+/// Whether `path` lies in a [`PROTECTED_DIRS`] folder or is an `.mcp.json`, at any depth.
+/// Names compare case-insensitively, as macOS's file system does (`.GIT` is `.git`).
+fn protected(path: &std::path::Path) -> bool {
+    path.components().any(|part| match part {
+        std::path::Component::Normal(name) => name.to_str().is_none_or(|name| {
+            PROTECTED_DIRS
+                .iter()
+                .chain([&".mcp.json"])
+                .any(|protected| name.eq_ignore_ascii_case(protected))
+        }),
+        _ => false,
+    })
 }
 
 /// Git can keep its administrative folders under names other than `.git`. Follow the
@@ -936,6 +949,46 @@ mod tests {
         assert!(workspace_grant(&write(&workspace.join("new.txt")), &workspace).is_some());
         for path in [admin.join("config"), common.join("hooks/pre-commit")] {
             assert_eq!(workspace_grant(&write(&path), &workspace), None);
+        }
+    }
+
+    #[test]
+    fn session_file_grants_exclude_cli_config_in_any_case() {
+        let dirs = Linked::new("cli-config");
+        let workspace = dirs.real();
+        std::fs::create_dir_all(workspace.join(".git/hooks")).unwrap();
+        let mut asked = write(&workspace.join("src/x.rs"));
+        asked.grant = workspace_grant(&asked, &workspace);
+        let mut similar = Similar::default();
+        similar.allow(&asked);
+        assert!(similar.covers(&write(&workspace.join("src/x.rs")), Some(&workspace)));
+        // `.GIT` is `.git` on macOS; `.Claude` doesn't exist yet.
+        for path in [
+            ".claude/settings.local.json",
+            ".claude/hooks/x.sh",
+            ".codex/config.toml",
+            ".agents/skills/x/SKILL.md",
+            ".mcp.json",
+            ".vscode/settings.json",
+            "sub/.MCP.json",
+            ".GIT/hooks/x",
+            ".Claude/settings.json",
+        ] {
+            let path = workspace.join(path);
+            assert!(
+                !similar.covers(&write(&path), Some(&workspace)),
+                "{}",
+                path.display()
+            );
+            assert_eq!(workspace_grant(&write(&path), &workspace), None);
+        }
+        // Through a symlink whose own name is ordinary.
+        #[cfg(unix)]
+        {
+            std::fs::create_dir_all(workspace.join(".claude")).unwrap();
+            std::os::unix::fs::symlink(workspace.join(".claude"), workspace.join("conf")).unwrap();
+            let path = workspace.join("conf/settings.json");
+            assert!(!similar.covers(&write(&path), Some(&workspace)));
         }
     }
 
