@@ -64,7 +64,19 @@
  *               narrowest-window              a window narrower than this hides the side panel
  *               panel-resize-step             an arrow key's move of the side panel's edge
  *               w-panel-tab, min-w-panel-tab-min  a side panel tab: its width, its least
- *               min-w-session-tab-min         a session's tab: its least (its width is a panel tab's)
+ *               session-tab-{min,max}         a session's tab: `.session-tab` (globals.css) shares
+ *                                             the strip evenly, at least session-tab-min and at
+ *                                             most session-tab-max (the list grows to the tabs'
+ *                                             count times session-tab-max); session-tab-separator
+ *                                             is the rule between tabs
+ *               --session-tab-title-mask      the fade at a long tab title's end
+ *               browser-{controls,address}    the Browser tab's toolbar: the least for each side's
+ *                                             buttons, the most for the address field, laid out
+ *                                             by --browser-toolbar-columns (`.browser-toolbar`)
+ *               w-browser-menu, h-browser-menu-item, rounded-browser-menu  its page menu
+ *               browser-{pane,tab-min,tab-max,composer}  the Browser tab's pane, its tabs' least
+ *                                             and most, its composer
+ *               max-w-new-tab-tools           the New tab page's tool grid (--container-new-tab-tools)
  *               max-h-user-message            a long user message, clipped (about 15 lines)
  *               max-w-thread, max-w-{2xs,xs,sm,md,lg} readable column / surface widths
  *               max-w-settings                the Settings page's column

@@ -9,7 +9,7 @@ import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { isRightSidebarKey, rightSidebarFolds, rightSidebarToggleLabel, type RightSidebarTab, selectRightSidebarTab, setRightSidebarOpen, useRightSidebarState } from "@/state/rightSidebar";
 import { useApp } from "@/state/store";
-import { useSessionTabsOf } from "@/state/sessionTabs";
+import { CHAT_TAB, useSessionTabs } from "@/state/sessionTabs";
 
 const FilesTab = lazy(() => import("@/app/conversation/FilesTab").then((m) => ({ default: m.FilesTab })));
 const SourcePanel = lazy(() => import("@/app/conversation/SourcePanel").then((m) => ({ default: m.SourcePanel })));
@@ -45,7 +45,7 @@ export function useRightSidebar(conversationId: string | null, enabled: boolean)
   const { width, setWidth, resizing, setResizing } = useSidebarWidth("brigadier.rightSidebarWidth");
   const [searchRequest, setSearchRequest] = useState(0);
   const [filePlaceholder, setFilePlaceholder] = useState<{ conversationId: string; tabId: string } | null>(null);
-  const sessionActive = useSessionTabsOf(conversationId).active;
+  const sessionActive = useSessionTabs((s) => conversationId ? s.sessions[conversationId]?.active ?? CHAT_TAB : CHAT_TAB);
   if (filePlaceholder && (!open || active !== "files" || sessionActive !== filePlaceholder.tabId || conversationId !== filePlaceholder.conversationId))
     setFilePlaceholder(null);
   const fileOpened = useCallback(() => setFilePlaceholder(null), []);
