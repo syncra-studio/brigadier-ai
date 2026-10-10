@@ -173,7 +173,11 @@ impl SessionManager {
         }
         let mut previous_reason = None;
         loop {
-            let reason = MachineStepReason::from_load(self.machine.guard.current());
+            let load = self.machine.guard.current();
+            if !load.workers_held() {
+                break;
+            }
+            let reason = MachineStepReason::from_load(load);
             if previous_reason != Some(reason) {
                 let words = match reason {
                     MachineStepReason::Heat => {
@@ -182,19 +186,21 @@ impl SessionManager {
                     MachineStepReason::Memory => "Waiting for memory to free up".to_owned(),
                 };
                 self.set_task_blocked(&task.id, Some(words)).await;
-                self.record_machine_step(
-                    &task.conversation_id,
-                    MachineStep {
-                        kind: MachineStepKind::WaitingToCool,
-                        reason,
-                        request_id: task.request_id.clone(),
-                        task_id: Some(task.id.clone()),
-                        command: None,
-                        at_ms: now_ms(),
-                        position: 0,
-                    },
-                )
-                .await;
+                if previous_reason.is_none() {
+                    self.record_machine_step(
+                        &task.conversation_id,
+                        MachineStep {
+                            kind: MachineStepKind::WaitingToCool,
+                            reason,
+                            request_id: task.request_id.clone(),
+                            task_id: Some(task.id.clone()),
+                            command: None,
+                            at_ms: now_ms(),
+                            position: 0,
+                        },
+                    )
+                    .await;
+                }
                 previous_reason = Some(reason);
             }
             let eased = self.machine.eased_within(RECHECK).await;
