@@ -519,6 +519,42 @@ fn a_grant_taken_away_since_the_start_is_reported_and_refuses_engine_work() {
 }
 
 #[test]
+fn once_a_restart_is_due_no_engine_work_starts_even_if_the_grants_change_back() {
+    use std::sync::atomic::AtomicBool;
+    // Accessibility taken away, then given back before the helper exits.
+    static TAKEN: AtomicBool = AtomicBool::new(true);
+    let system = System {
+        fresh_permissions: || {
+            Some(Permissions {
+                accessibility: !TAKEN.load(Ordering::SeqCst),
+                screen_recording: true,
+                restarting: false,
+            })
+        },
+        ..granted()
+    };
+    let s = setup(system, None);
+    let c = connect(&s, TOKEN);
+    let (_, rx) = send(&c, Op::Permissions);
+    assert!(
+        !answer(&rx)
+            .unwrap()
+            .reply
+            .permissions
+            .unwrap()
+            .accessibility
+    );
+    assert!(s.hub.restart_due());
+    TAKEN.store(false, Ordering::SeqCst);
+    let (_, rx) = send(&c, Op::Apps);
+    let e = answer(&rx).unwrap().reply.error.unwrap();
+    assert_eq!(e.code, ErrorCode::AppNotResponding, "{e:?}");
+    assert!(e.detail.contains("restarting"), "{e:?}");
+    assert_eq!(s.seen.apps_calls.load(Ordering::SeqCst), 0);
+    assert!(s.hub.restart_due(), "it still exits");
+}
+
+#[test]
 fn a_fresh_look_that_can_not_run_leaves_the_helpers_own_answers() {
     let system = System {
         fresh_permissions: || None,

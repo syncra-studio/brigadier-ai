@@ -147,13 +147,21 @@ struct Activity {
     running: usize,
     /// Since when nothing has been in use.
     idle_since: Option<Instant>,
+    /// The helper is exiting to restart: it takes no new engine work, which the exit would cut
+    /// off.
+    closing: bool,
 }
 
 impl Activity {
-    fn start(&mut self, worker: &str) {
+    /// Takes an engine request, unless the helper is exiting.
+    fn start(&mut self, worker: &str) -> bool {
+        if self.closing {
+            return false;
+        }
         self.sessions.insert(worker.to_owned());
         self.running += 1;
         self.idle_since = None;
+        true
     }
 
     fn done(&mut self) {
@@ -255,6 +263,7 @@ impl Hub {
             sessions: HashSet::new(),
             running: 0,
             idle_since: Some(Instant::now()),
+            closing: false,
         }));
         let grants = Arc::new(Grants {
             system,
@@ -328,9 +337,14 @@ impl Hub {
 
     /// Whether the helper should exit now so the next one starts with the grants as they are:
     /// one was given or taken away after this process started, and no engine request is
-    /// queued or running.
+    /// queued or running. Once it says yes, the helper takes no new engine work, even if the
+    /// grants change back before it exits.
     pub fn restart_due(&self) -> bool {
-        self.grants.restart.load(Ordering::SeqCst) && lock(&self.activity).running == 0
+        let mut a = lock(&self.activity);
+        if self.grants.restart.load(Ordering::SeqCst) && a.running == 0 {
+            a.closing = true;
+        }
+        a.closing
     }
 
     /// Looks at the grants again when a session is open and the last look is older than
@@ -425,9 +439,18 @@ impl Hub {
             }
             live.insert(req.id, key);
         }
+        if !lock(&self.activity).start(&req.worker) {
+            lock(&conn.live).remove(&req.id);
+            let e = CuError::new(
+                ErrorCode::AppNotResponding,
+                "Brigadier Computer Use is restarting to use the permissions as they are now; \
+                 send the request again in a moment",
+            );
+            conn.reply(Reply::error(req.id, e), &[]);
+            return;
+        }
         // Its deadline is set again when it starts.
         let token = self.gens.request_token(&req.worker, key, Duration::ZERO);
-        lock(&self.activity).start(&req.worker);
         let job = Box::new(Job {
             conn: conn.clone(),
             req,
