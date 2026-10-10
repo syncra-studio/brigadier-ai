@@ -290,9 +290,10 @@ pub(crate) fn proc_of(platform: &dyn Platform, pid: u32) -> Option<Proc> {
     })
 }
 
-/// Whether `proc` still is the process it was (alive, the same start time).
+/// Whether `proc` still is the process it was (alive and not a zombie, the same start time).
 pub(crate) fn still(platform: &dyn Platform, proc: Proc) -> bool {
     platform.processes().is_alive(proc.pid)
+        && !platform.processes().is_zombie(proc.pid)
         && proc_of(platform, proc.pid)
             .is_some_and(|now| (now.started_ms - proc.started_ms).abs() < 1_000)
 }
@@ -1051,6 +1052,7 @@ pub(crate) mod tests {
         sleeper.kill().unwrap();
         wait_for(|| platform.processes().is_zombie(proc.pid).then_some(()));
         assert!(platform.processes().is_alive(proc.pid));
+        assert!(!still(&*platform, proc));
         assert!(gone(&*platform, proc) && gone(&unreadable, proc));
         sleeper.wait().unwrap();
         assert!(gone(&*platform, proc));

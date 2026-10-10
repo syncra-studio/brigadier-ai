@@ -132,27 +132,14 @@ impl Processes for MacProcesses {
             .collect())
     }
     fn start_time_ms(&self, pid: u32) -> Result<f64> {
-        let pid = i32::try_from(pid)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid pid"))?;
-        let size = std::mem::size_of::<libc::proc_bsdinfo>();
-        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-        // SAFETY: `info` is a writable buffer of exactly `size` bytes, which is what
-        // PROC_PIDTBSDINFO fills; the return value is checked before `info` is read.
-        #[allow(unsafe_code)]
-        let (written, info) = unsafe {
-            let written = libc::proc_pidinfo(
-                pid,
-                libc::PROC_PIDTBSDINFO,
-                0,
-                info.as_mut_ptr().cast(),
-                size as libc::c_int,
-            );
-            (written, info.assume_init())
-        };
-        if written != size as libc::c_int {
-            return Err(io::Error::last_os_error().into());
-        }
-        Ok(info.pbi_start_tvsec as f64 * 1000.0 + info.pbi_start_tvusec as f64 / 1000.0)
+        // `kinfo_proc` holds the start time `PROC_PIDTBSDINFO` reports, but unlike that it is
+        // readable for another user's process and for a zombie, so a reused PID shows.
+        let info = kinfo_proc(pid)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such process"))?;
+        let field = |at: usize, len: usize| &info[at..at + len];
+        let seconds = i64::from_ne_bytes(field(P_STARTTIME_SEC, 8).try_into().unwrap());
+        let micros = i32::from_ne_bytes(field(P_STARTTIME_USEC, 4).try_into().unwrap());
+        Ok(seconds as f64 * 1000.0 + f64::from(micros) / 1000.0)
     }
 }
 
@@ -233,18 +220,26 @@ fn timebase() -> (u32, u32) {
     })
 }
 
-/// Whether `pid` is a zombie, per its `kinfo_proc` from `KERN_PROC_PID` (`proc_pidinfo`
-/// fails for a zombie, as it has no task any more).
+/// Whether `pid` is a zombie, per its `kinfo_proc` (`proc_pidinfo` fails for a zombie, as it
+/// has no task any more).
 fn is_zombie(pid: u32) -> bool {
-    // `struct kinfo_proc` (libc does not define it on Apple platforms): 648 bytes, with
-    // `kp_proc.p_stat` at offset 36 on 64-bit macOS.
-    const SIZE: usize = 648;
-    const P_STAT: usize = 36;
-    let Ok(pid) = libc::c_int::try_from(pid) else {
-        return false;
-    };
-    let mut buffer = [0u8; SIZE];
-    let mut size = SIZE;
+    kinfo_proc(pid).is_some_and(|info| u32::from(info[P_STAT]) == libc::SZOMB)
+}
+
+// `struct kinfo_proc` (libc does not define it on Apple platforms): 648 bytes on 64-bit
+// macOS, starting with `kp_proc`, whose `p_starttime` (a `timeval`: 64-bit seconds, then
+// 32-bit microseconds) is at offset 0 and `p_stat` at offset 36.
+const KINFO_PROC_SIZE: usize = 648;
+const P_STARTTIME_SEC: usize = 0;
+const P_STARTTIME_USEC: usize = 8;
+const P_STAT: usize = 36;
+
+/// `pid`'s `kinfo_proc`, per `KERN_PROC_PID`: readable for any user's process, zombies
+/// included; `None` once it is reaped.
+fn kinfo_proc(pid: u32) -> Option<[u8; KINFO_PROC_SIZE]> {
+    let pid = libc::c_int::try_from(pid).ok()?;
+    let mut buffer = [0u8; KINFO_PROC_SIZE];
+    let mut size = KINFO_PROC_SIZE;
     let mut mib = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
     // SAFETY: `buffer` is writable for `size` bytes and the call writes at most that many,
     // updating `size`; the result is checked before `buffer` is read.
@@ -260,7 +255,7 @@ fn is_zombie(pid: u32) -> bool {
         )
     };
     // No such process leaves `size` at 0.
-    read == 0 && size == SIZE && u32::from(buffer[P_STAT]) == libc::SZOMB
+    (read == 0 && size == KINFO_PROC_SIZE).then_some(buffer)
 }
 
 /// Every process id on the machine, per `proc_listallpids`.
@@ -1003,6 +998,42 @@ mod tests {
         assert!(MacProcesses.cpu_time_ms(std::process::id()).is_some());
         child.kill().unwrap();
         child.wait().unwrap();
+    }
+
+    #[test]
+    fn start_times_come_from_the_kernel_for_any_process_and_zombies() {
+        let now_ms = || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as f64
+        };
+        let own = MacProcesses.start_time_ms(std::process::id()).unwrap();
+        assert!(own > now_ms() - 3_600_000.0 && own <= now_ms(), "{own}");
+        let before = now_ms();
+        let mut child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let after = now_ms();
+        let started = MacProcesses.start_time_ms(child.id()).unwrap();
+        assert!(
+            started >= before - 1_000.0 && started <= after + 1_000.0,
+            "{before} <= {started} <= {after}"
+        );
+        // Another user's process (launchd), which PROC_PIDTBSDINFO refuses.
+        assert!(MacProcesses.start_time_ms(1).unwrap() <= own);
+        // A zombie keeps its start time until it is reaped.
+        child.kill().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !is_zombie(child.id()) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never became a zombie"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(MacProcesses.start_time_ms(child.id()).unwrap(), started);
+        let pid = child.id();
+        child.wait().unwrap();
+        assert!(MacProcesses.start_time_ms(pid).is_err());
     }
 
     #[test]

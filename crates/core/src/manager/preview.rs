@@ -892,8 +892,9 @@ impl SessionManager {
                 // and a detached one is beyond the group signal: walk from each of them too.
                 // One that has ended or whose PID was reused is not ours any more: it is
                 // dropped, and its ledger record with it, as the stop path forgets them. One
-                // whose identity cannot be checked now is not walked, but stays, so the stop
-                // path and a restart's ledger sweep still try to end it.
+                // whose identity cannot be checked now is not walked, but stays: the record
+                // only helps if its identity becomes readable again, so the stop path or a
+                // restart's ledger sweep can end it then.
                 let (known, dropped): (Vec<_>, Vec<_>) = {
                     let mut members = live
                         .paused_members
@@ -1958,6 +1959,55 @@ while True:
         detached.kill().unwrap();
         child.wait().unwrap();
         detached.wait().unwrap();
+        flow.stop().await;
+    }
+
+    /// A PID now held by another user's process (launchd), which PROC_PIDTBSDINFO refuses:
+    /// the kernel's own start time still shows it is not the member, which is forgotten.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_member_whose_pid_another_user_reused_is_forgotten() {
+        use crate::manager::flow::{Flow, Options, Reply};
+
+        let flow = Flow::start(
+            "preview-reused-member",
+            Options::default(),
+            Arc::new(|_| Box::pin(async { Reply::text("[quiet]") })),
+        )
+        .await;
+        let platform = flow.manager.runtime.platform().clone();
+        let spec = flow.manager.runtime.cli_env().spec(Path::new("/bin/cat"));
+        let mut child = platform.processes().piped_command(&spec).spawn().unwrap();
+        let launchd = crate::machine::proc_of(&*platform, 1).unwrap();
+        let member = crate::machine::builds::Proc {
+            started_ms: launchd.started_ms + 5_000,
+            ..launchd
+        };
+        let live = LivePreview {
+            conversation: flow.conversation.clone(),
+            id: "preview-1".into(),
+            pid: child.id(),
+            workspace: flow.repo.clone(),
+            log: flow.repo.join("unused.log"),
+            reason: Mutex::default(),
+            stop: CancellationToken::new(),
+            ended: CancellationToken::new(),
+            snapshot: Mutex::default(),
+            paused_members: Mutex::new(vec![member]),
+            updating: tokio::sync::Mutex::default(),
+        };
+        let owner = preview_owner(&flow.conversation);
+        let ledger = flow.manager.runtime.ledger();
+        ledger
+            .record(&owner, process_artifact(member))
+            .await
+            .unwrap();
+        let result = flow.manager.signal_preview_on(&live, true, &platform).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert!(!live.paused_members.lock().unwrap().contains(&member));
+        assert!(!ledger.artifacts(&owner).contains(&process_artifact(member)));
+        child.kill().unwrap();
+        child.wait().unwrap();
         flow.stop().await;
     }
 
