@@ -165,7 +165,7 @@ async fn the_first_start_deletes_every_old_conversation() {
         .core
         .project(&crate::model::ProjectId(OLD_PROJECT.into()))
         .expect("the project stays");
-    assert_eq!(project.prefs.permission, Some(PermissionLevel::FullAccess));
+    assert!(project.prefs.orchestrator.is_some(), "{:?}", project.prefs);
     assert_eq!(
         flow.core.engine().as_deref(),
         Some(super::super::engine::ENGINE)

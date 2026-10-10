@@ -7,7 +7,7 @@ use brigadier_providers::{FileSearch, ProviderKind, SearchKind};
 use super::SessionManager;
 use super::prompts;
 use super::workers::route_label;
-use crate::model::{ConversationId, DomainEvent};
+use crate::model::{ConversationId, DomainEvent, PermissionLevel};
 use crate::tools::{NoteKind, OrchestratorCall, ToolReply, WorkerCall};
 use crate::work::{
     ApprovalSubject, ArtifactRef, AttachmentRef, DecisionSource, InjectionKind, OrchestratorStep,
@@ -428,6 +428,9 @@ impl SessionManager {
                 self.propose_merge(id, args.note).await
             }
             OrchestratorCall::NoteForUser(args) => self.note_for_user(id, args).await,
+            OrchestratorCall::SuggestFullAccess(args) => {
+                self.suggest_full_access(id, &args.reason).await
+            }
             OrchestratorCall::SettleStep(args) => self.settle_step(id, args).await,
             OrchestratorCall::EndRun(args) => self.end_run_now(id, args).await,
             OrchestratorCall::ProposeOvernight(args) => self.interpret_overnight(id, args).await,
@@ -761,6 +764,63 @@ impl SessionManager {
                 .into())
             }
         }
+    }
+
+    /// `suggest_full_access`: a notice in the thread, under the request the orchestrator serves,
+    /// with a button that switches the session to Full access. Once per request, and only where
+    /// the switch would change something: a session below Full access, in a trusted folder,
+    /// with the user there to press it.
+    pub(crate) async fn suggest_full_access(
+        &self,
+        id: &ConversationId,
+        reason: &str,
+    ) -> Result<String> {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return Err(Error::Invalid("`reason` is empty".into()));
+        }
+        if !matches!(
+            self.core.conversation(id)?.setup,
+            Some(crate::model::Setup::Session { .. })
+        ) {
+            return Err(Error::Invalid(
+                "only a session has a permission level".into(),
+            ));
+        }
+        if self.repo_trust(id) == Some(false) {
+            return Err(Error::Invalid(
+                "The user doesn't trust this project's folder, so this session asks first whatever its level: say in your answer what needs more access; trusting the folder is in the project's settings.".into(),
+            ));
+        }
+        if self.overnight.active.get(id).is_some() {
+            return Err(Error::Invalid(
+                "An overnight run is going and nobody can press the button: list it with note_for_user, kind waiting.".into(),
+            ));
+        }
+        if self.permission(id) == PermissionLevel::FullAccess {
+            return Err(Error::Invalid(
+                "This session already has Full access: the sandbox isn't what stopped it.".into(),
+            ));
+        }
+        let request = self.request_for(id, None).await;
+        let board = self.core.board(id).await?;
+        if board.orchestrator_steps.iter().any(|step| {
+            step.request_id == request
+                && matches!(step.kind, OrchestratorStepKind::FullAccessSuggested { .. })
+        }) {
+            return Err(Error::Invalid(
+                "The notice is already shown for this request: don't show it again.".into(),
+            ));
+        }
+        self.orchestrator_step_in(
+            id,
+            request,
+            OrchestratorStepKind::FullAccessSuggested {
+                reason: reason.to_owned(),
+            },
+        )
+        .await;
+        Ok("Showed the user a notice with a button that switches this session to Full access. Say in a line what waits on it, and carry on with what doesn't need it; if they switch, a [settings] note tells you.".into())
     }
 
     /// The user's attachments in this conversation, by id.

@@ -2126,11 +2126,11 @@ fn find_queued<'a>(queue: &'a mut MessageQueue, item_id: &str) -> Result<&'a mut
 }
 
 /// Records a session setup's choices as the project's remembered ones. Returns whether
-/// anything changed.
+/// anything changed. The permission level isn't one: each new session starts at the default
+/// level (Settings > Configuration) unless the user picks another for it.
 fn remember(project: &mut Project, setup: Option<&Setup>) -> bool {
     let Some(Setup::Session {
         environment,
-        permission,
         orchestrator,
         ..
     }) = setup
@@ -2138,7 +2138,6 @@ fn remember(project: &mut Project, setup: Option<&Setup>) -> bool {
         return false;
     };
     let before = project.prefs.clone();
-    project.prefs.permission = Some(*permission);
     // Fast spends usage faster: each session opts in again rather than inheriting it. An
     // account is chosen per session: a new one starts on the default account again.
     project.prefs.orchestrator = Some(ModelChoice {

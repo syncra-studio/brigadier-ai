@@ -648,6 +648,16 @@ pub struct NoteForUser {
     pub why: Option<String>,
 }
 
+/// `suggest_full_access`: something the user asked for needs more than the session's sandbox
+/// allows; the thread shows a notice with a button that switches the session to Full access.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SuggestFullAccess {
+    /// One line for the user: what the sandbox stopped and what Full access would let you do
+    /// ("Installing Xcode's command line tools writes outside the project").
+    pub reason: String,
+}
+
 /// `settle_step`: during an overnight run, the thread settles a step of the run's plan once it
 /// has judged the step's whole scope and every "done when" (its own edits too).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -743,6 +753,7 @@ pub enum OrchestratorCall {
     FinishSession(FinishSession),
     ProposeMerge(ProposeMerge),
     NoteForUser(NoteForUser),
+    SuggestFullAccess(SuggestFullAccess),
     ListTasks,
     SettleStep(SettleStep),
     EndRun(EndRun),
@@ -783,6 +794,7 @@ impl OrchestratorCall {
             Self::FinishSession(_) => "finish_session",
             Self::ProposeMerge(_) => "propose_merge",
             Self::NoteForUser(_) => "note_for_user",
+            Self::SuggestFullAccess(_) => "suggest_full_access",
             Self::ListTasks => "list_tasks",
             Self::SettleStep(_) => "settle_step",
             Self::EndRun(_) => "end_run",

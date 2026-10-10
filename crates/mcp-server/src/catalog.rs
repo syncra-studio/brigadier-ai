@@ -9,8 +9,8 @@ use brigadier_core::tools::{
     OrchestratorCall, PlanPhases, PreviewLog, ProposeMerge, ProposeOvernight, ProposePlan,
     QueryBrain, ReadArtifact, RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role,
     RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript,
-    SettleStep, StartPreview, StopPreview, StopWorker, SubmitOutline, SubmitReport, TaskRef,
-    ToolCall, WorkerCall,
+    SettleStep, StartPreview, StopPreview, StopWorker, SubmitOutline, SubmitReport,
+    SuggestFullAccess, TaskRef, ToolCall, WorkerCall,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
@@ -179,6 +179,15 @@ during an overnight run only, something only the user can do (a key, a sign-in, 
 push), in one line, for the run's \"Waiting on you\" list; outside a run it is refused: say it \
 in your answer instead. Brigadier lists its own decisions and, in a run, the workers' needs_user \
 items itself: don't repeat them. Returns at once.";
+
+const SUGGEST_FULL_ACCESS: &str = "Show the user a notice in the thread when something they \
+asked for needs more access than this session's sandbox gives (writing outside the workspace, \
+installing software system-wide, the internet under Ask for approval, an app or device the \
+sandbox blocks): your reason, a button that switches this session to Full access, and a link to \
+Settings > Configuration. reason: one line on what the sandbox stopped and what Full access \
+would let you do. Not for what Full access wouldn't fix (a missing key, a failing test, an \
+outward step only the user takes). Refused when the session already has Full access. Returns at \
+once; the user's switch, if they make it, arrives as a change of this session's setting.";
 
 const RUN: &str = "Run a shell command and get its result: use it for builds, tests, logs and \
 long listings, anything that prints a lot. It runs with this session's access, in the same \
@@ -389,6 +398,11 @@ fn orchestrator_tools() -> Vec<Tool> {
             NOTE_FOR_USER,
             input_schema::<NoteForUser>(),
         ),
+        tool(
+            "suggest_full_access",
+            SUGGEST_FULL_ACCESS,
+            input_schema::<SuggestFullAccess>(),
+        ),
         tool("list_tasks", LIST_TASKS, no_arguments()),
         tool("settle_step", SETTLE_STEP, input_schema::<SettleStep>()),
         tool("end_run", END_RUN, input_schema::<EndRun>()),
@@ -514,6 +528,9 @@ pub fn parse_call(
                 "finish_session" => OrchestratorCall::FinishSession(args(name, arguments)?),
                 "propose_merge" => OrchestratorCall::ProposeMerge(args(name, arguments)?),
                 "note_for_user" => OrchestratorCall::NoteForUser(args(name, arguments)?),
+                "suggest_full_access" => {
+                    OrchestratorCall::SuggestFullAccess(args(name, arguments)?)
+                }
                 "list_tasks" => OrchestratorCall::ListTasks,
                 "settle_step" => OrchestratorCall::SettleStep(args(name, arguments)?),
                 "end_run" => OrchestratorCall::EndRun(args(name, arguments)?),
@@ -800,6 +817,30 @@ mod tests {
         };
         assert!(tools_for(&hook).is_empty());
         assert!(parse_call(&hook, "run", command()).is_err());
+    }
+
+    /// Every thread can show the Full access notice; the reason it gives is what the user reads.
+    #[test]
+    fn every_thread_can_suggest_full_access() {
+        for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {
+            let thread = Role::Orchestrator {
+                conversation_id: brigadier_core::model::ConversationId("c1".into()),
+                run,
+            };
+            assert!(
+                tools_for(&thread)
+                    .iter()
+                    .any(|tool| tool.name == "suggest_full_access"),
+                "{run:?}"
+            );
+            let arguments =
+                serde_json::json!({ "reason": "Installing Homebrew writes outside the project" });
+            assert!(matches!(
+                parse_call(&thread, "suggest_full_access", arguments.as_object().cloned()),
+                Ok(ToolCall::Orchestrator(OrchestratorCall::SuggestFullAccess(args)))
+                    if args.reason == "Installing Homebrew writes outside the project"
+            ));
+        }
     }
 
     #[test]

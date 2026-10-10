@@ -259,6 +259,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "propose_merge" => ToolCall::Orchestrator(O::ProposeMerge(arg(name, args))),
         "propose_plan" => ToolCall::Orchestrator(O::ProposePlan(arg(name, args))),
         "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
+        "suggest_full_access" => ToolCall::Orchestrator(O::SuggestFullAccess(arg(name, args))),
         "route_follow_up" => ToolCall::Orchestrator(O::RouteFollowUp(arg(name, args))),
         "list_tasks" => ToolCall::Orchestrator(O::ListTasks),
         "settle_step" => ToolCall::Orchestrator(O::SettleStep(arg(name, args))),

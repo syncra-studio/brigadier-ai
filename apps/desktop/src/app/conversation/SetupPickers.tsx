@@ -241,7 +241,7 @@ const FULL_ACCESS_POWERS: { icon: FC<{ className?: string }>; tone: string; titl
  * The "Turn on Full Access?" dialog: what workers could do without the sandbox, what still
  * asks, and the risks. Only Confirm changes the level; Esc or Cancel keeps it.
  */
-function FullAccessDialog({
+export function FullAccessDialog({
   open,
   onCancel,
   onConfirm,
@@ -456,10 +456,20 @@ function WaitingPill({ wait }: { wait: QuotaWait }) {
 }
 
 /** Whether the user doesn't trust the folder `repo` of the project `projectId`. */
-function useUntrusted(projectId: string | null, repo: string | null): boolean {
+export function useUntrusted(projectId: string | null, repo: string | null): boolean {
   return useApp(
     (s) => projectId !== null && repo !== null && folderTrust(s.projects[projectId], repo) === false,
   );
+}
+
+/** Changes a started session's permission level: the composer's picker, and the thread's notice. */
+export async function setSessionPermission(
+  conversation: Conversation,
+  permission: PermissionLevel,
+): Promise<void> {
+  const setup = conversation.setup;
+  if (setup?.type !== "session") return;
+  await updateSetup(conversation.id, { ...setup, permission });
 }
 
 /** Permission level of a started session. */
@@ -476,9 +486,7 @@ export function ConversationPermissionPicker({ conversation }: { conversation: C
       <PermissionPicker
         value={setup.permission}
         untrusted={untrusted}
-        onChange={(permission) =>
-          action.run(() => updateSetup(conversation.id, { ...setup, permission }))
-        }
+        onChange={(permission) => action.run(() => setSessionPermission(conversation, permission))}
       />
       {action.error && (
         <span role="alert" className="text-destructive max-w-xs truncate text-xs" title={action.error}>

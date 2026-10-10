@@ -8,7 +8,8 @@ import type { PermissionLevel } from "./PermissionLevel";
  */
 export type ProjectPrefs = { 
 /**
- * Absent: the global default from Settings.
+ * What earlier versions remembered; no longer written or read: new sessions start at
+ * the default level from Settings. Kept so old stored projects still load.
  */
 permission: PermissionLevel | null, 
 /**

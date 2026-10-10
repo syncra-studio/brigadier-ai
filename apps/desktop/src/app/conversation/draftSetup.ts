@@ -120,7 +120,7 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
 
   const model = resolveModel(draft.model, kind, project, settings, groups);
   const defaultModel = resolveModel(null, kind, project, settings, groups);
-  const permission = resolvePermission(draft.permission, project, settings);
+  const permission = resolvePermission(draft.permission, settings);
   const environment = draft.environment ?? project?.prefs.environment ?? "localCheckout";
   const current = repo.info?.currentBranch ?? null;
   const picked = draft.branch ?? current;

@@ -27,6 +27,7 @@ import { confirmPending } from "@/state/shownIds";
 /** A page of Settings. */
 export type SettingsPageId =
   | "general"
+  | "configuration"
   | "conversations"
   | "personalization"
   | "usage"

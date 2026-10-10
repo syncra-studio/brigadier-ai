@@ -212,10 +212,10 @@ fn environment_text(environment: &Environment) -> String {
 fn permission_text(permission: PermissionLevel) -> &'static str {
     match permission {
         PermissionLevel::AskForApproval => {
-            "Ask for approval: you and the workers run in a sandbox, and anything that must leave it asks the user first, on a card. The user gives each outline's go-ahead (approve_outline shows them a plan card)."
+            "Ask for approval: you and the workers run in a sandbox, and anything that must leave it asks the user first, on a card. The user gives each outline's go-ahead (approve_outline shows them a plan card). If the user's request needs more than the sandbox allows, call suggest_full_access instead of saying so."
         }
         PermissionLevel::ApproveForMe => {
-            "Approve for me: you and the workers run in a sandbox; a command that must leave it is settled by an automatic reviewer. You give outlines their go-ahead on the user's behalf. Ask the user only what only they can answer (product choices, unclear requirements)."
+            "Approve for me: you and the workers run in a sandbox; a command that must leave it is settled by an automatic reviewer. You give outlines their go-ahead on the user's behalf. Ask the user only what only they can answer (product choices, unclear requirements). If the user's request needs more than the sandbox allows, call suggest_full_access instead of saying so."
         }
         PermissionLevel::FullAccess => {
             "Full access: you and the workers run without a sandbox, and nothing asks for approval. You give outlines their go-ahead on the user's behalf. Be careful."
@@ -1390,9 +1390,10 @@ mod environment_tests {
         assert!(worktree.contains("call finish_session without user_words"));
         assert!(worktree.contains("that is their consent too"));
         assert!(!worktree.contains("there is no card"));
-        // Every byte is paid for on every call: it stays under 12 KiB, code rules included
-        // (the old orchestrator's 11,371 bytes, and the interview the user wanted built in).
-        assert!(codex.len() < 12_288, "{}", codex.len());
+        // Every byte is paid for on every call: it stays near 12 KiB, code rules included
+        // (the old orchestrator's 11,371 bytes, the interview the user wanted built in, and
+        // the suggest_full_access hint of the sandboxed levels).
+        assert!(codex.len() < 12_400, "{}", codex.len());
     }
 
     #[test]
@@ -1407,6 +1408,10 @@ mod environment_tests {
         assert!(text("askForApproval").contains(
             "you and the workers run in a sandbox, and anything that must leave it asks the user first, on a card"
         ));
+        // Where the sandbox stops the user's request, the thread offers the switch.
+        assert!(text("askForApproval").contains("call suggest_full_access"));
+        assert!(text("approveForMe").contains("call suggest_full_access"));
+        assert!(!text("fullAccess").contains("suggest_full_access"));
     }
 
     #[test]

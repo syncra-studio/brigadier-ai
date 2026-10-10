@@ -8,6 +8,7 @@ import {
   Robot,
   Shuffle,
   SettingsCog,
+  SettingsSlider,
   Storage,
   Terminal,
   Usage,
@@ -17,6 +18,7 @@ import { lazy, type ComponentType, type SVGProps } from "react";
 import { ACCOUNTS_ROWS, AccountsPage } from "@/app/settings/AccountsPage";
 import { ARCHIVED_ROWS, ArchivedPage } from "@/app/settings/ArchivedPage";
 import { COMPUTER_USE_ROWS, ComputerUsePage } from "@/app/settings/ComputerUsePage";
+import { CONFIGURATION_ROWS, ConfigurationPage } from "@/app/settings/ConfigurationPage";
 import { CONVERSATIONS_ROWS, ConversationsPage } from "@/app/settings/ConversationsPage";
 import { GENERAL_ROWS, GeneralPage } from "@/app/settings/GeneralPage";
 import { GIT_ROWS, GitPage } from "@/app/settings/GitPage";
@@ -84,6 +86,14 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "Personal",
     component: GeneralPage,
     rows: Object.values(GENERAL_ROWS),
+  },
+  {
+    id: "configuration",
+    label: "Configuration",
+    icon: SettingsSlider,
+    group: "Personal",
+    component: ConfigurationPage,
+    rows: Object.values(CONFIGURATION_ROWS),
   },
   {
     id: "conversations",

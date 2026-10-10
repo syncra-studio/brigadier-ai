@@ -24,4 +24,4 @@ text?: string, } | { "type": "stopped", taskId: TaskId, reason: string, } | { "t
 /**
  * The user message whose words asked for it: it asks for no other merge.
  */
-askedIn: string | null, };
+askedIn: string | null, } | { "type": "fullAccessSuggested", reason: string, };

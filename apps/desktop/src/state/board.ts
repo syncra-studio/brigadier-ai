@@ -658,6 +658,7 @@ const TOOL_DOING: Readonly<Record<string, string>> = {
   list_tasks: "Checking on the workers",
   route_follow_up: "Sorting your follow-up",
   note_for_user: "Noting it for you",
+  suggest_full_access: "Asking for more access",
   WebSearch: "Searching the web",
   WebFetch: "Reading a web page",
 };

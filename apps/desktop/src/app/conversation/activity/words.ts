@@ -65,6 +65,7 @@ const PLUMBING = new Set([
   "start_verifier",
   "ask_user",
   "propose_merge",
+  "suggest_full_access",
   "submit_report",
 ]);
 

@@ -145,7 +145,8 @@ pub struct ProjectRepo {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProjectPrefs {
-    /// Absent: the global default from Settings.
+    /// What earlier versions remembered; no longer written or read: new sessions start at
+    /// the default level from Settings. Kept so old stored projects still load.
     pub permission: Option<PermissionLevel>,
     /// Orchestrator provider, model and effort. Absent: the global default.
     pub orchestrator: Option<ModelChoice>,

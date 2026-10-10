@@ -1836,3 +1836,111 @@ async fn stop_all_stops_every_running_worker_and_tells_the_orchestrator_once() {
     assert_eq!(told, 1, "{inputs:?}");
     flow.stop().await;
 }
+
+/// When the sandbox stops what the user asked for, the thread shows a notice once per request,
+/// with its reason, under the request it serves; at Full access it is refused. Changing the
+/// default level leaves a started session's own level alone.
+#[tokio::test]
+async fn the_thread_suggests_full_access_once_and_never_at_full_access() {
+    let replies: Arc<Mutex<Vec<(bool, String)>>> = Arc::default();
+    let log = replies.clone();
+    let flow = Flow::start(
+        "thread-suggest-full-access",
+        Options {
+            permission: PermissionLevel::AskForApproval,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    for _ in 0..2 {
+                        let reply = turn
+                            .call(
+                                "suggest_full_access",
+                                json!({"reason": "Installing Homebrew writes outside the project."}),
+                            )
+                            .await;
+                        log.lock().unwrap().push((reply.is_error, reply.text));
+                    }
+                }
+                Reply::text("It needs Full access.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Install Homebrew.").await;
+    let board = flow.settled().await;
+    {
+        let replies = replies.lock().unwrap();
+        assert!(!replies[0].0, "{replies:?}");
+        assert!(
+            replies[1].0 && replies[1].1.contains("already shown"),
+            "{replies:?}"
+        );
+    }
+    let shown: Vec<_> = board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            OrchestratorStepKind::FullAccessSuggested { reason } => {
+                Some((reason.clone(), step.request_id.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert_eq!(
+        shown[0].0,
+        "Installing Homebrew writes outside the project."
+    );
+    assert!(shown[0].1.is_some(), "under the user's request");
+
+    // A new default leaves this session at its own level.
+    let mut settings = flow.core.settings();
+    settings.default_permission = PermissionLevel::FullAccess;
+    flow.core.update_settings(settings).await.unwrap();
+    let Some(Setup::Session { permission, .. }) =
+        flow.core.conversation(&flow.conversation).unwrap().setup
+    else {
+        panic!("a session");
+    };
+    assert_eq!(permission, PermissionLevel::AskForApproval);
+
+    // The user switches the session to Full access: there is nothing left to suggest.
+    let Some(Setup::Session {
+        repo,
+        environment,
+        orchestrator,
+        workers_see_uncommitted,
+        plan_mode,
+        ..
+    }) = flow.core.conversation(&flow.conversation).unwrap().setup
+    else {
+        panic!("a session");
+    };
+    flow.manager
+        .set_setup(
+            flow.conversation.clone(),
+            Setup::Session {
+                repo,
+                environment,
+                permission: PermissionLevel::FullAccess,
+                orchestrator,
+                workers_see_uncommitted,
+                plan_mode,
+            },
+        )
+        .await
+        .unwrap();
+    flow.say("Install it now.").await;
+    flow.settled().await;
+    {
+        let replies = replies.lock().unwrap();
+        assert!(
+            replies[2].0 && replies[2].1.contains("already has Full access"),
+            "{replies:?}"
+        );
+    }
+    flow.stop().await;
+}

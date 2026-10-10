@@ -239,13 +239,12 @@ export function completeChoice(groups: readonly ModelGroup[], choice: ModelChoic
   return { ...choice, model: model.id, effort: effortFor(model, choice.effort) };
 }
 
-/** The permission level: the session choice, the project's remembered one, the default. */
-export function resolvePermission(
-  explicit: PermissionLevel | null,
-  project: Project | null,
-  settings: Settings,
-): PermissionLevel {
-  return explicit ?? project?.prefs.permission ?? settings.defaultPermission;
+/**
+ * A new session's permission level: the draft's own pick, else the default from Settings >
+ * Configuration. Projects don't remember one (an earlier version's remembered level is ignored).
+ */
+export function resolvePermission(explicit: PermissionLevel | null, settings: Settings): PermissionLevel {
+  return explicit ?? settings.defaultPermission;
 }
 
 /** "Local checkout · main" or "New worktree · brigadier/x from main". */

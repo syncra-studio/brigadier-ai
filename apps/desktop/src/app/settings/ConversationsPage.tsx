@@ -5,7 +5,6 @@ import {
   SettingsPage,
   SettingsRow,
   SettingsSection,
-  SettingsSelect,
   selectTrigger,
   SwitchSetting,
 } from "@/app/settings/parts";
@@ -14,15 +13,10 @@ import {
   ModelSelector,
   type ModelGroup,
 } from "@/components/assistant-ui/elements/model-selector";
-import { Badge } from "@/components/ui/badge";
-import type { ModelChoice, PermissionLevel } from "@/ipc/generated";
+import type { ModelChoice } from "@/ipc/generated";
 import {
-  NEVER_PUSHES_NOTE,
   builtInDefault,
   modelName,
-  PERMISSION_DETAILS,
-  PERMISSION_LABELS,
-  PERMISSION_LEVELS,
   useAvailableModelGroups,
   useModelGroups,
   withChoice,
@@ -43,10 +37,6 @@ export const CONVERSATIONS_ROWS = {
     description:
       "The orchestrator answers in a few plain lines, overnight runs included. Turn off for fuller answers.",
   },
-  permission: {
-    label: "Default permission level",
-    description: `A project remembers its own, which wins over this. ${NEVER_PUSHES_NOTE}`,
-  },
   contextUsage: {
     label: "Show context window usage",
     description: "A ring by the model picker in the composer shows how full the model's context is.",
@@ -62,7 +52,6 @@ export function ConversationsPage() {
   const groups = useAvailableModelGroups();
   const orchestrator = useApp((s) => s.settings.defaultOrchestrator);
   const chatModel = useApp((s) => s.settings.defaultChatModel);
-  const permission = useApp((s) => s.settings.defaultPermission);
   const automatic = builtInDefault(groups);
 
   return (
@@ -102,12 +91,6 @@ export function ConversationsPage() {
       <SettingsSection title="Replies">
         <SettingsCard>
           <SwitchSetting setting="shortReplies" row={CONVERSATIONS_ROWS.shortReplies} />
-        </SettingsCard>
-      </SettingsSection>
-
-      <SettingsSection title="Permissions">
-        <SettingsCard>
-          <PermissionRow value={permission} />
         </SettingsCard>
       </SettingsSection>
 
@@ -158,33 +141,6 @@ function DefaultModelRow({
         defaultChoice={fallback}
         onChange={change}
         className={cn(selectTrigger, value && "text-foreground")}
-      />
-    </SettingsRow>
-  );
-}
-
-function PermissionRow({ value }: { value: PermissionLevel }) {
-  const save = useAction();
-  return (
-    <SettingsRow
-      label={CONVERSATIONS_ROWS.permission.label}
-      description={`${PERMISSION_DETAILS[value]}. ${CONVERSATIONS_ROWS.permission.description}`}
-      error={save.error}
-    >
-      <SettingsSelect<PermissionLevel>
-        label={CONVERSATIONS_ROWS.permission.label}
-        value={value}
-        options={PERMISSION_LEVELS.map((level) => ({
-          value: level,
-          label:
-            level === "fullAccess" ? (
-              <Badge className="bg-full-access/15 text-full-access">{PERMISSION_LABELS[level]}</Badge>
-            ) : (
-              PERMISSION_LABELS[level]
-            ),
-          hint: `${PERMISSION_DETAILS[level]}.`,
-        }))}
-        onChange={(level) => save.run(() => setSetting("defaultPermission", level))}
       />
     </SettingsRow>
   );

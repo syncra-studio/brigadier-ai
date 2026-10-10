@@ -4,6 +4,7 @@ import type { FC } from "react";
 import { isTeamStep, TeamStep, WorkerName } from "@/app/conversation/activity/TeamSentence";
 import type { BlockOrchestratorStep, DecidedStep, MachineWords } from "@/app/conversation/blocks";
 import { machineWords } from "@/app/conversation/rowWords";
+import { SandboxLimitNotice } from "@/app/conversation/SandboxLimitNotice";
 import { WorkerLine } from "@/app/conversation/WorkerChip";
 import { ROW, ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
@@ -12,7 +13,8 @@ import { useApp } from "@/state/store";
 
 /**
  * The thread's notices among its work (THREAD-UX-PLAN.md §3.1): a judgement call the lead made,
- * the machine pausing the work, a merge the user asked for. Each is one standalone row.
+ * the machine pausing the work, a merge the user asked for, the session's sandbox stopping what
+ * the user asked for. Each is one standalone row; the last has its own buttons.
  */
 
 const MACHINE_ICONS: Record<MachineWords["machine"], FC<{ className?: string }>> = {
@@ -73,6 +75,7 @@ export const ThreadStep: FC<{ step: BlockOrchestratorStep }> = ({ step }) => {
   if (kind.type === "machine") return <MachineRow kind={kind} />;
   if (kind.type === "decided") return <DecidedRow kind={kind} />;
   if (isTeamStep(kind)) return <TeamStep kind={kind} />;
+  if (kind.type === "fullAccessSuggested") return <SandboxLimitNotice reason={kind.reason} />;
   if (kind.type === "merged") {
     return (
       <div data-slot="orchestrator-step" data-kind="merged" className={ROW}>

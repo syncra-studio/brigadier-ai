@@ -1493,6 +1493,9 @@ pub enum OrchestratorStepKind {
         #[serde(default)]
         asked_in: Option<String>,
     },
+    /// A notice that something the user asked for needs more than the session's sandbox
+    /// allows (`suggest_full_access`), with a button that switches the session to Full access.
+    FullAccessSuggested { reason: String },
 }
 
 /// One step of the orchestrator, where it happened in the conversation.
