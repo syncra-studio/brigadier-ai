@@ -47,6 +47,16 @@ test("approval and plan modes include proposed plans in their original order", (
   }
 });
 
+test("a plan written as a document, and a lead's outline, ask the user under any permission", () => {
+  const outline: ShownApproval = {
+    ...approval, id: "outline", position: 4,
+    subject: { type: "outline", taskId: "task", title: "Add a flag", outline: "Edit main.rs" },
+  };
+  assert.deepEqual(pendingActionKeys(conversation, {
+    ...board, plans: { plan: { ...plan, body: "# Add a flag\n\nOne line." } }, approvals: { approval, outline },
+  }), ["question:question", "plan:plan", "approval:approval", "outline:outline", "overnight:night"]);
+});
+
 test("settled decisions and runs leave the rail", () => {
   assert.deepEqual(pendingActionKeys(conversation, {
     ...board,

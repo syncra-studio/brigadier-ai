@@ -2,7 +2,8 @@ import type { Conversation } from "@/ipc/generated";
 import type { Board } from "@/state/board";
 
 export type PendingAction = {
-  type: "approval" | "question" | "plan" | "overnight";
+  /** `outline`: a lead's outline approval, asked as "Implement this plan?" like a plan. */
+  type: "approval" | "question" | "plan" | "outline" | "overnight";
   id: string;
 };
 
@@ -20,7 +21,8 @@ export function pendingActionKeys(
   const waiting: { key: string; position: number }[] = [];
   for (const approval of Object.values(board.approvals)) {
     if (approval.state.type === "pending") {
-      waiting.push({ key: `approval:${approval.id}`, position: approval.position });
+      const type = approval.subject.type === "outline" ? "outline" : "approval";
+      waiting.push({ key: `${type}:${approval.id}`, position: approval.position });
     }
   }
   for (const question of Object.values(board.questions)) {
@@ -28,11 +30,10 @@ export function pendingActionKeys(
       waiting.push({ key: `question:${question.id}`, position: question.position });
     }
   }
-  if (decidesPlans) {
-    for (const plan of Object.values(board.plans)) {
-      if (plan.state.type === "proposed") {
-        waiting.push({ key: `plan:${plan.id}`, position: plan.position });
-      }
+  // A plan written for the user to read (`propose_plan`) is always theirs to decide.
+  for (const plan of Object.values(board.plans)) {
+    if (plan.state.type === "proposed" && (decidesPlans || plan.body)) {
+      waiting.push({ key: `plan:${plan.id}`, position: plan.position });
     }
   }
   for (const run of Object.values(board.overnight)) {

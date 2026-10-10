@@ -66,6 +66,7 @@ import type {
 import { shownCommand } from "@/components/transcript/activity";
 import { answerCard, answerQuestion, decidePlan } from "@/state/actions";
 import { type ShownApproval, useBoard } from "@/state/board";
+import { type PlanDocRef, planDoc } from "@/state/planDoc";
 import { useApp } from "@/state/store";
 
 /* Pending decisions sit on the rail above the full composer. Their shortcuts leave
@@ -226,6 +227,17 @@ export function PendingActionCard({
             id={action.id}
             onDismiss={onDismiss}
             footer={footer}
+            stagger={follows}
+          />
+        );
+      case "outline":
+        return (
+          <ImplementPlanAction
+            key={action.id}
+            docRef={{ type: "outline", id: action.id }}
+            onDismiss={onDismiss}
+            footer={footer}
+            stagger={follows}
           />
         );
       case "overnight":
@@ -1040,8 +1052,77 @@ function RoundPager({
   );
 }
 
-/** The rail points to the single plan card and keeps message entry available. */
+/**
+ * "Implement this plan?" for a plan the user reads as a document: Yes builds it; typed words
+ * send it back. A thread's own plan is decided as a plan (the thread revises it); a lead's
+ * outline answers its approval (Yes starts the lead, words go to it as corrections). Skip and
+ * × put it aside; the plan stays proposed.
+ */
+function ImplementPlanAction({
+  docRef,
+  onDismiss,
+  footer,
+  stagger,
+}: {
+  docRef: PlanDocRef;
+  onDismiss: () => void;
+  footer: ReactNode;
+  stagger: boolean;
+}) {
+  const conversationId = useBoard((s) => s.board?.conversationId ?? null);
+  const shown = useBoard((s) => planDoc(s.board, docRef) !== null);
+  const action = useAction();
+  if (!shown || !conversationId) return null;
+  const decide = (yes: boolean, text: string | null) =>
+    action.run(() =>
+      docRef.type === "plan"
+        ? decidePlan(conversationId, docRef.id, yes, text)
+        : answerCard(conversationId, docRef.id, yes ? { type: "allow" } : { type: "deny", message: text ?? "" }),
+    );
+  return (
+    <ChoiceCard
+      name="plan"
+      title="Implement this plan?"
+      choices={[{ label: "Yes, implement this plan" }]}
+      initial={0}
+      placeholder="No, and tell Brigadier what to do differently"
+      onChoose={() => decide(true, null)}
+      onText={(text) => decide(false, text)}
+      onSkip={onDismiss}
+      onDismiss={onDismiss}
+      busy={action.busy}
+      error={action.error}
+      footer={footer}
+      stagger={stagger}
+    />
+  );
+}
+
+/**
+ * A proposed plan: one written as a document asks "Implement this plan?"; one of phases alone
+ * keeps its rail link to the plan card, with message entry available.
+ */
 function PlanAction({
+  id,
+  onDismiss,
+  footer,
+  stagger,
+}: {
+  id: string;
+  onDismiss: () => void;
+  footer: ReactNode;
+  stagger: boolean;
+}) {
+  const document = useBoard((s) => !!s.board?.plans[id]?.body);
+  return document ? (
+    <ImplementPlanAction docRef={{ type: "plan", id }} onDismiss={onDismiss} footer={footer} stagger={stagger} />
+  ) : (
+    <PhasePlanAction id={id} onDismiss={onDismiss} footer={footer} />
+  );
+}
+
+/** The rail points to the single plan card and keeps message entry available. */
+function PhasePlanAction({
   id,
   onDismiss,
   footer,
