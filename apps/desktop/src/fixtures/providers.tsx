@@ -3,6 +3,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { revealSetting } from "@/app/settings/reveal";
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -22,7 +23,7 @@ import { useApp } from "@/state/store";
  * ?drive=1 reveals one account's email, leaves the page and comes back, opens a search result
  * whose row moved, and follows a new model's link to its rule, writing what it saw to
  * #providers-result (ProvidersPageRender.test.ts reads it). Without it, the page stays as it
- * opens, for screenshots.
+ * opens, for screenshots (see ?reveal and ?show below).
  */
 const params = new URLSearchParams(location.search);
 // Driven, nothing animates or blurs (see the archived chats fixture).
@@ -189,6 +190,18 @@ function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
     openSettings("providers");
+    // For screenshots: ?reveal=1 shows the second account's email, ?show=<row> brings a row
+    // into view (opening Advanced for one of its rows).
+    if (params.has("reveal") || params.has("show")) {
+      const timer = setTimeout(() => {
+        if (params.has("reveal")) {
+          all<HTMLButtonElement>("button").filter((element) => element.getAttribute("aria-label") === "Show email")[1]?.click();
+        }
+        const show = params.get("show");
+        if (show) revealSetting(show);
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
     if (!params.has("drive")) return;
     const seen: Record<string, unknown> = {};
     const steps: (() => void)[] = [

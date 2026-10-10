@@ -77,7 +77,8 @@ export function ProviderCard({
         </span>
       }
       actions={
-        <>
+        // Inset like a card row's control, so the switch lines up with the ones below.
+        <span className="flex items-center gap-2 pr-4">
           {on && needs && (
             <SettingsButton disabled={settingUp !== null} onClick={() => setSetup({ install: state === "install" })}>
               {state === "install" ? "Install" : "Sign in"}
@@ -89,7 +90,7 @@ export function ProviderCard({
             disabled={toggle.busy}
             onCheckedChange={(next) => toggle.run(() => setProviderOn(provider, next))}
           />
-        </>
+        </span>
       }
     >
       {toggle.error && (
