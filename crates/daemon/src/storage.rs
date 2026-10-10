@@ -8,9 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-#[cfg(unix)]
-use brigadier_core::manager::disk::counted;
-use brigadier_core::manager::disk::{Action, ScanContext, ScanItem};
+use brigadier_core::manager::disk::{Action, ScanContext, ScanItem, counted};
 use brigadier_core::storage::{CleanCategory, CleanFailure, CleanItem, CleanReport, StorageReport};
 use brigadier_ipc::protocol::{ClientFrame, ClientInfo, Outcome, Request, Response, ServerFrame};
 use brigadier_sandbox::AppPaths;
@@ -414,6 +412,12 @@ fn debug_overrides() -> (
                 (ProviderKind::Codex, ".codex"),
             ]
             .into_iter()
+            // Codex threads are deleted through the Codex CLI, which works in `CODEX_HOME`: its
+            // stand-in is looked in only when the CLI works there too.
+            .filter(|(kind, dir)| {
+                *kind != ProviderKind::Codex
+                    || std::env::var_os("CODEX_HOME").is_some_and(|codex| home.join(dir) == codex)
+            })
             .map(|(kind, dir)| AgentHome {
                 kind,
                 history: home.join(dir),

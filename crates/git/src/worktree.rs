@@ -646,6 +646,29 @@ impl Worktree {
         Ok(Some(commit))
     }
 
+    /// Whether HEAD holds commits no branch, tag or remote branch has: a detached checkout
+    /// that moved on from where it was made. Removing the checkout would lose them.
+    pub fn commits_only_here(&self) -> Result<bool> {
+        if self.repo.symbolic_head()?.is_some() {
+            return Ok(false);
+        }
+        let head = self.head()?;
+        let out = self.repo.cmd(
+            &[
+                "for-each-ref",
+                "--count=1",
+                "--format=%(refname)",
+                "--contains",
+                &head.0,
+                "refs/heads/",
+                "refs/remotes/",
+                "refs/tags/",
+            ],
+            true,
+        )?;
+        Ok(out.iter().all(u8::is_ascii_whitespace))
+    }
+
     /// Kept work must not carry the user's uncommitted changes the worker started from: replace
     /// the branch's commits since `snapshot` with one commit of the same changes on the
     /// snapshot's parent (the user's HEAD). Returns the new tip, or the conflicting paths when
@@ -871,6 +894,35 @@ mod tests {
         fs::write(f.wt.repo.root().join("notes.md"), "unsaved\n").expect("a file");
         let kept = f.wt.commit_wip("WIP").expect("a WIP").expect("a commit");
         assert!(paths(&f.wt.repo, &kept).contains(&"notes.md".to_owned()));
+    }
+
+    #[test]
+    fn commits_on_no_branch_are_told_apart() {
+        let f = fixture("only-here");
+        let wt = f
+            .repo
+            .add_worktree(
+                &f.dir.join("warm"),
+                WorktreeSpec::Detached { at: f.base.clone() },
+            )
+            .expect("a detached worktree");
+        // At a commit a branch has, and on a branch: nothing would be lost.
+        assert!(!wt.commits_only_here().expect("told"));
+        assert!(!f.wt.commits_only_here().expect("told"));
+        // A commit made on the detached checkout is on no branch.
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .current_dir(wt.repo.root())
+                .args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(out.status.success(), "{out:?}");
+        };
+        fs::write(wt.repo.root().join("notes.md"), "kept only here\n").expect("a file");
+        git(&["add", "notes.md"]);
+        git(&["commit", "-q", "-m", "Only here"]);
+        assert!(wt.commits_only_here().expect("told"));
     }
 
     #[test]

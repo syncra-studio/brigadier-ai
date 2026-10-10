@@ -45,6 +45,8 @@ const CACHEDIR_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55"
 pub struct BuildFiles {
     conversation: ConversationId,
     worktree: PathBuf,
+    /// The work folder, bound inside the data directory: never a link to somewhere else.
+    folder: Bound,
     /// Each folder, bound inside the work folder, with its path in it (`/`-separated) and size.
     entries: Vec<(Bound, String, u64)>,
 }
@@ -205,12 +207,18 @@ impl Scanner<'_> {
         // work folders' kept line.
         let mut apart = 0u64;
         for used in in_use(self.records) {
-            let Ok(repo) = self.git.open(&used.path) else {
+            // Bound inside the data directory first: a work folder swapped for a link to the
+            // user's checkout is never looked in.
+            let Some(folder) = self.bind_data(&used.path).filter(Bound::is_dir) else {
+                continue;
+            };
+            let root = folder.path().to_owned();
+            let Ok(repo) = self.git.open(&root) else {
                 continue;
             };
             let mut entries = Vec::new();
-            for path in candidates(&used.path) {
-                let Some(rel) = relative(&used.path, &path) else {
+            for path in candidates(&root) {
+                let Some(rel) = relative(&root, &path) else {
                     continue;
                 };
                 if only_ignored(&repo, &rel).is_err() {
@@ -244,7 +252,7 @@ impl Scanner<'_> {
             let bound: Vec<(Bound, String, u64)> = entries
                 .into_iter()
                 .filter_map(|(path, rel, bytes)| {
-                    Some((removal::bind(&used.path, &path).ok()?, rel, bytes))
+                    Some((removal::bind(&root, &path).ok()?, rel, bytes))
                 })
                 .collect();
             if bound.is_empty() {
@@ -269,6 +277,7 @@ impl Scanner<'_> {
                 super::Action::DeleteBuildFiles(BuildFiles {
                     conversation: used.conversation,
                     worktree: used.path,
+                    folder,
                     entries: bound,
                 }),
             );
@@ -312,8 +321,9 @@ impl SessionManager {
         let platform = self.runtime.platform().clone();
         let git = self.git.clone();
         blocking(move || {
-            unused(&*platform, &files.worktree).map_err(Error::Invalid)?;
-            let repo = git.open(&files.worktree).map_err(git_error)?;
+            removal::recheck(&files.folder).map_err(|err| Error::Invalid(err.to_string()))?;
+            unused(&*platform, files.folder.path()).map_err(Error::Invalid)?;
+            let repo = git.open(files.folder.path()).map_err(git_error)?;
             let mut cleaned = Cleaned::default();
             for (bound, rel, bytes) in &files.entries {
                 if let Err(why) = only_ignored(&repo, rel) {

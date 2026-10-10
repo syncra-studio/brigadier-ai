@@ -248,6 +248,75 @@ async fn unsaved_changes_are_kept_by_the_sweep_and_committed_before_a_removal_by
     flow.stop().await;
 }
 
+/// A detached work folder with commits no branch has is kept, and its removal is refused even
+/// when it is asked for anyway.
+#[tokio::test]
+async fn commits_on_no_branch_keep_their_work_folder() {
+    let (flow, worktree, _) = session("disk-detached").await;
+    git(&worktree, &["checkout", "-q", "--detach"]);
+    std::fs::write(worktree.join("only-here.txt"), "kept\n").unwrap();
+    git(&worktree, &["add", "only-here.txt"]);
+    git(&worktree, &["commit", "-q", "-m", "Only here"]);
+    let commit = git(&worktree, &["rev-parse", "HEAD"]).trim().to_owned();
+    leave_behind(&flow, &worktree).await;
+    let (items, _) = scan(&flow, context()).await;
+    let folder = named(&items, "Work folder of “Flow”");
+    assert!(!folder.item.selectable && !folder.item.checked);
+    assert_eq!(
+        folder.item.reason,
+        "Has commits that are on no branch, so it stays."
+    );
+    sweep(&flow, &items, context()).await;
+    assert!(worktree.join("only-here.txt").exists());
+
+    // Listed while it was still at its branch's commit, then moved on: the removal refuses.
+    git(&worktree, &["checkout", "-q", "--detach", "HEAD~1"]);
+    let (items, _) = scan(&flow, context()).await;
+    let folder = named(&items, "Work folder of “Flow”");
+    assert!(folder.item.checked && folder.item.selectable);
+    git(&worktree, &["checkout", "-q", "--detach", &commit]);
+    let refused = flow
+        .manager
+        .clean_storage(folder.action.clone(), context())
+        .await;
+    assert!(
+        refused.as_ref().is_err_and(|err| err.contains("no branch")),
+        "{refused:?}"
+    );
+    assert!(worktree.join("only-here.txt").exists());
+    flow.stop().await;
+}
+
+/// Codex threads an earlier Free up space took on but didn't finish deleting are counted when
+/// they go now.
+#[tokio::test]
+async fn codex_threads_of_an_earlier_cleanup_are_counted_when_they_go() {
+    let (flow, _, _) = session("disk-retry").await;
+    let ledger = flow.manager.runtime.ledger();
+    ledger
+        .record(
+            "sweep:earlier",
+            Artifact::CodexThread {
+                thread_id: "01a1-earlier".into(),
+                home: None,
+                cwd: None,
+            },
+        )
+        .await
+        .unwrap();
+    let (items, _) = scan(&flow, context()).await;
+    let left = named(&items, "an earlier Free up space");
+    assert_eq!(left.item.category, CleanCategory::AgentFiles);
+    let cleaned = flow
+        .manager
+        .clean_storage(left.action.clone(), context())
+        .await
+        .unwrap();
+    assert_eq!(cleaned.codex_threads, 1, "{cleaned:?}");
+    assert!(ledger.artifacts("sweep:earlier").is_empty());
+    flow.stop().await;
+}
+
 /// A branch with commits its target doesn't have is kept, never offered.
 #[tokio::test]
 async fn an_unmerged_branch_is_kept_with_why() {
@@ -412,7 +481,7 @@ async fn idle_sessions_build_files_go_only_while_git_ignores_them() {
     git(&worktree, &["add", "-f", "target/debug/app.bin"]);
     let cleaned = flow
         .manager
-        .clean_storage(build.action.clone(), idle)
+        .clean_storage(build.action.clone(), idle.clone())
         .await
         .unwrap();
     assert_eq!(cleaned.failures.len(), 1, "{:?}", cleaned.failures);
@@ -425,6 +494,24 @@ async fn idle_sessions_build_files_go_only_while_git_ignores_them() {
     assert!(worktree.join("target/debug/app.bin").exists());
     assert!(worktree.join("vendor/node_modules/kept.bin").exists());
     assert!(worktree.join("web/node_modules/tiny.txt").exists());
+
+    // The work folder swapped for a link to a checkout elsewhere: nothing there is looked at.
+    put("node_modules/pkg/index.bin");
+    let outside = Outside::new("checkout");
+    let moved = outside.0.join("checkout");
+    std::fs::rename(&worktree, &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, &worktree).unwrap();
+    let (items, _) = scan(&flow, idle).await;
+    assert!(
+        items
+            .iter()
+            .all(|item| item.item.category != CleanCategory::BuildFiles),
+        "{:?}",
+        labels(&items)
+    );
+    assert!(moved.join("node_modules/pkg/index.bin").exists());
+    std::fs::remove_file(&worktree).unwrap();
+    std::fs::rename(&moved, &worktree).unwrap();
     flow.stop().await;
 }
 

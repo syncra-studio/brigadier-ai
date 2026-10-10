@@ -641,7 +641,19 @@ impl SessionManager {
                 })
                 .await
                 .map_err(|err| err.to_string())?;
+                let threads = |ledger: &crate::ledger::CleanupLedger| {
+                    ledger
+                        .artifacts(&owner)
+                        .into_iter()
+                        .filter(|artifact| matches!(artifact, Artifact::CodexThread { .. }))
+                        .count()
+                };
+                let threads_before = threads(self.runtime.ledger());
                 let leftovers = self.runtime.ledger().dispose(&owner).await;
+                // Codex threads are deleted through Codex's own delete (an earlier Free up
+                // space's that didn't finish too): those no longer held went.
+                let codex_threads =
+                    threads_before.saturating_sub(threads(self.runtime.ledger())) as u32;
                 if leftovers.is_clean() {
                     // A worktree another owner still uses stays: its space isn't given back.
                     let kept = blocking(move || {
@@ -655,6 +667,7 @@ impl SessionManager {
                     .unwrap_or_default();
                     Ok(Cleaned {
                         reclaimed: bytes.saturating_sub(kept),
+                        codex_threads,
                         ..Cleaned::default()
                     })
                 } else {
@@ -823,7 +836,8 @@ pub struct ScanUsage {
 }
 
 /// Keeps a worktree's uncommitted changes as a WIP commit on its branch. Refuses when they
-/// can't be kept (no branch), so they are never lost with the worktree.
+/// can't be kept (no branch), or when it holds commits no branch has, so neither is ever lost
+/// with the worktree.
 pub(super) fn keep_changes(git: &brigadier_git::Git, path: &Path) -> Result<()> {
     let worktree = git.open_worktree(path).map_err(git_error)?;
     match worktree
@@ -833,11 +847,27 @@ pub(super) fn keep_changes(git: &brigadier_git::Git, path: &Path) -> Result<()> 
             tracing::info!(worktree = %path.display(), commit = %commit.0, "kept a worktree's changes as a WIP commit");
             Ok(())
         }
-        Ok(None) => Ok(()),
+        Ok(None) => match worktree.commits_only_here() {
+            Ok(false) => Ok(()),
+            Ok(true) => Err(Error::Invalid(
+                "it has commits that are on no branch; it stays".into(),
+            )),
+            Err(err) => Err(Error::Invalid(format!(
+                "git couldn't tell whether its commits are on a branch ({err}); it stays"
+            ))),
+        },
         Err(err) => Err(Error::Invalid(format!(
             "its uncommitted changes could not be kept ({err}); it stays"
         ))),
     }
+}
+
+/// Whether the worktree at `path` holds commits no branch has (a detached checkout that moved
+/// on), or git can't tell.
+fn stranded(git: &brigadier_git::Git, path: &Path) -> bool {
+    git.open_worktree(path)
+        .and_then(|worktree| worktree.commits_only_here())
+        .unwrap_or(true)
 }
 
 /// Whether Brigadier names branches like this: a session's or worker's `brigadier/…`, or an
@@ -1216,8 +1246,21 @@ impl Scanner<'_> {
                 }
                 let dirty = !state.dirty_files.is_empty();
                 let reason = match (&state.current_branch, dirty) {
-                    (_, false) => "Its session or task ended and nothing in it is unsaved. Its \
-                                   branch stays."
+                    (Some(_), false) => "Its session or task ended and nothing in it is \
+                                         unsaved. Its branch stays."
+                        .to_owned(),
+                    (None, false) if stranded(self.git, &path) => {
+                        self.keep(
+                            CleanCategory::FinishedWork,
+                            label,
+                            &path,
+                            "Has commits that are on no branch, so it stays.",
+                            vec![CleanBadge::HasChanges],
+                        );
+                        continue;
+                    }
+                    (None, false) => "Its session or task ended, nothing in it is unsaved, \
+                                      and its commits are all on a branch."
                         .to_owned(),
                     (Some(branch), true) => format!(
                         "Has unsaved changes, so it isn't part of the sweep. Picked by hand, \
@@ -1539,6 +1582,13 @@ impl Scanner<'_> {
             let mut unknown = false;
             for path in &worktrees {
                 match self.git.open(Path::new(path)).and_then(|w| w.state()) {
+                    // Commits no branch has would go with the folder.
+                    Ok(state)
+                        if state.current_branch.is_none()
+                            && stranded(self.git, Path::new(path)) =>
+                    {
+                        unknown = true;
+                    }
                     Ok(state) if state.dirty_files.is_empty() => {}
                     Ok(state) if state.current_branch.is_some() => dirty = true,
                     _ => unknown = true,
@@ -1559,13 +1609,25 @@ impl Scanner<'_> {
             } else {
                 CleanCategory::FinishedWork
             };
+            // Several such rows read alike: when their files last changed tells them apart.
+            let when = paths
+                .iter()
+                .filter_map(|path| last_change(path))
+                .max()
+                .and_then(|at| jiff::Timestamp::try_from(at).ok())
+                .map(|at| {
+                    at.to_zoned(jiff::tz::TimeZone::system())
+                        .strftime(", last changed %b %-d at %H:%M")
+                        .to_string()
+                })
+                .unwrap_or_default();
             let label = match state {
                 OwnerState::Unfinished => format!(
-                    "Cleanup of {what} that didn't finish ({})",
+                    "Cleanup of {what} that didn't finish{when} ({})",
                     counted(files, "item", "items")
                 ),
                 _ => format!(
-                    "Files left by {what} that is gone ({})",
+                    "Files left by {what} that is gone{when} ({})",
                     counted(files, "item", "items")
                 ),
             };
@@ -1575,8 +1637,8 @@ impl Scanner<'_> {
                     label,
                     paths.first().cloned(),
                     bytes,
-                    "Has a work folder git can't read, or with unsaved changes and no branch to \
-                     keep them on, so it stays.",
+                    "Has a work folder git can't read, or work that isn't on any branch \
+                     (unsaved changes or commits), so it stays.",
                     false,
                 );
                 entry.selectable = false;

@@ -365,9 +365,9 @@ impl CleanupLedger {
         let (processes, files): (Vec<Artifact>, Vec<Artifact>) =
             artifacts.into_iter().partition(is_process);
         let mut leftovers = self.remove(owner, processes).await;
-        leftovers
-            .failures
-            .extend(self.remove(owner, files).await.failures);
+        let removed = self.remove(owner, files).await;
+        leftovers.failures.extend(removed.failures);
+        leftovers.kept.extend(removed.kept);
         if leftovers.is_clean() {
             // Everything in the snapshot is gone. Artifacts recorded meanwhile stay, both here
             // and on replay. Always end the request durably: a record's event can be stored
@@ -1366,8 +1366,10 @@ mod tests {
             .await;
         drop(ledger);
         // Meanwhile, b.jsonl became another file at the same path.
-        std::fs::remove_file(&replaced).unwrap();
-        std::fs::write(&replaced, "the user's own\n").unwrap();
+        // (Written beside it first, so the new file can't reuse the old one's inode.)
+        let next = project.join("b.next");
+        std::fs::write(&next, "the user's own\n").unwrap();
+        std::fs::rename(&next, &replaced).unwrap();
 
         let ledger = fixture.load().await;
         ledger.sweep().await;
@@ -1392,6 +1394,15 @@ mod tests {
             .unwrap();
         assert!(leftovers.is_clean() && leftovers.kept.is_empty());
         assert!(!more.exists());
+        // One replaced between the preview and the removal stays, and the caller hears why.
+        let swapped = project.join("d.jsonl");
+        std::fs::write(&swapped, "{}\n").unwrap();
+        let shown = adopted(&root, &swapped, false);
+        std::fs::write(&next, "the user's own\n").unwrap();
+        std::fs::rename(&next, &swapped).unwrap();
+        let leftovers = ledger.adopt("sweep:swapped", vec![shown]).await.unwrap();
+        assert_eq!(leftovers.kept.len(), 1, "{leftovers:?}");
+        assert!(swapped.exists());
         let (folder, scratch) = fixture.folder("not-adoptable");
         assert!(ledger.adopt("sweep:bad", vec![scratch]).await.is_err());
         assert!(folder.is_dir());
