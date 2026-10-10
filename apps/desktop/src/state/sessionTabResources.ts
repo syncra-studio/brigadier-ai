@@ -38,6 +38,9 @@ export async function openMainTerminal(conversationId: string, tabId: string, co
     await request({ method: "closeTerminal", terminalId: attached.terminal.id });
     throw new Error("Terminal tab closed");
   }
+  // A restarted daemon has no shell for the session and starts a new one; closing the tab
+  // must end that one, not the first.
+  entry.terminal = Promise.resolve(attached.terminal);
   return attached.terminal;
 }
 
