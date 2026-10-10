@@ -1755,6 +1755,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 .update_settings(brigadier_core::accounts::edited(&before, *settings))
                 .await?;
             daemon.awake.apply().await;
+            if before.review_work != settings.review_work {
+                // Workers waiting for a review go on, and those at work hear it at once.
+                let (sessions, on) = (daemon.sessions.clone(), settings.review_work);
+                daemon
+                    .supervisor
+                    .spawn(async move { sessions.reviews_switched(on).await });
+            }
             // New rules or rankings, or an agent or model turned back on, may let work waiting
             // for quota run now.
             if before.accounts != settings.accounts

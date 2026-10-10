@@ -213,6 +213,7 @@ export const useApp = create<AppState>()(() => ({
     hiddenModels: [],
     knownModels: [],
     omitAiCoauthors: true,
+    reviewWork: true,
     accounts: [],
     switchAccounts: true,
     settingsVersion: 1,

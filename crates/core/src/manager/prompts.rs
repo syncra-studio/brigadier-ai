@@ -352,6 +352,38 @@ const RUN_LABEL: &str = "overnight run";
 const RUN_OVER_LABEL: &str = "overnight run over";
 const PREFERENCES_LABEL: &str = "preferences";
 const WORKSPACE_LABEL: &str = "workspace";
+const REVIEWS_ON_LABEL: &str = "reviews on";
+const REVIEWS_OFF_LABEL: &str = "reviews off";
+
+/// What the thread does while the user has reviews off; it replaces what its instructions say
+/// about reviews (Settings' "Review the work").
+pub(crate) const REVIEWS_OFF: &str = "Reviews are off (the user's setting): no landing, commit of your own or outline gets a review by the other vendor, review_plan starts none, and a verifier doesn't ask for one. Nothing waits for a review: judge the work yourself, from its report, its diff and its checks. A review that started before may still send its findings; weigh them as usual.";
+
+/// The thread's instructions while reviews are off, after what they say about reviews.
+pub(crate) fn reviews_off_section() -> String {
+    format!("\n\n{REVIEWS_OFF} This replaces what these instructions say about reviews.")
+}
+
+/// Tells a running thread the user switched reviews: its CLI keeps the instructions it
+/// started with.
+pub(crate) fn reviews_note(on: bool) -> String {
+    if on {
+        "[settings] The user turned reviews on. From now on, what your instructions say about reviews holds: every landing and every commit of your own gets one review by the other vendor in the background (nothing waits for it), and review_plan has a plan reviewed. Don't mention this note.".to_owned()
+    } else {
+        format!(
+            "[settings] The user turned reviews off. From now on, this replaces what your instructions say about reviews: {REVIEWS_OFF} Don't mention this note."
+        )
+    }
+}
+
+/// Tells a running worker that builds the user switched reviews: its brief keeps what it said.
+pub(crate) fn worker_reviews_note(on: bool) -> &'static str {
+    if on {
+        "[settings] The user turned reviews on. Once your work is committed, call review_code once if you haven't, and fix the findings you agree with before your report; this replaces what your task says about reviews."
+    } else {
+        "[settings] The user turned reviews off. From now on, don't call review_code and don't wait for a review: nothing waits on one. A review already running may still send its findings; fix those you agree with if they arrive before your report, but don't wait for them. Once your checks pass and your evidence is in, call submit_report. This replaces what your task says about reviews."
+    }
+}
 
 /// The parts of a session's instructions that can change while its CLI session lives on, as
 /// they are now.
@@ -359,6 +391,8 @@ pub(crate) struct Current {
     pub chat: bool,
     pub today: String,
     pub short_replies: bool,
+    /// Whether the work is reviewed (Settings' "Review the work"); on unless set.
+    pub review_work: bool,
     pub permission: PermissionLevel,
     pub folder_trusted: bool,
     /// Where accepted work lands and the permission level, as the instructions say them
@@ -400,6 +434,7 @@ impl Current {
             chat: false,
             today: today(),
             short_replies,
+            review_work: true,
             permission,
             folder_trusted: trusted,
             plain: setting_texts(conversation, trusted, None),
@@ -415,6 +450,7 @@ impl Current {
             chat: true,
             today: today(),
             short_replies: false,
+            review_work: true,
             permission: PermissionLevel::ApproveForMe,
             folder_trusted: true,
             plain: (String::new(), String::new()),
@@ -442,6 +478,7 @@ impl Current {
             run: session.then(|| self.run_fingerprint()),
             preferences: Some(preferences_fingerprint(&self.preferences)),
             workspace: self.workspace.clone(),
+            review_work: session.then_some(self.review_work),
         }
     }
 }
@@ -505,6 +542,21 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
                 label: short_replies_label(now.short_replies),
                 told: Told {
                     short_replies: Some(now.short_replies),
+                    ..Told::default()
+                },
+            });
+        }
+        // Instructions from before the switch told every session that work is reviewed.
+        if told.review_work.unwrap_or(true) != now.review_work {
+            notes.push(Note {
+                text: reviews_note(now.review_work),
+                label: if now.review_work {
+                    REVIEWS_ON_LABEL
+                } else {
+                    REVIEWS_OFF_LABEL
+                },
+                told: Told {
+                    review_work: Some(now.review_work),
                     ..Told::default()
                 },
             });
@@ -634,6 +686,7 @@ pub(crate) fn fill_told(told: &mut Told, older: &Told) {
     if told.workspace.is_none() {
         told.workspace.clone_from(&older.workspace);
     }
+    told.review_work = told.review_work.or(older.review_work);
 }
 
 /// What the current CLI session was last told, from its log's instruction entries (logged at
@@ -676,6 +729,9 @@ const WORKER_VOICE: &str = "
 
 /// What a lead does besides building: its outline when the work is big, and its own review.
 const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. As soon as your work is committed, call review_code once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks, and its findings arrive as a message. Fix each finding you agree with and say why for those you don't. Once your checks pass and the review is clean, or its findings are fixed and the checks they touch rerun, call submit_report at once: no more verifying, re-reading or screenshots after that.";
+
+/// [`LEAD_STEPS`] while the user has reviews off: no review of its own.
+const LEAD_STEPS_UNREVIEWED: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. Reviews are off (the user's setting): don't call review_code. Once your checks pass and your evidence (screenshots, manual runs) is in, call submit_report at once: no more verifying, re-reading or screenshots after that.";
 
 /// A worker's pointer to the code index tools (PLAN.md §7).
 const WORKER_CODE_TOOLS: &str = "
@@ -736,8 +792,9 @@ Rules:
 
 /// A worker's task, the first message of each new CLI session it gets (a successor's too):
 /// the date, the task and its kind, where it works (`repo_note`), the rules for that kind,
-/// `extra` (a review's or merge's brief, notes) and the spec.
-pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String {
+/// `extra` (a review's or merge's brief, notes) and the spec. `reviewed`: the user's "Review the
+/// work" setting, which decides whether a lead asks for its own review.
+pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str, reviewed: bool) -> String {
     let kind = match task.kind {
         TaskKind::Scout => {
             "scout: look around the repository and answer the question. Change nothing."
@@ -774,7 +831,12 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String 
         format!(
             "\n- Work only inside this worktree, on its branch.{commits} Don't switch branches or touch other checkouts. What you leave uncommitted is committed for you when your work lands.\n- List every file you changed, created or deleted in the report's `changes`: new files that aren't listed are left out when your work lands.\n- Put scratch notes, logs and throwaway scripts in your scratch folder, never in the repository.\n- Don't write new tests unless the task asks for them. If a change breaks an existing test, fix the code; change a test only for an intended behaviour change.\n- Before you report, check your own work: format, lint, build, and the tests of what you touched.{role}",
             role = match task.role {
-                Some(WorkerRole::Lead) | None if task.kind == TaskKind::Implement => LEAD_STEPS,
+                Some(WorkerRole::Lead) | None if task.kind == TaskKind::Implement && reviewed => {
+                    LEAD_STEPS
+                }
+                Some(WorkerRole::Lead) | None if task.kind == TaskKind::Implement => {
+                    LEAD_STEPS_UNREVIEWED
+                }
                 _ => "",
             }
         )
@@ -1120,7 +1182,11 @@ mod tests {
 
     /// What a worker reads before it starts: its system prompt, then its first message.
     fn worker(task: &Task) -> String {
-        format!("{}\n\n{}", worker_system(""), worker_brief(task, "", ""))
+        format!(
+            "{}\n\n{}",
+            worker_system(""),
+            worker_brief(task, "", "", true)
+        )
     }
 
     #[test]
@@ -1160,7 +1226,12 @@ mod tests {
         assert!(!system.contains("Add the flag"));
         assert!(!system.contains("Today is"));
         assert!(system.ends_with(instructions));
-        let brief = worker_brief(&task("claude", Some("lead")), "Your worktree: /w/t1", "");
+        let brief = worker_brief(
+            &task("claude", Some("lead")),
+            "Your worktree: /w/t1",
+            "",
+            true,
+        );
         assert!(brief.starts_with("Today is "));
         assert!(brief.contains("Task task-1: Add the flag"));
         assert!(brief.contains("never send SIGCONT or any other signal to resume them"));
@@ -1180,7 +1251,7 @@ mod tests {
         operator.kind = TaskKind::Operate;
         operator.target = Some("TextEdit, the window \"Notes\"".into());
         operator.end_state = Some("The note reads \"hi\"".into());
-        let brief = worker_brief(&operator, "", "");
+        let brief = worker_brief(&operator, "", "", true);
         assert!(
             brief.contains(
                 "Target: TextEdit, the window \"Notes\"\nEnd state: The note reads \"hi\""
@@ -1204,7 +1275,7 @@ mod tests {
         assert!(!brief.contains("How to write code"));
         assert!(!brief.contains("tools.mcp__computer__act"));
         operator.route.choice.provider = ProviderKind::Codex;
-        let codex = worker_brief(&operator, "", "");
+        let codex = worker_brief(&operator, "", "", true);
         assert!(codex.contains("tools.mcp__computer__observe({window})"));
         assert!(codex.contains("actions: [{do: \"set_value\""));
         // The report's shape too, so it never lists the tools or guesses the report.
@@ -1215,8 +1286,27 @@ mod tests {
         // An argument error has no "failed" line: only the batch's own verdict counts.
         assert!(codex.contains("only if the act's text starts with \"All \""));
         // Other kinds hear none of it.
-        let lead = worker_brief(&task("claude", Some("lead")), "", "");
+        let lead = worker_brief(&task("claude", Some("lead")), "", "", true);
         assert!(!lead.contains("How to operate"));
+    }
+
+    #[test]
+    fn a_lead_asks_for_its_review_only_while_reviews_are_on() {
+        let lead = task("claude", Some("lead"));
+        let reviewed = worker_brief(&lead, "", "", true);
+        assert!(reviewed.contains("call review_code once"));
+        let unreviewed = worker_brief(&lead, "", "", false);
+        assert!(
+            !unreviewed.contains("call review_code once"),
+            "{unreviewed}"
+        );
+        assert!(
+            unreviewed.contains("Reviews are off (the user's setting): don't call review_code.")
+        );
+        assert!(unreviewed.contains("call submit_report at once"));
+        assert!(worker_reviews_note(false).contains("nothing waits on one"));
+        assert!(!worker_reviews_note(false).contains("no findings"));
+        assert!(worker_reviews_note(true).contains("call review_code once"));
     }
 }
 
@@ -1534,6 +1624,41 @@ mod environment_tests {
         assert!(on.contains("at most three lines"));
         assert!(!on.contains("Short replies (the user's setting)"));
         assert!(short_replies_note(false).contains("no longer apply"));
+    }
+
+    /// A running thread hears the user switched reviews, once; one told nothing yet of them
+    /// counts as told they're on, as every thread's instructions said before the switch.
+    #[test]
+    fn a_running_thread_hears_reviews_switched_once() {
+        let conversation = session("fullAccess");
+        let mut now = Current::session(&conversation, true, None, true, vec![], None);
+        let mut told = now.told();
+        told.review_work = None;
+        assert!(notes(&told, &now).is_empty(), "unknown counts as on");
+        now.review_work = false;
+        let off = notes(&told, &now);
+        assert_eq!(off.len(), 1, "{off:#?}");
+        assert!(
+            off[0]
+                .text
+                .starts_with("[settings] The user turned reviews off.")
+        );
+        assert!(off[0].text.contains(REVIEWS_OFF));
+        fill_told(&mut told, &off[0].told);
+        let mut after = off[0].told.clone();
+        fill_told(&mut after, &told);
+        assert!(notes(&after, &now).is_empty(), "told once");
+        now.review_work = true;
+        let on = notes(&after, &now);
+        assert_eq!(on.len(), 1, "{on:#?}");
+        assert!(
+            on[0]
+                .text
+                .starts_with("[settings] The user turned reviews on.")
+        );
+        assert_eq!(on[0].told.review_work, Some(true));
+        // A new thread is told as its instructions say.
+        assert_eq!(now.told().review_work, Some(true));
     }
 
     fn session(permission: &str) -> Conversation {

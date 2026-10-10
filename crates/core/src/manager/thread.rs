@@ -293,6 +293,9 @@ impl SessionManager {
             provider,
             self.core.settings().short_replies,
         );
+        if !self.reviews_on() {
+            prompt.push_str(&super::prompts::reviews_off_section());
+        }
         if let Some(workspace) = workspace {
             prompt.push_str(&super::instructions::for_thread(&workspace.path).await);
         }

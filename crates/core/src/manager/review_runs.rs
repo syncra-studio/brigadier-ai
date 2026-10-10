@@ -41,6 +41,10 @@ const REVIEW_TIME: Duration = Duration::from_secs(30 * 60);
 const MESSAGE_MAX: usize = 12_000;
 /// What a worker waiting for its own review's findings is blocked on.
 pub(crate) const WAITING_FOR_REVIEW: &str = "Waiting for its code review";
+/// `review_code`'s answer while the user has reviews off.
+const REVIEWS_OFF_CODE: &str = "Reviews are off (the user's setting): no review runs, and nothing waits for one. Check your work yourself; once your checks pass and your evidence is in, call submit_report.";
+/// `review_plan`'s answer while the user has reviews off.
+const REVIEWS_OFF_PLAN: &str = "Reviews are off (the user's setting): no plan review runs. Judge the plan yourself and carry on.";
 
 /// A review to start.
 struct NewReview {
@@ -151,7 +155,7 @@ impl SessionManager {
             })
             .await;
         match started {
-            Ok((review, true)) if matches!(review.state, ReviewState::Failed { .. }) => {
+            Ok(Some((review, true))) if matches!(review.state, ReviewState::Failed { .. }) => {
                 self.tell_review(&review, None).await;
             }
             Ok(_) => {}
@@ -186,7 +190,7 @@ impl SessionManager {
             })
             .await;
         match started {
-            Ok((review, true)) if matches!(review.state, ReviewState::Failed { .. }) => {
+            Ok(Some((review, true))) if matches!(review.state, ReviewState::Failed { .. }) => {
                 self.tell_review(&review, None).await;
             }
             Ok(_) => {}
@@ -232,7 +236,7 @@ impl SessionManager {
             })
             .await;
         match started {
-            Ok((review, true)) if matches!(review.state, ReviewState::Failed { .. }) => {
+            Ok(Some((review, true))) if matches!(review.state, ReviewState::Failed { .. }) => {
                 self.tell_review(&review, None).await;
             }
             Ok(_) => {}
@@ -268,7 +272,7 @@ impl SessionManager {
         })
         .await?;
         let author = self.thread_author(conversation_id).await;
-        let (review, _) = self
+        let Some((review, _)) = self
             .start_review(NewReview {
                 conversation_id: conversation_id.clone(),
                 request_id: self.request_for(conversation_id, None).await,
@@ -281,7 +285,10 @@ impl SessionManager {
                 repo: workspace.repo,
                 plan: Some((args.brief, args.plan)),
             })
-            .await?;
+            .await?
+        else {
+            return Ok(REVIEWS_OFF_PLAN.to_owned());
+        };
         let reviewer = review.reviewer.label();
         Ok(match &review.state {
             ReviewState::Failed { reason } => {
@@ -342,6 +349,9 @@ impl SessionManager {
                 task.number, task.state
             )));
         }
+        if !self.reviews_on() {
+            return Ok(REVIEWS_OFF_CODE.to_owned());
+        }
         // Every new file but litter: no report names them yet, and the landing checks their
         // provenance over the whole range anyway.
         self.commit_leftovers(
@@ -376,7 +386,7 @@ impl SessionManager {
         }
         let author = self.phase_author(&task).await;
         let repo = self.task_repo(&task)?;
-        let (review, started) = self
+        let Some((review, started)) = self
             .start_review(NewReview {
                 conversation_id: conversation_id.clone(),
                 request_id: task.request_id.clone(),
@@ -394,7 +404,10 @@ impl SessionManager {
                 repo,
                 plan: None,
             })
-            .await?;
+            .await?
+        else {
+            return Ok(REVIEWS_OFF_CODE.to_owned());
+        };
         let reviewer = review.reviewer.label();
         Ok(match (&review.state, started) {
             (ReviewState::Running, true) => format!(
@@ -431,11 +444,17 @@ impl SessionManager {
     /// Records a review and starts it, or finds the one its range already has (a code review;
     /// then `false`). That one passes to the new asker when the worker it was for no longer
     /// works: a verifier on its lead's last commit, or the landing of a worker's reviewed tip.
-    /// One whose reviewer can't be routed is recorded failed, not started.
-    async fn start_review(&self, new: NewReview) -> Result<(ReviewRun, bool)> {
+    /// One whose reviewer can't be routed is recorded failed, not started. None while the
+    /// user has reviews off: nothing is recorded or started.
+    async fn start_review(&self, new: NewReview) -> Result<Option<(ReviewRun, bool)>> {
         // A closing conversation starts nothing more.
         drop(self.enter(&new.conversation_id)?);
+        // Held until the review is recorded and spawned, as switching reviews holds it: a
+        // review starts entirely before the switch or not at all after it.
         let _held = self.reviews.lock().await;
+        if !self.reviews_on() {
+            return Ok(None);
+        }
         if new.kind == ReviewKind::Code {
             let board = self.core.board(&new.conversation_id).await?;
             if let Some(known) = review_of(board.reviews.values(), &new.base.0, &new.tip.0) {
@@ -447,7 +466,7 @@ impl SessionManager {
                     known.notify = new.notify.clone();
                     self.store_review(&known).await?;
                 }
-                return Ok((known, false));
+                return Ok(Some((known, false)));
             }
         }
         let reviewer = other_vendor(new.author.provider);
@@ -468,7 +487,13 @@ impl SessionManager {
             ended_at_ms: None,
             findings: None,
         };
-        let effort = match self.reviewer_model(&new, reviewer).await {
+        let picked = self.reviewer_model(&new, reviewer).await;
+        // Picking the reviewer took time: the switch may have been turned off meanwhile, and
+        // it waits for this lock only once the setting is written.
+        if !self.reviews_on() {
+            return Ok(None);
+        }
+        let effort = match picked {
             Ok((model, effort)) => {
                 review.reviewer_model = Some(model);
                 effort
@@ -477,7 +502,7 @@ impl SessionManager {
                 review.state = ReviewState::Failed { reason: why };
                 review.ended_at_ms = Some(now_ms());
                 self.store_review(&review).await?;
-                return Ok((review, true));
+                return Ok(Some((review, true)));
             }
         };
         self.store_review(&review).await?;
@@ -506,7 +531,7 @@ impl SessionManager {
                 .remove(&started.id);
             manager.finish_review(started, outcome).await;
         });
-        Ok((review, true))
+        Ok(Some((review, true)))
     }
 
     /// The model (and effort) that reviews `new`: the router's pick of `reviewer`'s models,
@@ -1068,6 +1093,75 @@ impl SessionManager {
             request,
         )
         .await;
+    }
+
+    /// Whether the user has the work reviewed (Settings' "Review the work").
+    pub(crate) fn reviews_on(&self) -> bool {
+        self.core.settings().review_work
+    }
+
+    /// The user switched "Review the work" to `on`. Off: a worker waiting for its own review's
+    /// findings goes on at once; a review still running may finish and send them, but nothing
+    /// waits on it. Either way a worker that builds hears it at once while it works (its brief
+    /// said otherwise), one between turns with its next message, and the thread in a note
+    /// before its next turn.
+    pub async fn reviews_switched(&self, on: bool) {
+        let workers: Vec<_> = self.tasks_lock().values().cloned().collect();
+        let mut tell = Vec::new();
+        {
+            // Ordered with a review starting and a worker starting to wait for one: each sees
+            // the setting from before the switch, then this releases it, or from after it.
+            let _switch = self.reviews.lock().await;
+            if self.reviews_on() != on {
+                // Switched again meanwhile: that call handles it.
+                return;
+            }
+            for live in workers {
+                let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await else {
+                    continue;
+                };
+                if task.kind != TaskKind::Implement || task.state.is_final() {
+                    continue;
+                }
+                let waiting = task.blocked_reason.as_deref() == Some(WAITING_FOR_REVIEW);
+                if !on && waiting {
+                    self.set_task_blocked(&task.id, None).await;
+                    tell.push((live, task, true));
+                } else if live.busy().await || (!on && self.review_pending(&task).await) {
+                    // At work, or between turns about to wait for its review: it was nudged
+                    // to report instead, and hears why.
+                    tell.push((live, task, false));
+                }
+            }
+        }
+        for (live, task, released) in tell {
+            let text = match live.reviews_note(&task, on) {
+                Some(note) => note.to_owned(),
+                None if released => "Nothing waits on your review now: once your checks pass and your evidence is in, call submit_report.".to_owned(),
+                None => continue,
+            };
+            let now = self
+                .task_by_id(&task.conversation_id, &task.id)
+                .await
+                .unwrap_or(task);
+            let rounds = now.rework_rounds;
+            match self
+                .tell_worker(&now.conversation_id, &now, text, "Brigadier")
+                .await
+            {
+                // A note is no rework round.
+                Ok(_) => {
+                    let _ = self
+                        .update_task(&now.conversation_id, &now.id, |t| {
+                            t.rework_rounds = t.rework_rounds.min(rounds);
+                        })
+                        .await;
+                }
+                Err(err) => {
+                    tracing::info!(task = %now.id, error = %err, "a worker took no note that reviews were switched");
+                }
+            }
+        }
     }
 
     /// Ends `conversation_id`'s running reviews: it is closing.

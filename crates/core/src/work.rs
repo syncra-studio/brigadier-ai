@@ -2154,6 +2154,10 @@ pub struct Told {
     /// The thread's workspace: its folder and branch (`<path> @ <branch>`); empty: none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+    /// Whether the user's work is reviewed (Settings' "Review the work"); `None` counts as on,
+    /// as every session's instructions were before the switch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_work: Option<bool>,
 }
 
 /// One entry of the orchestrator log shown in the Inspector.

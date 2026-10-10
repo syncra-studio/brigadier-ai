@@ -1525,6 +1525,8 @@ mod prewarm_tests;
 #[cfg(test)]
 mod reads_tests;
 #[cfg(test)]
+mod review_switch_tests;
+#[cfg(test)]
 mod takeover_tests;
 #[cfg(test)]
 mod tests;

@@ -53,6 +53,12 @@ shortReplies: boolean,
  */
 omitAiCoauthors: boolean, 
 /**
+ * Another vendor's model reviews the sessions' work in the background: each landing, the
+ * thread's own commits, a lead's outline, and a worker's own change when it asks. Off, no
+ * review starts and nothing waits for one (THREAD-PLAN.md §2 Q12).
+ */
+reviewWork: boolean, 
+/**
  * The first-run setup (agents, then projects) was finished or skipped.
  */
 onboarded: boolean, 

@@ -237,9 +237,46 @@ pub(crate) struct TaskLive {
     /// Held while the task is opened in a terminal, handed back or its terminal ended; the
     /// terminal it is open in ([`super::takeover`]).
     pub(crate) takeover: tokio::sync::Mutex<Option<super::takeover::LiveTakeover>>,
+    /// What the worker was last told of the user's "Review the work" setting: its brief, or a
+    /// note since ([`REVIEWS_UNKNOWN`] counts as on, as every brief said before the switch).
+    reviews_told: std::sync::atomic::AtomicU8,
 }
 
+/// [`TaskLive::reviews_told`]'s values.
+const REVIEWS_UNKNOWN: u8 = 0;
+const REVIEWS_TOLD_OFF: u8 = 1;
+const REVIEWS_TOLD_ON: u8 = 2;
+
 impl TaskLive {
+    /// Records that the worker was told reviews are `on` (its brief, or a note).
+    pub(crate) fn told_reviews(&self, on: bool) {
+        let told = if on {
+            REVIEWS_TOLD_ON
+        } else {
+            REVIEWS_TOLD_OFF
+        };
+        self.reviews_told
+            .store(told, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The note a worker that builds needs with its next message when what it was told of
+    /// reviews isn't `on` any more; it counts as told from then on.
+    pub(crate) fn reviews_note(&self, task: &Task, on: bool) -> Option<&'static str> {
+        if task.kind != TaskKind::Implement {
+            return None;
+        }
+        let told = if on {
+            REVIEWS_TOLD_ON
+        } else {
+            REVIEWS_TOLD_OFF
+        };
+        let before = self
+            .reviews_told
+            .swap(told, std::sync::atomic::Ordering::SeqCst);
+        let was_on = before != REVIEWS_TOLD_OFF;
+        (was_on != on).then(|| prompts::worker_reviews_note(on))
+    }
+
     /// Records why the running model must hand the task on when its turn ends.
     pub(crate) async fn set_cutoff(&self, end: AttemptEnd) {
         self.state.lock().await.cutoff = Some(end);
@@ -529,6 +566,7 @@ impl TaskLive {
             learning: Arc::default(),
             turn_end: tokio::sync::Mutex::new(()),
             takeover: tokio::sync::Mutex::new(None),
+            reviews_told: std::sync::atomic::AtomicU8::new(REVIEWS_UNKNOWN),
         }
     }
 
@@ -1411,12 +1449,14 @@ impl SessionManager {
         let prompt = prompts::worker_system(&native);
         // A new CLI session hears its task first; a resumed or forked one has it already.
         if let (Origin::New, Some(first)) = (&origin, first) {
+            let reviewed = self.reviews_on();
             first.parts.insert(
                 0,
                 brigadier_providers::InputPart::Text(prompts::worker_brief(
-                    task, &repo_note, &extra,
+                    task, &repo_note, &extra, reviewed,
                 )),
             );
+            self.task_live(task).told_reviews(reviewed);
         }
 
         let worker_grant = self.grants.issue(
@@ -2588,8 +2628,10 @@ impl SessionManager {
             return;
         }
         // A worker whose own review still runs (`review_code`) waits for its findings: they
-        // start its next turn.
-        if self.review_pending(&task).await {
+        // start its next turn. Not while the user has reviews off: nothing waits on one. The
+        // lock orders this with the switch, which releases those already waiting.
+        let switch = self.reviews.lock().await;
+        if self.reviews_on() && self.review_pending(&task).await {
             self.set_task_blocked(
                 &task.id,
                 Some(super::review_runs::WAITING_FOR_REVIEW.into()),
@@ -2610,6 +2652,7 @@ impl SessionManager {
             }
             return;
         }
+        drop(switch);
         if nudge {
             let text = match self.keep_last_message(live, task.number).await {
                 Some(_) => {
@@ -3429,6 +3472,12 @@ impl SessionManager {
                 false,
             ));
         }
+        // A worker told otherwise of reviews hears the user's setting with this message.
+        let text = match live.reviews_note(task, self.reviews_on()) {
+            Some(note) if text.is_empty() => note.to_owned(),
+            Some(note) => format!("{note}\n\n{text}"),
+            None => text,
+        };
         let hand_over = !state.busy
             && state.cli.is_some()
             && match state.context {

@@ -588,6 +588,11 @@ pub struct Settings {
     /// own commits, what the agents write, and the commits Brigadier lands or keeps.
     #[serde(default = "default_true")]
     pub omit_ai_coauthors: bool,
+    /// Another vendor's model reviews the sessions' work in the background: each landing, the
+    /// thread's own commits, a lead's outline, and a worker's own change when it asks. Off, no
+    /// review starts and nothing waits for one (THREAD-PLAN.md §2 Q12).
+    #[serde(default = "default_true")]
+    pub review_work: bool,
     /// The first-run setup (agents, then projects) was finished or skipped.
     pub onboarded: bool,
     /// When the computer is kept from sleeping.
@@ -718,6 +723,7 @@ impl Default for Settings {
             enrich_brain: true,
             short_replies: true,
             omit_ai_coauthors: true,
+            review_work: true,
             onboarded: false,
             keep_awake: KeepAwake::default(),
             keep_awake_lid_closed: false,
@@ -1990,5 +1996,14 @@ mod tests {
         assert!(settings.short_replies);
         let settings: Settings = serde_json::from_str(r#"{"shortReplies":false}"#).unwrap();
         assert!(!settings.short_replies);
+    }
+
+    #[test]
+    fn work_is_reviewed_by_default_and_for_settings_saved_before_the_switch() {
+        assert!(Settings::default().review_work);
+        let settings: Settings = serde_json::from_str(r#"{"hibernateAfterMinutes":12}"#).unwrap();
+        assert!(settings.review_work);
+        let settings: Settings = serde_json::from_str(r#"{"reviewWork":false}"#).unwrap();
+        assert!(!settings.review_work);
     }
 }
