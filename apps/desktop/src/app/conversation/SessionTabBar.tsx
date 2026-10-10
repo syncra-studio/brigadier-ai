@@ -87,8 +87,9 @@ function noAutoscroll(event: ReactMouseEvent): void {
 }
 
 /** Session keys own main tabs. The bottom pane keeps Cmd+W and bracket navigation; off macOS a focused
- * terminal keeps its shell Ctrl keys. Cmd+T always creates a main tab on macOS. */
-function useTabKeys(conversationId: string, create: (kind: NewTabKind) => void): void {
+ * terminal keeps its shell Ctrl keys. Cmd+T always creates a main tab on macOS. An archived session
+ * opens no terminal tabs, so its Ctrl+` goes on to the bottom-terminal toggle. */
+function useTabKeys(conversationId: string, archived: boolean, create: (kind: NewTabKind) => void): void {
   const mac = useApp((s) => s.info?.platform === "macos");
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -105,7 +106,7 @@ function useTabKeys(conversationId: string, create: (kind: NewTabKind) => void):
         return;
       }
       const action = sessionTabKey(event, mac);
-      if (!action) return;
+      if (!action || (archived && action.type === "new" && action.kind === "terminal")) return;
       event.preventDefault(); event.stopPropagation();
       if (action.type === "new") create(action.kind);
       if (action.type === "close") closeTab(conversationId, sessionTabs(conversationId).active);
@@ -114,7 +115,7 @@ function useTabKeys(conversationId: string, create: (kind: NewTabKind) => void):
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [conversationId, mac, create]);
+  }, [conversationId, archived, mac, create]);
 }
 
 /** A tab's right-click menu: Keep open (a preview), Close, Close others, Close to the right. */
@@ -198,7 +199,7 @@ export function SessionTabBar({
     if (archived && (kind === "terminal" || kind === "sideChat")) return;
     newSessionTab(id, kind, cwd);
   }, [id, archived, cwd]);
-  useTabKeys(id, create);
+  useTabKeys(id, archived, create);
   const { listRef, shown, dragging, grip } = useDragReorder<SessionTab, HTMLDivElement>({
     items: tabs,
     idOf: (tab) => tab.id,

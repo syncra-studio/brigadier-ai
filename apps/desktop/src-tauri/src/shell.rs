@@ -211,7 +211,7 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
     let panes = tauri::menu::Submenu::new(app, "Panes", true)?;
     for (id, title, accelerator) in [
         ("terminal", "Toggle bottom terminal", "CmdOrCtrl+J"),
-        ("terminal-alternate", "New terminal tab", "Ctrl+`"),
+        ("terminal-alternate", "Terminal", "Ctrl+`"),
         ("new", "New tab", "CmdOrCtrl+T"),
         ("new-browser", "New browser tab", "CmdOrCtrl+Shift+B"),
         ("new-side-chat", "New side chat", "Alt+CmdOrCtrl+S"),
