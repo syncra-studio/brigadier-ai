@@ -1,4 +1,4 @@
-import { Chat, Globe, Terminal, Plus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Archive, Chat, Globe, Terminal, Plus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -278,20 +278,23 @@ export function SessionTabBar({
               role="tab"
               aria-selected={active === CHAT_TAB}
               tabIndex={active === CHAT_TAB ? 0 : -1}
-              title={conversation.title}
+              title={archived ? `${conversation.title} (Archived)` : conversation.title}
+              aria-label={archived ? `${title} (Archived)` : undefined}
               onClick={() => selectTab(id, CHAT_TAB)}
               onDoubleClick={archived ? undefined : onRename}
               className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
             >
-              <Chat aria-hidden className="size-icon-sm shrink-0" />
+              {archived ? <Archive aria-hidden className="size-icon-sm shrink-0" /> : <Chat aria-hidden className="size-icon-sm shrink-0" />}
               <span className="min-w-0 truncate">{title}</span>
             </button>
-            {archived && <Badge variant="outline" className="shrink-0">Archived</Badge>}
             <ChatActions
               conversation={conversation}
               onRename={onRename}
               compact
-              className="shrink-0 opacity-0 transition-opacity group-hover/tab:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100"
+              className={cn(
+                "shrink-0 transition-opacity",
+                active !== CHAT_TAB && "opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100",
+              )}
             />
           </div>
         </TabMenu>

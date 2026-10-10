@@ -130,7 +130,11 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
       ref={column}
       data-slot="right-sidebar"
       data-state={panel.open ? "expanded" : "collapsed"}
-      className={cn("relative flex h-full shrink-0", panel.open && "column-divider")}
+      className={cn(
+        "column-divider relative flex h-full shrink-0 before:transition-opacity before:duration-300 before:ease-sidebar after:transition-opacity after:duration-300 after:ease-sidebar motion-reduce:before:transition-none motion-reduce:after:transition-none",
+        !panel.open && "before:opacity-0 after:opacity-0",
+        panel.resizing && "before:transition-none after:transition-none",
+      )}
       style={{ "--right-sidebar-width": panel.width === null ? "var(--spacing-sidebar)" : `${panel.width}px` } as CSSProperties}
     >
       <SidebarReveal side="right" open={panel.open} hidden={!panel.open} resizing={panel.resizing}>
