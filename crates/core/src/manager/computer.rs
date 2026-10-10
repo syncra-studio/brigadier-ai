@@ -466,6 +466,10 @@ impl SessionManager {
             .request(&worker, Provider::Claude, Policy::default(), op)
             .await
             .map_err(|e| e.detail)?;
+        // A failed Start over says why, for Settings to show.
+        if let Some(e) = a.reply.error {
+            return Err(e.detail);
+        }
         a.reply
             .permissions
             .ok_or_else(|| "Brigadier Computer Use didn't say".into())
@@ -1266,6 +1270,8 @@ pub(crate) mod fake {
         /// The next permissions read finds the helper gone, as when it has just exited to
         /// pick up a screen-recording grant.
         pub gone_on_read: bool,
+        /// Start over fails with this reason.
+        pub reset_fails: Option<String>,
     }
 
     /// A helper connection that answers pings, cancels, session ends, describes of the
@@ -1340,7 +1346,12 @@ pub(crate) mod fake {
                 self.dead.store(true, Ordering::SeqCst);
                 return done(Err(Gone));
             }
+            let reset_fails = lock(&self.desktop).reset_fails.clone();
             match op {
+                Op::ResetPermission { .. } if reset_fails.is_some() => done(answer(Reply::error(
+                    id,
+                    CuError::new(ErrorCode::AppNotResponding, reset_fails.unwrap_or_default()),
+                ))),
                 Op::Permissions | Op::RequestPermission { .. } | Op::ResetPermission { .. } => {
                     done(answer(Reply {
                         permissions: Some(permissions),

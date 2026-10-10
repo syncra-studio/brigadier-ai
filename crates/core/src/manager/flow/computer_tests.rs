@@ -507,6 +507,15 @@ async fn allow_asks_and_start_over_resets_first() {
             },
         ]
     );
+    // A failed Start over gives Settings its reason.
+    lock(&helper.desktop).reset_fails =
+        Some("Couldn't start over: tccutil: No such bundle identifier".into());
+    let e = flow
+        .manager
+        .request_computer_permission(Grant::ScreenRecording, true)
+        .await
+        .unwrap_err();
+    assert_eq!(e, "Couldn't start over: tccutil: No such bundle identifier");
     finish(flow, worker).await;
 }
 
