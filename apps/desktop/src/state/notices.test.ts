@@ -60,3 +60,33 @@ test("older providers' live drift notices are hidden, but decode failures still 
   assert.equal(applyToBoard(board, event(drift)), board);
   assert.deepEqual(applyToBoard(board, event(decode)).notices, [decode]);
 });
+
+test("a saved account-switch notice shows its accounts' emails masked", () => {
+  const board = emptyBoard("conversation");
+  const saved: Notice = {
+    level: "info",
+    atMs: 4,
+    text: "Claude Code hit its usage limit on stephen@example.com; continuing on work@corp.io.",
+  };
+  const masked = "Claude Code hit its usage limit on ste•••••@•••••.com; continuing on wor•••••@•••••.io.";
+  const view = {
+    ...board,
+    conversation: { id: board.conversationId },
+    tasks: [],
+    approvals: [],
+    questions: [],
+    plans: [],
+    reviews: [],
+    previews: [],
+    overnight: [],
+    requests: [],
+    waiting: [],
+    compactions: [],
+    notices: [saved, environment],
+  } as unknown as ConversationView;
+  assert.deepEqual(
+    boardFromView(view, null, []).notices.map((notice) => notice.text),
+    [masked, environment.text],
+  );
+  assert.equal(applyToBoard(board, event(saved)).notices[0]?.text, masked);
+});

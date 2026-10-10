@@ -12,7 +12,7 @@ use brigadier_providers::{Provider, ProviderKind, ProviderStatus, QuotaSnapshot}
 use brigadier_store::Retention;
 
 use super::{Runtime, new_event};
-use crate::accounts::{AccountRef, Candidate};
+use crate::accounts::{AccountRef, Candidate, mask_email};
 use crate::model::{AccountEntry, AccountView, AccountsView, DomainEvent, streams};
 use crate::{Error, Result, now_ms};
 
@@ -335,8 +335,8 @@ impl Runtime {
         self.signed_in(&self.monitor.lead(provider))
     }
 
-    /// How the app names `account` to the user, as Settings → Accounts does: the user's own
-    /// login is "this computer's login"; an extra account its name, else its email.
+    /// How the app names `account` to the user (in notices): the user's own login is "this
+    /// computer's login"; an extra account its name, else its email, an email masked either way.
     pub fn account_label(&self, account: &AccountRef) -> String {
         let Some(id) = &account.account else {
             return "this computer's login".into();
@@ -347,8 +347,8 @@ impl Runtime {
         };
         let email = status.and_then(|status| status.email);
         match (name.trim(), email) {
-            (name, _) if !name.is_empty() => name.to_owned(),
-            (_, Some(email)) if !email.is_empty() => email,
+            (name, _) if !name.is_empty() => mask_email(name),
+            (_, Some(email)) if !email.is_empty() => mask_email(&email),
             _ => "a new account".into(),
         }
     }

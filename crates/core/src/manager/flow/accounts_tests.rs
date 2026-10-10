@@ -139,6 +139,35 @@ async fn a_limit_moves_the_chat_to_another_account_and_its_work_is_done_once() {
 }
 
 #[tokio::test]
+async fn a_switch_notice_masks_an_account_named_by_its_email() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-switch-masked",
+        Options::default(),
+        logging(&log, |turn| match &turn.account {
+            None => Reply::limited(),
+            Some(_) => Reply::text("Done."),
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let mut settings = flow.core.settings();
+    settings.accounts[0].name = "work.person@corp.example.io".into();
+    flow.core.update_settings(settings).await.unwrap();
+    flow.manager.runtime.sync_accounts().await;
+    flow.say("Do the thing.").await;
+    flow.settled().await;
+    let notices = notices(&flow).await;
+    assert!(
+        notices.iter().any(|text| text
+            == "Claude Code hit its usage limit on this computer's login; continuing on wor•••••@•••••.io."),
+        "{notices:#?}"
+    );
+    flow.stop().await;
+}
+
+#[tokio::test]
 async fn with_every_account_at_its_limit_the_chat_falls_back_to_the_other_provider() {
     let log = Log::default();
     let flow = Flow::start(
