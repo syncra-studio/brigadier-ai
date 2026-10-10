@@ -1455,6 +1455,29 @@ only, as a user's own Chrome). Before, its launch held the front for 3.6 s once.
 - A WebKit view's list, in a hidden app, opens a menu no press takes; dismissing it closed the fixture's window.
   Hidden isn't the same as another Space for menus; low priority.
 
+### Phase 7: final verification (2026-10-10)
+
+The finished tree, rebased onto main, verified once before the merge. Codex reviewed Phase 7's code (§10.4); its
+three findings are fixed. The full bench found one more: a single background click in 1,600 ended in
+`unsupported_capability`, from the process lookup for synthetic activation, which is now tried again.
+
+| Gate or check | Result | Evidence |
+|---|---|---|
+| Full bench, 200 reps, `--no-foreground` | **every gate passes** | 1217 s, `nice -n 10`, load average 2.3–4.0 (one-minute, sampled each minute; another session was busy) |
+| S1 / S2 | pass | observe 6.6 / 8.8 ms; with a screenshot 54.7 / 63.1 ms |
+| S3 / S3p | pass | set_value 2.7 / 3.1 ms effect; menu-bar pick 4.4 / 6.0 ms; press 2.7 / 3.4 ms; pop-up item 367.6 / 390.6 ms |
+| S4 / S5 / SEL | pass | background pixel click 12.2 / 18.8 ms effect; 100 characters 7.0 ms set, 16.7 ms as keys; 20/20 |
+| P1 / P2 / P2r / P4 | pass | 1600/1600; 1600/1600 inside, worst error 0.00 pt; 200/200; 0 |
+| SA / F1 | pass | 600/600, 0 focus changes; 0 |
+| The bench before the lookup fix | P2 1599/1600 | the one miss above; every other gate passed |
+| Scripted suite | **35/35** | the focus watcher logged no change of front app, window or cursor |
+| Second display | pass | quick bench with fixtures on display 2: every gate; `save-panel`, `slider`, `two-dots` scripted there, 0 front changes |
+| Helper grants | pass | the dev daemon's `getComputerAccess`: both allowed, through the signed bundle's own helper (parent pid 1, `ai.brigadier.dev.computer-use`, team 7JQSPMWT79) |
+| E1 | pass, from item 2's runs | Claude 1.0 and Codex 1.0 pooled; no model-facing text changed since, so no new model runs |
+
+**Not done** (the user's cut): the comparisons with other computer-use tools and Phase 4's six dev-build trials.
+The off-Space refusals of items 2 and 3 remain a user check.
+
 ### Phase 6: Windows and Linux backends (a future build)
 
 **Not in this build.** The user ruled on 2026-10-09 that computer use ships macOS-only; Windows and Linux are a
