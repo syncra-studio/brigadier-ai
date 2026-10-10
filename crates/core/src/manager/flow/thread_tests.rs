@@ -1854,13 +1854,14 @@ async fn the_thread_suggests_full_access_once_and_never_at_full_access() {
             let log = log.clone();
             async move {
                 if turn.is_orchestrator() {
-                    for _ in 0..2 {
-                        let reply = turn
-                            .call(
-                                "suggest_full_access",
-                                json!({"reason": "Installing Homebrew writes outside the project."}),
-                            )
-                            .await;
+                    let call = || {
+                        turn.call(
+                            "suggest_full_access",
+                            json!({"reason": "Installing Homebrew writes outside the project."}),
+                        )
+                    };
+                    let (first, second) = tokio::join!(call(), call());
+                    for reply in [first, second] {
                         log.lock().unwrap().push((reply.is_error, reply.text));
                     }
                 }
@@ -1873,9 +1874,17 @@ async fn the_thread_suggests_full_access_once_and_never_at_full_access() {
     let board = flow.settled().await;
     {
         let replies = replies.lock().unwrap();
-        assert!(!replies[0].0, "{replies:?}");
-        assert!(
-            replies[1].0 && replies[1].1.contains("already shown"),
+        assert_eq!(
+            replies.iter().filter(|reply| !reply.0).count(),
+            1,
+            "{replies:?}"
+        );
+        assert_eq!(
+            replies
+                .iter()
+                .filter(|reply| reply.0 && reply.1.contains("already shown"))
+                .count(),
+            1,
             "{replies:?}"
         );
     }

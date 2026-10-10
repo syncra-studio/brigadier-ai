@@ -64,7 +64,8 @@ pub(crate) fn thread(
         Some(Setup::Session { repo, .. }) => repo.as_str(),
         _ => "(none)",
     };
-    let (environment, permission) = setting_texts(conversation, run);
+    let trusted = project.and_then(|project| project.trusts(repo)) != Some(false);
+    let (environment, permission) = setting_texts(conversation, trusted, run);
     let project = project.map_or("(no project)", |p| p.name.as_str());
     let workspace = workspace.map_or_else(|| "(none yet)".to_owned(), workspace_text);
     let commands = match provider {
@@ -160,6 +161,7 @@ fn workspace_text(workspace: &str) -> String {
 /// permission level: the session's own, or an overnight run's while one is active.
 pub(crate) fn setting_texts(
     conversation: &Conversation,
+    trusted: bool,
     run: Option<&crate::overnight::RunWorkspace>,
 ) -> (String, String) {
     let (environment, permission) = match &conversation.setup {
@@ -172,6 +174,11 @@ pub(crate) fn setting_texts(
             &Environment::LocalCheckout { branch: "?".into() },
             PermissionLevel::ApproveForMe,
         ),
+    };
+    let permission = if trusted {
+        permission
+    } else {
+        PermissionLevel::AskForApproval
     };
     let unsandboxed = permission == PermissionLevel::FullAccess;
     // An overnight run works on its own branch and approves for the user; its workers keep the
@@ -193,7 +200,7 @@ pub(crate) fn setting_texts(
         ),
         None => (
             environment_text(environment),
-            permission_text(permission).to_owned(),
+            permission_text(permission, trusted),
         ),
     }
 }
@@ -209,17 +216,24 @@ fn environment_text(environment: &Environment) -> String {
     }
 }
 
-fn permission_text(permission: PermissionLevel) -> &'static str {
-    match permission {
+fn permission_text(permission: PermissionLevel, trusted: bool) -> String {
+    let text = match permission {
         PermissionLevel::AskForApproval => {
-            "Ask for approval: you and the workers run in a sandbox, and anything that must leave it asks the user first, on a card. The user gives each outline's go-ahead (approve_outline shows them a plan card). If the user's request needs more than the sandbox allows, call suggest_full_access instead of saying so."
+            "Ask for approval: you and the workers run in a sandbox, and anything that must leave it asks the user first, on a card. The user gives each outline's go-ahead (approve_outline shows them a plan card)."
         }
         PermissionLevel::ApproveForMe => {
-            "Approve for me: you and the workers run in a sandbox; a command that must leave it is settled by an automatic reviewer. You give outlines their go-ahead on the user's behalf. Ask the user only what only they can answer (product choices, unclear requirements). If the user's request needs more than the sandbox allows, call suggest_full_access instead of saying so."
+            "Approve for me: you and the workers run in a sandbox; a command that must leave it is settled by an automatic reviewer. You give outlines their go-ahead on the user's behalf. Ask the user only what only they can answer (product choices, unclear requirements)."
         }
         PermissionLevel::FullAccess => {
             "Full access: you and the workers run without a sandbox, and nothing asks for approval. You give outlines their go-ahead on the user's behalf. Be careful."
         }
+    };
+    if trusted && permission != PermissionLevel::FullAccess {
+        format!(
+            "{text} If the user's request needs more than the sandbox allows, call suggest_full_access instead of saying so."
+        )
+    } else {
+        text.to_owned()
     }
 }
 
@@ -362,6 +376,7 @@ impl Current {
     /// `workspace` the thread's.
     pub(crate) fn session(
         conversation: &Conversation,
+        trusted: bool,
         run: Option<(&crate::overnight::RunWorkspace, String)>,
         short_replies: bool,
         preferences: Vec<String>,
@@ -371,8 +386,13 @@ impl Current {
             Some(Setup::Session { permission, .. }) => *permission,
             _ => PermissionLevel::ApproveForMe,
         };
+        let permission = if trusted {
+            permission
+        } else {
+            PermissionLevel::AskForApproval
+        };
         let run = run.map(|(workspace, restrictions)| {
-            let (environment, permission) = setting_texts(conversation, Some(workspace));
+            let (environment, permission) = setting_texts(conversation, trusted, Some(workspace));
             (environment, permission, restrictions)
         });
         Self {
@@ -380,7 +400,7 @@ impl Current {
             today: today(),
             short_replies,
             permission,
-            plain: setting_texts(conversation, None),
+            plain: setting_texts(conversation, trusted, None),
             run,
             preferences,
             workspace,
@@ -1398,7 +1418,7 @@ mod environment_tests {
 
     #[test]
     fn the_permission_level_says_what_the_thread_itself_may_do() {
-        let text = |permission: &str| setting_texts(&session(permission), None).1;
+        let text = |permission: &str| setting_texts(&session(permission), true, None).1;
         assert!(text("fullAccess").starts_with(
             "Full access: you and the workers run without a sandbox, and nothing asks for approval."
         ));
@@ -1412,6 +1432,45 @@ mod environment_tests {
         assert!(text("askForApproval").contains("call suggest_full_access"));
         assert!(text("approveForMe").contains("call suggest_full_access"));
         assert!(!text("fullAccess").contains("suggest_full_access"));
+    }
+
+    #[test]
+    fn full_access_hint_is_only_offered_when_the_user_can_switch() {
+        let project: Project = serde_json::from_value(serde_json::json!({
+            "id": "project", "name": "Textkit", "createdAtMs": 0,
+            "trust": [{"path": "/tmp/textkit", "trusted": false, "decidedAtMs": 0}]
+        }))
+        .unwrap();
+        let run = workspace();
+        for level in ["askForApproval", "approveForMe", "fullAccess"] {
+            let conversation = session(level);
+            for (project, run, expected) in [
+                (None, None, level != "fullAccess"),
+                (Some(&project), None, false),
+                (None, Some(&run), false),
+                (Some(&project), Some(&run), false),
+            ] {
+                let prompt = thread(
+                    &conversation,
+                    project,
+                    &[],
+                    run,
+                    None,
+                    ProviderKind::Codex,
+                    true,
+                );
+                assert_eq!(
+                    prompt.contains("suggest_full_access"),
+                    expected,
+                    "{level}: {prompt}"
+                );
+            }
+            // Later settings notes use the same trust-aware permission text.
+            let current = Current::session(&conversation, false, None, true, vec![], None);
+            assert_eq!(current.permission, PermissionLevel::AskForApproval);
+            assert!(!current.plain.1.contains("suggest_full_access"));
+            assert!(current.plain.1.starts_with("Ask for approval:"));
+        }
     }
 
     #[test]
@@ -1483,6 +1542,7 @@ mod environment_tests {
         let workspace = workspace();
         let mut current = Current::session(
             &session(permission),
+            true,
             run.map(|restrictions| (&workspace, restrictions.to_owned())),
             true,
             preferences.iter().map(|p| (*p).to_owned()).collect(),

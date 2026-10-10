@@ -803,6 +803,8 @@ impl SessionManager {
             ));
         }
         let request = self.request_for(id, None).await;
+        let conv = self.conv(id)?;
+        let _notice = conv.full_access_notice.lock().await;
         let board = self.core.board(id).await?;
         if board.orchestrator_steps.iter().any(|step| {
             step.request_id == request

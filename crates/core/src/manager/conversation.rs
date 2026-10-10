@@ -271,6 +271,8 @@ pub(crate) struct ConvLive {
     /// from the queue). Held while each is stored, and by a merge from its last look at the
     /// user's consent until it lands, so a "wait" sent meanwhile either stops it or comes after.
     pub(super) user_wrote: tokio::sync::Mutex<u64>,
+    /// Serializes the full-access notice check and write, including persisted notices.
+    pub(super) full_access_notice: tokio::sync::Mutex<()>,
     /// Tests: what a merge waits for once prepared, before its last look at consent.
     #[cfg(test)]
     pub(super) merge_pause:
@@ -298,6 +300,7 @@ impl ConvLive {
             }),
             retry: tokio::sync::Mutex::new(()),
             user_wrote: tokio::sync::Mutex::new(0),
+            full_access_notice: tokio::sync::Mutex::new(()),
             #[cfg(test)]
             merge_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
@@ -1794,6 +1797,7 @@ impl SessionManager {
                     .await;
                 let current = prompts::Current::session(
                     &conversation,
+                    self.repo_trust(&conv.id) != Some(false),
                     run.as_ref()
                         .map(|(workspace, restrictions)| (workspace, restrictions.clone())),
                     short,
@@ -4083,6 +4087,7 @@ impl SessionManager {
                 });
                 prompts::Current::session(
                     &conversation,
+                    self.repo_trust(&conv.id) != Some(false),
                     run.as_ref()
                         .map(|(workspace, restrictions)| (workspace, restrictions.clone())),
                     self.core.settings().short_replies,
