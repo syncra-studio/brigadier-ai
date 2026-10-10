@@ -17,7 +17,7 @@ const field=()=>activePane().getByRole('textbox',{name:'Address',exact:true});
 const tabs=()=>page.getByRole('tablist',{name:'Session tabs',exact:true});
 const state=()=>page.evaluate(async()=>{const {id}=window.sessionTabFixture; const m=await import('/src/state/sessionTabs.ts'); return m.sessionTabs(id);});
 const check=(name)=>{results.push(name);console.log('PASS '+name);};
-const menu=async(name)=>page.evaluate(async(name)=>{const m=window.sessionTabFixture; await m.menuShortcut(name);},name);
+const menu=async(name)=>page.evaluate(async(shortcut)=>{const m=window.sessionTabFixture; await m.menuShortcut(shortcut);},name);
 const shot=async(name)=>{await page.screenshot({path:`${output}/${name}.png`,animations:'disabled'});};
 const fresh=async(query)=>{await page.goto(base+query);await page.evaluate(()=>localStorage.clear());await page.reload();};
 const settle=()=>page.waitForTimeout(120);

@@ -46,10 +46,8 @@ export function useRightSidebar(conversationId: string | null, enabled: boolean)
   const [searchRequest, setSearchRequest] = useState(0);
   const [filePlaceholder, setFilePlaceholder] = useState<{ conversationId: string; tabId: string } | null>(null);
   const sessionActive = useSessionTabsOf(conversationId).active;
-  useEffect(() => {
-    if (filePlaceholder && (!open || active !== "files" || sessionActive !== filePlaceholder.tabId || conversationId !== filePlaceholder.conversationId))
-      setFilePlaceholder(null);
-  }, [open, active, sessionActive, conversationId, filePlaceholder]);
+  if (filePlaceholder && (!open || active !== "files" || sessionActive !== filePlaceholder.tabId || conversationId !== filePlaceholder.conversationId))
+    setFilePlaceholder(null);
   const fileOpened = useCallback(() => setFilePlaceholder(null), []);
   const searchHandled = useCallback(() => setSearchRequest(0), []);
   const mac = useApp((s) => s.info?.platform === "macos");
