@@ -10,6 +10,7 @@ import type { CardId } from "./CardId";
 import type { ConversationId } from "./ConversationId";
 import type { GateLink } from "./GateLink";
 import type { KeptWork } from "./KeptWork";
+import type { MockupPart } from "./MockupPart";
 import type { Pin } from "./Pin";
 import type { QualityTier } from "./QualityTier";
 import type { QuotaWait } from "./QuotaWait";
@@ -77,6 +78,11 @@ target?: string,
  * What an operate task must leave true, checkable on screen.
  */
 endState?: string, 
+/**
+ * Its part in a mockup first (SESSION-FIXES-PLAN.md Q10): it builds the mockup, or the
+ * real work that must match one.
+ */
+mockup?: MockupPart, 
 /**
  * The plan this one reviews.
  */

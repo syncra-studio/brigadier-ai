@@ -184,6 +184,15 @@ pub struct DelegateTask {
     /// verifier left, or the open review findings of a landed task).
     #[serde(default)]
     pub role: Option<WorkerRole>,
+    /// True for an implement task that builds a mockup the user asked for: a static preview of
+    /// the screen from the project's real components with fake data, reported as screenshots.
+    /// It lands only once the user says yes to the real work.
+    #[serde(default)]
+    pub mockup: bool,
+    /// For the implement task that builds the real change after a mockup: the mockup's task,
+    /// e.g. "task-2". It gets the mockup's images and compares the live app with them.
+    #[serde(default)]
+    pub matches_mockup: Option<String>,
 }
 
 /// `message_worker`: answer a worker's blocking question, or steer a running worker.

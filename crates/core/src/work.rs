@@ -83,6 +83,22 @@ impl TaskKind {
     }
 }
 
+/// A task's part in a mockup first (SESSION-FIXES-PLAN.md Q10).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum MockupPart {
+    /// Builds a static preview of the screen from the real components with fake data; its
+    /// outputs' images are the mockup.
+    Builds,
+    /// Builds the real change to match the mockup `task` built; it was given that mockup's
+    /// images, and its outputs' images are the live captures to compare with them.
+    Matches { task: TaskId },
+}
+
 /// What a worker does in the request's flow, for its name in the thread ("Lead · Phase 1").
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, schemars::JsonSchema,
@@ -774,6 +790,11 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub end_state: Option<String>,
+    /// Its part in a mockup first (SESSION-FIXES-PLAN.md Q10): it builds the mockup, or the
+    /// real work that must match one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mockup: Option<MockupPart>,
     /// The plan this one reviews.
     pub plan: Option<CardId>,
     pub attachments: Vec<AttachmentRef>,

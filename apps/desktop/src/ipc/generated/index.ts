@@ -164,6 +164,7 @@ export type { Message } from "./Message";
 export type { MessagePage } from "./MessagePage";
 export type { MessageQueue } from "./MessageQueue";
 export type { MessageRole } from "./MessageRole";
+export type { MockupPart } from "./MockupPart";
 export type { Modalities } from "./Modalities";
 export type { Modality } from "./Modality";
 export type { ModelCatalog } from "./ModelCatalog";

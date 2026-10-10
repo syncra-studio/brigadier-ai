@@ -10,9 +10,9 @@ use super::workers::route_label;
 use crate::model::{ConversationId, DomainEvent, Environment, PermissionLevel, Setup};
 use crate::tools::{NoteKind, OrchestratorCall, ToolReply, WorkerCall};
 use crate::work::{
-    ApprovalSubject, ArtifactRef, AttachmentRef, DecisionSource, InjectionKind, OrchestratorStep,
-    OrchestratorStepKind, QuestionItem, QuestionKind, QuestionOption, Task, TaskId, TaskKind,
-    WaitingSource, WorkerRole,
+    ApprovalSubject, ArtifactRef, AttachmentRef, DecisionSource, InjectionKind, MockupPart,
+    OrchestratorStep, OrchestratorStepKind, QuestionItem, QuestionKind, QuestionOption, Task,
+    TaskId, TaskKind, WaitingSource, WorkerRole,
 };
 use crate::{Error, Result, now_ms};
 
@@ -155,6 +155,12 @@ impl SessionManager {
                         .map(str::to_owned)
                 };
                 let (target, end_state) = (given(&args.target), given(&args.end_state));
+                let built = match given(&args.matches_mockup) {
+                    Some(reference) => Some(self.find_task(id, &reference).await?),
+                    None => None,
+                };
+                let (mockup, mockup_images) =
+                    mockup_part(args.mockup, built.as_ref(), args.kind, role)?;
                 if args.kind == TaskKind::Operate {
                     if target.is_none() || end_state.is_none() {
                         return Err(Error::Invalid(
@@ -243,8 +249,13 @@ impl SessionManager {
                 } else {
                     Vec::new()
                 };
-                let attachments =
+                let mut attachments =
                     crate::heap(|| self.find_attachments(id, &args.attachments)).await?;
+                for image in mockup_images {
+                    if !attachments.iter().any(|given| given.id == image.id) {
+                        attachments.push(image);
+                    }
+                }
                 let avoid = subject
                     .as_ref()
                     .filter(|_| args.kind == TaskKind::Review)
@@ -272,6 +283,7 @@ impl SessionManager {
                             phase: args.phase,
                             target,
                             end_state,
+                            mockup,
                             ..Default::default()
                         },
                     )
@@ -1034,6 +1046,70 @@ fn messaged(task: &mut Task, text: String, answered: bool) {
     }
 }
 
+/// A delegated task's part in a mockup first (SESSION-FIXES-PLAN.md Q10), from
+/// `delegate_task`'s `mockup` and the task `matches_mockup` named (`built`), with the images it
+/// is given: the real work gets the mockup's, as files to match.
+fn mockup_part(
+    builds: bool,
+    built: Option<&Task>,
+    kind: TaskKind,
+    role: Option<WorkerRole>,
+) -> Result<(Option<MockupPart>, Vec<AttachmentRef>)> {
+    if !builds && built.is_none() {
+        return Ok((None, Vec::new()));
+    }
+    if builds && built.is_some() {
+        return Err(Error::Invalid(
+            "a task builds a mockup (`mockup`) or matches one (`matches_mockup`), not both".into(),
+        ));
+    }
+    if kind != TaskKind::Implement || role != Some(WorkerRole::Lead) {
+        return Err(Error::Invalid(
+            "a mockup, and the real work that matches one, is an implement task with one lead \
+             (role lead)"
+                .into(),
+        ));
+    }
+    let Some(built) = built else {
+        return Ok((Some(MockupPart::Builds), Vec::new()));
+    };
+    if built.mockup != Some(MockupPart::Builds) {
+        return Err(Error::Invalid(format!(
+            "task-{} didn't build a mockup: `matches_mockup` names the task delegated with \
+             `mockup: true`",
+            built.number
+        )));
+    }
+    let images: Vec<AttachmentRef> = built
+        .outputs
+        .iter()
+        .filter(|output| output.mime.starts_with("image/"))
+        .map(|output| AttachmentRef {
+            id: output.id.clone(),
+            name: output
+                .file_name
+                .clone()
+                .unwrap_or_else(|| output.title.clone()),
+            mime: output.mime.clone(),
+            bytes: output.bytes,
+            pasted: false,
+            inline: None,
+        })
+        .collect();
+    if images.is_empty() {
+        return Err(Error::Invalid(format!(
+            "task-{} has no mockup images yet: the real work starts once its report brings them",
+            built.number
+        )));
+    }
+    Ok((
+        Some(MockupPart::Matches {
+            task: built.id.clone(),
+        }),
+        images,
+    ))
+}
+
 /// The most questions one card asks, and the most options one question offers.
 const ROUND_MAX: usize = 6;
 const OPTIONS_MAX: usize = 4;
@@ -1123,6 +1199,83 @@ mod tests {
         messaged(&mut task, "Stop and use the old API instead.".into(), false);
         assert_eq!(task.landing, None);
         assert_eq!(task.messages.len(), 2);
+    }
+
+    /// Q10: a mockup is an implement lead; the real work names a task that built one and has
+    /// images, and gets those images (only those) as its files.
+    #[test]
+    fn the_real_work_gets_the_mockups_images_and_only_a_built_mockup_can_be_matched() {
+        let implement = (TaskKind::Implement, Some(WorkerRole::Lead));
+        let (none, images) = mockup_part(false, None, implement.0, implement.1).unwrap();
+        assert_eq!((none, images.len()), (None, 0));
+        let (builds, images) = mockup_part(true, None, implement.0, implement.1).unwrap();
+        assert_eq!((builds, images.len()), (Some(MockupPart::Builds), 0));
+        for (kind, role) in [
+            (TaskKind::Scout, None),
+            (TaskKind::Implement, Some(WorkerRole::Parallel)),
+            (TaskKind::Implement, Some(WorkerRole::Fix)),
+        ] {
+            let refused = mockup_part(true, None, kind, role).unwrap_err().to_string();
+            assert!(
+                refused.contains("implement task with one lead"),
+                "{refused}"
+            );
+        }
+
+        let output = |name: &str, mime: &str| ArtifactRef {
+            id: format!("hash-{name}"),
+            title: name.to_owned(),
+            kind: crate::work::ArtifactKind::File,
+            mime: mime.to_owned(),
+            bytes: 7,
+            file_name: Some(name.to_owned()),
+        };
+        let mut built: Task = serde_json::from_value(serde_json::json!({
+            "id": "t2",
+            "conversationId": "c1",
+            "number": 2,
+            "position": 0,
+            "title": "Density toggle mockup",
+            "kind": "implement",
+            "spec": "Build the mockup.",
+            "access": { "repo": "write", "network": false, "unsandboxed": false },
+            "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
+            "state": "reported",
+            "attachments": [],
+            "createdAtMs": 0,
+            "updatedAtMs": 0
+        }))
+        .expect("a task");
+        let matches = |built: &Task| mockup_part(false, Some(built), implement.0, implement.1);
+        let unbuilt = matches(&built).unwrap_err().to_string();
+        assert!(
+            unbuilt.contains("task-2 didn't build a mockup"),
+            "{unbuilt}"
+        );
+        built.mockup = Some(MockupPart::Builds);
+        let early = matches(&built).unwrap_err().to_string();
+        assert!(early.contains("no mockup images yet"), "{early}");
+        built.outputs = vec![
+            output("mockup-1.png", "image/png"),
+            output("notes.md", "text/markdown"),
+            output("mockup-2.png", "image/png"),
+        ];
+        let (part, images) = matches(&built).unwrap();
+        assert_eq!(
+            part,
+            Some(MockupPart::Matches {
+                task: built.id.clone()
+            })
+        );
+        let names: Vec<_> = images.iter().map(|image| image.name.as_str()).collect();
+        assert_eq!(names, ["mockup-1.png", "mockup-2.png"]);
+        assert_eq!(images[0].id, "hash-mockup-1.png");
+        assert!(!images[0].pasted && images[0].inline.is_none());
+
+        let both = mockup_part(true, Some(&built), implement.0, implement.1)
+            .unwrap_err()
+            .to_string();
+        assert!(both.contains("not both"), "{both}");
     }
 
     #[test]

@@ -1132,6 +1132,7 @@ impl SessionManager {
             subject: subject.as_ref().map(|task| task.id.clone()),
             target: extra.target,
             end_state: extra.end_state,
+            mockup: extra.mockup,
             plan: None,
             attachments,
             workspace: None,
@@ -4555,6 +4556,8 @@ pub(crate) struct TaskExtra {
     /// An operate task's target and end state.
     pub target: Option<String>,
     pub end_state: Option<String>,
+    /// Its part in a mockup first.
+    pub mockup: Option<crate::work::MockupPart>,
 }
 
 pub(crate) fn category(kind: TaskKind) -> brigadier_router::TaskCategory {
