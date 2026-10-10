@@ -33,7 +33,11 @@ export function WorkFold({ open, children }: { open: boolean; children: ReactNod
     if (!element || !(inner instanceof HTMLElement)) return;
     // From the height it shows now: its full height closing, nothing opening, or wherever an
     // animation going the other way left it.
-    const from = running.current.length > 0 ? element.getBoundingClientRect().height : open ? 0 : element.offsetHeight;
+    const turning = running.current.length > 0;
+    const from = turning ? element.getBoundingClientRect().height : open ? 0 : element.offsetHeight;
+    // Its fade and slide too: turned around, they go back from where they are, with no flash.
+    const shown = turning ? getComputedStyle(inner) : null;
+    const at = shown ? { opacity: Number(shown.opacity), transform: shown.transform } : null;
     for (const animation of running.current) animation.cancel();
     running.current = [];
     growing.current?.disconnect();
@@ -50,8 +54,8 @@ export function WorkFold({ open, children }: { open: boolean; children: ReactNod
     const height = element.animate([{ height: `${from}px` }, { height: `${to}px` }], timing);
     const fade = inner.animate(
       open
-        ? [{ opacity: 0, transform: slide }, { opacity: 1, transform: "none" }]
-        : [{ opacity: 1, transform: "none" }, { opacity: 0, transform: slide }],
+        ? [at ?? { opacity: 0, transform: slide }, { opacity: 1, transform: "none" }]
+        : [at ?? { opacity: 1, transform: "none" }, { opacity: 0, transform: slide }],
       timing,
     );
     running.current = [height, fade];
