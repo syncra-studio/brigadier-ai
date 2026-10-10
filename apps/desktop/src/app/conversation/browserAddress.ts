@@ -10,7 +10,11 @@ export function webAddress(typed: string): string | null {
   ) {
     return `http://${text}`;
   }
-  return host.includes(".") ? `https://${text}` : null;
+  if (host.includes(".")) return `https://${text}`;
+  // A single-label host (`devbox:3000`, `myserver/path`) is an internal machine, not a query;
+  // a plain word without a port or path still searches.
+  const single = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(:\d+)?$/i.exec(host);
+  return single && (single[2] || text[host.length] === "/") ? `http://${text}` : null;
 }
 
 /** Blank input stays put; everything other than a web address is a Google query. */
