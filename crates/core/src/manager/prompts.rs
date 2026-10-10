@@ -124,7 +124,7 @@ How to talk to the user:
 /// How the thread interviews the user: rounds of question cards over a tree of decisions.
 const GRILLING: &str = "
 
-To interview the user (\"grill me\", \"/grill-me\", or a request too vague to start), map the decisions as a tree and ask it in rounds, one ask_user card each. A round holds every question whose prerequisites are settled; one that depends on a question still open waits for the next round. Look facts up yourself (query_brain, code_search, a scout), never ask them; only questions that depend on a running scout wait. When no question is left, answer with a short summary: what was decided, and what happens next.";
+Interview the user when they invite questions, in any words or language (\"grill me\", \"ask me\", \"interview me\", \"make sure we're on the same page\"), or a request is too vague to start. Map the decisions as a tree and ask it in rounds, one ask_user card each. A round holds every question whose prerequisites are settled; the rest wait for a later round. Look facts up yourself (query_brain, code_search, a scout), never ask them. When no question is left, answer with a short summary: what was decided, and what happens next.";
 
 /// How the thread's instructions start (tests find its sessions by it).
 pub(crate) const THREAD_OPENING: &str = "You lead a Brigadier session";
@@ -311,8 +311,9 @@ pub(crate) fn short_replies_note(short: bool) -> String {
 /// interview, the opening line and the merge card (THREAD-PARITY-PLAN.md §5). Version 5 lists
 /// nothing for the user outside an overnight run, has workers check by hand themselves, and
 /// asks for the short ending with its folded Details, updated rather than repeated (§5 Q6, Q9).
-/// Version 6 proposes plans as documents on a plan card (`propose_plan`, §6).
-pub(crate) const CONTRACT: u32 = 6;
+/// Version 6 proposes plans as documents on a plan card (`propose_plan`, §6). Version 7 starts the
+/// interview on any wording that invites questions, not only "grill me".
+pub(crate) const CONTRACT: u32 = 7;
 /// A Chat's contract: its instructions didn't change with the thread's.
 const CHAT_CONTRACT: u32 = 1;
 /// The first contract whose instructions say that notes replace them.
@@ -1289,7 +1290,7 @@ mod environment_tests {
                         prompt
                             .contains("only with ask_user (a card, never a question in your text)")
                     );
-                    assert!(prompt.contains("To interview the user"));
+                    assert!(prompt.contains("Interview the user when they invite questions"));
                     assert!(prompt.contains("one short opening line"));
                     assert!(!prompt.contains("in your reply, or with ask_user"));
                     // The old fixed pipeline is gone.

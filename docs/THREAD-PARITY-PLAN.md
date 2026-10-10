@@ -332,7 +332,7 @@ own screenshots are in `msgs/evidence/brigadier/`.
   thread one note: "Ask that with ask_user (a card), then reply [quiet]". The request stays working, and the thread
   re-asks with a card. One retry; after that, today's behaviour. Tested.
 - **Grilling is built in** (Q8). This is a section of the thread's instructions modelled on the user's grilling skill:
-  - **When:** "grill me", "/grill-me", or a request too vague to start.
+  - **When:** the user invites questions in any wording ("grill me", "/grill-me", "ask me", "interview me", …), or a request is too vague to start.
   - **How:** a design tree worked in rounds. Each round is the **frontier**: every question whose prerequisites are
     settled.
   - **One `ask_user` call per round**, every question with 2–4 options and a recommendation.
