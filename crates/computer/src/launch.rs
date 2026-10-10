@@ -31,8 +31,8 @@ pub struct Opened {
     /// The windows this launch opened: the one showing the file when it opened one and the
     /// window can be told.
     pub new_windows: Vec<u32>,
-    /// Windows that appeared alongside, which the app reopened from its saved state: the
-    /// user's documents, not this launch's.
+    /// Windows that appeared in the app that this launch can't prove are its own (restored from
+    /// saved state, or not proven to show the file); never approved.
     pub restored_windows: Vec<u32>,
     pub front_restored: bool,
     /// The launch failed after it started the process: it is still reported, so the worker
@@ -282,28 +282,23 @@ pub fn launch<D: Desktop>(
                         new_windows = own.iter().map(|w| w.id).collect();
                         restored_windows = rest.iter().map(|w| w.id).collect();
                     } else if !appeared.is_empty() {
-                        // A file alone in an app that was running: a window that doesn't show it
-                        // may be one the user opened, so only the file's own window will do.
-                        // A newly started resolved app keeps the existing grace-period fallback
-                        // to all its new windows, preserving ownership when its document can't
-                        // be identified. An app bundle is the app itself, not a document.
-                        let unproven = req.app.is_none()
-                            && !new_process
-                            && file.extension().is_none_or(|e| e != "app");
                         let since = *first_window.get_or_insert_with(Instant::now);
-                        if (unproven || since.elapsed() < DOCUMENT_GRACE)
+                        if since.elapsed() < DOCUMENT_GRACE
                             && waited < WINDOW_WAIT
                             && stopped.is_none()
                         {
                             std::thread::sleep(Duration::from_millis(50));
                             continue;
                         }
-                        if unproven {
-                            give_back_front(&mut engine.desktop, front_before, a.pid);
-                            return err(
-                                ErrorCode::NoSuchTarget,
-                                format!("{} showed no window with that file", a.name),
-                            );
+                        // A file alone in an app that was running: a window that doesn't show it
+                        // may be one the user opened, so none is this launch's; they're reported,
+                        // never owned. A newly started app keeps all its new windows, since its
+                        // document can't be told. An app bundle is the app itself, not a document.
+                        if req.app.is_none()
+                            && !new_process
+                            && file.extension().is_none_or(|e| e != "app")
+                        {
+                            restored_windows = std::mem::take(&mut new_windows);
                         }
                     }
                 }

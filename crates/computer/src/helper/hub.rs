@@ -743,7 +743,7 @@ fn run<D: Desktop>(
                 let ids: Vec<String> = o.restored_windows.iter().map(|w| format!("w{w}")).collect();
                 let _ = write!(
                     text,
-                    " · it also reopened the user's earlier {} {}, not yours",
+                    " · {} {} also appeared but couldn't be confirmed as this launch's, not yours",
                     if ids.len() == 1 { "window" } else { "windows" },
                     ids.join(", ")
                 );

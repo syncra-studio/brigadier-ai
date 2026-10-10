@@ -3690,6 +3690,27 @@ mod tests {
     }
 
     #[test]
+    fn a_file_in_a_running_app_whose_window_cant_be_told_owns_no_window() {
+        let mut fake = Fake::new(basic());
+        fake.others = vec![other_app(20, "Notes", "dev.example.notes", 5)];
+        fake.resolves_to = Some(other_app(-1, "Notes", "dev.example.notes", 0));
+        // The app shows the file in a window whose title isn't the file's and reports no
+        // document: it may as well be one the user opened.
+        let mut doc = other_app(20, "Notes", "dev.example.notes", 6);
+        doc.windows[0].title = "a.txt — project".into();
+        fake.on_open = Some(doc);
+        let mut e = engine(fake);
+        let started = Instant::now();
+        let o = launch(&mut e, None, Some("/tmp/a.txt")).unwrap();
+        assert_eq!(o.app.pid, 20);
+        assert!(!o.new_process);
+        assert!(o.new_windows.is_empty());
+        assert_eq!(o.restored_windows, vec![6]);
+        // It waited a little for the file's own window, no longer.
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
     fn a_file_alone_is_matched_to_the_app_that_opens_it_not_to_what_the_user_opens_meanwhile() {
         let mut fake = Fake::new(basic());
         fake.others = vec![other_app(20, "Notes", "dev.example.notes", 5)];
@@ -3708,6 +3729,7 @@ mod tests {
         assert_eq!(o.app.pid, 20);
         assert!(!o.new_process);
         assert_eq!(o.new_windows, vec![6]);
+        // The window the user opened isn't proven to be this launch's: reported, not owned.
         assert_eq!(o.restored_windows, vec![8]);
 
         // No app opens it: refused before anything opens.
