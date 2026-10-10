@@ -122,6 +122,15 @@ fn shown(a: &AppInfo) -> HashSet<u32> {
         .collect()
 }
 
+/// The launch took the front for `pid`: gives it back to the user's app (§2.1). Whether it did.
+fn give_back_front<D: Desktop>(desktop: &mut D, front_before: i32, pid: i32) -> bool {
+    let front_now = desktop.user_focus().frontmost_pid;
+    front_now == pid
+        && front_before != pid
+        && front_before != 0
+        && desktop.activate(front_before).is_ok()
+}
+
 pub fn launch<D: Desktop>(
     engine: &mut Engine<D>,
     req: &LaunchRequest,
@@ -257,8 +266,11 @@ pub fn launch<D: Desktop>(
                         restored_windows = rest.iter().map(|w| w.id).collect();
                     } else if !appeared.is_empty() {
                         // A file alone in an app that was running: a window that doesn't show it
-                        // may be one the user opened, so only the file's own window will do.
-                        let unproven = req.app.is_none() && !new_process;
+                        // may be one the user opened, so only the file's own window will do. An
+                        // app bundle given as the file is the app itself, not a document.
+                        let unproven = req.app.is_none()
+                            && !new_process
+                            && file.extension().is_none_or(|e| e != "app");
                         let since = *first_window.get_or_insert_with(Instant::now);
                         if (unproven || since.elapsed() < DOCUMENT_GRACE)
                             && waited < WINDOW_WAIT
@@ -268,6 +280,7 @@ pub fn launch<D: Desktop>(
                             continue;
                         }
                         if unproven {
+                            give_back_front(&mut engine.desktop, front_before, a.pid);
                             return err(
                                 ErrorCode::NoSuchTarget,
                                 format!("{} showed no window with that file", a.name),
@@ -289,11 +302,7 @@ pub fn launch<D: Desktop>(
         std::thread::sleep(Duration::from_millis(50));
     };
     let mut opened = found;
-    // The launch took the front: give it back to the user's app (§2.1).
-    let front_now = engine.desktop.user_focus().frontmost_pid;
-    if front_now == opened.app.pid && front_before != opened.app.pid && front_before != 0 {
-        opened.front_restored = engine.desktop.activate(front_before).is_ok();
-    }
+    opened.front_restored = give_back_front(&mut engine.desktop, front_before, opened.app.pid);
     let facts = TargetFacts {
         pid: opened.app.pid,
         bundle_id: opened.app.bundle_id.as_deref(),
