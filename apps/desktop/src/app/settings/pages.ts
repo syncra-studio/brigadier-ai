@@ -73,7 +73,6 @@ const INSPECTOR_ROWS: readonly SettingsRowCopy[] = [
 
 const USAGE_ROWS: readonly SettingsRowCopy[] = [
   { label: "Usage windows", description: "How much of each agent's usage is left." },
-  { label: "Recent activity", description: "Hand-offs, and work waiting for quota." },
 ];
 
 export const SETTINGS_GROUPS: readonly SettingsGroup[] = ["Personal", "Agents", "System", "Archived"];

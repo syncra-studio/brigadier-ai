@@ -38,6 +38,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { EnvironmentKind, Project, QuotaWindow, RepoInfo } from "@/ipc/generated";
+import { usageTone } from "@/lib/quota";
 import { cn } from "@/lib/utils";
 import { loadProviders, select, updateProject } from "@/state/actions";
 import { openAddProject } from "@/state/addProject";
@@ -325,7 +326,7 @@ function UsageRemaining({ provider }: { provider: string }) {
           {windows.map((window) => (
             <p key={window.id} className="flex items-center gap-2">
               <span className="flex-1">{usageName(window)}</span>
-              <span className="tabular-nums">
+              <span className={cn("tabular-nums", usageTone(window.usedPercent, { normal: { text: "" } }).text)}>
                 {Math.max(0, Math.round(100 - window.usedPercent))}%
               </span>
               {window.resetsAtMs !== null && (

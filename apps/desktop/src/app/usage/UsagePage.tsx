@@ -1,7 +1,6 @@
 import {
   Analytics,
   ChevronRight,
-  Clock,
   ExclamationMarkCircle,
   Reload,
   Shuffle,
@@ -25,7 +24,6 @@ import type {
   Heat,
   ProviderOverview,
   ProviderUsage,
-  RoutingActivity,
   WindowHistory,
   WindowState,
   WindowTokens,
@@ -33,7 +31,6 @@ import type {
 import { formatAgo, formatCountdown, formatTokens } from "@/lib/format";
 import {
   byLength,
-  choiceName,
   formatResetAt,
   HEAT_LABELS,
   HEAT_TONES,
@@ -42,6 +39,7 @@ import {
   VENDOR_LABELS,
   windowScope,
 } from "@/lib/routing";
+import { usageTone } from "@/lib/quota";
 import { modelName, useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
 import { openConversation, refreshProviders } from "@/state/actions";
@@ -50,8 +48,7 @@ import { loadUsage, useUsage, useUsageRefresh } from "@/state/usage";
 
 /**
  * The Usage page: each agent's usage windows, a row each (how much is used, when it resets,
- * where it's heading; opening one shows its history and Brigadier's own use of it), what
- * routing did about them lately.
+ * where it's heading; opening one shows its history and Brigadier's own use of it).
  */
 export function UsagePage() {
   useUsageRefresh();
@@ -103,22 +100,19 @@ export function UsagePage() {
         )}
 
         {view && (
-          <>
-            <section aria-label="Usage windows" className="flex flex-col gap-4">
-              {PROVIDERS.map((provider) => (
-                <ProviderSection
-                  key={provider}
-                  usage={view.providers.find((entry) => entry.provider === provider)}
-                  overview={overviews?.find((entry) => entry.provider === provider)}
-                  overviews={overviews}
-                  groups={groups}
-                  now={now}
-                  provider={provider}
-                />
-              ))}
-            </section>
-            <ActivitySection activity={view.activity} groups={groups} now={now} />
-          </>
+          <section aria-label="Usage windows" className="flex flex-col gap-4">
+            {PROVIDERS.map((provider) => (
+              <ProviderSection
+                key={provider}
+                usage={view.providers.find((entry) => entry.provider === provider)}
+                overview={overviews?.find((entry) => entry.provider === provider)}
+                overviews={overviews}
+                groups={groups}
+                now={now}
+                provider={provider}
+              />
+            ))}
+          </section>
         )}
       </div>
     </SettingsPage>
@@ -151,7 +145,7 @@ function missingReason(overview: ProviderOverview | undefined, usage: ProviderUs
   return null;
 }
 
-/** An agent's card: its plan and heat, then a row per usage window. */
+/** An agent's card: its plan, then a row per usage window. */
 function ProviderSection({
   provider,
   usage,
@@ -190,7 +184,6 @@ function ProviderSection({
             Read {formatAgo(quota.observedAtMs, now)}
           </span>
         )}
-        {quota && <HeatBadge heat={quota.heat} />}
       </div>
       {quota?.limit && (
         <p className="text-destructive px-4 pt-1 text-sm">
@@ -267,7 +260,8 @@ function WindowRow({
   const used = Math.round(Math.min(100, Math.max(0, window.usedPercent)));
   const scope = windowScope(window);
   const estimate = forecastLine(state, now);
-  const warm = heat === "hot" || heat === "limited";
+  // Coloured by how much is used alone, from 80% and from 90%; the forecast never colours it.
+  const usage = usageTone(used, { limitReached: heat === "limited" });
   const span =
     window.resetsAtMs !== null && window.windowMinutes !== null
       ? { start: window.resetsAtMs - window.windowMinutes * 60_000, end: window.resetsAtMs }
@@ -294,13 +288,13 @@ function WindowRow({
             className="bg-muted rounded-capsule h-1.5 min-w-12 flex-1 overflow-hidden"
           >
             <span
-              className={cn("block h-full", warm ? HEAT_TONES[heat].fill : "bg-muted-foreground/60")}
+              className={cn("block h-full", usage.fill)}
               style={{ width: `${used}%` }}
             />
           </span>
           <span className="flex shrink-0 items-baseline justify-end gap-2 text-xs tabular-nums">
             <span
-              className={cn("text-label w-20 text-end", warm ? HEAT_TONES[heat].text : "text-foreground")}
+              className={cn("text-label w-20 text-end", usage.text)}
             >
               {used}% used
             </span>
@@ -318,11 +312,7 @@ function WindowRow({
           <span className="text-muted-foreground flex min-w-0 max-w-full gap-1.5 ps-5 text-xs">
             {scope && <span className="truncate">{scope}</span>}
             {scope && estimate && <span aria-hidden>·</span>}
-            {estimate && (
-              <span className={cn("truncate", forecast?.runsOutAtMs != null && "text-warning")}>
-                {estimate}
-              </span>
-            )}
+            {estimate && <span className="truncate">{estimate}</span>}
           </span>
         )}
       </CollapsibleTrigger>
@@ -442,108 +432,5 @@ function ShareList({ title, rows, total }: { title: string; rows: ShareRow[]; to
         </ul>
       )}
     </div>
-  );
-}
-
-// ----- routing activity ------------------------------------------------------------------
-
-function ActivitySection({
-  activity,
-  groups,
-  now,
-}: {
-  activity: readonly RoutingActivity[];
-  groups: readonly ModelGroup[];
-  now: number;
-}) {
-  return (
-    <section aria-labelledby="usage-activity" className="flex flex-col gap-2">
-      <h2 id="usage-activity" className="text-sm font-medium">
-        Recent activity
-      </h2>
-      {activity.length === 0 ? (
-        <p className="text-muted-foreground text-sm">
-          No hand-offs in the last 7 days, and nothing is waiting for quota.
-        </p>
-      ) : (
-        <ul className="flex flex-col">
-          {activity.map((entry) => (
-            <ActivityRow
-              key={`${entry.type}-${entry.conversationId}-${"taskId" in entry ? entry.taskId : ""}-${"atMs" in entry ? entry.atMs : ""}`}
-              entry={entry}
-              groups={groups}
-              now={now}
-            />
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-function ActivityRow({
-  entry,
-  groups,
-  now,
-}: {
-  entry: RoutingActivity;
-  groups: readonly ModelGroup[];
-  now: number;
-}) {
-  const Icon = entry.type === "waiting" ? Clock : Shuffle;
-  let what: string;
-  let detail: string;
-  let when: string;
-  switch (entry.type) {
-    case "handoff":
-      what = `Handed off: ${choiceName(groups, entry.from)} → ${choiceName(groups, entry.to)}`;
-      detail = entry.cause;
-      when = formatAgo(entry.atMs, now);
-      break;
-    case "waiting":
-      what = "Waiting for quota";
-      detail = entry.reason;
-      when =
-        entry.resetsAtMs !== null
-          ? `resets in ${formatCountdown(entry.resetsAtMs, now)}`
-          : `since ${formatAgo(entry.sinceMs, now)}`;
-      break;
-    case "fallback":
-      what = `On ${choiceName(groups, entry.fallback.choice)} instead of ${choiceName(groups, entry.fallback.replaces)}`;
-      detail = entry.fallback.reason;
-      when =
-        entry.fallback.untilMs !== null
-          ? `until ${formatResetAt(entry.fallback.untilMs, now)}`
-          : `since ${formatAgo(entry.fallback.sinceMs, now)}`;
-      break;
-  }
-  return (
-    <li
-      data-slot="usage-activity"
-      className="hover:bg-accent/50 rounded-control flex items-start gap-2 px-2 py-1.5"
-    >
-      <Icon
-        aria-hidden
-        className={cn(
-          "size-icon-md mt-0.5 shrink-0",
-          entry.type === "waiting" ? "text-warning" : "text-muted-foreground",
-        )}
-      />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <button
-          type="button"
-          className="min-w-0 truncate text-start text-sm hover:underline"
-          title={`Open ${entry.title}`}
-          onClick={() => openConversation(entry.conversationId)}
-        >
-          {entry.title}
-        </button>
-        <span className="text-xs">{what}</span>
-        <span className="text-muted-foreground truncate text-xs" title={detail}>
-          {detail}
-        </span>
-      </div>
-      <span className="text-muted-foreground shrink-0 text-xs tabular-nums">{when}</span>
-    </li>
   );
 }

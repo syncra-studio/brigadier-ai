@@ -3,8 +3,10 @@ import { useMemo, useState } from "react";
 import { useSize } from "@/hooks/use-size";
 import type { Forecast, QuotaSample } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
+import { usageTone } from "@/lib/quota";
 import { formatResetAt } from "@/lib/routing";
 import { tokenPx } from "@/lib/tokens";
+import { cn } from "@/lib/utils";
 import { useApp } from "@/state/store";
 
 const TICKS = [0, 50, 100];
@@ -12,7 +14,7 @@ const TICKS = [0, 50, 100];
 /**
  * Used % across a window's span, from its start to its reset: the samples as a line over a
  * faint wash, the rolling estimate dashed from now to the reset (or to where it runs out), and a
- * hairline at now. Hovering finds the nearest sample.
+ * hairline at now. The line is coloured by how much is used, the estimate never. Hovering finds the nearest sample.
  */
 export function WindowChart({
   samples,
@@ -34,6 +36,8 @@ export function WindowChart({
   const { ref, size } = useSize();
   const density = useApp((s) => s.settings.density);
   const [hover, setHover] = useState<number | null>(null);
+  // The line and its mark at now take usage's colour by how much is used; the estimate stays neutral.
+  const usage = usageTone(usedPercent);
 
   // Geometry comes from the spacing token, re-read when density switches it.
   // oxlint-disable-next-line react-hooks/exhaustive-deps
@@ -126,7 +130,7 @@ export function WindowChart({
           {area && <path d={area} className="fill-chart-2/10" />}
           <path
             d={line}
-            className="stroke-chart-2 fill-none stroke-2"
+            className={cn(usage.stroke, "fill-none stroke-2")}
             strokeLinejoin="round"
             strokeLinecap="round"
           />
@@ -138,7 +142,7 @@ export function WindowChart({
                 x2={x(projection.atMs)}
                 y2={y(projection.percent)}
                 strokeDasharray={`${unit} ${unit}`}
-                className="stroke-chart-2/60 stroke-2"
+                className="stroke-muted-foreground/60 stroke-2"
                 strokeLinecap="round"
               />
               {projection.runsOut && (
@@ -146,7 +150,7 @@ export function WindowChart({
                   cx={x(projection.atMs)}
                   cy={y(100)}
                   r={unit}
-                  className="fill-destructive stroke-card stroke-2"
+                  className="fill-muted-foreground stroke-card stroke-2"
                 />
               )}
             </>
@@ -162,7 +166,7 @@ export function WindowChart({
             cx={x(now)}
             cy={y(usedPercent)}
             r={unit}
-            className="fill-chart-2 stroke-card stroke-2"
+            className={cn(usage.mark, "stroke-card stroke-2")}
           />
           {hovered && (
             <line
