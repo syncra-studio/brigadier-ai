@@ -145,6 +145,19 @@ fn main() -> anyhow::Result<()> {
             )?;
         }
         Some("bench") => {
+            // An unknown argument (`--help` among them) must not start a bench that drives the Mac.
+            let mut rest = args[1..].iter();
+            while let Some(a) = rest.next() {
+                match a.as_str() {
+                    "--out" | "--replay" => {
+                        rest.next();
+                    }
+                    "--quick" | "--no-foreground" | "--cursor" => {}
+                    other => bail!(
+                        "bench: unknown argument {other}; bench [--out <dir>] [--quick] [--no-foreground] [--cursor] [--replay <dir>]"
+                    ),
+                }
+            }
             let out = flag("--out").unwrap_or_else(|| PathBuf::from("target/computer-bench"));
             let quick = args.iter().any(|a| a == "--quick");
             // P2f raises a window and takes the front; off while someone uses the Mac.
