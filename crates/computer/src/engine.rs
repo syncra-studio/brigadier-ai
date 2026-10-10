@@ -2055,6 +2055,9 @@ mod tests {
         /// Other apps, and what a launch opens.
         others: Vec<AppInfo>,
         on_open: Option<AppInfo>,
+        /// Apps or windows the user opens while a launch waits: one more shows on each read
+        /// of the apps after the launch opened.
+        appearing: Vec<AppInfo>,
         /// A launch takes the front.
         open_takes_front: bool,
         /// The document each window reports showing.
@@ -2110,6 +2113,7 @@ mod tests {
                 user_takes_window: None,
                 others: Vec::new(),
                 on_open: None,
+                appearing: Vec::new(),
                 open_takes_front: false,
                 documents: HashMap::new(),
                 resolves_to: None,
@@ -2157,6 +2161,10 @@ mod tests {
             }
         }
         fn apps(&mut self) -> CuResult<Vec<AppInfo>> {
+            if !self.appearing.is_empty() && self.log.iter().any(|l| l.starts_with("open ")) {
+                let a = self.appearing.remove(0);
+                self.others.push(a);
+            }
             let mut a = self.app(10)?;
             a.windows = vec![self.window.clone()];
             let mut all = vec![a];
@@ -3563,7 +3571,10 @@ mod tests {
         assert_eq!(e.desktop.front, 99);
 
         // A file opened in the app that's already running: a new window, not a new process.
-        e.desktop.on_open = Some(other_app(20, "Notes", "dev.example.notes", 6));
+        let mut notes = other_app(20, "Notes", "dev.example.notes", 6);
+        notes.windows[0].title = "a.txt".into();
+        e.desktop.on_open = Some(notes);
+        e.desktop.resolves_to = Some(other_app(-1, "Notes", "dev.example.notes", 0));
         e.desktop.open_takes_front = false;
         let o = launch(&mut e, None, Some("/tmp/a.txt")).unwrap();
         assert_eq!(o.app.pid, 20);
@@ -3618,6 +3629,7 @@ mod tests {
         app.windows.push(w);
         let mut fake = Fake::new(basic());
         fake.on_open = Some(app);
+        fake.resolves_to = Some(other_app(-1, "Notes", "dev.example.notes", 0));
         let mut e = engine(fake);
         let started = Instant::now();
         let o = launch(&mut e, None, Some("/tmp/nothing-shows-this.txt")).unwrap();
@@ -3625,6 +3637,34 @@ mod tests {
         assert!(o.restored_windows.is_empty());
         // It waited a little for the file's own window, no longer.
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn a_file_alone_is_matched_to_the_app_that_opens_it_not_to_what_the_user_opens_meanwhile() {
+        let mut fake = Fake::new(basic());
+        fake.others = vec![other_app(20, "Notes", "dev.example.notes", 5)];
+        fake.resolves_to = Some(AppInfo {
+            windows: Vec::new(),
+            ..other_app(-1, "Notes", "dev.example.notes", 0)
+        });
+        // While the launch waits, the user starts another app and opens a window in Notes;
+        // then Notes shows the file.
+        fake.on_open = Some(other_app(30, "Mail", "dev.example.mail", 7));
+        let mut doc = other_app(20, "Notes", "dev.example.notes", 6);
+        doc.windows[0].title = "a.txt".into();
+        fake.appearing = vec![other_app(20, "Notes", "dev.example.notes", 8), doc];
+        let mut e = engine(fake);
+        let o = launch(&mut e, None, Some("/tmp/a.txt")).unwrap();
+        assert_eq!(o.app.pid, 20);
+        assert!(!o.new_process);
+        assert_eq!(o.new_windows, vec![6]);
+        assert_eq!(o.restored_windows, vec![8]);
+
+        // No app opens it: refused before anything opens.
+        let mut e = engine(Fake::new(basic()));
+        let r = launch(&mut e, None, Some("/tmp/a.unknown"));
+        assert_eq!(r.unwrap_err().code, ErrorCode::NoSuchTarget);
+        assert!(e.desktop.log.is_empty(), "{:?}", e.desktop.log);
     }
 
     #[test]

@@ -101,6 +101,19 @@ fn shows<D: Desktop>(desktop: &mut D, w: &WindowInfo, file: &Path) -> bool {
     !title.is_empty() && (title == name || title == stem)
 }
 
+/// Whether running app `a` is `r`, the app the system resolved for a launch: by bundle id when
+/// both have one, else by bundle path.
+fn is_resolved(r: &AppInfo, a: &AppInfo) -> bool {
+    match (r.bundle_id.as_deref(), a.bundle_id.as_deref()) {
+        (Some(x), Some(y)) => x.eq_ignore_ascii_case(y),
+        _ => r
+            .bundle_path
+            .as_deref()
+            .zip(a.bundle_path.as_deref())
+            .is_some_and(|(x, y)| x.trim_end_matches('/') == y.trim_end_matches('/')),
+    }
+}
+
 fn shown(a: &AppInfo) -> HashSet<u32> {
     a.windows
         .iter()
@@ -151,6 +164,11 @@ pub fn launch<D: Desktop>(
     {
         return err(ErrorCode::Blocked, reason);
     }
+    // A file or URL alone is told by the app the system runs for it; without one, nothing tells
+    // its windows from those the user opens meanwhile.
+    if req.app.is_none() && resolved.is_none() {
+        return err(ErrorCode::NoSuchTarget, "no app opens that");
+    }
     if let Some(app) = resolved
         .as_ref()
         .filter(|a| crate::cdp::is_chromium(a.bundle_id.as_deref()))
@@ -191,15 +209,21 @@ pub fn launch<D: Desktop>(
                     .or_else(|| named.first())
                     .map(|a| (*a).clone())
             }
-            // A file or URL alone: whatever app started or showed a new window for it.
-            None => apps
-                .iter()
-                .find(|a| !before.contains_key(&a.pid) && !a.windows.is_empty())
-                .or_else(|| {
-                    apps.iter()
-                        .find(|a| before.contains_key(&a.pid) && fresh(a))
-                })
-                .cloned(),
+            // A file or URL alone: the app the system runs for it, once it started or showed a
+            // new window; other apps the user opens meanwhile aren't this launch's.
+            None => {
+                let ours: Vec<&AppInfo> = apps
+                    .iter()
+                    .filter(|a| resolved.as_ref().is_some_and(|r| is_resolved(r, a)))
+                    .collect();
+                ours.iter()
+                    .find(|a| !before.contains_key(&a.pid) && !a.windows.is_empty())
+                    .or_else(|| {
+                        ours.iter()
+                            .find(|a| before.contains_key(&a.pid) && fresh(a))
+                    })
+                    .map(|a| (*a).clone())
+            }
         };
         let waited = started.elapsed();
         if let Some(e) = &stopped
@@ -232,13 +256,22 @@ pub fn launch<D: Desktop>(
                         new_windows = own.iter().map(|w| w.id).collect();
                         restored_windows = rest.iter().map(|w| w.id).collect();
                     } else if !appeared.is_empty() {
+                        // A file alone in an app that was running: a window that doesn't show it
+                        // may be one the user opened, so only the file's own window will do.
+                        let unproven = req.app.is_none() && !new_process;
                         let since = *first_window.get_or_insert_with(Instant::now);
-                        if since.elapsed() < DOCUMENT_GRACE
+                        if (unproven || since.elapsed() < DOCUMENT_GRACE)
                             && waited < WINDOW_WAIT
                             && stopped.is_none()
                         {
                             std::thread::sleep(Duration::from_millis(50));
                             continue;
+                        }
+                        if unproven {
+                            return err(
+                                ErrorCode::NoSuchTarget,
+                                format!("{} showed no window with that file", a.name),
+                            );
                         }
                     }
                 }
