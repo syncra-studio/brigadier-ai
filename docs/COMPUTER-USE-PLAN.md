@@ -1588,6 +1588,21 @@ All 7 findings were accepted and fixed, each with a test:
 - `select` passed character offsets to accessibility, which counts UTF-16 units; they are converted both ways.
 - `launch` checked the block list against the request's words only; it now checks the app LaunchServices would run.
 
+### 10.4 The review of Phase 7's code (2026-10-10)
+
+All 3 findings were accepted and fixed, each with a test or a live check:
+- A click on a page list's option picked the first option with its label and confirmed it by label, so a second
+  option of the same name was never picked yet read as done. The click now carries the option's place in its list,
+  and the readback checks that place. Live, the arrow keys meant to step on from where typing stopped opened the
+  Mac list's menu instead; the next option a label begins is now reached with its first letter once the list's
+  type-ahead has forgotten what was typed (a second in Chromium), still with trusted keys. Checked on a fixture
+  list with two "Team" options: the second was picked, with trusted change events.
+- The helper waits a moment before it exits to restart for a changed grant; a request that arrived in that moment,
+  with the grant changed back, could pass the grant check and be cut off mid-action. Deciding to restart now closes
+  the helper to new engine work, under the same lock that counts what runs.
+- A failed Start over (a failing reset) came back to Settings as "Brigadier Computer Use didn't say"; it now shows
+  the reason.
+
 ## 11. Checked third-party contracts (2026-10-09)
 
 - **Claude images** (platform.claude.com/docs/en/build-with-claude/vision):
