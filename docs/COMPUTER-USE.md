@@ -89,11 +89,11 @@ tools/open-dev-app.sh /tmp/my-scratch          # or another data folder
 ## Limits
 
 - **macOS only.** Windows and Linux are a future build.
-- **One display tested.** Several displays are handled, but only tested in code, not on a real second screen.
+- **Several displays.** Tested on a second 1× display beside a 2× Retina display.
 - **Save dialogs on another desktop.** When a save dialog's window is on another desktop, or you're in a
   full-screen app, the dialog keeps its Save button disabled. The worker can't finish that save until the window is
-  on your current desktop.
-- **Your own Chrome.** In a Chrome window the session didn't open, a worker can fill fields and press buttons, but
-  can't type keys into the page.
+  on your current desktop, and says so.
+- **Chrome on another desktop.** Chrome and other Chromium browsers build no page for a window you can't see, so a
+  worker can't read a page whose window is on another desktop until it's in view.
 - **First look takes a moment.** Some apps (Electron apps, browsers, apps just launched) build their description
   only when asked. The first look at such a window waits for it, up to a few seconds.

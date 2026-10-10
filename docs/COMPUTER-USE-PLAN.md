@@ -1191,8 +1191,10 @@ the protocol path needs none)
 
 **Open**
 - Chrome with no debugging port: background key events (`type`) don't land in its page, though `set_value` does.
+  Fixed in Phase 7 item 3.
 - A plain launch of Chrome (not through `launch`) flicks the front for about 0.1–0.2 s. The suite's setup gives it
-  straight back; workers launch through `launch`, which never does this.
+  straight back; workers launch through `launch`, which never does this. The suite's setup no longer does it
+  (Phase 7 item 3).
 - `AXEnhancedUserInterface` stays set on a Chromium process once it has been looked at, which costs it some speed.
 - **Regressions:** the scripted suite passed 28/28, and `bench --quick --no-foreground` passes every gate. The
   combined verifier runs the full bench once, on the merged tree.
@@ -1279,12 +1281,15 @@ search the whole disk. `observe`'s description, which every worker sees, says th
 - **The six dev trials** of Phase 4 never ran.
 - **The comparisons** with other computer-use tools, once they are turned on and granted (a future build).
 - **A save panel on another Space** keeps Save disabled; `save-panel` can't finish while the user is on another
-  Space or in a full-screen app. Suggested: report `background_unavailable` with that reason.
-- **Several displays**: unit-tested only; this Mac has one display.
-- **Chrome without a debugging port**: background key events don't reach its page; `set_value` and presses do.
-  Only Chrome for Testing was driven; Arc and Dia never were.
-- **A plain launch of Chrome flicks the front** for 0.1–0.2 s (only the suite's setup does this; workers launch
-  through `launch`).
+  Space or in a full-screen app. macOS gives no background route (Phase 7 item 3); the engine now refuses with
+  `background_unavailable` and asks for the window to be brought into view. The off-Space refusal is unit-tested;
+  seeing it live needs the user on another Space (a user check).
+- **Several displays**: done in Phase 7 item 3, tested live on a second display.
+- **Chrome without a debugging port**: background key events reach its page since Phase 7 item 3. Its page
+  can't be read while its window is on another Space (a Chromium limit). Only Chrome for Testing was driven; Arc
+  and Dia never were.
+- **A plain launch of Chrome flicks the front**: fixed in Phase 7 item 3; the suite's setup opens Chrome with no
+  window and makes one through its protocol.
 - **A menu pick took the front once** while a system "quit unexpectedly" alert was the front app (stream B's quick
   bench). 200/200 menu picks changed nothing in a full bench.
 - **`AXEnhancedUserInterface` stays set** on a Chromium process once looked at, which costs it some speed.
@@ -1378,7 +1383,8 @@ search the whole disk) and its tests are unchanged.
 | web-iframe | 1 | 5 (1.25) | 5 (1.25) | 5 (1.25) | 3 (0.75) | 3 (0.75) |
 
 **Open**
-- **A Chrome window on another Space.** Claude 2 failed `web-ax-form` and `web-ax-form-webkit`, and two repeats on
+- **A Chrome window on another Space** (cause found in Phase 7 item 3: Chromium builds no page for a window that
+  can't be seen). Claude 2 failed `web-ax-form` and `web-ax-form-webkit`, and two repeats on
   that build failed `web-ax-form` again; each time the user was on a full-screen Space, so the window was off screen.
   Chrome built no page tree for 20 s and more, its screenshots were stale, and synthetic activation didn't bring the
   tree (the first repeat); its list opened no menu. With the user on the desktop's Space, both tasks passed in every run.
@@ -1388,11 +1394,66 @@ search the whole disk) and its tests are unchanged.
   another Space during a run. Making Chromium's windows key once, as Electron's are, was considered and not done:
   activation didn't bring the tree.
 - **`save-panel` (Codex 2): a pixel click into a save panel's field under synthetic activation brought the app to
-  the front 74 ms later**, with no cursor activity. An old delivery path, unchanged here. Suggested: refuse pointer
-  events into a save panel with `background_unavailable`.
+  the front 74 ms later**, with no cursor activity. An old delivery path, unchanged here. Fixed in Phase 7 item 3:
+  a pointer click into a save panel is refused with `background_unavailable` and the panel's refs, nothing sent.
 - **F1 in these runs**: the suite's own front changes were Chrome's plain launch in `web-ax-form`'s setup (known)
   and the save panel above; the rest overlapped the person's own clicks or window switches. The user was at the Mac throughout.
 - `password` passes with the note that the report repeats the password the request itself gave.
+
+### Phase 7, item 3: the known limits (2026-10-10)
+
+Three limits from the lists above: a save panel off screen, Chrome without a debugging port, several displays.
+The user was at the Mac; every run used windows the suite launched, and a focus watcher (`suite watch`) ran
+through each.
+
+| limit | result | how it was checked |
+|---|---|---|
+| Several displays | **PASS, nothing to fix** | A second display (1920×1080 at 1×, left of the built-in 1728×1117 at 2×). Fixtures open there with `BRIGADIER_FIXTURE_SCREEN=1`. Release `bench --quick --no-foreground --cursor`: every gate passes (S1 7.1/8.5 ms, S2 54.3/65.1, S3 6.8 dispatch / 3.4 effect, S4 16.4/32.4, S5 7.4/14.6, P1 160/160, P2 160/160 with worst error 0.00 pt at 1× and in a 2× zoom, P2r 20/20, P4 0, SA 60/60, F1 0). A screen capture of the region showed the cursor overlay on the target. Scripted on display 2: 17/17, 0 front changes |
+| Save panel, pixel click | **Fixed** | A pointer click into a save panel is refused with `background_unavailable`, naming the panel's refs; nothing is sent. Live, on screen, background app: refused, 0 front changes. `save-panel` 3/3 on screen, 0 front changes |
+| Save panel off screen | **Explained, not fixable from outside** | See below. The engine now says why and what to do |
+| Chrome keys, no port | **Fixed** | Before: `type`/`key` into a focused page field changed nothing, even on screen. Now 3/3 (click Name, then End, x, y, Backspace → "Old namex"), rung `background_activated`, 0 front changes. `web-ax-form` 3/3 and `web-ax-form-webkit` 3/3 |
+| Chrome page off screen | **Explained, a Chromium limit** | See below |
+
+**Save panel.** The panel is drawn by `com.apple.appkit.xpc.openAndSavePanelService`, not the app. Its Save button
+is disabled from the moment the sheet opens off screen, even with the default name, and turns on within about a
+second once the sheet is on a display (seen by moving the window to display 2 by accessibility). With the window on
+display 2 but the sheet below its visible area, Save stayed disabled: the sheet itself must be in view. `AXPress`
+on the disabled button is refused and `AXConfirm` on the name field does nothing, so there is no background route.
+The engine now finds a served panel (a sheet holding another process's elements) and:
+- notes it when the window is off screen, and when a screenshot was taken (the image leaves it out). ScreenCaptureKit failed every
+  capture of a window with the panel attached; an on-screen window is now captured from the window server when
+  ScreenCaptureKit fails;
+- turns "eN is disabled" inside it, on a window off screen, into `background_unavailable` asking for the window to
+  be brought into view;
+- refuses a pointer click into it (the 74 ms front grab of item 2 wasn't reproduced; the click is refused anyway).
+
+The off-screen refusal is unit-tested only: an app hidden as a stand-in unhides itself when its sheet opens, and a
+window ordered out can't hold a sheet. Seeing it live needs the user on another Space (a user check).
+
+**Chrome without a port.** Chromium handles key events only while its app is active, so a key batch into a
+Chromium app now holds the batch's synthetic activation for that app (`Desktop::keys_to`), as presses already did;
+other apps keep the old path (WebKit's type-ahead works without it). Off screen, Chromium builds no page for a
+window that can't be seen, so no accessibility tree: reproduced live once with the user on a full-screen Space, and
+with the browser hidden no tree appeared after 8 s for a mouse move, a scroll, a click, activation, or activation
+plus a move or click. A WebKit view builds its tree while hidden. The earlier "a first pixel click built it" was the
+user switching to the window's Space at the same moment. The incomplete-page note now says a Chromium browser
+builds no page until its window is in view. A future option: a browser that `launch` starts with its protocol and
+`--disable-backgrounding-occluded-windows`.
+
+**The suite's plain Chrome** now starts with `--no-startup-window` and a port, makes its window with one protocol
+call, and keeps its profile one level below the scratch base so the engine never adopts its port (accessibility
+only, as a user's own Chrome). Before, its launch held the front for 3.6 s once.
+
+**Final regression** on the exact tree: `suite scripted` 35/35 pass (Chrome for Testing, no
+`BRIGADIER_TEST_BROWSER`), and the focus watcher logged no change of front app, window or cursor through the run.
+
+**Open**
+- The off-Space refusal for a save panel and the off-Space page note for Chrome are unit-tested, not seen live (a
+  user check: stay on a full-screen Space, run `suite scripted <out> save-panel web-ax-form web-ax-form-webkit`;
+  expect the first two to fail with those messages and the WebKit one to pass, then all three to pass from the
+  desktop's Space).
+- A WebKit view's list, in a hidden app, opens a menu no press takes; dismissing it closed the fixture's window.
+  Hidden isn't the same as another Space for menus; low priority.
 
 ### Phase 6: Windows and Linux backends (a future build)
 
