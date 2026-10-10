@@ -6,7 +6,7 @@
 //! session files and Codex threads and trust entries, processes. A worktree whose changes
 //! can't be kept stays, with everything its owner holds.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 use brigadier_providers::Artifact;
@@ -141,6 +141,9 @@ impl SessionManager {
         branches: Vec<RemovalBranch>,
         picked: Vec<BranchChoice>,
     ) -> (Vec<RemovalBranch>, Vec<String>) {
+        for choice in &picked {
+            self.forget_branch(Path::new(&choice.repo), &choice.name);
+        }
         let git = self.git.clone();
         blocking(move || Ok(settle_branches(&git, branches, &picked)))
             .await

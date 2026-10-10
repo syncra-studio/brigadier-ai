@@ -89,6 +89,9 @@ impl SessionManager {
 
         let git = self.git.clone();
         let branches = plan.preview.branches;
+        for choice in &delete {
+            self.forget_branch(Path::new(&choice.repo), &choice.name);
+        }
         let (kept, mut failures) =
             blocking(move || Ok(settle_branches(&git, branches, &delete))).await?;
         self.record_kept(&kept).await;
