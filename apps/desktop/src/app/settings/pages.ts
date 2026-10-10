@@ -37,7 +37,7 @@ import type { SettingsPageId } from "@/state/store";
 
 export type SettingsRowCopy = { readonly label: string; readonly description?: string };
 
-export type SettingsGroup = "Personal" | "Agents" | "System" | "Archived";
+export type SettingsGroup = "Personal" | "Agents" | "System";
 
 export type SettingsPageEntry = {
   id: SettingsPageId;
@@ -75,7 +75,7 @@ const USAGE_ROWS: readonly SettingsRowCopy[] = [
   { label: "Usage windows", description: "How much of each agent's usage is left." },
 ];
 
-export const SETTINGS_GROUPS: readonly SettingsGroup[] = ["Personal", "Agents", "System", "Archived"];
+export const SETTINGS_GROUPS: readonly SettingsGroup[] = ["Personal", "Agents", "System"];
 
 export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   {
@@ -85,6 +85,22 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "Personal",
     component: GeneralPage,
     rows: Object.values(GENERAL_ROWS),
+  },
+  {
+    id: "archived",
+    label: "Archived chats",
+    icon: Archive,
+    group: "Personal",
+    component: ArchivedPage,
+    rows: Object.values(ARCHIVED_ROWS),
+  },
+  {
+    id: "storage",
+    label: "Storage",
+    icon: Storage,
+    group: "Personal",
+    component: StoragePage,
+    rows: Object.values(STORAGE_ROWS),
   },
   {
     id: "configuration",
@@ -161,28 +177,12 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     shown: computerUseAvailable,
   },
   {
-    id: "storage",
-    label: "Storage",
-    icon: Storage,
-    group: "System",
-    component: StoragePage,
-    rows: Object.values(STORAGE_ROWS),
-  },
-  {
     id: "inspector",
     label: "Inspector",
     icon: Terminal,
     group: "System",
     component: InspectorPage,
     rows: INSPECTOR_ROWS,
-  },
-  {
-    id: "archived",
-    label: "Archived chats",
-    icon: Archive,
-    group: "Archived",
-    component: ArchivedPage,
-    rows: Object.values(ARCHIVED_ROWS),
   },
 ];
 
