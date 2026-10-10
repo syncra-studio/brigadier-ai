@@ -260,6 +260,12 @@ impl Codex {
         if let Some(session) = session {
             crate::cli::apply_session_env(&mut spec, &session.env, &session.unset_env);
             spec.low_priority = session.low_priority;
+            let homes: Vec<PathBuf> = self
+                .codex_home()
+                .into_iter()
+                .chain(self.main_home.clone())
+                .collect();
+            spec = crate::cli::protect(self.platform.as_ref(), spec, session, &homes)?;
         }
         let redactor = session.and_then(|session| session.redactor.clone());
         let process::Spawned { process, stdout } = process::spawn(

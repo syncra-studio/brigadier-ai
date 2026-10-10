@@ -31,7 +31,7 @@ const LEVEL_COPY: Record<PermissionLevel, { allows: string; risk: string }> = {
   },
   fullAccess: {
     allows:
-      "No sandbox: the lead and its workers run commands like your own terminal, without asking. They can read, change or delete any file you can, install software and use the internet.",
+      "No sandbox: the lead and its workers run commands like your own terminal, without asking, except that the lead can’t change other sessions’ branches and folders or Brigadier’s own data. They can read, change or delete any other file you can, install software and use the internet.",
     risk: "A wrong command, or instructions planted in a web page or file (prompt injection), can delete or leak data anywhere on this computer. Use it with projects and sources you trust.",
   },
 };

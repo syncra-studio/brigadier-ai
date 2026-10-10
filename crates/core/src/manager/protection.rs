@@ -50,7 +50,68 @@ pub(crate) fn ref_protection(
     protection
 }
 
+/// What a Full-access thread may also never write: Brigadier's data folder but its own folders
+/// (`own`: its scratch folder, its workspace), and every session's temp folder
+/// (`/tmp/brigadier-<12 hex>`, a Claude session's `CLAUDE_CODE_TMPDIR`) and task test folder
+/// (`/tmp/brigadier-test-…`); the CLI's adapter gives its own temp folder back.
+pub(crate) fn add_full_access(protection: &mut Protection, data_dir: &Path, own: &[PathBuf]) {
+    protection.deny.push(data_dir.to_owned());
+    protection.allow.extend(own.iter().cloned());
+    let temp = super::workers::test_data_root();
+    let temp = temp.canonicalize().unwrap_or(temp);
+    let temp = regex_escape(&temp.display().to_string());
+    protection.deny_patterns.extend([
+        format!("^{temp}/brigadier-{}(/|$)", "[0-9a-f]".repeat(12)),
+        format!("^{temp}/brigadier-test-[^/]+(/|$)"),
+    ]);
+}
+
+/// Makes the folders the session's own ref and reflog live in: packing refs prunes an emptied
+/// one, and git can't make it again inside a protected folder.
+pub(crate) fn make_own_folders(protection: &Protection) {
+    for own in &protection.allow {
+        if let Some(parent) = own.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+}
+
+/// `text` matched literally inside a regular expression.
+fn regex_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if "\\.^$|?*+()[]{}".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 impl SessionManager {
+    /// What the thread may never write. At Full access its CLI and its own `run` commands run
+    /// inside Brigadier's allow-all-but profile of it; Full-access workers and checks don't
+    /// (a Seatbelt profile can't nest, and they build and test), so the ref check is theirs.
+    pub(crate) fn thread_protection(
+        &self,
+        id: &ConversationId,
+        workspace: Option<&super::thread::ThreadWorkspace>,
+        scratch: &Path,
+        full: bool,
+    ) -> Protection {
+        let mut protection = workspace
+            .map(|workspace| {
+                self.session_protection(id, &workspace.path, Some(&workspace.branch), &[], full)
+            })
+            .unwrap_or_default();
+        if full {
+            let mut own = vec![scratch.to_owned()];
+            own.extend(workspace.map(|workspace| workspace.path.clone()));
+            add_full_access(&mut protection, &self.data_dir, &own);
+        }
+        protection
+    }
+
     /// The branches a session's work lands on, which only the engine moves: a worktree
     /// session's base and its own branch, a local checkout's picked branch, an overnight
     /// run's branch.
@@ -97,13 +158,166 @@ impl SessionManager {
                 targets.push(target.clone());
             }
         }
-        ref_protection(repo.common_dir(), own, &targets, full)
+        let protection = ref_protection(repo.common_dir(), own, &targets, full);
+        make_own_folders(&protection);
+        protection
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A folder removed when dropped however the test ends.
+    struct Temp(PathBuf);
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn git(cwd: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
+    /// The incident (PLAN bug 6): a Full-access thread's cleanup deleted another session's
+    /// branch, every task's test folder and its own temp folder. Under the thread's real
+    /// wrap each of those commands fails, while its own work and the rest of the machine
+    /// stay like the user's own terminal.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_full_access_threads_cleanup_touches_nothing_of_another_session() {
+        let hex = || uuid::Uuid::new_v4().simple().to_string()[..12].to_owned();
+        let dir = Temp(std::env::temp_dir().join(format!("brigadier-protect-{}", hex())));
+        let repo = dir.0.join("repo");
+        let data = dir.0.join("data");
+        let scratch = data.join("orch/conv");
+        let worktree = data.join("worktrees/conv");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::write(data.join("brigadier.db"), "db").unwrap();
+        std::fs::create_dir_all(data.join("worktrees/other/src")).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "Start"]);
+        git(&repo, &["branch", "brigadier/bb/task-1"]);
+        let worktree_arg = worktree.display().to_string();
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "brigadier/aa/session",
+                &worktree_arg,
+            ],
+        );
+        // Other sessions' temp and test folders, the thread's own temp folder, and the user's.
+        let other_temp = Temp(PathBuf::from(format!("/tmp/brigadier-{}", hex())));
+        let other_test = Temp(PathBuf::from(format!("/tmp/brigadier-test-{}", hex())));
+        let own_temp = Temp(PathBuf::from(format!("/tmp/brigadier-{}", hex())));
+        let mine = Temp(PathBuf::from(format!("/tmp/my-scratch-{}", hex())));
+        for folder in [&other_temp, &other_test, &mine] {
+            std::fs::create_dir_all(folder.0.join("sub")).unwrap();
+        }
+        std::fs::create_dir_all(own_temp.0.join("claude-501/proj/session")).unwrap();
+
+        let common = repo.join(".git").canonicalize().unwrap();
+        let mut protection = ref_protection(
+            &common,
+            Some("brigadier/aa/session"),
+            &["main".into(), "brigadier/aa/session".into()],
+            true,
+        );
+        add_full_access(&mut protection, &data, &[scratch.clone(), worktree.clone()]);
+        // As the adapter gives back the CLI's own temp folder.
+        protection.allow.push(own_temp.0.clone());
+        protection.keep.push(own_temp.0.clone());
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.0.join("platform")),
+        })
+        .unwrap();
+        let sh = |script: &str| {
+            let spec = brigadier_sandbox::SpawnSpec {
+                program: PathBuf::from("/bin/sh"),
+                args: vec!["-c".into(), script.into()],
+                cwd: Some(worktree.clone()),
+                ..Default::default()
+            };
+            let spec = platform.sandbox().protect(spec, &protection).unwrap();
+            let out = std::process::Command::new(&spec.program)
+                .args(&spec.args)
+                .current_dir(&worktree)
+                .output()
+                .unwrap();
+            (
+                out.status.success(),
+                String::from_utf8_lossy(&out.stderr).into_owned(),
+            )
+        };
+        let other = git(&repo, &["rev-parse", "brigadier/bb/task-1"]);
+        let base = git(&repo, &["rev-parse", "main"]);
+
+        let (ok, stderr) = sh("git branch -D brigadier/bb/task-1");
+        assert!(
+            !ok && stderr.contains("Operation not permitted"),
+            "{stderr}"
+        );
+        let (ok, _) = sh(
+            "git update-ref refs/heads/main $(git -c user.name=t -c user.email=t@example.invalid commit-tree 'HEAD^{tree}' -m Other)",
+        );
+        assert!(!ok, "the base moves only by the engine");
+        git(&repo, &["pack-refs", "--all"]);
+        let (ok, _) = sh("git branch -D brigadier/bb/task-1");
+        assert!(!ok, "a packed ref's delete fails too");
+        assert_eq!(git(&repo, &["rev-parse", "brigadier/bb/task-1"]), other);
+        assert_eq!(git(&repo, &["rev-parse", "main"]), base);
+
+        let (ok, _) = sh(&format!(
+            "rm -rf {} {} {}",
+            other_temp.0.display(),
+            other_test.0.display(),
+            own_temp.0.display()
+        ));
+        assert!(!ok);
+        assert!(other_temp.0.join("sub").is_dir() && other_test.0.join("sub").is_dir());
+        assert!(own_temp.0.join("claude-501/proj/session").is_dir());
+        // Brigadier's bookkeeping and another conversation's worktree.
+        let (ok, _) = sh(&format!(
+            "rm -rf {0}/brigadier.db {0}/worktrees/other",
+            data.display()
+        ));
+        assert!(!ok);
+        assert!(data.join("brigadier.db").exists() && data.join("worktrees/other/src").is_dir());
+
+        // Its own work: a commit on its session branch (packing pruned the folder its ref
+        // lives in, which the engine makes again whenever it looks), its scratch, the user's
+        // folders.
+        make_own_folders(&protection);
+        let (ok, stderr) = sh(
+            "echo a > f && git add f && git -c user.name=t -c user.email=t@example.invalid commit -q -m Work",
+        );
+        assert!(ok && stderr.is_empty(), "{stderr}");
+        let (ok, stderr) = sh(&format!(
+            "echo s > {0}/note && rm {0}/note && rm -rf {1}",
+            scratch.display(),
+            mine.0.display()
+        ));
+        assert!(ok, "{stderr}");
+        assert!(!mine.0.exists());
+    }
 
     #[test]
     fn a_worker_may_move_only_its_own_branch() {

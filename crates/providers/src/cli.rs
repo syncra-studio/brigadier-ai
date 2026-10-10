@@ -150,6 +150,36 @@ fn add_toolchain_bins(vars: &mut BTreeMap<OsString, OsString>) {
     }
 }
 
+/// Puts a Full-access session's CLI, and everything it starts, inside Brigadier's
+/// allow-all-but profile of [`SessionSpec::protection`](crate::SessionSpec::protection), with
+/// the CLI's own homes (`homes`: its configuration, history) and its own temp folder
+/// (`CLAUDE_CODE_TMPDIR`, kept in place) given back. Any other session, or an empty
+/// protection, runs as it is.
+pub fn protect(
+    platform: &dyn Platform,
+    process: SpawnSpec,
+    session: &crate::SessionSpec,
+    homes: &[PathBuf],
+) -> crate::Result<SpawnSpec> {
+    if session.access != crate::Access::Full || session.protection.is_empty() {
+        return Ok(process);
+    }
+    let mut protection = session.protection.clone();
+    protection.allow.extend(homes.iter().cloned());
+    if let Some((_, temp)) = process
+        .env
+        .iter()
+        .find(|(name, _)| name == OsStr::new("CLAUDE_CODE_TMPDIR"))
+    {
+        protection.allow.push(PathBuf::from(temp));
+        protection.keep.push(PathBuf::from(temp));
+    }
+    platform
+        .sandbox()
+        .protect(process, &protection)
+        .map_err(|err| crate::Error::Io(std::io::Error::other(err.to_string())))
+}
+
 /// Adds a session's extra environment to a spawn spec.
 pub fn apply_session_env(spec: &mut SpawnSpec, env: &[(String, String)], unset: &[String]) {
     spec.env

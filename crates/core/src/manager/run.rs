@@ -192,6 +192,16 @@ impl SessionManager {
             }
             _ => self.run_spec(&access, &workdir, command)?,
         };
+        // At Full access its commands keep to what its CLI keeps to (PLAN bug 6); a command
+        // the user approved to leave the sandbox runs as approved.
+        if !unsandboxed && launch.access == Access::Full {
+            spec = self
+                .runtime
+                .platform()
+                .sandbox()
+                .protect(spec, &launch.protection)
+                .map_err(|err| Error::Invalid(err.to_string()))?;
+        }
         brigadier_providers::cli::apply_session_env(
             &mut spec,
             &SessionManager::thread_env(&scratch, cli.provider),

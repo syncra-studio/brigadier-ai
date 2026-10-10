@@ -175,11 +175,15 @@ pub struct Protection {
     /// The process's own paths inside the denied ones, writable all the same (its branch's
     /// ref, its own folders), each with everything under it.
     pub allow: Vec<PathBuf>,
+    /// Folders the process writes in but may not remove, nor the folders in them up to three
+    /// deep: a CLI's own temp folder, whose layout the CLI relies on while it runs (`rm -rf`
+    /// of it empties files but leaves every folder in place).
+    pub keep: Vec<PathBuf>,
 }
 
 impl Protection {
     pub fn is_empty(&self) -> bool {
-        self.deny.is_empty() && self.deny_patterns.is_empty()
+        self.deny.is_empty() && self.deny_patterns.is_empty() && self.keep.is_empty()
     }
 }
 

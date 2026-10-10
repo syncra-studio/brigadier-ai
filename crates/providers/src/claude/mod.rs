@@ -1033,6 +1033,13 @@ impl Provider for Claude {
             }
             crate::cli::apply_session_env(&mut process_spec, &env, &spec.unset_env);
             process_spec.low_priority = spec.low_priority;
+            let homes: Vec<PathBuf> = self
+                .config_dir()
+                .into_iter()
+                .chain(self.main_config.clone())
+                .collect();
+            let process_spec =
+                crate::cli::protect(self.platform.as_ref(), process_spec, &spec, &homes)?;
             let process::Spawned { process, stdout } = process::spawn(
                 self.platform.clone(),
                 &process_spec,
@@ -2268,6 +2275,65 @@ mod tests {
                 git.join("config").display().to_string(),
             ])
         );
+    }
+
+    #[test]
+    fn only_a_full_access_cli_runs_inside_the_protection_with_its_own_temp_given_back() {
+        let cwd = Temp::new();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(cwd.path().join("data")),
+        })
+        .expect("platform");
+        let protection = brigadier_sandbox::Protection {
+            deny: vec![cwd.path().join("data")],
+            ..Default::default()
+        };
+        let mut process = brigadier_sandbox::SpawnSpec::new("/bin/true");
+        process.env.push((
+            "CLAUDE_CODE_TMPDIR".into(),
+            "/tmp/brigadier-0123456789ab".into(),
+        ));
+        let full = SessionSpec {
+            access: Access::Full,
+            protection: protection.clone(),
+            ..spec(cwd.path(), &["claude-sonnet-5"])
+        };
+        let home = cwd.path().join("home");
+        let wrapped = crate::cli::protect(
+            platform.as_ref(),
+            process.clone(),
+            &full,
+            std::slice::from_ref(&home),
+        )
+        .expect("wrapped");
+        if cfg!(target_os = "macos") {
+            assert_eq!(wrapped.program, Path::new("/usr/bin/sandbox-exec"));
+            let args: Vec<String> = wrapped
+                .args
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+            assert!(
+                args.iter()
+                    .any(|arg| arg.ends_with("/private/tmp/brigadier-0123456789ab"))
+            );
+            assert!(
+                args.iter().any(|arg| arg.contains("vnode-type DIRECTORY")),
+                "kept in place"
+            );
+            assert!(
+                args.iter()
+                    .any(|arg| arg.ends_with(&*home.display().to_string()))
+            );
+        }
+        let scoped = SessionSpec {
+            access: Access::ReadOnly,
+            protection,
+            ..spec(cwd.path(), &["claude-sonnet-5"])
+        };
+        let unwrapped =
+            crate::cli::protect(platform.as_ref(), process, &scoped, &[]).expect("as is");
+        assert_eq!(unwrapped.program, Path::new("/bin/true"));
     }
 
     #[test]

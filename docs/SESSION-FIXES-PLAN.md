@@ -888,15 +888,29 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
    - A ref update writes `<ref>.lock` and renames it over the ref. If a CLI's sandbox can't grant a path that
      doesn't exist yet, each task branch gets a folder of its own (`brigadier/<short>/task-N/work`) and that folder
      is granted. Phase 1 decides this by test.
-3. **At Full access.** Each CLI process (thread and workers, Claude and Codex), and Brigadier's `run`/`run_check`
-   commands, starts inside Brigadier's Seatbelt with an allow-all profile:
-   - `(allow default)`, then `(deny file-write* …)` for the protected set, then `(allow file-write* …)` for the
-     session's own exceptions. `macos.rs` already relies on "later rules win" (`:658`). A regex rule covers the
-     not-yet-existing `.lock`.
-   - Every child inherits it: `Bash`, Codex's built-in shell, scripts, `eval`.
-   - It doesn't nest: at Full access the CLIs' own sandboxes are off, so there is no inner `sandbox-exec`.
-   - Full access stays "like your own terminal" for everything except other sessions' work and Brigadier's own
-     bookkeeping. The permission's description says so in one clause.
+3. **At Full access: the thread only** (revised 2026-10-11, the Delegator's decision after a test). A Seatbelt
+   profile can't nest: inside one, `sandbox-exec` fails with `sandbox_apply: Operation not permitted` (exit 71).
+   Wrapping every Full-access process would break whatever applies its own sandbox: `swift build` (its manifest
+   sandbox), Bazel's darwin sandbox, and Brigadier's own Seatbelt and Codex-sandbox tests, so a Full-access worker
+   or `run_check` running `tools/full-checks.sh` on Brigadier would fail. So:
+   - **The thread's CLI** (Claude or Codex, so Codex's built-in shell too) and **the thread's own `run` commands**
+     start inside Brigadier's Seatbelt with an allow-all profile: `(allow default)`, then `(deny file-write* …)`
+     for the protected set, then `(allow file-write* …)` for its own exceptions (later rules win; a regex rule
+     covers a not-yet-existing `.lock`). Every child inherits it. A `run_unsandboxed` command the user approved runs
+     as approved.
+   - Its protected set at Full access: other branches and the base (step 1), Brigadier's data dir except its scratch
+     folder and workspace, every `/tmp/brigadier-<12 hex>` and `/tmp/brigadier-test-*` folder. The CLI's own homes
+     (configuration, history) and its own temp folder are given back by the adapter. Its own temp folder can't be
+     removed, nor the folders in it three deep (`rm -rf` empties files and leaves the layout the CLI relies on).
+   - **Full-access workers and `run_check` run unwrapped,** as today. The trade-off, accepted: a Full-access worker
+     can still delete another session's temp or test folders, other worktrees and Brigadier's data dir, and
+     can move or delete branches. Branches are covered by the ref check (step 5: protected branches restored,
+     `main` reported); folders are not. That's accepted because the incident's actor was the thread (its own
+     cleanup); workers have a narrow task in their own worktree, the worker prompt says to clean up only through
+     `clean_up` (4.7), and test folders and worktrees of a finished task are made again or were disposable.
+     Below Full access every worker stays inside its CLI's sandbox (step 2).
+   - The Full-access description in Settings says so in one clause: the lead can't change other sessions' branches
+     and folders or Brigadier's own data.
 4. **Why git can't get around it.** Git's files backend takes the loose `<ref>.lock` for every update or delete of a
    ref, packed or not. So `git branch -D`, `git update-ref -d`, `git push . :ref`, `git worktree remove` and `rm -rf`
    on a protected path fail with "Operation not permitted".
@@ -953,7 +967,7 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
     `main` moved by the user is never touched.
   - Serialization: a landing and a check started together never restore the landing's move (the recorded tip is
     updated under the same lock).
-- Sandbox tests (macOS, with a real `git` and `sandbox-exec`), under the Full-access profile and under each CLI's
+- Sandbox tests (macOS, with a real `git` and `sandbox-exec`), under the thread's Full-access profile and under each CLI's
   scoped sandbox settings:
   - `git branch -D brigadier/<other>/task-1` fails, with the ref loose and again with it packed; the ref survives.
   - `git update-ref refs/heads/main <sha>` fails; a commit on the session's own branch works and prints no git
@@ -1170,7 +1184,9 @@ THREAD-PARITY §5). The user's answer: the gentlest way, a full start-over only 
 - Bug 1's three checks pass; the live run shows 0 Claude workers killed by a landing.
 - Bug 8: `ulimit -n` ≥ 8192 in a worker's `run_check`; a second identical check with a redundant prefix is cached,
   and one with a non-redundant prefix is not; 0 SIGSTOP to a running check (signal log).
-- Bug 6: its sandbox tests pass at Full access and under both CLIs' scoped sandboxes; the live "clean up everything"
+- Bug 6: its sandbox tests pass under the thread's Full-access profile (the incident's commands: `git branch -D` of
+  another session's branch, `rm` of another session's folders and of the thread's own temp folder, all refused) and
+  under both CLIs' scoped sandboxes; Full-access workers are covered by the ref-check tests; the live "clean up everything"
   request at Full access, on Claude and on Codex, leaves a parallel session intact; a normal commit (with no
   `packed-refs.lock` error on Codex), a merge task and a push still work at every level; worker and thread commits
   survive the ref check, and a concurrent worker's commits survive a check made for the thread.
@@ -1186,7 +1202,8 @@ THREAD-PARITY §5). The user's answer: the gentlest way, a full start-over only 
 - Resuming a Claude session whose process was killed mid-tool-call: the transcript may end on an unanswered tool use.
   Check live on the installed CLI version. If `--resume` refuses it, start a fresh session of the same model with the
   handoff files, which still beats switching vendor.
-- **The Full-access profile** runs CLIs under a sandbox for the first time. Some tools behave differently under any
+- **The Full-access profile** runs the thread's CLI under a sandbox for the first time (workers stay unwrapped, Bug 6
+  step 3). Some tools behave differently under any
   Seatbelt profile. `(allow default)` keeps that small, and phase 1's done-when runs the full checks, a dev-app
   launch and a push at Full access. Anything that breaks is listed with its fix before the phase ends.
 - Narrowed `commit_roots` can break git commands that write shared state (`git stash`, `rerere`, `gc --auto`'s

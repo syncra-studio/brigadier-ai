@@ -1931,19 +1931,9 @@ impl SessionManager {
             auto_review,
             omit_ai_coauthors: self.core.settings().omit_ai_coauthors,
             output_hook,
-            // The thread moves its session branch only; the base is the engine's to move.
             protection: launch
                 .as_ref()
-                .and_then(|launch| {
-                    let workspace = launch.workspace.as_ref()?;
-                    Some(self.session_protection(
-                        &conv.id,
-                        &workspace.path,
-                        Some(&workspace.branch),
-                        &[],
-                        launch.access == Access::Full,
-                    ))
-                })
+                .map(|launch| launch.protection.clone())
                 .unwrap_or_default(),
         };
         let mut resumed = resume.is_some();

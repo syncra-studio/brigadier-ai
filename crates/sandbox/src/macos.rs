@@ -750,8 +750,32 @@ impl Seatbelt {
             }
             profile.push_str(")\n");
         }
+        if !protection.keep.is_empty() {
+            profile.push_str(
+                "(deny file-write-unlink (require-all (vnode-type DIRECTORY) (require-any",
+            );
+            for folder in &protection.keep {
+                let folder = regex_escape(&resolved_path(folder).display().to_string());
+                profile.push_str(&format!(
+                    " (regex #\"^{folder}(/[^/]+)?(/[^/]+)?(/[^/]+)?$\")"
+                ));
+            }
+            profile.push_str(")))\n");
+        }
         profile
     }
+}
+
+/// `text` matched literally inside a Seatbelt regex.
+fn regex_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if "\\.^$|?*+()[]{}\"".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 impl Sandbox for Seatbelt {
@@ -763,7 +787,14 @@ impl Sandbox for Seatbelt {
         if protection.is_empty() {
             return Ok(spec);
         }
-        if let Some(pattern) = protection.deny_patterns.iter().find(|p| p.contains('"')) {
+        let kept = protection
+            .keep
+            .iter()
+            .map(|path| path.display().to_string());
+        if let Some(pattern) = (protection.deny_patterns.iter().cloned())
+            .chain(kept)
+            .find(|pattern| pattern.contains('"'))
+        {
             return Err(Error::Io(io::Error::other(format!(
                 "a protected pattern holds a quote: {pattern}"
             ))));
@@ -869,10 +900,16 @@ mod tests {
                 "^{}/tmp-[0-9a-f]+(/|$)",
                 real.display().to_string().replace('.', "\\.")
             )],
-            // Its own branch's ref and lock, neither existing yet.
-            allow: vec![refs.join("aa/task-1"), refs.join("aa/task-1.lock")],
+            // Its own branch's ref and lock, neither existing yet, and its own temp folder.
+            allow: vec![
+                refs.join("aa/task-1"),
+                refs.join("aa/task-1.lock"),
+                dir.join("tmp-0a1b"),
+            ],
+            keep: vec![dir.join("tmp-0a1b")],
         };
-        std::fs::create_dir_all(dir.join("tmp-0a1b")).unwrap();
+        std::fs::create_dir_all(dir.join("tmp-0a1b/c-1/proj/session/deep")).unwrap();
+        std::fs::create_dir_all(dir.join("tmp-ffff")).unwrap();
         let sh = |script: &str| {
             let spec = SpawnSpec {
                 program: PathBuf::from("/bin/sh"),
@@ -894,9 +931,19 @@ mod tests {
         ));
         assert!(!sh("rm refs/heads/brigadier/bb/task-1"));
         assert!(!sh("echo b > refs/heads/brigadier/bb/task-2"));
+        assert!(!sh("rm -rf tmp-ffff"), "another temp folder");
+        // Its own temp folder: written and emptied, but its folders stay.
+        assert!(sh(
+            "echo t > tmp-0a1b/c-1/proj/session/out && rm tmp-0a1b/c-1/proj/session/out"
+        ));
+        assert!(
+            sh("rmdir tmp-0a1b/c-1/proj/session/deep"),
+            "four deep is its own"
+        );
         assert!(!sh("rm -rf tmp-0a1b"));
+        assert!(dir.join("tmp-0a1b/c-1/proj/session").is_dir());
         assert!(sh("mkdir mine && echo c > mine/f && rm -rf mine"));
-        assert!(refs.join("bb/task-1").exists() && dir.join("tmp-0a1b").exists());
+        assert!(refs.join("bb/task-1").exists() && dir.join("tmp-ffff").exists());
         assert!(!sh(&format!("rm -rf '{}'", refs.display())));
         assert!(refs.join("bb/task-1").exists());
     }

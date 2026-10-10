@@ -74,6 +74,8 @@ pub(crate) struct ThreadLaunch {
     pub permission: PermissionLevel,
     /// The access it runs with, which its approval requests are judged against.
     pub access: Access,
+    /// What it may never write ([`SessionManager::thread_protection`]).
+    pub protection: brigadier_sandbox::Protection,
 }
 
 impl ThreadLaunch {
@@ -221,11 +223,14 @@ impl SessionManager {
         };
         let permission = self.permission(id);
         let (access, auto_review) = self.thread_access(workspace.as_ref(), scratch, permission);
+        let protection =
+            self.thread_protection(id, workspace.as_ref(), scratch, access == Access::Full);
         Ok((
             ThreadLaunch {
                 workspace,
                 permission,
                 access,
+                protection,
             },
             auto_review,
         ))
