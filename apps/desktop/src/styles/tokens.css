@@ -540,6 +540,9 @@
      hover. The rule under a turn's work header. */
   --row-chevron: color-mix(in oklab, var(--foreground) 25%, transparent);
   --work-rule: oklch(1 0 0 / 8.2%);
+  /* Live words ("Thinking", a running step): dim, with a brighter band sweeping across. */
+  --live-text: color-mix(in oklab, var(--foreground) 38.5%, transparent);
+  --live-text-highlight: color-mix(in oklab, var(--foreground) 75%, transparent);
   /* The titlebar's icon buttons: the glyph at rest, and the wash while hovered, held down,
      switched on (aria-pressed) and switched on and hovered. All follow the foreground, so a
      light theme gets its own. */

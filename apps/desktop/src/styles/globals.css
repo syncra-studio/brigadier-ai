@@ -332,8 +332,8 @@
 /* Live text ("Thinking", a running step): muted text a highlight band sweeps across now and
    then, the first time 600ms after it shows, then every 4s. Still with less motion. */
 @utility shimmer {
-  --shimmer-base: color-mix(in oklab, var(--color-foreground) 55%, transparent);
-  --shimmer-highlight: color-mix(in oklab, var(--color-foreground) 75%, transparent);
+  --shimmer-base: var(--live-text);
+  --shimmer-highlight: var(--live-text-highlight);
   background-color: var(--shimmer-base);
   background-image: linear-gradient(
     to right,
