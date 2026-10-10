@@ -81,6 +81,8 @@ pub enum BrowserEvent {
     Load { url: String, loading: bool },
     /// The page's title changed.
     Title { title: String },
+    /// A small PNG for the page's tab icon, safe under the app's image CSP.
+    Favicon { url: String, data_url: String },
     /// A navigation or download the tab refused (not a web page, or a file to save); the tab
     /// offers the system browser instead.
     Blocked { url: String },

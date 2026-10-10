@@ -711,10 +711,18 @@ fn run<D: Desktop>(
             Vec::new(),
         ),
         Op::Launch(l) => {
-            let o = crate::launch::launch(engine, l, &job.token.with_deadline(REQUEST_DEADLINE))?;
-            let started_us = (system.process_start_us)(o.app.pid).ok_or_else(|| {
-                CuError::new(ErrorCode::NoSuchTarget, "the app quit as it opened")
-            })?;
+            let o = crate::launch::launch(
+                engine,
+                &req.worker,
+                l,
+                &job.token.with_deadline(REQUEST_DEADLINE),
+            )?;
+            let started_us = match &o.failed {
+                Some(f) => f.started_us,
+                None => (system.process_start_us)(o.app.pid).ok_or_else(|| {
+                    CuError::new(ErrorCode::NoSuchTarget, "the app quit as it opened")
+                })?,
+            };
             let mut text = format!(
                 "{} pid {} · {}",
                 o.app.name,
@@ -735,7 +743,7 @@ fn run<D: Desktop>(
                 let ids: Vec<String> = o.restored_windows.iter().map(|w| format!("w{w}")).collect();
                 let _ = write!(
                     text,
-                    " · it also reopened the user's earlier {} {}, not yours",
+                    " · {} {} also appeared but couldn't be confirmed as this launch's, not yours",
                     if ids.len() == 1 { "window" } else { "windows" },
                     ids.join(", ")
                 );
@@ -744,7 +752,12 @@ fn run<D: Desktop>(
                 text.push_str(" · it took the front, which was given back");
             }
             text.push('\n');
-            let mut r = reply(text);
+            // A launch that failed after it started the process still reports it, so the
+            // broker owns it and quits it.
+            let mut r = match o.failed {
+                Some(f) => Reply::error(req.id, f.error),
+                None => reply(text),
+            };
             r.launched = Some(Launched {
                 instance: Instance {
                     pid: o.app.pid,

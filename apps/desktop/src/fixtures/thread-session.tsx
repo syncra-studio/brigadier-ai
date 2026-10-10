@@ -19,6 +19,11 @@
  * on the user's merge answer as done, its work folded); `computer=1` (computer use's missing
  * permissions under "Waiting on you", the side panel pinned).
  */
+import type { Channel } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
+import { usePaneShortcuts } from "@/app/paneShortcuts";
+import { newSessionTab, sessionTabs, openReviewTab } from "@/state/sessionTabs";
+import type { BrowserEvent } from "@/ipc/generated";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
@@ -41,6 +46,7 @@ const isGrill = query.get("session") === "grill";
 const isPlan = query.get("session") === "plan";
 const recorded = isGrill ? grill : isPlan ? planned : t1;
 const id = recorded.conversationId;
+const tabFixture = query.has("tabs");
 const branch = isGrill
   ? "brigadier/9a2b00c9/session"
   : isPlan
@@ -67,7 +73,7 @@ for (const envelope of events) {
 const created = events[0]?.atMs ?? 0;
 const conversation = {
   id,
-  kind: "session",
+  kind: query.get("plain") === "1" ? "chat" : "session",
   projectId: null,
   title: isGrill
     ? "For our brigadier app, instead of having the toolbar icons"
@@ -77,7 +83,7 @@ const conversation = {
   pinnedAtMs: null,
   createdAtMs: created,
   updatedAtMs: events.at(-1)?.atMs ?? created,
-  lifecycle: "active",
+  lifecycle: query.get("archived") === "1" ? "archived" : "active",
   forkedFrom: null,
   sideOf: null,
   fallback: null,
@@ -103,16 +109,38 @@ if (computer) {
 }
 useBoard.setState({ board: { ...board, loaded: true, head: messages.at(-1)?.id ?? null } });
 useApp.setState({
+  ...(tabFixture ? { info: { platform: query.get("platform") ?? "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 } } : {}),
+  selection: { type: "conversation", id },
   conversations: { [id]: conversation },
   threads: { [id]: { ...emptyThread, items: messages } },
   pinnedSummary: computer || query.get("summary") === "1",
   connection: { status: "connected", daemon: null, reason: null },
 });
 
+const fixtureCalls: { command: string; payload: unknown }[] = [];
+const browserChannels = new Map<string, Channel<BrowserEvent>>();
+function finishBrowserLoad(tabId: string, url: string, favicon?: string) {
+  const channel = browserChannels.get(tabId);
+  channel?.onmessage({ type: "load", url, loading: false });
+  channel?.onmessage({ type: "title", title: "Example Domain" });
+  if (favicon) channel?.onmessage({ type: "favicon", url, dataUrl: favicon });
+}
+function menuShortcut(name: string) { return emit("pane-shortcut", name); }
+
 // In the app's own window (a dev build pointed at this page) its IPC is real and can't be
 // replaced: the few requests the page makes go to that build's daemon instead.
 if (!("__TAURI_INTERNALS__" in window)) {
   mockIPC((command, payload) => {
+    if (tabFixture && command !== "browser_place") fixtureCalls.push({ command, payload });
+    if (command === "browser_open") {
+      const { id: tabId, events: channel } = payload as { id: string; events: Channel<BrowserEvent> };
+      browserChannels.set(tabId, channel);
+      return null;
+    }
+    if (command === "browser_close") {
+      browserChannels.delete((payload as { id: string }).id);
+      return null;
+    }
     if (command !== "ipc_request") return null;
     const req = (payload as { request: Request }).request;
     switch (req.method) {
@@ -121,7 +149,13 @@ if (!("__TAURI_INTERNALS__" in window)) {
       case "getRunDiff":
         return { method: req.method, diff: null };
       case "listFiles":
-        return { method: req.method, files: [], truncated: false };
+        return { method: req.method, files: tabFixture ? ["README.md", "src/app.tsx", "src/styles.css"] : [], truncated: false };
+      case "readFile":
+        return { method: req.method, file: { path: req.path, text: "# Fixture file\n", size: 15, truncated: false } };
+      case "openTerminal":
+        return { method: req.method, terminal: { id: req.sessionId ?? "bottom", cwd: "/workspace", shell: "/bin/zsh", scrollback: "" } };
+      case "listMessages":
+        return { method: req.method, page: { items: [], hasMore: false } };
       case "getComputerAccess":
       case "allowComputerAccess":
         return { method: req.method, access: { available: true, accessibility: false, screenRecording: true, problem: null } };
@@ -131,11 +165,22 @@ if (!("__TAURI_INTERNALS__" in window)) {
       default:
         return { method: req.method };
     }
-  });
+  }, { shouldMockEvents: true });
+}
+
+if (tabFixture) Object.assign(window, { sessionTabFixture: { id, fixtureCalls, finishBrowserLoad, menuShortcut } });
+
+if (tabFixture && !sessionTabs(id).tabs.length && conversation.kind === "session") {
+  const count = Number(query.get("tabs"));
+  for (let index = 0; index < count; index++) {
+    if (index === 0) openReviewTab(id, { type: "all" });
+    else newSessionTab(id, index === count - 1 ? "newTab" : index % 2 ? "browser" : "document");
+  }
 }
 
 /** The app's window layout (App.tsx) around the session, without its dialogs. */
 function SessionPage() {
+  usePaneShortcuts();
   return (
     <TooltipProvider>
       <div className="bg-chrome flex h-screen flex-col">

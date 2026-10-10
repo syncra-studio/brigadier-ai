@@ -273,23 +273,9 @@ export function setTerminalOpen(place: string, open: boolean): void {
   update(place, (current) => ({ ...current, open }));
 }
 
-/** Set while the open view's full view hides its terminal: calling it leaves full view. */
-let terminalCover: (() => void) | null = null;
-
-/** The open view says its full view hides the terminal (`cover` leaves it), or no longer. */
-export function setTerminalCover(cover: (() => void) | null): void {
-  terminalCover = cover;
-}
-
-/** Shows or hides the place's pane; hidden under full view, it is shown by leaving full view. */
+/** Shows or hides the bottom terminal. */
 export function toggleTerminal(place = currentPlace()): void {
   if (place === currentPlace() && !terminalWorksHere(useApp.getState())) return;
-  const cover = terminalCover;
-  if (cover && place === currentPlace()) {
-    cover();
-    setTerminalOpen(place, true);
-    return;
-  }
   setTerminalOpen(place, !terminalPlace(place).open);
 }
 

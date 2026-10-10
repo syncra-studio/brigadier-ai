@@ -10,7 +10,6 @@ export function useShortcuts() {
     forward: mac ? "⌘]" : "Ctrl+]",
     search: mac ? "⌘K" : "Ctrl+K",
     settings: mac ? "⌘," : "Ctrl+,",
-    sideChat: mac ? "⌥⌘S" : "Ctrl+Alt+S",
     terminal: mac ? "⌘J" : "Ctrl+J",
     inspector: mac ? "⌥⌘I" : "Ctrl+Alt+I",
   };

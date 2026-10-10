@@ -9,7 +9,7 @@ import type { Board } from "@/state/board";
  */
 export type PlanDocRef = { type: "plan" | "outline"; id: string };
 
-/** The plan each conversation's Plan tab shows. */
+/** The plan each session's Plan tab (in its right sidebar) shows, kept only while the app runs. */
 export const usePlanTab = create<{ shown: Record<string, PlanDocRef> }>(() => ({ shown: {} }));
 
 export function showPlanDoc(conversationId: string, ref: PlanDocRef): void {

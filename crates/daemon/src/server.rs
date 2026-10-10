@@ -359,14 +359,17 @@ impl Session {
                 conversation_id,
                 project_id,
                 session_id,
+                cwd,
+                fresh,
                 cols,
                 rows,
             } => self.open_terminal(
                 conversation_id.as_ref(),
                 project_id.as_ref(),
                 session_id.as_deref(),
-                cols,
-                rows,
+                cwd,
+                fresh.unwrap_or(false),
+                (cols, rows),
             ),
             Request::OpenSetupTerminal {
                 provider,
@@ -576,9 +579,11 @@ impl Session {
         conversation_id: Option<&ConversationId>,
         project_id: Option<&ProjectId>,
         session_id: Option<&str>,
-        cols: u16,
-        rows: u16,
+        restored_cwd: Option<String>,
+        fresh: bool,
+        size: (u16, u16),
     ) -> Result<Response, IpcError> {
+        let (cols, rows) = size;
         let (owner, cwd) = match conversation_id {
             Some(id) => (id.0.clone(), self.conversation_terminal_dir(id)?),
             None => (
@@ -586,9 +591,22 @@ impl Session {
                 self.project_terminal_dir(project_id)?,
             ),
         };
+        // A remembered shell folder may have been removed since the tab was last open.
+        let cwd = restored_cwd
+            .filter(|path| {
+                let path = std::path::Path::new(path);
+                path.is_absolute() && path.is_dir()
+            })
+            .unwrap_or(cwd);
         // Subscribed first, so no output between the scrollback and the feed is lost.
         if self.terminal_feed.is_none() {
             self.terminal_feed = Some(self.daemon.terminals.subscribe());
+        }
+        if fresh
+            && let Some(session) = session_id
+            && let Some(id) = self.daemon.terminals.running(&owner, session)
+        {
+            self.daemon.terminals.close(&id);
         }
         let terminal = self
             .daemon
@@ -1246,8 +1264,15 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 "a clone is answered on the connection that asked for it".into(),
             )));
         }
-        Request::OpenSideChat { conversation_id } => Response::OpenSideChat {
-            conversation: Box::new(sessions.open_side_chat(&conversation_id).await?),
+        Request::OpenSideChat {
+            conversation_id,
+            side_chat_id,
+        } => Response::OpenSideChat {
+            conversation: Box::new(
+                sessions
+                    .open_side_chat(&conversation_id, side_chat_id)
+                    .await?,
+            ),
         },
         Request::WriteTerminal { terminal_id, data } => {
             daemon.terminals.write(&terminal_id, &data)?;

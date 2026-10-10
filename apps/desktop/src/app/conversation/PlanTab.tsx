@@ -1,7 +1,7 @@
 import { CopyPlan, PlanText, usePlanDoc } from "@/app/conversation/cards/PlanDocument";
 import { usePlanTab } from "@/state/planDoc";
 
-/** The side panel's Plan tab: the whole plan the user opened from its card, to read and copy. */
+/** The right sidebar's Plan tab: the whole plan the user opened from its card, to read and copy. */
 export function PlanTab({ conversationId }: { conversationId: string }) {
   const ref = usePlanTab((s) => s.shown[conversationId] ?? null);
   const doc = usePlanDoc(ref);

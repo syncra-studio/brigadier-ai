@@ -1,4 +1,3 @@
-import { notePaneClose } from "@/state/closedPanes";
 import { create } from "zustand";
 
 import { browserClose, browserNavigate, browserOpen } from "@/ipc/client";
@@ -13,6 +12,8 @@ export type BrowserPage = {
   url: string;
   title: string;
   loading: boolean;
+  ready?: boolean;
+  favicon?: string | null;
   /** The last navigation or download the tab refused, offered to the system browser. */
   blocked: string | null;
 };
@@ -33,6 +34,25 @@ function update(id: string, patch: Partial<BrowserPage>): void {
   });
 }
 
+/**
+ * Whether a favicon sent from `url` belongs to the tab's `page`: the same document, also after a
+ * hash change, or a same-origin `pushState` once the page has loaded. While a new page loads, the
+ * previous one's late favicons are refused; another origin's always are.
+ */
+export function faviconFits(page: Pick<BrowserPage, "url" | "loading"> | undefined, url: string): boolean {
+  if (!page) return false;
+  if (url === page.url) return true;
+  try {
+    const sent = new URL(url);
+    const shown = new URL(page.url);
+    if (sent.origin !== shown.origin) return false;
+    sent.hash = shown.hash = "";
+    return sent.href === shown.href || !page.loading;
+  } catch {
+    return false;
+  }
+}
+
 /** Opens `url` in the conversation's Browser tab, over `bounds`. */
 export async function openPage(
   id: string,
@@ -43,7 +63,7 @@ export async function openPage(
   useBrowsers.setState(({ pages }) => ({
     pages: {
       ...pages,
-      [id]: { url, title: page?.title ?? "", loading: true, blocked: null },
+      [id]: { url, title: page?.title ?? "", loading: true, blocked: null, ready: made.has(id) },
     },
   }));
   try {
@@ -53,11 +73,17 @@ export async function openPage(
     }
     await browserOpen(id, url, bounds, (event) => {
       if (event.type === "load")
-        update(id, { url: event.url, loading: event.loading });
+        update(id, { url: event.url, loading: event.loading,
+          ...(event.url !== useBrowsers.getState().pages[id]?.url ? { favicon: null } : {}) });
       else if (event.type === "title") update(id, { title: event.title });
+      else if (event.type === "favicon") {
+        if (faviconFits(useBrowsers.getState().pages[id], event.url)) update(id, { favicon: event.dataUrl });
+      }
       else update(id, { blocked: event.url, loading: false });
     });
+    if (!useBrowsers.getState().pages[id]) { await browserClose(id); return; }
     made.add(id);
+    update(id, { ready: true });
   } catch (error) {
     update(id, { loading: false });
     throw error;
@@ -79,84 +105,4 @@ export function closePage(id: string): void {
   browserClose(id).catch((error: unknown) =>
     console.error("closing the browser failed", error),
   );
-}
-
-export type BrowserTabs = {
-  ids: string[];
-  active: string;
-  restoredUrls?: Record<string, string>;
-};
-const closedTabs = new Map<string, { url: string | null }[]>();
-export const useBrowserTabs = create<{
-  conversations: Record<string, BrowserTabs>;
-}>(() => ({ conversations: {} }));
-
-export function newBrowserTab(conversationId: string, url?: string): string {
-  const id = `page-${crypto.randomUUID()}`;
-  useBrowserTabs.setState(({ conversations }) => ({
-    conversations: {
-      ...conversations,
-      [conversationId]: {
-        ids: [...(conversations[conversationId]?.ids ?? []), id],
-        active: id,
-        restoredUrls: { ...conversations[conversationId]?.restoredUrls, ...(url ? { [id]: url } : {}) },
-      },
-    },
-  }));
-  return id;
-}
-export function selectBrowserTab(conversationId: string, id: string): void {
-  useBrowserTabs.setState(({ conversations }) => {
-    const tabs = conversations[conversationId];
-    return tabs
-      ? {
-          conversations: {
-            ...conversations,
-            [conversationId]: { ...tabs, active: id },
-          },
-        }
-      : { conversations };
-  });
-}
-export function closeBrowserTab(conversationId: string, id: string): void {
-  const url = useBrowsers.getState().pages[id]?.url ?? null;
-  closedTabs.set(conversationId, [
-    ...(closedTabs.get(conversationId) ?? []),
-    { url },
-  ]);
-  notePaneClose(conversationId, "browser");
-  closePage(id);
-  useBrowserTabs.setState(({ conversations }) => {
-    const tabs = conversations[conversationId];
-    if (!tabs) return { conversations };
-    const index = tabs.ids.indexOf(id);
-    const ids = tabs.ids.filter((tab) => tab !== id);
-    const active =
-      tabs.active === id
-        ? (ids[Math.min(index, ids.length - 1)] ?? "")
-        : tabs.active;
-    return {
-      conversations: { ...conversations, [conversationId]: { ids, active } },
-    };
-  });
-}
-
-export function reopenBrowserTab(conversationId: string): boolean {
-  const saved = closedTabs.get(conversationId)?.pop();
-  if (!saved) return false;
-  const id = newBrowserTab(conversationId);
-  if (saved.url)
-    useBrowserTabs.setState(({ conversations }) => ({
-      conversations: {
-        ...conversations,
-        [conversationId]: {
-          ...conversations[conversationId]!,
-          restoredUrls: {
-            ...conversations[conversationId]?.restoredUrls,
-            [id]: saved.url!,
-          },
-        },
-      },
-    }));
-  return true;
 }

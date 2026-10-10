@@ -2,6 +2,7 @@
 //! the engine, the renderer and the tool surface don't change between them.
 
 use std::hash::Hash;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -352,5 +353,17 @@ pub trait Desktop {
     fn open_new(&mut self, path: &str, args: &[String]) -> CuResult<()> {
         let _ = (path, args);
         err(ErrorCode::UnsupportedCapability, "launching")
+    }
+    /// Reads, from any thread, a process's start time (µs since the epoch): `None` once it has
+    /// gone, so a pid another process took later never passes for it. Always `None` when the
+    /// backend can't tell.
+    fn start_source(&self) -> Arc<dyn Fn(i32) -> Option<u64> + Send + Sync> {
+        Arc::new(|_| None)
+    }
+    /// The browser process running on this scratch profile, when one does: how a launch finds
+    /// the browser it started when the running apps can't tell it.
+    fn browser_on(&mut self, profile: &Path) -> Option<i32> {
+        let _ = profile;
+        None
     }
 }

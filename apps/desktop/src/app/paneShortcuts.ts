@@ -6,13 +6,21 @@ import { useApp } from "@/state/store";
 import { HOME_PLACE, toggleTerminal, undoTabClose } from "@/state/terminalPlaces";
 
 /** The Panes and View menus' items (macOS), as the key presses the views listen for. */
-const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?: boolean }> = {
+export const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?: boolean; alt?: boolean }> = {
   terminal: { code: "KeyJ" },
   "terminal-alternate": { code: "Backquote", control: true },
   new: { code: "KeyT" },
   reopen: { code: "KeyT", shift: true },
   address: { code: "KeyL" },
-  full: { code: "KeyF", shift: true },
+  "new-browser": { code: "KeyB", shift: true },
+  "new-side-chat": { code: "KeyS", alt: true },
+  "new-file": { code: "KeyN", alt: true },
+  save: { code: "KeyS" },
+  files: { code: "KeyP" },
+  review: { code: "KeyG", control: true, shift: true },
+  "cycle-next": { code: "Tab", control: true },
+  "cycle-previous": { code: "Tab", control: true, shift: true },
+  ...Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`tab-${index + 1}`, { code: `Digit${index + 1}` }])),
   close: { code: "KeyW" },
   previous: { code: "BracketLeft", shift: true },
   next: { code: "BracketRight", shift: true },
@@ -20,10 +28,12 @@ const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?: boole
   back: { code: "BracketLeft" },
   forward: { code: "BracketRight" },
   sidebar: { code: "KeyB" },
+  "right-sidebar": { code: "KeyB", alt: true },
 };
 
 /**
- * The panes' shortcuts, wherever the window is: ⌘J and ⌃` show or hide the bottom terminal,
+ * ⌘J shows or hides the bottom terminal. Live sessions capture ⌃` to create a main terminal tab;
+ * outside them (and in archived sessions) it retains the bottom-terminal toggle,
  * and in Settings ⌘⇧T brings back Home's last closed terminal tab (a view does that for its
  * own). On macOS the Panes menu owns the keys; its items arrive here and go on as
  * key presses, to the browser while it owns the keyboard.
@@ -37,7 +47,7 @@ export function usePaneShortcuts(): void {
     void listen<string>("pane-shortcut", ({ payload }) => {
       const key = MENU_KEYS[payload];
       if (!key) return;
-      const browser = document.querySelector('[data-pane="browser"]');
+      const browser = document.querySelector('[data-pane="browser"][data-active="true"]');
       const target = (!document.hasFocus() && browser) || document.activeElement || window;
       target.dispatchEvent(
         new KeyboardEvent("keydown", {
@@ -47,6 +57,7 @@ export function usePaneShortcuts(): void {
           metaKey: !key.control,
           ctrlKey: key.control ?? false,
           shiftKey: key.shift ?? false,
+          altKey: key.alt ?? false,
         }),
       );
     })

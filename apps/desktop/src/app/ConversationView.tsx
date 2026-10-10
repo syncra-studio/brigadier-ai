@@ -23,7 +23,8 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { PaneComposer, FloatingComposerSlot } from "@/app/conversation/PaneComposer";
+import { RightSidebar, RightSidebarContext, RightSidebarToggle } from "@/app/conversation/RightSidebar";
+import { ConversationComposer } from "@/app/conversation/Composer";
 import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { ChatActions, RenameDialog } from "@/app/conversation/ChatActions";
@@ -33,10 +34,7 @@ import { WorkerDiffs } from "@/app/conversation/WorkerSummary";
 import { latestRequest, reworkableRequest } from "@/app/conversation/rework";
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
 import {
-  SidePanel,
-  PanelButtons,
-  PanelButtonsRoom,
-  SidePanelContext,
+  TerminalButton,
   useSidePanel,
 } from "@/app/conversation/SidePanel";
 import { queuedImageRefs, reconcileImages } from "@/lib/inlineImages";
@@ -107,7 +105,7 @@ import {
 import { toast } from "@/state/toasts";
 import { useBoard } from "@/state/board";
 import { CHAT_TAB, openFileTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
-import { placeOf, setTerminalCover } from "@/state/terminalPlaces";
+import { placeOf } from "@/state/terminalPlaces";
 import {
   emptyThread,
   type PendingMessage,
@@ -536,13 +534,8 @@ export function ConversationView({
   );
   const { panel: sidePanel, agents } = useSidePanel(
     conversationId,
-    embedded || conversation?.sideOf
-      ? "sideChat"
-      : session
-        ? "session"
-        : conversation
-          ? "chat"
-          : null,
+    !embedded && conversation?.kind === "session",
+    embedded,
   );
   const [renaming, setRenaming] = useState(false);
 
@@ -735,14 +728,6 @@ export function ConversationView({
     [conversation, resolved, targets, mentions, running, onResume, pulled, attachments],
   );
 
-  const fullscreen = sidePanel.visible && sidePanel.state.fullscreen;
-  // Full view hides the thread column and its terminal; Terminal and ⌘J show it again.
-  const { setFullscreen } = sidePanel;
-  useEffect(() => {
-    if (embedded) return;
-    setTerminalCover(fullscreen ? () => setFullscreen(false) : null);
-    return () => setTerminalCover(null);
-  }, [embedded, fullscreen, setFullscreen]);
   // The pinned summary, in a session's own view.
   const summary = setup?.type === "session" && !embedded;
   // A session's own view has tabs; another tab in front covers the conversation (kept as it was).
@@ -769,20 +754,20 @@ export function ConversationView({
     <ViewContext.Provider value={{ selection, conversation, embedded }}>
       <EarlierTurnsContext.Provider value={earlier}>
       <ComposerTargetContext.Provider value={target}>
-        <SidePanelContext.Provider value={sidePanel}>
+        <RightSidebarContext.Provider value={sidePanel}>
           <AgentsPanelContext.Provider value={agents}>
             <StatusCardContext.Provider value={statusCard}>
               <AssistantRuntimeProvider runtime={runtime}>
                 <AttachmentReaderContext.Provider value={reader}>
                   <OpenFileContext.Provider value={openFileAt}>
+                    <div className="flex h-full min-h-0 min-w-0">
                     <div
-                      ref={embedded ? undefined : sidePanel.workspace}
                       data-embedded-view={embedded || undefined}
                       data-slot="pane-workspace"
-                      className="relative flex h-full min-h-0 flex-col"
+                      className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col"
                     >
                       <div className="relative flex min-h-0 flex-1">
-                      <div className={cn("flex h-full min-w-0 flex-1 flex-col", fullscreen && "hidden")}>
+                      <div className="flex h-full min-w-0 flex-1 flex-col">
                         {/* The summary's popover, where it floats: opened in the top bar, under it. */}
                         <SummaryFloat>
                           {tabbed && conversation ? (
@@ -796,7 +781,8 @@ export function ConversationView({
                                   <PinnedSummaryToggle />
                                 </span>
                               )}
-                              <PanelButtonsRoom besidePanel />
+                              <TerminalButton />
+                              <RightSidebarToggle />
                             </SessionTabBar>
                           ) : (
                             !embedded && (
@@ -805,7 +791,7 @@ export function ConversationView({
                                   <ChatActions conversation={conversation} onRename={() => setRenaming(true)} />
                                 )}
                                 {conversation && summary && <PinnedSummaryToggle />}
-                                <PanelButtonsRoom besidePanel />
+                                <TerminalButton />
                               </TopBar>
                             )
                           )}
@@ -847,10 +833,9 @@ export function ConversationView({
                         </SummaryFloat>
                         {!embedded && <TerminalPane place={placeOf(selection)} />}
                       </div>
-                      {!embedded && <SidePanel conversationId={conversationId} />}
-                      {!embedded && <PanelButtons />}
-                      {!embedded && <FloatingComposerSlot />}
                       </div>
+                    </div>
+                    {tabbed && conversationId && <RightSidebar conversationId={conversationId} />}
                     </div>
                   </OpenFileContext.Provider>
                   {conversation && (
@@ -864,7 +849,7 @@ export function ConversationView({
               </AssistantRuntimeProvider>
             </StatusCardContext.Provider>
           </AgentsPanelContext.Provider>
-        </SidePanelContext.Provider>
+        </RightSidebarContext.Provider>
       </ComposerTargetContext.Provider>
       </EarlierTurnsContext.Provider>
     </ViewContext.Provider>
@@ -1030,6 +1015,6 @@ const THREAD_COMPONENTS: ThreadComponents = {
   UserAttachments,
   AboveComposer,
   Capsule: ComposerCapsule,
-  Composer: PaneComposer,
+  Composer: ConversationComposer,
   UserText: UserMessageText,
 };

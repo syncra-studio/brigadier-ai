@@ -3,4 +3,4 @@
 /**
  * What the side panel's Browser tab hears about its page, over the channel it opened it with.
  */
-export type BrowserEvent = { "type": "load", url: string, loading: boolean, } | { "type": "title", title: string, } | { "type": "blocked", url: string, };
+export type BrowserEvent = { "type": "load", url: string, loading: boolean, } | { "type": "title", title: string, } | { "type": "favicon", url: string, dataUrl: string, } | { "type": "blocked", url: string, };

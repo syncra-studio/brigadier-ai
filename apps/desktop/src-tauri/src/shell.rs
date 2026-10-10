@@ -196,6 +196,7 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
             view.append(&tauri::menu::PredefinedMenuItem::separator(app)?)?;
             for (id, title, accelerator) in [
                 ("sidebar", "Toggle Sidebar", "CmdOrCtrl+B"),
+                ("right-sidebar", "Toggle Right Sidebar", "Alt+CmdOrCtrl+B"),
                 ("back", "Back", "CmdOrCtrl+["),
                 ("forward", "Forward", "CmdOrCtrl+]"),
             ] {
@@ -210,15 +211,22 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
     let panes = tauri::menu::Submenu::new(app, "Panes", true)?;
     for (id, title, accelerator) in [
         ("terminal", "Toggle bottom terminal", "CmdOrCtrl+J"),
-        ("terminal-alternate", "Open terminal", "Ctrl+`"),
-        ("new", "New browser page or terminal", "CmdOrCtrl+T"),
+        ("terminal-alternate", "Terminal", "Ctrl+`"),
+        ("new", "New tab", "CmdOrCtrl+T"),
+        ("new-browser", "New browser tab", "CmdOrCtrl+Shift+B"),
+        ("new-side-chat", "New side chat", "Alt+CmdOrCtrl+S"),
+        ("new-file", "New file", "Alt+CmdOrCtrl+N"),
+        ("save", "Save file", "CmdOrCtrl+S"),
+        ("files", "Find file", "CmdOrCtrl+P"),
+        ("review", "Review", "Ctrl+Shift+G"),
+        ("cycle-next", "Next session tab", "Ctrl+Tab"),
+        ("cycle-previous", "Previous session tab", "Ctrl+Shift+Tab"),
         (
             "reopen",
             "Reopen closed tab, page or terminal",
             "CmdOrCtrl+Shift+T",
         ),
         ("address", "Focus browser address", "CmdOrCtrl+L"),
-        ("full", "Toggle full view", "CmdOrCtrl+Shift+F"),
         (
             "previous",
             "Previous tab, page or terminal",
@@ -230,6 +238,20 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
             &MenuItemBuilder::with_id(format!("pane:{id}"), title)
                 .accelerator(accelerator)
                 .build(app)?,
+        )?;
+    }
+    for number in 1..=9 {
+        panes.append(
+            &MenuItemBuilder::with_id(
+                format!("pane:tab-{number}"),
+                if number == 1 {
+                    "Show chat".to_owned()
+                } else {
+                    format!("Show tab {number}")
+                },
+            )
+            .accelerator(format!("CmdOrCtrl+{number}"))
+            .build(app)?,
         )?;
     }
     menu.append(&panes)?;

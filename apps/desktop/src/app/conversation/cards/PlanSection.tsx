@@ -3,7 +3,7 @@ import { memo, useContext, useId, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { planStepStatus, planProgress, stepStates } from "@/app/conversation/planProgress";
-import { SidePanelContext } from "@/app/conversation/SidePanel";
+import { RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { taskState } from "@/app/conversation/rowWords";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
 import { useAction } from "@/app/conversation/useAction";
@@ -133,7 +133,7 @@ export const PlanSection = memo(function PlanSection({
     return setup.permission === "askForApproval" || setup.planMode ? "user" : "brigadier";
   });
   const request = useBoard((s) => (plan?.requestId ? s.board?.requests[plan.requestId]?.state.type : undefined));
-  const { openTab } = useContext(SidePanelContext);
+  const rightSidebar = useContext(RightSidebarContext);
   if (!plan) return null;
 
   const states = stepStates(
@@ -176,13 +176,13 @@ export const PlanSection = memo(function PlanSection({
           </p>
         )}
         {plan.body ? (
-          // A plan written as a document opens it in the side panel's Plan tab.
+          // A plan written as a document opens it in the right sidebar's Plan tab.
           <button
             type="button"
             title={plan.title}
             onClick={() => {
               showPlanDoc(plan.conversationId, { type: "plan", id: plan.id });
-              openTab("plan");
+              rightSidebar?.openTab("plan");
             }}
             className={cn(summaryRowInteractive, "relative isolate flex min-w-0 items-start gap-2 py-1 text-start text-label")}
           >

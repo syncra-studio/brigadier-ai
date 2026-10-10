@@ -62,7 +62,9 @@ import {
   upsertRawSession,
   useApp,
 } from "@/state/store";
+import { pruneSideChats } from "@/state/sessionTabResources";
 import { forgetDraft } from "@/state/drafts";
+import { forgetRightSidebarTabs, pruneRightSidebarTabs } from "@/state/rightSidebar";
 import { dismissToast, toast, useToasts } from "@/state/toasts";
 
 /** Messages shown when a conversation opens; older ones load on demand. */
@@ -80,6 +82,8 @@ function updateThread(id: string, update: (thread: Thread) => Thread): void {
 export async function loadCatalog(): Promise<void> {
   const { catalog } = await request({ method: "getCatalog" });
   replaceCatalog(catalog.projects, catalog.conversations, catalog.settings);
+  pruneRightSidebarTabs(catalog.conversations.map((conversation) => conversation.id));
+  pruneSideChats(catalog.conversations);
 }
 
 /**
@@ -1205,6 +1209,7 @@ export async function deleteAll(ids: string[]): Promise<void> {
   const deleted = before.filter((c) => !failed.some((entry) => entry.conversation.id === c.id));
   // Their unsent drafts go only once they are surely going.
   for (const { id } of deleted) forgetDraft(id);
+  forgetRightSidebarTabs(deleted.map((conversation) => conversation.id));
 }
 
 /** The branches deleting `ids` takes whose work never landed (or may not have). */
@@ -1231,6 +1236,7 @@ export async function removeProject(
     .map((conversation) => conversation.id);
   const { report } = await request({ method: "removeProject", id, deleteBranches, keepBrain });
   for (const conversation of gone) forgetDraft(conversation);
+  forgetRightSidebarTabs(gone);
   const { selection } = useApp.getState();
   if (
     (selection.type === "conversation" && gone.includes(selection.id)) ||

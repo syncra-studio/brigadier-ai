@@ -1,29 +1,8 @@
 /** Dragged dimensions belong to the app, so every chat uses the same pane sizes. */
 export const PANE_SIZE_KEY = "brigadier.paneSizes";
-export type PaneKind =
-  | "running"
-  | "workers"
-  | "review"
-  | "terminal"
-  | "browser"
-  | "browserComposer"
-  | "files"
-  | "source"
-  | "sideChat"
-  | "plan";
+export type PaneKind = "review" | "terminal";
 export type PaneSizes = Partial<Record<PaneKind, number>>;
-const PANES: readonly string[] = [
-  "running",
-  "workers",
-  "review",
-  "terminal",
-  "browser",
-  "browserComposer",
-  "files",
-  "source",
-  "sideChat",
-  "plan",
-];
+const PANES: readonly string[] = ["review", "terminal"];
 
 export function savedPaneSizes(): PaneSizes {
   try {
@@ -59,14 +38,4 @@ export function changedPaneSize(
     /* Keep in memory. */
   }
   return sizes;
-}
-
-/**
- * `current` with the terminal's saved height: the bottom pane saves that one itself, so a
- * view holding an older copy must not write it back.
- */
-export function withSavedTerminal(current: PaneSizes): PaneSizes {
-  const { terminal: _held, ...rest } = current;
-  const { terminal } = savedPaneSizes();
-  return terminal === undefined ? rest : { ...rest, terminal };
 }

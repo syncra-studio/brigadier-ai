@@ -1,17 +1,17 @@
-// oxlint-disable react/refs -- Like the panes fixture, this uses the production panel API, whose workspace member is a ref callback.
 /** Production Running panel with four preview states and synthetic IPC; no daemon. */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { PreviewChip } from "@/app/conversation/PreviewChip";
-import { SidePanel, SidePanelContext, useSidePanel } from "@/app/conversation/SidePanel";
+import { RightSidebar, RightSidebarContext } from "@/app/conversation/RightSidebar";
+import { useSidePanel } from "@/app/conversation/SidePanel";
 import { previewActive } from "@/app/conversation/previewStatus";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Preview, Request } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
-import { useBrowserTabs } from "@/state/browsers";
+import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 const id = "running-fixture";
@@ -58,7 +58,7 @@ const press = (label: string, within: ParentNode = document) => [...within.query
 const labels = (name: string) => [...(row(name)?.querySelectorAll("button") ?? [])].map((button) => button.textContent?.trim());
 
 function Fixture() {
-  const { panel } = useSidePanel(id, "session");
+  const { panel } = useSidePanel(id, true);
   const [result, setResult] = useState("");
   const { openTab } = panel;
   useEffect(() => { openTab("running"); }, [openTab]);
@@ -85,8 +85,9 @@ function Fixture() {
         seen.error = row("Web app")?.querySelector('[role="alert"]')?.textContent;
         failPause = false;
         press("http://localhost:5173/", row("Web app")!);
-        const tabs = useBrowserTabs.getState().conversations[id]!;
-        seen.browser = tabs.restoredUrls?.[tabs.active];
+        const tabs = sessionTabs(id);
+        const browser = tabs.tabs.find((tab) => tab.id === tabs.active);
+        seen.browser = browser?.kind === "browser" ? browser.url : undefined;
         document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]')?.click();
       });
       at(3000, () => { press("Clear finished"); });
@@ -102,8 +103,8 @@ function Fixture() {
     return () => timers.forEach(clearTimeout);
   }, []);
   return (
-    <SidePanelContext.Provider value={panel}>
-      <main ref={panel.workspace} className="bg-background text-foreground flex h-screen w-full min-w-0">
+    <RightSidebarContext.Provider value={panel}>
+      <main className="bg-background text-foreground flex h-screen w-full min-w-0">
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="h-titlebar flex items-center justify-between gap-3 px-5">
             <span className="text-sm font-medium">Build the web app</span><PreviewChip conversationId={id} />
@@ -113,10 +114,10 @@ function Fixture() {
             <p className="text-muted-foreground">Open its local address from Running. Pause a preview to hold it, or stop it when you are finished.</p>
           </div>
         </div>
-        <SidePanel conversationId={id} />
+        <RightSidebar conversationId={id} />
       </main>
       {result && <pre id="running-result">{result}</pre>}
-    </SidePanelContext.Provider>
+    </RightSidebarContext.Provider>
   );
 }
 createRoot(document.getElementById("root")!).render(<TooltipProvider><SidebarProvider defaultOpen={false}><Fixture /></SidebarProvider></TooltipProvider>);

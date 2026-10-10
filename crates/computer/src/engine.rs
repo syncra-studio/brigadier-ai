@@ -2055,6 +2055,9 @@ mod tests {
         /// Other apps, and what a launch opens.
         others: Vec<AppInfo>,
         on_open: Option<AppInfo>,
+        /// Apps or windows the user opens while a launch waits: one more shows on each read
+        /// of the apps after the launch opened.
+        appearing: Vec<AppInfo>,
         /// A launch takes the front.
         open_takes_front: bool,
         /// The document each window reports showing.
@@ -2071,6 +2074,15 @@ mod tests {
         served: Option<Rect>,
         /// The app hears plain keys only while it believes it is active (a Chromium page).
         keys_need_activation: bool,
+        /// The debugging port a browser `open_new` starts writes in its profile.
+        devtools: Option<u16>,
+        /// The profile each `open_new` was given, with the browser it started on it.
+        profiles: Vec<(std::path::PathBuf, Option<i32>)>,
+        /// Processes that have gone: they have no start time.
+        gone: Arc<Mutex<HashSet<i32>>>,
+        /// The running apps can't be read once `open_new` ran.
+        open_new_breaks_apps: bool,
+        apps_broken: bool,
     }
 
     fn node(id: u32, depth: u16, role: &str, label: &str, frame: Rect) -> RawNode<u32> {
@@ -2110,6 +2122,7 @@ mod tests {
                 user_takes_window: None,
                 others: Vec::new(),
                 on_open: None,
+                appearing: Vec::new(),
                 open_takes_front: false,
                 documents: HashMap::new(),
                 resolves_to: None,
@@ -2118,6 +2131,11 @@ mod tests {
                 typed: String::new(),
                 served: None,
                 keys_need_activation: false,
+                devtools: None,
+                profiles: Vec::new(),
+                gone: Arc::default(),
+                open_new_breaks_apps: false,
+                apps_broken: false,
             }
         }
 
@@ -2157,6 +2175,13 @@ mod tests {
             }
         }
         fn apps(&mut self) -> CuResult<Vec<AppInfo>> {
+            if self.apps_broken {
+                return err(ErrorCode::Failed, "the running apps can't be read");
+            }
+            if !self.appearing.is_empty() && self.log.iter().any(|l| l.starts_with("open ")) {
+                let a = self.appearing.remove(0);
+                self.others.push(a);
+            }
             let mut a = self.app(10)?;
             a.windows = vec![self.window.clone()];
             let mut all = vec![a];
@@ -2427,6 +2452,39 @@ mod tests {
                 self.others.push(a);
             }
             Ok(())
+        }
+        fn open_new(&mut self, path: &str, args: &[String]) -> CuResult<()> {
+            self.log.push(format!("open_new {path}"));
+            let profile = std::path::PathBuf::from(
+                args.iter()
+                    .find_map(|a| a.strip_prefix("--user-data-dir="))
+                    .unwrap(),
+            );
+            if let Some(port) = self.devtools {
+                std::fs::write(
+                    profile.join("DevToolsActivePort"),
+                    format!("{port}\n/devtools/browser/fake"),
+                )
+                .unwrap();
+            }
+            let started = self.on_open.take().map(|mut a| {
+                a.bundle_path = Some(path.to_owned());
+                self.others.push(a.clone());
+                a.pid
+            });
+            self.profiles.push((profile, started));
+            self.apps_broken = self.open_new_breaks_apps;
+            Ok(())
+        }
+        fn start_source(&self) -> Arc<dyn Fn(i32) -> Option<u64> + Send + Sync> {
+            let gone = self.gone.clone();
+            Arc::new(move |pid| (!gone.lock().unwrap().contains(&pid)).then_some(pid as u64 * 1000))
+        }
+        fn browser_on(&mut self, profile: &std::path::Path) -> Option<i32> {
+            self.profiles
+                .iter()
+                .find(|(p, _)| p == profile)
+                .and_then(|(_, pid)| *pid)
         }
     }
 
@@ -3545,7 +3603,7 @@ mod tests {
             open: open.map(str::to_owned),
         };
         let token = e.gens.token("w", Duration::from_secs(5));
-        crate::launch::launch(e, &req, &token)
+        crate::launch::launch(e, "w", &req, &token)
     }
 
     #[test]
@@ -3563,7 +3621,10 @@ mod tests {
         assert_eq!(e.desktop.front, 99);
 
         // A file opened in the app that's already running: a new window, not a new process.
-        e.desktop.on_open = Some(other_app(20, "Notes", "dev.example.notes", 6));
+        let mut notes = other_app(20, "Notes", "dev.example.notes", 6);
+        notes.windows[0].title = "a.txt".into();
+        e.desktop.on_open = Some(notes);
+        e.desktop.resolves_to = Some(other_app(-1, "Notes", "dev.example.notes", 0));
         e.desktop.open_takes_front = false;
         let o = launch(&mut e, None, Some("/tmp/a.txt")).unwrap();
         assert_eq!(o.app.pid, 20);
@@ -3618,6 +3679,7 @@ mod tests {
         app.windows.push(w);
         let mut fake = Fake::new(basic());
         fake.on_open = Some(app);
+        fake.resolves_to = Some(other_app(-1, "Notes", "dev.example.notes", 0));
         let mut e = engine(fake);
         let started = Instant::now();
         let o = launch(&mut e, None, Some("/tmp/nothing-shows-this.txt")).unwrap();
@@ -3625,6 +3687,56 @@ mod tests {
         assert!(o.restored_windows.is_empty());
         // It waited a little for the file's own window, no longer.
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn a_file_in_a_running_app_whose_window_cant_be_told_owns_no_window() {
+        let mut fake = Fake::new(basic());
+        fake.others = vec![other_app(20, "Notes", "dev.example.notes", 5)];
+        fake.resolves_to = Some(other_app(-1, "Notes", "dev.example.notes", 0));
+        // The app shows the file in a window whose title isn't the file's and reports no
+        // document: it may as well be one the user opened.
+        let mut doc = other_app(20, "Notes", "dev.example.notes", 6);
+        doc.windows[0].title = "a.txt — project".into();
+        fake.on_open = Some(doc);
+        let mut e = engine(fake);
+        let started = Instant::now();
+        let o = launch(&mut e, None, Some("/tmp/a.txt")).unwrap();
+        assert_eq!(o.app.pid, 20);
+        assert!(!o.new_process);
+        assert!(o.new_windows.is_empty());
+        assert_eq!(o.restored_windows, vec![6]);
+        // It waited a little for the file's own window, no longer.
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn a_file_alone_is_matched_to_the_app_that_opens_it_not_to_what_the_user_opens_meanwhile() {
+        let mut fake = Fake::new(basic());
+        fake.others = vec![other_app(20, "Notes", "dev.example.notes", 5)];
+        fake.resolves_to = Some(AppInfo {
+            windows: Vec::new(),
+            ..other_app(-1, "Notes", "dev.example.notes", 0)
+        });
+        // While the launch waits, the user starts another app and opens a window in Notes;
+        // then Notes shows the file.
+        fake.on_open = Some(other_app(30, "Mail", "dev.example.mail", 7));
+        let mut doc = other_app(20, "Notes", "dev.example.notes", 6);
+        doc.windows[0].title = "a.txt".into();
+        fake.appearing = vec![other_app(20, "Notes", "dev.example.notes", 8), doc];
+        let mut e = engine(fake);
+        let o = launch(&mut e, None, Some("/tmp/a.txt")).unwrap();
+        assert_eq!(o.app.pid, 20);
+        assert!(!o.new_process);
+        assert_eq!(o.new_windows, vec![6]);
+        // The window the user opened isn't proven to be this launch's: reported, not owned.
+        assert_eq!(o.restored_windows, vec![8]);
+
+        // No app opens it: refused before anything opens.
+        let mut e = engine(Fake::new(basic()));
+        let r = launch(&mut e, None, Some("/tmp/a.unknown"));
+        assert_eq!(r.unwrap_err().code, ErrorCode::NoSuchTarget);
+        assert!(e.desktop.log.is_empty(), "{:?}", e.desktop.log);
     }
 
     #[test]
@@ -3641,14 +3753,172 @@ mod tests {
         let token = e.gens.token("w", Duration::from_secs(5));
         e.gens.stop_all();
         // Stopped before its window showed: the new process is reported, so it's owned.
-        let o = crate::launch::launch(&mut e, &req, &token).unwrap();
+        let o = crate::launch::launch(&mut e, "w", &req, &token).unwrap();
         assert_eq!(o.app.pid, 20);
         assert!(o.new_process && o.new_windows.is_empty());
         // The same app again, already running: the stop ends it.
         let token = e.gens.token("w", Duration::from_secs(5));
         e.gens.stop_all();
-        let r = crate::launch::launch(&mut e, &req, &token);
+        let r = crate::launch::launch(&mut e, "w", &req, &token);
         assert_eq!(r.unwrap_err().code, ErrorCode::StoppedByUser);
+    }
+
+    fn chrome(pid: i32) -> AppInfo {
+        other_app(pid, "Google Chrome", "com.google.Chrome", pid as u32)
+    }
+
+    /// A browser's debugging endpoint that answers what a launch asks; `fails` gets an error.
+    fn fake_cdp(fails: Option<&'static str>) -> u16 {
+        use serde_json::json;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                std::thread::spawn(move || {
+                    let Ok(mut ws) = tungstenite::accept(stream) else {
+                        return;
+                    };
+                    while let Ok(m) = ws.read() {
+                        let tungstenite::Message::Text(t) = m else {
+                            continue;
+                        };
+                        let v: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
+                        let method = v["method"].as_str().unwrap_or_default();
+                        let reply = if Some(method) == fails {
+                            json!({"id": v["id"], "error": {"message": "refused"}})
+                        } else {
+                            let result = match method {
+                                "Target.createTarget" => json!({"targetId": "T1"}),
+                                "Target.attachToTarget" => json!({"sessionId": "S1"}),
+                                // The fake's window: (100, 100, 400, 300).
+                                "Browser.getWindowForTarget" => json!({"windowId": 1, "bounds":
+                                    {"left": 100, "top": 100, "width": 400, "height": 300}}),
+                                _ => json!({}),
+                            };
+                            json!({"id": v["id"], "result": result})
+                        };
+                        if ws
+                            .send(tungstenite::Message::text(reply.to_string()))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        port
+    }
+
+    /// A port nothing listens on: the connection is refused.
+    fn refused_port() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    }
+
+    fn browser_fake(pid: i32, devtools: Option<u16>) -> Fake {
+        let mut fake = Fake::new(basic());
+        fake.resolves_to = Some(chrome(0));
+        fake.on_open = Some(chrome(pid));
+        fake.devtools = devtools;
+        fake
+    }
+
+    fn launch_browser_as(e: &mut Engine<Fake>, worker: &str) -> CuResult<crate::launch::Opened> {
+        let req = crate::wire::LaunchRequest {
+            app: Some("Google Chrome".into()),
+            open: Some("https://example.com/".into()),
+        };
+        let token = e.gens.token(worker, Duration::from_secs(30));
+        crate::launch::launch(e, worker, &req, &token)
+    }
+
+    /// Whether `dir` is removed within a few seconds.
+    fn removed_soon(dir: &std::path::Path) -> bool {
+        let end = Instant::now() + Duration::from_secs(5);
+        while dir.exists() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        !dir.exists()
+    }
+
+    #[test]
+    fn each_worker_launches_its_own_browser() {
+        let mut e = engine(browser_fake(30, Some(fake_cdp(None))));
+        let a = launch_browser_as(&mut e, "task-1").unwrap();
+        assert_eq!((a.app.pid, a.new_process, a.failed), (30, true, None));
+        assert_eq!(a.new_windows, vec![1]);
+        // Another worker's launch starts a browser of its own, which it owns and quits: the
+        // first worker's is quit, windows and all, when that worker ends.
+        e.desktop.on_open = Some(chrome(31));
+        let b = launch_browser_as(&mut e, "task-2").unwrap();
+        assert_eq!((b.app.pid, b.new_process), (31, true));
+        // A worker's next launch opens a window in its own browser.
+        let again = launch_browser_as(&mut e, "task-1").unwrap();
+        assert_eq!((again.app.pid, again.new_process), (30, false));
+        let again = launch_browser_as(&mut e, "task-2").unwrap();
+        assert_eq!((again.app.pid, again.new_process), (31, false));
+        assert_eq!(e.desktop.profiles.len(), 2);
+        for (profile, _) in &e.desktop.profiles {
+            let _ = std::fs::remove_dir_all(profile);
+        }
+    }
+
+    #[test]
+    fn a_browser_launch_that_fails_after_the_browser_started_hands_the_browser_back() {
+        // Its debugging port refuses the connection; its page can't be made.
+        for (pid, port) in [
+            (30, refused_port()),
+            (31, fake_cdp(Some("Target.createTarget"))),
+        ] {
+            let fake = browser_fake(pid, Some(port));
+            let gone = fake.gone.clone();
+            let mut e = engine(fake);
+            let o = launch_browser_as(&mut e, "task-1").unwrap();
+            assert_eq!((o.app.pid, o.new_process), (pid, true));
+            assert!(o.new_windows.is_empty());
+            let f = o.failed.expect("the launch failed");
+            assert_eq!(f.started_us, pid as u64 * 1000);
+            assert_eq!(f.profile, e.desktop.profiles[0].0);
+            assert!(e.web.browsers.is_empty());
+            // The profile stays while the browser runs, and goes once it has gone, with no
+            // other launch.
+            std::thread::sleep(Duration::from_millis(600));
+            assert!(f.profile.exists());
+            gone.lock().unwrap().insert(pid);
+            assert!(removed_soon(&f.profile));
+        }
+    }
+
+    #[test]
+    fn a_browser_the_running_apps_lose_is_found_by_its_profile() {
+        let mut fake = browser_fake(30, None);
+        fake.open_new_breaks_apps = true;
+        let gone = fake.gone.clone();
+        let mut e = engine(fake);
+        let o = launch_browser_as(&mut e, "task-1").unwrap();
+        assert_eq!((o.app.pid, o.new_process), (30, true));
+        let f = o.failed.expect("the launch failed");
+        assert_eq!(f.error.code, ErrorCode::Failed);
+        assert_eq!(f.started_us, 30_000);
+        gone.lock().unwrap().insert(30);
+        assert!(removed_soon(&f.profile));
+    }
+
+    #[test]
+    fn a_failed_browser_launch_with_no_browser_left_removes_its_profile() {
+        // Quit before it connected (a pid reused since is never taken for it), and started
+        // where neither the running apps nor its profile show it.
+        let quit = browser_fake(30, Some(refused_port()));
+        quit.gone.lock().unwrap().insert(30);
+        let mut lost = browser_fake(30, None);
+        lost.on_open = None;
+        lost.open_new_breaks_apps = true;
+        for fake in [quit, lost] {
+            let mut e = engine(fake);
+            assert!(launch_browser_as(&mut e, "task-1").is_err());
+            assert!(!e.desktop.profiles[0].0.exists());
+        }
     }
 
     #[test]

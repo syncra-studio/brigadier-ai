@@ -7,8 +7,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use brigadier_computer::action::ActRequest;
-use brigadier_computer::wire::{Instance, LaunchRequest, Op, Permissions};
-use brigadier_providers::ApprovalDecision;
+use brigadier_computer::wire::{
+    Answer, Instance, LaunchRequest, Launched, Op, Permissions, Reply as WireReply,
+};
+use brigadier_providers::{ApprovalDecision, Artifact};
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
@@ -360,6 +362,109 @@ async fn another_workers_end_leaves_a_card_waiting() {
     let reply = tokio::join!(worker.turn.computer(act(5)), other_ends).0;
     assert!(!reply.is_error, "{}", reply.text);
     assert_eq!(ops(&helper), ["describe 5", "describe 5", "act 5"]);
+    finish(flow, worker).await;
+}
+
+/// A launch still running when its worker ends reports what it started after the worker's
+/// cleanup is over (the helper names what it started before the cancel): nothing is approved
+/// for the ended worker, and the process it started is ended, its windows closed first.
+#[tokio::test]
+async fn a_launch_that_reports_after_its_worker_ended_ends_what_it_started() {
+    let (flow, worker, helper) = start("computer-late-launch", PermissionLevel::FullAccess).await;
+    let task_id = flow.board().await.tasks.keys().next().unwrap().clone();
+    let owner = format!("task:{task_id}");
+    let ledger = flow.manager.runtime.ledger().clone();
+    // The app the launch starts: a real process, so ending it can be seen.
+    let mut app = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let started_ms = flow
+        .manager
+        .runtime
+        .platform()
+        .processes()
+        .start_time_ms(app.id())
+        .unwrap();
+    let started = Instance {
+        pid: app.id() as i32,
+        started_us: (started_ms * 1000.0) as u64,
+    };
+    let artifact = Artifact::Process {
+        pid: app.id(),
+        started_at_ms: Some(started.started_us as f64 / 1000.0),
+    };
+    let late = async {
+        // The launch waits in the helper while the worker ends, as `dispose_task` ends it.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        let id = loop {
+            let link = helper.links.lock().unwrap().first().cloned();
+            let sent = link.and_then(|l| {
+                l.sent
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|s| matches!(s.2, Op::Launch(_)))
+                    .map(|s| s.0)
+            });
+            if let Some(id) = sent {
+                break id;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the launch reached the helper"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        flow.manager.computer.end_worker(&task_id).await;
+        assert!(ledger.dispose(&owner).await.is_clean());
+        let link = helper.links.lock().unwrap()[0].clone();
+        let done = link.held.lock().unwrap().remove(&id).unwrap();
+        done(Ok(Answer {
+            reply: WireReply {
+                id,
+                ok: true,
+                launched: Some(Launched {
+                    instance: started.clone(),
+                    app_name: "TextEdit".into(),
+                    bundle_id: Some("com.apple.TextEdit".into()),
+                    new_process: true,
+                    new_windows: vec![9],
+                    restored_windows: Vec::new(),
+                    front_restored: false,
+                }),
+                ..Default::default()
+            },
+            image: None,
+            trajectory: None,
+        }));
+    };
+    let reply = tokio::join!(worker.turn.computer(launch()), late).0;
+    assert!(!reply.is_error, "{}", reply.text);
+    // The call answers once what the launch started is settled.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while app.try_wait().unwrap().is_none() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let ended = app.try_wait().unwrap().is_some();
+    if !ended {
+        app.kill().unwrap();
+        app.wait().unwrap();
+    }
+    assert!(ended, "the late launch's process is ended");
+    assert!(!ledger.holds(&artifact), "nothing is left recorded");
+    assert!(
+        !flow.manager.computer.holds_any_of(&task_id),
+        "nothing is approved or kept for the ended worker"
+    );
+    assert!(
+        helper
+            .ops()
+            .iter()
+            .any(|op| matches!(op, Op::CloseWindows { instance, windows }
+            if *instance == started && *windows == vec![9])),
+        "its windows close before it ends"
+    );
     finish(flow, worker).await;
 }
 

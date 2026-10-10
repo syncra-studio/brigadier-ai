@@ -13,6 +13,7 @@ import { tokenColor } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/state/store";
 import { onTerminalOutput } from "@/state/terminalPlaces";
+import { localTerminalFolder } from "@/state/terminalPaths";
 
 /*
  * The live terminal (xterm), apart from the pane so it loads only when a shell first shows.
@@ -88,6 +89,7 @@ export function TerminalView({
   restored,
   onClear,
   onTitle,
+  onCwd,
   reader,
   focus = true,
   className,
@@ -97,6 +99,7 @@ export function TerminalView({
   restored?: () => string | null;
   onClear?: () => void;
   onTitle?: (title: string) => void;
+  onCwd?: (cwd: string) => void;
   reader?: (read: () => string) => () => void;
   /** Takes the keyboard once it is open. */
   focus?: boolean;
@@ -153,6 +156,11 @@ export function TerminalView({
     const before = restored?.();
     if (before) terminal.write(`${before}${RESET}\r\n`);
     const title = onTitle ? terminal.onTitleChange(onTitle) : null;
+    const cwd = onCwd ? terminal.parser.registerOscHandler(7, (value) => {
+      const path = localTerminalFolder(value);
+      if (path) onCwd(path);
+      return false;
+    }) : null;
     const unread = reader?.(() => serialize.serialize({ scrollback: 5000 }));
 
     let id: string | null = null;
@@ -299,11 +307,12 @@ export function TerminalView({
       resize.dispose();
       stop();
       title?.dispose();
+      cwd?.dispose();
       unread?.();
       liveTerminal.current = null;
       terminal.dispose();
     };
-  }, [open, connected, onExit, mac, restored, onClear, onTitle, reader]);
+  }, [open, connected, onExit, mac, restored, onClear, onTitle, onCwd, reader]);
 
   return (
     <div

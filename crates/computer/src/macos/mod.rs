@@ -16,6 +16,7 @@ mod web;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -990,6 +991,14 @@ impl Desktop for MacDesktop {
             format!("couldn't open it: {}", why.trim()),
         )
     }
+
+    fn start_source(&self) -> Arc<dyn Fn(i32) -> Option<u64> + Send + Sync> {
+        Arc::new(process_start_us)
+    }
+
+    fn browser_on(&mut self, profile: &Path) -> Option<i32> {
+        crate::cdp::started_on(profile)
+    }
 }
 
 /// A range in characters as accessibility counts it, in UTF-16 units: an emoji is two.
@@ -1035,7 +1044,15 @@ fn resolve(app: Option<&str>, target: Option<&str>) -> Option<AppInfo> {
             NSURL::fileURLWithPath(&NSString::from_str(t))
         }
         (None, Some(t)) => {
-            let target = if t.contains("://") {
+            // A URL by its scheme (`https://…`, `mailto:…`); anything else a path.
+            let url = t.split_once(':').is_some_and(|(scheme, _)| {
+                scheme.len() > 1
+                    && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+                    && scheme
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c))
+            });
+            let target = if url {
                 NSURL::URLWithString(&NSString::from_str(t))?
             } else {
                 NSURL::fileURLWithPath(&NSString::from_str(t))

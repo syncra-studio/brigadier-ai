@@ -54,7 +54,9 @@ export const ComposerMentions: FC<{
   search: (query: string) => readonly MentionOption[];
   /** A grey line under the rows for this query ("Type to search for files"), if any. */
   hint?: (query: string) => string | null;
-}> = ({ search, hint }) => {
+  /** Refresh suggestions once each time the menu opens, not while its query changes. */
+  onOpen?: () => void;
+}> = ({ search, hint, onOpen }) => {
   // The adapter hands assistant-ui the items; the rows' icons and details are looked up here.
   const shown = useRef(new Map<string, MentionOption>());
   const adapter = useMemo<TriggerAdapter>(
@@ -74,7 +76,7 @@ export const ComposerMentions: FC<{
       <ComposerPrimitive.Unstable_TriggerPopover.Directive formatter={formatter} />
       <ComposerPrimitive.Unstable_TriggerPopoverItems>
         {(matches) => (
-          <MentionList hint={hint}>
+          <MentionList hint={hint} onOpen={onOpen}>
             {matches.map((item, index) => {
               const option = shown.current.get(item.id);
               return (
@@ -111,13 +113,22 @@ export const ComposerMentions: FC<{
 /** The menu's scrolling panel: keeps the highlighted row in view, ends with the hint. */
 function MentionList({
   hint,
+  onOpen,
   children,
 }: {
   hint: ((query: string) => string | null) | undefined;
+  onOpen: (() => void) | undefined;
   children: ReactNode[];
 }) {
   const list = useRef<HTMLDivElement>(null);
+  const onOpenRef = useRef(onOpen);
+  useEffect(() => {
+    onOpenRef.current = onOpen;
+  });
   const { highlightedIndex, query } = unstable_useTriggerPopoverScopeContext();
+  useEffect(() => {
+    onOpenRef.current?.();
+  }, []);
   useEffect(() => {
     if (highlightedIndex < 0) return;
     list.current?.querySelector("[data-highlighted]")?.scrollIntoView({ block: "nearest" });

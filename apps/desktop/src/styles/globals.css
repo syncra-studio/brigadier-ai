@@ -142,7 +142,16 @@
   width: clamp(
     var(--spacing-sidebar-min),
     var(--sidebar-width, var(--spacing-sidebar)),
-    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - 20rem))
+    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min) - var(--right-sidebar-shown, var(--sidebar-other-width))))
+  );
+}
+
+/* The right column owns its width variable and leaves room for the left column too. */
+@utility right-sidebar-panel-width {
+  width: clamp(
+    var(--spacing-sidebar-min),
+    var(--right-sidebar-width, var(--spacing-sidebar)),
+    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min) - var(--sidebar-shown)))
   );
 }
 
@@ -155,11 +164,12 @@
   --sidebar-shown: clamp(
     var(--spacing-sidebar-min),
     var(--sidebar-width, var(--spacing-sidebar)),
-    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - 20rem))
+    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min) - var(--right-sidebar-shown, var(--sidebar-other-width))))
   );
 }
 
-/* A hidden sidebar reserves no width and leaves no divider on the main content. */
+/* A hidden sidebar reserves no width and leaves no body divider on the main content.
+   Sessions still separate the fixed titlebar controls from their tabs. */
 [data-slot="sidebar-wrapper"][data-collapse="hidden"] {
   --sidebar-shown: 0px;
 }
@@ -273,6 +283,15 @@
     top: var(--spacing-titlebar);
     bottom: 0;
   }
+}
+
+/* A session's column divider clears the fixed navigation controls when the sidebar folds. */
+[data-slot="session-tabs"]::before {
+  @apply transition-[inset-inline-start] duration-300 ease-sidebar motion-reduce:transition-none;
+  inset-inline-start: max(
+    0%,
+    calc(var(--spacing-titlebar-nav-end) + var(--spacing) - var(--spacing-surface-inset) - var(--sidebar-shown))
+  );
 }
 
 /* A list that fades out under its header and above its end while there is more to scroll that
@@ -539,4 +558,28 @@
   from {
     opacity: 0;
   }
+}
+
+/* Chat stays pinned while its siblings scroll, all at the same responsive width. */
+.session-tab-list {
+  container-type: inline-size;
+  flex: 0 1 calc(var(--session-tab-count) * var(--spacing-session-tab-max));
+}
+.session-tab {
+  flex: 0 0 clamp(var(--spacing-session-tab-min), calc((100cqw - (var(--session-tab-count) - 1) * var(--spacing) / 2) / var(--session-tab-count)), var(--spacing-session-tab-max));
+}
+.session-tab[data-separator]::after {
+  content: "";
+  position: absolute;
+  inset-inline-end: 0;
+  height: calc(var(--spacing) * 4);
+  width: var(--spacing-session-tab-separator);
+  background: var(--color-border);
+}
+.session-tab-title {
+  mask-image: var(--session-tab-title-mask);
+}
+.browser-toolbar {
+  display: grid;
+  grid-template-columns: var(--browser-toolbar-columns);
 }

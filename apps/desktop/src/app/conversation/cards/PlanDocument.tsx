@@ -2,12 +2,13 @@ import { Check, CollapseSm, Copy, ExpandSm, Lightbulb } from "@openai/apps-sdk-u
 import { type ComponentProps, type ReactNode, useContext, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { SidePanelContext } from "@/app/conversation/SidePanel";
+import { RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
+import { rightSidebarToggleLabel } from "@/state/rightSidebar";
 import { type PlanDoc, type PlanDocRef, planDoc, showPlanDoc, usePlanTab } from "@/state/planDoc";
 
 /**
@@ -130,16 +131,16 @@ export function PlanDocCard({ docRef }: { docRef: PlanDocRef }) {
     const state = docRef.type === "plan" ? s.board?.plans[docRef.id]?.state.type : null;
     return state === "rejected" || state === "superseded";
   });
-  const { openTab, closeTab, state, visible } = useContext(SidePanelContext);
-  // While the side panel shows this plan, its card here is only its header.
+  const rightSidebar = useContext(RightSidebarContext);
+  // While the right sidebar shows this plan, its card here is only its header.
   const tabRef = usePlanTab((s) => (conversationId ? s.shown[conversationId] : undefined));
   const inPanel =
-    visible && state.active === "plan" && tabRef?.type === docRef.type && tabRef.id === docRef.id;
+    !!rightSidebar?.open && rightSidebar.active === "plan" && tabRef?.type === docRef.type && tabRef.id === docRef.id;
   if (!doc) return null;
   const open = () => {
     if (!conversationId) return;
     showPlanDoc(conversationId, docRef);
-    openTab("plan");
+    rightSidebar?.openTab("plan");
   };
   return (
     <PlanFrame
@@ -149,10 +150,10 @@ export function PlanDocCard({ docRef }: { docRef: PlanDocRef }) {
         <>
           <CopyPlan markdown={doc.markdown} />
           <TooltipIconButton
-            tooltip={inPanel ? "Close the side panel's plan" : "Open in side panel"}
+            tooltip={inPanel ? rightSidebarToggleLabel(true) : "Open in right sidebar"}
             side="top"
             className="text-foreground/50 hover:text-foreground [&_svg]:size-icon-sm"
-            onClick={inPanel ? () => closeTab("plan") : open}
+            onClick={inPanel ? () => rightSidebar?.setOpen(false) : open}
           >
             {inPanel ? <CollapseSm /> : <ExpandSm />}
           </TooltipIconButton>

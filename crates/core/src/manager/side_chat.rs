@@ -13,7 +13,11 @@ const SIDE_CHAT_TITLE: &str = "Side chat";
 impl SessionManager {
     /// The conversation's side chat, started if it has none, on the model the conversation
     /// uses.
-    pub async fn open_side_chat(&self, parent: &ConversationId) -> Result<Conversation> {
+    pub async fn open_side_chat(
+        &self,
+        parent: &ConversationId,
+        side_id: Option<ConversationId>,
+    ) -> Result<Conversation> {
         let conversation = self.core.conversation(parent)?;
         if conversation.side_of.is_some() {
             return Err(Error::Invalid(
@@ -25,7 +29,21 @@ impl SessionManager {
                 "an archived conversation has no side chat".into(),
             ));
         }
-        if let Some(existing) = self.side_chats(parent).into_iter().next() {
+        if let Some(id) = side_id.as_ref() {
+            if uuid::Uuid::parse_str(&id.0).is_err() {
+                return Err(Error::Invalid("side chat id must be a UUID".into()));
+            }
+            if let Ok(existing) = self.core.conversation(id) {
+                if existing.side_of.as_ref() != Some(parent)
+                    || existing.lifecycle == Lifecycle::Archived
+                {
+                    return Err(Error::Invalid(
+                        "this side chat does not belong to the session".into(),
+                    ));
+                }
+                return Ok(existing);
+            }
+        } else if let Some(existing) = self.side_chats(parent).into_iter().next() {
             return Ok(existing);
         }
         let model = match conversation.setup {
@@ -39,7 +57,7 @@ impl SessionManager {
         };
         self.core
             .create_conversation(
-                ConversationId::generate(),
+                side_id.unwrap_or_else(ConversationId::generate),
                 ConversationKind::Chat,
                 None,
                 Some(SIDE_CHAT_TITLE.into()),

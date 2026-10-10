@@ -1,23 +1,11 @@
-import { request } from "@/ipc/client";
-import { useApp } from "@/state/store";
+import type { Conversation } from "@/ipc/generated";
 
-/** Each conversation's side chat while its tab is open, so closing the tab deletes it. */
-const open = new Map<string, string>();
-
-export function noteSideChat(conversationId: string, sideChatId: string): void {
-  open.set(conversationId, sideChatId);
-}
-
-/** Deletes the conversation's side chat: side chats are temporary. */
-export function closeSideChat(conversationId: string): void {
-  const id = open.get(conversationId);
-  if (!id) return;
-  open.delete(conversationId);
-  useApp.setState((state) => {
-    const { [id]: _closed, ...threads } = state.threads;
-    return { threads };
-  });
-  request({ method: "delete", ids: [id] }).catch(
-    (error: unknown) => console.error("deleting the side chat failed", error),
-  );
+/** Only a loaded session's unreferenced side chats belong to tab cleanup. */
+export function abandonedSideChats(
+  conversations: readonly Pick<Conversation, "id" | "kind" | "sideOf">[],
+  referenced: ReadonlySet<string>,
+): string[] {
+  const sessions = new Set(conversations.filter((conversation) => conversation.kind === "session").map((conversation) => conversation.id));
+  return conversations.filter((conversation) => conversation.sideOf && sessions.has(conversation.sideOf) && !referenced.has(conversation.id))
+    .map((conversation) => conversation.id);
 }

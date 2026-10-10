@@ -247,13 +247,23 @@ pub enum Request {
         #[serde(default)]
         #[ts(optional)]
         session_id: Option<String>,
+        /// Main tabs restore a fresh shell in their remembered folder.
+        #[serde(default)]
+        #[ts(optional)]
+        cwd: Option<String>,
+        /// A main tab's first open after app startup replaces any previous process.
+        #[serde(default)]
+        #[ts(optional)]
+        fresh: Option<bool>,
         cols: u16,
         rows: u16,
     },
-    /// The conversation's side chat (the side panel's Side chat tab), started if it has none.
-    /// Closing it deletes it.
+    /// Opens a side conversation. A supplied ID makes creation retryable and allows multiples.
     OpenSideChat {
         conversation_id: ConversationId,
+        #[serde(default)]
+        #[ts(optional)]
+        side_chat_id: Option<ConversationId>,
     },
     /// A terminal in the home folder that sets up a CLI (the first run's Install and Sign
     /// in), started if none runs for it: it runs the CLI's installer when `install`, else its

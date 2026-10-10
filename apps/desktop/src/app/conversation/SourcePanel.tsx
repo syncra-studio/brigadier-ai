@@ -10,7 +10,6 @@ import {
 } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useCallback, useEffect, useState } from "react";
 
-import { useShowMain } from "@/app/conversation/SidePanel";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Spinner } from "@/components/glyphs/spinner";
@@ -114,10 +113,8 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
   const [committing, setCommitting] = useState(false);
   const locked = busy || committing;
   const [discarding, setDiscarding] = useState<Discarding | null>(null);
-  const showMain = useShowMain();
   const review = (path: string, staged: boolean) => {
     openReviewTab(conversationId, { type: "file", path, staged });
-    showMain();
   };
 
   const act = (run: () => Promise<{ state: SourceState }>, failed: string) => {
@@ -387,7 +384,6 @@ const CommitBox: FC<{
     setBusyState(next);
     onCommitting(next !== null);
   };
-  const showMain = useShowMain();
   const omit = useApp((s) => s.settings.omitAiCoauthors);
   const mac = useApp((s) => s.info?.platform === "macos");
   const nothing = !state || state.staged.length === 0;
@@ -435,7 +431,6 @@ const CommitBox: FC<{
           onClick={() => {
             setReviewScope(conversationId, { type: "uncommitted" });
             openReviewTab(conversationId, { type: "all" });
-            showMain();
           }}
         >
           Review all

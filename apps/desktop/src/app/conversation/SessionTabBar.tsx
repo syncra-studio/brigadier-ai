@@ -1,13 +1,24 @@
-import { Chat, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Archive, Chat, Globe, Terminal, Plus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type CSSProperties,
+  useState,
+  useCallback,
   lazy,
   Suspense,
   useEffect,
   useRef,
 } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
+import { TitlebarButton } from "@/components/titlebar-button";
+import { sessionTabKey } from "@/state/sessionTabKeys";
+import { shortcutLabel } from "@/app/conversation/SidePanel";
+import { takePaneClose } from "@/state/closedPanes";
+import { undoTabClose } from "@/state/terminalPlaces";
 import { ChatActions } from "@/app/conversation/ChatActions";
 import { PreviewChip } from "@/app/conversation/PreviewChip";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
@@ -25,6 +36,10 @@ import type { Conversation } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import {
   CHAT_TAB,
+  newSessionTab,
+  replaceNewTab,
+  reopenTab,
+  type NewTabKind,
   closeOtherTabs,
   closeTab,
   closeTabsToTheRight,
@@ -37,8 +52,11 @@ import {
   stepTab,
   tabOrder,
   useSessionTabsOf,
+  useTabCloseAsk,
 } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
+import { useBrowsers } from "@/state/browsers";
+import { NewTabTools } from "./NewTabTools";
 
 /** The names the daemon gives a conversation until its first message titles it. */
 const UNTITLED = new Set(["New session", "New chat"]);
@@ -51,77 +69,65 @@ export function tabTitle(tab: SessionTab): string {
   if (tab.kind === "review") {
     return tab.target.type === "all" ? "Review" : `${baseName(tab.target.path)} (diff)`;
   }
+  if (tab.kind === "newTab") return "New tab";
+  if (tab.kind === "browser") return tab.title || tab.url || "New browser";
+  if (tab.kind === "terminal") return tab.title || (tab.cwd ? baseName(tab.cwd) : "Terminal");
+  if (tab.kind === "sideChat") return tab.title || "Side chat";
+  if (tab.kind === "document") return tab.name;
   return baseName(tab.path);
 }
 
-/** A tab's look: 32px and rounded, the one in front lifted, the others muted. */
+/** Tabs share the available row, then scroll once they reach their minimum width. */
 const TAB =
-  "group/tab relative flex h-8 min-w-session-tab-min flex-[0_1_var(--spacing-panel-tab)] items-center gap-1 rounded-lg ps-2 pe-1 text-sm select-none";
+  "session-tab group/tab relative flex h-7 items-center gap-1 rounded-lg ps-2 pe-1 text-sm select-none";
 
 /** Mouse down with the middle button would start autoscroll. */
 function noAutoscroll(event: ReactMouseEvent): void {
   if (event.button === 1) event.preventDefault();
 }
 
-/** Where focus is in a pane that keeps its own tab keys (a terminal, a browser page). */
-function inOwnPane(target: EventTarget | null): boolean {
-  return (
-    target instanceof Element &&
-    target.closest('[data-slot="terminal-pane"], [data-terminal-menu], [data-pane="browser"]') !==
-      null
-  );
-}
-
-/**
- * The tab keys while a session shows: ⌘1 Chat and ⌘2–⌘9 the others, ⌘W closes the tab in
- * front (never Chat), ⌃Tab or ⌘⇧] the next and ⌃⇧Tab or ⌘⇧[ the previous (Ctrl for ⌘ off
- * macOS). A terminal or browser page with focus keeps them for its own tabs.
- */
-function useTabKeys(conversationId: string): void {
+/** Session keys own main tabs. The bottom pane keeps Cmd+W and bracket navigation; off macOS a focused
+ * terminal keeps its shell Ctrl keys. Cmd+T always creates a main tab on macOS. An archived session
+ * opens no terminal tabs, so its Ctrl+` goes on to the bottom-terminal toggle. */
+function useTabKeys(conversationId: string, archived: boolean, create: (kind: NewTabKind) => void): void {
   const mac = useApp((s) => s.info?.platform === "macos");
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || inOwnPane(event.target)) return;
-      const command = mac ? event.metaKey : event.ctrlKey;
-      const other = mac ? event.ctrlKey : event.metaKey;
-      if (event.ctrlKey && !event.metaKey && !event.altKey && event.code === "Tab") {
-        event.preventDefault();
-        stepTab(conversationId, event.shiftKey ? -1 : 1);
+      if (event.defaultPrevented || event.isComposing) return;
+      const target = event.target instanceof Element ? event.target : document.activeElement;
+      if (!mac && target?.closest('[data-slot="terminal-pane"], [data-main-terminal]')) return;
+      if (target?.closest('[data-slot="terminal-pane"]') && ["KeyW", "BracketLeft", "BracketRight"].includes(event.code)) return;
+      const command = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+      if (command && !event.altKey && event.shiftKey && event.code === "KeyT") {
+        event.preventDefault(); event.stopPropagation();
+        const closed = takePaneClose(conversationId);
+        if (closed === "tab") reopenTab(conversationId, useApp.getState().conversations[conversationId]?.lifecycle !== "archived");
+        else if (closed === "terminal") undoTabClose(`conv:${conversationId}`);
         return;
       }
-      if (!command || other || event.altKey) return;
-      if (event.shiftKey && (event.code === "BracketLeft" || event.code === "BracketRight")) {
-        event.preventDefault();
-        stepTab(conversationId, event.code === "BracketLeft" ? -1 : 1);
-        return;
-      }
-      if (event.shiftKey) return;
-      const digit = /^Digit([1-9])$/.exec(event.code);
-      if (digit) {
-        event.preventDefault();
-        selectTabNumber(conversationId, Number(digit[1]));
-        return;
-      }
-      if (event.code === "KeyW") {
-        const { active } = sessionTabs(conversationId);
-        if (active === CHAT_TAB) return;
-        event.preventDefault();
-        closeTab(conversationId, active);
-      }
+      const action = sessionTabKey(event, mac);
+      if (!action || (archived && action.type === "new" && action.kind === "terminal")) return;
+      event.preventDefault(); event.stopPropagation();
+      if (action.type === "new") create(action.kind);
+      if (action.type === "close") closeTab(conversationId, sessionTabs(conversationId).active);
+      if (action.type === "number") selectTabNumber(conversationId, action.number);
+      if (action.type === "step") stepTab(conversationId, action.step);
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [conversationId, mac]);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [conversationId, archived, mac, create]);
 }
 
 /** A tab's right-click menu: Keep open (a preview), Close, Close others, Close to the right. */
 function TabMenu({
   conversationId,
   tab,
+  onRename,
   children,
 }: {
   conversationId: string;
   tab: SessionTab | null;
+  onRename?: (() => void) | undefined;
   children: ReactNode;
 }) {
   const id = tab?.id ?? CHAT_TAB;
@@ -130,6 +136,12 @@ function TabMenu({
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent>
+        {!tab && (
+          <>
+            <ContextMenuItem disabled={!onRename} onSelect={() => onRename?.()}>Rename</ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
         {tab?.kind === "file" && tab.preview && (
           <>
             <ContextMenuItem onSelect={() => keepTabOpen(conversationId, id)}>
@@ -176,11 +188,18 @@ export function SessionTabBar({
   children?: ReactNode;
 }) {
   const id = conversation.id;
+  const confirmClose = useTabCloseAsk((state) => state.confirm);
   const { tabs, active } = useSessionTabsOf(id);
   const connection = useApp((s) => s.connection.status);
   const archived = conversation.lifecycle === "archived";
   const strip = useRef<HTMLDivElement>(null);
-  useTabKeys(id);
+  const mac = useApp((s) => s.info?.platform === "macos");
+  const cwd = useCheckoutRoot();
+  const create = useCallback((kind: NewTabKind) => {
+    if (archived && (kind === "terminal" || kind === "sideChat")) return;
+    newSessionTab(id, kind, cwd);
+  }, [id, archived, cwd]);
+  useTabKeys(id, archived, create);
   const { listRef, shown, dragging, grip } = useDragReorder<SessionTab, HTMLDivElement>({
     items: tabs,
     idOf: (tab) => tab.id,
@@ -215,15 +234,15 @@ export function SessionTabBar({
     <header
       data-tauri-drag-region
       data-slot="session-tabs"
-      className="h-titlebar ease-sidebar ps-clear-2 flex shrink-0 items-center gap-1 pe-1 transition-[padding] duration-300 motion-reduce:transition-none"
+      className="column-divider h-titlebar ease-sidebar ps-clear-2 flex shrink-0 items-center gap-1 pe-1 transition-[padding] duration-300 motion-reduce:transition-none"
     >
       <div
-        ref={strip}
         role="tablist"
         aria-label="Session tabs"
         tabIndex={-1}
         data-tauri-drag-region
-        className="hide-scrollbar flex min-w-0 flex-1 scroll-px-1 items-center gap-0.5 overflow-x-auto"
+        className="session-tab-list flex min-w-0 items-center gap-0.5"
+        style={{ "--session-tab-count": tabs.length + 1 } as CSSProperties}
         onKeyDown={(event) => {
           // Alt+←/→ moved the tab itself (its drag handle's keys).
           if (event.defaultPrevented || event.altKey) return;
@@ -243,135 +262,165 @@ export function SessionTabBar({
                 : (at + (forward ? 1 : -1) + order.length) % order.length;
           const target = order[next]!;
           selectTab(id, target);
-          requestAnimationFrame(() =>
-            strip.current
+          requestAnimationFrame(() => {
+            strip.current?.parentElement
               ?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(target)}"] [role="tab"]`)
-              ?.focus(),
-          );
+              ?.focus();
+          });
         }}
       >
-        <TabMenu conversationId={id} tab={null}>
+        <TabMenu conversationId={id} tab={null} onRename={archived ? undefined : onRename}>
           <div
             data-tab-id={CHAT_TAB}
+            data-separator={active !== CHAT_TAB && tabs.length > 0 && tabs[0]?.id !== active || undefined}
             data-active={active === CHAT_TAB || undefined}
             className={cn(
               TAB,
               active === CHAT_TAB
-                ? "bg-panel-tab shadow-panel-tab"
+                ? "bg-panel-tab text-foreground"
                 : "text-toolbar-foreground hover:bg-toolbar-hover",
             )}
           >
             <button
               type="button"
               role="tab"
-              onClick={() => selectTab(id, CHAT_TAB)}
               aria-selected={active === CHAT_TAB}
               tabIndex={active === CHAT_TAB ? 0 : -1}
-              title={conversation.title}
+              title={archived ? `${conversation.title} (Archived)` : conversation.title}
+              aria-label={archived ? `${title} (Archived)` : undefined}
+              onClick={() => selectTab(id, CHAT_TAB)}
+              onDoubleClick={archived ? undefined : onRename}
               className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
             >
-              <Chat aria-hidden className="size-icon-sm shrink-0" />
-              <span className="min-w-0 truncate">{title}</span>
+              {archived ? <Archive aria-hidden className="size-icon-sm shrink-0" /> : <Chat aria-hidden className="size-icon-sm shrink-0" />}
+              <span className="session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap">{title}</span>
             </button>
-            {archived && (
-              <Badge
-                variant="outline"
-                className="shrink-0"
-                title="Archived: restore it from Settings → Archived chats to continue."
-              >
-                Archived
-              </Badge>
-            )}
             <ChatActions
               conversation={conversation}
               onRename={onRename}
               compact
               className={cn(
-                "shrink-0 opacity-0 transition-opacity group-hover/tab:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100",
-                active === CHAT_TAB && "opacity-100",
+                "shrink-0 transition-opacity",
+                active !== CHAT_TAB && "opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100",
               )}
             />
           </div>
         </TabMenu>
-        <div ref={listRef} className="contents">
-          {shown.map((tab) => {
-            const index = tabs.findIndex((entry) => entry.id === tab.id);
-            const selected = tab.id === active;
-            const name = tabTitle(tab);
-            const handlers = grip(tab.id, index);
-            return (
-              <TabMenu key={tab.id} conversationId={id} tab={tab}>
-                <div
-                  data-session-tab
-                  data-tab-id={tab.id}
-                  data-active={selected || undefined}
-                  data-dragging={dragging === tab.id || undefined}
-                  className={cn(
-                    TAB,
-                    selected
-                      ? "bg-panel-tab shadow-panel-tab"
-                      : "text-toolbar-foreground hover:bg-toolbar-hover",
-                    "data-dragging:z-10 data-dragging:opacity-80",
-                  )}
-                >
-                  {/* The tab itself is the drag handle; Alt+←/→ moves it from the keyboard. */}
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={selected}
-                    tabIndex={selected ? 0 : -1}
-                    title={tab.kind === "file" ? tab.path : name}
-                    onPointerDown={handlers.onPointerDown}
-                    onPointerMove={handlers.onPointerMove}
-                    onPointerUp={handlers.onPointerUp}
-                    onPointerCancel={handlers.onPointerCancel}
-                    onMouseDown={noAutoscroll}
-                    onMouseUp={middleClose(tab.id)}
-                    onClick={() => selectTab(id, tab.id)}
-                    onDoubleClick={() => keepTabOpen(id, tab.id)}
-                    onKeyDown={(event) => {
-                      if (event.altKey) handlers.onKeyDown(event);
-                    }}
-                    className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
-                  >
-                    {tab.kind === "file" ? (
-                      <FileTypeIcon name={tab.path} className="size-icon-sm shrink-0" />
-                    ) : (
-                      <DiffGlyph className="size-icon-sm shrink-0" />
-                    )}
-                    <span className={cn("min-w-0 truncate", tab.kind === "file" && tab.preview && "italic")}>
-                      {name}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`Close ${name}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      closeTab(id, tab.id);
-                    }}
+        <div
+          ref={strip}
+          data-tauri-drag-region
+          className="hide-scrollbar flex min-w-0 shrink scroll-px-1 items-center gap-0.5 overflow-x-auto"
+        >
+          <div ref={listRef} className="contents">
+            {shown.map((tab) => {
+              const index = tabs.findIndex((entry) => entry.id === tab.id);
+              const selected = tab.id === active;
+              const name = tabTitle(tab);
+              const handlers = grip(tab.id, index);
+              return (
+                <TabMenu key={tab.id} conversationId={id} tab={tab}>
+                  <div
+                    data-session-tab
+                    data-separator={!selected && index < tabs.length - 1 && tabs[index + 1]?.id !== active || undefined}
+                    data-tab-id={tab.id}
+                    data-active={selected || undefined}
+                    data-dragging={dragging === tab.id || undefined}
                     className={cn(
-                      "hover:bg-toolbar-hover flex size-5 shrink-0 items-center justify-center rounded-full opacity-60 hover:opacity-100",
-                      !selected && "invisible group-focus-within/tab:visible group-hover/tab:visible",
+                      TAB,
+                      selected
+                        ? "bg-panel-tab text-foreground"
+                        : "text-toolbar-foreground hover:bg-toolbar-hover",
+                      "data-dragging:z-10 data-dragging:opacity-80",
                     )}
                   >
-                    <X aria-hidden className="size-icon-xs" />
-                  </button>
-                </div>
-              </TabMenu>
-            );
-          })}
+                    {/* The tab itself is the drag handle; Alt+←/→ moves it from the keyboard. */}
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={selected}
+                      tabIndex={selected ? 0 : -1}
+                      title={tab.kind === "file" ? tab.path : name}
+                      onPointerDown={handlers.onPointerDown}
+                      onPointerMove={handlers.onPointerMove}
+                      onPointerUp={handlers.onPointerUp}
+                      onPointerCancel={handlers.onPointerCancel}
+                      onMouseDown={noAutoscroll}
+                      onMouseUp={middleClose(tab.id)}
+                      onClick={() => selectTab(id, tab.id)}
+                      onDoubleClick={() => keepTabOpen(id, tab.id)}
+                      onKeyDown={(event) => {
+                        if (event.altKey) handlers.onKeyDown(event);
+                      }}
+                      className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
+                    >
+                      {tab.kind === "file" ? (
+                        <FileTypeIcon name={tab.path} className="size-icon-sm shrink-0" />
+                      ) : tab.kind === "newTab" ? <Globe className="size-icon-sm shrink-0" />
+                        : tab.kind === "browser" ? <BrowserIcon tabId={tab.id} />
+                        : tab.kind === "terminal" ? <Terminal className="size-icon-sm shrink-0" />
+                        : tab.kind === "sideChat" ? <Chat className="size-icon-sm shrink-0" />
+                        : tab.kind === "document" ? <Document className="size-icon-sm shrink-0" /> : (
+                        <DiffGlyph className="size-icon-sm shrink-0" />
+                      )}
+                      <span className={cn("session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap", tab.kind === "file" && tab.preview && "italic")}>
+                        {name}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Close ${name} tab`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        closeTab(id, tab.id);
+                      }}
+                      className={cn(
+                        "hover:bg-toolbar-hover flex size-5 shrink-0 items-center justify-center rounded-full opacity-60 hover:opacity-100",
+                        !selected && "invisible group-focus-within/tab:visible group-hover/tab:visible",
+                      )}
+                    >
+                      <X aria-hidden className="size-icon-xs" />
+                    </button>
+                  </div>
+                </TabMenu>
+              );
+            })}
+          </div>
         </div>
       </div>
+      <TitlebarButton tooltip="New tab" shortcut={shortcutLabel("⌘T", mac)} onClick={() => create("newTab")}><Plus /></TitlebarButton>
       {connection !== "connected" && (
         <Badge variant="warning" role="status" className="shrink-0">
           {connection === "connecting" ? "Connecting to core…" : "Reconnecting to core…"}
         </Badge>
       )}
       <PreviewChip conversationId={id} />
+      <div data-tauri-drag-region className="min-w-0 flex-1 self-stretch" />
       {children}
+      <Dialog open={confirmClose !== null} onOpenChange={(open) => { if (!open) useTabCloseAsk.setState({ confirm: null }); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Close unsaved files?</DialogTitle>
+            <DialogDescription>These files have unsaved changes. Keep them open to save your work, or close them without saving.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => useTabCloseAsk.setState({ confirm: null })}>Keep open</Button>
+            <Button variant="destructive" onClick={() => {
+              useTabCloseAsk.setState({ confirm: null });
+              confirmClose?.();
+            }}>Close without saving</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </header>
   );
+}
+
+function BrowserIcon({ tabId }: { tabId: string }) {
+  const favicon = useBrowsers((s) => s.pages[tabId]?.favicon);
+  const [failed, setFailed] = useState<string | null>(null);
+  return favicon && favicon !== failed
+    ? <img src={favicon} alt="" className="size-icon-sm shrink-0" onError={() => setFailed(favicon)} />
+    : <Globe aria-hidden className="size-icon-sm shrink-0" />;
 }
 
 const FileTabView = lazy(() =>
@@ -380,6 +429,11 @@ const FileTabView = lazy(() =>
 const ReviewTab = lazy(() =>
   import("@/app/conversation/ReviewTab").then((module) => ({ default: module.ReviewTab })),
 );
+
+const BrowserTab = lazy(() => import("./BrowserTab").then((module) => ({ default: module.BrowserTab })));
+const SideChatTab = lazy(() => import("./SideChatTab").then((module) => ({ default: module.SideChatTab })));
+const MainTerminalTab = lazy(() => import("./MainTerminalTab").then((module) => ({ default: module.MainTerminalTab })));
+const DocumentTabView = lazy(() => import("./DocumentTabView").then((module) => ({ default: module.DocumentTabView })));
 
 /**
  * The session's open tabs over its conversation, which stays as it was (scrolled, its draft
@@ -403,9 +457,18 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
             <Suspense fallback={null}>
               {tab.kind === "file" ? (
                 <FileTabView conversationId={conversationId} tab={tab} active={shown} />
-              ) : (
+              ) : tab.kind === "review" ? (
                 <ReviewTab conversationId={conversationId} target={tab.target} active={shown} />
-              )}
+              ) : tab.kind === "newTab" || tab.kind === "browser" ? (
+                <BrowserTab conversationId={tab.id} initialUrl={tab.kind === "browser" ? tab.url : undefined} active={shown}
+                  onNavigate={tab.kind === "newTab" ? (url) => replaceNewTab(conversationId, tab.id, "browser", null, url) : undefined}>
+                  {tab.kind === "newTab" ? <NewTabTools conversationId={conversationId} tabId={tab.id} /> : null}
+                </BrowserTab>
+              ) : tab.kind === "sideChat" ? (
+                <SideChatTab conversationId={conversationId} tab={tab} />
+              ) : tab.kind === "terminal" ? (
+                <div data-main-terminal className="flex min-h-0 flex-1 flex-col"><MainTerminalTab conversationId={conversationId} tab={tab} active={shown} /></div>
+              ) : <DocumentTabView conversationId={conversationId} tab={tab} active={shown} />}
             </Suspense>
           </div>
         );

@@ -66,7 +66,19 @@
  *               narrowest-window              a window narrower than this hides the side panel
  *               panel-resize-step             an arrow key's move of the side panel's edge
  *               w-panel-tab, min-w-panel-tab-min  a side panel tab: its width, its least
- *               min-w-session-tab-min         a session's tab: its least (its width is a panel tab's)
+ *               session-tab-{min,max}         a session's tab: `.session-tab` (globals.css) shares
+ *                                             the strip evenly, at least session-tab-min and at
+ *                                             most session-tab-max (the list grows to the tabs'
+ *                                             count times session-tab-max); session-tab-separator
+ *                                             is the rule between tabs
+ *               --session-tab-title-mask      the fade at a long tab title's end
+ *               browser-{controls,address}    the Browser tab's toolbar: the least for each side's
+ *                                             buttons, the most for the address field, laid out
+ *                                             by --browser-toolbar-columns (`.browser-toolbar`)
+ *               w-browser-menu, h-browser-menu-item, rounded-browser-menu  its page menu
+ *               browser-{pane,tab-min,tab-max,composer}  the Browser tab's pane, its tabs' least
+ *                                             and most, its composer
+ *               max-w-new-tab-tools           the New tab page's tool grid (--container-new-tab-tools)
  *               max-h-user-message            a long user message, clipped (about 15 lines)
  *               max-w-thread, max-w-{2xs,xs,sm,md,lg} readable column / surface widths
  *               max-w-settings                the Settings page's column
@@ -215,6 +227,8 @@
   --spacing-rail-tuck: 0.25rem;
   /* The sidebar panel: its width, and how far it resizes. */
   --spacing-sidebar: 18rem;
+  --spacing-sidebar-thread-min: 20rem;
+  --sidebar-other-width: 0px;
   --spacing-sidebar-min: 11.75rem;
   --spacing-sidebar-max: 29.25rem;
   /* The sidebar panel collapsed to a strip of icons: each icon where it sits in the expanded
@@ -297,7 +311,6 @@
   --color-terminal-tab-active: var(--terminal-tab-active);
   --color-terminal-tab-inactive: var(--terminal-tab-inactive);
   --shadow-terminal-tab: inset 0 0 0 0.5px oklch(1 0 0 / 5%);
-  --spacing-workers-pane: 26.25rem;
   --spacing-side-panel-min: 20rem;
   --spacing-side-panel-chat-min: 20rem;
   --spacing-side-panel-preferred: 40rem;
@@ -310,7 +323,14 @@
   --spacing-panel-tab: 15rem;
   --spacing-panel-tab-min: 5.625rem;
   /* A session's tab keeps room for a short name beside its icon and button. */
-  --spacing-session-tab-min: 8rem;
+  --spacing-session-tab-min: 5.625rem;
+  --spacing-session-tab-separator: 1px;
+  --spacing-session-tab-max: 15rem;
+  --spacing-browser-controls: 6rem;
+  --spacing-browser-address: 40rem;
+  --container-new-tab-tools: 40rem;
+  --session-tab-title-mask: linear-gradient(to right, #000 calc(100% - 1rem), transparent);
+  --browser-toolbar-columns: minmax(var(--spacing-browser-controls), 1fr) minmax(0, var(--spacing-browser-address)) minmax(var(--spacing-browser-controls), 1fr);
   --spacing-setup: min(60rem, calc(100dvh - 2rem));
   --spacing-setup-card: 13rem;
   --spacing-user-message: 22.5rem;
