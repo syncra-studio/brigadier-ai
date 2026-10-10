@@ -2127,7 +2127,7 @@ fn find_queued<'a>(queue: &'a mut MessageQueue, item_id: &str) -> Result<&'a mut
 
 /// Records a session setup's choices as the project's remembered ones. Returns whether
 /// anything changed. The permission level isn't one: each new session starts at the default
-/// level (Settings > Configuration) unless the user picks another for it.
+/// level (Settings > Configurations) unless the user picks another for it.
 fn remember(project: &mut Project, setup: Option<&Setup>) -> bool {
     let Some(Setup::Session {
         environment,

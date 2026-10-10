@@ -184,7 +184,7 @@ const SUGGEST_FULL_ACCESS: &str = "Show the user a notice in the thread when som
 asked for needs more access than this session's sandbox gives (writing outside the workspace, \
 installing software system-wide, the internet under Ask for approval, an app or device the \
 sandbox blocks): your reason, a button that switches this session to Full access, and a link to \
-Settings > Configuration. reason: one line on what the sandbox stopped and what Full access \
+Settings > Configurations. reason: one line on what the sandbox stopped and what Full access \
 would let you do. Not for what Full access wouldn't fix (a missing key, a failing test, an \
 outward step only the user takes). Refused when the session already has Full access. Returns at \
 once; the user's switch, if they make it, arrives as a change of this session's setting.";
