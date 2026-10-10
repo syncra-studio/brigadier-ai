@@ -1,8 +1,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-/** Plan shows while a plan is open in it (`showPlanDoc`). */
-export type RightSidebarTab = "files" | "source" | "workers" | "running" | "plan";
+/** Plan shows while a plan is open in it (`showPlanDoc`); Mockup while the session has a mockup. */
+export type RightSidebarTab = "files" | "source" | "workers" | "running" | "plan" | "mockup";
 
 /** One open choice for the app, with each session remembering its front tab. */
 type RightSidebarState = {
@@ -42,7 +42,7 @@ export function selectRightSidebarTab(id: string, tab: RightSidebarTab): void {
 
 /** A tab a session comes back to at launch: not Plan, whose open plan isn't kept. */
 export function isRightSidebarTab(tab: string): tab is RightSidebarTab {
-  return tab === "files" || tab === "source" || tab === "workers" || tab === "running";
+  return tab === "files" || tab === "source" || tab === "workers" || tab === "running" || tab === "mockup";
 }
 
 export function isRightSidebarKey(event: KeyboardEvent, mac: boolean): boolean {
