@@ -454,6 +454,11 @@ impl SessionManager {
             .filter(|entry| removal::is_gone(entry.bound.path()))
             .map(|entry| entry.bytes)
             .sum();
+        let codex_threads = adoption
+            .entries
+            .iter()
+            .filter(|entry| entry.thread.is_some() && removal::is_gone(entry.bound.path()))
+            .count() as u32;
         let mut failures = changed;
         failures.extend(leftovers.failures);
         failures.extend(
@@ -466,6 +471,7 @@ impl SessionManager {
             reclaimed,
             trashed: 0,
             failures,
+            codex_threads,
         })
     }
 }

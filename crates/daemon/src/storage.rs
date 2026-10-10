@@ -240,6 +240,7 @@ impl Storage {
                 Ok(cleaned) => {
                     report.reclaimed_bytes += cleaned.reclaimed;
                     report.trashed_bytes += cleaned.trashed;
+                    report.codex_threads_deleted += cleaned.codex_threads;
                     if cleaned.failures.is_empty() {
                         report.removed += 1;
                         tracing::info!(item = %entry.item.label, "cleaned");

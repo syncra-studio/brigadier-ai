@@ -137,6 +137,8 @@ pub struct Cleaned {
     pub trashed: u64,
     /// Entries of the item that stayed, and why; the others are gone.
     pub failures: Vec<String>,
+    /// Codex threads deleted through Codex's own delete.
+    pub codex_threads: u32,
 }
 
 /// The records a scan works from, taken once.

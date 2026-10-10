@@ -129,6 +129,11 @@ export function result(cleaned: CleanReport): { title: string; lines: string[] }
   if (cleaned.trashedBytes > 0) {
     lines.push(`${formatBytes(cleaned.trashedBytes)} moved to the Trash: empty it to get that space back.`);
   }
+  if (cleaned.codexThreadsDeleted > 0) {
+    lines.push(
+      `Deleted ${count(cleaned.codexThreadsDeleted, "Codex thread", "Codex threads")}. The Codex app keeps its own list, so it may still show ${cleaned.codexThreadsDeleted === 1 ? "it" : "them"} until it refreshes.`,
+    );
+  }
   if (cleaned.failures.length > 0) {
     lines.push(`${count(cleaned.failures.length, "item stays", "items stay")}, as below.`);
   }

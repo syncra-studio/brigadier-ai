@@ -146,6 +146,8 @@ pub struct CleanReport {
     /// Moved to the Trash: given back once the Trash is emptied.
     pub trashed_bytes: u64,
     pub failures: Vec<CleanFailure>,
+    /// Codex threads deleted: the Codex app keeps its own list and may show them a while.
+    pub codex_threads_deleted: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

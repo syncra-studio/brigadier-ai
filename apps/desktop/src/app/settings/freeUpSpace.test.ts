@@ -100,7 +100,7 @@ test("the summary, the button, the confirmation and the result say it plainly", 
   assert.equal(summary(tidy, sweep(tidy)), "Brigadier uses 31.0 GB on this computer. Nothing to free up: Brigadier is tidy.");
   assert.equal(action(sweep(tidy)), "Nothing to free up");
 
-  assert.deepEqual(result({ removed: 5, reclaimedBytes: 11 * GB, trashedBytes: 0, failures: [] }), {
+  assert.deepEqual(result({ removed: 5, reclaimedBytes: 11 * GB, trashedBytes: 0, failures: [], codexThreadsDeleted: 0 }), {
     title: "Freed 11.0 GB.",
     lines: [],
   });
@@ -110,8 +110,13 @@ test("the summary, the button, the confirmation and the result say it plainly", 
       reclaimedBytes: 0,
       trashedBytes: 0,
       failures: [{ label: "x", path: null, error: "something runs in it now" }],
+      codexThreadsDeleted: 0,
     }),
     { title: "Nothing could be removed.", lines: ["1 item stays, as below."] },
+  );
+  assert.deepEqual(
+    result({ removed: 3, reclaimedBytes: 2 * GB, trashedBytes: 0, failures: [], codexThreadsDeleted: 3 }).lines,
+    ["Deleted 3 Codex threads. The Codex app keeps its own list, so it may still show them until it refreshes."],
   );
 });
 
@@ -152,7 +157,7 @@ test("the screen shows the groups, what is kept, and one button", async () => {
     const looking = render({ report: null });
     assert.match(looking, /Looking at what Brigadier keeps/);
 
-    const done = render({ cleaned: { removed: 5, reclaimedBytes: 11 * GB, trashedBytes: 0, failures: [] } });
+    const done = render({ cleaned: { removed: 5, reclaimedBytes: 11 * GB, trashedBytes: 0, failures: [], codexThreadsDeleted: 0 } });
     assert.match(done, />Freed 11\.0 GB\.</);
     assert.match(done, />Scan again</);
     assert.doesNotMatch(done, /Free up 11/);
