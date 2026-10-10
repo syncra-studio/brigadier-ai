@@ -117,6 +117,9 @@ impl CleanupLedger {
                     DomainEvent::CleanupRemoved { owner, artifacts } => {
                         if let Some(known) = state.artifacts.get_mut(&owner) {
                             known.retain(|artifact| !artifacts.contains(artifact));
+                            if known.is_empty() {
+                                state.disposing.remove(&owner);
+                            }
                         }
                     }
                     DomainEvent::CleanupRequested { owner } => {
@@ -724,7 +727,8 @@ fn remove_preview_data(data_dir: &Path, dir: &Path, identity: (u64, u64)) -> std
             #[cfg(unix)]
             {
                 if !bound.is_dir() || bound.unix_identity() != identity {
-                    return Err(std::io::Error::other("preview data identity changed"));
+                    // The recorded folder is gone; its replacement is not ours.
+                    return Ok(());
                 }
                 brigadier_sandbox::removal::delete(&bound).map_err(std::io::Error::other)
             }

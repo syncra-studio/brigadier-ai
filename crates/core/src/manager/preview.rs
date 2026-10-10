@@ -1563,7 +1563,7 @@ mod tests {
                 .is_err()
         );
         let leftovers = ledger.release(&owner, vec![artifact]).await;
-        assert!(!leftovers.is_clean());
+        assert!(leftovers.is_clean());
         assert!(
             fresh.is_dir(),
             "identity mismatch must not delete the replacement"
@@ -1588,6 +1588,82 @@ mod tests {
             !unrecorded.exists(),
             "a failed durable record must prevent mkdirat"
         );
+        flow.stop().await;
+    }
+
+    #[tokio::test]
+    async fn stale_preview_data_disposes_cleanly_and_later_records_survive_restart() {
+        use crate::ledger::CleanupLedger;
+        use crate::manager::flow::{Flow, Options, Reply};
+        use brigadier_providers::{claude::Claude, codex::Codex};
+        use std::os::unix::fs::MetadataExt;
+
+        let flow = Flow::start(
+            "stale-preview-data",
+            Options::default(),
+            Arc::new(|_| Box::pin(async { Reply::text("[quiet]") })),
+        )
+        .await;
+        let runtime = &flow.manager.runtime;
+        let ledger = runtime.ledger();
+        let root = std::env::temp_dir().join(format!("preview-data-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        for replaced in [true, false] {
+            let owner = format!("preview-data:{}:{replaced}", flow.conversation);
+            let path = root.join(format!("data-{replaced}"));
+            std::fs::create_dir(&path).unwrap();
+            let artifact = |path: &Path| {
+                let meta = std::fs::metadata(path).unwrap();
+                Artifact::PreviewDataDir {
+                    path: path.to_string_lossy().into_owned(),
+                    identity: Some((meta.dev(), meta.ino())),
+                }
+            };
+            ledger.record(&owner, artifact(&path)).await.unwrap();
+            // Keep the old inode alive so the replacement cannot reuse it.
+            std::fs::rename(&path, root.join(format!("original-{replaced}"))).unwrap();
+            if replaced {
+                std::fs::create_dir(&path).unwrap();
+                std::fs::write(path.join("foreign"), "keep").unwrap();
+            }
+            assert!(ledger.dispose(&owner).await.is_clean());
+            assert!(ledger.artifacts(&owner).is_empty());
+            assert!(!ledger.disposing().contains(&owner));
+
+            let later = root.join(format!("later-{replaced}"));
+            std::fs::create_dir(&later).unwrap();
+            let later_artifact = artifact(&later);
+            ledger.record(&owner, later_artifact.clone()).await.unwrap();
+            let reloaded = CleanupLedger::load(
+                flow.manager.core.clone(),
+                runtime.platform().clone(),
+                Arc::new(Claude::new(
+                    runtime.platform().clone(),
+                    runtime.cli_env().clone(),
+                )),
+                Arc::new(Codex::new(
+                    runtime.platform().clone(),
+                    runtime.cli_env().clone(),
+                )),
+            )
+            .await
+            .unwrap();
+            assert!(!reloaded.disposing().contains(&owner));
+            reloaded.sweep().await;
+            assert!(later.is_dir());
+            assert_eq!(reloaded.artifacts(&owner), vec![later_artifact]);
+            if replaced {
+                assert_eq!(
+                    std::fs::read_to_string(path.join("foreign")).unwrap(),
+                    "keep"
+                );
+            } else {
+                assert!(!path.exists());
+            }
+            assert!(ledger.dispose(&owner).await.is_clean());
+        }
+        std::fs::remove_dir_all(root).unwrap();
         flow.stop().await;
     }
 
