@@ -8,7 +8,12 @@ export function MainTerminalTab({ conversationId, tab, active }: { conversationI
   // Restart remounts the view, which opens a new shell.
   const [attempt, setAttempt] = useState(0);
   const [exited, setExited] = useState(false);
-  const open = useCallback((cols: number, rows: number) => openMainTerminal(conversationId, tab.id, cols, rows), [conversationId, tab.id]);
+  const open = useCallback(async (cols: number, rows: number) => {
+    const terminal = await openMainTerminal(conversationId, tab.id, cols, rows);
+    // A reconnect reopens the view on a new shell: the old one's exit no longer applies.
+    setExited(false);
+    return terminal;
+  }, [conversationId, tab.id]);
   const onExit = useCallback(() => setExited(true), []);
   const onTitle = useCallback((title: string) => changeSessionTab(conversationId, tab.id,
     (current) => current.kind === "terminal" ? { ...current, title } : current), [conversationId, tab.id]);
