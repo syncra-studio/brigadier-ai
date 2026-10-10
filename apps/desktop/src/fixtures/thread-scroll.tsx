@@ -30,7 +30,7 @@ const BLOB_MS = 400;
 const start = Date.now() - 86_400_000;
 
 const paragraph = (turn: number, index: number) =>
-  `Paragraph ${index + 1} of answer ${turn + 1}. The thread keeps its place while the rows around it change size, and it follows new content only from the bottom, the way ChatGPT's conversation does when a reply streams in below what the user reads.`;
+  `Paragraph ${index + 1} of answer ${turn + 1}. The thread keeps its place while the rows around it change size, and it follows new content only from the bottom, so a reply streaming in below what the user reads never moves the view.`;
 
 function conversation(id: string, kind: "chat" | "session", title: string): Conversation {
   return {
@@ -147,8 +147,19 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** After the next frame is laid out (and its resize observers ran). */
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve)));
 let sequence = 1000;
+/** Requests not answered yet: the page settles only once none is left. */
+let pending = 0;
 
 mockIPC(async (command, payload) => {
+  pending++;
+  try {
+    return await answer(command, payload);
+  } finally {
+    pending--;
+  }
+});
+
+async function answer(command: string, payload: unknown): Promise<unknown> {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
@@ -185,7 +196,7 @@ mockIPC(async (command, payload) => {
     default:
       return { method: req.method };
   }
-});
+}
 
 useApp.setState({
   conversations,
@@ -226,16 +237,48 @@ const stackTop = () => $('[data-slot="aui_thread-footer-column"]')!.getBoundingC
 const button = () => $<HTMLButtonElement>(".aui-thread-scroll-to-bottom")!;
 const round = (value: number) => Math.round(value * 100) / 100;
 
+/** What the checks measure, as one string: it holds still once the page has settled. */
+function layoutNow(): string {
+  const view = $('[data-slot="aui_thread-viewport"]');
+  const footer = $('[data-slot="aui_thread-footer-column"]')?.getBoundingClientRect().top;
+  return view ? `${view.scrollTop} ${view.scrollHeight} ${view.clientHeight} ${footer}` : "";
+}
+
+/** A fold opening, a fade: a finite animation or transition still running. */
+const animating = () =>
+  document.getAnimations().some((animation) => animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity);
+
+/**
+ * Waits `ms`, then until every request is answered, no reply waits on its renderer, nothing
+ * animates and the layout holds for 100ms of frames. A slower machine (a CI runner) loads and
+ * lays out later than the time a step allows; the step then waits longer, never less.
+ */
+async function settle(ms: number): Promise<void> {
+  await wait(ms);
+  const until = performance.now() + 10_000;
+  let last = layoutNow();
+  let stillSince = performance.now();
+  for (let frames = 0; performance.now() < until; ) {
+    await frame();
+    const now = layoutNow();
+    if (pending > 0 || $('[data-slot="reply-loading"]') || animating() || now !== last) {
+      stillSince = performance.now();
+      frames = 0;
+    } else if (++frames >= 3 && performance.now() - stillSince >= 100) return;
+    last = now;
+  }
+}
+
 /** A scroll by the user (a wheel, a key, the scrollbar): the page sets it itself. */
 async function userScroll(top: number): Promise<void> {
   viewport().dispatchEvent(new WheelEvent("wheel", { deltaY: top < viewport().scrollTop ? -1 : 1 }));
   viewport().scrollTop = top;
-  await wait(50);
+  await settle(50);
 }
 
 async function open(id: string): Promise<void> {
   select({ type: "conversation", id });
-  await wait(LOAD_MS + BLOB_MS + 400);
+  await settle(LOAD_MS + BLOB_MS + 400);
 }
 
 /** The newest row's bottom to the floating footer's top. */
@@ -259,14 +302,24 @@ function buttonState() {
 async function toggleStays(toggle: HTMLElement): Promise<{ before: number; after: number; distance: number }> {
   const before = toggle.getBoundingClientRect().top;
   toggle.click();
-  await wait(450);
+  await settle(450);
   return { before: round(before), after: round(toggle.getBoundingClientRect().top), distance: distance() };
 }
 
-/** Streams `words` more words of an answer, noting the view's scrollTop and distance after each. */
+/**
+ * Streams `words` more words of an answer, noting the view's scrollTop and distance each time
+ * the answer's growth is laid out, until the answer stops growing. The reply reveals its text on
+ * its own timers, so a reading between frames can see text the thread hasn't laid out yet: this
+ * observer, made after the thread's own, reads each frame right after the thread handled it.
+ */
 async function stream(messageId: string, requestId: string, words: number): Promise<{ tops: number[]; distances: number[] }> {
   const tops: number[] = [];
   const distances: number[] = [];
+  const laidOut = new ResizeObserver(() => {
+    tops.push(Math.round(viewport().scrollTop));
+    distances.push(distance());
+  });
+  laidOut.observe($('[data-slot="aui_message-group"]')!);
   const streaming = useBoard.getState().board?.streaming;
   let text = streaming?.messageId === messageId ? streaming.text : "";
   for (let index = 0; index < words; index++) {
@@ -276,9 +329,9 @@ async function stream(messageId: string, requestId: string, words: number): Prom
     );
     await wait(20);
     await frame();
-    tops.push(Math.round(viewport().scrollTop));
-    distances.push(distance());
   }
+  await settle(0);
+  laidOut.disconnect();
   return { tops, distances };
 }
 
@@ -312,17 +365,17 @@ const steps = {
   /** The button's threshold and place. */
   async button() {
     await userScroll(max() - 8);
-    await wait(250);
+    await settle(250);
     const at8 = buttonState();
     await userScroll(max() - 9);
-    await wait(250);
+    await settle(250);
     const at9 = buttonState();
     return { at8, at9 };
   },
   /** Mid-scroll, a session switch and back: the same place, with history and long text loading late. */
   async switchBack() {
     await userScroll(Math.round(max() / 2));
-    await wait(100);
+    await settle(100);
     const top = viewport().scrollTop;
     const anchor = rows().find((row) => row.getBoundingClientRect().bottom > viewTop())!;
     const id = anchor.dataset["messageId"];
@@ -336,13 +389,16 @@ const steps = {
       await wait(100);
       early.push(Math.round(viewport().scrollTop));
     }
+    // A slower machine loads it later: the last sample is once it has.
+    await settle(0);
+    early.push(Math.round(viewport().scrollTop));
     const back = rows().find((row) => row.dataset["messageId"] === id);
     return { top: Math.round(top), restored: Math.round(viewport().scrollTop), offset, restoredOffset: back ? round(back.getBoundingClientRect().top - viewTop()) : null, early };
   },
   /** Earlier turns shown, then a switch and back: the same older row at the same place. */
   async revealedBack() {
     $<HTMLButtonElement>('[data-slot="earlier-turns"]')?.click();
-    await wait(200);
+    await settle(200);
     const older = rows().find((row) => row.dataset["messageId"] === "long-u2")!;
     await userScroll(viewport().scrollTop + older.getBoundingClientRect().top - viewTop() - 40);
     const offset = round(older.getBoundingClientRect().top - viewTop());
@@ -357,21 +413,21 @@ const steps = {
     const column = $('[data-slot="pane-workspace"] > div > div')!;
     const hidden = async () => {
       column.classList.add("hidden");
-      await wait(200);
+      await settle(200);
       const height = viewport().clientHeight;
       column.classList.remove("hidden");
-      await wait(200);
+      await settle(200);
       return height;
     };
     await userScroll(Math.round(max() / 3));
-    await wait(100);
+    await settle(100);
     const top = Math.round(viewport().scrollTop);
     const anchor = rows().find((row) => row.getBoundingClientRect().bottom > viewTop())!;
     const offset = round(anchor.getBoundingClientRect().top - viewTop());
     const hiddenHeight = await hidden();
     const middle = { top, restored: Math.round(viewport().scrollTop), offset, restoredOffset: round(anchor.getBoundingClientRect().top - viewTop()), button: buttonState().shown };
     await userScroll(max());
-    await wait(100);
+    await settle(100);
     await hidden();
     return { hiddenHeight, middle, bottom: distance() };
   },
@@ -398,17 +454,17 @@ const steps = {
   /** A notice above the composer: the view doesn't move; at the bottom the gaps are kept. */
   async composerGrows() {
     await userScroll(max());
-    await wait(100);
+    await settle(100);
     const before = { top: Math.round(viewport().scrollTop), stackTop: round(stackTop()) };
     const notice = { level: "warning", text: "A notice above the composer, two lines long to make the footer taller than one row would.\nIts second line.", atMs: Date.now() };
     useBoard.setState(({ board }) => (board ? { board: { ...board, notices: [notice as never] } } : {}));
-    await wait(300);
+    await settle(300);
     const grown = { top: Math.round(viewport().scrollTop), stackTop: round(stackTop()), distance: distance(), button: buttonState() };
     await userScroll(max());
-    await wait(250);
+    await settle(250);
     const atBottom = { lastGap: lastGap(), button: buttonState() };
     useBoard.setState(({ board }) => (board ? { board: { ...board, notices: [] } } : {}));
-    await wait(300);
+    await settle(300);
     const shrunk = { distance: distance(), lastGap: lastGap() };
     return { before, grown, atBottom, shrunk };
   },
@@ -419,7 +475,7 @@ const steps = {
     const topPadding = round(rows()[0]!.getBoundingClientRect().top - viewTop());
     await userScroll(max());
     await send({ text: "A new question, sent from the bottom.", attachments: [], mentions: [] });
-    await wait(600);
+    await settle(600);
     const user = rows().findLast((row) => row.dataset["role"] === "user")!;
     const placed = {
       userTop: round(user.getBoundingClientRect().top - viewTop()),
@@ -436,13 +492,13 @@ const steps = {
     const followed = await stream("other-streaming", requestId, 120);
     // At the bottom, a resize of the window keeps it there.
     $("#thread-scroll-main")!.style.paddingBottom = `${SHRINK_PX}px`;
-    await wait(200);
+    await settle(200);
     const shrunkWindow = distance();
     $("#thread-scroll-main")!.style.paddingBottom = "";
-    await wait(200);
+    await settle(200);
     const grownWindow = distance();
     stopStreaming("other", "other-answer", "Done.", requestId);
-    await wait(200);
+    await settle(200);
     return {
       topPadding,
       placed,
@@ -455,21 +511,21 @@ const steps = {
   /** At the bottom with the sent turn's room (not following), a resize keeps it at the bottom. */
   async resizeAtBottom() {
     await send({ text: "Another question.", attachments: [], mentions: [] });
-    await wait(600);
+    await settle(600);
     const placed = distance();
     $("#thread-scroll-main")!.style.paddingBottom = `${SHRINK_PX * 2}px`;
-    await wait(200);
+    await settle(200);
     const shrunk = distance();
     $("#thread-scroll-main")!.style.paddingBottom = "";
-    await wait(200);
+    await settle(200);
     return { placed, shrunk, grown: distance() };
   },
   /** The first message of a new chat, sent from the new-chat view. */
   async newChat() {
     select({ type: "draft", kind: "chat" });
-    await wait(200);
+    await settle(200);
     await send({ text: "The first message of a new chat.", attachments: [], mentions: [] }, { kind: "chat", setup: null });
-    await wait(LOAD_MS + 600);
+    await settle(LOAD_MS + 600);
     const user = rows().find((row) => row.dataset["role"] === "user");
     return { userTop: user ? round(user.getBoundingClientRect().top - viewTop()) : null, top: viewport().scrollTop };
   },
@@ -477,13 +533,13 @@ const steps = {
   async capsule() {
     await open(planId);
     useBoard.setState({ board: { ...planBoard, loaded: true, head: planMessages.at(-1)?.id ?? null } });
-    await wait(400);
+    await settle(400);
     await userScroll(max());
-    await wait(250);
+    await settle(250);
     const capsule = $('[data-slot="composer-capsule"]');
     const atBottom = { capsule: capsule !== null, capsuleInStack: capsule ? round(capsule.getBoundingClientRect().top - stackTop()) : null, lastGap: lastGap(), distance: distance() };
     await userScroll(max() - 200);
-    await wait(250);
+    await settle(250);
     return { atBottom, button: buttonState() };
   },
   /** An existing conversation never opened, whose one turn still runs: the bottom. */
