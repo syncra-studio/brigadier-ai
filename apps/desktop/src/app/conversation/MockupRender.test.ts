@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderFixturePage } from "@/fixtures/headless";
 
-test("a mockup shows in its tab, takes comments, sends them in one message and moves to the revision", { timeout: 60000 }, async (t) => {
+test("a mockup gets its own session tab, busy while it builds, takes comments, sends them in one message and moves to the revision", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "mockup.html?drive=1", "mockup-result", 30000)) as Record<string, unknown>;
   if (process.env.MOCKUP_SEEN) console.log(JSON.stringify(seen, null, 2));
-  assert.match(String(seen.chip), /Mockup.*Ready/);
-  assert.deepEqual(seen.tabs, ["Files", "Source", "Workers", "Running", "Mockup"]);
+  assert.deepEqual(seen.building, { name: "Mockup, building", busy: true, active: "chat" });
+  assert.deepEqual(seen.ready, { name: "Mockup", busy: false });
+  assert.equal(seen.shown, true);
+  assert.equal(seen.chip, false);
   assert.match(String(seen.pill), /Mockup · Screen 1.*v1 · Ready/);
   assert.match(String(seen.zoom), /^\d+%$/);
   assert.match(String(seen.helper), /Click on the image to add comments/);
@@ -22,7 +24,6 @@ test("a mockup shows in its tab, takes comments, sends them in one message and m
   assert.equal(seen.notesLeft, 0);
   assert.match(String(seen.revised), /See latest changes/);
   assert.match(String(seen.after), /v2 · Ready/);
-  assert.equal(seen.fullTab, "mockup");
-  assert.equal(seen.fullShown, true);
-  assert.deepEqual(seen.exited, { tabs: 0, sidebar: "expanded" });
+  assert.deepEqual(seen.closed, { tab: false, active: "chat" });
+  assert.deepEqual(seen.compared, { tab: true, name: "Mockup", busy: false });
 });

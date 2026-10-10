@@ -12,7 +12,7 @@ import { discardDocument, documentIsSaved, pruneDocumentDrafts } from "@/state/d
 
 export const CHAT_TAB = "chat";
 export const REVIEW_TAB = "review";
-/** The session's mockup in full view (SESSION-FIXES-PLAN.md Q10); split, it is the right sidebar's tab. */
+/** The session's mockup (SESSION-FIXES-PLAN.md Q10): one tab, there while it builds and after. */
 export const MOCKUP_TAB = "mockup";
 
 /** What the Review tab shows: every change (its scope picker), or one file's diff. */
@@ -66,6 +66,8 @@ export type SessionTabs = {
   /** The tabs after Chat, in order. */
   tabs: SessionTab[];
   active: string;
+  /** The mockup moment (`showMockupTab`) the Mockup tab last appeared for, so a closed one stays closed until the next. */
+  mockup?: string;
 };
 
 const EMPTY: SessionTabs = { tabs: [], active: CHAT_TAB };
@@ -102,8 +104,11 @@ export function useSessionTabsOf(conversationId: string | null): SessionTabs {
 
 function update(conversationId: string, change: (current: SessionTabs) => SessionTabs): void {
   useSessionTabs.setState(({ sessions }) => {
-    const next = change(sessions[conversationId] ?? EMPTY);
-    if (!next.tabs.length && next.active === CHAT_TAB) {
+    const current = sessions[conversationId] ?? EMPTY;
+    const changed = change(current);
+    // Changes that rebuild the tabs keep the mockup moment unless they set it.
+    const next = current.mockup && !("mockup" in changed) ? { ...changed, mockup: current.mockup } : changed;
+    if (!next.tabs.length && next.active === CHAT_TAB && !next.mockup) {
       const { [conversationId]: _gone, ...rest } = sessions;
       return { sessions: rest };
     }
@@ -261,11 +266,18 @@ export function openReviewTab(conversationId: string, target: ReviewTarget, repl
   });
 }
 
-/** Shows the session's mockup over its main area, after the tab in front; once. */
-export function openMockupTab(conversationId: string): void {
-  update(conversationId, (current) => current.tabs.some((tab) => tab.id === MOCKUP_TAB)
-    ? { ...current, active: MOCKUP_TAB }
-    : { tabs: insertAfterActive(current, { kind: "mockup", id: MOCKUP_TAB, opener: current.active }), active: MOCKUP_TAB });
+/**
+ * Adds the Mockup tab at the end, without bringing it to the front, when the session's mockup
+ * reaches a new `moment` (it starts, a revision, the comparison). Closed, it stays closed until
+ * the next one.
+ */
+export function showMockupTab(conversationId: string, moment: string): void {
+  update(conversationId, (current) => current.mockup === moment ? current : {
+    ...current,
+    mockup: moment,
+    tabs: current.tabs.some((tab) => tab.id === MOCKUP_TAB) ? current.tabs
+      : [...current.tabs, { kind: "mockup", id: MOCKUP_TAB, opener: CHAT_TAB }],
+  });
 }
 
 export function selectTab(conversationId: string, id: string): void {
@@ -416,6 +428,6 @@ export function restoreSessionTabs(sessions: Record<string, SessionTabs>, isSave
     }).filter((tab, index, list) => list.findIndex((entry) => entry.id === tab.id) === index)
       .map((tab) => ({ ...tab, opener: tab.opener ? remapped.get(tab.opener) ?? tab.opener : null }));
     const active = remapped.get(session.active) ?? session.active;
-    return [id, { tabs, active: tabs.some((tab) => tab.id === active) ? active : CHAT_TAB }];
+    return [id, { tabs, active: tabs.some((tab) => tab.id === active) ? active : CHAT_TAB, ...(session.mockup ? { mockup: session.mockup } : {}) }];
   }));
 }

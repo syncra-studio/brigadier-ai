@@ -1,7 +1,7 @@
 # The mockup tab and the reference app's image tab (2026-10-11)
 
-SESSION-FIXES-PLAN.md Q10 shows a mockup in a tab of the right sidebar and asks it to look and behave like the
-reference app's preview tab. Its image tab was studied on 2026-10-11: its web bundle read, and a separate instance on a
+SESSION-FIXES-PLAN.md Q10 shows a mockup in a tab of its own and asks it to look and behave like the reference app's
+preview tab. Its image tab was studied on 2026-10-11: its web bundle read, and a separate instance on a
 throwaway profile driven over CDP (window 1728x1018, light theme forced in the renderer; nothing was sent, the profile
 was deleted). **[L]** is measured live, **[C]** read from code only.
 
@@ -9,7 +9,7 @@ was deleted). **[L]** is measured live, **[C]** read from code only.
 
 | The reference app | The mockup tab |
 |---|---|
-| Previews open as a content tab of the side panel; split beside Chat or full view (Chat becomes a tab) [L] | The Mockup tab of the right sidebar (shown while the session has a mockup); "Enter full view" opens it as a session tab over the main area, "Exit full view" returns it to the sidebar |
+| Previews open as a content tab in the title bar's tab strip; split beside Chat or full view (Chat becomes a tab) [L] | The session's Mockup tab in the titlebar's tab strip, added when the mockup starts (busy spinner while it builds); its page is the main area |
 | Header 48px over the stage; floating 32px capsules (blurred, ringed, round), gap 6px [L] | Same: `h-mockup-header`, `h-mockup-control`, `shadow-mockup-control`, `rounded-capsule`, `gap-1.5` |
 | File-type pill, its menu listing the file [L] | The pill names the image shown and the mockup's version and state; its menu lists every screenshot (mockup, live, side by side) |
 | Zoom capsule "73%": 25 / 50 / 100 / 150 / 200, separator, "Zoom to fit" (default; never enlarges); pinch and ⌘-scroll, 10–400% [L, C] | Same menu, steps and default; ⌘/pinch zoom with the same factor and clamp; a zoomed image pans by drag (grab cursor) |
@@ -34,6 +34,6 @@ was deleted). **[L]** is measured live, **[C]** read from code only.
 - **The sent screenshots carry their markers.** The reference app attaches the original image and relies on the
   percentages; a worker finds the place faster from a drawn marker.
 - **No Open / Download / Move toolbar.** The images are a worker's outputs, also in its report; the toolbar stays put.
-- **Split view is the right sidebar's width** (at most 29.25rem), not the reference app's resizable half: full view is
-  one click away.
+- **No split view.** The tab's page is the session's main area, as the session's other tabs are (the user's decision:
+  no right-sidebar tab, no chip).
 - **Dark only,** in Brigadier's tokens: the stage is `--mockup-stage`, the controls `bg-popover`.

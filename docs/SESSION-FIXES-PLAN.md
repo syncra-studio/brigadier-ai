@@ -606,7 +606,9 @@ noticed.
 2. **On yes,** a worker builds a static preview of the real screen: the real components, fake data, in the fixture
    gallery (`apps/desktop/src/fixtures`, the headless-Chromium capture scripts). It reports screenshots and a
    preview URL.
-3. **The surface** is a `mockup` tab of the right sidebar, opened by a chip in the thread (§5).
+3. **The surface** is the session's own Mockup tab in the titlebar's tab strip, beside its other tabs (§5, the user's
+   decision of 2026-10-11). It appears when the mockup task starts, shows the busy spinner while it builds, and opens
+   the mockup when clicked. No chip, no right-sidebar tab.
 4. The user reacts to the picture. The thread asks only about what the picture can't show (behaviour, edge cases).
    Real work starts after the user's yes.
 5. The final check compares the live app with the mockup: a side-by-side screenshot in the report, the live side
@@ -1165,7 +1167,8 @@ Both options were studied on 2026-10-11: the current assistant-ui docs and regis
 - **For several images,** a "Canvas view" shows them side by side, with comments across images: the pattern our
   mockup-vs-live comparison needs.
 
-**Recommendation: (b), with two borrowings from (a).** Show the mockup as a new `mockup` tab of the right sidebar we
+**Recommendation (superseded in part, see "The user's decision" below): (b), with two borrowings from (a).** Show the
+mockup as a new `mockup` tab of the right sidebar we
 already have (`apps/desktop/src/state/rightSidebar.ts:5`, today `files | source | workers | running | plan`), opened
 by a chip in the thread the way `C/PreviewChip.tsx` opens Running.
 1. A mockup made of real components needs real room: split and full-width, which canvas-split's fixed text card can't
@@ -1180,6 +1183,13 @@ by a chip in the thread the way `C/PreviewChip.tsx` opens Running.
 4. From canvas-split, borrow the header shape (title, version, building/done, Close) and the tool-UI pattern
    (`by_name` + `useToolArgsStatus`), which work on 0.15.22. No new dependency.
 5. One surface in our own tokens: nothing vendored to keep in sync.
+
+**The user's decision (2026-10-11), after seeing it built:** the mockup is **its own tab in the titlebar's session tab
+strip**, next to the session's tab like the other session tabs, **not** a right-sidebar tab, and there is **no separate
+chip**. The tab appears (without taking the front) when the mockup task starts; while the mockup is built, or built for
+real, its icon is the busy spinner that running rows use; ready, it shows normally. Clicking it opens the mockup: the
+image view, zoom, notes, Canvas view and side by side, all in the tab's page. Closed, it comes back at the mockup's next
+moment (a revision, the comparison). It is restored after a restart like the other session tabs.
 
 **The comparison uses computer use** (§3, "Computer use"): the mockup worker, or the final check's worker,
 launches the dev build and captures the live screen with the computer tools, next to the mockup's screenshot.
@@ -1520,12 +1530,12 @@ count when the window is narrow.
 **Scope:**
 1. The thread's offer (instruction plus an `ask_user` card shape).
 2. The mockup task kind or brief (real components, fake data, fixture page, screenshots).
-3. The surface from §5.
+3. The surface from §5: the session's Mockup tab in the titlebar's strip (the user's decision).
 4. The final side-by-side check in the report, with the live side captured by computer use.
 5. The phase's instruction revision: open threads hear the mockup offer as a note.
 
-**Done when:** the three live checks of Q10 pass, with screenshots of the mockup in its surface and of the final
-side-by-side. A thread open since phase 5 offers a mockup after its note, without starting over.
+**Done when:** the three live checks of Q10 pass, with screenshots of the Mockup tab while it builds and when ready, of
+the mockup in it, and of the final side-by-side. A thread open since phase 5 offers a mockup after its note, without starting over.
 
 **Risks.** A mockup of a deep screen may need state the fixtures don't have. The worker builds a fixture board for it
 (as `thread-t1-2026-10-08.events.json` was), and a screen it can't fake is said in the offer.

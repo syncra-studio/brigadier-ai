@@ -13,7 +13,7 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage } });
 const { CHAT_TAB, newSessionTab, sessionTabs, selectTab, closeTab, reopenTab, moveTab,
   selectTabNumber, stepTab, changeSessionTab, restoreSessionTabs, useSessionTabs, useTabCloseAsk,
-  replaceNewTab, replaceNewTabWithFile, openFileTab, openReviewTab } = await import("./sessionTabs");
+  replaceNewTab, replaceNewTabWithFile, openFileTab, openReviewTab, showMockupTab, MOCKUP_TAB } = await import("./sessionTabs");
 const { editDocument, documentText, flushDocument, noteDocumentSave, documentIsSaved, documentRelativePath, discardDocument } = await import("./documentDrafts");
 
 test("side chat pruning preserves plain chats, unknown parents and referenced session chats", () => {
@@ -26,6 +26,25 @@ test("side chat pruning preserves plain chats, unknown parents and referenced se
   assert.deepEqual(abandonedSideChats([], new Set()), []);
   assert.deepEqual(abandonedSideChats(conversations.slice(2), new Set()), []);
   assert.deepEqual(abandonedSideChats(conversations, new Set(["kept"])), ["orphan"]);
+});
+
+test("the Mockup tab appears at each mockup moment without taking the front, stays closed until the next, and restores", () => {
+  const session = "mockup-session";
+  openFileTab(session, "src/a.ts");
+  showMockupTab(session, "task-1/v1");
+  assert.deepEqual(sessionTabs(session).tabs.map((tab) => tab.id), ["file:src/a.ts", MOCKUP_TAB]);
+  assert.equal(sessionTabs(session).active, "file:src/a.ts");
+  showMockupTab(session, "task-1/v1");
+  assert.equal(sessionTabs(session).tabs.length, 2);
+  closeTab(session, MOCKUP_TAB);
+  closeTab(session, "file:src/a.ts");
+  showMockupTab(session, "task-1/v1");
+  assert.deepEqual(sessionTabs(session), { tabs: [], active: CHAT_TAB, mockup: "task-1/v1" });
+  showMockupTab(session, "task-1/v2");
+  assert.deepEqual(sessionTabs(session).tabs.map((tab) => tab.id), [MOCKUP_TAB]);
+  selectTab(session, MOCKUP_TAB);
+  const restored = restoreSessionTabs({ [session]: sessionTabs(session) })[session]!;
+  assert.deepEqual(restored, { tabs: [{ kind: "mockup", id: MOCKUP_TAB, opener: CHAT_TAB }], active: MOCKUP_TAB, mockup: "task-1/v2" });
 });
 
 test("empty new files close without confirmation while edited files ask", () => {

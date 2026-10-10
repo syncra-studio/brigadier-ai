@@ -1,4 +1,4 @@
-import { Archive, Chat, Globe, ImageSquare, Terminal, Plus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Archive, Chat, Globe, Terminal, Plus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -21,7 +21,7 @@ import { takePaneClose } from "@/state/closedPanes";
 import { undoTabClose } from "@/state/terminalPlaces";
 import { ChatActions } from "@/app/conversation/ChatActions";
 import { PreviewChip } from "@/app/conversation/PreviewChip";
-import { MockupChip } from "@/app/conversation/MockupChip";
+import { MockupTabIcon, MockupTabStatus, useMockupTab } from "@/app/conversation/MockupTabIcon";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { Badge } from "@/components/ui/badge";
@@ -192,6 +192,7 @@ export function SessionTabBar({
   const id = conversation.id;
   const confirmClose = useTabCloseAsk((state) => state.confirm);
   const { tabs, active } = useSessionTabsOf(id);
+  useMockupTab(id);
   const connection = useApp((s) => s.connection.status);
   const archived = conversation.lifecycle === "archived";
   const strip = useRef<HTMLDivElement>(null);
@@ -362,11 +363,12 @@ export function SessionTabBar({
                         : tab.kind === "terminal" ? <Terminal className="size-icon-sm shrink-0" />
                         : tab.kind === "sideChat" ? <Chat className="size-icon-sm shrink-0" />
                         : tab.kind === "document" ? <Document className="size-icon-sm shrink-0" />
-                        : tab.kind === "mockup" ? <ImageSquare className="size-icon-sm shrink-0" /> : (
+                        : tab.kind === "mockup" ? <MockupTabIcon conversationId={id} /> : (
                         <DiffGlyph className="size-icon-sm shrink-0" />
                       )}
                       <span className={cn("session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap", tab.kind === "file" && tab.preview && "italic")}>
                         {name}
+                        {tab.kind === "mockup" && <MockupTabStatus conversationId={id} />}
                       </span>
                     </button>
                     <button
@@ -397,7 +399,6 @@ export function SessionTabBar({
         </Badge>
       )}
       <PreviewChip conversationId={id} />
-      <MockupChip conversationId={id} />
       <div data-tauri-drag-region className="min-w-0 flex-1 self-stretch" />
       {children}
       <Dialog open={confirmClose !== null} onOpenChange={(open) => { if (!open) useTabCloseAsk.setState({ confirm: null }); }}>
@@ -473,7 +474,7 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
                 <SideChatTab conversationId={conversationId} tab={tab} />
               ) : tab.kind === "terminal" ? (
                 <div data-main-terminal className="flex min-h-0 flex-1 flex-col"><MainTerminalTab conversationId={conversationId} tab={tab} active={shown} /></div>
-              ) : tab.kind === "mockup" ? <MockupView conversationId={conversationId} full />
+              ) : tab.kind === "mockup" ? <MockupView conversationId={conversationId} />
                 : <DocumentTabView conversationId={conversationId} tab={tab} active={shown} />}
             </Suspense>
           </div>

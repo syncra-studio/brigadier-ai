@@ -1,8 +1,7 @@
-import { ArrowUp, Check, ChevronDown, Collapse, Comment, Expand, Grid, ImageSquare, SquareImage, Trash, X } from "@openai/apps-sdk-ui/components/Icon";
-import { type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ArrowUp, Check, ChevronDown, Comment, Grid, ImageSquare, SquareImage, Trash, X } from "@openai/apps-sdk-ui/components/Icon";
+import { type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { type ImageState, type LoadedImage, loadImage, markedScreenshot, useStoredImage } from "@/app/conversation/mockupImages";
-import { RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -14,7 +13,6 @@ import { addAttachment, send } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { type Mockup, mockupOf } from "@/state/mockup";
 import { changeNotes, markedName, markerNumber, mockupNotesOf, type MockupNote, notePlacement, notesByScreen, notesMessage, pointIn, useSessionNotes } from "@/state/mockupNotes";
-import { closeTab, MOCKUP_TAB, openMockupTab } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 /** The zoom menu's steps, as the reference app's image tab offers them. */
@@ -52,9 +50,9 @@ const CAPSULE = "bg-popover/90 text-popover-foreground shadow-mockup-control rou
 /**
  * The session's mockup (SESSION-FIXES-PLAN.md Q10): its screenshots to look at and mark with
  * notes, sent in one batch to the worker that made them; then, once the real work is built,
- * the live captures beside them. Split in the right sidebar, or `full` over the main area.
+ * the live captures beside them. It is the page of the session's Mockup tab.
  */
-export function MockupView({ conversationId, full = false }: { conversationId: string; full?: boolean }) {
+export function MockupView({ conversationId }: { conversationId: string }) {
   const tasks = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.tasks : null));
   const mockup = useMemo(() => (tasks ? mockupOf(tasks) : null), [tasks]);
   const { notes, commenting, sent } = useSessionNotes(conversationId);
@@ -73,7 +71,6 @@ export function MockupView({ conversationId, full = false }: { conversationId: s
   const [zoom, setZoom] = useState<Zoom>("fit");
   const [fitted, setFitted] = useState(100);
   const current = items.find((item) => item.key === picked) ?? items[0] ?? null;
-  const rightSidebar = useContext(RightSidebarContext);
   const canComment = Boolean(mockup && shown.length && (mockup.status === "ready" || mockup.status === "building") && !sent);
 
   useEffect(() => () => {
@@ -95,16 +92,6 @@ export function MockupView({ conversationId, full = false }: { conversationId: s
     return () => window.removeEventListener("keydown", onKey);
   }, [commenting, sendNotes]);
 
-  const toggleFull = () => {
-    if (full) {
-      closeTab(conversationId, MOCKUP_TAB);
-      rightSidebar?.openTab("mockup");
-    } else {
-      openMockupTab(conversationId);
-      rightSidebar?.setOpen(false);
-    }
-  };
-
   if (!mockup) {
     return <Centered>No mockup in this session yet.</Centered>;
   }
@@ -117,11 +104,6 @@ export function MockupView({ conversationId, full = false }: { conversationId: s
           <FilePill mockup={mockup} items={items} current={view === "focused" ? current : null} onPick={(key) => { setPicked(key); setView("focused"); }} />
           <div className="min-w-0 flex-1" />
           {items.length > 0 && <ZoomMenu zoom={zoom} percent={shownZoom} onChange={setZoom} />}
-          <Tip label={full ? "Exit full view" : "Enter full view"}>
-            <button type="button" aria-label={full ? "Exit full view" : "Enter full view"} onClick={toggleFull} className={cn(CAPSULE, "hover:bg-popover size-mockup-control justify-center")}>
-              {full ? <Collapse className="size-icon-sm" /> : <Expand className="size-icon-sm" />}
-            </button>
-          </Tip>
         </header>
         {items.length === 0 ? (
           mockup.status === "building"
@@ -593,9 +575,4 @@ function useSendNotes(conversationId: string, mockup: Mockup | null, shown: read
     await send({ text: notesMessage(mockup.version, notes), attachments, mentions: [] }, undefined, { to: conversationId });
     changeNotes(conversationId, () => ({ notes: [], commenting: false, sent: { version: mockup.version, shots: mockup.shots.map((ref) => ref.id), dismissed: false } }));
   }, [conversationId, mockup, shown]);
-}
-
-/** The session's right sidebar tab: the mockup, split beside the thread. */
-export function MockupTab({ conversationId }: { conversationId: string }) {
-  return <MockupView conversationId={conversationId} />;
 }

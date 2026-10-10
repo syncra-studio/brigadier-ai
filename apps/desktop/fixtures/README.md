@@ -143,9 +143,10 @@ This entry is absent from the production build.
 
 # Mockup
 
-`http://localhost:1426/fixtures/mockup.html` shows a session's mockup (SESSION-FIXES-PLAN.md Q10) in the
-right sidebar's Mockup tab, opened from its chip, with screenshots drawn in the page. Query switches:
-`stage=building|ready|compared|stopped`, `full=1` (full view over the main area), `comment=1` (two
-notes already marked). `drive=1` runs the flow `src/app/conversation/MockupRender.test.ts` checks:
-Comment, two markers with notes, ⌘↩ sends one message with the marked screenshot, Working, the
-revision's See latest changes, full view and back. Requests never reach a daemon.
+`http://localhost:1426/fixtures/mockup.html` shows a session's mockup (SESSION-FIXES-PLAN.md Q10) in its
+Mockup tab of the session tab strip, with screenshots drawn in the page. Query switches:
+`stage=building|ready|compared|stopped`, `chat=1` (Chat stays in front, to see the tab itself),
+`comment=1` (two notes already marked). `drive=1` runs the flow `src/app/conversation/MockupRender.test.ts`
+checks: the tab busy while it builds, then ready; opening it, Comment, two markers with notes, ⌘↩ sends
+one message with the marked screenshot, Working, the revision's See latest changes, closing the tab and
+its return at the comparison. Requests never reach a daemon.

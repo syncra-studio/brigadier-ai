@@ -1,23 +1,21 @@
 /**
- * The mockup tab (SESSION-FIXES-PLAN.md Q10) on synthetic board data; no daemon. Screenshots
- * are drawn here; `stage=building|ready|compared|stopped`, `full=1` (full view), `comment=1`
- * (two notes made), `drive=1` (the rendering test's flow, its result in #mockup-result).
+ * The session's Mockup tab (SESSION-FIXES-PLAN.md Q10) on synthetic board data; no daemon.
+ * Screenshots are drawn here; `stage=building|ready|compared|stopped`, `chat=1` (Chat stays in
+ * front), `comment=1` (two notes made), `drive=1` (the rendering test's flow, its result in
+ * #mockup-result).
  */
+import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { MockupChip } from "@/app/conversation/MockupChip";
-import { RightSidebar, RightSidebarContext } from "@/app/conversation/RightSidebar";
-import { SessionTabViews } from "@/app/conversation/SessionTabBar";
-import { useSidePanel } from "@/app/conversation/SidePanel";
-import { SidebarProvider } from "@/components/ui/sidebar";
+import { SessionTabBar, SessionTabViews } from "@/app/conversation/SessionTabBar";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { ArtifactRef, Request, Task } from "@/ipc/generated";
+import type { ArtifactRef, Conversation, Request, Task } from "@/ipc/generated";
 import { tokenColor } from "@/lib/tokens";
 import { emptyBoard, useBoard } from "@/state/board";
 import { changeNotes, mockupNotesOf } from "@/state/mockupNotes";
-import { openMockupTab, sessionTabs } from "@/state/sessionTabs";
+import { closeTab, MOCKUP_TAB, selectTab, sessionTabs, useSessionTabs, useSessionTabsOf } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 const id = "mockup-fixture";
@@ -81,7 +79,8 @@ const task = (number: number, change: Partial<Task>): Task => ({
 }) as Task;
 
 const shots = (version: number) => [1, 2].map((screen) => ref(`mockup-${screen}.png`, `mockup-${screen}-v${version}`));
-const tasks: Task[] = stage === "building" ? [task(1, { mockup: { type: "builds" }, state: "running" })]
+const building = [task(1, { mockup: { type: "builds" }, state: "running" })];
+const tasks: Task[] = stage === "building" || params.has("drive") ? building
   : stage === "stopped" ? [task(1, { mockup: { type: "builds" }, state: "stopped" })]
     : stage === "compared" ? [
       task(1, { mockup: { type: "builds" }, state: "landed", outputs: shots(1) }),
@@ -89,8 +88,18 @@ const tasks: Task[] = stage === "building" ? [task(1, { mockup: { type: "builds"
         outputs: [1, 2].flatMap((screen) => [ref(`live-${screen}.png`, `live-${screen}`), ref(`compare-${screen}.png`, `compare-${screen}`)]) }),
     ]
       : [task(1, { mockup: { type: "builds" }, outputs: shots(1) })];
-useBoard.setState({ board: { ...emptyBoard(id), loaded: true, tasks: Object.fromEntries(tasks.map((t) => [t.id, t])) } });
+const setTasks = (list: Task[]) => useBoard.setState({ board: { ...emptyBoard(id), loaded: true, tasks: Object.fromEntries(list.map((t) => [t.id, t])) } });
+setTasks(tasks);
+// A fresh page each load, whatever an earlier one left in storage.
+useSessionTabs.setState({ sessions: {} });
+const conversation: Conversation = {
+  id, kind: "session", projectId: "fixture-project", title: "Density toggle",
+  pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active",
+  forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+};
 useApp.setState({
+  conversations: { [id]: conversation },
+  selection: { type: "conversation", id },
   info: { platform: "macos", version: "fixture", processStartMs: now, smoke: false, firstLaunch: false, budgetTolerance: 1 },
   connection: { status: "connected", daemon: null, reason: null },
 });
@@ -98,7 +107,6 @@ if (params.has("comment")) changeNotes(id, () => ({ commenting: true, notes: [
   { id: "n1", screen: 1, x: 0.18, y: 0.92, text: "Put the toggle in the header instead" },
   { id: "n2", screen: 1, x: 0.62, y: 0.12, text: "Keep this card's height" },
 ] }));
-if (params.has("full")) openMockupTab(id);
 
 const calls: Request[] = [];
 mockIPC((command, payload) => {
@@ -121,22 +129,39 @@ const type = (input: HTMLInputElement, value: string) => {
   input.dispatchEvent(new Event("input", { bubbles: true }));
 };
 
+const mockupTab = () => document.querySelector('[data-tab-id="mockup"]');
+
 function Fixture() {
-  const { panel } = useSidePanel(id, true);
   const [result, setResult] = useState("");
-  const { openTab } = panel;
-  useEffect(() => { if (!params.has("full")) openTab("mockup"); }, [openTab]);
+  const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
+  const { tabs } = useSessionTabsOf(id);
+  const added = tabs.some((tab) => tab.id === MOCKUP_TAB);
+  // Clicking the tab opens the mockup; the fixture does it for its screenshots.
+  useEffect(() => { if (added && !params.has("chat") && !params.has("drive")) selectTab(id, MOCKUP_TAB); }, [added]);
   useEffect(() => {
     if (!params.has("drive")) return;
     const seen: Record<string, unknown> = {};
     const timers: ReturnType<typeof setTimeout>[] = [];
     const at = (ms: number, action: () => void) => timers.push(setTimeout(action, ms));
     const surface = () => document.querySelector('[data-slot="mockup-surface"]')!;
+    const tabState = () => ({
+      name: mockupTab()?.querySelector('[role="tab"]')?.textContent,
+      busy: Boolean(mockupTab()?.querySelector('[data-slot="mockup-tab-busy"]')),
+    });
+    at(800, () => {
+      // While it builds: the tab is there, not in front, with the busy spinner.
+      seen.building = { ...tabState(), active: sessionTabs(id).active };
+      setTasks([task(1, { mockup: { type: "builds" }, outputs: shots(1) })]);
+    });
+    at(1200, () => {
+      seen.ready = tabState();
+      mockupTab()?.querySelector<HTMLButtonElement>('[role="tab"]')?.click();
+    });
     at(1500, () => {
-      seen.chip = document.querySelector('[data-slot="mockup-chip"]')?.textContent;
+      seen.shown = Boolean(document.querySelector('[role="tabpanel"][aria-label="Mockup"] [data-slot="mockup"]'));
       seen.pill = button("File actions for Density toggle mockup")?.textContent;
       seen.zoom = document.querySelector('[aria-label^="Current zoom"]')?.textContent;
-      seen.tabs = [...document.querySelectorAll('[aria-label="Right sidebar"] [role="tab"]')].map((tab) => tab.getAttribute("aria-label"));
+      seen.chip = Boolean(document.querySelector('[data-slot="mockup-chip"]'));
       button("Comment")?.click();
     });
     at(1800, () => {
@@ -183,40 +208,37 @@ function Fixture() {
       });
       at(1000, () => {
         seen.after = button("File actions for Density toggle mockup")?.textContent;
-        button("Enter full view")?.click();
+        closeTab(id, MOCKUP_TAB);
       });
-      at(1400, () => {
-        seen.fullTab = sessionTabs(id).active;
-        seen.fullShown = Boolean(document.querySelector('[role="tabpanel"][aria-label="Mockup"] [data-slot="mockup"]'));
-        button("Exit full view")?.click();
+      at(1300, () => {
+        seen.closed = { tab: Boolean(mockupTab()), active: sessionTabs(id).active };
+        // The real work is built and compared with the mockup: the tab comes back.
+        const board = useBoard.getState().board!;
+        useBoard.setState({ board: { ...board, tasks: { ...board.tasks, "task-1": { ...board.tasks["task-1"]!, state: "landed" },
+          "task-2": task(2, { title: "Compact density toggle", mockup: { type: "matches", task: "task-1" }, state: "reported",
+            outputs: [1, 2].flatMap((screen) => [ref(`live-${screen}.png`, `live-${screen}`), ref(`compare-${screen}.png`, `compare-${screen}`)]) }) } } });
       });
-      at(1800, () => {
-        seen.exited = { tabs: sessionTabs(id).tabs.length, sidebar: document.querySelector('[data-slot="right-sidebar"]')?.getAttribute("data-state") };
+      at(1700, () => {
+        seen.compared = { tab: Boolean(mockupTab()), ...tabState() };
         setResult(JSON.stringify(seen));
       });
     }));
     return () => timers.forEach(clearTimeout);
   }, []);
   return (
-    <RightSidebarContext.Provider value={panel}>
-      <main className="bg-background text-foreground flex h-screen w-full min-w-0">
-        <div className="relative flex min-w-0 flex-1 flex-col">
-          <header className="h-titlebar flex shrink-0 items-center justify-between gap-3 px-5">
-            <span className="text-sm font-medium">Add a compact density toggle to the sidebar</span>
-            <MockupChip conversationId={id} />
-          </header>
-          <div className="relative min-h-0 flex-1">
-            <div className="mx-auto max-w-xl space-y-4 px-6 py-12 text-sm">
-              <p>Here is a mockup of the compact density toggle: two screens, the sidebar as it is and with compact rows.</p>
-              <p className="text-muted-foreground">Mark anything to change on the screenshots, then send your notes.</p>
-            </div>
-            <SessionTabViews conversationId={id} />
-          </div>
+    <AssistantRuntimeProvider runtime={runtime}>
+    <main className="bg-background text-foreground flex h-screen w-full min-w-0 flex-col">
+      <SessionTabBar conversation={conversation} onRename={() => {}} />
+      <div className="relative min-h-0 flex-1">
+        <div className="mx-auto max-w-xl space-y-4 px-6 py-12 text-sm">
+          <p>Here is a mockup of the compact density toggle: two screens, the sidebar as it is and with compact rows.</p>
+          <p className="text-muted-foreground">Open the Mockup tab, mark anything to change on the screenshots, then send your notes.</p>
         </div>
-        <RightSidebar conversationId={id} />
-      </main>
+        <SessionTabViews conversationId={id} />
+      </div>
       {result && <pre id="mockup-result">{result}</pre>}
-    </RightSidebarContext.Provider>
+    </main>
+    </AssistantRuntimeProvider>
   );
 }
-createRoot(document.getElementById("root")!).render(<TooltipProvider><SidebarProvider defaultOpen={false}><Fixture /></SidebarProvider></TooltipProvider>);
+createRoot(document.getElementById("root")!).render(<TooltipProvider><Fixture /></TooltipProvider>);
