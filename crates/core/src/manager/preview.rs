@@ -2107,29 +2107,33 @@ while True: time.sleep(0.03)
         let root = std::env::temp_dir().join(format!("preview-data-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
         let root = root.canonicalize().unwrap();
-        for replaced in [true, false] {
-            let owner = format!("preview-data:{}:{replaced}", flow.conversation);
-            let path = root.join(format!("data-{replaced}"));
-            std::fs::create_dir(&path).unwrap();
-            let artifact = |path: &Path| {
-                let meta = std::fs::metadata(path).unwrap();
-                Artifact::PreviewDataDir {
-                    path: path.to_string_lossy().into_owned(),
-                    identity: Some((meta.dev(), meta.ino())),
-                }
-            };
-            ledger.record(&owner, artifact(&path)).await.unwrap();
-            // Keep the old inode alive so the replacement cannot reuse it.
-            std::fs::rename(&path, root.join(format!("original-{replaced}"))).unwrap();
-            if replaced {
+        let artifact = |path: &Path| {
+            let meta = std::fs::metadata(path).unwrap();
+            Artifact::PreviewDataDir {
+                path: path.to_string_lossy().into_owned(),
+                identity: Some((meta.dev(), meta.ino())),
+            }
+        };
+        // `None`: the owner held nothing when it was disposed of.
+        for replaced in [Some(true), Some(false), None] {
+            let case = format!("{replaced:?}");
+            let owner = format!("preview-data:{}:{case}", flow.conversation);
+            let path = root.join(format!("data-{case}"));
+            if let Some(replaced) = replaced {
                 std::fs::create_dir(&path).unwrap();
-                std::fs::write(path.join("foreign"), "keep").unwrap();
+                ledger.record(&owner, artifact(&path)).await.unwrap();
+                // Keep the old inode alive so the replacement cannot reuse it.
+                std::fs::rename(&path, root.join(format!("original-{case}"))).unwrap();
+                if replaced {
+                    std::fs::create_dir(&path).unwrap();
+                    std::fs::write(path.join("foreign"), "keep").unwrap();
+                }
             }
             assert!(ledger.dispose(&owner).await.is_clean());
             assert!(ledger.artifacts(&owner).is_empty());
             assert!(!ledger.disposing().contains(&owner));
 
-            let later = root.join(format!("later-{replaced}"));
+            let later = root.join(format!("later-{case}"));
             std::fs::create_dir(&later).unwrap();
             let later_artifact = artifact(&later);
             ledger.record(&owner, later_artifact.clone()).await.unwrap();
@@ -2151,13 +2155,13 @@ while True: time.sleep(0.03)
             reloaded.sweep().await;
             assert!(later.is_dir());
             assert_eq!(reloaded.artifacts(&owner), vec![later_artifact]);
-            if replaced {
-                assert_eq!(
+            match replaced {
+                Some(true) => assert_eq!(
                     std::fs::read_to_string(path.join("foreign")).unwrap(),
                     "keep"
-                );
-            } else {
-                assert!(!path.exists());
+                ),
+                Some(false) => assert!(!path.exists()),
+                None => {}
             }
             assert!(ledger.dispose(&owner).await.is_clean());
         }

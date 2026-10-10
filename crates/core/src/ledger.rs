@@ -287,6 +287,17 @@ impl CleanupLedger {
             .failures
             .extend(self.remove(owner, files).await.failures);
         if self.artifacts(owner).is_empty() {
+            // Stored as well, so an owner that held nothing (no `cleanup.removed` follows) is
+            // not disposed of again at the next launch, with whatever it records by then.
+            if let Err(err) = self
+                .append(DomainEvent::CleanupCompleted {
+                    owner: owner.to_owned(),
+                    failures: Vec::new(),
+                })
+                .await
+            {
+                tracing::warn!(owner, error = %err, "could not record a finished cleanup");
+            }
             self.state().disposing.remove(owner);
         }
         leftovers
@@ -559,8 +570,9 @@ impl CleanupLedger {
                     let data_dir = self.platform.paths().data_dir.clone();
                     let dir = PathBuf::from(path);
                     let identity = *identity;
+                    let held = owner.to_owned();
                     match tokio::task::spawn_blocking(move || match identity {
-                        Some(identity) => remove_preview_data(&data_dir, &dir, identity),
+                        Some(identity) => remove_preview_data(&data_dir, &dir, identity, &held),
                         None => Ok(()),
                     })
                     .await
@@ -703,7 +715,12 @@ fn remove_scratch(data_dir: &Path, dir: &Path) -> std::io::Result<()> {
 
 /// Separately owned preview data can have a caller-chosen name, but must remain strictly
 /// inside /tmp and outside both app data directories. The ledger is the ownership proof.
-fn remove_preview_data(data_dir: &Path, dir: &Path, identity: (u64, u64)) -> std::io::Result<()> {
+fn remove_preview_data(
+    data_dir: &Path,
+    dir: &Path,
+    identity: (u64, u64),
+    owner: &str,
+) -> std::io::Result<()> {
     let root = Path::new("/tmp").canonicalize()?;
     if !dir.starts_with(&root) || dir == root {
         return Err(std::io::Error::other("preview data is outside /tmp"));
@@ -728,13 +745,18 @@ fn remove_preview_data(data_dir: &Path, dir: &Path, identity: (u64, u64)) -> std
             {
                 if !bound.is_dir() || bound.unix_identity() != identity {
                     // The recorded folder is gone; its replacement is not ours.
+                    tracing::warn!(
+                        path = %dir.display(),
+                        owner,
+                        "preview data folder was replaced; dropping its claim"
+                    );
                     return Ok(());
                 }
                 brigadier_sandbox::removal::delete(&bound).map_err(std::io::Error::other)
             }
             #[cfg(not(unix))]
             {
-                let _ = (bound, identity);
+                let _ = (bound, identity, owner);
                 Err(std::io::Error::other("preview data identity requires Unix"))
             }
         }

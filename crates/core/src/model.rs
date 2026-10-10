@@ -1568,8 +1568,8 @@ pub enum DomainEvent {
     CleanupRequested {
         owner: String,
     },
-    /// Written before artifacts were acknowledged one by one: every artifact of `owner` was
-    /// dealt with.
+    /// Every artifact of `owner` was dealt with: the disposal is over. Older stores also hold
+    /// it from before artifacts were acknowledged one by one.
     CleanupCompleted {
         owner: String,
         failures: Vec<String>,
