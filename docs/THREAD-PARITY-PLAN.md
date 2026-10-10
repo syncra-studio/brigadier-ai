@@ -637,3 +637,15 @@ The thirteen points were folded in:
 - measured thought durations only (§4.3);
 - plan length as guidance and Short replies untouched (§5 Q9, §6.1);
 - `full-checks.sh` and native checks (§7).
+
+### 8.4 From building phase 2 (2026-10-10)
+- **The merge card holds nothing up.** It comes after the request's answer, so an open merge card no longer
+  keeps its request waiting (phase 1 had it wait like a question round). The request is done: its work folds,
+  its newest reply is the answer, and "Worked for" stops counting while the card waits in the composer's place,
+  possibly overnight. The user's answer makes the request work again. `propose_merge` tells the thread to write
+  its final answer with the card. A round of `ask_user` questions still keeps its request waiting with its time
+  running (§4.1).
+- **An overnight run's items end with the run** (§4.6): with no Done buttons nothing else would end a
+  `Run`-source item; the run's report keeps the list. Items listed in a session before this build are resolved
+  the next time its requests settle.
+- **A question in the thread's text** makes no request wait, in runs too (§5 Q6): runs never ask the user.
