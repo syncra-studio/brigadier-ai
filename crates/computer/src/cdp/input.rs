@@ -311,17 +311,17 @@ pub fn text_of(conn: &mut Conn, el: &WebEl) -> CuResult<String> {
     }
 }
 
-/// The `<select>` an `<option>` is in, and the option's label. A closed list's options have no
-/// box to click (the protocol answered "Node does not have a layout object"), so a click on one
-/// picks it in its list. `None` for any other element.
-pub fn option_list(conn: &mut Conn, el: &WebEl) -> CuResult<Option<(WebEl, String)>> {
-    let label = call_on(
+/// The `<select>` an `<option>` is in, and the option's place in its list. A closed list's
+/// options have no box to click (the protocol answered "Node does not have a layout object"), so
+/// a click on one picks it in its list. `None` for any other element.
+pub fn option_list(conn: &mut Conn, el: &WebEl) -> CuResult<Option<(WebEl, usize)>> {
+    let index = call_on(
         conn,
         el,
-        "function(){ return this.tagName === 'OPTION' && this.closest('select') ? this.label : null; }",
+        "function(){ return this.tagName === 'OPTION' && this.closest('select') ? this.index : null; }",
         &[],
     )?;
-    let Some(label) = label.as_str().map(str::to_owned) else {
+    let Some(index) = index.as_u64().map(|i| i as usize) else {
         return Ok(None);
     };
     let s = Some(el.session.as_str());
@@ -349,19 +349,26 @@ pub fn option_list(conn: &mut Conn, el: &WebEl) -> CuResult<Option<(WebEl, Strin
             session: el.session.clone(),
             node,
         },
-        label,
+        index,
     )))
 }
 
-/// Picks a `<select>`'s option by its label or value with the keyboard, as a person would
-/// without opening its menu: focus, then type the option's label. Returns the option picked.
+/// The option to pick: one named by its label or value, or the very one a worker clicked (two
+/// options may share a label).
+pub enum Choice<'a> {
+    Named(&'a str),
+    At(usize),
+}
+
+/// Picks a `<select>`'s option with the keyboard, as a person would without opening its menu:
+/// focus, then type the option's label. Returns the option's place in its list.
 pub fn pick_option(
     conn: &mut Conn,
     page: &Page,
     el: &WebEl,
-    want: &str,
+    want: Choice<'_>,
     cancel: &CancelToken,
-) -> CuResult<String> {
+) -> CuResult<usize> {
     let options = call_on(
         conn,
         el,
@@ -374,27 +381,31 @@ pub fn pick_option(
         .flatten()
         .filter_map(|o| Some((o[0].as_str()?.to_owned(), o[1].as_str()?.to_owned())))
         .collect();
-    let index = options
-        .iter()
-        .position(|(l, v)| l == want || v == want)
-        .or_else(|| {
-            options
-                .iter()
-                .position(|(l, _)| l.eq_ignore_ascii_case(want.trim()))
-        })
-        .ok_or_else(|| {
-            CuError::new(
-                ErrorCode::NotSettable,
-                format!(
-                    "no option {want:?}; it has {}",
-                    options
-                        .iter()
-                        .map(|(l, _)| format!("{l:?}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            )
-        })?;
+    let index = match want {
+        Choice::At(i) if i < options.len() => i,
+        Choice::At(_) => return err(ErrorCode::StaleRef, "the option is gone"),
+        Choice::Named(want) => options
+            .iter()
+            .position(|(l, v)| l == want || v == want)
+            .or_else(|| {
+                options
+                    .iter()
+                    .position(|(l, _)| l.eq_ignore_ascii_case(want.trim()))
+            })
+            .ok_or_else(|| {
+                CuError::new(
+                    ErrorCode::NotSettable,
+                    format!(
+                        "no option {want:?}; it has {}",
+                        options
+                            .iter()
+                            .map(|(l, _)| format!("{l:?}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                )
+            })?,
+    };
     let label = options[index].0.clone();
     let selected = |conn: &mut Conn| -> CuResult<i64> {
         Ok(
@@ -404,7 +415,7 @@ pub fn pick_option(
         )
     };
     if selected(conn)? == index as i64 {
-        return Ok(label);
+        return Ok(index);
     }
     focus(conn, el)?;
     // Typing a label selects the first option it begins; the keys are the page's own input.
@@ -424,14 +435,14 @@ pub fn pick_option(
         }
     }
     if selected(conn)? == index as i64 {
-        return Ok(label);
+        return Ok(index);
     }
     // Labels that share their start: step with the arrow keys from where typing left it.
     for _ in 0..options.len() {
         cancel.check()?;
         let now = selected(conn)?;
         if now == index as i64 {
-            return Ok(label);
+            return Ok(index);
         }
         let dir = if now < index as i64 { "down" } else { "up" };
         key(
@@ -444,7 +455,7 @@ pub fn pick_option(
         )?;
     }
     if selected(conn)? == index as i64 {
-        return Ok(label);
+        return Ok(index);
     }
     err(
         ErrorCode::NotSettable,

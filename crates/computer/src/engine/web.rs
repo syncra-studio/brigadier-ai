@@ -17,8 +17,8 @@ struct Outcome {
     before: Option<RawNode<WebEl>>,
     /// Text that must read back from an element.
     text: Option<(WebEl, String)>,
-    /// A `<select>` that must show this option.
-    option: Option<(WebEl, String)>,
+    /// A `<select>` that must show the option at this place in its list.
+    option: Option<(WebEl, usize)>,
     answered: bool,
 }
 
@@ -477,17 +477,17 @@ impl<D: Desktop> Engine<D> {
                 if let Some(el) = el.as_ref().filter(|el| el.is_dialog()) {
                     self.web_answer(&page, el, "press")?;
                     out.answered = true;
-                } else if let Some((list, label)) = option {
+                } else if let Some((list, index)) = option {
                     // An option of a closed list is picked in its list, as `set_value` does.
                     out.aim = target
                         .r#ref
                         .as_deref()
                         .and_then(|r| self.ref_aim_web(w.id, r));
                     self.show_cursor(worker, w, out.aim, Gesture::Click);
-                    let label = self.on_page(&page, |p, c| {
-                        input::pick_option(c, p, &list, &label, cancel)
+                    let index = self.on_page(&page, |p, c| {
+                        input::pick_option(c, p, &list, input::Choice::At(index), cancel)
                     })?;
-                    out.option = Some((list, label));
+                    out.option = Some((list, index));
                 } else {
                     let (css, aim, el) = self.web_point(w, &page, &vp, target, true)?;
                     if let Some(el) = &el {
@@ -519,9 +519,10 @@ impl<D: Desktop> Engine<D> {
                         return err(ErrorCode::SecureField, "that is a password field");
                     }
                     if node.role == "popup" {
-                        let label = self
-                            .on_page(&page, |p, c| input::pick_option(c, p, &el, text, cancel))?;
-                        out.option = Some((el, label));
+                        let index = self.on_page(&page, |p, c| {
+                            input::pick_option(c, p, &el, input::Choice::Named(text), cancel)
+                        })?;
+                        out.option = Some((el, index));
                     } else {
                         self.on_page(&page, |p, c| input::replace_text(c, p, &el, text, cancel))?;
                         out.text = Some((el, text.clone()));
@@ -705,20 +706,21 @@ impl<D: Desktop> Engine<D> {
             } else {
                 fail(ErrorCode::NotSettable, format!("the value is now {now:?}"))
             }
-        } else if let Some((el, want)) = &out.option {
+        } else if let Some((el, index)) = &out.option {
+            // By place, not label: two options may share a label.
             let now = self
                 .on_page(&page, |_, c| {
                     web_page::call_on(
                         c,
                         el,
-                        "function(){ const o = this.options[this.selectedIndex]; return o ? o.label : ''; }",
+                        "function(){ const o = this.options[this.selectedIndex]; return [this.selectedIndex, o ? o.label : '']; }",
                         &[],
                     )
                 })
                 .ok()
-                .and_then(|v| v.as_str().map(str::to_owned))
                 .unwrap_or_default();
-            if now == *want {
+            let (at, now) = (now[0].as_i64(), now[1].as_str().unwrap_or_default());
+            if at == Some(*index as i64) {
                 Effect::Confirmed
             } else {
                 fail(
