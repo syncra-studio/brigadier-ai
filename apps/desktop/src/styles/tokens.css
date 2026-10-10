@@ -195,7 +195,7 @@
   --spacing-kbd: 1.125rem;
   --spacing-menu: 8rem;
   --spacing-composer: 2.75rem;
-  /* The thread's scroll, as in ChatGPT's app: a sent message settles 171px under the view's top;
+  /* The thread's scroll: a sent message settles 171px under the view's top;
      at the bottom the last content ends 84px above the floating composer; the thread fades out
      over 30px above the composer and 20px under the top bar. */
   --spacing-thread-turn: 10.6875rem;

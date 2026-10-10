@@ -323,7 +323,7 @@ impl CleanupLedger {
     }
 
     /// After a restart, when nothing of Brigadier's runs: archives the Codex threads it still
-    /// holds, so the Codex and ChatGPT apps don't list them among the user's own. A session
+    /// holds, so the user's own Codex apps don't list them among their threads. A session
     /// closed normally archived its thread already; a thread is unarchived when resumed.
     pub async fn archive_codex_threads(&self) {
         #[cfg(test)]

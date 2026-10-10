@@ -11,7 +11,7 @@ function near(actual: number | null, expected: number, label: string): void {
   assert.ok(actual !== null && Math.abs(actual - expected) <= 0.5, `${label}: ${actual}, not ${expected}`);
 }
 
-test("the thread scrolls like ChatGPT's in the conversation view", { timeout: 120000 }, async (t) => {
+test("the thread keeps its place, follows from the bottom and places a sent turn in the conversation view", { timeout: 120000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "thread-scroll.html?drive=1", "thread-scroll-result", 90000)) as {
     error?: string;
     firstOpen: { distance: number; lastGap: number; button: Button; topFade: number; bottomFade: number };

@@ -1,7 +1,7 @@
 /*
- * The thread's scrolling, matched to ChatGPT's app. The thread lays out top-down with the
- * browser's own scroll anchoring off (WebKit has none), so content growing below the view moves
- * nothing. What does move is decided here:
+ * The thread's scrolling. The thread lays out top-down with the browser's own scroll anchoring
+ * off (WebKit has none), so content growing below the view moves nothing. What does move is
+ * decided here:
  * - An anchor keeps its place on screen while anything above it changes size or loads: the row
  *   crossing the view's top, or for a moment the toggle the user just clicked.
  * - The thread follows new content (stays at its bottom) only once the user went to the bottom

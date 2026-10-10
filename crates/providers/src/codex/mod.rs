@@ -948,8 +948,8 @@ fn trusted() -> Value {
 }
 
 /// The `projects` table of the user's own `config.toml`, by project path.
-/// Archives a thread Brigadier is done with for now, so the Codex and ChatGPT apps don't list
-/// it among the user's own threads (their Recents). The app-server offers no unlisted threads
+/// Archives a thread Brigadier is done with for now, so the user's own Codex apps don't list
+/// it among their threads (their Recents). The app-server offers no unlisted threads
 /// that can still be resumed: every thread it starts is recorded as a `vscode` one. A thread
 /// with no turn yet has nothing to archive.
 async fn archive_thread(rpc: &Rpc, thread_id: &str) -> Result<()> {
