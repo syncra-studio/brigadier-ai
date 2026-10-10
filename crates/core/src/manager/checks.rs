@@ -199,6 +199,12 @@ impl SessionManager {
         let Some(command) = command else {
             return self.affected_checks(&caller).await;
         };
+        // Keyed and run without the prefixes that change nothing about how it runs.
+        let command = canonical_command(
+            command,
+            &check_tmpdir(&caller),
+            brigadier_sandbox::limits::open_files(),
+        );
         let workdir = run_workdir(
             args.workdir.as_deref(),
             caller.tree.as_deref(),
@@ -550,11 +556,13 @@ impl SessionManager {
                     Error::Invalid(format!("the check can't be sandboxed here: {err}"))
                 })?,
         };
-        brigadier_providers::cli::apply_session_env(
-            &mut spec,
-            &super::workers::worker_env(&caller.scratch),
-            &[],
-        );
+        let mut env = super::workers::worker_env(&caller.scratch);
+        for (name, value) in &mut env {
+            if name == "TMPDIR" {
+                *value = check_tmpdir(caller).to_string_lossy().into_owned();
+            }
+        }
+        brigadier_providers::cli::apply_session_env(&mut spec, &env, &[]);
         // Workers run at low priority, and so do their checks.
         spec.low_priority = caller.task_id.is_some();
         Ok(spec)
@@ -822,6 +830,131 @@ impl SessionManager {
 /// Where a check of a caller with checkout `tree` runs, for `workdir`: the folder its access
 /// grants as its working directory when that isn't its checkout (`cwd_grant`), else the
 /// checkout's root when `workdir` is in it, else `workdir` itself.
+/// The temporary folder a check runs with: a task's test data folder, the thread's scratch
+/// folder.
+fn check_tmpdir(caller: &Caller) -> PathBuf {
+    caller
+        .task_id
+        .as_ref()
+        .map_or_else(|| caller.scratch.clone(), super::workers::test_data_dir)
+}
+
+/// `command` without the leading prefixes proven to change nothing about how it runs (bug 8):
+/// a `TMPDIR` set to exactly `tmpdir`, which the check sets anyway, and a `ulimit -n` that
+/// leaves both the soft and the hard limit as they are (`limits`, which the check inherits).
+/// `ulimit -n N` without `-S` or `-H` sets both limits in bash, the soft one in zsh, so it is
+/// dropped only when N is both. Anything else stays, in the command and so in its cache key:
+/// another folder, a limit that lowers or raises either one, other variables.
+fn canonical_command<'a>(
+    command: &'a str,
+    tmpdir: &Path,
+    limits: Option<brigadier_sandbox::limits::OpenFiles>,
+) -> &'a str {
+    let mut rest = command.trim_start();
+    loop {
+        let next = limits
+            .and_then(|limits| drop_ulimit(rest, limits))
+            .or_else(|| drop_tmpdir(rest, tmpdir));
+        match next {
+            Some(after) => rest = after.trim_start(),
+            None => return rest,
+        }
+    }
+}
+
+/// The next word of a command line and what follows it; a word ends at a blank, `;` or `&`.
+fn next_word(line: &str) -> (&str, &str) {
+    let line = line.trim_start_matches([' ', '\t']);
+    let end = line.find([' ', '\t', '\n', ';', '&']).unwrap_or(line.len());
+    line.split_at(end)
+}
+
+/// What follows a command separator (`;`, `&&` or a new line) at the start of `line`.
+fn after_separator(line: &str) -> Option<&str> {
+    let line = line.trim_start_matches([' ', '\t']);
+    line.strip_prefix("&&")
+        .or_else(|| line.strip_prefix(';'))
+        .or_else(|| line.strip_prefix('\n'))
+}
+
+/// A word without its surrounding quotes.
+fn unquoted(word: &str) -> &str {
+    for quote in ['\'', '"'] {
+        if let Some(inner) = word
+            .strip_prefix(quote)
+            .and_then(|word| word.strip_suffix(quote))
+        {
+            return inner;
+        }
+    }
+    word
+}
+
+/// What follows a leading `ulimit -n N;` that leaves both limits as `limits` has them.
+fn drop_ulimit(line: &str, limits: brigadier_sandbox::limits::OpenFiles) -> Option<&str> {
+    let (word, mut rest) = next_word(line);
+    if word != "ulimit" {
+        return None;
+    }
+    let (mut soft, mut hard, mut files) = (false, false, false);
+    let value = loop {
+        let (word, after) = next_word(rest);
+        rest = after;
+        match word.strip_prefix('-') {
+            Some(flags) if !flags.is_empty() => {
+                for flag in flags.chars() {
+                    match flag {
+                        'S' => soft = true,
+                        'H' => hard = true,
+                        'n' => files = true,
+                        _ => return None,
+                    }
+                }
+            }
+            Some(_) => return None,
+            None => break word,
+        }
+    };
+    if !files {
+        return None;
+    }
+    let value = match value {
+        "unlimited" => brigadier_sandbox::limits::UNLIMITED,
+        number => number.parse().ok()?,
+    };
+    let (soft, hard) = if soft || hard {
+        (soft, hard)
+    } else {
+        (true, true)
+    };
+    let unchanged = (!soft || value == limits.soft) && (!hard || value == limits.hard);
+    if unchanged {
+        after_separator(rest)
+    } else {
+        None
+    }
+}
+
+/// What follows a leading `TMPDIR=<tmpdir> ` (before the command it applies to),
+/// `TMPDIR=<tmpdir>;` or `export TMPDIR=<tmpdir>;`, for exactly the folder the check sets.
+fn drop_tmpdir<'a>(line: &'a str, tmpdir: &Path) -> Option<&'a str> {
+    let (mut word, mut rest) = next_word(line);
+    let exported = word == "export";
+    if exported {
+        (word, rest) = next_word(rest);
+    }
+    let value = word.strip_prefix("TMPDIR=")?;
+    if Path::new(unquoted(value)) != tmpdir {
+        return None;
+    }
+    match after_separator(rest) {
+        Some(after) => Some(after),
+        // `TMPDIR=… command`: the assignment applies to the command that follows.
+        None if !exported && rest.starts_with([' ', '\t']) && !rest.trim().is_empty() => Some(rest),
+        None => None,
+    }
+}
+
 fn check_root(tree: Option<&Path>, cwd_grant: Option<&Path>, workdir: &Path) -> PathBuf {
     if let Some(grant) = cwd_grant {
         return grant.canonicalize().unwrap_or_else(|_| grant.to_owned());
@@ -1771,6 +1904,63 @@ mod tests {
             tree.0,
             input_files(root, root, &packages, &["secret.json".into()]),
         )
+    }
+
+    #[test]
+    fn only_prefixes_that_change_nothing_leave_a_check_command() {
+        use brigadier_sandbox::limits::{OpenFiles, UNLIMITED};
+        let tmp = Path::new("/tmp/brigadier-test-1234abcd");
+        // The daemon's limits: soft raised, hard unlimited (macOS).
+        let limits = Some(OpenFiles {
+            soft: 65_536,
+            hard: UNLIMITED,
+        });
+        let same = |command: &'static str| canonical_command(command, tmp, limits);
+        // Dropped: a TMPDIR the check sets anyway, a limit already in place.
+        assert_eq!(
+            same("TMPDIR=/tmp/brigadier-test-1234abcd cargo test"),
+            "cargo test"
+        );
+        assert_eq!(
+            same("export TMPDIR='/tmp/brigadier-test-1234abcd/'; cargo test"),
+            "cargo test"
+        );
+        assert_eq!(same("ulimit -Sn 65536; cargo test"), "cargo test");
+        assert_eq!(same("ulimit -S -n 65536 && cargo test"), "cargo test");
+        assert_eq!(same("ulimit -Hn unlimited\ncargo test"), "cargo test");
+        assert_eq!(
+            same("ulimit -Sn 65536; TMPDIR=/tmp/brigadier-test-1234abcd cargo test -p core"),
+            "cargo test -p core"
+        );
+        // Kept: a limit that lowers the soft one, sets the hard one (bash's `ulimit -n N`
+        // sets both), or a folder the check doesn't set.
+        for command in [
+            "ulimit -n 8192; cargo test",
+            "ulimit -n 65536; cargo test",
+            "ulimit -Sn 8192; cargo test",
+            "ulimit -Hn 65536; cargo test",
+            "ulimit -n 8192 cargo test",
+            "ulimit -u 100; cargo test",
+            "TMPDIR=/tmp/elsewhere cargo test",
+            "export TMPDIR=/tmp/brigadier-test-1234abcd",
+            "FOO=1 cargo test",
+        ] {
+            assert_eq!(same(command), command, "{command}");
+        }
+        // `ulimit -n N` drops only where N is both limits.
+        let equal = Some(OpenFiles {
+            soft: 8192,
+            hard: 8192,
+        });
+        assert_eq!(
+            canonical_command("ulimit -n 8192; cargo test", tmp, equal),
+            "cargo test"
+        );
+        // Unreadable limits: no ulimit is dropped.
+        assert_eq!(
+            canonical_command("ulimit -Sn 65536; cargo test", tmp, None),
+            "ulimit -Sn 65536; cargo test"
+        );
     }
 
     #[test]

@@ -2154,6 +2154,9 @@ pub struct Told {
     /// The thread's workspace: its folder and branch (`<path> @ <branch>`); empty: none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+    /// The instructions' revision ([`crate::manager::prompts::REVISIONS`]) it last heard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u32>,
 }
 
 /// One entry of the orchestrator log shown in the Inspector.

@@ -1004,19 +1004,21 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
    without it, so the cache key is always the command actually executed (`M/checks.rs`):
    - `TMPDIR=<dir> ` or `export TMPDIR=<dir>;` where `<dir>` is exactly the task's test folder that `run_check`
      sets anyway.
-   - `ulimit -n N;` where N is at most the soft limit the check already gets (step 1). Its only effect, raising the
-     limit to N, is already met.
+   - `ulimit -n N;` only when it leaves both the soft and the hard limit as the check already has them (step 1):
+     `-S` with N the soft limit, `-H` with N the hard one, and without either only when N is both (bash's `ulimit -n
+     N` sets both limits, zsh's the soft one). A `ulimit -n 8192` under a raised soft limit lowers it, so it stays.
    - Anything else stays in the command and in the key, and runs as written: a `TMPDIR` pointing elsewhere, a
-     `ulimit -n` above the limit or any other `ulimit`, other variables.
+     `ulimit` that changes either limit or another resource, other variables. (Revised after the outline review:
+     the first rule dropped any `ulimit -n N` at or below the soft limit, which changes the limits.)
    - The worker prompt says not to add these prefixes.
 
 **Verify.**
 - Rust tests:
   - The daemon's spawned child reports `ulimit -n` ≥ 8192.
-  - Two `run_check` calls with and without a redundant `ulimit -n 8192;` / `TMPDIR=<test folder>` prefix on the same
-    tree → the second is `cached`, and the command run is the one without the prefix.
-  - A `TMPDIR=/somewhere/else` prefix, or a `ulimit -n` above the effective limit, keeps its own cache entry and is
-    run as written.
+  - Two `run_check` calls with and without a redundant `ulimit -Sn <soft>;` / `TMPDIR=<test folder>` prefix on the
+    same tree → the second is `cached`, and the command run is the one without the prefix.
+  - A `TMPDIR=/somewhere/else` prefix, or a `ulimit -n 8192` that would lower the soft limit or set the hard one,
+    keeps its own cache entry and is run as written.
   - A check queued behind the lease is never sent SIGSTOP (a fake platform records signals).
 - Live: two workers run `cargo test` at once. The second waits, then runs, with no `Too many open files` and no
   timing failure.
@@ -1436,5 +1438,5 @@ rejected. Two adoptions are narrower than the review's wording, for the reasons 
 | 4 | Dropping `packed-refs.lock` brings back a git error | `3278280c` and docs/evidence/2026-10-07-thread-phase1.md:55: without the lock every Codex commit printed "Unable to create packed-refs.lock" | Bug 6 step 2: the lock stays granted, `packed-refs` itself is protected (renaming the lock over it needs write access to it); both proved by test, and any alternative chosen by test first |
 | 5 | HEAD must be the merge commit, breaking the correction loop | Q2 step 2 required "the tip is a merge commit"; Q2's own refusal asks the worker to restore files, which it does with a new commit | Q2 step 2: the merge commit in HEAD's ancestry, both inputs ancestors of HEAD, the checks on the final tree; a test of a refused merge repaired by a later commit |
 | 6 | No recovery when the target advances | Today's landing keeps an expected tip and retries on `LandBlock::TipMoved` (`M/landing.rs:453-466`); the plan's fast-forward had no such path | Q2 step 3: the expected-tip check kept; on a moved target nothing lands and the same merge worker is resumed against the new tip, then re-validated; a concurrent-landing test and done-when case |
-| 7 | Cache normalization can equate different commands | Bug 8 stripped any `TMPDIR=…` and `ulimit -n N` before keying | Bug 8 step 3: only prefixes proven redundant with what `run_check` already sets (TMPDIR equal to the task's test folder; `ulimit -n N` at or below the effective limit) are dropped, and the command runs without them, so the key is the command executed; everything else stays in the key |
+| 7 | Cache normalization can equate different commands | Bug 8 stripped any `TMPDIR=…` and `ulimit -n N` before keying | Bug 8 step 3: only prefixes proven redundant with what `run_check` already sets (TMPDIR equal to the task's test folder; a `ulimit -n` that leaves both the soft and the hard limit unchanged, per the outline review) are dropped, and the command runs without them, so the key is the command executed; everything else stays in the key |
 | 8 | REA's install isn't fully pinned | Only the top-level package and tarball were pinned; about 148 transitive dependencies weren't | REA step 2: a reviewed manifest and lockfile with integrity values, `npm ci --ignore-scripts` (npm v11 `npm ci` docs), the install exposed only after its checks pass. Built in phase 3 |

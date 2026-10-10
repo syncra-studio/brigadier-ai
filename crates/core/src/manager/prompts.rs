@@ -88,7 +88,7 @@ How to work:
 - A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part (screenshots only if the user asked), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository, research tasks check current docs and operate tasks use apps on screen (over about five GUI steps, or exploring an app), when that is more than a quick look by you or the worker on the task.
 - Answer a worker's question ([question from task-N]) at once with answer_worker. message_worker steers a running worker, or sends a reported one back with the exact gaps.
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
-- Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect.
+- Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect. {CHECK_PREFIXES}
 - You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
 - Land finished work with land_phase (a phase isn't needed). What it left unfixed goes to a fix task (role fix, subject that task) or, when only the user can settle it, on a card (ask_user).
 - Every landing and every commit of your own gets one review by the other vendor in the background; nothing waits for it, and a tip already reviewed isn't reviewed again. Its findings arrive as a [review …] message, maybe after your answer or a merge: fix what you agree with (a fix worker, or a tiny fix) and say why not for the rest.
@@ -328,6 +328,53 @@ pub(crate) fn short_replies_note(short: bool) -> String {
 /// Version 6 proposes plans as documents on a plan card (`propose_plan`, §6). Version 7 starts the
 /// interview on any wording that invites questions, not only "grill me".
 pub(crate) const CONTRACT: u32 = 7;
+/// What the thread's instructions say about prefixing a check (bug 8).
+const CHECK_PREFIXES: &str =
+    "No `ulimit`/`TMPDIR=` prefix: it sets both, and a prefix misses the cache.";
+
+/// A change to the thread's or the workers' instructions that reaches open sessions as a
+/// note, with no start-over (SESSION-FIXES-PLAN.md §6, "Instruction changes reach open
+/// sessions"): a session told an older revision hears every newer one's note once, at the
+/// start of its next turn; a new session starts on the current instructions and hears none.
+pub(crate) struct Revision {
+    pub number: u32,
+    /// What the thread hears; empty when its instructions didn't change.
+    pub thread: &'static str,
+    /// What a resumed worker hears; empty when its instructions didn't change.
+    pub worker: &'static str,
+}
+
+/// Every revision since notes carried them, oldest first. Add one entry per instruction
+/// change, in the commit that changes the instructions; never renumber.
+pub(crate) const REVISIONS: &[Revision] = &[Revision {
+    number: 1,
+    thread: "From now on, give run_check the bare command: checks already run with a high open-files limit and their own TMPDIR, so never prefix `ulimit -n …;` or `TMPDIR=…`; a prefix only makes the cache miss.",
+    worker: "From now on, give run_check the bare command: it already runs with a high open-files limit and TMPDIR set to your test data folder, so never prefix `ulimit -n …;` or `TMPDIR=…`; a prefix only makes the cache miss.",
+}];
+
+/// The instructions' current revision.
+pub(crate) fn revision() -> u32 {
+    REVISIONS.last().map_or(0, |revision| revision.number)
+}
+
+/// The notes of every revision after `told`, for the thread or a worker, as one
+/// `[instructions]` note; `None` when there is nothing new to say.
+pub(crate) fn revision_note(told: u32, worker: bool) -> Option<String> {
+    let lines: Vec<&str> = REVISIONS
+        .iter()
+        .filter(|revision| revision.number > told)
+        .map(|revision| {
+            if worker {
+                revision.worker
+            } else {
+                revision.thread
+            }
+        })
+        .filter(|text| !text.is_empty())
+        .collect();
+    (!lines.is_empty()).then(|| format!("[instructions] {}", lines.join("\n")))
+}
+
 /// A Chat's contract: its instructions didn't change with the thread's.
 const CHAT_CONTRACT: u32 = 1;
 /// The first contract whose instructions say that notes replace them.
@@ -352,6 +399,7 @@ const RUN_LABEL: &str = "overnight run";
 const RUN_OVER_LABEL: &str = "overnight run over";
 const PREFERENCES_LABEL: &str = "preferences";
 const WORKSPACE_LABEL: &str = "workspace";
+const REVISION_LABEL: &str = "instructions revision";
 
 /// The parts of a session's instructions that can change while its CLI session lives on, as
 /// they are now.
@@ -442,6 +490,7 @@ impl Current {
             run: session.then(|| self.run_fingerprint()),
             preferences: Some(preferences_fingerprint(&self.preferences)),
             workspace: self.workspace.clone(),
+            revision: session.then(revision),
         }
     }
 }
@@ -499,6 +548,16 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
         });
     }
     if !now.chat {
+        if let Some(text) = revision_note(told.revision.unwrap_or(0), false) {
+            notes.push(Note {
+                text,
+                label: REVISION_LABEL,
+                told: Told {
+                    revision: Some(revision()),
+                    ..Told::default()
+                },
+            });
+        }
         if told.short_replies != Some(now.short_replies) {
             notes.push(Note {
                 text: short_replies_note(now.short_replies),
@@ -634,6 +693,7 @@ pub(crate) fn fill_told(told: &mut Told, older: &Told) {
     if told.workspace.is_none() {
         told.workspace.clone_from(&older.workspace);
     }
+    told.revision = told.revision.or(older.revision);
 }
 
 /// What the current CLI session was last told, from its log's instruction entries (logged at
@@ -683,7 +743,7 @@ const WORKER_CODE_TOOLS: &str = "
 
 /// How every worker runs its checks (THREAD-PLAN.md Q8 lever 3).
 const WORKER_CHECKS: &str = "
-- Run every check (tests, lint, typecheck, build, formatting) with run_check, not your shell: call it first with no command for the checks your changes affect, then run those. A check that already ran on the same files answers from the cache.";
+- Run every check (tests, lint, typecheck, build, formatting) with run_check, not your shell: call it first with no command for the checks your changes affect, then run those. A check that already ran on the same files answers from the cache. Give run_check the bare command: it already runs with a high open-files limit and TMPDIR set to your test data folder, so never prefix `ulimit -n …;` or `TMPDIR=…`: a prefix only makes the cache miss.";
 
 /// How implement and merge workers write code (PLAN.md §7; after ponytail's rules, see
 /// THIRD_PARTY_NOTICES.md).
@@ -1441,8 +1501,8 @@ mod environment_tests {
         assert!(!worktree.contains("there is no card"));
         // Every byte is paid for on every call: it stays near 12 KiB, code rules included
         // (the old orchestrator's 11,371 bytes, the interview the user wanted built in, and
-        // the suggest_full_access hint of the sandboxed levels).
-        assert!(codex.len() < 12_400, "{}", codex.len());
+        // the suggest_full_access hint of the sandboxed levels, and bug 8's check prefixes).
+        assert!(codex.len() < 12_500, "{}", codex.len());
     }
 
     #[test]
@@ -1660,6 +1720,42 @@ mod environment_tests {
         let mut told = told;
         took(&mut told, &sent);
         assert!(notes(&told, &chat).is_empty());
+    }
+
+    /// §6, "Instruction changes reach open sessions": a session told revision N−1 hears
+    /// exactly revision N's note, once; one told N, or a new one, hears nothing.
+    #[test]
+    fn an_older_revision_hears_the_newer_notes_once_and_a_current_one_nothing() {
+        let now = current("approveForMe", None, &[]);
+        let current_told = now.told();
+        assert_eq!(current_told.revision, Some(revision()));
+        assert!(notes(&current_told, &now).is_empty());
+
+        let mut older = current_told.clone();
+        older.revision = Some(revision() - 1);
+        let sent = notes(&older, &now);
+        assert_eq!(labels(&sent), vec![REVISION_LABEL]);
+        let newest = REVISIONS.last().unwrap();
+        assert_eq!(sent[0].text, format!("[instructions] {}", newest.thread));
+        // Once heard, nothing more.
+        let mut heard = sent[0].told.clone();
+        fill_told(&mut heard, &older);
+        assert!(notes(&heard, &now).is_empty());
+
+        // A session from before revisions existed hears every one; a worker its own words.
+        older.revision = None;
+        assert_eq!(labels(&notes(&older, &now)), vec![REVISION_LABEL]);
+        assert_eq!(
+            revision_note(revision() - 1, true),
+            Some(format!("[instructions] {}", newest.worker))
+        );
+        assert_eq!(revision_note(revision(), true), None);
+        // Revision 1: checks get no prefixes.
+        assert!(
+            REVISIONS[0]
+                .worker
+                .contains("never prefix `ulimit -n …;` or `TMPDIR=…`")
+        );
     }
 
     #[test]

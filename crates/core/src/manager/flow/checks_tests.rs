@@ -164,3 +164,93 @@ async fn a_check_runs_once_per_tree_for_workers_and_the_thread() {
     );
     flow.stop().await;
 }
+
+/// Bug 8: a check runs with a raised open-files limit and the task's test folder as TMPDIR,
+/// and a prefix that changes neither is dropped, so the check answers from the cache; one
+/// that changes how it runs keeps its own entry and runs as written.
+#[tokio::test]
+async fn a_prefix_that_changes_nothing_still_answers_from_the_cache() {
+    // As the daemon does at start; the checks inherit it.
+    let limits = brigadier_sandbox::limits::raise_open_files().unwrap();
+    let replies: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = replies.clone();
+    let flow = Flow::start(
+        "check-prefixes",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    if turn.earlier == 0 {
+                        let reply = turn
+                            .call(
+                                "delegate_task",
+                                json!({"effort": "high", "title": "Run the check", "kind": "scout",
+                                       "spec": "Run the check."}),
+                            )
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                    }
+                    return Reply::text("[quiet]");
+                }
+                let check = |command: String| {
+                    let turn = &turn;
+                    let log = log.clone();
+                    async move {
+                        let reply = turn.call("run_check", json!({ "command": command })).await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        log.lock().unwrap().push(reply.text.clone());
+                        reply.text
+                    }
+                };
+                let env = check("echo \"$TMPDIR\"; ulimit -Sn".into()).await;
+                let tmpdir = env.lines().nth(1).unwrap().to_owned();
+                check("echo checked".into()).await;
+                check(format!("ulimit -Sn {}; echo checked", limits.soft)).await;
+                check(format!("TMPDIR={tmpdir} echo checked")).await;
+                check("ulimit -n 8192; echo checked".into()).await;
+                check("TMPDIR=/tmp/elsewhere echo checked".into()).await;
+                let reply = turn
+                    .call("submit_report", json!({"summary": "Checked."}))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("Reported.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Check it.").await;
+    flow.until("the worker's checks", |_| {
+        replies.lock().unwrap().len() == 6
+    })
+    .await;
+    flow.settled().await;
+    let replies = replies.lock().unwrap().clone();
+    let env: Vec<&str> = replies[0].lines().collect();
+    assert!(
+        env[1].contains("brigadier-test-"),
+        "TMPDIR is the task's test folder: {}",
+        replies[0]
+    );
+    let soft: u64 = env[2].parse().unwrap_or(u64::MAX);
+    assert!(soft >= 8192, "{}", replies[0]);
+    assert_eq!(replies[1], "[exit 0]\nchecked\n");
+    for cached in &replies[2..4] {
+        assert!(cached.starts_with("[cached: "), "{cached}");
+    }
+    for fresh in &replies[4..] {
+        assert_eq!(fresh, "[exit 0]\nchecked\n");
+    }
+    // The cached answers are recorded under the command that ran, without the prefix.
+    let commands: Vec<String> = flow
+        .events()
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            DomainEvent::CheckRan { command, .. } => Some(command),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(commands[1..4], ["echo checked"; 3]);
+    flow.stop().await;
+}
