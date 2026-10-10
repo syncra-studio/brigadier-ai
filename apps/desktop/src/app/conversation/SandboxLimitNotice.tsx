@@ -17,7 +17,7 @@ import { openSettings } from "@/state/actions";
  * The thread's notice that something the user asked for needs more than the session's sandbox
  * allows (its `suggest_full_access`): the lead's reason, "Switch this session to Full access"
  * (the composer's confirmation, then the composer's change, so its picker shows it too) and a
- * link to Settings > Configuration. Once the session has Full access the button gives way to
+ * link to Settings > Configurations. Once the session has Full access the button gives way to
  * a line saying so; in a folder the user doesn't trust, to the reason it can't switch.
  */
 export function SandboxLimitNotice({ reason }: { reason: string }) {
@@ -65,7 +65,7 @@ export function SandboxLimitNotice({ reason }: { reason: string }) {
           className="text-link text-xs hover:underline"
           onClick={() => openSettings("configuration")}
         >
-          {"Open Settings > Configuration"}
+          {"Open Settings > Configurations"}
         </button>
       </div>
       {action.error && (

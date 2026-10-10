@@ -1,9 +1,10 @@
 import { Check, ChevronDown, ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
 import { ToggleGroup as ToggleGroupPrimitive } from "radix-ui";
-import { useId, type ComponentProps, type ReactNode } from "react";
+import { useId, useState, type ComponentProps, type ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
+import { useReveal } from "@/app/settings/reveal";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -122,17 +123,24 @@ export function SettingsSection({
 
 /**
  * A page's power features, closed until asked for: "Advanced" and a line on what is inside,
- * then its sections.
+ * then its sections. It opens by itself when Settings brings one of its rows (`labels`) into
+ * view.
  */
 export function SettingsAdvanced({
   description,
+  labels = [],
   children,
 }: {
   description: string;
+  labels?: readonly string[];
   children: ReactNode;
 }) {
+  const revealing = useReveal((s) => s.label);
+  const [open, setOpen] = useState(false);
+  const holds = revealing !== null && labels.includes(revealing);
+  if (holds && !open) setOpen(true);
   return (
-    <Collapsible data-slot="settings-advanced">
+    <Collapsible data-slot="settings-advanced" open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className="group flex w-full items-start gap-2 rounded-xs text-start">
         <ChevronRight
           aria-hidden

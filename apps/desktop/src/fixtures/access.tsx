@@ -1,10 +1,10 @@
 /**
- * Settings → Configuration beside a session's thread notice that the sandbox stopped what the
+ * Settings → Configurations beside a session's thread notice that the sandbox stopped what the
  * user asked for, and the session's composer permission picker, over the IPC mock. No daemon.
  *
  * ?level=askForApproval (the default) | approveForMe | fullAccess: the session's level.
  * ?drive=1 picks a new default on the page, switches the session from the notice (through the
- * Full access confirmation), opens Settings > Configuration from it, and writes what it saw to
+ * Full access confirmation), opens Settings > Configurations from it, and writes what it saw to
  * #access-result (AccessRender.test.ts reads it).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -61,6 +61,8 @@ mockIPC((command, payload) => {
     case "updateSetup":
       calls.push(`session ${req.setup.type === "session" ? req.setup.permission : "chat"}`);
       return { method: req.method, conversation: { ...useApp.getState().conversations[id], setup: req.setup } };
+    case "listMemories":
+      return { method: req.method, memories: [] };
     default:
       return { method: req.method };
   }
@@ -120,7 +122,7 @@ function Fixture() {
           notice: noticeButtons(),
           line: q('[data-slot="full-access-on"]')?.textContent,
         };
-        buttonNamed("Open Settings > Configuration")?.click();
+        buttonNamed("Open Settings > Configurations")?.click();
       }),
       at(1800, () => {
         seen.selection = useApp.getState().selection;

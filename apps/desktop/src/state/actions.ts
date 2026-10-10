@@ -1,3 +1,4 @@
+import { revealSetting } from "@/app/settings/reveal";
 import { expectSentTurn } from "@/components/assistant-ui/thread-scroll";
 import { request } from "@/ipc/client";
 import type {
@@ -205,8 +206,25 @@ export function shownBeforeSettings(): Selection {
   return beforeSettings;
 }
 
-/** Shows a page of Settings (what to go back to is remembered by `select`). */
-export function openSettings(page: SettingsPageId = "general"): void {
+/** Pages merged into Configurations, by the row each one opens at. */
+const MERGED_SETTINGS_PAGES = {
+  conversations: "Model for sessions",
+  personalization: "Memories",
+} as const;
+
+/** A Settings page's id, or one of a page since merged into another. */
+export type SettingsPageLink = SettingsPageId | keyof typeof MERGED_SETTINGS_PAGES;
+
+/**
+ * Shows a page of Settings (what to go back to is remembered by `select`). A merged page's id
+ * opens Configurations at the row it held.
+ */
+export function openSettings(page: SettingsPageLink = "general"): void {
+  if (page === "conversations" || page === "personalization") {
+    select({ type: "settings", page: "configuration" });
+    revealSetting(MERGED_SETTINGS_PAGES[page]);
+    return;
+  }
   select({ type: "settings", page });
 }
 

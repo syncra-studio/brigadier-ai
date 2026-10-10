@@ -2,9 +2,7 @@ import {
   Archive,
   AvatarProfile,
   Branch,
-  Chats,
   Cursor,
-  MemoryOnRemember,
   Robot,
   Shuffle,
   SettingsCog,
@@ -19,10 +17,8 @@ import { ACCOUNTS_ROWS, AccountsPage } from "@/app/settings/AccountsPage";
 import { ARCHIVED_ROWS, ArchivedPage } from "@/app/settings/ArchivedPage";
 import { COMPUTER_USE_ROWS, ComputerUsePage } from "@/app/settings/ComputerUsePage";
 import { CONFIGURATION_ROWS, ConfigurationPage } from "@/app/settings/ConfigurationPage";
-import { CONVERSATIONS_ROWS, ConversationsPage } from "@/app/settings/ConversationsPage";
 import { GENERAL_ROWS, GeneralPage } from "@/app/settings/GeneralPage";
 import { GIT_ROWS, GitPage } from "@/app/settings/GitPage";
-import { PERSONALIZATION_ROWS, PersonalizationPage } from "@/app/settings/PersonalizationPage";
 import { STORAGE_ROWS, StoragePage } from "@/app/settings/StoragePage";
 import { PROVIDERS_ROWS, ProvidersPage } from "@/app/providers/ProvidersPage";
 import { ROUTING_PAGE_ROWS, RoutingPage } from "@/app/routing/RoutingPage";
@@ -35,13 +31,20 @@ import type { SettingsPageId } from "@/state/store";
  * copy it renders, so the two never drift apart.
  */
 
-export type SettingsRowCopy = { readonly label: string; readonly description?: string };
+/** A row search finds; `target` is the row it brings into view, when that is another one. */
+export type SettingsRowCopy = {
+  readonly label: string;
+  readonly description?: string;
+  readonly target?: string;
+};
 
 export type SettingsGroup = "Personal" | "Agents" | "System";
 
 export type SettingsPageEntry = {
   id: SettingsPageId;
   label: string;
+  /** Names the page went by, which search still finds it under. */
+  formerly?: readonly string[];
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   group: SettingsGroup;
   component: ComponentType;
@@ -104,27 +107,12 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   },
   {
     id: "configuration",
-    label: "Configuration",
+    label: "Configurations",
+    formerly: ["Conversations", "Personalization"],
     icon: SettingsSlider,
     group: "Personal",
     component: ConfigurationPage,
     rows: Object.values(CONFIGURATION_ROWS),
-  },
-  {
-    id: "conversations",
-    label: "Conversations",
-    icon: Chats,
-    group: "Personal",
-    component: ConversationsPage,
-    rows: Object.values(CONVERSATIONS_ROWS),
-  },
-  {
-    id: "personalization",
-    label: "Personalization",
-    icon: MemoryOnRemember,
-    group: "Personal",
-    component: PersonalizationPage,
-    rows: Object.values(PERSONALIZATION_ROWS),
   },
   {
     id: "usage",
@@ -209,7 +197,7 @@ export function searchSettings(query: string): SettingsSearchResult[] {
   const results: SettingsSearchResult[] = [];
   const pages = shownSettingsPages();
   for (const page of pages) {
-    if (matches(page.label)) results.push({ page, row: null });
+    if (matches([page.label, ...(page.formerly ?? [])].join(" "))) results.push({ page, row: null });
   }
   for (const page of pages) {
     for (const row of page.rows) {

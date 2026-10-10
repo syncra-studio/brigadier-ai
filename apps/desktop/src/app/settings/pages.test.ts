@@ -35,3 +35,67 @@ test("Settings lists computer use on macOS from the app's info, without reading 
     Object.assign(globals, saved);
   }
 });
+
+// Configurations holds what the Configuration, Conversations and Personalization pages did:
+// search still finds every one of their settings there, and the old pages' names find the page.
+test("search finds every merged setting on Configurations, and no Recent activity", async () => {
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  try {
+    const { searchSettings } = await server.ssrLoadModule("/src/app/settings/pages.ts");
+    type Result = { page: { id: string }; row: { label: string; target?: string } | null };
+    const found = (query: string): Result[] => searchSettings(query);
+    for (const query of [
+      "Orchestrator",
+      "Chat model",
+      "Model for sessions",
+      "Short replies",
+      "Show context window usage",
+      "Show the Full access notice",
+      "Use spare quota to deepen the Brain",
+      "Memories",
+      "Default permission level",
+      "Ask for approval",
+      "Approve for me",
+      "Full access",
+      "Review the work",
+    ]) {
+      assert.ok(
+        found(query).some((result) => result.page.id === "configuration" && result.row !== null),
+        `"${query}" finds a row on Configurations`,
+      );
+    }
+    // A level's row brings the default level's row into view.
+    const level = found("Approve for me").find((result) => result.row?.label === "Approve for me");
+    assert.equal(level?.row?.target, "Default permission level");
+    for (const name of ["Configurations", "Conversations", "Personalization"]) {
+      assert.ok(found(name).some((result) => result.page.id === "configuration" && result.row === null), name);
+    }
+    assert.deepEqual(found("Recent activity"), []);
+  } finally {
+    await server.close();
+  }
+});
+
+// Links to the merged pages open Configurations, at the setting each one held.
+test("the merged pages' ids open Configurations at their setting", async () => {
+  const globals = globalThis as Record<string, unknown>;
+  const saved = { requestAnimationFrame: globals.requestAnimationFrame };
+  globals.requestAnimationFrame = () => 0;
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  try {
+    const { useApp } = await server.ssrLoadModule("/src/state/store.ts");
+    const { openSettings } = await server.ssrLoadModule("/src/state/actions.ts");
+    const { useReveal } = await server.ssrLoadModule("/src/app/settings/reveal.ts");
+    for (const [id, label] of [
+      ["conversations", "Model for sessions"],
+      ["personalization", "Memories"],
+    ]) {
+      openSettings(id);
+      assert.deepEqual(useApp.getState().selection, { type: "settings", page: "configuration" });
+      assert.equal(useReveal.getState().label, label);
+    }
+  } finally {
+    await server.close();
+    Object.assign(globals, saved);
+  }
+});
