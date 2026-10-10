@@ -220,16 +220,22 @@ export class ThreadScroller {
     this.record(false);
   }
 
-  /** A scroll event. One that didn't come from here is the user's. */
+  /**
+   * A scroll event. One that didn't come from here is the user's, except the browser clamping
+   * the view to a range that shrank under it.
+   */
   scrolled(): void {
     const viewport = this.layout?.viewport;
     if (!viewport) return;
-    if (Math.abs(viewport.scrollTop - this.expected) < 1) {
-      this.record(false);
+    const max = maxScroll(viewport);
+    const clamped = this.expected > max && Math.abs(viewport.scrollTop - max) < 1;
+    if (clamped || Math.abs(viewport.scrollTop - this.expected) < 1) {
+      // Clamped, the view's top moved: its anchor is where it is now.
+      this.record(clamped);
       return;
     }
     this.interrupt();
-    this.follow = maxScroll(viewport) - viewport.scrollTop <= AT_BOTTOM_PX;
+    this.follow = max - viewport.scrollTop <= AT_BOTTOM_PX;
     this.record();
   }
 
@@ -244,7 +250,7 @@ export class ThreadScroller {
    * A click in the thread: a button or toggle keeps its place while what it opens or closes
    * settles, and opening or closing a fold stops following.
    */
-  clicked(target: HTMLElement): void {
+  clicked(target: Element): void {
     const viewport = this.layout?.viewport;
     const toggle = target.closest<HTMLElement>("button, summary, [role=button], [aria-expanded]");
     if (!viewport || !toggle) return;
@@ -309,7 +315,10 @@ export class ThreadScroller {
     return null;
   }
 
-  /** Puts the kept row back at its offset; once nothing clamps it, the anchor keeps it there. */
+  /**
+   * Puts the kept row back at its offset; once nothing clamps it and the row reaches the view's
+   * top (a reply still loading may be shorter than the offset into it), the anchor keeps it there.
+   */
   private applyRestore(): void {
     const restore = this.restore;
     const viewport = this.layout?.viewport;
@@ -320,7 +329,8 @@ export class ThreadScroller {
     const target = viewport.scrollTop + this.offsetOf(restore.row) - restore.offset;
     this.setTop(target);
     this.anchor = restore;
-    if (target >= 0 && target <= maxScroll(viewport)) this.restore = null;
+    const reached = restore.row.getBoundingClientRect().bottom > viewport.getBoundingClientRect().top;
+    if (target >= 0 && target <= maxScroll(viewport) && reached) this.restore = null;
   }
 
   /** Gives the turn of user message `id` its room and glides it up under the view's top. */
@@ -445,8 +455,10 @@ export class ThreadScroller {
       if ((rows[middle]?.getBoundingClientRect().bottom ?? 0) > viewTop) high = middle;
       else low = middle + 1;
     }
-    const row = rows[Math.min(low, rows.length - 1)];
-    if (measured || this.anchor?.row !== row) {
+    // A restore still underway keeps its row and offset as the place.
+    const row = this.restore ? this.restore.row : rows[Math.min(low, rows.length - 1)];
+    if (this.restore) this.anchor = this.restore;
+    else if (measured || this.anchor?.row !== row) {
       this.anchor = row ? { row, offset: row.getBoundingClientRect().top - viewTop } : null;
     }
     if (this.started && this.key !== null) {

@@ -448,6 +448,47 @@ test("a reopened conversation keeps asking for its place while its content loads
   assert.equal(third.scrollTop, 10);
 });
 
+test("a reopened place deep in a reply that loads short waits for the reply to reach it", () => {
+  const id = key();
+  const first = new Fake();
+  conversation(first, 4);
+  first.rows.push(first.row("long-u", 60, "user"), first.row("long-a", 1500));
+  conversation(first, 4, "after-");
+  const scroller = open(first, id);
+  const long = first.rows.find((row) => row.dataset["messageId"] === "long-a")!;
+  userScroll(first, scroller, first.rowTop(long) + 700);
+  const offset = first.offset(long);
+
+  // The reply first shows 100px tall: the place is in range, but past the reply.
+  const loading = new Fake();
+  conversation(loading, 4);
+  loading.rows.push(loading.row("long-u", 60, "user"), loading.row("long-a", 100));
+  conversation(loading, 4, "after-");
+  const reopened = open(loading, id);
+  const same = loading.rows.find((row) => row.dataset["messageId"] === "long-a")!;
+  same.height = 1500;
+  reopened.resized();
+  assert.equal(loading.offset(same), offset);
+});
+
+test("the browser clamping the view to a shrunk range is not a scroll by the user", () => {
+  const fake = new Fake();
+  conversation(fake, 10);
+  const scroller = open(fake);
+  userScroll(fake, scroller, fake.max - 50);
+  assert.equal(scroller.following, false);
+  // A fold below closes: the range shrinks by 100px and the browser clamps the view.
+  fake.rows.at(-1)!.height -= 100;
+  scroller.scrolled();
+  scroller.resized();
+  assert.equal(scroller.following, false);
+  // New content below then doesn't move the view.
+  const top = fake.scrollTop;
+  fake.rows.at(-1)!.height += 300;
+  scroller.resized();
+  assert.equal(fake.scrollTop, top);
+});
+
 test("a kept row that is gone falls back to the nearest one before it, or the bottom", () => {
   const id = key();
   const first = new Fake();

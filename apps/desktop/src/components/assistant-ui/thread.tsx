@@ -227,7 +227,8 @@ function useThreadScroll(
     viewport.addEventListener(
       "click",
       (event) => {
-        if (event.target instanceof HTMLElement) scroller.clicked(event.target);
+        // An icon's SVG, too: its button is found from it.
+        if (event.target instanceof Element) scroller.clicked(event.target);
       },
       { ...options, capture: true },
     );
