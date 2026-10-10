@@ -281,12 +281,16 @@ impl CleanupLedger {
     /// so that removing them now, or the launch sweep's retry after a crash, removes exactly
     /// those entries. Then disposes of `owner`.
     pub async fn adopt(&self, owner: &str, artifacts: Vec<Artifact>) -> Result<Leftovers> {
-        if artifacts
-            .iter()
-            .any(|artifact| !matches!(artifact, Artifact::Adopted { .. }))
-        {
+        // Codex threads go by id through Codex's own `thread/delete`, which also takes them off
+        // the Codex app's lists; the caller checked their files are still the ones shown.
+        if artifacts.iter().any(|artifact| {
+            !matches!(
+                artifact,
+                Artifact::Adopted { .. } | Artifact::CodexThread { .. }
+            )
+        }) {
             return Err(Error::Invalid(
-                "only adopted entries can be taken on this way".into(),
+                "only adopted entries and Codex threads can be taken on this way".into(),
             ));
         }
         for artifact in artifacts {
@@ -1314,5 +1318,82 @@ mod tests {
         // Once the continuation is being disposed of too, the worktree can go.
         state.disposing.insert("overnight:r2".into());
         assert!(!state.shares_worktree("overnight:r1", "/wt/overnight-1"));
+    }
+
+    /// An entry Free up space showed, bound with its identity.
+    fn adopted(root: &Path, path: &Path, empty_only: bool) -> Artifact {
+        let bound = brigadier_sandbox::removal::bind(root, path).unwrap();
+        Artifact::Adopted {
+            root: root.display().to_string(),
+            path: path.display().to_string(),
+            identity: bound.identity().parts(),
+            evidence: "it used Brigadier's tools".into(),
+            empty_only,
+        }
+    }
+
+    /// Adoption survives a crash: once the approved entries are recorded and their removal was
+    /// asked for, the next launch's sweep removes exactly those entries, keeps one replaced
+    /// since (and forgets it), and never touches what is beside them.
+    #[tokio::test]
+    async fn adopted_entries_go_only_as_they_were_shown_even_after_a_crash() {
+        let fixture = Fixture::new().await;
+        let root = fixture.dir.join("home");
+        let project = root.join("projects").join("-data-orch-a");
+        std::fs::create_dir_all(&project).unwrap();
+        let (shown, replaced, beside) = (
+            project.join("a.jsonl"),
+            project.join("b.jsonl"),
+            project.join("mine.jsonl"),
+        );
+        for path in [&shown, &replaced, &beside] {
+            std::fs::write(path, "{}\n").unwrap();
+        }
+        let owner = "sweep:crashed";
+        let ledger = fixture.load().await;
+        for artifact in [
+            adopted(&root, &shown, false),
+            adopted(&root, &replaced, false),
+            adopted(&root, &project, true),
+        ] {
+            ledger.record(owner, artifact).await.unwrap();
+        }
+        // The daemon stopped after asking for the removal, before anything went.
+        fixture
+            .append(DomainEvent::CleanupRequested {
+                owner: owner.into(),
+            })
+            .await;
+        drop(ledger);
+        // Meanwhile, b.jsonl became another file at the same path.
+        std::fs::remove_file(&replaced).unwrap();
+        std::fs::write(&replaced, "the user's own\n").unwrap();
+
+        let ledger = fixture.load().await;
+        ledger.sweep().await;
+        assert!(!shown.exists());
+        assert_eq!(
+            std::fs::read_to_string(&replaced).unwrap(),
+            "the user's own\n"
+        );
+        assert!(beside.exists());
+        // Not empty: the folder others still use stays.
+        assert!(project.is_dir());
+        // Kept entries are forgotten, not retried.
+        assert!(ledger.artifacts(owner).is_empty());
+        assert!(!ledger.disposing().contains(&owner.to_owned()));
+
+        // Taking entries on directly removes them at once, and only adopted entries are taken.
+        let more = project.join("c.jsonl");
+        std::fs::write(&more, "{}\n").unwrap();
+        let leftovers = ledger
+            .adopt("sweep:now", vec![adopted(&root, &more, false)])
+            .await
+            .unwrap();
+        assert!(leftovers.is_clean() && leftovers.kept.is_empty());
+        assert!(!more.exists());
+        let (folder, scratch) = fixture.folder("not-adoptable");
+        assert!(ledger.adopt("sweep:bad", vec![scratch]).await.is_err());
+        assert!(folder.is_dir());
     }
 }

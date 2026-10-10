@@ -15,6 +15,8 @@
 //! Each file is bound when it is listed. Removing goes through the cleanup ledger, which takes
 //! on exactly those entries with their identities ([`Artifact::Adopted`]): what changed since
 //! the scan stays, and a removal cut off is finished by the next launch's sweep.
+//! A Codex thread goes by its id through Codex's own `thread/delete` (its rollout checked
+//! first to still be the file shown), so it also leaves the Codex app's lists (Recents).
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -49,10 +51,21 @@ pub struct AgentHome {
 #[derive(Debug, Clone)]
 pub struct Adoption {
     sessions: Vec<Session>,
-    /// Each file or folder, bound, with whether it goes only once empty, and its size.
-    entries: Vec<(Bound, bool, u64)>,
+    entries: Vec<Entry>,
     /// Why they are Brigadier's, in plain words.
     evidence: String,
+}
+
+/// A listed file or folder.
+#[derive(Debug, Clone)]
+struct Entry {
+    bound: Bound,
+    /// Goes only once empty (a project folder other sessions may share).
+    empty_only: bool,
+    bytes: u64,
+    /// A Codex thread's rollout: the thread goes through Codex's own `thread/delete`, which
+    /// also takes it off the Codex app's lists, while the file is still the one shown.
+    thread: Option<String>,
 }
 
 /// One listed session: what it served, checked again before its files go.
@@ -218,7 +231,7 @@ fn live_worktrees(
 #[derive(Default)]
 struct Group {
     sessions: Vec<Session>,
-    entries: Vec<(Bound, bool, u64)>,
+    entries: Vec<Entry>,
     evidence: Vec<&'static str>,
 }
 
@@ -266,7 +279,7 @@ impl Scanner<'_> {
                     };
                     (mark.describe(), Owner::DataDir(place.root.clone()))
                 };
-                let entries: Vec<(Bound, bool, u64)> = found
+                let entries: Vec<Entry> = found
                     .entries
                     .iter()
                     .filter(|entry| !held_paths.contains(&entry.path))
@@ -277,16 +290,25 @@ impl Scanner<'_> {
                         } else {
                             removal::allocated_size(&entry.path)
                         };
-                        Some((bound, entry.empty_only, bytes))
+                        let rollout = home.kind == ProviderKind::Codex
+                            && entry.root.file_name().is_some_and(|part| {
+                                part == "sessions" || part == "archived_sessions"
+                            });
+                        Some(Entry {
+                            bound,
+                            empty_only: entry.empty_only,
+                            bytes,
+                            thread: rollout.then(|| found.id.clone()),
+                        })
                     })
                     .collect();
-                if entries.iter().all(|(_, empty_only, _)| *empty_only) {
+                if entries.iter().all(|entry| entry.empty_only) {
                     continue;
                 }
                 if !owner_gone(self.records, &live, &owner) {
                     if ours {
                         open.0 += 1;
-                        open.1 += entries.iter().map(|(_, _, bytes)| bytes).sum::<u64>();
+                        open.1 += entries.iter().map(|entry| entry.bytes).sum::<u64>();
                     }
                     continue;
                 }
@@ -337,12 +359,12 @@ impl Scanner<'_> {
                     "Brigadier's own ({evidence}), and the data folder they belonged to is gone."
                 )
             };
-            let bytes = group.entries.iter().map(|(_, _, bytes)| bytes).sum();
+            let bytes = group.entries.iter().map(|entry| entry.bytes).sum();
             let path = group
                 .entries
                 .iter()
-                .find(|(_, empty_only, _)| !empty_only)
-                .map(|(bound, _, _)| bound.path().to_owned());
+                .find(|entry| !entry.empty_only)
+                .map(|entry| entry.bound.path().to_owned());
             self.push(
                 item(CleanCategory::AgentFiles, label, path, bytes, &reason, true),
                 Action::Adopt(Adoption {
@@ -397,26 +419,43 @@ impl SessionManager {
             Ok(())
         })
         .await?;
-        let artifacts = adoption
-            .entries
-            .iter()
-            .map(|(bound, empty_only, _)| Artifact::Adopted {
-                root: bound.root().display().to_string(),
-                path: bound.path().display().to_string(),
-                identity: bound.identity().parts(),
-                evidence: adoption.evidence.clone(),
-                empty_only: *empty_only,
-            })
-            .collect();
+        let mut artifacts = Vec::new();
+        let mut changed = Vec::new();
+        for entry in &adoption.entries {
+            let Some(thread_id) = &entry.thread else {
+                artifacts.push(Artifact::Adopted {
+                    root: entry.bound.root().display().to_string(),
+                    path: entry.bound.path().display().to_string(),
+                    identity: entry.bound.identity().parts(),
+                    evidence: adoption.evidence.clone(),
+                    empty_only: entry.empty_only,
+                });
+                continue;
+            };
+            // The thread goes by its id: only while its file is still the one shown.
+            match removal::recheck(&entry.bound) {
+                Ok(()) => artifacts.push(Artifact::CodexThread {
+                    thread_id: thread_id.clone(),
+                    home: None,
+                    cwd: adoption
+                        .sessions
+                        .iter()
+                        .find(|session| session.id == *thread_id)
+                        .map(|session| session.cwd.display().to_string()),
+                }),
+                Err(err) => changed.push(format!("left in place: {err}")),
+            }
+        }
         let owner = format!("sweep:{}", uuid::Uuid::now_v7());
         let leftovers = self.runtime.ledger().adopt(&owner, artifacts).await?;
         let reclaimed = adoption
             .entries
             .iter()
-            .filter(|(bound, _, _)| removal::is_gone(bound.path()))
-            .map(|(_, _, bytes)| bytes)
+            .filter(|entry| removal::is_gone(entry.bound.path()))
+            .map(|entry| entry.bytes)
             .sum();
-        let mut failures = leftovers.failures;
+        let mut failures = changed;
+        failures.extend(leftovers.failures);
         failures.extend(
             leftovers
                 .kept

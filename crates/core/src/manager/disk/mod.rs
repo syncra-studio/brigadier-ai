@@ -17,7 +17,7 @@
 
 mod agent_files;
 mod build_files;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
 
 pub use agent_files::AgentHome;
