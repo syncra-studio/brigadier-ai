@@ -104,6 +104,9 @@ mockIPC((command, payload) => {
     case "getComputerAccess":
     case "allowComputerAccess":
       return { method: req.method, access: { available: true, accessibility: false, screenRecording: true, problem: null } };
+    // A step's full call, as its row opens to: a command gives its line from the step itself.
+    case "getThreadItem":
+      return { method: req.method, item: { input: null, output: "a1b2c3d Example change\nf4e5d6c Example fix", exit: 0, ms: 1200 } };
     default:
       return { method: req.method };
   }
