@@ -71,21 +71,44 @@ async function sampleToggle({ block, action }) {
   // What follows the work: the answer, else the block's actions.
   const below = root.querySelector('[data-slot="request-body"] > [data-slot="aui_assistant-message-content"]') ?? root.lastElementChild;
   const workHeight = () => [...root.querySelectorAll('[data-slot="request-fold"]')].reduce((sum, fold) => sum + fold.getBoundingClientRect().height, 0);
-  const sample = () => ({ work: workHeight(), below: below.getBoundingClientRect().top, header: header.getBoundingClientRect().top });
-  const frames = [sample()];
+  const sample = () => ({
+    time: document.timeline.currentTime,
+    work: workHeight(),
+    below: below.getBoundingClientRect().top,
+    header: header.getBoundingClientRect().top,
+  });
+  const samples = [sample()];
+  // The animation time of the last rendering update that resized the turn: its resize observers,
+  // the anchor's scroll fix among them, ran before that frame was painted.
+  let updated = null;
+  const observer = new ResizeObserver(() => {
+    updated = document.timeline.currentTime;
+  });
   let sampling = true;
-  // After each frame is painted (its resize observers and scroll fixes done), what it showed.
+  // After each frame is painted, what it showed.
   const tick = () => {
     if (!sampling) return;
     requestAnimationFrame(() => setTimeout(() => {
-      frames.push(sample());
+      const frame = sample();
+      samples.push({ ...frame, updated: updated === frame.time });
       tick();
     }, 0));
   };
   header.click();
+  observer.observe(root);
   tick();
   await new Promise((resolve) => setTimeout(resolve, 700));
   sampling = false;
+  observer.disconnect();
+  // Outside a frame, Chromium's animation clock runs ahead to the next frame's time, so a timeout
+  // that runs late measures a frame not yet laid out, observed or fixed: a resize no update has
+  // seen, never painted. Such a sample is left out; the rest are what was painted.
+  const frames = [samples[0]];
+  for (const frame of samples.slice(1)) {
+    if (!frame.updated && Math.abs(frame.work - frames.at(-1).work) > 0.01) continue;
+    if (frame.time === frames.at(-1).time) frames.pop();
+    frames.push(frame);
+  }
   const last = frames.at(-1);
   return {
     frames,
@@ -97,7 +120,9 @@ async function sampleToggle({ block, action }) {
 }
 
 /** How far below the header what follows the work is. */
-const gap = (frame) => frame.below - frame.header;
+function gap(frame) {
+  return frame.below - frame.header;
+}
 
 /**
  * What is wrong with a toggle's frames, if anything. What follows is measured from the header, so
