@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Code frame</title><script src="/log.js"></script>
+<style>body { font: 14px -apple-system, system-ui, sans-serif; margin: 8px; } #pad { height: 240px; }</style></head>
+<body>
+<!-- Taller than its frame: its button is below the frame's fold, so reaching it scrolls the frame. -->
+<p>Another site. Enter the code, then send it.</p>
+<div id="pad"></div>
+<label for="code">Code</label><input id="code" autocomplete="off">
+<button id="send-code">Send code</button> <span id="code-result"></span>
+<p><label for="pin">PIN</label><input id="pin" type="password" autocomplete="off"></p>
+<script>
+const code = document.getElementById("code");
+code.addEventListener("input", (e) => log("code", "input", { v: code.value, trusted: e.isTrusted }));
+// A password field in another site's frame: only its length is logged.
+document.getElementById("pin").addEventListener("input", (e) => log("pin", "input", { v: String(e.target.value.length), trusted: e.isTrusted }));
+document.getElementById("send-code").addEventListener("click", (e) => {
+  document.getElementById("code-result").textContent = "Sent " + code.value;
+  log("send-code", "click", { v: code.value, x: e.clientX, y: e.clientY, trusted: e.isTrusted });
+});
+</script>
+</body>
+</html>

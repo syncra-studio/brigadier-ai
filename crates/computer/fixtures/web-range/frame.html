@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>City frame</title><script src="/log.js"></script>
+<style>body { font: 14px -apple-system, system-ui, sans-serif; margin: 8px; }</style></head>
+<body>
+<label for="city">City</label><input id="city" autocomplete="off">
+<button id="save-city">Save city</button> <span id="city-result"></span>
+<script>
+const city = document.getElementById("city");
+city.addEventListener("input", (e) => log("city", "input", { v: city.value, trusted: e.isTrusted }));
+document.getElementById("save-city").addEventListener("click", (e) => {
+  document.getElementById("city-result").textContent = "Saved " + city.value;
+  log("save-city", "click", { v: city.value, trusted: e.isTrusted });
+});
+</script>
+</body>
+</html>

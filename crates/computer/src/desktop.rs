@@ -1,0 +1,356 @@
+//! The seam between the engine and an operating system (§4.1, §6). One implementation per OS;
+//! the engine, the renderer and the tool surface don't change between them.
+
+use std::hash::Hash;
+use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
+
+use std::sync::Arc;
+
+use crate::action::Rung;
+use crate::cancel::{CancelToken, InputGuard, Release};
+use crate::error::{CuResult, ErrorCode, err};
+use crate::geom::{ImageTransform, Point, Rect};
+use crate::redact::Rgba;
+use crate::tree::RawNode;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WindowInfo {
+    pub id: u32,
+    pub pid: i32,
+    pub title: String,
+    /// Global points, top left of the main display.
+    pub frame: Rect,
+    pub on_screen: bool,
+    pub minimized: bool,
+    /// Its app is hidden (⌘H): the window is ordered out, so pointer events can't reach it;
+    /// accessibility still can.
+    #[serde(default)]
+    pub hidden: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppInfo {
+    pub pid: i32,
+    pub name: String,
+    pub bundle_id: Option<String>,
+    pub bundle_path: Option<String>,
+    pub frontmost: bool,
+    pub windows: Vec<WindowInfo>,
+}
+
+/// What a backend can do; anything else returns `unsupported_capability`.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct Capabilities {
+    pub structure: bool,
+    pub capture: bool,
+    pub element_actions: bool,
+    pub background_keys: bool,
+    pub background_pointer: bool,
+    /// Making a background app believe it is active without changing the user's focus.
+    pub synthetic_activation: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Button {
+    #[default]
+    Left,
+    Right,
+    Middle,
+}
+
+/// Modifier keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Mods {
+    pub cmd: bool,
+    pub shift: bool,
+    pub alt: bool,
+    pub ctrl: bool,
+}
+
+/// A key with its modifiers, parsed from `cmd+shift+s`, `return`, `a`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Chord {
+    pub mods: Mods,
+    pub key: String,
+}
+
+impl Chord {
+    pub fn parse(s: &str) -> Option<Self> {
+        let mut mods = Mods::default();
+        let parts: Vec<&str> = s.split('+').map(str::trim).collect();
+        let (key, mod_parts) = parts.split_last()?;
+        for m in mod_parts {
+            match m.to_ascii_lowercase().as_str() {
+                "cmd" | "command" | "meta" | "super" => mods.cmd = true,
+                "shift" => mods.shift = true,
+                "alt" | "option" | "opt" => mods.alt = true,
+                "ctrl" | "control" => mods.ctrl = true,
+                _ => return None,
+            }
+        }
+        if key.is_empty() {
+            return None;
+        }
+        Some(Self {
+            mods,
+            key: key.to_ascii_lowercase(),
+        })
+    }
+}
+
+/// The element that has keyboard focus in an app.
+#[derive(Debug, Clone)]
+pub struct Focus<E> {
+    pub element: Option<E>,
+    pub window: Option<u32>,
+    pub secure: bool,
+    pub role: Option<String>,
+    /// The focused element's selected text; never read from a password field.
+    pub selected_text: Option<String>,
+}
+
+/// The user's side of the desktop, compared before and after every action (F1).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct UserFocus {
+    pub frontmost_pid: i32,
+    /// The frontmost app's focused window, by title.
+    pub frontmost_window: Option<String>,
+    /// The same window's id, when the system can tell.
+    pub frontmost_window_id: Option<u32>,
+    pub cursor: Point,
+    /// The window server's own front process, when the system exposes it.
+    pub server_front: Option<u64>,
+}
+
+/// Whether a window's structure is all there: some apps build it only after the first
+/// accessibility client asks, and take a moment to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Structure {
+    Ready,
+    /// Still being built; read again shortly.
+    Pending,
+    /// The app took longer than the engine waits; what it read may be partial.
+    Incomplete,
+}
+
+/// One captured image with how it was made.
+pub struct Capture {
+    pub image: Rgba,
+    pub transform: ImageTransform,
+}
+
+/// A capture under way: `wait` gives its image. Other reads of the same app may run meanwhile.
+pub struct PendingCapture(Box<dyn FnOnce() -> CuResult<Capture>>);
+
+impl PendingCapture {
+    pub fn new(wait: impl FnOnce() -> CuResult<Capture> + 'static) -> Self {
+        Self(Box::new(wait))
+    }
+
+    pub fn wait(self) -> CuResult<Capture> {
+        (self.0)()
+    }
+}
+
+pub trait Desktop {
+    type Element: Clone + Eq + Hash + std::fmt::Debug;
+
+    /// Releases held input; independent of the backend's borrow so a guard can outlive a call.
+    fn releaser(&self) -> Arc<dyn Release + Send + Sync>;
+
+    fn capabilities(&self) -> Capabilities;
+    fn apps(&mut self) -> CuResult<Vec<AppInfo>>;
+    /// One app's windows, read fresh.
+    fn windows(&mut self, pid: i32) -> CuResult<Vec<WindowInfo>>;
+    /// One window, read fresh.
+    fn window(&mut self, id: u32) -> CuResult<WindowInfo>;
+    /// The app that owns `pid`, without its windows.
+    fn app(&mut self, pid: i32) -> CuResult<AppInfo>;
+    /// The window's elements in pre-order, frames in window points. Unless `all` is asked for,
+    /// a backend may skip reading rows its lists report out of view; those come back
+    /// `unread`, with only their role.
+    fn tree(&mut self, window: &WindowInfo, all: bool) -> CuResult<Vec<RawNode<Self::Element>>>;
+    /// One element read fresh (children not included), frame in window points.
+    fn read(&mut self, window: &WindowInfo, el: &Self::Element)
+    -> CuResult<RawNode<Self::Element>>;
+    /// The display's pixels per point under the window.
+    fn backing_scale(&mut self, window: &WindowInfo) -> f64;
+    /// Captures `crop` (window points) at most `pixels_per_point`, at most `max_side` px a side.
+    fn capture(
+        &mut self,
+        window: &WindowInfo,
+        crop: Rect,
+        pixels_per_point: f64,
+        max_side: u32,
+    ) -> CuResult<Capture>;
+    /// Starts the same capture as `capture` without waiting for it, so that reading the window's
+    /// tree overlaps it. A backend that can't overlap captures at once.
+    fn begin_capture(
+        &mut self,
+        window: &WindowInfo,
+        crop: Rect,
+        pixels_per_point: f64,
+        max_side: u32,
+    ) -> CuResult<PendingCapture> {
+        let done = self.capture(window, crop, pixels_per_point, max_side);
+        Ok(PendingCapture::new(move || done))
+    }
+
+    /// A platform-neutral element action: `press`, `show-menu`, `increment`, `decrement`,
+    /// `confirm`, `cancel`, `raise`, `pick`.
+    fn perform(&mut self, el: &Self::Element, action: &str) -> CuResult<()>;
+    fn set_value(&mut self, el: &Self::Element, text: &str) -> CuResult<()>;
+    /// Inserts text at the element's selection, without key events.
+    fn insert_text(&mut self, el: &Self::Element, text: &str) -> CuResult<()>;
+    fn set_focus(&mut self, el: &Self::Element) -> CuResult<()>;
+    /// Sets the element's selected text range, in characters.
+    fn select(&mut self, el: &Self::Element, start: usize, length: usize) -> CuResult<()>;
+    /// The element's selected text range, in characters.
+    fn selection(&mut self, el: &Self::Element) -> Option<(usize, usize)>;
+    /// Presses the menu-bar item at `path`, e.g. `["File", "Save As…"]`.
+    fn menu(&mut self, pid: i32, path: &[String]) -> CuResult<()>;
+    fn focus(&mut self, pid: i32) -> CuResult<Focus<Self::Element>>;
+
+    /// A click at a window point. `activate` wraps it in synthetic activation, which may last
+    /// until `end_batch`.
+    #[allow(clippy::too_many_arguments)]
+    fn click(
+        &mut self,
+        w: &WindowInfo,
+        at: Point,
+        button: Button,
+        count: u8,
+        mods: Mods,
+        activate: bool,
+        guard: &mut InputGuard<'_>,
+    ) -> CuResult<()>;
+    fn scroll(&mut self, w: &WindowInfo, at: Point, dx: i32, dy: i32) -> CuResult<()>;
+    fn drag(
+        &mut self,
+        w: &WindowInfo,
+        from: Point,
+        to: Point,
+        activate: bool,
+        guard: &mut InputGuard<'_>,
+        cancel: &CancelToken,
+    ) -> CuResult<()>;
+    fn key(&mut self, pid: i32, chord: &Chord, guard: &mut InputGuard<'_>) -> CuResult<()>;
+    fn type_text(&mut self, pid: i32, text: &str, cancel: &CancelToken) -> CuResult<()>;
+    /// The frame, in window points, of a sheet on `w` that another process draws, as the system
+    /// draws a save or open panel: its buttons stay disabled while the window is off screen, and
+    /// a background pixel click into it can bring its app to the front.
+    fn served_panel(&mut self, w: &WindowInfo) -> Option<Rect> {
+        let _ = w;
+        None
+    }
+    /// Readies window `w`'s app for plain keys (`key`, `type_text`). An app that hears them
+    /// only while it believes it is active, a Chromium browser's page, is made to believe so
+    /// until the batch ends; true when it was.
+    fn keys_to(&mut self, w: &WindowInfo) -> CuResult<bool> {
+        let _ = w;
+        Ok(false)
+    }
+    /// Picks a menu-bar item for window `w`. A background app checks its menu items against
+    /// no key window, so some read as disabled; a backend that can make the app believe it is
+    /// active with `w` key sends such an item's shortcut that way.
+    fn menu_for(
+        &mut self,
+        w: &WindowInfo,
+        path: &[String],
+        guard: &mut InputGuard<'_>,
+    ) -> CuResult<Rung> {
+        let _ = guard;
+        self.menu(w.pid, path)?;
+        Ok(Rung::Element)
+    }
+    /// A menu shortcut (a chord with command or control) to window `w`'s app. An app that isn't
+    /// active ignores its menus' shortcuts, so a backend that can make it believe it is active
+    /// does, for the shortcut only.
+    fn shortcut(
+        &mut self,
+        w: &WindowInfo,
+        chord: &Chord,
+        guard: &mut InputGuard<'_>,
+    ) -> CuResult<Rung> {
+        self.key(w.pid, chord, guard)?;
+        Ok(Rung::Background)
+    }
+
+    /// Starts listening for the app's accessibility notifications.
+    fn watch(&mut self, pid: i32);
+    /// Runs the notification loop for at most `d`.
+    fn pump(&mut self, d: Duration);
+    /// When the app last posted a notification.
+    fn last_notification(&self, pid: i32) -> Option<Instant>;
+
+    fn user_focus(&mut self) -> UserFocus;
+    /// The end of a batch: a backend that kept an app believing it is active across the batch's
+    /// actions lets it go, so the window shows its active look once a batch, not once an action.
+    fn end_batch(&mut self) {}
+    /// Whether `w`'s structure is complete yet (see `Structure`).
+    fn structure(&mut self, w: &WindowInfo) -> Structure {
+        let _ = w;
+        Structure::Ready
+    }
+
+    /// Reads, from any thread, how many seconds ago the user last used a mouse, trackpad or
+    /// keyboard. Input this crate posts doesn't count. Zero when the backend can't tell, which
+    /// keeps the foreground rung off.
+    fn idle_source(&self) -> Arc<dyn Fn() -> f64 + Send + Sync> {
+        Arc::new(|| 0.0)
+    }
+    /// The foreground rung: shows the window if it's minimised, raises it and brings its app to
+    /// the front.
+    fn raise(&mut self, w: &WindowInfo) -> CuResult<()> {
+        let _ = w;
+        err(ErrorCode::UnsupportedCapability, "raising a window")
+    }
+    /// Brings an app to the front: the user's own, given back after the foreground rung or a
+    /// launch that took the front.
+    fn activate(&mut self, pid: i32) -> CuResult<()> {
+        let _ = pid;
+        err(ErrorCode::UnsupportedCapability, "activating an app")
+    }
+    fn minimize(&mut self, w: &WindowInfo) -> CuResult<()> {
+        let _ = w;
+        err(ErrorCode::UnsupportedCapability, "minimising a window")
+    }
+    /// Hides an app again after the foreground rung showed it.
+    fn hide(&mut self, pid: i32) -> CuResult<()> {
+        let _ = pid;
+        err(ErrorCode::UnsupportedCapability, "hiding an app")
+    }
+    /// The file or URL the window shows, as the app reports it (a `file:` URL for a file);
+    /// `None` when it doesn't say.
+    fn document(&mut self, w: &WindowInfo) -> Option<String> {
+        let _ = w;
+        None
+    }
+    /// Closes the window as its close button would: an app may keep it open to ask about
+    /// unsaved changes.
+    fn close(&mut self, w: &WindowInfo) -> CuResult<()> {
+        let _ = w;
+        err(ErrorCode::UnsupportedCapability, "closing a window")
+    }
+    /// The app `open` would run for these, without running it: its name, bundle id and path,
+    /// so the block list sees the app, whatever name the request gave it.
+    fn resolve(&mut self, app: Option<&str>, target: Option<&str>) -> Option<AppInfo> {
+        let _ = (app, target);
+        None
+    }
+    /// Opens an app, a file or a URL (or a file or URL in an app) without bringing it to the
+    /// front, and returns once the system took the request; windows come later.
+    fn open(&mut self, app: Option<&str>, target: Option<&str>) -> CuResult<()> {
+        let _ = (app, target);
+        err(ErrorCode::UnsupportedCapability, "launching")
+    }
+    /// Starts a new instance of the app at `path` with these arguments, without bringing it to
+    /// the front: a session browser on its scratch profile.
+    fn open_new(&mut self, path: &str, args: &[String]) -> CuResult<()> {
+        let _ = (path, args);
+        err(ErrorCode::UnsupportedCapability, "launching")
+    }
+}

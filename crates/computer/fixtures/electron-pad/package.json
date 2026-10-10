@@ -1,0 +1,5 @@
+{
+  "name": "electron-pad",
+  "private": true,
+  "main": "main.js"
+}

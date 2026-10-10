@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Web Range</title>
+<!-- The browser fixture (docs/COMPUTER-USE-PLAN.md §8, Phase 5): a form with small targets, dialogs,
+     a same-origin and a cross-origin frame, and a canvas with no accessibility. Every input, click and
+     submit is posted to the fixture server's log, with whether the browser marked it trusted. -->
+<style>
+  body { font: 14px -apple-system, system-ui, sans-serif; margin: 16px; color: #222; }
+  section { border: 1px solid #ccc; border-radius: 6px; padding: 10px 12px; margin-bottom: 14px; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  label { margin-right: 10px; }
+  .tiny { width: 8px; height: 8px; margin: 0 4px 0 0; vertical-align: middle; }
+  .tiny-btn { width: 8px; height: 8px; padding: 0; border: 1px solid #555; background: #6a6; vertical-align: middle; }
+  canvas { border: 1px solid #999; display: block; }
+  iframe { border: 1px solid #999; display: block; margin: 6px 0; }
+  #spacer { height: 700px; }
+</style>
+<script src="/log.js"></script>
+</head>
+<body>
+<h1>Web Range</h1>
+
+<section id="form-section">
+  <h2>Sign-up</h2>
+  <form id="signup">
+    <p><label for="name">Name</label><input id="name" name="name" value="Old name" autocomplete="off"></p>
+    <p><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="off"></p>
+    <p><label for="plan">Plan</label>
+      <select id="plan" name="plan">
+        <option>Basic</option><option>Pro</option><option>Team</option><option>Enterprise</option>
+      </select></p>
+    <p><label for="notes">Notes</label><textarea id="notes" name="notes" rows="2" cols="30"></textarea></p>
+    <p><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="off"></p>
+    <p><input id="news" type="checkbox"><label for="news">Send news</label>
+       <input id="terms" class="tiny" type="checkbox" aria-label="Accept terms"><span>Accept terms (8 px)</span></p>
+    <p>Rate: <button type="button" class="tiny-btn" id="star-1" aria-label="1 star"></button><button type="button" class="tiny-btn" id="star-2" aria-label="2 stars"></button><button type="button" class="tiny-btn" id="star-3" aria-label="3 stars"></button>
+      <span id="rating">no rating</span></p>
+    <p><button id="submit" type="submit">Submit</button> <span id="result"></span></p>
+  </form>
+</section>
+
+<section id="dialog-section">
+  <h2>Dialogs</h2>
+  <button id="delete">Delete item</button>
+  <button id="rename">Rename item</button>
+  <button id="details">Open details</button>
+  <span id="item">Item: Report.txt</span>
+  <dialog id="details-dialog">
+    <p>Details of Report.txt</p>
+    <button id="close-details">Close details</button>
+  </dialog>
+</section>
+
+<section id="canvas-section">
+  <h2>Dots</h2>
+  <canvas id="dots" width="480" height="200" role="img" aria-label="Dots picture"></canvas>
+</section>
+
+<section id="frames">
+  <h2>Frames</h2>
+  <iframe id="same" title="City frame" src="/frame.html" width="420" height="90"></iframe>
+  <div id="spacer"></div>
+  <iframe id="cross" title="Code frame" width="420" height="120"></iframe>
+</section>
+
+<script>
+const $ = (id) => document.getElementById(id);
+for (const id of ["name", "email", "notes"]) {
+  $(id).addEventListener("input", (e) => log(id, "input", { v: e.target.value, trusted: e.isTrusted }));
+}
+$("password").addEventListener("input", (e) => log("password", "input", { v: String(e.target.value.length), trusted: e.isTrusted }));
+$("plan").addEventListener("change", (e) => log("plan", "change", { v: e.target.value, trusted: e.isTrusted }));
+for (const id of ["news", "terms"]) {
+  $(id).addEventListener("click", (e) => log(id, "click", { v: e.target.checked ? "on" : "off", trusted: e.isTrusted }));
+}
+for (const n of [1, 2, 3]) {
+  $("star-" + n).addEventListener("click", (e) => {
+    $("rating").textContent = n + (n === 1 ? " star" : " stars");
+    log("star-" + n, "click", { trusted: e.isTrusted });
+  });
+}
+$("signup").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const v = JSON.stringify({
+    name: $("name").value, email: $("email").value, plan: $("plan").value, notes: $("notes").value,
+    news: $("news").checked, terms: $("terms").checked, rating: $("rating").textContent,
+  });
+  $("result").textContent = "Submitted";
+  log("form", "submit", { v, trusted: e.isTrusted && (e.submitter ? true : false) });
+});
+$("submit").addEventListener("click", (e) => log("submit", "click", { trusted: e.isTrusted }));
+
+$("delete").addEventListener("click", (e) => {
+  log("delete", "click", { trusted: e.isTrusted });
+  const yes = confirm("Delete Report.txt?");
+  log("delete", "confirm", { v: yes ? "accepted" : "dismissed" });
+  if (yes) $("item").textContent = "Item: (deleted)";
+});
+$("rename").addEventListener("click", (e) => {
+  log("rename", "click", { trusted: e.isTrusted });
+  const name = prompt("New name for Report.txt", "Report.txt");
+  log("rename", "prompt", { v: name === null ? "(dismissed)" : name });
+  if (name) $("item").textContent = "Item: " + name;
+});
+$("details").addEventListener("click", (e) => { log("details", "click", { trusted: e.isTrusted }); $("details-dialog").showModal(); });
+$("close-details").addEventListener("click", (e) => { log("close-details", "click", { trusted: e.isTrusted }); $("details-dialog").close(); });
+
+// The dots: no accessibility at all. A click logs the dot it hit, or "canvas".
+const dots = [
+  { id: "red", x: 60, y: 60, r: 10, c: "#d33" }, { id: "green", x: 180, y: 140, r: 10, c: "#3a3" },
+  { id: "orange", x: 300, y: 50, r: 10, c: "#e90" }, { id: "blue", x: 420, y: 150, r: 10, c: "#36c" },
+];
+const cv = $("dots"), cx = cv.getContext("2d");
+cx.fillStyle = "#f7f7f7"; cx.fillRect(0, 0, cv.width, cv.height);
+for (const d of dots) { cx.fillStyle = d.c; cx.beginPath(); cx.arc(d.x, d.y, d.r, 0, 7); cx.fill(); }
+cv.addEventListener("mousedown", (e) => {
+  const x = e.offsetX, y = e.offsetY;
+  const hit = dots.find((d) => (x - d.x) ** 2 + (y - d.y) ** 2 <= d.r ** 2);
+  log(hit ? hit.id : "canvas", "down", { x, y, trusted: e.isTrusted });
+});
+
+// The cross-origin frame: the same server under another host name, so another site.
+const other = location.hostname === "127.0.0.1" ? "localhost" : "127.0.0.1";
+$("cross").src = `${location.protocol}//${other}:${location.port}/xframe.html`;
+log("app", "ready");
+</script>
+</body>
+</html>

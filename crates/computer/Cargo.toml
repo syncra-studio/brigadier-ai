@@ -1,0 +1,67 @@
+[package]
+name = "brigadier-computer"
+description = "Computer use: observe and act on the user's desktop in the background, for every worker."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = ["engine"]
+# The macOS backend, the helper process and the bench. brigadierd builds without it: it needs
+# only the request types and the helper client.
+engine = [
+  "dep:libc",
+  "dep:block2",
+  "dep:objc2",
+  "dep:objc2-core-foundation",
+  "dep:objc2-core-graphics",
+  "dep:objc2-application-services",
+  "dep:objc2-foundation",
+  "dep:objc2-app-kit",
+  "dep:objc2-screen-capture-kit",
+  "dep:objc2-quartz-core",
+  "dep:dispatch2",
+]
+
+[[bin]]
+name = "brigadier-computer"
+required-features = ["engine"]
+
+[[example]]
+name = "cursor-proof"
+required-features = ["engine"]
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+png = "0.18.1"
+base64.workspace = true
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { version = "0.2.189", optional = true }
+block2 = { version = "0.6.2", optional = true }
+objc2 = { version = "0.6.4", optional = true }
+objc2-core-foundation = { version = "0.3.2", optional = true }
+objc2-core-graphics = { version = "0.3.2", optional = true }
+objc2-application-services = { version = "0.3.2", optional = true }
+objc2-foundation = { optional = true, version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSBundle", "NSString", "NSError", "NSURL", "NSEnumerator", "NSGeometry", "NSValue"] }
+objc2-app-kit = { optional = true, version = "0.3.2", default-features = false, features = [
+  "std", "libc", "block2", "objc2-core-foundation", "NSWorkspace", "NSRunningApplication", "NSEvent", "NSGraphics",
+  "NSApplication", "NSResponder", "NSView", "NSControl", "NSButton", "NSImage", "NSMenu",
+  "NSMenuItem", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSWindow", "NSPanel", "NSScreen",
+  "NSColor", "NSFont", "objc2-quartz-core",
+] }
+objc2-quartz-core = { optional = true, version = "0.3.2", default-features = false, features = [
+  "std", "objc2-core-foundation", "objc2-core-graphics", "CALayer", "CAShapeLayer", "CATextLayer", "CATransaction",
+  "CAAnimation", "CAMediaTiming", "CAMediaTimingFunction", "CABase",
+] }
+dispatch2 = { optional = true, version = "0.3.1", default-features = false, features = ["std"] }
+objc2-screen-capture-kit = { optional = true, version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-core-foundation", "objc2-core-graphics", "SCShareableContent", "SCScreenshotManager", "SCStream"] }
+
+[lints]
+workspace = true
