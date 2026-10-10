@@ -64,15 +64,18 @@ export function ShellBox({ command, output, status, exit }: {
   const end = ending(status, exit);
   return (
     <div data-slot="shell-card" className={SHELL}>
-      <span className="text-foreground/70 text-label px-3 pt-2">Shell</span>
-      <pre data-slot="shell-command" className={cn(SHELL_TEXT, "text-foreground line-clamp-2 px-3 pt-1")}>{`$ ${unwrapCommand(command)}`}</pre>
+      <span className="text-foreground/70 text-label px-3 py-1">Shell</span>
+      <pre data-slot="shell-command" className={cn(SHELL_TEXT, "text-foreground line-clamp-2 px-3 pt-2")}>
+        <span className="text-muted-foreground">$ </span>
+        {unwrapCommand(command)}
+      </pre>
       {/* Its newest line in view, the older ones fading out above it. */}
       <div data-slot="shell-output" className="max-h-shell-output scroll-edge-fade flex flex-col-reverse overflow-y-auto px-3 py-2 [--spacing-scroll-fade-bottom:0] [--spacing-scroll-fade-top:var(--spacing-shell-fade)]">
-        <pre className={cn(SHELL_TEXT, "text-foreground/70")}>{printed ? <Output text={printed} /> : "No output"}</pre>
+        <pre className={cn(SHELL_TEXT, "text-foreground/70 font-medium")}>{printed ? <Output text={printed} /> : "No output"}</pre>
       </div>
       <span
         className={cn(
-          "border-foreground/16 border-t px-3 py-1.5 text-end text-xs",
+          "px-3 py-1.5 text-end text-xs",
           end === "✓ Success" ? "text-muted-foreground" : end === "Running" ? "shimmer" : "text-destructive",
         )}
       >
