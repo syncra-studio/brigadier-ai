@@ -439,9 +439,10 @@ impl Session {
             }
             Request::StartDictation => {
                 self.follow_dictation();
+                let settings = self.daemon.core.settings();
                 self.daemon
                     .dictation
-                    .start()
+                    .start(&settings.dictation_language, &settings.dictation_words)
                     .map(|dictation_id| {
                         self.dictations.insert(dictation_id.clone());
                         Response::StartDictation { dictation_id }

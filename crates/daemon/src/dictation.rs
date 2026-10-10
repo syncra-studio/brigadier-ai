@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use brigadier_core::Error;
-use brigadier_ipc::protocol::{DictationStatus, DictationUpdate};
+use brigadier_ipc::protocol::{DictationLanguage, DictationStatus, DictationUpdate};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin};
@@ -107,6 +107,7 @@ impl Dictation {
             model_bytes: MODEL_BYTES,
             installed: self.installed(),
             downloading: lock(&self.download).is_some(),
+            languages: languages(),
         }
     }
 
@@ -164,17 +165,24 @@ impl Dictation {
         }
     }
 
-    /// Starts a dictation's helper, which loads the model while audio arrives. One dictation
-    /// runs at a time: a new one ends the one before.
-    pub fn start(&self) -> Result<String> {
+    /// Starts a dictation's helper, which loads the model while audio arrives, listening for
+    /// `language` (empty or unknown: detected) with `words` as a hint. One dictation runs at a
+    /// time: a new one ends the one before.
+    pub fn start(&self, language: &str, words: &[String]) -> Result<String> {
         if !self.installed() {
             return Err(invalid("the speech model isn't downloaded yet"));
         }
         let exe = std::env::current_exe()
             .map_err(|err| invalid(format!("couldn't find brigadierd: {err}")))?;
-        let mut child = tokio::process::Command::new(exe)
-            .arg("transcribe")
-            .arg(self.model_path())
+        let mut command = tokio::process::Command::new(exe);
+        command.arg("transcribe").arg(self.model_path());
+        if known_language(language) {
+            command.arg("--language").arg(language);
+        }
+        if let Some(hint) = words_hint(words) {
+            command.arg("--words").arg(hint);
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -412,16 +420,62 @@ fn fetch(
     Ok(())
 }
 
-/// `brigadierd transcribe <model>`: the dictation helper. Reads 16 kHz mono 16-bit PCM from
-/// stdin until it closes, loading the model meanwhile, and prints `{"text": …}` (or
-/// `{"error": …}`) as one line.
-pub fn transcribe_main(mut args: impl Iterator<Item = std::ffi::OsString>) -> ExitCode {
-    let answer = match args.next() {
-        Some(model) => match transcribe(Path::new(&model)) {
+/// The languages the speech engine knows.
+fn languages() -> Vec<DictationLanguage> {
+    (0..=whisper_rs::get_lang_max_id())
+        .filter_map(|id| {
+            Some(DictationLanguage {
+                code: whisper_rs::get_lang_str(id)?.to_owned(),
+                name: whisper_rs::get_lang_str_full(id)?.to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// Whether `code` is the short name of a language the speech engine knows (not "auto", nor a
+/// long name such as "english"). Checked before asking it: it can't take a null byte.
+fn known_language(code: &str) -> bool {
+    !code.is_empty()
+        && code.len() <= 8
+        && code.bytes().all(|byte| byte.is_ascii_lowercase())
+        && whisper_rs::get_lang_id(code).and_then(whisper_rs::get_lang_str) == Some(code)
+}
+
+/// Longest word hint passed on: the engine reads the hint as an earlier part of the speech,
+/// and takes only so much of it.
+const WORDS_HINT_CHARS: usize = 600;
+
+/// The words dictation should recognise, as the speech engine's hint ("Brigadier, Jane Doe"),
+/// or None when there are none.
+fn words_hint(words: &[String]) -> Option<String> {
+    let mut hint = String::new();
+    for word in words {
+        let word: String = word.chars().filter(|c| !c.is_control()).collect();
+        let word = word.trim();
+        if word.is_empty() {
+            continue;
+        }
+        let separator = if hint.is_empty() { "" } else { ", " };
+        if hint.chars().count() + separator.len() + word.chars().count() > WORDS_HINT_CHARS {
+            break;
+        }
+        hint.push_str(separator);
+        hint.push_str(word);
+    }
+    (!hint.is_empty()).then_some(hint)
+}
+
+/// `brigadierd transcribe <model> [--language <code>] [--words <hint>]`: the dictation
+/// helper. Reads 16 kHz mono 16-bit PCM from stdin until it closes, loading the model
+/// meanwhile, and prints `{"text": …}` (or `{"error": …}`) as one line. Without a language it
+/// detects one; the words are a hint of names and terms to expect.
+pub fn transcribe_main(args: impl Iterator<Item = std::ffi::OsString>) -> ExitCode {
+    let answer = match parse_transcribe(args) {
+        Ok(job) => match transcribe(&job) {
             Ok(text) => serde_json::json!({ "text": text }),
             Err(error) => serde_json::json!({ "error": error }),
         },
-        None => serde_json::json!({ "error": "usage: brigadierd transcribe <model>" }),
+        Err(error) => serde_json::json!({ "error": error }),
     };
     let ok = answer.get("text").is_some();
     println!("{answer}");
@@ -432,7 +486,42 @@ pub fn transcribe_main(mut args: impl Iterator<Item = std::ffi::OsString>) -> Ex
     }
 }
 
-fn transcribe(model: &Path) -> std::result::Result<String, String> {
+/// What `brigadierd transcribe` was asked to do.
+#[derive(Debug, PartialEq)]
+struct Transcription {
+    model: PathBuf,
+    language: Option<String>,
+    words: Option<String>,
+}
+
+const TRANSCRIBE_USAGE: &str =
+    "usage: brigadierd transcribe <model> [--language <code>] [--words <hint>]";
+
+fn parse_transcribe(
+    mut args: impl Iterator<Item = std::ffi::OsString>,
+) -> std::result::Result<Transcription, String> {
+    let model = args.next().ok_or(TRANSCRIBE_USAGE)?;
+    let mut job = Transcription {
+        model: PathBuf::from(model),
+        language: None,
+        words: None,
+    };
+    while let Some(flag) = args.next() {
+        let value = args
+            .next()
+            .and_then(|value| value.into_string().ok())
+            .ok_or(TRANSCRIBE_USAGE)?;
+        match flag.to_str() {
+            Some("--language") if known_language(&value) => job.language = Some(value),
+            Some("--language") => return Err(format!("unknown language: {value}")),
+            Some("--words") => job.words = words_hint(&[value]),
+            _ => return Err(TRANSCRIBE_USAGE.to_owned()),
+        }
+    }
+    Ok(job)
+}
+
+fn transcribe(job: &Transcription) -> std::result::Result<String, String> {
     use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
     // whisper.cpp's own logging would go to stderr; nothing reads it.
@@ -442,7 +531,7 @@ fn transcribe(model: &Path) -> std::result::Result<String, String> {
         let mut bytes = Vec::new();
         std::io::stdin().read_to_end(&mut bytes).map(|_| bytes)
     });
-    let context = WhisperContext::new_with_params(model, WhisperContextParameters::default())
+    let context = WhisperContext::new_with_params(&job.model, WhisperContextParameters::default())
         .map_err(|err| format!("couldn't load the speech model: {err}"))?;
     let mut state = context
         .create_state()
@@ -463,7 +552,10 @@ fn transcribe(model: &Path) -> std::result::Result<String, String> {
     }
 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    params.set_language(Some("auto"));
+    params.set_language(Some(job.language.as_deref().unwrap_or("auto")));
+    if let Some(words) = &job.words {
+        params.set_initial_prompt(words);
+    }
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
     params.set_n_threads(i32::try_from(threads).unwrap_or(4));
     params.set_no_context(true);
@@ -493,4 +585,88 @@ fn transcribe(model: &Path) -> std::result::Result<String, String> {
         text.push_str(piece);
     }
     Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> impl Iterator<Item = std::ffi::OsString> {
+        list.iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    #[test]
+    fn the_engine_lists_its_languages_by_code_and_name() {
+        let languages = languages();
+        assert!(languages.len() > 90, "{}", languages.len());
+        assert_eq!(languages[0].code, "en");
+        assert_eq!(languages[0].name, "english");
+        assert!(
+            languages
+                .iter()
+                .any(|lang| lang.code == "de" && lang.name == "german")
+        );
+    }
+
+    #[test]
+    fn only_a_language_the_engine_knows_is_passed_on() {
+        assert!(known_language("en"));
+        assert!(known_language("yue"));
+        for code in ["", "auto", "xx", "EN", "e\0n", "english"] {
+            assert!(!known_language(code), "{code:?}");
+        }
+    }
+
+    #[test]
+    fn the_word_hint_joins_words_and_stays_short() {
+        let words = ["  Brigadier ", "", "Jane\u{0}Doe", "\n"].map(String::from);
+        assert_eq!(words_hint(&words).as_deref(), Some("Brigadier, JaneDoe"));
+        assert_eq!(words_hint(&[]), None);
+        let many: Vec<String> = (0..500).map(|n| format!("word{n}")).collect();
+        let hint = words_hint(&many).unwrap();
+        assert!(hint.chars().count() <= WORDS_HINT_CHARS);
+        assert!(hint.ends_with(char::is_numeric));
+    }
+
+    #[test]
+    fn the_helper_reads_its_model_language_and_words() {
+        assert_eq!(
+            parse_transcribe(args(&["/m.bin"])),
+            Ok(Transcription {
+                model: PathBuf::from("/m.bin"),
+                language: None,
+                words: None
+            })
+        );
+        assert_eq!(
+            parse_transcribe(args(&[
+                "/m.bin",
+                "--language",
+                "de",
+                "--words",
+                "Brigadier, Jane"
+            ])),
+            Ok(Transcription {
+                model: PathBuf::from("/m.bin"),
+                language: Some("de".into()),
+                words: Some("Brigadier, Jane".into())
+            })
+        );
+        assert_eq!(
+            parse_transcribe(args(&["/m.bin", "--language", "xx"])),
+            Err("unknown language: xx".into())
+        );
+        assert_eq!(parse_transcribe(args(&[])), Err(TRANSCRIBE_USAGE.into()));
+        assert_eq!(
+            parse_transcribe(args(&["/m.bin", "--language"])),
+            Err(TRANSCRIBE_USAGE.into())
+        );
+        assert_eq!(
+            parse_transcribe(args(&["/m.bin", "--speed", "2"])),
+            Err(TRANSCRIBE_USAGE.into())
+        );
+    }
 }

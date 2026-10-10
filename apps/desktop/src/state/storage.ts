@@ -63,3 +63,19 @@ export async function uninstall(
 export function quitApp(): Promise<void> {
   return invoke("quit_app");
 }
+
+/**
+ * Removes the dictation speech model through the same scan and clean as Free up space, which
+ * keeps it while a dictation or its download runs. Resolves when it is gone (or wasn't there).
+ */
+export async function removeSpeechModel(): Promise<void> {
+  const report = await scanStorage();
+  const model = report.items.find(
+    (item) => item.category === "models" && /[\\/]models[\\/]whisper[\\/]?$/.test(item.path ?? ""),
+  );
+  if (!model) return;
+  if (!model.selectable) throw new Error("Dictation is using it now. Try again when it has finished.");
+  const cleaned = await cleanStorage(report.scanId, [model.id]);
+  const failed = cleaned.failures[0];
+  if (failed) throw new Error(failed.error);
+}

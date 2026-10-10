@@ -623,6 +623,16 @@ pub struct Settings {
     /// provider.
     #[serde(default = "default_true")]
     pub switch_accounts: bool,
+    /// The language dictation listens for, as the speech engine names it ("en", "de"…). Empty:
+    /// it is detected from the speech.
+    pub dictation_language: String,
+    /// Words and names dictation should recognise, given to the speech engine as a hint.
+    pub dictation_words: Vec<String>,
+    /// The microphone dictation records from (the webview's device id). Empty: the system's
+    /// default.
+    pub dictation_microphone: String,
+    /// The system voice Read aloud speaks with (its voice URI). Empty: the system's default.
+    pub read_aloud_voice: String,
     /// The shape saved settings were last brought up to ([`SETTINGS_VERSION`]). Settings saved
     /// before it existed read as 0, so their conversions run.
     #[serde(default)]
@@ -734,6 +744,10 @@ impl Default for Settings {
             known_models: Vec::new(),
             accounts: Vec::new(),
             switch_accounts: true,
+            dictation_language: String::new(),
+            dictation_words: Vec::new(),
+            dictation_microphone: String::new(),
+            read_aloud_voice: String::new(),
             settings_version: SETTINGS_VERSION,
         }
     }

@@ -37,7 +37,8 @@ export type SettingsPageId =
   | "storage"
   | "inspector"
   | "archived"
-  | "shortcuts";
+  | "shortcuts"
+  | "voice";
 
 /**
  * What the main area shows. Drafts become real conversations on their first message. Settings
@@ -215,6 +216,10 @@ export const useApp = create<AppState>()(() => ({
     reviewWork: true,
     accounts: [],
     switchAccounts: true,
+    dictationLanguage: "",
+    dictationWords: [],
+    dictationMicrophone: "",
+    readAloudVoice: "",
     settingsVersion: 1,
   },
   threads: {},

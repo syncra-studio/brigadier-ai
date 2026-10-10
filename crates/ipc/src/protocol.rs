@@ -1644,6 +1644,18 @@ pub struct DictationStatus {
     pub installed: bool,
     /// Its download is under way.
     pub downloading: bool,
+    /// The languages the speech engine knows, in its own order.
+    pub languages: Vec<DictationLanguage>,
+}
+
+/// A language dictation can listen for.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DictationLanguage {
+    /// As the speech engine names it ("en").
+    pub code: String,
+    /// In English ("english"), as the speech engine has it.
+    pub name: String,
 }
 
 /// A step of a dictation or of the speech model's download.

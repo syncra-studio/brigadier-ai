@@ -108,6 +108,24 @@ accounts: Array<AccountEntry>,
  */
 switchAccounts: boolean, 
 /**
+ * The language dictation listens for, as the speech engine names it ("en", "de"…). Empty:
+ * it is detected from the speech.
+ */
+dictationLanguage: string, 
+/**
+ * Words and names dictation should recognise, given to the speech engine as a hint.
+ */
+dictationWords: Array<string>, 
+/**
+ * The microphone dictation records from (the webview's device id). Empty: the system's
+ * default.
+ */
+dictationMicrophone: string, 
+/**
+ * The system voice Read aloud speaks with (its voice URI). Empty: the system's default.
+ */
+readAloudVoice: string, 
+/**
  * The shape saved settings were last brought up to ([`SETTINGS_VERSION`]). Settings saved
  * before it existed read as 0, so their conversions run.
  */

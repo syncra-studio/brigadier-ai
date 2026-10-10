@@ -4,6 +4,7 @@ import {
   Branch,
   Cursor,
   KeyboardShortcut,
+  Mic,
   Robot,
   Shuffle,
   SettingsCog,
@@ -21,6 +22,7 @@ import { CONFIGURATION_ROWS, ConfigurationPage } from "@/app/settings/Configurat
 import { GENERAL_ROWS, GeneralPage } from "@/app/settings/GeneralPage";
 import { GIT_ROWS, GitPage } from "@/app/settings/GitPage";
 import { STORAGE_ROWS, StoragePage } from "@/app/settings/StoragePage";
+import { VOICE_ROWS, VoicePage } from "@/app/settings/VoicePage";
 import { SHORTCUTS_ROWS, ShortcutsPage } from "@/app/settings/ShortcutsPage";
 import { PROVIDERS_ROWS, ProvidersPage } from "@/app/providers/ProvidersPage";
 import { ROUTING_PAGE_ROWS, RoutingPage } from "@/app/routing/RoutingPage";
@@ -98,6 +100,14 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "Personal",
     component: ArchivedPage,
     rows: Object.values(ARCHIVED_ROWS),
+  },
+  {
+    id: "voice",
+    label: "Voice",
+    icon: Mic,
+    group: "Personal",
+    component: VoicePage,
+    rows: Object.values(VOICE_ROWS),
   },
   {
     id: "storage",

@@ -85,6 +85,7 @@ export type { DecisionSource } from "./DecisionSource";
 export type { DecisionWords } from "./DecisionWords";
 export type { Density } from "./Density";
 export type { Diagnostics } from "./Diagnostics";
+export type { DictationLanguage } from "./DictationLanguage";
 export type { DictationStatus } from "./DictationStatus";
 export type { DictationUpdate } from "./DictationUpdate";
 export type { DiffStat } from "./DiffStat";

@@ -1,14 +1,15 @@
-import { type SpeechSynthesisAdapter, WebSpeechSynthesisAdapter } from "@assistant-ui/react";
 import { useSyncExternalStore } from "react";
 
+import { useApp } from "@/state/store";
+
 /**
- * "Read aloud" under an answer, with the system's voices: one answer at a time.
- * Reading another stops the first.
+ * "Read aloud" under an answer, with the system's voices: one answer at a time, in the voice
+ * chosen in Settings › Voice (the system's default when none is, or it is gone). Reading
+ * another stops the first.
  */
 
-const voice = new WebSpeechSynthesisAdapter();
 const listeners = new Set<() => void>();
-let current: { id: string; utterance: SpeechSynthesisAdapter.Utterance } | null = null;
+let current: { id: string; utterance: SpeechSynthesisUtterance } | null = null;
 
 function changed(): void {
   for (const listener of listeners) listener();
@@ -30,23 +31,44 @@ export function spokenText(markdown: string): string {
     .trim();
 }
 
+/** The voice `uri` names among `voices`; null for the system's default (none chosen, or gone). */
+export function voiceFor(uri: string, voices: readonly SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
+  return uri ? (voices.find((voice) => voice.voiceURI === uri) ?? null) : null;
+}
+
 /** Reads `text` as answer `id`, stopping whatever was being read. */
 export function readAloud(id: string, text: string): void {
-  current?.utterance.cancel();
-  const utterance = voice.speak(spokenText(text));
+  speak(id, spokenText(text));
+}
+
+/** Says a line in the chosen voice (Settings › Voice, when one is picked). */
+export function sayInVoice(text: string): void {
+  speak("sample", text);
+}
+
+function speak(id: string, text: string): void {
+  speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  const voice = voiceFor(useApp.getState().settings.readAloudVoice, speechSynthesis.getVoices());
+  if (voice) {
+    utterance.voice = voice;
+    utterance.lang = voice.lang;
+  }
+  const ended = () => {
+    if (current?.utterance !== utterance) return;
+    current = null;
+    changed();
+  };
+  utterance.addEventListener("end", ended);
+  utterance.addEventListener("error", ended);
   current = { id, utterance };
-  utterance.subscribe(() => {
-    if (utterance.status.type === "ended" && current?.utterance === utterance) {
-      current = null;
-      changed();
-    }
-  });
+  speechSynthesis.speak(utterance);
   changed();
 }
 
 export function stopReading(): void {
-  current?.utterance.cancel();
   current = null;
+  speechSynthesis.cancel();
   changed();
 }
 
