@@ -32,11 +32,20 @@ export function StepRow({ words, status, exit = null, detail, suffix, slot }: De
   suffix?: ReactNode;
   slot?: string;
 }) {
+  const running = status === "inProgress";
   return (
     // Its Shell box or diff spans the column, flush under the row.
-    <ThreadActivity data-slot={slot} data-kind={words.kind} detail={detail} detailClassName={cn(ROW_DETAIL, "ps-0")}>
+    // While it runs it has nothing to open yet, so no chevron: it opens once it has finished.
+    <ThreadActivity
+      data-slot={slot}
+      data-kind={words.kind}
+      detail={running ? undefined : detail}
+      detailClassName={cn(ROW_DETAIL, "ps-0")}
+    >
       <StepIcon words={words} />
-      <span className={cn("min-w-0 truncate", status === "inProgress" && "shimmer")}>{stepLabel(words, status, exit)}</span>
+      <span className={cn("min-w-0 truncate", running && "shimmer")}>
+        {stepLabel(words, status, exit)}
+      </span>
       {suffix && <span className="shrink-0 tabular-nums">{suffix}</span>}
     </ThreadActivity>
   );
@@ -64,11 +73,10 @@ export function ActivityGroup<S>({ items, live, describe, renderStep }: {
   const current = described.at(-1);
   const first = described[0];
   const head = live || described.length === 1 ? current : first;
-  const label = !current
-    ? ""
-    : live || described.length === 1
-      ? stepLabel(current.words, current.status, current.exit)
-      : summarize(described.map((step) => step.words));
+  const oneStep = live || described.length === 1;
+  const label = !current ? "" : oneStep ? stepLabel(current.words, current.status, current.exit) : summarize(described.map((step) => step.words));
+  // It says the step running now: like that step's own row, no chevron until it is open.
+  const running = live && current?.status === "inProgress";
   return (
     <Collapsible data-slot="work-group">
       <CollapsibleTrigger className={cn(ROW, ROW_TOGGLE)}>
@@ -76,11 +84,11 @@ export function ActivityGroup<S>({ items, live, describe, renderStep }: {
         {/* A live group's step changes in place: its words cross-fade, with no jump. */}
         <span
           key={live ? label : undefined}
-          className={cn("min-w-0 truncate", live && "animate-in fade-in duration-160 motion-reduce:animate-none", live && current?.status === "inProgress" && "shimmer")}
+          className={cn("min-w-0 truncate", live && "animate-in fade-in duration-160 motion-reduce:animate-none", running && "shimmer")}
         >
           {label}
         </span>
-        <ChevronRight aria-hidden className={CHEVRON} />
+        <ChevronRight aria-hidden className={cn(CHEVRON, running && "group-data-[state=closed]:hidden")} />
       </CollapsibleTrigger>
       <CollapsibleContent className={OPENS}>
         {/* Up to 224px of rows 4px apart, then it scrolls, its edges fading while there is more. */}
