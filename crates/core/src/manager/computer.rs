@@ -127,12 +127,20 @@ struct Approved {
     windows: HashSet<(Instance, u32)>,
 }
 
+/// A worker's launches still running, and whether the worker ended while they ran.
+#[derive(Default)]
+struct Launching {
+    running: usize,
+    ended: bool,
+}
+
 #[derive(Default)]
 struct State {
     leases: HashMap<LeaseKey, Lease>,
     approved: HashMap<TaskId, Approved>,
     /// Processes and windows each worker's `launch` created.
     launched: HashMap<TaskId, Vec<Launched>>,
+    launching: HashMap<TaskId, Launching>,
     host_pid: Option<i32>,
     /// Conversations with an open "Waiting on you" item for missing permissions.
     permission_waits: HashSet<ConversationId>,
@@ -175,6 +183,15 @@ impl Computer {
     #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn set_starter(&self, starter: HelperStarter) {
         *lock(&self.starter) = starter;
+    }
+
+    /// Whether the worker still has approvals, launches, or launches running here.
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn holds_any_of(&self, task_id: &TaskId) -> bool {
+        let state = lock(&self.state);
+        state.approved.contains_key(task_id)
+            || state.launched.contains_key(task_id)
+            || state.launching.contains_key(task_id)
     }
 
     /// The Brigadier app that connected to this daemon: its windows hold the cards a worker
@@ -288,9 +305,19 @@ impl Computer {
             let mut state = lock(&self.state);
             state.leases.retain(|_, l| &l.owner != task_id);
             state.approved.remove(task_id);
+            // What a launch still running started is ended when it reports, never kept.
+            if let Some(l) = state.launching.get_mut(task_id) {
+                l.ended = true;
+            }
             state.launched.remove(task_id).unwrap_or_default()
         };
         self.changes.send_modify(|_| {});
+        self.close_launched(task_id, &launched).await;
+    }
+
+    /// Closes the windows `launched` opened in apps it started, then ends the worker's
+    /// session in the helper.
+    async fn close_launched(&self, task_id: &TaskId, launched: &[Launched]) {
         let link = self.link.lock().await.clone();
         let Some(link) = link.filter(|l| l.is_alive()) else {
             return;
@@ -302,7 +329,7 @@ impl Computer {
             .filter(|l| l.new_process)
             .map(|l| (l.instance.clone(), Vec::new()))
             .collect();
-        for l in &launched {
+        for l in launched {
             if let Some(windows) = owned.get_mut(&l.instance) {
                 windows.extend(&l.new_windows);
             }
@@ -407,8 +434,43 @@ impl Computer {
     }
 
     fn approve(&self, task_id: &TaskId, instance: &Instance, windows: &[u32]) {
+        lock(&self.state).approve(task_id, instance, windows);
+    }
+
+    /// Counts a launch of the worker's as running until the guard drops.
+    fn launch_running(&self, task_id: &TaskId) -> RunningLaunch {
+        lock(&self.state)
+            .launching
+            .entry(task_id.clone())
+            .or_default()
+            .running += 1;
+        RunningLaunch {
+            state: self.state.clone(),
+            task_id: task_id.clone(),
+        }
+    }
+
+    /// Keeps what a launch created as the worker's: its windows approved, its process and
+    /// windows its own. Nothing is kept, and it says so, when the worker ended while the launch
+    /// ran.
+    fn keep_launch(&self, task_id: &TaskId, l: &Launched) -> bool {
         let mut state = lock(&self.state);
-        let a = state.approved.entry(task_id.clone()).or_default();
+        if state.launching.get(task_id).is_some_and(|l| l.ended) {
+            return false;
+        }
+        state.approve(task_id, &l.instance, &l.new_windows);
+        state
+            .launched
+            .entry(task_id.clone())
+            .or_default()
+            .push(l.clone());
+        true
+    }
+}
+
+impl State {
+    fn approve(&mut self, task_id: &TaskId, instance: &Instance, windows: &[u32]) {
+        let a = self.approved.entry(task_id.clone()).or_default();
         a.instances.insert(instance.clone());
         for w in windows {
             a.windows.insert((instance.clone(), *w));
@@ -518,6 +580,24 @@ struct HeldLeases<'a> {
 impl Drop for HeldLeases<'_> {
     fn drop(&mut self) {
         self.computer.release_leases(self.task_id, self.keys);
+    }
+}
+
+/// A launch running for a worker, counted until it is dropped.
+struct RunningLaunch {
+    state: Arc<Mutex<State>>,
+    task_id: TaskId,
+}
+
+impl Drop for RunningLaunch {
+    fn drop(&mut self) {
+        let mut state = lock(&self.state);
+        if let Some(l) = state.launching.get_mut(&self.task_id) {
+            l.running -= 1;
+            if l.running == 0 {
+                state.launching.remove(&self.task_id);
+            }
+        }
     }
 }
 
@@ -757,7 +837,14 @@ impl SessionManager {
                 // and cleaned up; it's bounded by the launch's own window wait.
                 let (tx, rx) = oneshot::channel();
                 let (manager, task) = (self.arc(), task_id.clone());
+                // Counted before the grant is checked again, so a worker that ends from here on
+                // finds the launch running, and ends what it starts.
+                let running = computer.launch_running(task_id);
+                if self.grants.resolve(grant).is_none() {
+                    return Err(CuError::new(ErrorCode::Cancelled, "the worker ended"));
+                }
                 self.spawn(async move {
+                    let _running = running;
                     let a = manager
                         .computer
                         .request(&task, provider, policy, Op::Launch(req))
@@ -904,28 +991,29 @@ impl SessionManager {
 
     /// Records what a launch created as the worker's: a new process in the cleanup ledger
     /// (quit when the worker ends), its windows as approved. A process the system handed
-    /// back already running is never the worker's to quit.
+    /// back already running is never the worker's to quit. When the worker ended while the
+    /// launch ran, its cleanup may be over: what the launch started is ended here instead.
     async fn own_launch(&self, task_id: &TaskId, l: &Launched) {
-        if l.new_process {
-            let artifact = Artifact::Process {
-                pid: l.instance.pid as u32,
-                started_at_ms: Some(l.instance.started_us as f64 / 1000.0),
-            };
-            if let Err(err) = self
-                .runtime
-                .ledger()
-                .record(&format!("task:{task_id}"), artifact)
-                .await
-            {
-                tracing::warn!(task = %task_id, error = %err, "could not record a launched app");
-            }
+        let owner = format!("task:{task_id}");
+        let process = l.new_process.then(|| Artifact::Process {
+            pid: l.instance.pid as u32,
+            started_at_ms: Some(l.instance.started_us as f64 / 1000.0),
+        });
+        if let Some(artifact) = &process
+            && let Err(err) = self.runtime.ledger().record(&owner, artifact.clone()).await
+        {
+            tracing::warn!(task = %task_id, error = %err, "could not record a launched app");
         }
-        self.computer.approve(task_id, &l.instance, &l.new_windows);
-        lock(&self.computer.state)
-            .launched
-            .entry(task_id.clone())
-            .or_default()
-            .push(l.clone());
+        if self.computer.keep_launch(task_id, l) {
+            return;
+        }
+        tracing::info!(task = %task_id, pid = l.instance.pid, "a launch finished after its worker ended");
+        self.computer
+            .close_launched(task_id, std::slice::from_ref(l))
+            .await;
+        if let Some(artifact) = process {
+            self.runtime.ledger().forget(&owner, artifact).await;
+        }
     }
 
     /// The batch's actions as session events, its annotated screenshot in the blob store. A
