@@ -387,9 +387,22 @@ async fn idle_sessions_build_files_go_only_while_git_ignores_them() {
         labels(&items)
     );
 
-    let (items, _) = scan(&flow, idle.clone()).await;
+    let (items, usage) = scan(&flow, idle.clone()).await;
     let build = named(&items, "Build files in “Flow”");
     assert!(build.item.checked && build.item.selectable);
+    // The open session's work folder is kept, without counting its offered build files again.
+    let open = usage
+        .kept
+        .iter()
+        .find(|line| line.label.contains("open session"))
+        .expect("a counted line for open sessions");
+    let whole = removal::allocated_size(&worktree);
+    assert!(
+        open.bytes <= whole - build.item.bytes + 512 * 1024,
+        "kept {} of {whole}, build files {}",
+        open.bytes,
+        build.item.bytes
+    );
     assert!(
         build.item.reason.contains("(node_modules, target)"),
         "{}",

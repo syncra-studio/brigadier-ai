@@ -201,6 +201,9 @@ impl Scanner<'_> {
     /// recently is counted as kept.
     pub(super) fn build_files(&mut self, idle: Duration) {
         let mut recent = (0usize, 0u64);
+        // Build files shown here, offered or kept, are not counted again in the open sessions'
+        // work folders' kept line.
+        let mut apart = 0u64;
         for used in in_use(self.records) {
             let Ok(repo) = self.git.open(&used.path) else {
                 continue;
@@ -226,6 +229,7 @@ impl Scanner<'_> {
             if !idle_for(self.records, &used.conversation, idle) {
                 recent.0 += 1;
                 recent.1 += total;
+                apart += total;
                 continue;
             }
             if self.busy(&used.path) {
@@ -247,6 +251,7 @@ impl Scanner<'_> {
                 continue;
             }
             let bytes = bound.iter().map(|(_, _, bytes)| bytes).sum();
+            apart += bytes;
             self.push(
                 item(
                     CleanCategory::BuildFiles,
@@ -275,6 +280,9 @@ impl Scanner<'_> {
                 bytes: recent.1,
                 reason: format!("Their sessions were used in the last {}.", days(idle)),
             });
+        }
+        if let Some(line) = self.open_folders.and_then(|at| self.kept.get_mut(at)) {
+            line.bytes = line.bytes.saturating_sub(apart);
         }
     }
 }

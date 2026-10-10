@@ -299,6 +299,7 @@ impl SessionManager {
                 platform: &*platform,
                 items: Vec::new(),
                 kept: Vec::new(),
+                open_folders: None,
             };
             scan.worktrees();
             scan.stale_worktree_records();
@@ -1076,6 +1077,8 @@ struct Scanner<'a> {
     platform: &'a dyn brigadier_sandbox::Platform,
     items: Vec<ScanItem>,
     kept: Vec<KeptLine>,
+    /// The kept line counting open sessions' work folders, in `kept`.
+    open_folders: Option<usize>,
 }
 
 impl Scanner<'_> {
@@ -1258,6 +1261,7 @@ impl Scanner<'_> {
         }
         if !open.is_empty() {
             let bytes = open.iter().map(|path| removal::allocated_size(path)).sum();
+            self.open_folders = Some(self.kept.len());
             self.kept.push(KeptLine {
                 category: CleanCategory::FinishedWork,
                 label: counted(
