@@ -180,8 +180,11 @@ images, best-of-N rollouts and GPU grounders.
   `LSUIElement`), shipped inside `Brigadier.app/Contents/Helpers/`, signed with Brigadier's Developer ID. It has its
   own TCC identity, so System Settings shows "Brigadier Computer Use" and the grant survives Brigadier updates.
   brigadierd starts it through LaunchServices (`open -g -j -a`), so it is its own responsible process and the grants
-  are its own, not the daemon's or a terminal's. (A process can also disclaim responsibility when it spawns a child;
-  that is the fallback if LaunchServices start is too slow.) It exits after 10 minutes with no session, and when
+  are its own, not the daemon's or a terminal's. It runs from a copy in the data directory (`computer/`), refreshed
+  when the bundled one changes: macOS 27 answers Screen Recording for the outermost app around a process, so started
+  inside `Brigadier.app` it would be Brigadier there, with no entry of its own (found live in the installed
+  release; Accessibility keeps the nested helper's id). (A process can also disclaim responsibility when it spawns a
+  child; that is the fallback if LaunchServices start is too slow.) It exits after 10 minutes with no session, and when
   brigadierd goes away.
 - **`ComputerBroker`** in brigadierd: starts and supervises the helper, checks each call's grant, holds target
   leases, runs the global stop, and moves screenshots of the action log into the blob store.

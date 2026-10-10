@@ -46,6 +46,13 @@ permission you turn off later shows as **Not allowed yet** too, and a worker tha
 The permissions belong to Brigadier Computer Use, not to Brigadier or a terminal, and they stay when Brigadier
 updates. If a worker needs them before you've given them, the conversation shows the same two Allow buttons.
 
+Brigadier Computer Use runs from a copy in Brigadier's data folder:
+`~/Library/Application Support/Brigadier/computer/Brigadier Computer Use.app`. macOS 27 counts Screen Recording for
+the outermost app around a program, so run from inside Brigadier.app it would be Brigadier there and never get an
+entry of its own in Screen & System Audio Recording. Brigadier copies it again after an update, checks the copy's
+signature (`codesign --verify --strict`) and swaps it in only once the old copy has stopped. It checks the signature
+again before each start; a copy that fails says so in Settings → Computer use instead of starting.
+
 To open those lists yourself:
 
 ```sh
@@ -62,7 +69,8 @@ grants across rebuilds and updates.
 ### Opening the dev build (for Brigadier's developers)
 
 A checkout's dev build is `target/debug/bundle/macos/Brigadier Dev.app`. Its helper is named **Brigadier Computer
-Use** too, with its own id (`ai.brigadier.dev.computer-use`), so it gets its own entries in System Settings. Build it
+Use** too, with its own id (`ai.brigadier.dev.computer-use`), so it gets its own entries in System Settings. It runs
+from its own copy in its data folder (`/tmp/brigadier-dev/computer/Brigadier Computer Use.app` by default). Build it
 signed, so the grants survive rebuilds, then open it with the script, never `/Applications/Brigadier.app`:
 
 ```sh

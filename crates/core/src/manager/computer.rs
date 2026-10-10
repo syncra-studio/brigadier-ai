@@ -1,8 +1,9 @@
 //! Computer use for workers (COMPUTER-USE-PLAN.md §4–§5): the broker between the workers'
 //! computer grants and the helper process that drives the desktop.
 //!
-//! - **The helper** is started on the first call: the bundled `Brigadier Computer Use.app`
-//!   through LaunchServices (`open -n`, so each daemon gets its own), or in development a
+//! - **The helper** is started on the first call: the bundled `Brigadier Computer Use.app`,
+//!   from its copy in the data directory (see [`place_helper`]), through LaunchServices
+//!   (`open -n`, so each daemon gets its own), or in development a
 //!   `brigadier-computer` binary spawned directly (`BRIGADIER_COMPUTER_HELPER`, or one next to
 //!   brigadierd). One that died is started again on the next call; the call that was running
 //!   fails and is never replayed.
@@ -1176,24 +1177,27 @@ fn start_helper(
             .stderr(Stdio::null())
             .spawn()
             .map(|_| ()),
-        // The bundled helper, through LaunchServices: its own responsible process, so the
-        // grants are "Brigadier Computer Use"'s. `-n`: never another daemon's helper.
-        (None, Some(app)) => Command::new("/usr/bin/open")
-            .args(["-n", "-g", "-a"])
-            .arg(&app)
-            .arg("--args")
-            .args(&serve)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .and_then(|s| {
-                if s.success() {
-                    Ok(())
-                } else {
-                    Err(std::io::Error::other(format!("open exited with {s}")))
-                }
-            }),
+        // The bundled helper, from its copy outside Brigadier.app, through LaunchServices: its
+        // own responsible process, so the grants are "Brigadier Computer Use"'s. `-n`: never
+        // another daemon's helper.
+        (None, Some(app)) => place_helper(&app, dir).and_then(|app| {
+            Command::new("/usr/bin/open")
+                .args(["-n", "-g", "-a"])
+                .arg(&app)
+                .arg("--args")
+                .args(&serve)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .and_then(|s| {
+                    if s.success() {
+                        Ok(())
+                    } else {
+                        Err(std::io::Error::other(format!("open exited with {s}")))
+                    }
+                })
+        }),
         (None, None) => return Err("the helper app is missing from this install".into()),
     };
     spawned.map_err(|e| format!("couldn't start it: {e}"))?;
@@ -1233,6 +1237,191 @@ fn start_helper(
         }
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// Where the bundled helper runs from: its copy in `dir`, copied again whenever it differs
+/// from `bundle` (an update). macOS 27 answers Screen Recording for the outermost app around a
+/// process, so a helper started inside Brigadier.app is Brigadier itself there, and never
+/// gets an entry of its own under Screen & System Audio Recording (the privacy log's
+/// `AUTHREQ_SUBJECT`; Accessibility keeps the helper's own id either way). Outside, it is
+/// "Brigadier Computer Use" for both. Its grants follow its signature, not its place, and
+/// each daemon's data directory has its own copy (a dev build's is its own, under its id).
+///
+/// A new copy must pass its signature check before it replaces the old one, which happens in
+/// one swap and only once no helper runs from the old one. The copy in place is checked again
+/// before every start.
+#[cfg(target_os = "macos")]
+fn place_helper(bundle: &Path, dir: &Path) -> std::io::Result<std::path::PathBuf> {
+    let placed = dir.join("Brigadier Computer Use.app");
+    if !same_tree(bundle, &placed) {
+        let fresh = dir.join(format!(".helper-new-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&fresh);
+        let made = copy_bundle(bundle, &fresh)
+            .and_then(|()| verify_signature(&fresh))
+            .and_then(|()| wait_until_unused(&placed, START_TIMEOUT))
+            .and_then(|()| match std::fs::symlink_metadata(&placed) {
+                Ok(_) => place::swap(&fresh, &placed),
+                Err(_) => std::fs::rename(&fresh, &placed),
+            });
+        // After a swap this is the old copy; after a failure, the new one.
+        let _ = std::fs::remove_dir_all(&fresh);
+        made?;
+    }
+    verify_signature(&placed)?;
+    Ok(placed)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn place_helper(_: &Path, _: &Path) -> std::io::Result<std::path::PathBuf> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
+/// Copies an app bundle with ditto(1), which keeps it as signed. `--noqtn`: no quarantine on
+/// the copy, which macOS already checked as part of Brigadier.app, so it isn't asked about as
+/// a download.
+#[cfg(target_os = "macos")]
+fn copy_bundle(from: &Path, to: &Path) -> std::io::Result<()> {
+    let out = std::process::Command::new("/usr/bin/ditto")
+        .arg("--noqtn")
+        .arg(from)
+        .arg(to)
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(std::io::Error::other(format!(
+        "couldn't copy Brigadier Computer Use to {}: {}",
+        to.display(),
+        String::from_utf8_lossy(&out.stderr).trim()
+    )))
+}
+
+/// `codesign --verify --strict` (codesign(1): verify the signature, with its extra checks
+/// such as symbolic links pointing only inside the bundle).
+#[cfg(target_os = "macos")]
+fn verify_signature(app: &Path) -> std::io::Result<()> {
+    let out = std::process::Command::new("/usr/bin/codesign")
+        .args(["--verify", "--strict"])
+        .arg(app)
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(std::io::Error::other(format!(
+        "Brigadier Computer Use at {} failed its signature check: {}",
+        app.display(),
+        String::from_utf8_lossy(&out.stderr).trim()
+    )))
+}
+
+/// Waits, up to `limit`, until no process runs from inside `app`.
+#[cfg(target_os = "macos")]
+fn wait_until_unused(app: &Path, limit: Duration) -> std::io::Result<()> {
+    let Ok(real) = std::fs::canonicalize(app) else {
+        return Ok(());
+    };
+    let started = Instant::now();
+    while place::runs_from(&real) {
+        if started.elapsed() > limit {
+            return Err(std::io::Error::other(format!(
+                "an earlier Brigadier Computer Use still runs from {} and didn't exit",
+                app.display()
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
+/// The two system calls the helper's copy needs.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+mod place {
+    use std::ffi::CString;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    use std::path::Path;
+
+    use nix::libc;
+
+    /// Swaps two paths in one step: renamex_np(2) with `RENAME_SWAP`. On a file system without
+    /// it (`ENOTSUP`), two renames, with `b` missing for a moment between them.
+    pub(super) fn swap(a: &Path, b: &Path) -> std::io::Result<()> {
+        let c = |p: &Path| CString::new(p.as_os_str().as_bytes()).map_err(std::io::Error::other);
+        let (ca, cb) = (c(a)?, c(b)?);
+        // SAFETY: both are NUL-terminated paths that live across the call.
+        if unsafe { libc::renamex_np(ca.as_ptr(), cb.as_ptr(), libc::RENAME_SWAP) } == 0 {
+            return Ok(());
+        }
+        let e = std::io::Error::last_os_error();
+        if e.raw_os_error() != Some(libc::ENOTSUP) {
+            return Err(e);
+        }
+        let aside = a.with_extension("swap");
+        std::fs::rename(b, &aside)?;
+        std::fs::rename(a, b)?;
+        std::fs::rename(aside, a)
+    }
+
+    /// Whether any process's executable lies inside `dir` (a real path).
+    pub(super) fn runs_from(dir: &Path) -> bool {
+        // SAFETY: with no buffer it only counts the processes.
+        let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+        if n <= 0 {
+            return false;
+        }
+        // Room for processes started since the count.
+        let mut pids: Vec<libc::c_int> = vec![0; n as usize + 64];
+        let size = (pids.len() * std::mem::size_of::<libc::c_int>()) as libc::c_int;
+        // SAFETY: the buffer holds exactly `size` bytes of pids, which is what it fills.
+        let n = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), size) };
+        pids.truncate(n.max(0) as usize);
+        pids.into_iter().any(|pid| {
+            let mut path = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+            // SAFETY: the buffer is `PROC_PIDPATHINFO_MAXSIZE` bytes, its documented size.
+            let len =
+                unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
+            if len <= 0 {
+                return false;
+            }
+            path.truncate(len as usize);
+            Path::new(&std::ffi::OsString::from_vec(path)).starts_with(dir)
+        })
+    }
+}
+
+/// Whether two trees hold the same entries: names, file bytes and modes, link targets.
+#[cfg(target_os = "macos")]
+fn same_tree(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (Ok(ma), Ok(mb)) = (std::fs::symlink_metadata(a), std::fs::symlink_metadata(b)) else {
+        return false;
+    };
+    let (ta, tb) = (ma.file_type(), mb.file_type());
+    if ta.is_symlink() || tb.is_symlink() {
+        return ta.is_symlink()
+            && tb.is_symlink()
+            && matches!((std::fs::read_link(a), std::fs::read_link(b)), (Ok(x), Ok(y)) if x == y);
+    }
+    if ta.is_dir() && tb.is_dir() {
+        let names = |d: &Path| -> Option<std::collections::BTreeSet<std::ffi::OsString>> {
+            std::fs::read_dir(d)
+                .ok()?
+                .map(|e| e.ok().map(|e| e.file_name()))
+                .collect()
+        };
+        return match (names(a), names(b)) {
+            (Some(x), Some(y)) if x == y => x.iter().all(|n| same_tree(&a.join(n), &b.join(n))),
+            _ => false,
+        };
+    }
+    ta.is_file()
+        && tb.is_file()
+        && ma.len() == mb.len()
+        && ma.permissions().mode() == mb.permissions().mode()
+        && matches!((std::fs::read(a), std::fs::read(b)), (Ok(x), Ok(y)) if x == y)
 }
 
 #[cfg(not(unix))]
@@ -1786,5 +1975,109 @@ mod tests {
         );
         assert_eq!(computer_batches(&log, 45), Some(("batch 5".into(), None)));
         assert_eq!(computer_batches(&log, 60), None);
+    }
+
+    /// The helper runs from a copy outside Brigadier.app, made once, and made again only after
+    /// the bundled one changes: checked, then swapped in once nothing runs from the old one.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_helper_runs_from_a_checked_copy_kept_like_the_bundled_one() {
+        use std::os::unix::fs::MetadataExt;
+        use std::process::Command;
+
+        let root = std::env::temp_dir().join(format!("brigadier-place-{}", uuid::Uuid::now_v7()));
+        let bundle = root.join("Brigadier.app/Contents/Helpers/Brigadier Computer Use.app");
+        let dir = root.join("data/computer");
+        std::fs::create_dir_all(bundle.join("Contents/MacOS")).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = bundle.join("Contents/MacOS/brigadier-computer");
+        let plist = |exe: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>\
+                 <key>CFBundleExecutable</key><string>{exe}</string>\
+                 <key>CFBundleIdentifier</key><string>ai.brigadier.test.place</string>\
+                 <key>CFBundlePackageType</key><string>APPL</string></dict></plist>"
+            )
+        };
+        // A bundle signed ad hoc, as a dev build's is, around one of the system's programs.
+        let build = |program: &str| {
+            std::fs::copy(program, &exe).unwrap();
+            std::fs::write(
+                bundle.join("Contents/Info.plist"),
+                plist("brigadier-computer"),
+            )
+            .unwrap();
+            let signed = Command::new("/usr/bin/codesign")
+                .args(["--force", "--sign", "-"])
+                .arg(&bundle)
+                .output()
+                .unwrap();
+            assert!(signed.status.success(), "{signed:?}");
+        };
+        build("/bin/sleep");
+
+        let placed = place_helper(&bundle, &dir).unwrap();
+        assert_eq!(placed, dir.join("Brigadier Computer Use.app"));
+        assert!(same_tree(&bundle, &placed));
+        let ino = |p: &Path| {
+            std::fs::metadata(p.join("Contents/Info.plist"))
+                .unwrap()
+                .ino()
+        };
+        let first = ino(&placed);
+        // The same: left as it is.
+        place_helper(&bundle, &dir).unwrap();
+        assert_eq!(ino(&placed), first);
+
+        // An update while a helper still runs from the copy: it waits for that one to end.
+        let mut running = Command::new(placed.join("Contents/MacOS/brigadier-computer"))
+            .arg("0.6")
+            .spawn()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        build("/usr/bin/true");
+        assert!(!same_tree(&bundle, &placed));
+        let reaper = std::thread::spawn(move || running.wait().unwrap());
+        let started = Instant::now();
+        place_helper(&bundle, &dir).unwrap();
+        assert!(
+            started.elapsed() >= Duration::from_millis(300),
+            "{:?}",
+            started.elapsed()
+        );
+        reaper.join().unwrap();
+        assert!(same_tree(&bundle, &placed));
+        assert_ne!(ino(&placed), first);
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["Brigadier Computer Use.app"]);
+
+        // A copy that fails its signature check never starts, and says so.
+        std::fs::write(
+            placed.join("Contents/Info.plist"),
+            plist("brigadier-computer "),
+        )
+        .unwrap();
+        std::fs::write(
+            bundle.join("Contents/Info.plist"),
+            plist("brigadier-computer "),
+        )
+        .unwrap();
+        let e = place_helper(&bundle, &dir).unwrap_err().to_string();
+        assert!(e.contains("failed its signature check"), "{e}");
+
+        // A file the bundle doesn't have, or a mode it doesn't, is a difference too.
+        build("/usr/bin/true");
+        place_helper(&bundle, &dir).unwrap();
+        std::fs::write(placed.join("Contents/extra"), "").unwrap();
+        assert!(!same_tree(&bundle, &placed));
+        std::fs::remove_file(placed.join("Contents/extra")).unwrap();
+        assert!(same_tree(&bundle, &placed));
+        std::fs::set_permissions(&exe, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .unwrap();
+        assert!(!same_tree(&bundle, &placed));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
