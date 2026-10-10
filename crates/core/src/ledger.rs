@@ -456,6 +456,7 @@ impl CleanupLedger {
 
     /// Revoke a failed claim immediately, before another start can reuse it. Its durable
     /// cleanup continues even when the start future was cancelled.
+    #[cfg(any(target_os = "macos", all(test, unix)))]
     pub(crate) fn rollback(self: &Arc<Self>, owner: String, artifacts: Vec<Artifact>) {
         if let Some(known) = self.state().artifacts.get_mut(&owner) {
             known.retain(|artifact| !artifacts.contains(artifact));
