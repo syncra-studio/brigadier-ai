@@ -1133,8 +1133,7 @@ impl SessionManager {
         };
         self.open_round(id, None, kind, vec![item]).await?;
         Ok(format!(
-            "Asked the user whether to merge `{branch}` into `{base}`. The answer arrives as an [answer] message; reply with exactly {} or your final answer now.",
-            super::prompts::QUIET
+            "Asked the user whether to merge `{branch}` into `{base}`. The card shows under your final answer: write it now, unless you already did. The answer arrives as an [answer] message."
         ))
     }
 

@@ -539,7 +539,8 @@ async fn a_not_yet_on_the_card_revokes_the_words_before_it() {
 }
 
 /// A merge card left open while the user asks for the merge in words: their words merge, the
-/// card goes with the merge, and no request is left waiting on it.
+/// card goes with the merge, and no request is left waiting on it. The card holds nothing up:
+/// the request that opened it is done while it waits.
 #[tokio::test]
 async fn a_merge_asked_in_words_closes_the_merge_card_left_open() {
     let calls: Calls = Arc::default();
@@ -550,29 +551,7 @@ async fn a_merge_asked_in_words_closes_the_merge_card_left_open() {
         script(move |turn| {
             let log = log.clone();
             async move {
-                // The user writes while the request waits on the card: their words join it.
-                let routed = log
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .any(|(name, ..)| name == "route_follow_up");
-                if let Some(at) = turn.input.find("[follow-up ")
-                    && !routed
-                {
-                    let rest = &turn.input[at + "[follow-up ".len()..];
-                    let id = &rest[..rest.find(']').unwrap()];
-                    assert!(
-                        call(
-                            &turn,
-                            &log,
-                            "route_follow_up",
-                            json!({ "follow_up": id, "joins": true })
-                        )
-                        .await
-                    );
-                    // It reaches the running turn as the user's message.
-                    let steered = turn.steered().await.unwrap_or_default();
-                    assert!(steered.contains("just merge it"), "{steered}");
+                if turn.input.contains("just merge it") {
                     let merged = call(
                         &turn,
                         &log,
@@ -586,7 +565,7 @@ async fn a_merge_asked_in_words_closes_the_merge_card_left_open() {
                 if turn.input.contains("Add notes.") {
                     commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
                     assert!(call(&turn, &log, "propose_merge", json!({})).await);
-                    return Reply::text("[quiet]");
+                    return Reply::text("Notes are in.");
                 }
                 Reply::text("Done.")
             }
@@ -596,9 +575,12 @@ async fn a_merge_asked_in_words_closes_the_merge_card_left_open() {
     flow.say("Add notes.").await;
     flow.until("the merge card", |board| open_card(board, true).is_some())
         .await;
-    flow.settled().await;
+    let board = flow.settled().await;
+    assert!(open_card(&board, true).is_some());
+    let asked = board.latest_request().unwrap();
+    assert_eq!(asked.state, RequestState::Done, "{asked:#?}");
     flow.say("Yes, just merge it.").await;
-    flow.until("the merge", |_| calls.lock().unwrap().len() >= 3)
+    flow.until("the merge", |_| calls.lock().unwrap().len() >= 2)
         .await;
     let board = flow.settled().await;
     assert!(on_main(&flow, "NOTES.md"), "merged on the user's words");

@@ -411,15 +411,15 @@ enum Wait {
     Quota,
 }
 
-/// The request's thread asked the user on a card (its questions, or the merge) that is open.
+/// The request's thread asked the user a round of questions on a card that is open. Its merge
+/// card holds nothing up: it comes after the request's answer, so the request is done, with
+/// its work folded and its time stopped, while the card waits in the composer's place; the
+/// user's answer makes it work again (THREAD-PARITY-PLAN §5 Q9).
 fn open_question_cards(board: &Board, request: &str) -> bool {
     board.questions.values().any(|q| {
         q.request_id.as_deref() == Some(request)
             && q.is_open()
-            && matches!(
-                q.kind,
-                QuestionKind::Orchestrator | QuestionKind::Merge { .. }
-            )
+            && q.kind == QuestionKind::Orchestrator
     })
 }
 
@@ -645,8 +645,18 @@ mod tests {
             "answeredAtMs": null
         }))
         .expect("a question");
+        let mut merge = card.clone();
+        merge.id = crate::model::CardId("q2".into());
+        merge.kind = QuestionKind::Merge {
+            branch: "brigadier/c/session".into(),
+            base: "main".into(),
+        };
         asked.questions.insert(card.id.clone(), card);
         assert_eq!(wait(&asked, "r1"), Some(Wait::Card));
+        // The merge card comes after the answer and holds nothing up.
+        let mut merging = board.clone();
+        merging.questions.insert(merge.id.clone(), merge);
+        assert_eq!(wait(&merging, "r1"), None);
     }
 
     #[test]
