@@ -58,6 +58,7 @@ const CATEGORY_HEADS: Record<TaskCategory, string> = {
   operate: "Use apps",
   chat: "Chat",
   orchestrate: "Orchestrate",
+  gitText: "Git text",
 };
 
 /** A kind of work counts among a model's best within this much of its top score. */

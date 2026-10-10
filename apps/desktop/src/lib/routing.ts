@@ -59,6 +59,7 @@ export const CATEGORY_LABELS: Record<TaskCategory, string> = {
   operate: "using apps",
   chat: "chat",
   orchestrate: "orchestration",
+  gitText: "writing git text",
 };
 
 /** The kinds of work the Providers page ranks (the orchestrator keeps its own picker). */
@@ -84,6 +85,7 @@ export const KIND_HINTS: Record<TaskCategory, string> = {
   operate: "Uses apps on this Mac to reach a result; changes no code.",
   chat: "Takes over a Chat whose model hits its limit.",
   orchestrate: "Plans and delegates a session's work.",
+  gitText: "Writes the commit messages Brigadier writes for you, on a fast, light model.",
 };
 
 /** A kind of work in plain words, as the Providers page names it: "Write code". */
@@ -97,6 +99,7 @@ export const PLAIN_KIND_NAMES: Record<TaskCategory, string> = {
   operate: "Use apps",
   chat: "Take over a chat",
   orchestrate: "Plan and delegate",
+  gitText: "Write commit messages",
 };
 
 /** A kind of work as "best for …" reads it: "Best for writing code and reviewing changes". */
@@ -110,6 +113,7 @@ export const PLAIN_KIND_WORDS: Record<TaskCategory, string> = {
   operate: "using apps",
   chat: "chat",
   orchestrate: "planning",
+  gitText: "writing commit messages",
 };
 
 /** A quality tier in plain words, for the Models page. */
@@ -132,6 +136,7 @@ export const DEFAULT_FLOORS: Record<TaskCategory, QualityTier> = {
   operate: "strong",
   chat: "light",
   orchestrate: "strong",
+  gitText: "light",
 };
 
 const TIER_ORDER: readonly QualityTier[] = ["unrated", "light", "standard", "strong", "frontier"];
