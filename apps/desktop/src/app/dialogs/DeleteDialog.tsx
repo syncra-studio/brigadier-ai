@@ -75,8 +75,8 @@ function DeleteForm({ ids, onClose }: { ids: string[]; onClose: () => void }) {
         <DialogTitle>{count === 1 ? `Delete ${noun}?` : `Delete ${count} ${noun}?`}</DialogTitle>
         <DialogDescription>
           {count === 1
-            ? `“${conversations[0]?.title}” and its transcript are removed for good.`
-            : `These ${count} ${noun} and their transcripts are removed for good.`}
+            ? `This permanently deletes “${conversations[0]?.title}”. This can't be undone.`
+            : `This permanently deletes these ${count} ${noun}. This can't be undone.`}
         </DialogDescription>
       </DialogHeader>
       {branches === "failed"
@@ -99,7 +99,7 @@ function DeleteForm({ ids, onClose }: { ids: string[]; onClose: () => void }) {
           disabled={!ready}
           onClick={confirm}
         >
-          Delete
+          {count === 1 ? `Delete ${noun}` : `Delete ${count} ${noun}`}
         </Button>
       </DialogFooter>
     </div>

@@ -1,14 +1,32 @@
-import { Archive, Chats, Folder, Trash, Unarchive } from "@openai/apps-sdk-ui/components/Icon";
-import { type MouseEvent, useEffect, useMemo, useRef } from "react";
+import {
+  Branch,
+  Chats,
+  Check,
+  ChevronDown,
+  DotsHorizontal,
+  Filter,
+  Folder,
+  MagnifyingGlassSearch,
+  Trash,
+  Unarchive,
+  XCircleFilled,
+} from "@openai/apps-sdk-ui/components/Icon";
+import { type ComponentProps, type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import {
-  SettingsButton,
-  SettingsCard,
-  SettingsPage,
-  SettingsRow,
-  SettingsSection,
-} from "@/app/settings/parts";
+  ALL_ARCHIVED,
+  type ArchivedFilter,
+  archivedGroups,
+  archivedOf,
+  groupCount,
+  KIND_CHOICES,
+  narrowed,
+  projectChoices,
+  shownIds,
+  SORT_CHOICES,
+} from "@/app/settings/archived";
+import { SettingsButton, SettingsCard, SettingsPage, selectTrigger } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -17,8 +35,19 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { Conversation } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { openConversation, restoreAll } from "@/state/actions";
 import { askDelete, clearPicked, pickClick, prunePicked, usePicked } from "@/state/picking";
 import { useApp } from "@/state/store";
@@ -31,55 +60,35 @@ export const ARCHIVED_ROWS = {
   },
 } as const;
 
-type Group = { key: string; label: string; conversations: Conversation[] };
-
-function useArchivedGroups(): Group[] {
-  const conversations = useApp((s) => s.conversations);
-  const projects = useApp((s) => s.projects);
-  return useMemo(() => {
-    const archived = Object.values(conversations)
-      .filter((conversation) => conversation.lifecycle === "archived")
-      .toSorted((a, b) => b.updatedAtMs - a.updatedAtMs);
-    const groups = new Map<string, Group>();
-    for (const conversation of archived) {
-      const projectId = conversation.kind === "session" ? conversation.projectId : null;
-      const key = projectId ?? "chats";
-      let group = groups.get(key);
-      if (!group) {
-        group = {
-          key,
-          label: projectId ? (projects[projectId]?.name ?? "Project") : "Chats",
-          conversations: [],
-        };
-        groups.set(key, group);
-      }
-      group.conversations.push(conversation);
-    }
-    // Projects first (in order of their newest archived session), chats last.
-    return [...groups.values()].toSorted(
-      (a, b) => Number(a.key === "chats") - Number(b.key === "chats"),
-    );
-  }, [conversations, projects]);
-}
-
-function countLabel(group: Group): string {
-  const count = group.conversations.length;
-  const noun = group.key === "chats" ? "chat" : "session";
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 /**
- * Archived sessions and chats: hidden from the sidebar, cleaned up, and restorable. Their
- * transcripts and artifacts are kept. Rows are picked with ⌘-click (Ctrl-click off macOS) and
- * Shift-click for Unarchive (N) and Delete (N); Delete all deletes every one, after a confirm.
+ * Archived sessions and chats: a search and two menus (kind and order, project) over the list,
+ * which is grouped by project, chats last. Each row opens on its title and has Unarchive and
+ * Delete. Rows are also picked with ⌘-click (Ctrl-click off macOS) and Shift-click for
+ * Unarchive (N) and Delete (N)…, which show only while rows are picked; Delete all… is in the
+ * toolbar's "…" menu.
  */
 export function ArchivedPage() {
-  const groups = useArchivedGroups();
+  const conversations = useApp((s) => s.conversations);
+  const projects = useApp((s) => s.projects);
   const mac = useApp((s) => s.info?.platform === "macos");
-  const shown = useMemo(
-    () => groups.flatMap((group) => group.conversations.map((conversation) => conversation.id)),
-    [groups],
+  const [filter, setFilter] = useState<ArchivedFilter>(ALL_ARCHIVED);
+
+  const archived = useMemo(() => archivedOf(conversations), [conversations]);
+  const projectMenu = useMemo(() => projectChoices(archived, projects), [archived, projects]);
+  // A project chosen in the menu whose last archived session left shows them all again.
+  const effective = useMemo(
+    () =>
+      projectMenu.some((choice) => choice.value === filter.project)
+        ? filter
+        : { ...filter, project: "all" },
+    [projectMenu, filter],
   );
+  const groups = useMemo(
+    () => archivedGroups(archived, projects, effective),
+    [archived, projects, effective],
+  );
+  const shown = useMemo(() => shownIds(groups), [groups]);
+
   const shownRef = useRef(shown);
   useEffect(() => {
     shownRef.current = shown;
@@ -93,109 +102,85 @@ export function ArchivedPage() {
     if (!pickClick("archived", id, shownRef.current, event, mac)) openConversation(id);
   };
 
+  const filtered = narrowed(effective);
   return (
-    <SettingsPage
-      title="Archived chats"
-      description="Archived sessions and chats keep their transcript and artifacts; their workers, worktrees and processes are gone. Unmerged branches are kept."
-      actions={
-        shown.length > 0 && (
-          <div className="flex items-center gap-2">
+    <SettingsPage title="Archived chats">
+      {/* The toolbar stays in view over the list; the groups follow it. */}
+      <div className="flex flex-col">
+        {archived.length > 0 && (
+          <div className="bg-background sticky top-0 z-10 -mt-5 flex flex-col gap-3 pt-5 pb-2">
+            <div className="flex items-center gap-2">
+              <SearchField
+                value={filter.query}
+                onChange={(query) => setFilter((f) => ({ ...f, query }))}
+              />
+              <KindMenu filter={effective} onChange={setFilter} />
+              <ProjectMenu
+                filter={effective}
+                choices={projectMenu}
+                onChange={(project) => setFilter((f) => ({ ...f, project }))}
+              />
+              <MoreMenu
+                count={shown.length}
+                filtered={filtered}
+                onDeleteAll={() => askDelete(shown)}
+              />
+            </div>
             {picked.length > 0 && (
-              <>
+              <div
+                role="toolbar"
+                aria-label="Picked chats"
+                className="flex items-center gap-2"
+              >
+                <span className="text-foreground/65 text-label flex-1">
+                  {picked.length} picked
+                </span>
+                <SettingsButton onClick={() => clearPicked()}>Clear</SettingsButton>
                 <SettingsButton onClick={() => unarchive(picked)}>
                   Unarchive ({picked.length})
                 </SettingsButton>
-                <SettingsButton destructive onClick={() => askDelete(picked)}>
+                <DeleteButton onClick={() => askDelete(picked)}>
                   Delete ({picked.length})…
-                </SettingsButton>
-              </>
-            )}
-            {picked.length === 0 && (
-              <SettingsButton destructive onClick={() => askDelete(shown)}>
-                Delete all…
-              </SettingsButton>
+                </DeleteButton>
+              </div>
             )}
           </div>
-        )
-      }
-    >
-      {groups.length === 0 && (
-        <div className="text-muted-foreground flex flex-col items-center gap-2 py-12 text-sm">
-          <Archive aria-hidden className="size-icon-lg" />
-          Nothing archived.
-        </div>
-      )}
-      {groups.map((group) => (
-        <SettingsSection
-          key={group.key}
-          title={group.label}
-          icon={
-            group.key === "chats" ? (
-              <Chats aria-hidden className="text-muted-foreground size-icon-md shrink-0" />
-            ) : (
-              <Folder aria-hidden className="text-muted-foreground size-icon-md shrink-0" />
-            )
-          }
-          actions={<span className="text-muted-foreground text-label">{countLabel(group)}</span>}
-        >
-          <SettingsCard>
-            {group.conversations.map((conversation) => {
-              const selected = picked.includes(conversation.id);
-              // A right-click acts on every picked row when it is one of them.
-              const targets = selected ? picked : [conversation.id];
-              return (
-                <ContextMenu
+        )}
+
+        {shown.length === 0 && (
+          <p role="status" className="text-foreground/65 py-12 text-center text-sm">
+            {archived.length === 0 ? "No archived chats" : "No archived chats match"}
+          </p>
+        )}
+
+        <div className="flex flex-col gap-10 pt-5">
+        {groups.map((group) => (
+          <section key={group.key} aria-label={group.label} className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-4 pb-1.5">
+              <h2 className="flex min-w-0 flex-1 items-center gap-2 text-sm font-medium">
+                {group.key === "chats" ? (
+                  <Chats aria-hidden className="size-icon-md shrink-0" />
+                ) : (
+                  <Folder aria-hidden className="size-icon-md shrink-0" />
+                )}
+                <span className="truncate">{group.label}</span>
+              </h2>
+              <span className="text-foreground/65 text-label shrink-0">{groupCount(group)}</span>
+            </div>
+            <SettingsCard>
+              {group.conversations.map((conversation) => (
+                <ArchivedRow
                   key={conversation.id}
-                  modal={false}
-                  onOpenChange={(open) => open && !selected && clearPicked()}
-                >
-                  <ContextMenuTrigger asChild>
-                    <div data-selected={selected} className="data-[selected=true]:bg-link/15">
-                      <SettingsRow
-                        label={
-                          <button
-                            type="button"
-                            className="max-w-full truncate text-start hover:underline"
-                            onClick={(event) => onTitleClick(conversation.id, event)}
-                          >
-                            {conversation.title}
-                          </button>
-                        }
-                        description={formatDateTime(conversation.updatedAtMs)}
-                      >
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`Delete “${conversation.title}”…`}
-                          title="Delete…"
-                          className="text-muted-foreground hover:text-destructive"
-                          onClick={() => askDelete([conversation.id])}
-                        >
-                          <Trash />
-                        </Button>
-                        <SettingsButton onClick={() => unarchive([conversation.id])}>
-                          Unarchive
-                        </SettingsButton>
-                      </SettingsRow>
-                    </div>
-                  </ContextMenuTrigger>
-                  <ContextMenuContent>
-                    <ContextMenuItem onSelect={() => unarchive(targets)}>
-                      <Unarchive />
-                      {targets.length > 1 ? `Unarchive (${targets.length})` : "Unarchive"}
-                    </ContextMenuItem>
-                    <ContextMenuSeparator />
-                    <ContextMenuItem variant="destructive" onSelect={() => askDelete(targets)}>
-                      <Trash />
-                      {targets.length > 1 ? `Delete (${targets.length})…` : "Delete…"}
-                    </ContextMenuItem>
-                  </ContextMenuContent>
-                </ContextMenu>
-              );
-            })}
-          </SettingsCard>
-        </SettingsSection>
-      ))}
+                  conversation={conversation}
+                  picked={picked}
+                  onTitleClick={onTitleClick}
+                />
+              ))}
+            </SettingsCard>
+          </section>
+        ))}
+        </div>
+      </div>
     </SettingsPage>
   );
 }
@@ -205,4 +190,241 @@ const NONE: string[] = [];
 function unarchive(ids: string[]): void {
   clearPicked();
   void restoreAll(ids);
+}
+
+/** One archived conversation: what it is, its title (which opens it) and date, its two actions. */
+function ArchivedRow({
+  conversation,
+  picked,
+  onTitleClick,
+}: {
+  conversation: Conversation;
+  picked: string[];
+  onTitleClick: (id: string, event: MouseEvent) => void;
+}) {
+  const selected = picked.includes(conversation.id);
+  // A right-click acts on every picked row when it is one of them.
+  const targets = selected ? picked : [conversation.id];
+  const Icon = conversation.kind === "session" ? Branch : Chats;
+  return (
+    <ContextMenu modal={false} onOpenChange={(open) => open && !selected && clearPicked()}>
+      <ContextMenuTrigger asChild>
+        <div
+          data-slot="archived-row"
+          data-selected={selected}
+          className="data-[selected=true]:bg-link/15 flex items-center gap-6 px-4 py-3"
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <Icon
+              aria-label={conversation.kind === "session" ? "Session" : "Chat"}
+              className="text-foreground/65 size-icon-md shrink-0"
+            />
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <button
+                type="button"
+                className="text-link text-label max-w-full truncate text-start font-medium hover:underline"
+                onClick={(event) => onTitleClick(conversation.id, event)}
+              >
+                {conversation.title}
+              </button>
+              <span className="text-foreground/65 text-xs">
+                {formatDateTime(conversation.updatedAtMs)}
+              </span>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <SettingsButton onClick={() => unarchive([conversation.id])}>
+              Unarchive
+            </SettingsButton>
+            <DeleteButton
+              aria-label={`Delete “${conversation.title}”…`}
+              onClick={() => askDelete([conversation.id])}
+            >
+              Delete
+            </DeleteButton>
+          </div>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={() => unarchive(targets)}>
+          <Unarchive />
+          {targets.length > 1 ? `Unarchive (${targets.length})` : "Unarchive"}
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem variant="destructive" onSelect={() => askDelete(targets)}>
+          <Trash />
+          {targets.length > 1 ? `Delete (${targets.length})…` : "Delete…"}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/** A red pill: a delete that asks first. */
+function DeleteButton(props: ComponentProps<typeof Button>) {
+  return (
+    <SettingsButton
+      {...props}
+      className="bg-destructive/10 hover:bg-destructive/20 text-destructive border-transparent"
+    />
+  );
+}
+
+/** The search field over the list: every word must be in the title. */
+function SearchField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="rounded-capsule border-foreground/16 bg-foreground/8 flex h-8 min-w-0 flex-1 items-center gap-2 border px-2.5">
+      <MagnifyingGlassSearch aria-hidden className="text-foreground/65 size-icon-md shrink-0" />
+      <input
+        type="search"
+        value={value}
+        placeholder="Search archived chats"
+        aria-label="Search archived chats"
+        spellCheck={false}
+        autoComplete="off"
+        className="placeholder:text-foreground/50 min-w-0 flex-1 bg-transparent text-sm outline-none [&::-webkit-search-cancel-button]:hidden"
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && value) {
+            // Esc clears the search before it leaves Settings.
+            event.stopPropagation();
+            onChange("");
+          }
+        }}
+      />
+      {value && (
+        <button
+          type="button"
+          aria-label="Clear search"
+          className="text-foreground/50 hover:text-foreground flex shrink-0 items-center"
+          onClick={() => onChange("")}
+        >
+          <XCircleFilled className="size-icon-sm" />
+        </button>
+      )}
+    </label>
+  );
+}
+
+/** A toolbar menu's button: an icon, the chosen choice's words, a chevron. */
+function MenuTrigger({ icon, label, children }: { icon: ReactNode; label: string; children: ReactNode }) {
+  return (
+    <DropdownMenuTrigger asChild>
+      <button type="button" aria-label={label} className={cn(selectTrigger, "flex w-40 shrink-0 gap-2")}>
+        {icon}
+        <span className="min-w-0 flex-1 truncate text-start">{children}</span>
+        <ChevronDown aria-hidden className="text-foreground/65 size-icon-sm shrink-0" />
+      </button>
+    </DropdownMenuTrigger>
+  );
+}
+
+const check = <Check className="size-icon-md" />;
+
+/** Which kind shows (all, sessions, chats) and in what order. */
+function KindMenu({
+  filter,
+  onChange,
+}: {
+  filter: ArchivedFilter;
+  onChange: (update: (filter: ArchivedFilter) => ArchivedFilter) => void;
+}) {
+  const kind = KIND_CHOICES.find((choice) => choice.value === filter.kind)?.label;
+  return (
+    <DropdownMenu modal={false}>
+      <MenuTrigger label="Filter archived chats" icon={<Filter aria-hidden className="size-icon-sm shrink-0" />}>
+        {kind}
+      </MenuTrigger>
+      <DropdownMenuContent align="end" className="w-(--radix-dropdown-menu-trigger-width)">
+        <DropdownMenuLabel>Type</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={filter.kind}
+          onValueChange={(value) => onChange((f) => ({ ...f, kind: value as ArchivedFilter["kind"] }))}
+        >
+          {KIND_CHOICES.map((choice) => (
+            <DropdownMenuRadioItem key={choice.value} value={choice.value} indicator={check}>
+              {choice.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={filter.sort}
+          onValueChange={(value) => onChange((f) => ({ ...f, sort: value as ArchivedFilter["sort"] }))}
+        >
+          {SORT_CHOICES.map((choice) => (
+            <DropdownMenuRadioItem key={choice.value} value={choice.value} indicator={check}>
+              {choice.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** Which project's sessions show, or the chats. */
+function ProjectMenu({
+  filter,
+  choices,
+  onChange,
+}: {
+  filter: ArchivedFilter;
+  choices: { value: string; label: string }[];
+  onChange: (project: string) => void;
+}) {
+  const chosen = choices.find((choice) => choice.value === filter.project)?.label;
+  return (
+    <DropdownMenu modal={false}>
+      <MenuTrigger
+        label="Filter archived chats by project"
+        icon={<Folder aria-hidden className="size-icon-sm shrink-0" />}
+      >
+        {chosen}
+      </MenuTrigger>
+      <DropdownMenuContent align="end" className="max-w-sm min-w-(--radix-dropdown-menu-trigger-width)">
+        <DropdownMenuRadioGroup value={filter.project} onValueChange={onChange}>
+          {choices.map((choice) => (
+            <DropdownMenuRadioItem key={choice.value} value={choice.value} indicator={check}>
+              <span className="truncate">{choice.label}</span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** "…": Delete all (of what shows). */
+function MoreMenu({
+  count,
+  filtered,
+  onDeleteAll,
+}: {
+  count: number;
+  filtered: boolean;
+  onDeleteAll: () => void;
+}) {
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="More"
+          className="text-foreground/65 shrink-0"
+        >
+          <DotsHorizontal />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem variant="destructive" disabled={count === 0} onSelect={onDeleteAll}>
+          <Trash />
+          {filtered ? `Delete these ${count}…` : "Delete all…"}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
