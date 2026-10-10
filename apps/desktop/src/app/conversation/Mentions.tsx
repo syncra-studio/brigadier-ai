@@ -191,9 +191,10 @@ function fileRank(path: string, query: string): number {
   return lower.includes(query) ? 2 : 3;
 }
 
-/** A session checkout's files, fetched again when a worker lands something; null until then. */
+/** A session checkout's files, refreshed on worker landings and explicit refresh requests. */
 export function useCheckoutFiles(
   conversation: Conversation | null,
+  refresh = 0,
 ): { files: string[]; truncated: boolean } | null {
   const id = conversation?.kind === "session" ? conversation.id : null;
   const landed = useBoard((s) =>
@@ -205,6 +206,7 @@ export function useCheckoutFiles(
     id: string;
     /** The landings it was listed after. */
     landed: number;
+    refresh: number;
     files: string[];
     truncated: boolean;
   } | null>(null);
@@ -212,12 +214,12 @@ export function useCheckoutFiles(
     if (!id) return;
     let live = true;
     listFiles(id)
-      .then((list) => live && setFetched({ id, landed, ...list }))
-      .catch(() => live && setFetched({ id, landed, files: [], truncated: false }));
+      .then((list) => live && setFetched({ id, landed, refresh, ...list }))
+      .catch(() => live && setFetched({ id, landed, refresh, files: [], truncated: false }));
     return () => {
       live = false;
     };
-  }, [id, landed]);
+  }, [id, landed, refresh]);
   return fetched && fetched.id === id ? fetched : null;
 }
 
@@ -229,7 +231,9 @@ export const Mentions: FC<{
   conversation: Conversation;
   targets: readonly MentionTarget[];
 }> = ({ conversation, targets }) => {
-  const files = useCheckoutFiles(conversation);
+  const [refresh, setRefresh] = useState(0);
+  const onOpen = useCallback(() => setRefresh((value) => value + 1), []);
+  const files = useCheckoutFiles(conversation, refresh);
   const chats = useApp(
     useShallow((s) =>
       Object.values(s.conversations)
@@ -287,5 +291,5 @@ export const Mentions: FC<{
     [files],
   );
 
-  return <ComposerMentions search={search} hint={hint} />;
+  return <ComposerMentions search={search} hint={hint} onOpen={onOpen} />;
 };
