@@ -33,6 +33,9 @@ const OFF_NOTE = "Off: its models are hidden from the model picker, and it gets 
 export const FABLE_NOTE =
   "Brigadier never gives work to Fable models. You can still pick one for a chat or session.";
 
+/** The line under a model a "Don't give work" rule keeps from tasks. */
+const NO_WORK_NOTE = "Gets no tasks: a rule under Advanced keeps it to chats and sessions you pick it for.";
+
 /**
  * One agent: its name with how it stands, the one action that gets it working (Install or Sign
  * in) and its switch; then its accounts, then its models with "Use this model" each.
@@ -170,8 +173,8 @@ function ProviderModels({
 /**
  * A model: its name, what it's like in a few words, and "Use this model" (in the pickers, and
  * given work). A model Brigadier saw after its agent's first list is tagged New: it gets no
- * tasks until the user removes its rule, which the link opens under Advanced. Fable models
- * never get tasks.
+ * tasks until the user removes its rule, which the link opens under Advanced; one the user
+ * keeps from tasks says so. Fable models never get tasks.
  */
 function ModelRow({
   provider,
@@ -187,9 +190,9 @@ function ModelRow({
   const ref = { provider, id: model.id };
   const available = useApp((s) => modelAvailable(s.settings, ref));
   const projects = useApp((s) => s.projects);
-  const newRule = useApp((s) =>
-    s.settings.routingOverrides.find((rule) => isNewModelRule(rule) && isWorkerRule(rule, ref)),
-  );
+  const rules = useApp((s) => s.settings.routingOverrides);
+  const newRule = rules.find((rule) => isNewModelRule(rule) && isWorkerRule(rule, ref));
+  const noWork = rules.some((rule) => isWorkerRule(rule, ref));
   const toggle = useAction();
   const fable = isFable(model);
   const fresh = !fable && newRule !== undefined;
@@ -207,6 +210,8 @@ function ModelRow({
         Allow in Rules
       </button>
     </span>
+  ) : noWork ? (
+    NO_WORK_NOTE
   ) : (
     modelSummary(model, known) || undefined
   );
