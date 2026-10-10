@@ -168,6 +168,10 @@ test("a thought's row says what it was about: its heading, else its first senten
   assert.equal(thoughtTopic(streamed, "newest"), "Planning the fix");
   assert.equal(thoughtTopic(streamed, "first"), "Reading the code");
   assert.equal(thoughtTopic(""), "");
+  // Live, a first sentence still streaming shows its whole words so far.
+  assert.equal(thoughtTopic("I want to analyze the panel, so I'm th", "newest"), "I want to analyze the panel, so I'm…");
+  assert.equal(thoughtTopic("I want to analyze ", "newest"), "I want to analyze…");
+  assert.equal(thoughtTopic("Analyz", "newest"), "");
 });
 
 test("a thought's time is the provider's own: one that arrived whole has none", () => {

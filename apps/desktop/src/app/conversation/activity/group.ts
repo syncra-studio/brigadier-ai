@@ -124,7 +124,8 @@ const HEADING = /^\s*\*\*(.+?)\*\*\s*$/;
 
 /**
  * What a thought is about, in one line: its first (or, while it streams, its newest) heading,
- * else its first sentence; "" when it has no words. The row truncates it to the line.
+ * else its first sentence (live, the whole words of one still streaming); "" when it has no
+ * words. The row truncates it to the line.
  */
 export function thoughtTopic(text: string, which: "first" | "newest" = "first"): string {
   const lines = text.split("\n");
@@ -137,8 +138,12 @@ export function thoughtTopic(text: string, which: "first" | "newest" = "first"):
     .replace(/[*_`#>]+/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  const sentence = /^.+?[.!?…](?=\s|$)/.exec(plain)?.[0] ?? plain;
-  return sentence.trim();
+  const sentence = /^.+?[.!?…](?=\s|$)/.exec(plain)?.[0];
+  if (sentence) return sentence.trim();
+  if (which === "first") return plain;
+  // Live, a sentence still streaming shows its whole words so far, never half a word.
+  const whole = /\s$/.test(text) ? plain : plain.replace(/\s*\S+$/, "");
+  return whole ? `${whole}…` : "";
 }
 
 /** Whether the lead's step is work it did itself (a group's step), rather than news of its team. */
