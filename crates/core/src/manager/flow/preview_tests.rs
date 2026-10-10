@@ -693,6 +693,7 @@ async fn a_sandboxed_preview_gets_a_private_writable_temp_directory() {
 
 /// Data belongs to the session: restarts retain it, other sessions cannot adopt it,
 /// archive sweeps it, and a failed OS spawn rolls back only the newly created folder.
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn preview_data_is_session_owned_and_failed_spawns_leave_no_folder() {
     let tmp = scratch("data-lifecycle");
@@ -746,12 +747,15 @@ async fn preview_data_is_session_owned_and_failed_spawns_leave_no_folder() {
         replies.lock().unwrap()
     );
     let ledger = flow.manager.runtime.ledger();
-    let artifact = Artifact::ScratchDir {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(&data).unwrap();
+    let artifact = Artifact::PreviewDataDir {
         path: data.canonicalize().unwrap().to_string_lossy().into_owned(),
+        identity: Some((meta.dev(), meta.ino())),
     };
     assert!(
         ledger
-            .artifacts(&format!("session:{}", flow.conversation))
+            .artifacts(&format!("preview-data:{}", flow.conversation))
             .contains(&artifact)
     );
     assert!(
@@ -773,7 +777,10 @@ async fn preview_data_is_session_owned_and_failed_spawns_leave_no_folder() {
     let other_replies = Replies::default();
     let other = Flow::start(
         "preview-data-other",
-        Options::default(),
+        Options {
+            permission: crate::model::PermissionLevel::ApproveForMe,
+            ..Options::default()
+        },
         make_thread(other_replies.clone()),
     )
     .await;
@@ -801,12 +808,119 @@ async fn preview_data_is_session_owned_and_failed_spawns_leave_no_folder() {
         "{:?}",
         replies.lock().unwrap()
     );
-    assert!(!failed.exists());
+    super::eventually("failed claim removed from ledger", || {
+        !failed.exists()
+            && ledger.artifacts(&format!("preview-data:{}", flow.conversation))
+                == vec![artifact.clone()]
+    })
+    .await;
     assert!(data.join("probe").exists());
+    // Worktree disposal after a merge must leave data under its separate owner.
+    let old_worktree = workspace(&flow);
+    let _ = flow
+        .manager
+        .release_merged_session(&flow.conversation)
+        .await;
+    assert!(
+        !old_worktree.exists(),
+        "merge actually released the worktree"
+    );
+    assert!(data.join("probe").exists());
+    flow.say("Start it again after the merge.").await;
+    flow.until("data reused after merge", |_| {
+        replies.lock().unwrap().len() == 4
+    })
+    .await;
+    flow.settled().await;
+    let worktree = workspace(&flow);
+    let git_file = worktree.join(".git");
+    let original = std::fs::read(&git_file).unwrap();
+    // Make open_worktree fail, so archive cannot keep the session's changes.
+    std::fs::write(&git_file, "not a git worktree").unwrap();
     flow.manager
         .archive(flow.conversation.clone())
         .await
         .unwrap();
     super::eventually("session data swept", || !data.exists()).await;
+    assert!(worktree.exists(), "failed keep must retain the worktree");
+    assert!(
+        !ledger
+            .disposing()
+            .contains(&format!("session:{}", flow.conversation))
+    );
+    std::fs::write(git_file, original).unwrap();
+    flow.stop().await;
+}
+
+/// Full access, and Linux's existing sandbox path, pass the value to the child unchanged.
+#[tokio::test]
+async fn preview_data_pass_through_does_not_claim_or_create_folders() {
+    let tmp = scratch("data-pass-through");
+    let missing = tmp.join("missing-parent/data");
+    let existing = tmp.join("existing");
+    std::fs::create_dir(&existing).unwrap();
+    let replies = Replies::default();
+    let script = {
+        let replies = replies.clone();
+        let missing = missing.clone();
+        let existing = existing.clone();
+        script(move |turn| {
+            let (replies, missing, existing) = (replies.clone(), missing.clone(), existing.clone());
+            async move {
+                if turn.is_orchestrator() {
+                    let path = if turn.input.contains("existing") {
+                        &existing
+                    } else {
+                        &missing
+                    };
+                    let result = turn
+                        .call(
+                            "start_preview",
+                            json!({
+                                "command": "printf '%s' \"$BRIGADIER_DATA_DIR\"",
+                                "env": { "BRIGADIER_DATA_DIR": path },
+                            }),
+                        )
+                        .await;
+                    replies
+                        .lock()
+                        .unwrap()
+                        .push(("start_preview".into(), result.text));
+                }
+                Reply::text("Done.")
+            }
+        })
+    };
+    let flow = Flow::start("data-pass-through", Options::default(), script).await;
+    for (index, (message, path)) in [("missing", &missing), ("existing", &existing)]
+        .into_iter()
+        .enumerate()
+    {
+        flow.say(message).await;
+        flow.until("pass-through preview", |_| {
+            replies.lock().unwrap().len() == index + 1
+        })
+        .await;
+        flow.settled().await;
+        assert!(
+            replies.lock().unwrap()[index]
+                .1
+                .contains(path.to_str().unwrap())
+        );
+        assert!(
+            flow.manager
+                .runtime
+                .ledger()
+                .artifacts(&format!("preview-data:{}", flow.conversation))
+                .is_empty()
+        );
+    }
+    assert!(!missing.parent().unwrap().exists());
+    flow.manager
+        .archive(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.manager.cleanup_finished(&flow.conversation).await;
+    assert!(existing.exists());
     flow.stop().await;
 }

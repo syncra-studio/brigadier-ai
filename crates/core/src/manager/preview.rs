@@ -197,7 +197,9 @@ impl SessionManager {
             ));
         }
         let workdir = preview_workdir(args.workdir.as_deref(), &workspace)?;
-        let mut env = args.env.unwrap_or_default();
+        let env = args.env.unwrap_or_default();
+        #[cfg(target_os = "macos")]
+        let mut env = env;
         let installed = brigadier_sandbox::default_data_dir().ok();
         let protected = [Some(self.data_dir.clone()), installed]
             .into_iter()
@@ -233,19 +235,17 @@ impl SessionManager {
                 },
             )
             .await?;
-        #[cfg(unix)]
-        let mut data = if let Some(value) = env.get(brigadier_sandbox::DATA_DIR_ENV) {
-            let owner = format!("session:{id}");
-            let data =
-                create_preview_data(&workdir.join(value), &protected, &ledger.artifacts(&owner))?;
-            ledger
-                .record(
-                    &owner,
-                    Artifact::ScratchDir {
-                        path: data.path.to_string_lossy().into_owned(),
-                    },
-                )
-                .await?;
+        #[cfg(target_os = "macos")]
+        let mut data = if launch.access != Access::Full
+            && let Some(value) = env.get(brigadier_sandbox::DATA_DIR_ENV)
+        {
+            let data = create_preview_data(
+                &workdir.join(value),
+                &protected,
+                ledger.clone(),
+                preview_data_owner(id),
+            )
+            .await?;
             env.insert(
                 brigadier_sandbox::DATA_DIR_ENV.into(),
                 data.path.to_string_lossy().into_owned(),
@@ -357,10 +357,10 @@ impl SessionManager {
                 watched.ask_to_stop("it could not be recorded");
             }
             drop(starting);
-            #[cfg(unix)]
+            #[cfg(target_os = "macos")]
             let recorded_ok = recorded.is_ok();
             let _ = recorded_tx.send(recorded);
-            #[cfg(unix)]
+            #[cfg(target_os = "macos")]
             if recorded_ok && let Some(data) = &mut data {
                 data.created = false;
             }
@@ -946,39 +946,32 @@ fn check_env(env: &BTreeMap<String, String>, workdir: &Path, protected: &[PathBu
     Ok(())
 }
 
-/// A newly claimed directory rolls back on failure or cancellation. A reused session
-/// directory survives failed starts, just as it survives a successful preview's exit.
-#[cfg(unix)]
-struct PreviewData {
-    path: PathBuf,
-    parent: std::os::fd::OwnedFd,
-    name: std::ffi::OsString,
-    created: bool,
-    bound: Option<brigadier_sandbox::removal::Bound>,
+pub(crate) fn preview_data_owner(id: &ConversationId) -> String {
+    format!("preview-data:{id}")
 }
 
-#[cfg(unix)]
+/// A new claim rolls back on failure or cancellation, including its ledger records.
+#[cfg(any(target_os = "macos", all(test, unix)))]
+struct PreviewData {
+    path: PathBuf,
+    created: bool,
+    ledger: Arc<crate::ledger::CleanupLedger>,
+    owner: String,
+    artifacts: Vec<Artifact>,
+}
+
+#[cfg(any(target_os = "macos", all(test, unix)))]
 impl Drop for PreviewData {
     fn drop(&mut self) {
         if self.created {
-            if let Some(bound) = &self.bound {
-                if let Err(err) = brigadier_sandbox::removal::delete(bound) {
-                    tracing::warn!(path = %self.path.display(), error = %err, "could not roll back preview data; the session ledger will retry");
-                }
-                return;
-            }
-            // Before binding the new leaf, it is empty. Never follow a replaced parent.
-            let _ = nix::unistd::unlinkat(
-                &self.parent,
-                self.name.as_os_str(),
-                nix::unistd::UnlinkatFlags::RemoveDir,
-            );
+            self.ledger
+                .rollback(self.owner.clone(), self.artifacts.clone());
         }
     }
 }
 
-#[cfg(unix)]
-fn directory_path(fd: &std::os::fd::OwnedFd) -> std::io::Result<PathBuf> {
+#[cfg(any(target_os = "macos", all(test, unix)))]
+fn directory_path(fd: &impl std::os::fd::AsFd) -> std::io::Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let mut path = PathBuf::new();
@@ -988,20 +981,22 @@ fn directory_path(fd: &std::os::fd::OwnedFd) -> std::io::Result<PathBuf> {
     #[cfg(not(target_os = "macos"))]
     {
         use std::os::fd::AsRawFd as _;
-        std::fs::read_link(format!("/proc/self/fd/{}", fd.as_raw_fd()))
+        std::fs::read_link(format!("/proc/self/fd/{}", fd.as_fd().as_raw_fd()))
     }
 }
 
 /// Walk from the temp root without following links, then claim the leaf through its
 /// parent's descriptor. Only this session's ledger grants permission to reuse a leaf.
-#[cfg(unix)]
-fn create_preview_data(
+#[cfg(any(target_os = "macos", all(test, unix)))]
+async fn create_preview_data(
     path: &Path,
     protected: &[PathBuf],
-    owned: &[Artifact],
+    ledger: Arc<crate::ledger::CleanupLedger>,
+    owner: String,
 ) -> Result<PreviewData> {
     use nix::fcntl::{OFlag, open, openat};
     use nix::sys::stat::{Mode, mkdirat};
+    use std::os::unix::fs::MetadataExt;
     use std::path::Component;
 
     let invalid = |why: String| {
@@ -1050,32 +1045,64 @@ fn create_preview_data(
         .map_err(|err| invalid(err.to_string()))?
         .join(name);
     check(&dir)?;
-    let artifact = Artifact::ScratchDir {
+    let pending = Artifact::PreviewDataDir {
         path: dir.to_string_lossy().into_owned(),
+        identity: None,
     };
-    let created = match mkdirat(&parent, name, Mode::S_IRWXU) {
-        Ok(()) => true,
-        Err(nix::errno::Errno::EEXIST) if owned.contains(&artifact) => false,
-        Err(err) => return Err(invalid(err.to_string())),
-    };
+    let owned = ledger.artifacts(&owner);
     let mut data = PreviewData {
         path: dir,
-        parent,
-        name: name.to_owned(),
-        created,
-        bound: None,
+        created: true,
+        ledger,
+        owner,
+        artifacts: vec![pending.clone()],
     };
-    let leaf =
-        openat(&data.parent, name, flags, Mode::empty()).map_err(|err| invalid(err.to_string()))?;
+    // Persist intent before mkdirat. An intent without an identity never owns an entry.
+    data.ledger.record(&data.owner, pending.clone()).await?;
+    let current = directory_path(&parent)
+        .map_err(|err| invalid(err.to_string()))?
+        .join(name);
+    check(&current)?;
+    if current != data.path {
+        return Err(invalid("parent changed while recording the folder".into()));
+    }
+    let created = match mkdirat(&parent, name, Mode::S_IRWXU) {
+        Ok(()) => true,
+        Err(nix::errno::Errno::EEXIST) => false,
+        Err(err) => return Err(invalid(err.to_string())),
+    };
+    let leaf = std::fs::File::from(
+        openat(&parent, name, flags, Mode::empty()).map_err(|err| invalid(err.to_string()))?,
+    );
+    let stat = leaf.metadata().map_err(|err| invalid(err.to_string()))?;
+    let artifact = Artifact::PreviewDataDir {
+        path: data.path.to_string_lossy().into_owned(),
+        identity: Some((stat.dev(), stat.ino())),
+    };
+    if !created && !owned.contains(&artifact) {
+        return Err(invalid(
+            "the existing folder's identity is not owned".into(),
+        ));
+    }
+    if created {
+        data.artifacts.push(artifact.clone());
+    }
     let real = directory_path(&leaf).map_err(|err| invalid(err.to_string()))?;
     check(&real)?;
     if real != data.path || data.path.canonicalize().ok().as_ref() != Some(&real) {
         return Err(invalid("parent changed while creating the folder".into()));
     }
-    data.bound = Some(
-        brigadier_sandbox::removal::bind(&temp, &data.path)
-            .map_err(|err| invalid(err.to_string()))?,
-    );
+    data.ledger.record(&data.owner, artifact).await?;
+    data.ledger.unrecord(&data.owner, pending.clone()).await?;
+    data.artifacts.retain(|artifact| *artifact != pending);
+    let bound = brigadier_sandbox::removal::bind(&temp, &data.path)
+        .map_err(|err| invalid(err.to_string()))?;
+    if !bound.is_dir() || bound.unix_identity() != (stat.dev(), stat.ino()) {
+        return Err(invalid(
+            "folder changed while recording its identity".into(),
+        ));
+    }
+    data.created = created;
     Ok(data)
 }
 
@@ -1429,25 +1456,21 @@ mod tests {
             )
             .is_ok()
         );
-        #[cfg(target_os = "macos")]
-        {
-            let fresh = root.join("fresh-data");
-            let mut data = create_preview_data(&fresh, &[], &[]).unwrap();
-            assert_eq!(data.path, resolved(&fresh));
-            data.created = false;
-            assert!(create_preview_data(&fresh, &[], &[]).is_err());
-            assert!(create_preview_data(&root.join("link"), &[], &[]).is_err());
-            for name in ["brigadier-pv-new", "brigadier-test-new"] {
-                assert!(create_preview_data(&root.join(name), &[], &[]).is_err());
-                assert!(!root.join(name).exists());
-            }
-        }
         assert!(check_env(&env("1BAD", "x"), workdir, &protected).is_err());
         assert!(check_env(&env("A B", "x"), workdir, &protected).is_err());
     }
 
-    #[test]
-    fn preview_data_refuses_symlink_parents_and_rechecks_protected_paths() {
+    #[tokio::test]
+    async fn preview_data_refuses_symlink_parents_and_rechecks_protected_paths() {
+        use crate::manager::flow::{Flow, Options, Reply};
+        let flow = Flow::start(
+            "data-claim",
+            Options::default(),
+            Arc::new(|_| Box::pin(async { Reply::text("[quiet]") })),
+        )
+        .await;
+        let ledger = flow.manager.runtime.ledger().clone();
+        let owner = preview_data_owner(&flow.conversation);
         use std::os::unix::fs::{PermissionsExt, symlink};
         let root =
             Temp(std::env::temp_dir().join(format!("preview-data-{}", uuid::Uuid::new_v4())));
@@ -1463,27 +1486,109 @@ mod tests {
         // Swap after the early validation, as a thread could while record().await runs.
         std::fs::remove_dir(root.join("parent")).unwrap();
         symlink(root.join("protected"), root.join("parent")).unwrap();
-        assert!(create_preview_data(&path, &protected, &[]).is_err());
+        assert!(
+            create_preview_data(&path, &protected, ledger.clone(), owner.clone())
+                .await
+                .is_err()
+        );
         assert!(!root.join("protected/data").exists());
         // Even a symlink pointing to an otherwise allowed parent is refused.
-        assert!(create_preview_data(&path, &[], &[]).is_err());
-        assert!(create_preview_data(&root.join("protected/data"), &protected, &[]).is_err());
+        assert!(
+            create_preview_data(&path, &[], ledger.clone(), owner.clone())
+                .await
+                .is_err()
+        );
+        assert!(
+            create_preview_data(
+                &root.join("protected/data"),
+                &protected,
+                ledger.clone(),
+                owner.clone()
+            )
+            .await
+            .is_err()
+        );
         let fresh = root.join("fresh");
-        let data = create_preview_data(&fresh, &protected, &[]).unwrap();
+        let data = create_preview_data(&fresh, &protected, ledger.clone(), owner.clone())
+            .await
+            .unwrap();
         assert_eq!(
             std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777,
             0o700
         );
+        let events = flow
+            .manager
+            .core
+            .store()
+            .read_stream_since(crate::model::streams::CLEANUP.into(), 0, 1000)
+            .await
+            .unwrap();
+        let claims = events
+            .iter()
+            .filter_map(|event| match crate::sessions::decode(event).unwrap() {
+                DomainEvent::CleanupRecorded {
+                    owner: held,
+                    artifact: Artifact::PreviewDataDir { identity, .. },
+                } if held == owner => Some(identity),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(claims.len(), 2);
+        assert_eq!(
+            claims[0], None,
+            "durable intent precedes confirmed identity"
+        );
+        assert!(claims[1].is_some());
         std::fs::write(
             fresh.join("partial-start"),
             "a child wrote before recording failed",
         )
         .unwrap();
         drop(data);
+        crate::manager::flow::eventually("rollback removed folder and ledger entry", || {
+            !fresh.exists() && ledger.artifacts(&owner).is_empty()
+        })
+        .await;
+        let mut data = create_preview_data(&fresh, &[], ledger.clone(), owner.clone())
+            .await
+            .unwrap();
+        data.created = false;
+        let artifact = ledger.artifacts(&owner).pop().unwrap();
+        // Retain the original inode so the replacement cannot reuse it.
+        std::fs::rename(&fresh, root.join("original")).unwrap();
+        std::fs::create_dir(&fresh).unwrap();
         assert!(
-            !fresh.exists(),
-            "a cancelled start rolls back its new directory"
+            create_preview_data(&fresh, &[], ledger.clone(), owner.clone())
+                .await
+                .is_err()
         );
+        let leftovers = ledger.release(&owner, vec![artifact]).await;
+        assert!(!leftovers.is_clean());
+        assert!(
+            fresh.is_dir(),
+            "identity mismatch must not delete the replacement"
+        );
+        for name in ["brigadier-pv-new", "brigadier-test-new"] {
+            assert!(
+                create_preview_data(&root.join(name), &[], ledger.clone(), owner.clone())
+                    .await
+                    .is_err()
+            );
+            assert!(!root.join(name).exists());
+        }
+        flow.manager.shutdown().await;
+        flow.manager.core.store().shutdown().await.unwrap();
+        let unrecorded = root.join("record-failed");
+        assert!(
+            create_preview_data(&unrecorded, &[], ledger.clone(), owner.clone())
+                .await
+                .is_err()
+        );
+        assert!(
+            !unrecorded.exists(),
+            "a failed durable record must prevent mkdirat"
+        );
+        flow.stop().await;
     }
 
     #[test]

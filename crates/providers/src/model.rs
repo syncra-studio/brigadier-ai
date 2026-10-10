@@ -1055,6 +1055,12 @@ pub enum Artifact {
     /// A folder Brigadier created in its data directory (a worker's scratch folder, the
     /// orchestrator's or a Chat's working folder).
     ScratchDir { path: String },
+    /// Preview data, recorded before creation. Only a confirmed device and inode grant
+    /// permission to reuse or remove it; an interrupted claim has no identity.
+    PreviewDataDir {
+        path: String,
+        identity: Option<(u64, u64)>,
+    },
     /// A short temp folder of a Claude session's own (`/tmp/brigadier-<id>`), for Claude's
     /// temp files and its sandboxed commands' TMPDIR.
     ClaudeTempDir { path: String },

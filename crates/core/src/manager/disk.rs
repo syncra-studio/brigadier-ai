@@ -1803,6 +1803,7 @@ fn artifact_path(artifact: &Artifact) -> Option<String> {
     match artifact {
         Artifact::Worktree { path, .. }
         | Artifact::ScratchDir { path }
+        | Artifact::PreviewDataDir { path, .. }
         | Artifact::ClaudeTempDir { path }
         | Artifact::ClaudeProjectDir { path }
         | Artifact::CodexGeneratedImages { path } => Some(path.clone()),

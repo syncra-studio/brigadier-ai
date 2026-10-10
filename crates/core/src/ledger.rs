@@ -421,6 +421,28 @@ impl CleanupLedger {
         self.remove(owner, artifacts).await
     }
 
+    /// Revoke a failed claim immediately, before another start can reuse it. Its durable
+    /// cleanup continues even when the start future was cancelled.
+    pub(crate) fn rollback(self: &Arc<Self>, owner: String, artifacts: Vec<Artifact>) {
+        if let Some(known) = self.state().artifacts.get_mut(&owner) {
+            known.retain(|artifact| !artifacts.contains(artifact));
+        }
+        let ledger = self.clone();
+        tokio::spawn(async move {
+            for artifact in artifacts {
+                let leftovers = ledger.release(&owner, vec![artifact.clone()]).await;
+                if !leftovers.is_clean() {
+                    // Keep failed cleanup visible for a later archive or delete.
+                    let mut state = ledger.state();
+                    let known = state.artifacts.entry(owner.clone()).or_default();
+                    if !known.contains(&artifact) {
+                        known.push(artifact);
+                    }
+                }
+            }
+        });
+    }
+
     /// Forgets a recorded artifact that was never created after all: nothing is touched.
     pub async fn unrecord(&self, owner: &str, artifact: Artifact) -> Result<()> {
         self.append(DomainEvent::CleanupRemoved {
@@ -530,18 +552,34 @@ impl CleanupLedger {
                         Err(err) => leftovers.failures.push(err.to_string()),
                     }
                 }
+                Artifact::PreviewDataDir { path, identity } => {
+                    let data_dir = self.platform.paths().data_dir.clone();
+                    let dir = PathBuf::from(path);
+                    let identity = *identity;
+                    match tokio::task::spawn_blocking(move || match identity {
+                        Some(identity) => remove_preview_data(&data_dir, &dir, identity),
+                        None => Ok(()),
+                    })
+                    .await
+                    {
+                        Ok(Ok(())) => removed.push(artifact),
+                        Ok(Err(err)) => leftovers.failures.push(format!("{path}: {err}")),
+                        Err(err) => leftovers.failures.push(err.to_string()),
+                    }
+                }
                 Artifact::ScratchDir { path } => {
                     let data_dir = self.platform.paths().data_dir.clone();
                     let dir = PathBuf::from(path);
-                    let session = owner.starts_with("session:");
-                    match tokio::task::spawn_blocking(move || {
-                        if session && !dir.starts_with(&data_dir) && !test_data_folder(&dir) {
-                            remove_preview_data(&data_dir, &dir)
-                        } else {
-                            remove_scratch(&data_dir, &dir)
-                        }
-                    })
-                    .await
+                    // Older previews used path-only session records. They cannot prove
+                    // ownership and must not delete a replacement or block the worktree.
+                    if owner.starts_with("session:")
+                        && !dir.starts_with(&data_dir)
+                        && !test_data_folder(&dir)
+                    {
+                        removed.push(artifact);
+                        continue;
+                    }
+                    match tokio::task::spawn_blocking(move || remove_scratch(&data_dir, &dir)).await
                     {
                         Ok(Ok(())) => removed.push(artifact),
                         Ok(Err(err)) => leftovers.failures.push(format!("{path}: {err}")),
@@ -660,9 +698,9 @@ fn remove_scratch(data_dir: &Path, dir: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Session-owned preview data can have a caller-chosen name, but must remain strictly
+/// Separately owned preview data can have a caller-chosen name, but must remain strictly
 /// inside /tmp and outside both app data directories. The ledger is the ownership proof.
-fn remove_preview_data(data_dir: &Path, dir: &Path) -> std::io::Result<()> {
+fn remove_preview_data(data_dir: &Path, dir: &Path, identity: (u64, u64)) -> std::io::Result<()> {
     let root = Path::new("/tmp").canonicalize()?;
     if !dir.starts_with(&root) || dir == root {
         return Err(std::io::Error::other("preview data is outside /tmp"));
@@ -682,7 +720,20 @@ fn remove_preview_data(data_dir: &Path, dir: &Path) -> std::io::Result<()> {
         }
     }
     match brigadier_sandbox::removal::bind(&root, dir) {
-        Ok(bound) => brigadier_sandbox::removal::delete(&bound).map_err(std::io::Error::other),
+        Ok(bound) => {
+            #[cfg(unix)]
+            {
+                if !bound.is_dir() || bound.unix_identity() != identity {
+                    return Err(std::io::Error::other("preview data identity changed"));
+                }
+                brigadier_sandbox::removal::delete(&bound).map_err(std::io::Error::other)
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = (bound, identity);
+                Err(std::io::Error::other("preview data identity requires Unix"))
+            }
+        }
         Err(brigadier_sandbox::removal::RemovalError::Gone(_)) => Ok(()),
         Err(err) => Err(std::io::Error::other(err)),
     }

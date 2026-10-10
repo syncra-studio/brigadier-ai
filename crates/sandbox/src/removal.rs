@@ -91,6 +91,12 @@ impl Bound {
     pub fn identity(&self) -> Identity {
         self.identity
     }
+
+    /// The device and inode captured by this binding, for durable ownership records.
+    #[cfg(unix)]
+    pub fn unix_identity(&self) -> (u64, u64) {
+        (self.identity.a, self.identity.b)
+    }
 }
 
 /// Binds `path`, which must be strictly inside `root` (an existing directory; it may itself be
