@@ -266,8 +266,10 @@ pub fn launch<D: Desktop>(
                         restored_windows = rest.iter().map(|w| w.id).collect();
                     } else if !appeared.is_empty() {
                         // A file alone in an app that was running: a window that doesn't show it
-                        // may be one the user opened, so only the file's own window will do. An
-                        // app bundle given as the file is the app itself, not a document.
+                        // may be one the user opened, so only the file's own window will do.
+                        // A newly started resolved app keeps the existing grace-period fallback
+                        // to all its new windows, preserving ownership when its document can't
+                        // be identified. An app bundle is the app itself, not a document.
                         let unproven = req.app.is_none()
                             && !new_process
                             && file.extension().is_none_or(|e| e != "app");
