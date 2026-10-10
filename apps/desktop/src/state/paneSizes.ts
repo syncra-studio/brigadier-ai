@@ -8,7 +8,8 @@ export type PaneKind =
   | "browserComposer"
   | "files"
   | "source"
-  | "sideChat";
+  | "sideChat"
+  | "plan";
 export type PaneSizes = Partial<Record<PaneKind, number>>;
 const PANES: readonly string[] = [
   "workers",
@@ -19,6 +20,7 @@ const PANES: readonly string[] = [
   "files",
   "source",
   "sideChat",
+  "plan",
 ];
 
 export function savedPaneSizes(): PaneSizes {

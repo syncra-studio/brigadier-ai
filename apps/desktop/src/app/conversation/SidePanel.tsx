@@ -2,6 +2,7 @@ import {
   Branch,
   Folders,
   Globe,
+  Lightbulb,
   PlusCircle,
   Terminal,
   X,
@@ -44,6 +45,11 @@ import {
 import { changedPaneSize, savedPaneSizes, withSavedTerminal } from "@/state/paneSizes";
 import { useApp } from "@/state/store";
 
+const PlanTab = lazy(() =>
+  import("@/app/conversation/PlanTab").then((module) => ({
+    default: module.PlanTab,
+  })),
+);
 const SideChatTab = lazy(() =>
   import("@/app/conversation/SideChatTab").then((module) => ({
     default: module.SideChatTab,
@@ -74,7 +80,9 @@ export type SideTab =
   | "browser"
   | "files"
   | "source"
-  | "sideChat";
+  | "sideChat"
+  /** The plan opened from its card in the thread (`showPlanDoc`). */
+  | "plan";
 
 /** Each tab's title, icon and shortcut (macOS keys; Ctrl for ⌘ elsewhere). */
 const TABS: Record<
@@ -86,6 +94,7 @@ const TABS: Record<
   files: { title: "Files", icon: <Folders />, keys: "⌘P" },
   source: { title: "Source", icon: <Branch />, keys: null },
   sideChat: { title: "Side chat", icon: <PlusCircle />, keys: "⌥⌘S" },
+  plan: { title: "Plan", icon: <Lightbulb />, keys: null },
 };
 
 /** The tabs the titlebar has a button for, in order; Terminal comes before Browser. Review is
@@ -335,7 +344,7 @@ export function useSidePanel(
   const available = useMemo<SideTab[]>(() => {
     const tabs: SideTab[] =
       kind === "session" && conversationId
-        ? ["workers", "browser", "files", "source", "sideChat"]
+        ? ["workers", "browser", "files", "source", "sideChat", "plan"]
         : kind === "chat"
           ? ["sideChat", "browser"]
           : kind === "sideChat"
@@ -820,6 +829,10 @@ export function SidePanel({
             ) : state.active === "source" && conversationId ? (
               <Suspense fallback={null}>
                 <SourcePanel conversationId={conversationId} />
+              </Suspense>
+            ) : state.active === "plan" && conversationId ? (
+              <Suspense fallback={null}>
+                <PlanTab conversationId={conversationId} />
               </Suspense>
             ) : null}
           </div>

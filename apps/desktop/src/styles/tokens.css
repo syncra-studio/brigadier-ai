@@ -163,6 +163,11 @@
   --spacing-shell-output: 9rem;
   --spacing-shell-fade: 2rem;
   --spacing-thought: 8.75rem;
+  /* A plan's card in the thread: its header, the height it shows before it clips, and the fade
+     over its clipped end. */
+  --spacing-plan-header: 2.5rem;
+  --spacing-plan-clip: 12.5rem;
+  --spacing-plan-fade: 4rem;
   /* A turn's work folding: the slide it opens from and closes to. */
   --spacing-fold-slide: 0.5rem;
   /* The answer's action bar: its gap under the answer, its buttons and their gap. */
@@ -330,6 +335,8 @@
   --radius-bubble: 1.375rem;
   /* A command's Shell box in the thread. */
   --radius-shell: 0.78125rem;
+  /* A plan's card in the thread. */
+  --radius-plan: 0.78125rem;
   --radius-rail: 1.25rem;
   /* Menus and tooltips: rounder than cards. */
   --radius-menu: 1.25rem;
@@ -374,6 +381,13 @@
   --text-code: 0.8125rem;
   --text-code--line-height: 1.25rem;
   --text-code-inline: 0.85em;
+  /* A plan document: its title, its section headings and its text. */
+  --text-plan-title: 1.3125rem;
+  --text-plan-title--line-height: 1.75rem;
+  --text-plan-heading: 1.09375rem;
+  --text-plan-heading--line-height: 1.53125rem;
+  --text-plan: 0.875rem;
+  --text-plan--line-height: 1.421875rem;
 
   --shadow-hairline: inset 0 0 1px 0 oklch(1 0 0 / 20%);
   --shadow-tooltip: 0 8px 18px oklch(0 0 0 / 25%);

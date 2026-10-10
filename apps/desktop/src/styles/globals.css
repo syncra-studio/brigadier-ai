@@ -329,6 +329,16 @@
   mask-image: linear-gradient(to bottom, transparent, black var(--spacing-row-sm));
 }
 
+/* A plan's card shows the start of the plan: clipped, and when the plan goes on past the
+   clip, its end fades out under the card's edge. */
+@utility plan-clip {
+  max-height: var(--spacing-plan-clip);
+  overflow: hidden;
+}
+@utility plan-clip-fade {
+  mask-image: linear-gradient(to bottom, black calc(100% - var(--spacing-plan-fade)), transparent);
+}
+
 /* Live text ("Thinking", a running step): muted text a highlight band sweeps across now and
    then, the first time 600ms after it shows, then every 4s. Still with less motion. */
 @utility shimmer {
