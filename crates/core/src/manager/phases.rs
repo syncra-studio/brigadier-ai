@@ -186,10 +186,56 @@ impl SessionManager {
         let request_id = self.request_for(id, None).await;
         let _held = self.plans.lock().await;
         let board = self.core.board(id).await?;
+        // A lead that outlined in plan mode waits for the user's yes to this document: its
+        // phase moves here with its outline, and the plan it outlined under gives way.
+        let mut waiting: Vec<&Task> = board
+            .tasks
+            .values()
+            .filter(|task| task.request_id == request_id && Self::waits_for_go_ahead(task))
+            .collect();
+        waiting.sort_by_key(|task| task.number);
+        for lead in waiting {
+            let outlined = board
+                .plans
+                .values()
+                .filter(|plan| plan.request_id == request_id)
+                .filter_map(|plan| {
+                    let step = plan
+                        .steps
+                        .iter()
+                        .find(|step| step.task_id.as_ref() == Some(&lead.id))?;
+                    Some((plan.created_at_ms, step))
+                })
+                .max_by_key(|(created, _)| *created)
+                .map(|(_, step)| step.clone());
+            let numbered = lead.phase.and_then(|number| {
+                steps.iter().enumerate().position(|(index, step)| {
+                    step.number_at(index) == number && step.task_id.is_none()
+                })
+            });
+            let Some(index) =
+                numbered.or_else(|| steps.iter().position(|step| step.task_id.is_none()))
+            else {
+                break;
+            };
+            let step = &mut steps[index];
+            step.task_id = Some(lead.id.clone());
+            step.stage = PhaseStage::AwaitingGoAhead;
+            step.outline = outlined.as_ref().and_then(|step| step.outline.clone());
+            step.started_at_ms = outlined
+                .as_ref()
+                .and_then(|step| step.started_at_ms)
+                .or(Some(now_ms()));
+        }
+        let leads: Vec<&TaskId> = steps.iter().filter_map(|s| s.task_id.as_ref()).collect();
         for earlier in board.plans.values().filter(|plan| {
             plan.state == PlanState::Proposed
                 || (plan.request_id == request_id
-                    && matches!(plan.state, PlanState::Rejected { .. }))
+                    && (matches!(plan.state, PlanState::Rejected { .. })
+                        || (matches!(plan.state, PlanState::Approved { .. })
+                            && plan.steps.iter().any(|step| {
+                                step.task_id.as_ref().is_some_and(|t| leads.contains(&t))
+                            }))))
         }) {
             let mut replaced = earlier.clone();
             replaced.state = PlanState::Superseded;
