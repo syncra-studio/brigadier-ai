@@ -566,6 +566,23 @@ impl Repo {
         self.cmd(&["cat-file", "blob", &object.0], true).map(Some)
     }
 
+    /// Whether git tracks anything at or under a repo-relative path (a file added with
+    /// `git add -f` inside an ignored folder included).
+    pub fn tracks_under(&self, path: &str) -> Result<bool> {
+        valid_path(path)?;
+        let out = self.git.run(
+            Some(&self.root),
+            &["ls-files", "-z", "--cached", "--", path],
+            true,
+            &[("GIT_LITERAL_PATHSPECS".into(), "1".into())],
+            None,
+        )?;
+        if !out.status.success() {
+            return Err(failure(&["ls-files", "--cached", "--", path], &out));
+        }
+        Ok(out.stdout.iter().any(|byte| *byte != 0))
+    }
+
     /// Whether a repo-relative file is ignored (tracked files are not ignored).
     pub fn is_ignored(&self, path: &str) -> Result<bool> {
         valid_path(path)?;

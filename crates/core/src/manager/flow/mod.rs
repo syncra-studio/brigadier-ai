@@ -556,10 +556,12 @@ impl Provider for FakeCli {
                     ProviderKind::Claude => Artifact::ClaudeSession {
                         session_id: native_id.clone(),
                         home,
+                        cwd: None,
                     },
                     ProviderKind::Codex => Artifact::CodexThread {
                         thread_id: native_id.clone(),
                         home,
+                        cwd: None,
                     },
                 };
                 ledger.record(artifact).await?;
@@ -626,8 +628,12 @@ impl Provider for FakeCli {
             }
             for artifact in artifacts {
                 let (id, home) = match artifact {
-                    Artifact::ClaudeSession { session_id, home } => (session_id, home),
-                    Artifact::CodexThread { thread_id, home } => (thread_id, home),
+                    Artifact::ClaudeSession {
+                        session_id, home, ..
+                    } => (session_id, home),
+                    Artifact::CodexThread {
+                        thread_id, home, ..
+                    } => (thread_id, home),
                     _ => continue,
                 };
                 let expected = self

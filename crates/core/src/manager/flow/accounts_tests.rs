@@ -861,10 +861,12 @@ async fn a_restart_finishes_account_cleanup_in_the_recorded_homes() {
         let removals = flow.behavior.removals.lock().unwrap().clone();
         for artifact in native {
             let (id, home) = match &artifact {
-                brigadier_providers::Artifact::ClaudeSession { session_id, home } => {
-                    (session_id, home)
-                }
-                brigadier_providers::Artifact::CodexThread { thread_id, home } => (thread_id, home),
+                brigadier_providers::Artifact::ClaudeSession {
+                    session_id, home, ..
+                } => (session_id, home),
+                brigadier_providers::Artifact::CodexThread {
+                    thread_id, home, ..
+                } => (thread_id, home),
                 other => panic!("unexpected artifact: {other:?}"),
             };
             let account = home.as_ref().map(|_| "acct-b".to_owned());
@@ -1399,6 +1401,7 @@ async fn a_start_cut_off_by_an_archive_ends_even_after_a_restore() {
         vec![brigadier_providers::Artifact::ClaudeSession {
             session_id: after.native_id.clone(),
             home: None,
+            cwd: None,
         }]
     );
     flow.stop().await;

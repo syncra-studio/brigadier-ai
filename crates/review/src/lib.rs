@@ -307,10 +307,12 @@ async fn run_codex_review(
     process.close_stdin().await;
     let mut events = CodexEvents::default();
     let ledger = run.ledger.clone();
+    let cwd = run.cwd.display().to_string();
     let record = async |thread_id: &str| {
         let artifact = Artifact::CodexThread {
             thread_id: thread_id.to_owned(),
             home: None,
+            cwd: Some(cwd.clone()),
         };
         if let Err(err) = ledger.record(artifact).await {
             tracing::warn!(thread = %thread_id, error = %err, "could not record a review's thread");
@@ -646,6 +648,7 @@ mod tests {
         let thread = Artifact::CodexThread {
             thread_id: "01a1-review".into(),
             home: None,
+            cwd: Some(dir.display().to_string()),
         };
         // Recorded as soon as it starts, not when the review ends.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(20);

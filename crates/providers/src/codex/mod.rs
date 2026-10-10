@@ -26,6 +26,7 @@
 //! ([`SessionSpec::owned_cwd`]), it is recorded and removed with the session through Codex's
 //! config API, only while it is still exactly `trusted`.
 
+pub(crate) mod files;
 pub mod parse;
 #[allow(clippy::all, clippy::pedantic, dead_code, unused_imports)]
 pub mod protocol;
@@ -909,6 +910,7 @@ async fn open_thread(
         .record(Artifact::CodexThread {
             thread_id: thread.id.clone(),
             home,
+            cwd: Some(cwd.display().to_string()),
         })
         .await?;
     if let Some(root) = images_root {

@@ -62,6 +62,17 @@ pub struct Identity {
     b: u64,
 }
 
+impl Identity {
+    /// Its two numbers, for a durable record ([`Identity::from_parts`] reads them back).
+    pub fn parts(self) -> (u64, u64) {
+        (self.a, self.b)
+    }
+
+    pub fn from_parts((a, b): (u64, u64)) -> Self {
+        Self { a, b }
+    }
+}
+
 /// An entry checked to be strictly inside `root`, reached without any symbolic link below
 /// `root`, with the identity it had then.
 #[derive(Debug, Clone)]
@@ -113,6 +124,18 @@ pub fn bind(root: &Path, path: &Path) -> Result<Bound> {
         identity,
         dir,
     })
+}
+
+/// Binds `path` as [`bind`] does, but only while it is still the entry recorded as `identity`
+/// when it was first looked at: what a durable record names is bound again, never whatever
+/// took its place since.
+pub fn bind_as(root: &Path, path: &Path, identity: Identity) -> Result<Bound> {
+    let bound = bind(root, path)?;
+    if bound.identity == identity {
+        Ok(bound)
+    } else {
+        Err(RemovalError::Changed(bound.path))
+    }
 }
 
 /// Checks that `bound` is still what it was: inside its root, reached without links, the

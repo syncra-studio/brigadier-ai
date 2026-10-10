@@ -46,9 +46,37 @@ struct State {
     artifacts: HashMap<String, Vec<Artifact>>,
     /// Owners whose artifacts are all to be removed.
     disposing: HashSet<String>,
+    /// Every CLI session Brigadier ever started, by its CLI's own id, kept after its files
+    /// went: what proves a session's files found later are Brigadier's.
+    native: HashMap<String, NativeSession>,
+}
+
+/// A CLI session Brigadier started, as its ledger recorded it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeSession {
+    pub kind: ProviderKind,
+    /// The folder it ran in (unknown for sessions recorded before Brigadier noted it).
+    pub cwd: Option<String>,
 }
 
 impl State {
+    fn note_native(&mut self, artifact: &Artifact) {
+        let (id, kind, cwd) = match artifact {
+            Artifact::ClaudeSession {
+                session_id, cwd, ..
+            } => (session_id, ProviderKind::Claude, cwd),
+            Artifact::CodexThread { thread_id, cwd, .. } => (thread_id, ProviderKind::Codex, cwd),
+            _ => return,
+        };
+        let known = self
+            .native
+            .entry(id.clone())
+            .or_insert(NativeSession { kind, cwd: None });
+        if cwd.is_some() {
+            known.cwd.clone_from(cwd);
+        }
+    }
+
     /// Whether an owner other than `owner`, and not being disposed of, records the worktree at
     /// `path` too (through symbolic links).
     fn shares_worktree(&self, owner: &str, path: &str) -> bool {
@@ -68,6 +96,9 @@ impl State {
 #[derive(Debug, Default)]
 pub struct Leftovers {
     pub failures: Vec<String>,
+    /// Adopted entries left in place on purpose, and why: they are no longer the entry that
+    /// was shown (changed or replaced), or a folder others still use. Forgotten, not retried.
+    pub kept: Vec<String>,
 }
 
 impl Leftovers {
@@ -120,6 +151,7 @@ impl CleanupLedger {
                 after = event.stream_seq;
                 match crate::sessions::decode(event)? {
                     DomainEvent::CleanupRecorded { owner, artifact } => {
+                        state.note_native(&artifact);
                         let artifacts = state.artifacts.entry(owner).or_default();
                         if !artifacts.contains(&artifact) {
                             artifacts.push(artifact);
@@ -228,12 +260,39 @@ impl CleanupLedger {
             artifact: artifact.clone(),
         })
         .await?;
-        self.state()
+        let mut state = self.state();
+        state.note_native(&artifact);
+        state
             .artifacts
             .entry(owner.to_owned())
             .or_default()
             .push(artifact);
         Ok(())
+    }
+
+    /// Every CLI session this data directory's Brigadier ever started, by its CLI's own id,
+    /// including the ones whose files are gone.
+    pub fn native_sessions(&self) -> HashMap<String, NativeSession> {
+        self.state().native.clone()
+    }
+
+    /// Takes on `artifacts` for `owner`: the entries Free up space showed and the user approved,
+    /// each recorded (durably, before anything is removed) with the identity it had when shown,
+    /// so that removing them now, or the launch sweep's retry after a crash, removes exactly
+    /// those entries. Then disposes of `owner`.
+    pub async fn adopt(&self, owner: &str, artifacts: Vec<Artifact>) -> Result<Leftovers> {
+        if artifacts
+            .iter()
+            .any(|artifact| !matches!(artifact, Artifact::Adopted { .. }))
+        {
+            return Err(Error::Invalid(
+                "only adopted entries can be taken on this way".into(),
+            ));
+        }
+        for artifact in artifacts {
+            self.record(owner, artifact).await?;
+        }
+        Ok(self.dispose(owner).await)
     }
 
     /// Whether any owner still holds `artifact`.
@@ -546,6 +605,35 @@ impl CleanupLedger {
                 Artifact::CodexGeneratedImages { .. } | Artifact::CodexProjectTrust { .. } => {
                     add(ProviderKind::Codex, None, artifact)
                 }
+                Artifact::Adopted {
+                    root,
+                    path,
+                    identity,
+                    empty_only,
+                    ..
+                } => {
+                    let platform = self.platform.clone();
+                    let (root, path, identity, empty_only) = (
+                        PathBuf::from(root),
+                        PathBuf::from(path),
+                        *identity,
+                        *empty_only,
+                    );
+                    match tokio::task::spawn_blocking(move || {
+                        remove_adopted(&*platform, &root, &path, identity, empty_only)
+                    })
+                    .await
+                    {
+                        Ok(Ok(Adopted::Removed)) => removed.push(artifact),
+                        Ok(Ok(Adopted::Kept(why))) => {
+                            tracing::info!(owner, why, "left an adopted entry in place");
+                            leftovers.kept.push(why);
+                            removed.push(artifact);
+                        }
+                        Ok(Err(err)) => leftovers.failures.push(err),
+                        Err(err) => leftovers.failures.push(err.to_string()),
+                    }
+                }
                 // Run segments share one worktree: the last owner using it removes it.
                 Artifact::Worktree { path, .. } if self.state().shares_worktree(owner, path) => {
                     tracing::info!(owner, path, "left a worktree another owner still uses");
@@ -677,6 +765,60 @@ impl CleanupLedger {
         self.core.store().append(vec![new]).await?;
         Ok(())
     }
+}
+
+/// What became of an adopted entry.
+enum Adopted {
+    /// Gone (removed now, or already).
+    Removed,
+    /// Left in place on purpose, and why.
+    Kept(String),
+}
+
+/// Removes an adopted entry, but only while it is the very entry that was shown: bound under
+/// its root again with its recorded identity (no link below the root, no `..`), nothing running
+/// in it, and, for a folder others may share, only while it is empty. Anything else stays.
+fn remove_adopted(
+    platform: &dyn Platform,
+    root: &Path,
+    path: &Path,
+    identity: (u64, u64),
+    empty_only: bool,
+) -> std::result::Result<Adopted, String> {
+    use brigadier_sandbox::removal::{self, Identity, RemovalError};
+    if removal::is_gone(path) {
+        return Ok(Adopted::Removed);
+    }
+    let bound = match removal::bind_as(root, path, Identity::from_parts(identity)) {
+        Ok(bound) => bound,
+        Err(RemovalError::Gone(_)) => return Ok(Adopted::Removed),
+        Err(err @ (RemovalError::Changed(_) | RemovalError::Symlink(_))) => {
+            return Ok(Adopted::Kept(format!("{err}; it is not what was shown")));
+        }
+        Err(err) => return Err(err.to_string()),
+    };
+    if bound.is_dir() {
+        match platform.processes().in_dir(bound.path()) {
+            Ok(found) if found.is_empty() => {}
+            Ok(_) => return Err(format!("{}: something runs in it now", path.display())),
+            Err(err) => return Err(format!("{}: {err}", path.display())),
+        }
+    }
+    if empty_only {
+        let empty = std::fs::read_dir(bound.path()).is_ok_and(|mut e| e.next().is_none());
+        if !empty {
+            return Ok(Adopted::Kept(format!(
+                "{} still holds other files",
+                path.display()
+            )));
+        }
+        return removal::remove_empty_dir(&bound)
+            .map(|()| Adopted::Removed)
+            .map_err(|err| err.to_string());
+    }
+    removal::delete(&bound)
+        .map(|()| Adopted::Removed)
+        .map_err(|err| err.to_string())
 }
 
 fn is_process(artifact: &Artifact) -> bool {

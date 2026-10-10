@@ -1027,6 +1027,11 @@ pub enum Artifact {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         home: Option<String>,
+        /// The folder it ran in, so its files are known as Brigadier's for good (absent in
+        /// records older than this field).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        cwd: Option<String>,
     },
     /// A Claude Code project directory (`projects/<encoded cwd>`) that did not exist before.
     ClaudeProjectDir { path: String },
@@ -1040,6 +1045,10 @@ pub enum Artifact {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         home: Option<String>,
+        /// The folder it ran in (absent in records older than this field).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        cwd: Option<String>,
     },
     /// The folder where Codex saves a thread's generated images
     /// (`$CODEX_HOME/generated_images/<thread id>`), which deleting the thread leaves behind.
@@ -1047,6 +1056,20 @@ pub enum Artifact {
     /// A project trust entry Codex persisted in the user's `config.toml` when a thread started
     /// there. Removed through Codex's config API, only while it is still just `trusted`.
     CodexProjectTrust { path: String },
+    /// A file or folder Free up space proved to be Brigadier's leftover and the user approved
+    /// removing: exactly that entry (bound under `root` with the identity it had when it was
+    /// shown), never anything found again by name. Removed only while it is still that entry.
+    Adopted {
+        root: String,
+        path: String,
+        /// Its identity when it was shown (device and inode, or volume and file index).
+        identity: (u64, u64),
+        /// Why it is Brigadier's, as shown.
+        evidence: String,
+        /// A folder removed only once empty (a CLI project folder whose files went with it).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        empty_only: bool,
+    },
     /// Every process working inside `dir`, a folder Brigadier created (a worktree, a scratch
     /// folder): what a worker started there, including processes that left its tree.
     ProcessesIn { dir: String },
