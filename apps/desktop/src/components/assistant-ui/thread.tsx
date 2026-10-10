@@ -211,6 +211,18 @@ function useThreadScroll(
     for (const type of ["wheel", "touchstart", "pointerdown", "keydown"]) {
       viewport.addEventListener(type, scroller.interrupt, options);
     }
+    // A click on the list's empty space focuses it but leaves the caret in the composer, where
+    // Cmd+Up and Cmd+Down would move the caret rather than scroll the list.
+    viewport.addEventListener(
+      "focus",
+      () => {
+        const selection = getSelection();
+        const anchor = selection?.anchorNode;
+        const element = anchor instanceof Element ? anchor : anchor?.parentElement;
+        if (element?.closest("[contenteditable]")) selection?.removeAllRanges();
+      },
+      options,
+    );
     // Capturing: the toggle's place is taken before its fold changes.
     viewport.addEventListener(
       "click",

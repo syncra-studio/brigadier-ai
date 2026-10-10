@@ -486,6 +486,6 @@ async function drive(): Promise<void> {
   document.body.append(pre);
 }
 
-Object.assign(window, { threadScroll: { steps, open, userScroll, distance, lastGap, buttonState } });
+Object.assign(window, { threadScroll: { steps, open, send, userScroll, distance, lastGap, buttonState } });
 useBoard.setState({ board: emptyBoard("long") });
 createRoot(document.getElementById("root")!).render(<Page />);
