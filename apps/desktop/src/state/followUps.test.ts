@@ -121,6 +121,11 @@ test("queue reconciliation distinguishes attachments and conversations", () => {
   assert.deepEqual(useApp.getState().pending.map((entry) => entry.localId), ["plain", "elsewhere"]);
 });
 
+test("a queue event with no matching pending entries keeps pending the same", () => {
+  const pending = useApp.getState().pending;
+  queue([item]);
+  assert.equal(useApp.getState().pending, pending);
+});
 
 test("a queued response identifies its item before its event can consume another echo", async () => {
   const sent = start();
@@ -130,7 +135,6 @@ test("a queued response identifies its item before its event can consume another
   queue([item]);
   assert.deepEqual(useApp.getState().pending.map((entry) => entry.localId), ["second"]);
 });
-
 
 test("a queued item matches the send's mentions as well as its visible text", async () => {
   const mentions: [Mention, Mention, Mention] = [{ type: "file", path: "first.ts" }, { type: "task", id: "one" }, { type: "chat", id: "chat-one", title: "Same title" }];

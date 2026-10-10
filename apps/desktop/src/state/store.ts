@@ -509,10 +509,14 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
       }
       // Replayed queue snapshots must not consume another identical send's echo.
       const queuedIds = event.queue.items.map((item) => item.id);
+      const gains = (entry: PendingMessage) =>
+        entry.conversationId === event.conversationId &&
+        queuedIds.some((queuedId) => !entry.queuedIds?.includes(queuedId));
+      if (pending === slice.pending && !pending.some(gains)) return slice;
       return {
         ...slice,
         pending: pending.map((entry) =>
-          entry.conversationId === event.conversationId
+          gains(entry)
             ? { ...entry, queuedIds: [...new Set([...(entry.queuedIds ?? []), ...queuedIds])] }
             : entry,
         ),

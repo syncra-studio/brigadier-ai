@@ -467,13 +467,17 @@ export async function send(
       }));
     } else {
       // Reconcile before publishing the rail item, including when the response beats its event.
-      useApp.setState((state) => ({
-        pending: state.pending
-          .filter((entry) => entry.localId !== localId)
-          .map((entry) => entry.conversationId === conversationId
-            ? { ...entry, queuedIds: [...new Set([...(entry.queuedIds ?? []), outcome.item.id])] }
-            : entry),
-      }));
+      // Its echo, once its queue event removed it, needs no guard in the others.
+      useApp.setState((state) => {
+        const pending = state.pending.filter((entry) => entry.localId !== localId);
+        if (localId && pending.length === state.pending.length) return state;
+        return {
+          pending: pending.map((entry) =>
+            entry.conversationId === conversationId && !entry.queuedIds?.includes(outcome.item.id)
+              ? { ...entry, queuedIds: [...(entry.queuedIds ?? []), outcome.item.id] }
+              : entry),
+        };
+      });
       // Shown before its queue event arrives. If the queue changed meanwhile, the events are
       // newer than this answer (the item may already be sent or deleted) and bring it anyway.
       updateBoard(conversationId, (current) => {
@@ -484,7 +488,7 @@ export async function send(
       });
     }
   } finally {
-    if (localId) {
+    if (localId && useApp.getState().pending.some((entry) => entry.localId === localId)) {
       useApp.setState((state) => ({
         pending: state.pending.filter((entry) => entry.localId !== localId),
       }));
