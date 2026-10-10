@@ -239,9 +239,9 @@ const round = (value: number) => Math.round(value * 100) / 100;
 
 /** What the checks measure, as one string: it holds still once the page has settled. */
 function layoutNow(): string {
-  const view = $('[data-slot="aui_thread-viewport"]');
+  const box = $('[data-slot="aui_thread-viewport"]');
   const footer = $('[data-slot="aui_thread-footer-column"]')?.getBoundingClientRect().top;
-  return view ? `${view.scrollTop} ${view.scrollHeight} ${view.clientHeight} ${footer}` : "";
+  return box ? `${box.scrollTop} ${box.scrollHeight} ${box.clientHeight} ${footer}` : "";
 }
 
 /** A fold opening, a fade: a finite animation or transition still running. */
