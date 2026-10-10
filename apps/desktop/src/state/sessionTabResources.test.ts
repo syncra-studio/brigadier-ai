@@ -53,3 +53,15 @@ test("a new terminal tab uses the shell it started, so its startup output stream
   assert.equal(again.scrollback, "startup\r\n");
   closeTab("new", tab);
 });
+
+test("after the daemon restarts, closing a terminal tab ends the shell it started for the tab", async () => {
+  const tab = newSessionTab("restart", "terminal");
+  const first = await openMainTerminal("restart", tab, 80, 24);
+  running.clear(); // The daemon restarted: its shells are gone.
+  const second = await openMainTerminal("restart", tab, 80, 24);
+  assert.notEqual(second.id, first.id);
+  closeTab("restart", tab);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(sent.filter((req) => req.method === "closeTerminal").map((req) => req.terminalId), [second.id]);
+  assert.equal(running.size, 0);
+});
