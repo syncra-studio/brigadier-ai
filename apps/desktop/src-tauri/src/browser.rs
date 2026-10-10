@@ -157,17 +157,16 @@ impl FaviconLimit {
         }
     }
 
-    /// The held favicon, if any, once its `Later` wait is over.
-    fn flush(&mut self, now: Instant) -> Option<(String, String)> {
+    /// Recheck the latest send time: a reset or immediate send may have moved the deadline.
+    fn flush(&mut self, now: Instant) -> FaviconStep {
         self.flushing = false;
-        let (url, data_url) = self.held.take()?;
-        self.sent = Some(data_url.clone());
-        self.at = Some(now);
-        Some((url, data_url))
+        match self.held.take() {
+            Some((url, data_url)) => self.offer(url, data_url, now),
+            None => FaviconStep::Skip,
+        }
     }
 
     /// A new page is loading: the app clears the tab's favicon, so the next one goes.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn reset(&mut self) {
         self.sent = None;
         self.at = None;
@@ -292,13 +291,22 @@ mod embedded {
                     FaviconStep::Send { url, data_url } => {
                         let _ = on_favicon.send(BrowserEvent::Favicon { url, data_url });
                     }
-                    FaviconStep::Later(wait) => {
+                    FaviconStep::Later(mut wait) => {
                         let (limit, on_favicon) = (limit.clone(), on_favicon.clone());
                         tauri::async_runtime::spawn(async move {
-                            tokio::time::sleep(wait).await;
-                            let held = limit.lock().expect("favicon lock").flush(Instant::now());
-                            if let Some((url, data_url)) = held {
-                                let _ = on_favicon.send(BrowserEvent::Favicon { url, data_url });
+                            loop {
+                                tokio::time::sleep(wait).await;
+                                let step =
+                                    limit.lock().expect("favicon lock").flush(Instant::now());
+                                match step {
+                                    FaviconStep::Later(remaining) => wait = remaining,
+                                    FaviconStep::Send { url, data_url } => {
+                                        let _ = on_favicon
+                                            .send(BrowserEvent::Favicon { url, data_url });
+                                        break;
+                                    }
+                                    FaviconStep::Skip => break,
+                                }
                             }
                         });
                     }
@@ -524,11 +532,8 @@ mod tests {
         assert_eq!(offer(&mut limit, "c", soon), FaviconStep::Skip);
         assert_eq!(offer(&mut limit, "d", soon), FaviconStep::Skip);
         let flushed = start + FAVICON_INTERVAL;
-        assert_eq!(
-            limit.flush(flushed),
-            Some(("https://example.com/".into(), "d".into()))
-        );
-        assert_eq!(limit.flush(flushed), None);
+        assert_eq!(limit.flush(flushed), send("d"));
+        assert_eq!(limit.flush(flushed), FaviconStep::Skip);
 
         // Settling back on the icon already sent cancels the held one.
         let next = flushed + FAVICON_INTERVAL / 2;
@@ -537,12 +542,70 @@ mod tests {
             FaviconStep::Later(_)
         ));
         assert_eq!(offer(&mut limit, "d", next), FaviconStep::Skip);
-        assert_eq!(limit.flush(flushed + FAVICON_INTERVAL), None);
+        assert_eq!(limit.flush(flushed + FAVICON_INTERVAL), FaviconStep::Skip);
 
         // Once the interval has passed, a new icon goes at once.
         assert_eq!(
             offer(&mut limit, "f", flushed + FAVICON_INTERVAL * 2),
             send("f")
         );
+    }
+
+    #[test]
+    fn favicon_timer_after_reset_waits_for_the_new_pages_interval() {
+        let start = Instant::now();
+        let mut limit = FaviconLimit::default();
+        assert_eq!(offer(&mut limit, "a", start), send("a"));
+        assert_eq!(
+            offer(&mut limit, "b", start + Duration::from_millis(100)),
+            FaviconStep::Later(Duration::from_millis(200))
+        );
+
+        limit.reset();
+        let sent = start + Duration::from_millis(250);
+        assert_eq!(offer(&mut limit, "a", sent), send("a"));
+        assert_eq!(
+            offer(&mut limit, "c", sent + Duration::from_millis(10)),
+            FaviconStep::Skip
+        );
+        assert_eq!(
+            limit.flush(start + FAVICON_INTERVAL),
+            FaviconStep::Later(Duration::from_millis(250))
+        );
+        // The existing timer still owns the latest icon in the new page's burst.
+        assert_eq!(
+            offer(&mut limit, "d", sent + Duration::from_millis(100)),
+            FaviconStep::Skip
+        );
+        assert_eq!(limit.flush(sent + FAVICON_INTERVAL), send("d"));
+        assert_eq!(limit.flush(sent + FAVICON_INTERVAL), FaviconStep::Skip);
+    }
+
+    #[test]
+    fn delayed_favicon_timer_waits_after_an_immediate_send() {
+        let start = Instant::now();
+        let mut limit = FaviconLimit::default();
+        assert_eq!(offer(&mut limit, "a", start), send("a"));
+        assert_eq!(
+            offer(&mut limit, "b", start + Duration::from_millis(100)),
+            FaviconStep::Later(Duration::from_millis(200))
+        );
+
+        let sent = start + Duration::from_millis(400);
+        assert_eq!(offer(&mut limit, "c", sent), send("c"));
+        assert_eq!(
+            offer(&mut limit, "d", sent + Duration::from_millis(1)),
+            FaviconStep::Skip
+        );
+        assert_eq!(
+            limit.flush(sent + Duration::from_millis(2)),
+            FaviconStep::Later(Duration::from_millis(298))
+        );
+        assert_eq!(
+            limit.flush(sent + FAVICON_INTERVAL - Duration::from_millis(1)),
+            FaviconStep::Later(Duration::from_millis(1))
+        );
+        assert_eq!(limit.flush(sent + FAVICON_INTERVAL), send("d"));
+        assert_eq!(limit.flush(sent + FAVICON_INTERVAL), FaviconStep::Skip);
     }
 }
