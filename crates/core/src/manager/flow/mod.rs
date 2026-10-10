@@ -547,7 +547,9 @@ impl Provider for FakeCli {
                 brigadier_providers::model::Origin::Resume { native_id } => native_id.clone(),
                 _ => uuid::Uuid::new_v4().to_string(),
             };
-            if self.behavior.cleanup {
+            // Like Codex's adapter: an ephemeral thread is never saved, so nothing is recorded.
+            let saved = !(spec.ephemeral && self.kind == ProviderKind::Codex);
+            if self.behavior.cleanup && saved {
                 let home = self
                     .account
                     .as_ref()
@@ -1385,6 +1387,11 @@ impl Flow {
             assert!(tokio::time::Instant::now() < deadline, "accounts checked");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+
+    /// Every session the CLIs were started with, in order.
+    pub fn specs(&self) -> Vec<(ProviderKind, SessionSpec)> {
+        self.specs.lock().unwrap().clone()
     }
 
     /// The sessions the thread's CLIs were started with, in order.

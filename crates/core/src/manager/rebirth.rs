@@ -319,6 +319,7 @@ impl SessionManager {
             effort: choice.effort.clone(),
             fast: choice.fast == Some(true),
             origin: Origin::Fork { native_id },
+            ephemeral: true,
             access: Access::ReadOnly,
             append_system_prompt: Some(prompt),
             mcp_servers: Vec::new(),

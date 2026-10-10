@@ -731,6 +731,7 @@ impl SessionManager {
             effort,
             fast: false,
             origin: Origin::New,
+            ephemeral: true,
             access: Access::ReadOnly,
             append_system_prompt: Some(brigadier_review::REVIEW_ROLE.to_owned()),
             mcp_servers: Vec::new(),

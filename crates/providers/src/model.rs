@@ -919,6 +919,11 @@ pub struct SessionSpec {
     /// Runs on the model's fast service tier, where it has one (see [`ModelInfo::fast`]).
     pub fast: bool,
     pub origin: Origin,
+    /// A one-shot run that nothing ever resumes, forks or continues (a Brain pass, a commit
+    /// message, a handoff note): a new or forked Codex thread is started ephemeral, never saved,
+    /// so it stays out of the Codex app's lists and leaves nothing to clean up. Such a thread
+    /// can't be resumed once its process ends. Claude ignores it.
+    pub ephemeral: bool,
     pub access: Access,
     /// Appended to the CLI's own system prompt.
     pub append_system_prompt: Option<String>,

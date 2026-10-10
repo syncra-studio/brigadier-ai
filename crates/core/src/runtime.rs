@@ -1456,6 +1456,8 @@ fn spec_for(session: &RawSession, origin: Origin, record_to: Option<PathBuf>) ->
         effort: session.effort.clone(),
         fast: false,
         origin,
+        // The user's own session: they may resume it.
+        ephemeral: false,
         access: session.access.clone(),
         append_system_prompt: None,
         mcp_servers: Vec::new(),

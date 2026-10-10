@@ -1834,6 +1834,7 @@ mod tests {
             effort: None,
             fast: false,
             origin: Origin::New,
+            ephemeral: false,
             access: Access::Full,
             append_system_prompt: None,
             mcp_servers: Vec::new(),

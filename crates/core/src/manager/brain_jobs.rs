@@ -541,6 +541,7 @@ impl SessionManager {
             effort,
             fast: false,
             origin: SessionOrigin::New,
+            ephemeral: true,
             access: Access::Scoped {
                 write_cwd: codex,
                 writable_roots: if codex {

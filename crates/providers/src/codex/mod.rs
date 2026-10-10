@@ -644,6 +644,7 @@ impl Provider for Codex {
 
             let session = Arc::new(CodexSession {
                 thread_id: thread.id.clone(),
+                ephemeral: thread.ephemeral,
                 compacts: version_at_least(&thread.cli_version, COMPACT_SINCE),
                 rpc,
                 shared,
@@ -720,10 +721,7 @@ impl Provider for Codex {
                         .await;
                     match deleted {
                         Ok(_) => {}
-                        // Already gone: never persisted (no turn ran), or deleted before.
-                        Err(Error::Rejected(message))
-                            if message.contains("not found")
-                                || message.contains("no rollout found") => {}
+                        Err(Error::Rejected(message)) if already_gone(&message) => {}
                         Err(err) => return Err(err),
                     }
                 }
@@ -791,8 +789,52 @@ struct Opened {
     notices: Vec<String>,
 }
 
-/// Starts, resumes or forks the session's thread, recording it (and the folder its generated
-/// images would go to, under `images_root`) in the ledger.
+/// The call that opens a session's thread.
+enum Opening {
+    Start(p::ThreadStartParams),
+    Resume(p::ThreadResumeParams),
+    Fork(p::ThreadForkParams),
+}
+
+/// The call that opens `spec`'s thread with the settings in `start`. A one-shot run's new or
+/// forked thread is ephemeral (never saved); a resumed thread was saved.
+fn opening(spec: &SessionSpec, start: p::ThreadStartParams) -> Opening {
+    let ephemeral = spec.ephemeral.then_some(true);
+    match &spec.origin {
+        Origin::New => Opening::Start(p::ThreadStartParams { ephemeral, ..start }),
+        Origin::Resume { native_id } => Opening::Resume(p::ThreadResumeParams {
+            thread_id: native_id.clone(),
+            cwd: start.cwd,
+            model: start.model,
+            sandbox: start.sandbox,
+            approval_policy: start.approval_policy,
+            approvals_reviewer: start.approvals_reviewer,
+            developer_instructions: start.developer_instructions,
+            config: start.config,
+            exclude_turns: Some(true),
+            service_tier: start.service_tier,
+            ..Default::default()
+        }),
+        // An ephemeral fork needs `excludeTurns`.
+        Origin::Fork { native_id } => Opening::Fork(p::ThreadForkParams {
+            thread_id: native_id.clone(),
+            cwd: start.cwd,
+            model: start.model,
+            sandbox: start.sandbox,
+            approval_policy: start.approval_policy,
+            approvals_reviewer: start.approvals_reviewer,
+            developer_instructions: start.developer_instructions,
+            config: start.config,
+            exclude_turns: Some(true),
+            service_tier: start.service_tier,
+            ephemeral,
+            ..Default::default()
+        }),
+    }
+}
+
+/// Starts, resumes or forks the session's thread, recording it if saved (and the folder its
+/// generated images would go to, under `images_root`) in the ledger.
 async fn open_thread(
     rpc: &Rpc,
     spec: &SessionSpec,
@@ -822,10 +864,6 @@ async fn open_thread(
     } else {
         trusted_projects(rpc, cwd).await?
     };
-    let cwd_text = Some(cwd.display().to_string());
-    let sandbox = thread_sandbox(&spec.access);
-    let approval = Some(approval_policy(&spec.access));
-    let reviewer = Some(reviewer(spec.auto_review));
     let instructions = match &spec.append_system_prompt {
         Some(prompt) if profiled && spec.auto_review => {
             Some(format!("{prompt}\n\n{ADDITIONAL_PERMISSIONS_HINT}"))
@@ -834,85 +872,52 @@ async fn open_thread(
     };
     // Always named: an omitted tier inherits the resumed thread's or the user's config.
     let service_tier = Some(if spec.fast { FAST_TIER } else { STANDARD_TIER }.to_owned());
-    let (thread, model) = match &spec.origin {
-        Origin::New => {
-            let started: Profiled<p::ThreadStartResponse> = rpc
-                .call(
-                    "thread/start",
-                    &p::ThreadStartParams {
-                        cwd: cwd_text,
-                        model: spec.model.clone(),
-                        sandbox,
-                        approval_policy: approval,
-                        approvals_reviewer: reviewer,
-                        developer_instructions: instructions,
-                        config: Some(config),
-                        service_tier: service_tier.clone(),
-                        ..Default::default()
-                    },
-                )
-                .await?;
+    let start = p::ThreadStartParams {
+        cwd: Some(cwd.display().to_string()),
+        model: spec.model.clone(),
+        sandbox: thread_sandbox(&spec.access),
+        approval_policy: Some(approval_policy(&spec.access)),
+        approvals_reviewer: Some(reviewer(spec.auto_review)),
+        developer_instructions: instructions,
+        config: Some(config),
+        service_tier,
+        ..Default::default()
+    };
+    let (thread, model) = match opening(spec, start) {
+        Opening::Start(params) => {
+            let started: Profiled<p::ThreadStartResponse> =
+                rpc.call("thread/start", &params).await?;
             let started = started.checked(profiled)?;
             (started.thread, started.model)
         }
-        Origin::Resume { native_id } => {
+        Opening::Resume(params) => {
             // Brigadier archived it when it last closed the thread.
-            unarchive_thread(rpc, native_id).await?;
-            let resumed: Profiled<p::ThreadResumeResponse> = rpc
-                .call(
-                    "thread/resume",
-                    &p::ThreadResumeParams {
-                        thread_id: native_id.clone(),
-                        cwd: cwd_text,
-                        model: spec.model.clone(),
-                        sandbox,
-                        approval_policy: approval,
-                        approvals_reviewer: reviewer,
-                        developer_instructions: instructions,
-                        config: Some(config),
-                        exclude_turns: Some(true),
-                        service_tier: service_tier.clone(),
-                        ..Default::default()
-                    },
-                )
-                .await?;
+            unarchive_thread(rpc, &params.thread_id).await?;
+            let resumed: Profiled<p::ThreadResumeResponse> =
+                rpc.call("thread/resume", &params).await?;
             let resumed = resumed.checked(profiled)?;
             (resumed.thread, resumed.model)
         }
-        Origin::Fork { native_id } => {
-            let archived = unarchive_thread(rpc, native_id).await?;
-            let forked: Profiled<p::ThreadForkResponse> = rpc
-                .call(
-                    "thread/fork",
-                    &p::ThreadForkParams {
-                        thread_id: native_id.clone(),
-                        cwd: cwd_text,
-                        model: spec.model.clone(),
-                        sandbox,
-                        approval_policy: approval,
-                        approvals_reviewer: reviewer,
-                        developer_instructions: instructions,
-                        config: Some(config),
-                        exclude_turns: Some(true),
-                        service_tier: service_tier.clone(),
-                        ..Default::default()
-                    },
-                )
-                .await?;
+        Opening::Fork(params) => {
+            let archived = unarchive_thread(rpc, &params.thread_id).await?;
+            let forked: Profiled<p::ThreadForkResponse> = rpc.call("thread/fork", &params).await?;
             if archived {
-                archive_thread(rpc, native_id).await?;
+                archive_thread(rpc, &params.thread_id).await?;
             }
             let forked = forked.checked(profiled)?;
             (forked.thread, forked.model)
         }
     };
-    ledger
-        .record(Artifact::CodexThread {
-            thread_id: thread.id.clone(),
-            home,
-            cwd: Some(cwd.display().to_string()),
-        })
-        .await?;
+    // An ephemeral thread leaves nothing on disk: nothing to archive or delete later.
+    if !thread.ephemeral {
+        ledger
+            .record(Artifact::CodexThread {
+                thread_id: thread.id.clone(),
+                home,
+                cwd: Some(cwd.display().to_string()),
+            })
+            .await?;
+    }
     if let Some(root) = images_root {
         ledger
             .record(Artifact::CodexGeneratedImages {
@@ -944,6 +949,14 @@ async fn open_thread(
     })
 }
 
+/// Whether `thread/delete` refused because the thread is already gone: never saved (no turn
+/// ran, or an ephemeral thread), or deleted before. Nothing to do then.
+fn already_gone(message: &str) -> bool {
+    message.contains("not found")
+        || message.contains("no rollout found")
+        || message.contains("not persisted")
+}
+
 /// The trust entry Codex writes, exactly.
 fn trusted() -> Value {
     json!({ "trust_level": "trusted" })
@@ -952,8 +965,8 @@ fn trusted() -> Value {
 /// The `projects` table of the user's own `config.toml`, by project path.
 /// Archives a thread Brigadier is done with for now, so the user's own Codex apps don't list
 /// it among their threads (their Recents). The app-server offers no unlisted threads
-/// that can still be resumed: every thread it starts is recorded as a `vscode` one. A thread
-/// with no turn yet has nothing to archive.
+/// that can still be resumed: every thread it starts is recorded as a `vscode` one (a one-shot
+/// run's is ephemeral instead, never saved). A thread with no turn yet has nothing to archive.
 async fn archive_thread(rpc: &Rpc, thread_id: &str) -> Result<()> {
     let archived: Result<Value> = rpc
         .call(
@@ -1691,6 +1704,8 @@ struct Shared {
 
 pub struct CodexSession {
     thread_id: String,
+    /// Never saved ([`SessionSpec::ephemeral`]): there is nothing to archive.
+    ephemeral: bool,
     /// The app-server serves `thread/compact/start`.
     compacts: bool,
     rpc: Arc<Rpc>,
@@ -1900,7 +1915,7 @@ impl ProviderSession for CodexSession {
 
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
-            if self.rpc.process.is_running() {
+            if self.rpc.process.is_running() && !self.ephemeral {
                 match tokio::time::timeout(EXIT_GRACE, archive_thread(&self.rpc, &self.thread_id))
                     .await
                 {
@@ -2107,6 +2122,7 @@ mod tests {
             effort: None,
             fast: false,
             origin: Origin::New,
+            ephemeral: false,
             access: Access::Full,
             append_system_prompt: None,
             mcp_servers: Vec::new(),
@@ -2129,6 +2145,65 @@ mod tests {
     fn without_sub_agents(args: &[String]) -> bool {
         args.windows(2)
             .any(|pair| pair[0] == "-c" && pair[1] == NO_SUB_AGENTS)
+    }
+
+    /// What `spec`'s opening call sends: its method and its `ephemeral` field.
+    fn opened(spec: &SessionSpec) -> (&'static str, Option<Value>) {
+        let start = p::ThreadStartParams {
+            model: spec.model.clone(),
+            ..Default::default()
+        };
+        let (method, params) = match opening(spec, start) {
+            Opening::Start(params) => ("thread/start", serde_json::to_value(params)),
+            Opening::Resume(params) => ("thread/resume", serde_json::to_value(params)),
+            Opening::Fork(params) => ("thread/fork", serde_json::to_value(params)),
+        };
+        let params = params.unwrap();
+        assert_eq!(params["model"], "gpt-6.1-sol");
+        (method, params.get("ephemeral").cloned())
+    }
+
+    #[test]
+    fn only_a_one_shot_runs_new_or_forked_thread_is_ephemeral() {
+        let with = |origin: Origin, ephemeral: bool| SessionSpec {
+            origin,
+            ephemeral,
+            ..spec(ToolSet::None, None)
+        };
+        let fork = || Origin::Fork {
+            native_id: "t1".into(),
+        };
+        let resume = || Origin::Resume {
+            native_id: "t1".into(),
+        };
+        assert_eq!(
+            opened(&with(Origin::New, true)),
+            ("thread/start", Some(json!(true)))
+        );
+        assert_eq!(
+            opened(&with(fork(), true)),
+            ("thread/fork", Some(json!(true)))
+        );
+        // Resumable threads are opened as before: saved.
+        assert_eq!(opened(&with(Origin::New, false)), ("thread/start", None));
+        assert_eq!(opened(&with(fork(), false)), ("thread/fork", None));
+        // A resumed thread was saved; resume takes no such field.
+        assert_eq!(opened(&with(resume(), true)), ("thread/resume", None));
+        assert_eq!(opened(&with(resume(), false)), ("thread/resume", None));
+    }
+
+    #[test]
+    fn deleting_a_thread_that_was_never_saved_is_nothing_to_do() {
+        // What codex-cli 0.162.1 answers `thread/delete` for an ephemeral thread, while its
+        // app-server runs and after.
+        assert!(already_gone(
+            "thread is not persisted and cannot be deleted: 01a127ee-2c00-7dd0-b6d7-2834a44cb8fa"
+        ));
+        assert!(already_gone(
+            "no rollout found for thread id 01a127ed-edbb-7160-85ba-837c49f64a14"
+        ));
+        assert!(already_gone("thread not found: 01a1"));
+        assert!(!already_gone("permission denied"));
     }
 
     #[test]

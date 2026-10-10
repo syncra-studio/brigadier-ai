@@ -246,6 +246,7 @@ impl SessionManager {
             effort,
             fast: false,
             origin: Origin::New,
+            ephemeral: true,
             access: Access::ReadOnly,
             append_system_prompt: Some(WRITER_PROMPT.to_owned()),
             mcp_servers: Vec::new(),

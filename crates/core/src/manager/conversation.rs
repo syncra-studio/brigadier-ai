@@ -1900,6 +1900,8 @@ impl SessionManager {
                 },
                 None => Origin::New,
             },
+            // Resumed on the next message, rebirth or restart.
+            ephemeral: false,
             // A Chat only searches the web.
             access: launch
                 .as_ref()

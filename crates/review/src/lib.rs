@@ -2,8 +2,8 @@
 //! read-only by the vendor other than its author's, in a checkout of its own. Nothing waits
 //! for one; the session manager hands the findings to whoever asked.
 //!
-//! - **Codex** runs `codex exec review --base <base>` (an outline: `codex exec` with the review
-//!   asked for on stdin), read-only, at effort high. `--json` prints its events, which carry the
+//! - **Codex** runs `codex exec review --base <base>` (an outline: `codex exec --ephemeral`, never
+//!   saved, with the review asked for on stdin), read-only, at effort high. `--json` prints its events, which carry the
 //!   turn's token use; `-o` keeps its final message, the review ([`run_codex`]). A range review
 //!   runs in a child thread whose use `--json` reports as zero (codex-cli 0.160.1), so it is read
 //!   from that thread's rollout instead ([`child_threads`]). A review of a
@@ -94,6 +94,9 @@ pub fn codex_args(subject: Subject<'_>, model: Option<&str>, output: &Path) -> V
     if let Subject::Code { .. } = subject {
         args.push("review".into());
     }
+    if ephemeral(subject) {
+        args.push("--ephemeral".into());
+    }
     args.extend([
         "-c".into(),
         format!("model_reasoning_effort=\"{EFFORT}\""),
@@ -113,6 +116,13 @@ pub fn codex_args(subject: Subject<'_>, model: Option<&str>, output: &Path) -> V
         Subject::Plan { .. } => args.push("-".into()),
     }
     args
+}
+
+/// Whether a review's `codex exec` thread is never saved. A plan review's is: nothing resumes
+/// it and its events report what it used. A range review runs in a child thread whose use only
+/// its saved rollout holds ([`child_threads`]), so it is saved, and deleted with the review.
+fn ephemeral(subject: Subject<'_>) -> bool {
+    matches!(subject, Subject::Plan { .. })
 }
 
 /// How many findings a review lists: its lines that start (after a list marker) with a
@@ -324,7 +334,10 @@ async fn run_codex_review(
                 let known = events.thread_id.is_some();
                 events.read(&line);
                 // Its own thread goes with the review's other leftovers as soon as it exists.
-                if !known && let Some(thread) = &events.thread_id {
+                if !known
+                    && !ephemeral(run.subject)
+                    && let Some(thread) = &events.thread_id
+                {
                     record(thread).await;
                 }
             }
@@ -613,6 +626,17 @@ mod tests {
         ledger: Arc<Recorded>,
         stop: CancellationToken,
     ) -> CodexReview {
+        review_of(dir, env, Subject::Code { base: "HEAD~1" }, ledger, stop).await
+    }
+
+    #[cfg(unix)]
+    async fn review_of(
+        dir: &Path,
+        env: &CliEnv,
+        subject: Subject<'_>,
+        ledger: Arc<Recorded>,
+        stop: CancellationToken,
+    ) -> CodexReview {
         let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
             data_dir: Some(dir.join("data")),
         })
@@ -623,7 +647,7 @@ mod tests {
             cwd: dir,
             output: &dir.join("review.md"),
             model: None,
-            subject: Subject::Code { base: "HEAD~1" },
+            subject,
             ledger,
             time: Duration::from_secs(60),
             stop,
@@ -698,6 +722,36 @@ exit 1"#
                 reasoning_tokens: 0,
                 cost_usd: None,
             })
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_plan_review_runs_ephemeral_and_leaves_no_thread_to_clean_up() {
+        let (dir, env) = fake_codex(
+            "plan",
+            &format!(
+                r#"case " $* " in *" --ephemeral "*) ;; *) echo "saved" >&2; exit 1;; esac
+cat >/dev/null
+{STARTED}
+echo '{{"type":"item.completed","item":{{"type":"agent_message","text":"No findings."}}}}'
+echo '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":5,"reasoning_output_tokens":0}}}}'"#
+            ),
+        );
+        let ledger = Arc::new(Recorded::default());
+        let plan = Subject::Plan {
+            brief: "Add a flag.",
+            outline: "1. Parse it.",
+        };
+        let ended = review_of(&dir, &env, plan, ledger.clone(), CancellationToken::new()).await;
+        assert_eq!(ended.outcome.map(|review| review.findings), Ok(0));
+        assert!(
+            !ledger
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|artifact| matches!(artifact, Artifact::CodexThread { .. }))
         );
     }
 
@@ -931,6 +985,9 @@ exit 1"#
         );
         assert_eq!(plan.first().map(String::as_str), Some("exec"));
         assert!(!plan.iter().any(|arg| arg == "review" || arg == "--base"));
+        // A plan review is one-shot and never saved; a range review's child holds its use.
+        assert!(plan.iter().any(|arg| arg == "--ephemeral"));
+        assert!(!code.iter().any(|arg| arg == "--ephemeral"));
         assert_eq!(plan.last().map(String::as_str), Some("-"));
     }
 

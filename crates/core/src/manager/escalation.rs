@@ -132,6 +132,7 @@ impl SessionManager {
             effort: Some(REVIEWER_EFFORT.into()),
             fast: false,
             origin: Origin::New,
+            ephemeral: true,
             access: Access::ReadOnly,
             append_system_prompt: Some(ROLE.into()),
             mcp_servers: Vec::new(),

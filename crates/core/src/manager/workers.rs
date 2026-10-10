@@ -1468,6 +1468,8 @@ impl SessionManager {
             effort: task.route.choice.effort.clone(),
             fast: false,
             origin,
+            // Resumed for follow-ups, fixes and retries.
+            ephemeral: false,
             access: access.clone(),
             append_system_prompt: Some(prompt),
             mcp_servers,
