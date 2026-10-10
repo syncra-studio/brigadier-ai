@@ -681,6 +681,7 @@ const AnswerActions: FC<{
   const now = useNow(60_000);
   return (
     <ActionBarPrimitive.Root
+      data-slot="answer-actions"
       autohide="never"
       className={cn(
         // 26px buttons 2px apart, their 16px icons at half white.

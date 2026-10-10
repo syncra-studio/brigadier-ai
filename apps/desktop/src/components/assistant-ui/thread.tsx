@@ -615,7 +615,8 @@ const UserMessage: FC = () => {
       <div className="aui-user-message-content-wrapper flex max-w-7/10 min-w-0 flex-col items-end gap-y-1">
         <UserAttachments />
         <UserMessageText />
-        <div className="aui-user-action-bar-wrapper peer-empty:hidden opacity-0 transition-opacity group-hover/user:opacity-100 group-focus-within/user:opacity-100">
+        {/* Flush under the bubble: with the turn's gap, its work header starts 48px below the bubble. */}
+        <div className="aui-user-action-bar-wrapper peer-empty:hidden -mt-1 opacity-0 transition-opacity group-hover/user:opacity-100 group-focus-within/user:opacity-100">
           <UserActionBar />
         </div>
       </div>
