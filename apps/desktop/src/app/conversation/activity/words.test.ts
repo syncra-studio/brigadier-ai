@@ -51,7 +51,7 @@ test("a tool keeps its words across provider namespaces and never shows them", (
 });
 
 test("Brigadier's plumbing is never a row", () => {
-  for (const name of ["read_report", "read_artifact", "finish_session", "note_for_user", "remember", "delegate_task", "message_worker", "answer_worker", "stop_worker", "land_phase", "mcp__brigadier__submit_report", "ToolSearch"]) {
+  for (const name of ["read_report", "read_artifact", "finish_session", "note_for_user", "remember", "delegate_task", "message_worker", "answer_worker", "stop_worker", "land_phase", "ask_user", "mcp__brigadier__propose_merge", "mcp__brigadier__submit_report", "ToolSearch"]) {
     assert.ok(isPlumbing(name), name);
   }
   for (const name of ["Read", "run", "query_brain", "review_code"]) assert.ok(!isPlumbing(name), name);

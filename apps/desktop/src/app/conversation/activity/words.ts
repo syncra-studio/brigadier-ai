@@ -61,6 +61,7 @@ const PLUMBING = new Set([
   "stop_worker",
   "start_verifier",
   "ask_user",
+  "propose_merge",
   "submit_report",
 ]);
 
