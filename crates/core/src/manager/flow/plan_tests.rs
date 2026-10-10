@@ -462,3 +462,164 @@ async fn in_plan_mode_the_users_yes_to_the_plan_starts_the_lead_that_outlined_it
     assert!(!plan_mode(&flow));
     flow.stop().await;
 }
+
+/// In plan mode a lead that outlined waits on the thread's plan document. Its phase and
+/// outline move into each proposed revision, the plan card holds nothing up while it waits,
+/// and the user's yes to a revision sent back with changes starts the lead with the plan they
+/// approved, which wins over its outline.
+#[tokio::test]
+async fn a_revised_plan_carries_its_leads_outline_and_reaches_the_lead() {
+    const REVISED: &str = "# Add one.txt and two.txt\nTwo files.\n\n## Changes\n- `one.txt`: create it.\n- `two.txt`: create it too.";
+    let worker_inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = worker_inputs.clone();
+    let flow = Flow::start(
+        "plan-mode-revised",
+        Options {
+            plan_mode: true,
+            permission: PermissionLevel::AskForApproval,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    let body = if turn.input.contains("[outline task-1") {
+                        Some("# Add one.txt\nOne file.\n\n## Changes\n- `one.txt`: create it.")
+                    } else if turn.input.contains("What they want changed") {
+                        Some(REVISED)
+                    } else {
+                        None
+                    };
+                    if let Some(body) = body {
+                        let title = body.lines().next().unwrap().trim_start_matches("# ");
+                        let proposed = turn
+                            .call("propose_plan", json!({ "title": title, "body": body }))
+                            .await;
+                        assert!(!proposed.is_error, "{}", proposed.text);
+                        return Reply::text("[quiet]");
+                    }
+                    if turn.input.contains("[report task-1") {
+                        let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        return Reply::text("Added both files.");
+                    }
+                    if turn.input.contains("[decision]") {
+                        return Reply::text("[quiet]");
+                    }
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "high", "title": "Add the file", "kind": "implement",
+                                   "spec": "Create one.txt.", "provider": "claude"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                log.lock().unwrap().push(turn.input.clone());
+                if turn.earlier == 0 {
+                    let reply = turn
+                        .call("submit_outline", json!({"outline": "1. Create one.txt"}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Waiting for the go-ahead.");
+                }
+                turn.write("one.txt", "one\n");
+                turn.write("two.txt", "two\n");
+                turn.git(&["add", "one.txt", "two.txt"]);
+                turn.git(&["commit", "-q", "-m", "Add one.txt and two.txt"]);
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "Added both.", "changes": ["one.txt", "two.txt"]}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("Reported.")
+            }
+        }),
+    )
+    .await;
+    let proposed = |board: &Board| {
+        board
+            .plans
+            .values()
+            .find(|plan| plan.state == PlanState::Proposed)
+            .cloned()
+    };
+    // The lead's outline is the proposed plan's phase, and its card holds nothing up.
+    let lead_of = |plan: &Plan, board: &Board| {
+        let step = &plan.steps[0];
+        assert_eq!(
+            step.task_id.as_ref(),
+            Some(&Flow::task(board, 1).id),
+            "{plan:#?}"
+        );
+        assert_eq!(
+            step.outline.as_deref(),
+            Some("1. Create one.txt"),
+            "{plan:#?}"
+        );
+    };
+    flow.say("Add one.txt.").await;
+    flow.until("the plan card", |board| proposed(board).is_some())
+        .await;
+    let board = flow.settled().await;
+    let first = proposed(&board).unwrap();
+    lead_of(&first, &board);
+    assert_eq!(board.latest_request().unwrap().state, RequestState::Done);
+    assert!(
+        board
+            .plans
+            .values()
+            .all(|plan| plan.id == first.id || plan.state == PlanState::Superseded),
+        "the plan the lead outlined under gives way: {:#?}",
+        board.plans
+    );
+
+    flow.manager
+        .decide_plan(
+            flow.conversation.clone(),
+            first.id.clone(),
+            false,
+            Some("Add two.txt too.".into()),
+        )
+        .await
+        .unwrap();
+    flow.until("the revised plan", |board| {
+        proposed(board).is_some_and(|plan| plan.id != first.id)
+    })
+    .await;
+    let board = flow.settled().await;
+    let revised = proposed(&board).unwrap();
+    lead_of(&revised, &board);
+    assert_eq!(board.latest_request().unwrap().state, RequestState::Done);
+    assert_eq!(
+        worker_inputs.lock().unwrap().len(),
+        1,
+        "the lead still waits"
+    );
+
+    flow.manager
+        .decide_plan(flow.conversation.clone(), revised.id.clone(), true, None)
+        .await
+        .unwrap();
+    let board = flow
+        .until("the lead lands", |board| {
+            board
+                .tasks
+                .values()
+                .any(|task| task.state == TaskState::Landed)
+        })
+        .await;
+    let go_ahead = worker_inputs.lock().unwrap()[1].clone();
+    assert!(
+        go_ahead.contains("Go ahead") && go_ahead.contains("`two.txt`: create it too."),
+        "{go_ahead}"
+    );
+    // The approved plan follows its lead's phase, with the outline kept for its checks.
+    let approved = &board.plans[&revised.id];
+    lead_of(approved, &board);
+    assert!(board.approvals.is_empty(), "{:#?}", board.approvals);
+    flow.stop().await;
+}

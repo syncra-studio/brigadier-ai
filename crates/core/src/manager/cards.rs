@@ -594,8 +594,13 @@ impl SessionManager {
                 .cloned()
                 .collect();
             waiting.sort_by_key(|task| task.number);
+            // The plan the user said yes to may differ from the outline: revised on their
+            // changes, or with checks and assumptions the outline left out. It wins.
+            let approved = plan.body.as_deref().map(|body| {
+                format!("The plan the user approved, which wins over your outline:\n{body}")
+            });
             for lead in waiting {
-                match self.go_ahead(&lead, None).await {
+                match self.go_ahead(&lead, approved.clone()).await {
                     Ok(()) => started.push(format!("task-{}", lead.number)),
                     Err(err) => {
                         tracing::warn!(task = %lead.id, error = %err, "could not start an outline");
