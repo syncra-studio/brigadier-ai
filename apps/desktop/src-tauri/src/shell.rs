@@ -217,6 +217,7 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
         ("new-side-chat", "New side chat", "Alt+CmdOrCtrl+S"),
         ("new-file", "New file", "Alt+CmdOrCtrl+N"),
         ("save", "Save file", "CmdOrCtrl+S"),
+        ("save-as", "Save file as…", "CmdOrCtrl+Shift+S"),
         ("files", "Find file", "CmdOrCtrl+P"),
         ("review", "Review", "Ctrl+Shift+G"),
         ("cycle-next", "Next session tab", "Ctrl+Tab"),

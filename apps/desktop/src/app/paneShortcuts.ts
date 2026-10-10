@@ -16,6 +16,7 @@ export const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?
   "new-side-chat": { code: "KeyS", alt: true },
   "new-file": { code: "KeyN", alt: true },
   save: { code: "KeyS" },
+  "save-as": { code: "KeyS", shift: true },
   files: { code: "KeyP" },
   review: { code: "KeyG", control: true, shift: true },
   "cycle-next": { code: "Tab", control: true },

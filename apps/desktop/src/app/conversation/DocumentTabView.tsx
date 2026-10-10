@@ -13,13 +13,15 @@ export function DocumentTabView({ conversationId, tab, active }: { conversationI
   const saving = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const save = async () => {
+  const save = async (choose = false) => {
     if (saving.current) return;
     saving.current = true; setBusy(true); setError(null);
     try {
       flushDocument(tab.id);
       const written = documentText(tab.id);
-      const path = await saveDocument(tab.id, written, root, tab.name);
+      // Save As starts where the document was last saved.
+      const folder = choose && tab.savedPath ? tab.savedPath.replace(/[\\/][^\\/]*$/, "") || root : root;
+      const path = await saveDocument(tab.id, written, folder, tab.name, choose);
       if (path) {
         noteDocumentSave(tab.id, written);
         changeSessionTab(conversationId, tab.id, (current) => current.kind === "document" ? {
@@ -33,8 +35,8 @@ export function DocumentTabView({ conversationId, tab, active }: { conversationI
   useEffect(() => {
     if (!active) return;
     const key = (event: KeyboardEvent) => {
-      if ((mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) && !event.shiftKey && !event.altKey && event.code === "KeyS") {
-        event.preventDefault(); void save();
+      if ((mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) && !event.altKey && event.code === "KeyS") {
+        event.preventDefault(); void save(event.shiftKey);
       }
     };
     window.addEventListener("keydown", key);
@@ -43,6 +45,7 @@ export function DocumentTabView({ conversationId, tab, active }: { conversationI
   return <div data-slot="document-tab" className="flex min-h-0 flex-1 flex-col">
     <header className="border-border flex h-control-lg shrink-0 items-center gap-2 border-b px-4">
       <span className="min-w-0 flex-1 truncate text-sm">{tab.savedPath ?? tab.name}</span>
+      {tab.savedPath && <Button size="sm" variant="ghost" disabled={busy} onClick={() => void save(true)}>Save As…</Button>}
       <Button size="sm" variant="ghost" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</Button>
     </header>
     {error && <p role="alert" className="text-destructive px-4 py-2 text-sm">{error}</p>}

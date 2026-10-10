@@ -80,10 +80,13 @@ pub async fn save_document(
     text: String,
     directory: Option<String>,
     name: String,
+    choose: bool,
 ) -> Result<Option<String>, String> {
     // Serialize dialogs and writes, including repeated Cmd+S while a dialog is open.
     let mut grants = documents.0.lock().await;
-    let path = if let Some(grant) = grants.get(&id) {
+    // Save As asks for a destination even when one is remembered; the old one stays until
+    // the new one is written.
+    let path = if let Some(grant) = grants.get(&id).filter(|_| !choose) {
         if let Err(error) = grant.check() {
             grants.remove(&id);
             return Err(error);
@@ -117,7 +120,7 @@ pub async fn save_document(
         };
         // Follow a chosen link once; the grant then names its target, so atomic replacement
         // preserves the link. New files still use the exact parent chosen in the dialog.
-        let path = match path.canonicalize() {
+        match path.canonicalize() {
             Ok(target) => target,
             Err(error)
                 if error.kind() == std::io::ErrorKind::NotFound
@@ -126,30 +129,42 @@ pub async fn save_document(
                 path
             }
             Err(error) => return Err(format!("Cannot resolve the selected file: {error}")),
-        };
-        grants.insert(
-            id.clone(),
-            SaveGrant {
-                path: path.clone(),
-                last: std::fs::read(&path).ok(),
-            },
-        );
-        path
+        }
     };
     let destination = path.clone();
     let written = text.as_bytes().to_vec();
-    tauri::async_runtime::spawn_blocking(move || atomic_write(&destination, &text))
+    let outcome = tauri::async_runtime::spawn_blocking(move || atomic_write(&destination, &text))
         .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())?;
+        .map_err(std::io::Error::other)
+        .and_then(|result| result);
+    remember(&mut grants, id, &path, outcome, written)?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+/// Only a written destination is remembered. A failed write forgets the document's
+/// destination, so the next save asks for one instead of retrying it.
+fn remember(
+    grants: &mut HashMap<String, SaveGrant>,
+    id: String,
+    path: &Path,
+    outcome: std::io::Result<()>,
+    written: Vec<u8>,
+) -> Result<(), String> {
+    if let Err(error) = outcome {
+        grants.remove(&id);
+        return Err(format!(
+            "Cannot save to {}: {error}. Your draft is unchanged; save again to choose another location.",
+            path.display()
+        ));
+    }
     grants.insert(
         id,
         SaveGrant {
-            path: path.clone(),
+            path: path.to_path_buf(),
             last: Some(written),
         },
     );
-    Ok(Some(path.to_string_lossy().into_owned()))
+    Ok(())
 }
 
 #[tauri::command]
@@ -179,6 +194,28 @@ mod tests {
             "original"
         );
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_write_forgets_the_destination() {
+        let root = std::env::temp_dir().join(format!("document-failed-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("directory")).unwrap();
+        let good = root.join("notes.txt");
+        let bad = root.join("directory");
+        let mut grants = HashMap::new();
+        remember(&mut grants, "doc".into(), &good, Ok(()), b"saved".to_vec()).unwrap();
+        assert_eq!(grants["doc"].path, good);
+        let error = remember(
+            &mut grants,
+            "doc".into(),
+            &bad,
+            atomic_write(&bad, "edited"),
+            b"edited".to_vec(),
+        )
+        .unwrap_err();
+        assert!(error.contains("choose another location"));
+        assert!(!grants.contains_key("doc"));
         std::fs::remove_dir_all(root).unwrap();
     }
 
