@@ -98,6 +98,8 @@ export type PendingMessage = {
   text: string;
   attachments: AttachmentRef[];
   createdAtMs: number;
+  /** Queue items already seen before this send could be admitted. */
+  queuedIds?: readonly string[];
 };
 
 export { shownIdOf, storedIdOf } from "@/state/shownIds";
@@ -479,6 +481,34 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
         conversations: { ...slice.conversations, [event.id]: next },
       };
     }
+    case "queueChanged": {
+      let pending = slice.pending;
+      for (const item of event.queue.items) {
+        const echo = pending.findIndex(
+          (entry) =>
+            entry.conversationId === event.conversationId &&
+            !entry.queuedIds?.includes(item.id) &&
+            entry.text === item.text &&
+            entry.attachments.length === item.attachments.length &&
+            entry.attachments.every((attachment, index) => {
+              const queued = item.attachments[index];
+              return attachment.id === queued?.id &&
+                attachment.inline === queued.inline && attachment.pasted === queued.pasted;
+            }),
+        );
+        if (echo !== -1) pending = pending.filter((_, index) => index !== echo);
+      }
+      // Replayed queue snapshots must not consume another identical send's echo.
+      const queuedIds = event.queue.items.map((item) => item.id);
+      return {
+        ...slice,
+        pending: pending.map((entry) =>
+          entry.conversationId === event.conversationId
+            ? { ...entry, queuedIds: [...new Set([...(entry.queuedIds ?? []), ...queuedIds])] }
+            : entry,
+        ),
+      };
+    }
     case "messageAppended": {
       // The store assigns a message's position: its sequence in the conversation stream.
       const message = { ...event.message, seq: streamSeq };
@@ -592,7 +622,6 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "threadLooked":
     case "previewUpdated":
     case "overnightUpdated":
-    case "queueChanged":
     case "workerEvent":
     case "orchestratorLogged":
     // A Chat's Memory chips live on its board; Brain jobs in the Inspector's Brain tab.

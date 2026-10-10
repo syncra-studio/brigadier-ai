@@ -443,6 +443,7 @@ export async function send(
           text: outgoing.text,
           attachments: outgoing.attachments,
           createdAtMs: Date.now(),
+          queuedIds: queue?.items.map((item) => item.id) ?? [],
         },
       ],
     }));
@@ -464,6 +465,14 @@ export async function send(
         items: mergeMessages(thread.items, [outcome.message]),
       }));
     } else {
+      // Reconcile before publishing the rail item, including when the response beats its event.
+      useApp.setState((state) => ({
+        pending: state.pending
+          .filter((entry) => entry.localId !== localId)
+          .map((entry) => entry.conversationId === conversationId
+            ? { ...entry, queuedIds: [...new Set([...(entry.queuedIds ?? []), outcome.item.id])] }
+            : entry),
+      }));
       // Shown before its queue event arrives. If the queue changed meanwhile, the events are
       // newer than this answer (the item may already be sent or deleted) and bring it anyway.
       updateBoard(conversationId, (current) => {
