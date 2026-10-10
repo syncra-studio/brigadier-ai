@@ -3,7 +3,7 @@ import {
   MagnifyingGlassSearch,
   XCircleFilled,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   searchSettings,
@@ -14,7 +14,6 @@ import {
 import { navRow, NavHeader, NavList, NavSection } from "@/app/sidebar/nav";
 import { cn } from "@/lib/utils";
 import { closeSettings, openSettings } from "@/state/actions";
-import { readComputerAccess, useComputerAccess } from "@/state/computerAccess";
 import { useApp } from "@/state/store";
 
 /** How many frames a result waits for its page (which may load lazily) to show the setting. */
@@ -56,9 +55,6 @@ export function SettingsNav() {
   const [query, setQuery] = useState("");
   // The result Enter opens; the arrow keys move it.
   const [active, setActive] = useState(0);
-  // The Computer use page shows only where the system has it; reading that re-renders this.
-  useComputerAccess();
-  useEffect(readComputerAccess, []);
   const pages = shownSettingsPages();
   const results = query.trim() ? searchSettings(query) : null;
 

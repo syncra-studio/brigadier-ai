@@ -2,10 +2,11 @@ import { useEffect, useSyncExternalStore } from "react";
 
 import type { ComputerAccess, ComputerGrant } from "@/ipc/generated";
 import { request } from "@/ipc/client";
+import { useApp } from "@/state/store";
 
 /*
- * Computer use's system permissions, as last read. Settings shows its page only where the
- * system has computer use, so the navigation and the page share this.
+ * Computer use's system permissions, as last read. Only the helper knows them, so a read starts
+ * it: only what is about computer use reads them (its Settings page, a session's permission row).
  */
 
 let access: ComputerAccess | null = null;
@@ -26,9 +27,13 @@ export function useComputerAccess(): ComputerAccess | null {
   return useSyncExternalStore(subscribe, () => access);
 }
 
-/** Whether this system has computer use, as last read. */
+/**
+ * Whether this system has computer use (macOS), from the app's own info: Settings lists its page
+ * without a read, so showing Settings (the launch smoke check opens its Inspector) never starts
+ * the helper.
+ */
 export function computerUseAvailable(): boolean {
-  return access?.available === true;
+  return useApp.getState().info?.platform === "macos";
 }
 
 let reading = false;

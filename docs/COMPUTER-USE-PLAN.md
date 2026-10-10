@@ -595,6 +595,8 @@ background route avoids it. Ruled by the Delegator on 2026-10-09: pop-up picks h
   check (§4.2). It exits when its parent dies, and 10 minutes after the last session ends (not the last request).
 - **One helper per daemon.** The broker starts the bundle with `open -n -g -j -a` (a new instance every time, so
   two data directories never share a helper or its arguments), its socket and token under that data directory.
+  Only computer use starts it: a worker's call, the Computer use page or a session's permission row. Settings
+  lists that page from the platform alone, so opening Settings (or the smoke check's Inspector) starts nothing.
   A helper that crashes is started again on the next call; the call that was running fails with
   `app_not_responding` and is never replayed. Development and tonight's tests use `BRIGADIER_COMPUTER_HELPER=<binary>`,
   which spawns the binary directly so it inherits the grants of the terminal the dev build came from.

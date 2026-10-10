@@ -148,7 +148,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "Agents",
     component: ComputerUsePage,
     rows: Object.values(COMPUTER_USE_ROWS),
-    // Only where the system has computer use (macOS), once Settings has read that.
+    // Only where the system has computer use (macOS).
     shown: computerUseAvailable,
   },
   {
