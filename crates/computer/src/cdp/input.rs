@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::conn::Conn;
+use super::conn::{CALL_TIMEOUT, Conn};
 use super::keys::{PageKey, mac_command, modifier_bits, page_key};
 use super::page::{Page, WebEl, call_on, content_quad};
 use crate::cancel::CancelToken;
@@ -59,8 +59,12 @@ pub fn drag(
     to: (f64, f64),
     cancel: &CancelToken,
 ) -> CuResult<()> {
-    drag_in(conn, &page.session, from, to, cancel)
+    drag_in(conn, &page.session, from, to, cancel, CALL_TIMEOUT)
 }
+
+/// How long the release waits for its answer once the drag has failed: the browser may be
+/// gone, and the failure has already cost its own wait.
+const RELEASE_AFTER_FAILURE: Duration = Duration::from_millis(500);
 
 fn drag_in(
     conn: &mut Conn,
@@ -68,32 +72,48 @@ fn drag_in(
     from: (f64, f64),
     to: (f64, f64),
     cancel: &CancelToken,
+    timeout: Duration,
 ) -> CuResult<()> {
     let s = Some(session);
-    let ev = |conn: &mut Conn, kind: &str, (x, y): (f64, f64), buttons: u32| {
-        conn.call(
+    let ev = |conn: &mut Conn, kind: &str, (x, y): (f64, f64), buttons: u32, timeout| {
+        conn.call_within(
             s,
             "Input.dispatchMouseEvent",
             json!({"type": kind, "x": x, "y": y, "button": "left", "buttons": buttons, "clickCount": 1}),
+            timeout,
         )
         .map(drop)
     };
-    ev(conn, "mouseMoved", from, 0)?;
-    ev(conn, "mousePressed", from, 1)?;
+    ev(conn, "mouseMoved", from, 0, timeout)?;
+    // A press the browser rejected never landed; any other failure (no answer in time, a lost
+    // connection) may have pressed the button all the same, so it is let go below.
+    let mut result = match ev(conn, "mousePressed", from, 1, timeout) {
+        Err(e) if e.code == ErrorCode::Failed => return Err(e),
+        r => r,
+    };
     let steps = 10;
-    let mut result = Ok(());
     for i in 1..=steps {
-        let t = f64::from(i) / f64::from(steps);
-        let p = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
-        result = cancel.check().and_then(|()| ev(conn, "mouseMoved", p, 1));
         if result.is_err() {
             break;
         }
-        std::thread::sleep(Duration::from_millis(8));
+        let t = f64::from(i) / f64::from(steps);
+        let p = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
+        result = cancel
+            .check()
+            .and_then(|()| ev(conn, "mouseMoved", p, 1, timeout));
+        if result.is_ok() {
+            std::thread::sleep(Duration::from_millis(8));
+        }
     }
     // The button is let go on every path, as a person's hand would be. When the drag already
-    // failed, the release is best effort and the first error is the one reported.
-    let released = ev(conn, "mouseReleased", to, 0);
+    // failed, the release is best effort, waits only briefly, and the first error is the one
+    // reported.
+    let wait = if result.is_ok() {
+        timeout
+    } else {
+        RELEASE_AFTER_FAILURE
+    };
+    let released = ev(conn, "mouseReleased", to, 0, wait);
     result.and(released)
 }
 
@@ -499,15 +519,16 @@ pub fn select_range(conn: &mut Conn, el: &WebEl, start: usize, length: usize) ->
 mod tests {
     use std::net::TcpListener;
     use std::thread;
+    use std::time::Instant;
 
     use tungstenite::Message;
 
     use super::*;
     use crate::cancel::Generations;
 
-    /// A browser endpoint on a local port that answers every command, except that it fails
-    /// mouse moves made with the button down. It returns the commands it was sent.
-    fn browser_failing_held_moves() -> (u16, thread::JoinHandle<Vec<Value>>) {
+    /// A browser endpoint on a local port that answers each command with what `reply` gives
+    /// for it, or not at all for `None`. It returns the commands it was sent.
+    fn browser(reply: fn(&Value) -> Option<Value>) -> (u16, thread::JoinHandle<Vec<Value>>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
@@ -517,37 +538,151 @@ mod tests {
             while let Ok(msg) = ws.read() {
                 let Message::Text(text) = msg else { continue };
                 let cmd: Value = serde_json::from_str(&text).unwrap();
-                let p = &cmd["params"];
-                let reply = if p["type"] == "mouseMoved" && p["buttons"] == 1 {
-                    json!({"id": cmd["id"], "error": {"message": "the target closed"}})
-                } else {
-                    json!({"id": cmd["id"], "result": {}})
-                };
+                let answer = reply(&cmd);
                 sent.push(cmd);
-                ws.send(Message::text(reply.to_string())).unwrap();
+                if let Some(answer) = answer {
+                    ws.send(Message::text(answer.to_string())).unwrap();
+                }
             }
             sent
         });
         (port, server)
     }
 
-    #[test]
-    fn a_drag_whose_move_fails_still_lets_the_button_go_and_reports_the_move() {
-        let (port, server) = browser_failing_held_moves();
-        let mut conn = Conn::connect(port, "/").unwrap();
-        let cancel = Generations::new().token("s", Duration::from_secs(60));
-        let e = drag_in(&mut conn, "page", (10.0, 10.0), (50.0, 50.0), &cancel).unwrap_err();
-        assert_eq!(e.code, ErrorCode::Failed);
-        assert!(e.detail.contains("the target closed"), "{}", e.detail);
+    fn ok(cmd: &Value) -> Value {
+        json!({"id": cmd["id"], "result": {}})
+    }
+
+    fn rejected(cmd: &Value) -> Value {
+        json!({"id": cmd["id"], "error": {"message": "the target closed"}})
+    }
+
+    /// Answers every command, except that it fails mouse moves made with the button down.
+    fn browser_failing_held_moves() -> (u16, thread::JoinHandle<Vec<Value>>) {
+        browser(|cmd| {
+            let p = &cmd["params"];
+            Some(if p["type"] == "mouseMoved" && p["buttons"] == 1 {
+                rejected(cmd)
+            } else {
+                ok(cmd)
+            })
+        })
+    }
+
+    /// The kinds of mouse events the browser was sent, once the connection is closed.
+    fn kinds(conn: Conn, server: thread::JoinHandle<Vec<Value>>) -> Vec<String> {
         drop(conn);
-        let kinds: Vec<String> = server
+        server
             .join()
             .unwrap()
             .iter()
             .map(|c| c["params"]["type"].as_str().unwrap().to_owned())
-            .collect();
+            .collect()
+    }
+
+    fn token() -> CancelToken {
+        Generations::new().token("s", Duration::from_secs(60))
+    }
+
+    #[test]
+    fn a_drag_whose_move_fails_still_lets_the_button_go_and_reports_the_move() {
+        let (port, server) = browser_failing_held_moves();
+        let mut conn = Conn::connect(port, "/").unwrap();
+        let e = drag_in(
+            &mut conn,
+            "page",
+            (10.0, 10.0),
+            (50.0, 50.0),
+            &token(),
+            CALL_TIMEOUT,
+        )
+        .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Failed);
+        assert!(e.detail.contains("the target closed"), "{}", e.detail);
         assert_eq!(
-            kinds,
+            kinds(conn, server),
+            ["mouseMoved", "mousePressed", "mouseMoved", "mouseReleased"]
+        );
+    }
+
+    #[test]
+    fn a_press_that_gets_no_answer_still_lets_the_button_go_and_reports_the_press() {
+        let (port, server) =
+            browser(|cmd| (cmd["params"]["type"] != "mousePressed").then(|| ok(cmd)));
+        let mut conn = Conn::connect(port, "/").unwrap();
+        let e = drag_in(
+            &mut conn,
+            "page",
+            (10.0, 10.0),
+            (50.0, 50.0),
+            &token(),
+            Duration::from_millis(200),
+        )
+        .unwrap_err();
+        assert_eq!(e.code, ErrorCode::AppNotResponding);
+        assert!(
+            e.detail.contains("Input.dispatchMouseEvent"),
+            "{}",
+            e.detail
+        );
+        assert_eq!(
+            kinds(conn, server),
+            ["mouseMoved", "mousePressed", "mouseReleased"]
+        );
+    }
+
+    #[test]
+    fn a_press_the_browser_rejects_sends_no_release() {
+        let (port, server) = browser(|cmd| {
+            Some(if cmd["params"]["type"] == "mousePressed" {
+                rejected(cmd)
+            } else {
+                ok(cmd)
+            })
+        });
+        let mut conn = Conn::connect(port, "/").unwrap();
+        let e = drag_in(
+            &mut conn,
+            "page",
+            (10.0, 10.0),
+            (50.0, 50.0),
+            &token(),
+            CALL_TIMEOUT,
+        )
+        .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Failed);
+        assert!(e.detail.contains("the target closed"), "{}", e.detail);
+        assert_eq!(kinds(conn, server), ["mouseMoved", "mousePressed"]);
+    }
+
+    #[test]
+    fn the_release_after_a_failure_does_not_wait_the_full_call_timeout() {
+        // Held moves fail; the release, the last command, is never answered.
+        let (port, server) = browser(|cmd| {
+            let p = &cmd["params"];
+            match (p["type"].as_str(), p["buttons"].as_u64()) {
+                (Some("mouseReleased"), _) => None,
+                (Some("mouseMoved"), Some(1)) => Some(rejected(cmd)),
+                _ => Some(ok(cmd)),
+            }
+        });
+        let mut conn = Conn::connect(port, "/").unwrap();
+        let started = Instant::now();
+        let e = drag_in(
+            &mut conn,
+            "page",
+            (10.0, 10.0),
+            (50.0, 50.0),
+            &token(),
+            CALL_TIMEOUT,
+        )
+        .unwrap_err();
+        let took = started.elapsed();
+        assert_eq!(e.code, ErrorCode::Failed);
+        assert!(took >= RELEASE_AFTER_FAILURE, "{took:?}");
+        assert!(took < CALL_TIMEOUT / 2, "{took:?}");
+        assert_eq!(
+            kinds(conn, server),
             ["mouseMoved", "mousePressed", "mouseMoved", "mouseReleased"]
         );
     }
