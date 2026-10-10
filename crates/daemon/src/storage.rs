@@ -595,14 +595,10 @@ fn app_caches(roots: &CacheRoots, app: String) -> Option<(CleanItem, DaemonActio
     }
     let mut item = plain_item(
         CleanCategory::Temporary,
-        format!(
-            "Caches of {}",
-            counted(
-                identifiers.len(),
-                "another copy of Brigadier",
-                "other copies of Brigadier"
-            )
-        ),
+        match identifiers.len() {
+            1 => "Caches of another copy of Brigadier".to_owned(),
+            n => format!("Caches of {n} other copies of Brigadier"),
+        },
         entries.first().map(|(bound, _)| bound.path()),
         format!(
             "{} Caches are made again when needed; settings and data stay. ({})",

@@ -317,6 +317,47 @@ async fn codex_threads_of_an_earlier_cleanup_are_counted_when_they_go() {
     flow.stop().await;
 }
 
+/// Leftovers of several gone workers read alike, so they are one row, and it removes them all.
+#[tokio::test]
+async fn alike_leftovers_are_one_row() {
+    let (flow, _, _) = session("disk-alike").await;
+    let ledger = flow.manager.runtime.ledger();
+    for n in 1..=2 {
+        ledger
+            .record(
+                &format!("task:gone-{n}"),
+                Artifact::CodexThread {
+                    thread_id: format!("01a1-gone-{n}"),
+                    home: None,
+                    cwd: None,
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let (items, _) = scan(&flow, context()).await;
+    let rows: Vec<&ScanItem> = items
+        .iter()
+        .filter(|item| item.item.label.contains("workers that are gone"))
+        .collect();
+    assert_eq!(rows.len(), 1, "{:?}", labels(&items));
+    assert_eq!(
+        rows[0].item.label,
+        "Files left by 2 workers that are gone (2 items)"
+    );
+    assert!(rows[0].item.checked && rows[0].item.selectable);
+    let cleaned = flow
+        .manager
+        .clean_storage(rows[0].action.clone(), context())
+        .await
+        .unwrap();
+    assert!(cleaned.failures.is_empty(), "{cleaned:?}");
+    assert_eq!(cleaned.codex_threads, 2);
+    assert!(ledger.artifacts("task:gone-1").is_empty());
+    assert!(ledger.artifacts("task:gone-2").is_empty());
+    flow.stop().await;
+}
+
 /// A branch with commits its target doesn't have is kept, never offered.
 #[tokio::test]
 async fn an_unmerged_branch_is_kept_with_why() {

@@ -86,8 +86,8 @@ pub enum Action {
         branch: KeptBranch,
         merged: bool,
     },
-    /// Everything the cleanup ledger records for `owner`.
-    Dispose { owner: String, bytes: u64 },
+    /// Everything the cleanup ledger records for each owner, with the bytes it was listed with.
+    Dispose { owners: Vec<(String, u64)> },
     /// A downloaded model's folder, deleted only while nothing uses the model.
     DeleteModel {
         /// The dictation speech model; otherwise the Brain's embedding model.
@@ -235,6 +235,46 @@ impl Records {
             _ => None,
         }
     }
+}
+
+/// Plain leftovers of gone owners of one kind, listed as one row.
+struct Alike {
+    what: &'static str,
+    many: &'static str,
+    category: CleanCategory,
+    owners: Vec<(String, u64)>,
+    files: usize,
+    path: Option<PathBuf>,
+    newest: Option<SystemTime>,
+}
+
+impl Alike {
+    fn add(
+        &mut self,
+        owner: &str,
+        files: usize,
+        bytes: u64,
+        paths: &[PathBuf],
+        newest: Option<SystemTime>,
+    ) {
+        self.owners.push((owner.to_owned(), bytes));
+        self.files += files;
+        if self.path.is_none() {
+            self.path = paths.first().cloned();
+        }
+        self.newest = self.newest.max(newest);
+    }
+}
+
+/// ", last changed Oct 9 at 14:05", in local time; nothing when unknown.
+fn last_changed(at: Option<SystemTime>) -> String {
+    at.and_then(|at| jiff::Timestamp::try_from(at).ok())
+        .map(|at| {
+            at.to_zoned(jiff::tz::TimeZone::system())
+                .strftime(", last changed %b %-d at %H:%M")
+                .to_string()
+        })
+        .unwrap_or_default()
 }
 
 /// What recorded a worktree in the data directory.
@@ -611,68 +651,18 @@ impl SessionManager {
                 })
                 .await
             }
-            Action::Dispose { owner, bytes } => {
-                let records = self
-                    .storage_records()
-                    .await
-                    .map_err(|err| err.to_string())?;
-                if self.owner_states(&records).get(&owner) == Some(&OwnerState::Live) {
-                    return Err("it is in use again".into());
-                }
-                let worktrees: Vec<PathBuf> = self
-                    .runtime
-                    .ledger()
-                    .artifacts(&owner)
-                    .into_iter()
-                    .filter_map(|artifact| match artifact {
-                        Artifact::Worktree { path, .. } => Some(PathBuf::from(path)),
-                        _ => None,
-                    })
-                    .collect();
-                let git = self.git.clone();
-                let checked = worktrees.clone();
-                blocking(move || {
-                    for path in &checked {
-                        if path.exists() {
-                            keep_changes(&git, path)?;
+            Action::Dispose { owners } => {
+                let mut cleaned = Cleaned::default();
+                for (owner, bytes) in owners {
+                    match self.dispose_listed(&owner, bytes).await {
+                        Ok(done) => {
+                            cleaned.reclaimed += done.reclaimed;
+                            cleaned.codex_threads += done.codex_threads;
                         }
+                        Err(err) => cleaned.failures.push(err.to_string()),
                     }
-                    Ok(())
-                })
-                .await
-                .map_err(|err| err.to_string())?;
-                let threads = |ledger: &crate::ledger::CleanupLedger| {
-                    ledger
-                        .artifacts(&owner)
-                        .into_iter()
-                        .filter(|artifact| matches!(artifact, Artifact::CodexThread { .. }))
-                        .count()
-                };
-                let threads_before = threads(self.runtime.ledger());
-                let leftovers = self.runtime.ledger().dispose(&owner).await;
-                // Codex threads are deleted through Codex's own delete (an earlier Free up
-                // space's that didn't finish too): those no longer held went.
-                let codex_threads =
-                    threads_before.saturating_sub(threads(self.runtime.ledger())) as u32;
-                if leftovers.is_clean() {
-                    // A worktree another owner still uses stays: its space isn't given back.
-                    let kept = blocking(move || {
-                        Ok(worktrees
-                            .iter()
-                            .filter(|path| path.exists())
-                            .map(|path| removal::allocated_size(path))
-                            .sum::<u64>())
-                    })
-                    .await
-                    .unwrap_or_default();
-                    Ok(Cleaned {
-                        reclaimed: bytes.saturating_sub(kept),
-                        codex_threads,
-                        ..Cleaned::default()
-                    })
-                } else {
-                    Err(Error::Invalid(leftovers.failures.join("; ")))
                 }
+                Ok(cleaned)
             }
             Action::DeleteModel {
                 speech,
@@ -712,6 +702,66 @@ impl SessionManager {
             Action::External(kind) => Err(Error::Invalid(format!("{kind} is the daemon's"))),
         }
         .map_err(|err| err.to_string())
+    }
+
+    /// Disposes of a ledger owner listed with `bytes`, after checking again that it isn't live
+    /// and keeping its worktrees' work (see [`keep_changes`]).
+    async fn dispose_listed(&self, owner: &str, bytes: u64) -> Result<Cleaned> {
+        let records = self.storage_records().await?;
+        if self.owner_states(&records).get(owner) == Some(&OwnerState::Live) {
+            return Err(Error::Invalid("it is in use again".into()));
+        }
+        let worktrees: Vec<PathBuf> = self
+            .runtime
+            .ledger()
+            .artifacts(owner)
+            .into_iter()
+            .filter_map(|artifact| match artifact {
+                Artifact::Worktree { path, .. } => Some(PathBuf::from(path)),
+                _ => None,
+            })
+            .collect();
+        let git = self.git.clone();
+        let checked = worktrees.clone();
+        blocking(move || {
+            for path in &checked {
+                if path.exists() {
+                    keep_changes(&git, path)?;
+                }
+            }
+            Ok(())
+        })
+        .await?;
+        let threads = |ledger: &crate::ledger::CleanupLedger| {
+            ledger
+                .artifacts(owner)
+                .into_iter()
+                .filter(|artifact| matches!(artifact, Artifact::CodexThread { .. }))
+                .count()
+        };
+        let threads_before = threads(self.runtime.ledger());
+        let leftovers = self.runtime.ledger().dispose(owner).await;
+        // Codex threads are deleted through Codex's own delete (an earlier Free up space's that
+        // didn't finish too): those no longer held went.
+        let codex_threads = threads_before.saturating_sub(threads(self.runtime.ledger())) as u32;
+        if !leftovers.is_clean() {
+            return Err(Error::Invalid(leftovers.failures.join("; ")));
+        }
+        // A worktree another owner still uses stays: its space isn't given back.
+        let kept = blocking(move || {
+            Ok(worktrees
+                .iter()
+                .filter(|path| path.exists())
+                .map(|path| removal::allocated_size(path))
+                .sum::<u64>())
+        })
+        .await
+        .unwrap_or_default();
+        Ok(Cleaned {
+            reclaimed: bytes.saturating_sub(kept),
+            codex_threads,
+            ..Cleaned::default()
+        })
     }
 
     async fn compact_database(&self) -> Result<Cleaned> {
@@ -1564,6 +1614,8 @@ impl Scanner<'_> {
 
     /// What the cleanup ledger still holds for owners that are gone or whose cleanup stopped.
     fn ledger_leftovers(&mut self) {
+        // Plain leftovers of the same kind read alike, so they are listed as one row.
+        let mut alike: Vec<Alike> = Vec::new();
         for (owner, artifacts, _) in &self.records.owners {
             let state = self.states.get(owner).copied().unwrap_or(OwnerState::Live);
             if state == OwnerState::Live {
@@ -1611,33 +1663,45 @@ impl Scanner<'_> {
                     _ => unknown = true,
                 }
             }
-            let what = match owner.split_once(':') {
-                Some(("orch" | "session" | "workers", _)) => "a session",
-                Some(("chat", _)) => "a Chat",
-                Some(("task", _)) => "a worker",
-                Some(("brain", _)) => "a Brain job",
-                Some(("gen", _)) => "a commit message writer",
-                Some(("overnight", _)) => "an overnight run",
-                Some(("sweep", _)) => "an earlier Free up space",
-                _ => "an Inspector session",
+            let (what, many) = match owner.split_once(':') {
+                Some(("orch" | "session" | "workers", _)) => ("a session", "sessions"),
+                Some(("chat", _)) => ("a Chat", "Chats"),
+                Some(("task", _)) => ("a worker", "workers"),
+                Some(("brain", _)) => ("a Brain job", "Brain jobs"),
+                Some(("gen", _)) => ("a commit message writer", "commit message writers"),
+                Some(("overnight", _)) => ("an overnight run", "overnight runs"),
+                Some(("sweep", _)) => ("an earlier Free up space", "earlier Free up space runs"),
+                _ => ("an Inspector session", "Inspector sessions"),
             };
             let category = if worktrees.is_empty() {
                 CleanCategory::AgentFiles
             } else {
                 CleanCategory::FinishedWork
             };
-            // Several such rows read alike: when their files last changed tells them apart.
-            let when = paths
-                .iter()
-                .filter_map(|path| last_change(path))
-                .max()
-                .and_then(|at| jiff::Timestamp::try_from(at).ok())
-                .map(|at| {
-                    at.to_zoned(jiff::tz::TimeZone::system())
-                        .strftime(", last changed %b %-d at %H:%M")
-                        .to_string()
-                })
-                .unwrap_or_default();
+            let newest = paths.iter().filter_map(|path| last_change(path)).max();
+            if state == OwnerState::Orphaned && !dirty && !unknown {
+                match alike
+                    .iter_mut()
+                    .find(|group| group.what == what && group.category == category)
+                {
+                    Some(group) => group.add(owner, files, bytes, &paths, newest),
+                    None => {
+                        let mut group = Alike {
+                            what,
+                            many,
+                            category,
+                            owners: Vec::new(),
+                            files: 0,
+                            path: None,
+                            newest: None,
+                        };
+                        group.add(owner, files, bytes, &paths, newest);
+                        alike.push(group);
+                    }
+                }
+                continue;
+            }
+            let when = last_changed(newest);
             let label = match state {
                 OwnerState::Unfinished => format!(
                     "Cleanup of {what} that didn't finish{when} ({})",
@@ -1694,8 +1758,40 @@ impl Scanner<'_> {
             self.push(
                 entry,
                 Action::Dispose {
-                    owner: owner.clone(),
+                    owners: vec![(owner.clone(), bytes)],
+                },
+            );
+        }
+        for group in alike {
+            let n = group.owners.len();
+            let who = if n == 1 {
+                format!("{} that is gone", group.what)
+            } else {
+                format!("{n} {} that are gone", group.many)
+            };
+            let label = format!(
+                "Files left by {who}{} ({})",
+                last_changed(group.newest),
+                counted(group.files, "item", "items")
+            );
+            let bytes = group.owners.iter().map(|(_, bytes)| bytes).sum();
+            self.push(
+                item(
+                    group.category,
+                    label,
+                    group.path,
                     bytes,
+                    if n == 1 {
+                        "What it ran in and its agent session files, as Brigadier recorded them. \
+                         Branches stay."
+                    } else {
+                        "What they ran in and their agent session files, as Brigadier recorded \
+                         them. Branches stay."
+                    },
+                    true,
+                ),
+                Action::Dispose {
+                    owners: group.owners,
                 },
             );
         }
