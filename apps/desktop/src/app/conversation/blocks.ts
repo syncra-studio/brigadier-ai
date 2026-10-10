@@ -789,10 +789,11 @@ export function endsWithPlan(sequence: readonly SequenceEntry[]): boolean {
 
 /**
  * Whether an entry of a finished block folds under "Worked for …": everything but its answer
- * and the cards that stay in view (decisions, failures, what needs the user).
+ * and the cards and access notices that stay in view (decisions, failures, what needs the user).
  */
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
   if (entry.kind === "text") return entry.index !== answer;
+  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "fullAccessSuggested")) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }
 

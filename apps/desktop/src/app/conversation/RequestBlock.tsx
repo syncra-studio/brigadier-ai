@@ -505,9 +505,9 @@ export const RequestBlock: FC = () => {
   // A run over folds to its outcome; the thread's replies during it go into the fold.
   const answer = endsWithPlan(sequence) ? null : answerIndex(meta.texts, done && !phase);
   const activity = turnActivity(sequence);
-  // The answer and the cards that stay in view are outside the fold.
+  // The answer, kept cards and access notices stay outside the fold.
   const folded = activity.filter((item) => item.type === "group" || foldsAway(item.entry, answer));
-  const kept = meta.cards.filter((card) => card.keep);
+  const kept = sequence.filter((entry) => entry.kind !== "text" && !foldsAway(entry, answer));
   const parts = workParts(done ? folded : activity, live && !done);
   const foldable = done && parts.some((part) => part.type === "work" && part.items.length > 0);
   const outcome = done ? (phase?.outcome ?? null) : null;
@@ -583,9 +583,9 @@ export const RequestBlock: FC = () => {
         )}
         {done && (
           <>
-            {kept.map((card) => (
-              <div key={`${card.type}:${card.id}`} className="pt-activity flex min-w-0 flex-col">
-                <CardEntry card={card} />
+            {kept.map((entry) => (
+              <div key={entryKey(entry)} className="pt-activity flex min-w-0 flex-col">
+                <SequenceEntry entry={entry} streaming={false} />
               </div>
             ))}
             {outcome && (

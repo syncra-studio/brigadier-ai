@@ -385,6 +385,10 @@ test("the lead's suggestion of Full access shows as its notice, and its tool cal
   const shown = sequence(buildBlocks([user], {}, false, replay, [])[0]!).flatMap((entry) =>
     entry.kind === "orchestrator" ? entry.steps.map((s) => s.kind) : []);
   assert.deepEqual(shown, [{ type: "fullAccessSuggested", reason: "Installing Homebrew writes outside the project." }]);
+  // Once the lead answers, the actionable notice stays outside the collapsed work.
+  const entries = sequence(buildBlocks([user], {}, false, replay, [])[0]!);
+  const kept = entries.filter((entry) => entry.kind !== "text" && !foldsAway(entry, 0));
+  assert.deepEqual(kept.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map((step) => step.kind) : []), shown);
 });
 
 const node = (id: string, parentId: string | null, kind: ThreadNode["kind"], state: Block["state"] = "done"): ThreadNode =>
