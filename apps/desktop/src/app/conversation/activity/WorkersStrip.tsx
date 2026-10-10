@@ -7,7 +7,6 @@ import { useTaskActivityLine } from "@/app/conversation/WorkerActivity";
 import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversation/WorkerChip";
 import { workerDone, workerState } from "@/app/conversation/workerPresentation";
 import { Changes, workerStat } from "@/app/conversation/WorkerSummary";
-import { CHEVRON } from "@/components/assistant-ui/elements/activity-row";
 import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -88,13 +87,21 @@ export const WorkersStrip: FC<{ conversationId: string }> = ({ conversationId })
             type="button"
             aria-expanded={open}
             onClick={() => setOpen(!open)}
-            className="hover:text-foreground text-foreground/60 rounded-control flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-start text-sm"
+            className="group/toggle hover:text-foreground text-foreground/60 rounded-control flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-start text-sm"
           >
             <span className="flex shrink-0 items-center gap-1">
               {view.rows.slice(0, 4).map((id) => <WorkerGlyph key={id} taskId={id} className="size-4" />)}
             </span>
-            <span className="min-w-0 truncate">{stripWords(view)}</span>
-            <ChevronRight aria-hidden className={cn(CHEVRON, "-rotate-90 group-data-[state=open]:rotate-90")} />
+            {/* Its chevron right after the words, in a 24px box: right while closed, down open. */}
+            <span className="flex min-w-0 items-center">
+              <span className="min-w-0 truncate">{stripWords(view)}</span>
+              <span aria-hidden className="size-icon-button-sm flex shrink-0 items-center justify-center">
+                <ChevronRight
+                  data-slot="workers-strip-chevron"
+                  className="text-row-chevron size-chevron group-hover/toggle:text-foreground group-focus-visible/toggle:text-foreground transition-[rotate,color] duration-300 ease-standard group-data-[state=open]:rotate-90 motion-reduce:transition-none"
+                />
+              </span>
+            </span>
           </button>
           {view.stoppable && (
             <Tooltip>
