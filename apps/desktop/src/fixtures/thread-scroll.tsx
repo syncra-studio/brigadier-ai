@@ -351,6 +351,30 @@ const steps = {
     const back = rows().find((row) => row.dataset["messageId"] === "long-u2");
     return { offset, restoredOffset: back ? round(back.getBoundingClientRect().top - viewTop()) : null };
   },
+  /** A side panel in fullscreen hides the thread (`display: none`) and back: the same place, mid-scroll and at the bottom. */
+  async fullscreen() {
+    // The conversation's column, which ConversationView hides under a fullscreen panel.
+    const column = $('[data-slot="pane-workspace"] > div > div')!;
+    const hidden = async () => {
+      column.classList.add("hidden");
+      await wait(200);
+      const height = viewport().clientHeight;
+      column.classList.remove("hidden");
+      await wait(200);
+      return height;
+    };
+    await userScroll(Math.round(max() / 3));
+    await wait(100);
+    const top = Math.round(viewport().scrollTop);
+    const anchor = rows().find((row) => row.getBoundingClientRect().bottom > viewTop())!;
+    const offset = round(anchor.getBoundingClientRect().top - viewTop());
+    const hiddenHeight = await hidden();
+    const middle = { top, restored: Math.round(viewport().scrollTop), offset, restoredOffset: round(anchor.getBoundingClientRect().top - viewTop()), button: buttonState().shown };
+    await userScroll(max());
+    await wait(100);
+    await hidden();
+    return { hiddenHeight, middle, bottom: distance() };
+  },
   /** A report's Details, a disclosure, opened and closed mid-scroll and at the bottom. */
   async expand() {
     const summaries = [...document.querySelectorAll<HTMLElement>('[data-slot="report-details"] > summary')];

@@ -10,6 +10,8 @@
  * - A sent message's turn glides up to its `scroll-margin-top` under the view's top, with room
  *   below it (the newest turn's minimum height) that its answer fills as it streams.
  * - Each conversation's place is kept for the app's run, by row id, and restored on return.
+ * - While the thread is hidden (`display: none`, under a fullscreen side panel) nothing is measured
+ *   or kept; shown again, it is put back where it was, or at the bottom if it was there.
  */
 
 /** Within this of the bottom the thread is at its bottom: no scroll button, and it follows. */
@@ -116,6 +118,8 @@ export class ThreadScroller {
   private newestUser: string | null = null;
   private editSentAtMs: number | null = null;
   private glide: number | null = null;
+  /** The view was hidden, and its showing again isn't handled yet. */
+  private hidden = false;
   private readonly listeners = new Set<() => void>();
 
   get following(): boolean {
@@ -140,6 +144,7 @@ export class ThreadScroller {
     this.layout = layout;
     this.key = key;
     this.started = false;
+    this.hidden = false;
     this.size = { width: layout.viewport.clientWidth, height: layout.viewport.clientHeight };
     this.follow = true;
     this.anchor = null;
@@ -169,7 +174,7 @@ export class ThreadScroller {
     const newest = newestUserRow(rows);
     this.newestUser = newest ? (rowId(newest) ?? null) : null;
     if (!this.started) {
-      if (rows.length > 0) this.start();
+      if (rows.length > 0 && !this.hide(layout.viewport)) this.start();
       return;
     }
     if (this.newestUser !== null && this.newestUser !== previous) {
@@ -196,8 +201,16 @@ export class ThreadScroller {
    */
   resized(): void {
     const layout = this.layout;
-    if (!layout || !this.started) return;
+    if (!layout) return;
     const viewport = layout.viewport;
+    if (this.hide(viewport)) return;
+    if (!this.started) {
+      if (layout.rows().length > 0) this.start();
+      return;
+    }
+    // Shown again: the browser may have reset the view's top while it was hidden.
+    const shown = this.hidden;
+    this.hidden = false;
     const wasAtBottom = this.atBottom;
     this.updateRoom();
     const contentChanged = layout.content() !== this.contentHeight;
@@ -212,7 +225,10 @@ export class ThreadScroller {
     if (held && (performance.now() > held.untilMs || !held.row.isConnected)) this.held = null;
     if (this.restore) this.applyRestore();
     else if (this.held) this.keep(this.held);
-    else if ((viewChanged && wasAtBottom) || (this.follow && contentChanged)) {
+    else if (
+      ((viewChanged || shown) && wasAtBottom) ||
+      (this.follow && (contentChanged || shown))
+    ) {
       this.toBottom();
       this.record();
       return;
@@ -222,11 +238,15 @@ export class ThreadScroller {
 
   /**
    * A scroll event. One that didn't come from here is the user's, except the browser clamping
-   * the view to a range that shrank under it.
+   * the view to a range that shrank under it, or hiding or showing it.
    */
   scrolled(): void {
     const viewport = this.layout?.viewport;
-    if (!viewport) return;
+    if (!viewport || this.hide(viewport)) return;
+    if (this.hidden) {
+      this.resized();
+      return;
+    }
     const max = maxScroll(viewport);
     const clamped = this.expected > max && Math.abs(viewport.scrollTop - max) < 1;
     if (clamped || Math.abs(viewport.scrollTop - this.expected) < 1) {
@@ -354,7 +374,7 @@ export class ThreadScroller {
   /** The newest turn's room: down to the composer's gap, with the turn's top at its place. */
   private updateRoom(): void {
     const layout = this.layout;
-    if (!layout) return;
+    if (!layout || this.hide(layout.viewport)) return;
     let px = 0;
     if (this.room !== null) {
       const rows = layout.rows();
@@ -373,6 +393,13 @@ export class ThreadScroller {
   }
 
   /* --- moving ----------------------------------------------------------------------------- */
+
+  /** Whether the view is hidden (it has no height): it is noted, and nothing is measured. */
+  private hide(viewport: ScrollBox): boolean {
+    if (viewport.clientHeight > 0) return false;
+    this.hidden = true;
+    return true;
+  }
 
   private offsetOf(row: RowBox): number {
     const viewport = this.layout?.viewport;
@@ -414,6 +441,11 @@ export class ThreadScroller {
         this.glide = null;
         return;
       }
+      // Hidden, it waits to be shown and then ends where it was going.
+      if (this.hide(this.layout.viewport)) {
+        this.glide = requestAnimationFrame(step);
+        return;
+      }
       const progress = Math.min(1, Math.max(0, (now - begun) / GLIDE_MS));
       const eased = 1 - (1 - progress) ** 3;
       this.setTop(from + (target() - from) * eased);
@@ -435,7 +467,7 @@ export class ThreadScroller {
    */
   private record(measured = true): void {
     const layout = this.layout;
-    if (!layout) return;
+    if (!layout || this.hide(layout.viewport)) return;
     const viewport = layout.viewport;
     this.expected = viewport.scrollTop;
     this.lastDistance = Math.max(0, maxScroll(viewport) - viewport.scrollTop);

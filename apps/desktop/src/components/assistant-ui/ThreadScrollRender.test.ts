@@ -18,6 +18,11 @@ test("the thread scrolls like ChatGPT's in the conversation view", { timeout: 12
     button: { at8: Button; at9: Button };
     switchBack: { top: number; restored: number; offset: number; restoredOffset: number | null; early: number[] };
     revealedBack: { offset: number; restoredOffset: number | null };
+    fullscreen: {
+      hiddenHeight: number;
+      middle: { top: number; restored: number; offset: number; restoredOffset: number; button: boolean };
+      bottom: number;
+    };
     expand: { midOpen: Toggle; midClose: Toggle; userOpen: Toggle; bottomOpen: Toggle; buttonAfter: Button; bottomClose: Toggle };
     composerGrows: {
       before: { top: number; stackTop: number };
@@ -66,6 +71,14 @@ test("the thread scrolls like ChatGPT's in the conversation view", { timeout: 12
   assert.equal(switchBack.early.at(-1), switchBack.top);
   // Earlier turns, once shown, stay shown: their row is found again.
   assert.equal(seen.revealedBack.restoredOffset, seen.revealedBack.offset);
+
+  // A fullscreen side panel hiding the thread and back: the same place, mid-scroll and at the bottom.
+  const { fullscreen } = seen;
+  assert.equal(fullscreen.hiddenHeight, 0);
+  assert.equal(fullscreen.middle.restored, fullscreen.middle.top);
+  assert.equal(fullscreen.middle.restoredOffset, fullscreen.middle.offset);
+  assert.equal(fullscreen.middle.button, true);
+  assert.equal(fullscreen.bottom, 0);
 
   // A toggle stays where it was, opening or closing, mid-scroll and at the bottom.
   const { expand } = seen;

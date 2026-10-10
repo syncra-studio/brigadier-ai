@@ -40,6 +40,7 @@ class Fake {
   }
 
   get scrollHeight(): number {
+    if (this.clientHeight === 0) return 0;
     return Math.max(this.clientHeight, this.content + this.padding);
   }
 
@@ -71,6 +72,7 @@ class Fake {
       dataset: { messageId: id, role },
       isConnected: true,
       getBoundingClientRect: () => {
+        if (this.clientHeight === 0) return { top: 0, bottom: 0 };
         const top = VIEW_TOP + this.rowTop(row) - this.scrollTop;
         return { top, bottom: top + row.height };
       },
@@ -79,6 +81,7 @@ class Fake {
   }
 
   getBoundingClientRect() {
+    if (this.clientHeight === 0) return { top: 0, bottom: 0 };
     return { top: VIEW_TOP, bottom: VIEW_TOP + this.clientHeight };
   }
 
@@ -164,6 +167,25 @@ function userScroll(fake: Fake, scroller: ThreadScroller, top: number): void {
   scroller.interrupt();
   fake.scrollTop = top;
   scroller.scrolled();
+}
+
+/**
+ * The thread hidden (`display: none`, under a fullscreen panel): no size, and the browser resets
+ * its top. The returned call shows it again, the reset top's scroll event before its resize.
+ */
+function hide(fake: Fake, scroller: ThreadScroller): () => void {
+  const { clientHeight, clientWidth } = fake;
+  fake.clientHeight = 0;
+  fake.clientWidth = 0;
+  fake.scrollTop = 0;
+  scroller.scrolled();
+  scroller.resized();
+  return () => {
+    fake.clientHeight = clientHeight;
+    fake.clientWidth = clientWidth;
+    scroller.scrolled();
+    scroller.resized();
+  };
 }
 
 test("a first open lands at the bottom and stays there while content loads late", () => {
@@ -555,4 +577,57 @@ test("at the bottom, a resize of the view keeps it at the bottom", () => {
   for (const row of fake.rows) row.height += 20;
   scroller.resized();
   assert.equal(fake.scrollTop, fake.max);
+});
+
+test("hidden mid-scroll, then shown, the thread is back where it was", () => {
+  const fake = new Fake();
+  conversation(fake, 10);
+  const scroller = open(fake);
+  userScroll(fake, scroller, 2000);
+  const shown = fake.rows.find((row) => row.getBoundingClientRect().bottom > VIEW_TOP)!;
+  const offset = fake.offset(shown);
+  const show = hide(fake, scroller);
+  assert.equal(scroller.contentBelow(), true);
+  show();
+  assert.equal(fake.scrollTop, 2000);
+  assert.equal(fake.offset(shown), offset);
+  assert.equal(scroller.following, false);
+  assert.equal(scroller.contentBelow(), true);
+});
+
+test("hidden at the bottom, then shown, the thread stays at the bottom", () => {
+  const fake = new Fake();
+  conversation(fake, 10);
+  const id = key();
+  const scroller = open(fake, id);
+  // Not following (a sent turn), yet at the bottom.
+  expectSentTurn(id, "sent");
+  fake.rows.push(fake.row("sent", 60, "user"), fake.row("answer", 900));
+  scroller.rowsChanged();
+  userScroll(fake, scroller, fake.max);
+  scroller.clicked(toggle(fake.rows.at(-1)!, 10));
+  scroller.interrupt();
+  assert.equal(scroller.following, false);
+  const show = hide(fake, scroller);
+  fake.clientWidth = 600;
+  show();
+  assert.equal(fake.scrollTop, fake.max);
+  assert.ok(fake.max > 0);
+  assert.equal(scroller.following, false);
+});
+
+test("content added while hidden is followed once shown", () => {
+  const fake = new Fake();
+  conversation(fake, 10);
+  const scroller = open(fake);
+  assert.equal(scroller.following, true);
+  const show = hide(fake, scroller);
+  fake.rows.push(fake.row("later-u", 60, "user"), fake.row("later-a", 700));
+  scroller.rowsChanged();
+  fake.rows.at(-1)!.height += 300;
+  scroller.resized();
+  show();
+  assert.equal(fake.scrollTop, fake.max);
+  assert.equal(scroller.following, true);
+  assert.equal(scroller.contentBelow(), false);
 });
