@@ -279,7 +279,6 @@
   --spacing-panel-tab: 15rem;
   --spacing-panel-tab-min: 5.625rem;
   /* A session's tab keeps room for a short name beside its icon and button. */
-  --spacing-session-title: 12rem;
   --spacing-session-tab-min: 8rem;
   --spacing-setup: min(60rem, calc(100dvh - 2rem));
   --spacing-setup-card: 13rem;

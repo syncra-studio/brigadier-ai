@@ -163,7 +163,8 @@
   );
 }
 
-/* A hidden sidebar reserves no width and leaves no divider on the main content. */
+/* A hidden sidebar reserves no width and leaves no body divider on the main content.
+   Sessions still separate the fixed titlebar controls from their tabs. */
 [data-slot="sidebar-wrapper"][data-collapse="hidden"] {
   --sidebar-shown: 0px;
 }
@@ -182,19 +183,6 @@
         var(--sidebar-shown)
     )
   );
-}
-
-/* Sessions continue the sidebar boundary into the titlebar. When collapsed, clear the
-   fixed navigation controls just as ps-clear-* does for the tabs. */
-@utility session-titlebar-divider {
-  &::before {
-    content: "";
-    @apply pointer-events-none absolute top-1/2 h-5 w-px -translate-y-1/2 bg-divider transition-[inset-inline-start] duration-300 ease-sidebar motion-reduce:transition-none;
-    inset-inline-start: max(
-      0%,
-      calc(var(--spacing-titlebar-nav-end) + var(--spacing) - var(--spacing-surface-inset) - var(--sidebar-shown))
-    );
-  }
 }
 
 /* A corner of the page surface: it paints the window chrome (and the surface's hairline edge)
@@ -290,6 +278,15 @@
     top: var(--spacing-titlebar);
     bottom: 0;
   }
+}
+
+/* A session's column divider clears the fixed navigation controls when the sidebar folds. */
+[data-slot="session-tabs"]::before {
+  @apply transition-[inset-inline-start] duration-300 ease-sidebar motion-reduce:transition-none;
+  inset-inline-start: max(
+    0%,
+    calc(var(--spacing-titlebar-nav-end) + var(--spacing) - var(--spacing-surface-inset) - var(--sidebar-shown))
+  );
 }
 
 /* A list that fades out under its header and above its end while there is more to scroll that

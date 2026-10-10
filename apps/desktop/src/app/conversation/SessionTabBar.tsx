@@ -116,10 +116,12 @@ function useTabKeys(conversationId: string, create: (kind: NewTabKind) => void):
 function TabMenu({
   conversationId,
   tab,
+  onRename,
   children,
 }: {
   conversationId: string;
   tab: SessionTab | null;
+  onRename?: (() => void) | undefined;
   children: ReactNode;
 }) {
   const id = tab?.id ?? CHAT_TAB;
@@ -128,6 +130,12 @@ function TabMenu({
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent>
+        {!tab && (
+          <>
+            <ContextMenuItem disabled={!onRename} onSelect={() => onRename?.()}>Rename</ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
         {tab?.kind === "file" && tab.preview && (
           <>
             <ContextMenuItem onSelect={() => keepTabOpen(conversationId, id)}>
@@ -220,7 +228,7 @@ export function SessionTabBar({
     <header
       data-tauri-drag-region
       data-slot="session-tabs"
-      className="session-titlebar-divider relative h-titlebar ease-sidebar ps-clear-2 flex shrink-0 items-center gap-1 pe-1 transition-[padding] duration-300 motion-reduce:transition-none"
+      className="column-divider h-titlebar ease-sidebar ps-clear-2 flex shrink-0 items-center gap-1 pe-1 transition-[padding] duration-300 motion-reduce:transition-none"
     >
       <div
         role="tablist"
@@ -254,45 +262,39 @@ export function SessionTabBar({
           });
         }}
       >
-        <ContextMenu>
-          <ContextMenuTrigger asChild>
-            <div
-              data-tab-id={CHAT_TAB}
-              data-active={active === CHAT_TAB || undefined}
-              className={cn(
-                TAB,
-                "max-w-session-title shrink-0",
-                active === CHAT_TAB
-                  ? "bg-panel-tab shadow-panel-tab"
-                  : "text-toolbar-foreground hover:bg-toolbar-hover",
-              )}
+        <TabMenu conversationId={id} tab={null} onRename={archived ? undefined : onRename}>
+          <div
+            data-tab-id={CHAT_TAB}
+            data-active={active === CHAT_TAB || undefined}
+            className={cn(
+              TAB,
+              active === CHAT_TAB
+                ? "bg-panel-tab shadow-panel-tab"
+                : "text-toolbar-foreground hover:bg-toolbar-hover",
+            )}
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={active === CHAT_TAB}
+              tabIndex={active === CHAT_TAB ? 0 : -1}
+              title={conversation.title}
+              onClick={() => selectTab(id, CHAT_TAB)}
+              onDoubleClick={archived ? undefined : onRename}
+              className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
             >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={active === CHAT_TAB}
-                tabIndex={active === CHAT_TAB ? 0 : -1}
-                title={conversation.title}
-                onClick={() => selectTab(id, CHAT_TAB)}
-                onDoubleClick={archived ? undefined : onRename}
-                className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
-              >
-                <Chat aria-hidden className="size-icon-sm shrink-0" />
-                <span className="min-w-0 truncate">{title}</span>
-              </button>
-              {archived && <Badge variant="outline" className="shrink-0">Archived</Badge>}
-              <ChatActions
-                conversation={conversation}
-                onRename={onRename}
-                compact
-                className="shrink-0 opacity-0 transition-opacity group-hover/tab:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100"
-              />
-            </div>
-          </ContextMenuTrigger>
-          <ContextMenuContent>
-            <ContextMenuItem disabled={archived} onSelect={onRename}>Rename</ContextMenuItem>
-          </ContextMenuContent>
-        </ContextMenu>
+              <Chat aria-hidden className="size-icon-sm shrink-0" />
+              <span className="min-w-0 truncate">{title}</span>
+            </button>
+            {archived && <Badge variant="outline" className="shrink-0">Archived</Badge>}
+            <ChatActions
+              conversation={conversation}
+              onRename={onRename}
+              compact
+              className="shrink-0 opacity-0 transition-opacity group-hover/tab:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100"
+            />
+          </div>
+        </TabMenu>
         <div
           ref={strip}
           data-tauri-drag-region
@@ -376,7 +378,7 @@ export function SessionTabBar({
         <DropdownMenuTrigger asChild>
           <TitlebarButton tooltip="New tab" aria-label="New tab"><Plus /></TitlebarButton>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
+        <DropdownMenuContent align="start">
           {NEW_TAB_MENU.filter((item) => !archived || (item.kind !== "terminal" && item.kind !== "sideChat")).map((item) => (
             <DropdownMenuItem key={item.kind} onSelect={() => create(item.kind)}>
               {item.label}<DropdownMenuShortcut>{shortcutLabel(item.shortcut, mac)}</DropdownMenuShortcut>

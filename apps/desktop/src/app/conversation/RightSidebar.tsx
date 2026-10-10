@@ -130,13 +130,12 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
       ref={column}
       data-slot="right-sidebar"
       data-state={panel.open ? "expanded" : "collapsed"}
-      className="relative flex h-full shrink-0"
+      className={cn("relative flex h-full shrink-0", panel.open && "column-divider")}
       style={{ "--right-sidebar-width": panel.width === null ? "var(--spacing-sidebar)" : `${panel.width}px` } as CSSProperties}
     >
       <SidebarReveal side="right" open={panel.open} hidden={!panel.open} resizing={panel.resizing}>
         <div ref={content} className="right-sidebar-panel-width flex h-full flex-col">
-          <div role="tablist" aria-label="Right sidebar" data-tauri-drag-region className="relative h-titlebar flex shrink-0 items-center gap-1 ps-2 pe-icon-button-lg">
-            {panel.open && <span aria-hidden className="bg-divider absolute start-0 h-5 w-px" />}
+          <div role="tablist" aria-label="Right sidebar" data-tauri-drag-region className="h-titlebar flex shrink-0 items-center gap-1 ps-2 pe-icon-button-lg">
             <TitlebarTips>
               {TABS.map(({ id, title, Icon }, index) => (
                 <TitlebarButton
