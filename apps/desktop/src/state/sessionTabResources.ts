@@ -44,6 +44,11 @@ export async function openMainTerminal(conversationId: string, tabId: string, co
   return attached.terminal;
 }
 
+/** Ends a terminal tab's shell, so the tab's next open starts a new one (Restart, after it exited). */
+export function endMainTerminal(tabId: string): void {
+  closeShell(tabId);
+}
+
 function closeShell(id: string): void {
   const entry = shells.get(id);
   if (!entry) return;

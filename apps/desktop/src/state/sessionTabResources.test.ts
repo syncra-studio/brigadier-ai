@@ -12,7 +12,7 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
 } });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage } });
 const { closeTab, newSessionTab } = await import("./sessionTabs");
-const { openMainTerminal } = await import("./sessionTabResources");
+const { endMainTerminal, openMainTerminal } = await import("./sessionTabResources");
 
 type Sent = RequestOf<"openTerminal"> | RequestOf<"closeTerminal">;
 let sent: Sent[];
@@ -64,4 +64,16 @@ test("after the daemon restarts, closing a terminal tab ends the shell it starte
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(sent.filter((req) => req.method === "closeTerminal").map((req) => req.terminalId), [second.id]);
   assert.equal(running.size, 0);
+});
+
+test("restarting a terminal tab whose shell exited starts a new shell", async () => {
+  const tab = newSessionTab("exited", "terminal");
+  const first = await openMainTerminal("exited", tab, 80, 24);
+  running.delete(tab); // `exit`: the daemon lets the shell go.
+  endMainTerminal(tab);
+  const restarted = await openMainTerminal("exited", tab, 80, 24);
+  assert.notEqual(restarted.id, first.id);
+  assert.deepEqual(opens().map((req) => req.fresh ?? false), [true, true]);
+  assert.equal(restarted.scrollback, "");
+  closeTab("exited", tab);
 });
