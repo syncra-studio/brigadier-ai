@@ -67,7 +67,8 @@ own screenshots are in `msgs/evidence/brigadier/`.
 - **Row:** 21 px tall, content-width (not full-width), inner gap 6 px.
   - Icon: 16 px at `rgba(255,255,255,.6)`, centred on the row's centre line.
   - Text: `.6` white, truncated.
-  - Two-tone rows: the verb at about 90 % of the tertiary colour, the object at 40 %.
+  - Two-tone rows: the whole row is `.6`; the file it acts on is a step fainter, about `.47` (measured on the
+    2× screenshots). The `/90` against `/40` split is a row against a summary line, not verb against object.
 - **Chevron:**
   - 14 px, 4 px after the text, centred on the same line (`items-center`).
   - Hidden until hover, then shown at once; the text turns white on hover.
@@ -237,9 +238,14 @@ own screenshots are in `msgs/evidence/brigadier/`.
   - The chevron is `size-chevron` with `ms-1`, centred by `items-center`.
   - It stays **always visible** (THREAD-UX-PLAN §3.7, kept by the user on 2026-10-09). It is quieter: the
     `--color-row-chevron` token, about `/25`, against today's `/40`. On hover or focus it turns white with the text.
+  - "Always visible" means once there is something to open: a row still running has no chevron and doesn't open
+    (target 22). A live group saying its running step hides its chevron until it is open, and still opens to the
+    steps already done.
   - `TeamSentence`'s `items-start` goes. A sentence too long for one line truncates; the full names are in its detail.
-- **Two-tone words:** the verb at `/90` of the tertiary colour and the object at `/40`, for `Asked 3 questions`,
-  `Edited x.ts +5 −1` (green/red) and lifecycle sentences (`Analyze right panel` / `started working`).
+- **Two-tone words:** the verb in the row's tone (`/60`) and what it acts on (a file, a command, a pattern, a host)
+  at `--color-row-object` (48 %), both white on hover. Steps carry their object in `StepWords.object`. Running rows
+  keep one tone under their shimmer. `Asked 3 questions` stays one tone, as in the target. Team sentences keep their
+  own two tones: names at `/90`, verbs in the row's tone.
 - **Group rows** keep THREAD-UX-PLAN §3.2's table, with no counts.
   - Open: 4 px between rows, max 224 px with a 24 px edge fade.
   - The Shell box takes §2.3's numbers (`C/activity/StepDetail.tsx`).
