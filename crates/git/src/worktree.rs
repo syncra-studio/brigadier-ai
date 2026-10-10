@@ -627,13 +627,13 @@ impl Worktree {
     /// Identity comes from git config. Nothing is created for a clean checkout.
     pub fn commit_wip(&self, message: &str) -> Result<Option<Oid>> {
         self.ensure_idle()?;
+        if self.repo.status(false)?.dirty().is_empty() {
+            return Ok(None);
+        }
         if self.repo.symbolic_head()?.is_none() {
             return Err(Error::Invalid(
                 "WIP requires a branch so it survives worktree removal".into(),
             ));
-        }
-        if self.repo.status(false)?.dirty().is_empty() {
-            return Ok(None);
         }
         let head = self.head()?;
         let (index, tree) = self.repo.capture()?;
@@ -849,6 +849,28 @@ mod tests {
             } => (tip, commits, rewritten),
             SeriesOutcome::Conflicts { paths } => panic!("unexpected conflicts: {paths:?}"),
         }
+    }
+
+    #[test]
+    fn a_wip_needs_a_branch_only_when_there_is_something_to_keep() {
+        let f = fixture("wip-detached");
+        let wt = f
+            .repo
+            .add_worktree(
+                &f.dir.join("warm"),
+                WorktreeSpec::Detached { at: f.base.clone() },
+            )
+            .expect("a detached worktree");
+        // A clean detached checkout has nothing to keep.
+        assert_eq!(wt.commit_wip("WIP").expect("nothing to keep"), None);
+        // Changes in one are refused rather than lost.
+        fs::write(wt.repo.root().join("notes.md"), "unsaved\n").expect("a file");
+        assert!(wt.commit_wip("WIP").is_err());
+        assert!(wt.repo.root().join("notes.md").exists());
+        // On a branch they are kept as a commit.
+        fs::write(f.wt.repo.root().join("notes.md"), "unsaved\n").expect("a file");
+        let kept = f.wt.commit_wip("WIP").expect("a WIP").expect("a commit");
+        assert!(paths(&f.wt.repo, &kept).contains(&"notes.md".to_owned()));
     }
 
     #[test]
