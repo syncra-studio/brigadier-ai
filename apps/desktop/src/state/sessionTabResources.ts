@@ -13,6 +13,7 @@ export async function openMainTerminal(conversationId: string, tabId: string, co
   const tab = sessionTabs(conversationId).tabs.find((candidate) => candidate.id === tabId);
   if (tab?.kind !== "terminal") throw new Error("Terminal tab closed");
   let entry = shells.get(tab.id);
+  const started = !entry;
   if (!entry) {
     const terminal = request({ method: "openTerminal", conversationId, sessionId: tab.id, fresh: true,
       ...(tab.cwd ? { cwd: tab.cwd } : {}), cols, rows }).then((opened) => {
@@ -28,6 +29,9 @@ export async function openMainTerminal(conversationId: string, tabId: string, co
     await request({ method: "closeTerminal", terminalId: terminal.id });
     throw new Error("Terminal tab closed");
   }
+  // A shell started here streams its first output to the view; attaching again would show
+  // that output twice, once in the scrollback and once from the stream.
+  if (started) return terminal;
   // Attach this connection and get current scrollback when its session becomes visible again.
   const attached = await request({ method: "openTerminal", conversationId, sessionId: tab.id, ...(tab.cwd ? { cwd: tab.cwd } : {}), cols, rows });
   if (entry.closed || !sessionTabs(conversationId).tabs.some((current) => current.id === tab.id)) {
