@@ -58,7 +58,6 @@ import {
   MessageText,
   StreamingMessageText,
 } from "@/components/assistant-ui/thread";
-import { preserveAnchor } from "@/components/assistant-ui/preserve-anchor";
 import { RateItem, RateMenu } from "@/components/assistant-ui/rate-menu";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
@@ -180,8 +179,7 @@ const WorkHeader: FC<{
   foldable: boolean;
   /** Its messages wait for quota, and no worker of it runs meanwhile. */
   quota: boolean;
-  /** Called with the header, before the fold opens or closes. */
-  onToggle: (header: HTMLElement) => void;
+  onToggle: () => void;
 }> = ({ meta, phase, open, foldable, quota, onToggle }) => {
   const phaseElapsed = useElapsed(phase?.startedAtMs ?? 0, phase?.endedAtMs ?? null, !!phase && !phase.settled);
   const now = useTicking(!phase && isLive(meta.state));
@@ -215,7 +213,7 @@ const WorkHeader: FC<{
       type="button"
       data-slot="request-work-header"
       aria-expanded={open}
-      onClick={(event) => onToggle(event.currentTarget)}
+      onClick={onToggle}
       className={cn(rule, "group gap-1 text-start")}
     >
       {text}
@@ -439,23 +437,6 @@ const BlockError: FC<{ retry: boolean }> = ({ retry }) => {
 };
 
 /**
- * Where a turn is, for the thread's scrolling: its final answer streams (`final_answer`), it
- * shows work before that (`prework`), or it is over or shows nothing yet (`idle`).
- */
-function turnPhase(
-  meta: BlockMeta,
-  live: boolean,
-  answering: boolean,
-): "idle" | "prework" | "final_answer" {
-  if (!live) return "idle";
-  const streaming = meta.texts.at(-1)?.position === Number.POSITIVE_INFINITY;
-  const work = meta.rows.length > 0 || meta.orchestratorSteps.length > 0 || meta.cards.length > 0 || (meta.thinking?.length ?? 0) > 0;
-  if (answering || (!work && streaming)) return "final_answer";
-  if (work || meta.texts.some((text) => text.position !== Number.POSITIVE_INFINITY)) return "prework";
-  return "idle";
-}
-
-/**
  * One request's answer, shown as a turn. While the request works (and after it was stopped
  * or failed) its work shows in place, in order: replies, workers and cards, then what happens
  * right now. Once it is done, everything before the answer folds into "Worked for 3m 4s"; the
@@ -511,7 +492,6 @@ export const RequestBlock: FC = () => {
   const parts = workParts(done ? folded : activity, live && !done);
   const foldable = done && parts.some((part) => part.type === "work" && part.items.length > 0);
   const outcome = done ? (phase?.outcome ?? null) : null;
-  const turn = turnPhase(meta, live, answering);
   const header =
     phase !== null ||
     foldable ||
@@ -526,9 +506,6 @@ export const RequestBlock: FC = () => {
       id={meta.answerId ? `message-${meta.answerId}` : undefined}
       tabIndex={-1}
       data-state={meta.state}
-      data-turn-phase={turn}
-      data-turn-live={live ? "true" : undefined}
-      data-turn-steers={String(meta.steers.length)}
       className="group/answer gap-answer-actions-gap relative flex flex-col px-2"
     >
       {/* A run picks its models itself: not a change the user made. */}
@@ -556,7 +533,6 @@ export const RequestBlock: FC = () => {
             <WorkFold key={`work:${index}`} open={!done || fold.open}>
               <div
                 data-slot="request-work"
-                data-follow-content={live && index === parts.length - 1 ? "" : undefined}
                 className={cn("gap-activity flex min-w-0 flex-col", (header || index > 0) && "pt-activity")}
               >
                 <ActivityItems
@@ -627,16 +603,12 @@ export const RequestBlock: FC = () => {
 };
 
 /**
- * Whether a finished turn's work is open. It folds by default, and the header keeps its place on
- * screen while the work opens or closes under it.
+ * Whether a finished turn's work is open. It folds by default; the thread keeps the header in
+ * place on screen while the work opens or closes under it (see `thread-scroll.ts`).
  */
 function useFold() {
   const [open, setOpen] = useState(false);
-  const toggle = (header: HTMLElement) => {
-    preserveAnchor(header);
-    setOpen(!open);
-  };
-  return { open, toggle };
+  return { open, toggle: () => setOpen(!open) };
 }
 
 /** A turn's work cut at the user's follow-ups: runs of work, and the steered bubbles between them. */

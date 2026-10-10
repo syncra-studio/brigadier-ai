@@ -345,6 +345,9 @@ function textOf(message: AppendMessage): string {
     .trim();
 }
 
+/** The conversations whose earlier turns the user showed, for the app's run. */
+const unfolded = new Set<string>();
+
 const NO_PENDING: PendingMessage[] = [];
 const NO_RATINGS: Partial<Record<string, Rating>> = {};
 
@@ -471,15 +474,24 @@ export function ConversationView({
       ),
     [thread.items, thread.fullText, thread.hasMore, digest, pending, session],
   );
-  // A long thread shows its newest turns; the older ones wait behind "N earlier messages".
-  const [unfoldedIn, setUnfoldedIn] = useState<string | null>(null);
+  // A long thread shows its newest turns; the older ones wait behind "N earlier messages", until
+  // shown (then for the app's run, so the thread reopens where it was left).
+  const [unfoldedIn, setUnfoldedIn] = useState<string | null>(() =>
+    conversationId !== null && unfolded.has(conversationId) ? conversationId : null,
+  );
   const folded = useMemo(
     () => (unfoldedIn === conversationId ? { tree: full, hidden: 0 } : foldTurns(full, SHOWN_TURNS)),
     [full, unfoldedIn, conversationId],
   );
   const tree = folded.tree;
   const earlier = useMemo(
-    () => ({ hidden: folded.hidden, show: () => setUnfoldedIn(conversationId) }),
+    () => ({
+      hidden: folded.hidden,
+      show: () => {
+        if (conversationId !== null) unfolded.add(conversationId);
+        setUnfoldedIn(conversationId);
+      },
+    }),
     [folded.hidden, conversationId],
   );
   const setup = conversation?.setup;
@@ -826,9 +838,6 @@ export function ConversationView({
                                   components={THREAD_COMPONENTS}
                                   // One placeholder, in every conversation.
                                   placeholder="Do anything"
-                                  // A session's work comes before its answer, and is followed once it
-                                  // reaches the composer; a Chat's answer fills the room made for it.
-                                  scrollMode={conversation?.kind === "chat" ? "chat" : "session"}
                                   scrollKey={conversation?.id}
                                 />
                               </SummaryPane>

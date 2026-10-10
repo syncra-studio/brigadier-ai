@@ -36,11 +36,7 @@ import {
   type FC,
 } from "react";
 
-import {
-  type ScrollMode,
-  ThreadScroller,
-  TurnLayout,
-} from "@/components/assistant-ui/thread-scroll";
+import { ThreadScroller } from "@/components/assistant-ui/thread-scroll";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -75,8 +71,6 @@ export type ThreadProps = {
   components?: ThreadComponents | undefined;
   autoFocus?: boolean | undefined;
   placeholder?: string | undefined;
-  /** How a sent message's turn is followed: a Chat's answer, or a session's work then answer. */
-  scrollMode?: ScrollMode | undefined;
   /** Where the thread was scrolled is kept under this key (the conversation) while it is away. */
   scrollKey?: string | undefined;
 };
@@ -124,7 +118,6 @@ export const Thread: FC<ThreadProps> = ({
   components = EMPTY_COMPONENTS,
   autoFocus = true,
   placeholder = "Send a message...",
-  scrollMode = "chat",
   scrollKey,
 }) => {
   const isEmpty = useAuiState(isNewChatView);
@@ -135,7 +128,6 @@ export const Thread: FC<ThreadProps> = ({
         isEmpty={isEmpty}
         autoFocus={autoFocus}
         placeholder={placeholder}
-        scrollMode={scrollMode}
         scrollKey={scrollKey ?? null}
       />
     </ThreadComponentsContext.Provider>
@@ -144,103 +136,106 @@ export const Thread: FC<ThreadProps> = ({
 
 const ThreadScrollContext = createContext<ThreadScroller | null>(null);
 
-/** The room behind each step of the room's intersection with the view, in hundredths. */
-const SPACER_THRESHOLDS = Array.from({ length: 101 }, (_, index) => index / 100);
-
-/** The attributes on a row that say what its turn is doing. */
-const TURN_ATTRIBUTES = ["data-turn-phase", "data-turn-live", "data-turn-steers", "data-message-id"];
-
 /**
- * Wires the scroll element, the message rows, the room after them and the floating composer
- * to the thread's scroll controller (see `thread-scroll.ts`).
+ * Wires the scroll element, its column, the message rows, the room after them, the pad under
+ * them and the floating footer to the thread's scroll controller (see `thread-scroll.ts`).
  */
 function useThreadScroll(
   scroller: ThreadScroller,
-  mode: ScrollMode,
   saveKey: string | null,
 ): {
   setViewport: (element: HTMLDivElement | null) => void;
+  setColumn: (element: HTMLDivElement | null) => void;
   setGroup: (element: HTMLDivElement | null) => void;
   setSpacer: (element: HTMLDivElement | null) => void;
+  setPad: (element: HTMLDivElement | null) => void;
   setFooter: (element: HTMLDivElement | null) => void;
 } {
   const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
+  const [column, setColumn] = useState<HTMLDivElement | null>(null);
   const [group, setGroup] = useState<HTMLDivElement | null>(null);
   const [spacer, setSpacer] = useState<HTMLDivElement | null>(null);
+  const [pad, setPad] = useState<HTMLDivElement | null>(null);
   const [footer, setFooter] = useState<HTMLDivElement | null>(null);
 
   useLayoutEffect(() => {
-    if (!viewport || !group || !spacer || !footer) return;
-    const detach = scroller.attach(viewport);
-    const turns = new TurnLayout(scroller, mode, group, spacer, saveKey);
-    scroller.setTurns(turns);
-
-    const footerObserver = new ResizeObserver(([entry]) => {
-      if (entry) scroller.footerResized(entry.borderBoxSize[0]?.blockSize ?? footer.offsetHeight);
-    });
-    footerObserver.observe(footer);
-
-    const rowObserver = new ResizeObserver((entries) => turns.rowsResized(entries));
-    let rows: HTMLElement[] = [];
-    const sync = () => {
-      const current = [...group.children].filter((child) => child instanceof HTMLElement);
-      const known = new Set(rows);
-      const kept = new Set(current);
-      for (const row of rows) if (!kept.has(row)) rowObserver.unobserve(row);
-      // Rows added after every row there was (a new message), not above them (earlier ones).
-      const lastKnown = current.findLastIndex((row) => known.has(row));
-      const appended = rows.length === 0 ? [] : current.slice(lastKnown + 1);
-      for (const row of current) if (!known.has(row)) rowObserver.observe(row);
-      rows = current;
-      turns.update(current, appended);
-    };
-    const children = new MutationObserver(sync);
-    children.observe(group, { childList: true });
-    const attributes = new MutationObserver(sync);
-    attributes.observe(group, { subtree: true, attributes: true, attributeFilter: TURN_ATTRIBUTES });
-    sync();
-
-    const offScroll = scroller.addScrollListener((distance) => turns.scrolled(distance));
-    const offUser = scroller.addUserScrollListener((distance, previous) =>
-      turns.userScrolled(distance, previous),
-    );
-    let frame: number | null = null;
-    const viewObserver = new ResizeObserver(() => {
-      frame ??= requestAnimationFrame(() => {
-        frame = null;
-        turns.resized();
-      });
-    });
-    viewObserver.observe(viewport);
-    viewObserver.observe(footer);
-    const intersection = new IntersectionObserver(
-      ([entry]) => {
-        if (entry) turns.spacerIntersection(entry.intersectionRect.height);
+    if (!viewport || !column || !group || !spacer || !pad || !footer) return;
+    const list = () => [...group.children].filter((child) => child instanceof HTMLElement);
+    let rows = list();
+    // The pad and the scroll padding follow the floating footer's height (see globals.css).
+    const footerResized = () =>
+      viewport.style.setProperty("--thread-footer-height", `${footer.offsetHeight}px`);
+    footerResized();
+    const detach = scroller.attach(
+      {
+        viewport,
+        rows: () => rows,
+        content: () => spacer.getBoundingClientRect().bottom - column.getBoundingClientRect().top,
+        padding: () => pad.offsetHeight,
+        turnTop: (row) =>
+          row instanceof HTMLElement ? Number.parseFloat(getComputedStyle(row).scrollMarginTop) || 0 : 0,
+        setRoom: (px) => {
+          spacer.style.height = `${px}px`;
+        },
       },
-      { root: viewport, threshold: SPACER_THRESHOLDS },
+      saveKey,
     );
-    intersection.observe(spacer);
+
+    // The view, the floating footer and what the column holds above the room (the rows, and a
+    // skeleton or "earlier messages" before them): never the room or the pad, which change
+    // here in answer.
+    const resizes = new ResizeObserver((entries) => {
+      if (entries.some((entry) => entry.target === footer)) footerResized();
+      scroller.resized();
+    });
+    const observed = new Set<Element>();
+    const observe = () => {
+      const now = new Set([viewport, footer, ...[...column.children].filter((child) => child !== spacer && !child.contains(pad))]);
+      for (const element of observed) if (!now.has(element)) resizes.unobserve(element);
+      for (const element of now) if (!observed.has(element)) resizes.observe(element);
+      observed.clear();
+      for (const element of now) observed.add(element);
+    };
+    observe();
+    const above = new MutationObserver(observe);
+    above.observe(column, { childList: true });
+    const children = new MutationObserver(() => {
+      rows = list();
+      scroller.rowsChanged();
+    });
+    children.observe(group, { childList: true });
+
+    const listening = new AbortController();
+    const options = { passive: true, signal: listening.signal };
+    viewport.addEventListener("scroll", () => scroller.scrolled(), options);
+    for (const type of ["wheel", "touchstart", "pointerdown", "keydown"]) {
+      viewport.addEventListener(type, scroller.interrupt, options);
+    }
+    // Capturing: the toggle's place is taken before its fold changes.
+    viewport.addEventListener(
+      "click",
+      (event) => {
+        if (event.target instanceof HTMLElement) scroller.clicked(event.target);
+      },
+      { ...options, capture: true },
+    );
 
     return () => {
-      intersection.disconnect();
-      viewObserver.disconnect();
-      if (frame !== null) cancelAnimationFrame(frame);
-      offUser();
-      offScroll();
-      attributes.disconnect();
+      listening.abort();
       children.disconnect();
-      rowObserver.disconnect();
-      footerObserver.disconnect();
-      turns.dispose();
-      scroller.setTurns(null);
+      above.disconnect();
+      resizes.disconnect();
       detach();
     };
-  }, [scroller, mode, saveKey, viewport, group, spacer, footer]);
+  }, [scroller, saveKey, viewport, column, group, spacer, pad, footer]);
 
-  // The user's own message (sent, or an edit sent) is placed where its answer has room.
-  useAuiEvent({ scope: "thread", event: "composer.send" }, scroller.sent);
+  // A sent edit's new message is placed like a new one (new messages are placed by their id,
+  // see `expectSentTurn`).
+  useAuiEvent({ scope: "thread", event: "composer.send" }, (event) => {
+    if (event.messageId) scroller.editSent();
+  });
 
-  return { setViewport, setGroup, setSpacer, setFooter };
+  return { setViewport, setColumn, setGroup, setSpacer, setPad, setFooter };
 }
 
 /** "Drop to attach", over the thread while files are dragged onto it. */
@@ -261,9 +256,8 @@ const ThreadRoot: FC<{
   isEmpty: boolean;
   autoFocus: boolean;
   placeholder: string;
-  scrollMode: ScrollMode;
   scrollKey: string | null;
-}> = ({ isEmpty, autoFocus, placeholder, scrollMode, scrollKey }) => {
+}> = ({ isEmpty, autoFocus, placeholder, scrollKey }) => {
   const {
     Welcome = ThreadWelcome,
     BeforeMessages,
@@ -272,16 +266,20 @@ const ThreadRoot: FC<{
     Composer: ComposerComponent = Composer,
   } = useContext(ThreadComponentsContext);
   const [scroller] = useState(() => new ThreadScroller());
-  const { setViewport, setGroup, setSpacer, setFooter } = useThreadScroll(scroller, scrollMode, scrollKey);
+  const { setViewport, setColumn, setGroup, setSpacer, setPad, setFooter } = useThreadScroll(
+    scroller,
+    scrollKey,
+  );
 
-  // The pad under the content, as tall as the floating composer, backed by the background up to
-  // just above it so text fades out as it scrolls under.
+  // The pad under the content: the floating footer's height and the gap above it, backed by the
+  // background under the footer and fading out above it, so text fades as it scrolls under.
   const pad = (
     <div
+      ref={setPad}
       aria-hidden
       className="thread-bottom-pad pointer-events-none sticky bottom-0 z-10 mt-auto w-full shrink-0"
     >
-      <div className="thread-bottom-fade absolute inset-x-0 -top-8 bottom-0" />
+      <div className="thread-bottom-fade absolute inset-x-0 bottom-0" />
     </div>
   );
 
@@ -289,15 +287,22 @@ const ThreadRoot: FC<{
     <ThreadScrollContext.Provider value={scroller}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background @container flex h-full flex-col">
         <ComposerPrimitive.AttachmentDropzone className="group/drop relative flex min-h-0 flex-1 flex-col">
-          {/* Laid out bottom-up: the thread stays on its end unless scrolled, and what shows
-              stays put while content changes around it (see `thread-scroll.ts`). */}
+          {/* What shows stays put while content changes around it, and the view follows new
+              content only from the bottom (see `thread-scroll.ts`). Focusable, so the keys
+              scroll it once clicked. */}
           <div
             ref={setViewport}
             data-slot="aui_thread-viewport"
-            className="flex min-h-0 flex-1 flex-col-reverse overflow-x-hidden overflow-y-auto thread-scroll-padding focus:outline-none"
+            tabIndex={-1}
+            className="thread-scroll-padding flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto focus:outline-none"
           >
+            {/* Under the top bar the thread fades out. */}
+            <div aria-hidden className="pointer-events-none sticky top-0 z-10 h-0 shrink-0">
+              <div className="thread-top-fade absolute inset-x-0 top-0" />
+            </div>
             {/* The column: the pane may move it aside for the pinned summary. */}
             <div
+              ref={setColumn}
               data-slot="aui_thread-column"
               className="max-w-thread mx-auto flex min-h-full w-full shrink-0 flex-col px-4 pt-8"
             >
@@ -313,25 +318,24 @@ const ThreadRoot: FC<{
               </AuiIf>
               {BeforeMessages && <BeforeMessages />}
 
-              <div className="flex flex-col pb-8 empty:hidden has-[[data-slot=aui_message-group]:empty]:pb-0">
-                <div
-                  ref={setGroup}
-                  data-slot="aui_message-group"
-                  className="flex flex-col gap-y-6 empty:hidden"
-                >
-                  <ThreadPrimitive.Messages>
-                    {() => <ThreadMessage />}
-                  </ThreadPrimitive.Messages>
-                </div>
-                {/* Room for the newest turn's answer, made when the user sends. */}
-                <div ref={setSpacer} aria-hidden data-slot="aui_thread-spacer" className="shrink-0" />
+              <div
+                ref={setGroup}
+                data-slot="aui_message-group"
+                className="flex flex-col gap-y-6 empty:hidden"
+              >
+                <ThreadPrimitive.Messages>
+                  {() => <ThreadMessage />}
+                </ThreadPrimitive.Messages>
               </div>
+              {/* Room for the newest turn's answer, made when the user sends. */}
+              <div ref={setSpacer} aria-hidden data-slot="aui_thread-spacer" className="shrink-0" />
 
               {isEmpty ? <div className="flex grow basis-0 flex-col justify-end">{pad}</div> : pad}
             </div>
           </div>
 
-          {/* The composer floats over the thread's bottom; its height is the thread's padding. */}
+          {/* The composer, with what sits above it, floats over the thread's bottom; its height
+              and a gap are the thread's bottom padding. */}
           <div
             ref={setFooter}
             data-thread-scroll-footer
@@ -390,8 +394,8 @@ const WorkingDots: FC = () => (
 );
 
 /**
- * ↓ over the composer once part of the thread lies below what shows (the room made for an
- * answer doesn't count); "•••" in its place while the model works. It fades in and out.
+ * ↓ over the composer once the view is above the bottom; "•••" in its place while the model
+ * works, and ↓ again on hover or focus. It fades in and out.
  */
 const ThreadScrollToBottom: FC = () => {
   const scroller = useContext(ThreadScrollContext);
@@ -406,13 +410,22 @@ const ThreadScrollToBottom: FC = () => {
       aria-label="Scroll to bottom"
       aria-hidden={!shown || undefined}
       tabIndex={shown ? undefined : -1}
-      onClick={shown ? scroller?.scrollToEnd : undefined}
+      onClick={shown ? scroller?.scrollToBottom : undefined}
       className={cn(
-        "aui-thread-scroll-to-bottom border-border bg-background text-foreground above-composer absolute end-1/2 z-30 flex size-8 translate-x-1/2 items-center justify-center rounded-full border bg-clip-padding transition-opacity duration-150 ease-in-out [&_svg]:size-4",
+        "aui-thread-scroll-to-bottom group/scroll border-border bg-background text-foreground above-composer absolute end-1/2 z-30 flex size-8 translate-x-1/2 items-center justify-center rounded-full border bg-clip-padding transition-opacity duration-150 ease-in-out [&_svg]:size-4",
         shown ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
       )}
     >
-      {shown && running ? <WorkingDots /> : <ArrowDown />}
+      {running ? (
+        <>
+          <span className="group-hover/scroll:hidden group-focus-visible/scroll:hidden">
+            <WorkingDots />
+          </span>
+          <ArrowDown className="hidden group-hover/scroll:block group-focus-visible/scroll:block" />
+        </>
+      ) : (
+        <ArrowDown />
+      )}
     </button>
   );
 };
@@ -544,7 +557,7 @@ const AssistantMessage: FC = () => {
     <MessagePrimitive.Root
       data-slot="aui_assistant-message-root"
       data-role="assistant"
-      className="relative -mb-7.5 pb-7.5"
+      className="relative -mb-7.5 pb-7.5 last:mb-0"
     >
       <div
         data-slot="aui_assistant-message-content"
@@ -608,7 +621,7 @@ const UserMessage: FC = () => {
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
       data-message-id={id}
-      className="group/user flex flex-col items-end gap-y-1 px-2"
+      className="group/user scroll-mt-thread-turn flex flex-col items-end gap-y-1 px-2"
       data-role="user"
     >
       <DaySeparator />
@@ -676,6 +689,7 @@ const UserMessageText: FC = () => {
       {(clipped || expanded) && (
         <button
           type="button"
+          aria-expanded={expanded}
           onClick={() => setExpanded(!expanded)}
           className="text-muted-foreground hover:text-foreground self-start pt-1 text-xs"
         >
@@ -742,7 +756,7 @@ const EditComposer: FC = () => {
     <MessagePrimitive.Root
       data-slot="aui_edit-composer-root"
       data-role="user"
-      className="flex flex-col px-2"
+      className="scroll-mt-thread-turn flex flex-col px-2"
     >
       <ComposerPrimitive.Root className="bg-muted rounded-thread ms-auto flex w-full flex-col gap-2 p-2">
         <ComposerPrimitive.Input

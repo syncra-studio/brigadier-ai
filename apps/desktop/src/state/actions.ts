@@ -1,3 +1,4 @@
+import { expectSentTurn } from "@/components/assistant-ui/thread-scroll";
 import { request } from "@/ipc/client";
 import type {
   Access,
@@ -434,6 +435,8 @@ export async function send(
   const waits = running || working || (slot !== null && !!queue?.paused);
   const localId = waits ? null : crypto.randomUUID();
   if (localId) {
+    // The thread places the turn it starts once it shows, under this id (see `shownIdOf`).
+    expectSentTurn(conversationId, localId);
     useApp.setState((state) => ({
       pending: [
         ...state.pending,

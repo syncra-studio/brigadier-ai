@@ -40,6 +40,8 @@
  *               min-h-composer                composer input minimum height
  *               max-h-composer-max            composer input maximum height (then it scrolls)
  *               max-h-queue-max               the queue card's maximum height (then it scrolls)
+ *               scroll-mt-thread-turn         where a sent message settles under the thread's top;
+ *                                             thread-composer-gap, thread-fade-{bottom,top} (globals.css)
  *               size-attachment-thumb, w-attachment-card  an image attachment, a file attachment
  *               mx-rail-inset, -mb-rail-tuck  the composer rail: its side inset, the tuck under the card
  *   Layout      w-sidebar, min-w-sidebar-min, max-w-sidebar-max  the sidebar panel: default
@@ -181,6 +183,13 @@
   --spacing-kbd: 1.125rem;
   --spacing-menu: 8rem;
   --spacing-composer: 2.75rem;
+  /* The thread's scroll, as in ChatGPT's app: a sent message settles 171px under the view's top;
+     at the bottom the last content ends 84px above the floating composer; the thread fades out
+     over 30px above the composer and 20px under the top bar. */
+  --spacing-thread-turn: 10.6875rem;
+  --spacing-thread-composer-gap: 5.25rem;
+  --spacing-thread-fade-bottom: 1.875rem;
+  --spacing-thread-fade-top: 1.25rem;
   /* The composer grows with its text up to a quarter of the window, then scrolls. */
   --spacing-composer-max: 25dvh;
   /* The pinned summary: its gap to the top bar and the thread pane's edges (also the gap

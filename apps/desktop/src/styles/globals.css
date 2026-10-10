@@ -101,34 +101,39 @@
   --animate-glyph-in: glyph-in 280ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-/* The thread's scroll element, laid out bottom-up: the browser's own scroll anchoring is off (the
-   thread keeps its place itself), and focus scrolls keep clear of the floating composer. */
+/* The thread's scroll element: the browser's own scroll anchoring is off (the thread keeps its
+   place itself, see thread-scroll.ts), and focus scrolls keep clear of the floating footer. */
 @utility thread-scroll-padding {
   overflow-anchor: none;
-  scroll-padding-bottom: var(--thread-scroll-padding-bottom, 0px);
+  scroll-padding-bottom: calc(var(--thread-footer-height, 0px) + var(--spacing-thread-composer-gap));
 }
 
-/* The pad after the thread's content: as tall as the floating composer (the padding less its gap). */
+/* The pad after the thread's content: the floating footer's height (--thread-footer-height, set
+   by the thread) and the gap above it, so the content ends that gap above the footer's top. */
 @utility thread-bottom-pad {
-  height: calc(var(--thread-scroll-padding-bottom, 1rem) - 1rem);
+  height: calc(var(--thread-footer-height, 0px) + var(--spacing-thread-composer-gap));
 }
 
-/* Behind the floating composer the background is solid, then fades out over 2rem above it. */
+/* Behind the floating footer the background is solid, then fades out above it. */
 @utility thread-bottom-fade {
+  height: calc(var(--thread-footer-height, 0px) + var(--spacing-thread-fade-bottom));
   background-image: linear-gradient(
     to top,
     var(--color-background) 0%,
-    var(--color-background) calc(100% - 2rem),
+    var(--color-background) calc(100% - var(--spacing-thread-fade-bottom)),
     transparent 100%
   );
 }
 
-/* 1.5rem above the composer's column, or above the capsule floating over it. */
+/* Under the top bar the thread fades in. */
+@utility thread-top-fade {
+  height: var(--spacing-thread-fade-top);
+  background-image: linear-gradient(to bottom, var(--color-background), transparent);
+}
+
+/* 1.5rem above the floating footer's column: its composer, and what sits above it. */
 @utility above-composer {
   bottom: calc(100% + 1.5rem);
-  [data-slot="aui_thread-footer-column"]:has([data-slot="composer-capsule"]) > & {
-    bottom: calc(100% + 4rem);
-  }
 }
 
 /* The sidebar panel's width: where the user dragged it (--sidebar-width, set by the sidebar)

@@ -28,7 +28,7 @@ const shot = async (name) => {
   const viewport = page.locator('[data-slot="aui_thread-viewport"]');
   if (await viewport.count())
     await viewport.evaluate((element) => {
-      element.scrollTop = -element.scrollHeight;
+      element.scrollTop = 0;
     });
   await page.screenshot({ path: `${output}/${name}.png`, animations: "disabled" });
   const text = await page.locator("main").innerText();
