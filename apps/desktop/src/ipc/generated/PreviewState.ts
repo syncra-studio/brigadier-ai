@@ -3,4 +3,4 @@
 /**
  * Where a preview stands.
  */
-export type PreviewState = { "type": "running" } | { "type": "exited", code: number | null, status: string, } | { "type": "stopped", reason: string, };
+export type PreviewState = { "type": "running" } | { "type": "paused" } | { "type": "exited", code: number | null, status: string, } | { "type": "stopped", reason: string, };

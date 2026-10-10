@@ -649,6 +649,23 @@ export async function stopPreview(conversationId: string, previewId: string | nu
   await request({ method: "stopPreview", conversationId, previewId });
 }
 
+export async function pausePreview(conversationId: string, previewId: string): Promise<void> {
+  await request({ method: "pausePreview", conversationId, previewId });
+}
+
+export async function resumePreview(conversationId: string, previewId: string): Promise<void> {
+  await request({ method: "resumePreview", conversationId, previewId });
+}
+
+export async function clearPreviews(conversationId: string): Promise<void> {
+  await request({ method: "clearPreviews", conversationId });
+}
+
+export async function previewLogTail(conversationId: string, previewId: string): Promise<{ tail: string; url: string | null }> {
+  const { tail, url } = await request({ method: "previewLog", conversationId, previewId, lines: 80 });
+  return { tail, url };
+}
+
 /** Continues the latest request after the user stopped it, in the same block. */
 export async function resume(conversationId: string): Promise<void> {
   await request({ method: "resume", conversationId });

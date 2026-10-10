@@ -30,6 +30,7 @@ pub(crate) const KINDS: &[&str] = &[
     "output.stored",
     "thread.looked",
     "preview.updated",
+    "previews.cleared",
     "queue.changed",
     "request.updated",
     "worker.step",
@@ -93,6 +94,8 @@ pub(crate) struct Board {
     pub(crate) thread_reads: std::sync::Arc<crate::manager::reads::ReadLog>,
     /// Its previews, by id.
     pub(crate) previews: HashMap<String, crate::work::Preview>,
+    /// Highest preview number ever recorded, including cleared rows.
+    pub(crate) preview_number: u64,
 }
 
 impl Board {
@@ -190,7 +193,18 @@ impl Board {
                 reads, searches, ..
             } => std::sync::Arc::make_mut(&mut self.thread_reads).apply(reads, searches),
             DomainEvent::PreviewUpdated { preview } => {
+                if let Some(number) = preview
+                    .id
+                    .strip_prefix("preview-")
+                    .and_then(|n| n.parse().ok())
+                {
+                    self.preview_number = self.preview_number.max(number);
+                }
                 self.previews.insert(preview.id.clone(), preview.clone());
+            }
+            DomainEvent::PreviewsCleared { ids, .. } => {
+                self.previews
+                    .retain(|id, preview| preview.state.is_live() || !ids.contains(id));
             }
             DomainEvent::QueueChanged { queue, .. } => self.queue = queue.clone(),
             DomainEvent::RunStateChanged {

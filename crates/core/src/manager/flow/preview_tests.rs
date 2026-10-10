@@ -341,6 +341,31 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
         !last.contains("was stopped by the user"),
         "told once: {last}"
     );
+    let board = flow.board().await;
+    let ids = board.previews.keys().cloned().collect::<Vec<_>>();
+    let aliases = board
+        .previews
+        .values()
+        .filter_map(|p| p.log.clone())
+        .collect::<Vec<_>>();
+    flow.manager
+        .clear_previews(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.say("Where are those previews?").await;
+    flow.settled().await;
+    let last = inputs.lock().unwrap().last().cloned().unwrap();
+    assert!(last.contains("The user cleared"), "{last}");
+    assert!(
+        last.contains("stored logs remain readable through read_artifact"),
+        "{last}"
+    );
+    for id in ids {
+        assert!(last.contains(&id), "{last}");
+    }
+    for alias in aliases {
+        assert!(last.contains(&format!("read_artifact {alias}")), "{last}");
+    }
     flow.stop().await;
 }
 
@@ -922,5 +947,250 @@ async fn preview_data_pass_through_does_not_claim_or_create_folders() {
         .unwrap();
     flow.manager.cleanup_finished(&flow.conversation).await;
     assert!(existing.exists());
+    flow.stop().await;
+}
+
+/// A stopped group includes grandchildren and descendants that start another session.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn pause_and_resume_stop_the_group_and_detached_grandchildren_and_stop_quits_them() {
+    use std::time::Duration;
+    let replies = Replies::default();
+    let flow = Flow::start("preview-pause", Options::default(), thread(replies)).await;
+    let tmp = scratch("pause");
+    let program = tmp.join("heartbeat.py");
+    std::fs::write(
+        &program,
+        r#"
+import os, signal, sys, time
+root = sys.argv[1]
+def heartbeat(name):
+    def quit(signum, frame):
+        with open(root + '/' + name + '.quit', 'w') as f: f.write('term')
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, quit)
+    with open(root + '/' + name + '.pid', 'w') as f: f.write(str(os.getpid()))
+    while True:
+        with open(root + '/' + name, 'a') as f: f.write('.')
+        time.sleep(0.03)
+if os.fork() == 0:
+    if os.fork() == 0:
+        os.setsid()
+        heartbeat('detached')
+    heartbeat('child')
+heartbeat('parent')
+"#,
+    )
+    .unwrap();
+    flow.say(&format!(
+        "start python3 '{}' '{}'",
+        program.display(),
+        tmp.display()
+    ))
+    .await;
+    let board = flow
+        .until("the heartbeat preview", |board| {
+            !running(board).is_empty() && tmp.join("detached").exists()
+        })
+        .await;
+    let preview = running(&board).pop().unwrap();
+    flow.settled().await;
+    let size = |name: &str| std::fs::metadata(tmp.join(name)).unwrap().len();
+    let names = ["parent", "child", "detached"];
+    flow.manager
+        .pause_preview(flow.conversation.clone(), preview.id.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        flow.board().await.previews[&preview.id].state,
+        PreviewState::Paused
+    );
+    assert!(!flow.board().await.previews[&preview.id].state.is_running());
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let before = names.map(size);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        names.map(size),
+        before,
+        "the parent, child and detached grandchild are stopped"
+    );
+    let log = flow
+        .manager
+        .preview_log(&flow.conversation, Some(&preview.id), None)
+        .await
+        .unwrap();
+    assert!(log.contains("paused by the user"), "{log}");
+    flow.manager
+        .resume_preview(flow.conversation.clone(), preview.id.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        flow.board().await.previews[&preview.id].state,
+        PreviewState::Running
+    );
+    super::eventually("all heartbeats to continue", || {
+        names
+            .iter()
+            .enumerate()
+            .all(|(i, name)| size(name) > before[i])
+    })
+    .await;
+    flow.manager
+        .pause_preview(flow.conversation.clone(), preview.id.clone())
+        .await
+        .unwrap();
+    flow.manager
+        .stop_preview(flow.conversation.clone(), Some(preview.id.clone()))
+        .await
+        .unwrap();
+    assert!(matches!(
+        flow.board().await.previews[&preview.id].state,
+        PreviewState::Stopped { .. }
+    ));
+    super::eventually(
+        "all processes to handle SIGTERM, including the paused grandchild",
+        || {
+            names
+                .iter()
+                .all(|name| tmp.join(format!("{name}.quit")).exists())
+        },
+    )
+    .await;
+    for name in names {
+        gone(&flow, child_pid(&tmp.join(format!("{name}.pid")))).await;
+    }
+    assert!(
+        flow.manager
+            .resume_preview(flow.conversation.clone(), preview.id)
+            .await
+            .is_err()
+    );
+    // If its leader dies externally while paused, detached children must not remain frozen.
+    let orphaned = tmp.join("orphaned");
+    std::fs::create_dir(&orphaned).unwrap();
+    flow.say(&format!(
+        "start python3 '{}' '{}'",
+        program.display(),
+        orphaned.display()
+    ))
+    .await;
+    let board = flow
+        .until("another heartbeat preview", |board| {
+            !running(board).is_empty() && orphaned.join("detached.pid").exists()
+        })
+        .await;
+    let preview = running(&board).pop().unwrap();
+    flow.settled().await;
+    flow.manager
+        .pause_preview(flow.conversation.clone(), preview.id.clone())
+        .await
+        .unwrap();
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(preview.pid.unwrap() as i32),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .unwrap();
+    flow.until("the externally killed preview to end", |board| {
+        !board.previews[&preview.id].state.is_live()
+    })
+    .await;
+    for name in names {
+        gone(&flow, child_pid(&orphaned.join(format!("{name}.pid")))).await;
+    }
+    flow.stop().await;
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn clear_keeps_live_previews_and_artifacts_and_reloads_without_reusing_ids() {
+    let replies = Replies::default();
+    let mut flow = Flow::start("preview-clear", Options::default(), thread(replies)).await;
+    let tmp = scratch("clear");
+    flow.say("start printf 'http://localhost:\\033[1m5173\\033[22m/\\nfirst\\nlast\\n'")
+        .await;
+    flow.settled().await;
+    let board = flow
+        .until("an ended preview", |board| {
+            board.previews.values().any(|p| !p.state.is_live())
+        })
+        .await;
+    let ended = board.sorted_previews().pop().unwrap();
+    let (tail, url) = flow
+        .manager
+        .preview_log_tail(flow.conversation.clone(), ended.id.clone(), 1)
+        .await
+        .unwrap();
+    assert!(tail.ends_with("last"), "{tail}");
+    assert!(!tail.contains("first"), "{tail}");
+    assert_eq!(url.as_deref(), Some("http://localhost:5173/"));
+    assert_eq!(ended.url, url);
+    let artifact = ended.log.clone().unwrap();
+    let (live, _) = start(&flow, &tmp.join("live.pid")).await;
+    flow.settled().await;
+    // Polling discovers and persists a URL while the preview is still running. Later
+    // polls use the stored URL even if the beginning of its log changes.
+    let live_log = flow
+        .manager
+        .owned_dir("previews", &flow.conversation.0)
+        .join(format!("{}.log", live.id));
+    std::fs::write(
+        &live_log,
+        "http://localhost:\x1b[1m8123\x1b[22m/\nlistening on 8123\n",
+    )
+    .unwrap();
+    let (_, url) = flow
+        .manager
+        .preview_log_tail(flow.conversation.clone(), live.id.clone(), 1)
+        .await
+        .unwrap();
+    assert_eq!(url.as_deref(), Some("http://localhost:8123/"));
+    assert_eq!(flow.board().await.previews[&live.id].url, url);
+    std::fs::write(&live_log, "listening on 8123\n").unwrap();
+    let (paused, _) = start(&flow, &tmp.join("paused.pid")).await;
+    flow.settled().await;
+    flow.manager
+        .pause_preview(flow.conversation.clone(), paused.id.clone())
+        .await
+        .unwrap();
+    let before = flow.board().await.outputs.len();
+    for _ in 0..3 {
+        let (tail, cached_url) = flow
+            .manager
+            .preview_log_tail(flow.conversation.clone(), live.id.clone(), 1)
+            .await
+            .unwrap();
+        assert!(tail.contains("listening on 8123"));
+        assert_eq!(cached_url, url);
+    }
+    assert_eq!(
+        flow.board().await.outputs.len(),
+        before,
+        "polls do not create artifacts"
+    );
+    flow.manager
+        .clear_previews(flow.conversation.clone())
+        .await
+        .unwrap();
+    let board = flow.board().await;
+    assert_eq!(board.previews.len(), 2);
+    assert!(board.previews.contains_key(&live.id) && board.previews.contains_key(&paused.id));
+    assert!(board.outputs.contains_key(&artifact));
+    // Shutdown must also stop the paused row. Reload folds the clear event, including its ID watermark.
+    flow.restart().await;
+    let board = flow.board().await;
+    assert!(!board.previews.contains_key(&ended.id));
+    assert!(matches!(
+        board.previews[&paused.id].state,
+        PreviewState::Stopped { .. }
+    ));
+    assert!(board.outputs.contains_key(&artifact));
+    flow.manager
+        .clear_previews(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.restart().await;
+    assert!(flow.board().await.previews.is_empty());
+    let (next, _) = start(&flow, &tmp.join("next.pid")).await;
+    assert_eq!(next.id, "preview-4");
     flow.stop().await;
 }

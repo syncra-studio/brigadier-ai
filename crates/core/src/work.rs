@@ -563,6 +563,10 @@ pub struct Preview {
     /// The latest snapshot of its log (`out-<id>`, read with `read_artifact`).
     #[serde(default)]
     pub log: Option<String>,
+    /// A local HTTP URL printed by this preview.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<String>,
 }
 
 /// Where a preview stands.
@@ -574,6 +578,8 @@ pub struct Preview {
 )]
 pub enum PreviewState {
     Running,
+    /// The user suspended its process group; it still belongs to the session.
+    Paused,
     /// It ended on its own: `status` as "exit 1" or "killed by signal 9".
     Exited {
         code: Option<i32>,
@@ -586,6 +592,10 @@ pub enum PreviewState {
 }
 
 impl PreviewState {
+    pub fn is_live(&self) -> bool {
+        matches!(self, Self::Running | Self::Paused)
+    }
+
     pub fn is_running(&self) -> bool {
         matches!(self, Self::Running)
     }

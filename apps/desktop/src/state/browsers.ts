@@ -91,7 +91,7 @@ export const useBrowserTabs = create<{
   conversations: Record<string, BrowserTabs>;
 }>(() => ({ conversations: {} }));
 
-export function newBrowserTab(conversationId: string): string {
+export function newBrowserTab(conversationId: string, url?: string): string {
   const id = `page-${crypto.randomUUID()}`;
   useBrowserTabs.setState(({ conversations }) => ({
     conversations: {
@@ -99,6 +99,7 @@ export function newBrowserTab(conversationId: string): string {
       [conversationId]: {
         ids: [...(conversations[conversationId]?.ids ?? []), id],
         active: id,
+        restoredUrls: { ...conversations[conversationId]?.restoredUrls, ...(url ? { [id]: url } : {}) },
       },
     },
   }));

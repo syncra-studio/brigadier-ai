@@ -45,6 +45,9 @@ import {
 import { changedPaneSize, savedPaneSizes, withSavedTerminal } from "@/state/paneSizes";
 import { useApp } from "@/state/store";
 
+const RunningTab = lazy(() =>
+  import("@/app/conversation/RunningTab").then((module) => ({ default: module.RunningTab })),
+);
 const PlanTab = lazy(() =>
   import("@/app/conversation/PlanTab").then((module) => ({
     default: module.PlanTab,
@@ -76,6 +79,7 @@ const FilesTab = lazy(() =>
 
 /** The kinds of tab the side panel opens. */
 export type SideTab =
+  | "running"
   | "workers"
   | "browser"
   | "files"
@@ -89,6 +93,7 @@ const TABS: Record<
   SideTab,
   { title: string; icon: ReactNode; keys: string | null }
 > = {
+  running: { title: "Running", icon: null, keys: null },
   workers: { title: WORKERS_LABEL, icon: null, keys: null },
   browser: { title: "Browser", icon: <Globe />, keys: "⌘T" },
   files: { title: "Files", icon: <Folders />, keys: "⌘P" },
@@ -344,7 +349,7 @@ export function useSidePanel(
   const available = useMemo<SideTab[]>(() => {
     const tabs: SideTab[] =
       kind === "session" && conversationId
-        ? ["workers", "browser", "files", "source", "sideChat", "plan"]
+        ? ["workers", "running", "browser", "files", "source", "sideChat", "plan"]
         : kind === "chat"
           ? ["sideChat", "browser"]
           : kind === "sideChat"
@@ -812,7 +817,11 @@ export function SidePanel({
             </header>
           )}
           <div className="flex min-h-0 flex-1 flex-col">
-            {state.active === "workers" && conversationId ? (
+            {state.active === "running" && conversationId ? (
+              <Suspense fallback={null}>
+                <RunningTab conversationId={conversationId} />
+              </Suspense>
+            ) : state.active === "workers" && conversationId ? (
               <WorkersTab conversationId={conversationId} />
             ) : state.active === "browser" ? (
               <Suspense fallback={null}>

@@ -141,7 +141,7 @@ const CLAUDE_COMMANDS: &str = "\n- Use run for builds, tests, logs and long list
 
 /// How the thread shows the user something running (THREAD-PLAN.md Q6): its previews outlive
 /// its CLI, and in Brigadier's own repository they never touch the installed app's data.
-const PREVIEWS: &str = "\n- Use start_preview (foreground, no `&`), preview_log for output and stop_preview to stop. In Brigadier use a new BRIGADIER_DATA_DIR under /tmp and a dev identity, never ai.brigadier.app. macOS GUI previews below Full access retain confinement and get private temp space. Chromium/Electron may need `--no-sandbox`; Brigadier still confines their helpers. Mach rendezvous IDs: ai.brigadier.dev, com.github.Electron, org.chromium.Chromium, com.google.chrome.for.testing. Other packaged IDs need a dev identity or Full access. Put browser profiles in writable roots.";
+const PREVIEWS: &str = "\n- Use start_preview (foreground, no `&`), preview_log for logs, stop_preview to stop; users may pause previews. In Brigadier use a new BRIGADIER_DATA_DIR under /tmp and a dev identity, never ai.brigadier.app. macOS GUI previews below Full stay confined with private temp space. Chromium/Electron may need `--no-sandbox`; Brigadier still confines their helpers. Mach rendezvous IDs: ai.brigadier.dev, com.github.Electron, org.chromium.Chromium, com.google.chrome.for.testing. Other packaged IDs need a dev identity or Full access. Put browser profiles in writable roots.";
 
 /// The trailer that marks a commit the thread made itself (THREAD-PLAN.md Q4): its commits get
 /// their own one-shot review.

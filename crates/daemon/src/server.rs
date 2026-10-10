@@ -1351,6 +1351,34 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             sessions.stop_preview(conversation_id, preview_id).await?;
             Response::StopPreview
         }
+        Request::PausePreview {
+            conversation_id,
+            preview_id,
+        } => {
+            sessions.pause_preview(conversation_id, preview_id).await?;
+            Response::PausePreview
+        }
+        Request::ResumePreview {
+            conversation_id,
+            preview_id,
+        } => {
+            sessions.resume_preview(conversation_id, preview_id).await?;
+            Response::ResumePreview
+        }
+        Request::ClearPreviews { conversation_id } => {
+            sessions.clear_previews(conversation_id).await?;
+            Response::ClearPreviews
+        }
+        Request::PreviewLog {
+            conversation_id,
+            preview_id,
+            lines,
+        } => {
+            let (tail, url) = sessions
+                .preview_log_tail(conversation_id, preview_id, lines)
+                .await?;
+            Response::PreviewLog { tail, url }
+        }
         Request::Compact { conversation_id } => {
             sessions.compact(conversation_id).await?;
             Response::Compact

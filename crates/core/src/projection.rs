@@ -143,6 +143,7 @@ impl Projection {
             | DomainEvent::CheckRan { .. }
             | DomainEvent::ThreadLooked { .. }
             | DomainEvent::PreviewUpdated { .. }
+            | DomainEvent::PreviewsCleared { .. }
             | DomainEvent::OvernightUpdated { .. }
             | DomainEvent::QueueChanged { .. }
             | DomainEvent::WorkerEvent { .. }

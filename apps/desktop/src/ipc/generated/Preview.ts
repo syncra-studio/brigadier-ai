@@ -32,4 +32,8 @@ pid: number | null, state: PreviewState, startedAtMs: number, endedAtMs: number 
 /**
  * The latest snapshot of its log (`out-<id>`, read with `read_artifact`).
  */
-log: string | null, };
+log: string | null, 
+/**
+ * A local HTTP URL printed by this preview.
+ */
+url?: string, };

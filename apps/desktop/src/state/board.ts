@@ -303,6 +303,7 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "planUpdated",
   "reviewUpdated",
   "previewUpdated",
+  "previewsCleared",
   "overnightUpdated",
   "queueChanged",
   "runStateChanged",
@@ -540,6 +541,10 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return { ...board, reviews: { ...board.reviews, [event.review.id]: event.review } };
     case "previewUpdated":
       return { ...board, previews: { ...board.previews, [event.preview.id]: event.preview } };
+    case "previewsCleared":
+      return { ...board, previews: Object.fromEntries(Object.entries(board.previews).filter(([id, preview]) =>
+        preview.state.type === "running" || preview.state.type === "paused" || !event.ids.includes(id),
+      )) };
     case "overnightUpdated":
       return { ...board, overnight: { ...board.overnight, [event.run.id]: event.run } };
     case "requestUpdated":

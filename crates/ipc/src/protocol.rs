@@ -32,7 +32,7 @@ use ts_rs::TS;
 use crate::metrics::{DaemonMetrics, Diagnostics};
 
 /// Bumped on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 15;
+pub const PROTOCOL_VERSION: u32 = 16;
 
 /// What a development build's injected limit applies to.
 #[cfg(debug_assertions)]
@@ -426,6 +426,22 @@ pub enum Request {
     StopPreview {
         conversation_id: ConversationId,
         preview_id: Option<String>,
+    },
+    PausePreview {
+        conversation_id: ConversationId,
+        preview_id: String,
+    },
+    ResumePreview {
+        conversation_id: ConversationId,
+        preview_id: String,
+    },
+    ClearPreviews {
+        conversation_id: ConversationId,
+    },
+    PreviewLog {
+        conversation_id: ConversationId,
+        preview_id: String,
+        lines: u32,
     },
     /// Compacts a Chat's context now, in a turn of its own (a `/compact` command).
     Compact {
@@ -1096,6 +1112,13 @@ pub enum Response {
     Interrupt,
     Resume,
     StopPreview,
+    PausePreview,
+    ResumePreview,
+    ClearPreviews,
+    PreviewLog {
+        tail: String,
+        url: Option<String>,
+    },
     Compact,
     GetConversationStatus {
         status: ConversationStatus,
@@ -1690,5 +1713,35 @@ mod inline_edit_tests {
             panic!("expected refs")
         };
         assert!(refs[0].inline.is_some());
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn preview_controls_and_log_tail_keep_their_wire_methods() {
+        for method in ["pausePreview", "resumePreview", "previewLog"] {
+            let wire = serde_json::json!({"method": method, "conversationId": "c", "previewId": "preview-1", "lines": 2});
+            let request: Request = serde_json::from_value(wire).unwrap();
+            assert_eq!(serde_json::to_value(request).unwrap()["method"], method);
+        }
+        let request: Request = serde_json::from_value(
+            serde_json::json!({"method":"clearPreviews", "conversationId":"c"}),
+        )
+        .unwrap();
+        assert!(matches!(request, Request::ClearPreviews { .. }));
+        let response = Response::PreviewLog {
+            tail: "last two\nlines".into(),
+            url: Some("http://localhost:5173/".into()),
+        };
+        let wire = serde_json::to_value(response).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({"method":"previewLog", "tail":"last two\nlines", "url":"http://localhost:5173/"})
+        );
+        let decoded: Response = serde_json::from_value(wire).unwrap();
+        assert!(matches!(decoded, Response::PreviewLog { tail, .. } if tail == "last two\nlines"));
     }
 }

@@ -1758,6 +1758,11 @@ pub enum DomainEvent {
     PreviewUpdated {
         preview: crate::work::Preview,
     },
+    /// Removes only the named ended previews; their artifacts remain readable.
+    PreviewsCleared {
+        conversation_id: ConversationId,
+        ids: Vec<String>,
+    },
     QueueChanged {
         conversation_id: ConversationId,
         queue: MessageQueue,
@@ -1868,6 +1873,7 @@ impl DomainEvent {
             Self::CheckRan { .. } => "check.ran",
             Self::ThreadLooked { .. } => "thread.looked",
             Self::PreviewUpdated { .. } => "preview.updated",
+            Self::PreviewsCleared { .. } => "previews.cleared",
             Self::QueueChanged { .. } => "queue.changed",
             Self::WorkerEvent { .. } => "worker.event",
             Self::OrchestratorLogged { .. } => "orchestrator.logged",

@@ -85,6 +85,8 @@ pub(crate) struct LivePreview {
     ended: CancellationToken,
     /// The log's size and alias at its last snapshot, so an unchanged log isn't stored again.
     snapshot: Mutex<Option<(u64, String)>>,
+    /// The descendants suspended with it, including ones outside its group.
+    paused_members: Mutex<Vec<crate::machine::builds::Proc>>,
     /// Held while its record is read and written back, so a log snapshot can't undo its end.
     updating: tokio::sync::Mutex<()>,
 }
@@ -222,7 +224,7 @@ impl SessionManager {
                     .into(),
             ));
         }
-        let number = self.core.board(id).await?.previews.len() + 1;
+        let number = self.core.board(id).await?.preview_number + 1;
         let preview_id = format!("preview-{number}");
         let owner = preview_owner(id);
         let ledger = self.runtime.ledger();
@@ -327,6 +329,7 @@ impl SessionManager {
             started_at_ms: now_ms(),
             ended_at_ms: None,
             log: None,
+            url: None,
         };
         let live = Arc::new(LivePreview {
             conversation: id.clone(),
@@ -338,6 +341,7 @@ impl SessionManager {
             stop: CancellationToken::new(),
             ended: CancellationToken::new(),
             snapshot: Mutex::default(),
+            paused_members: Mutex::default(),
             updating: tokio::sync::Mutex::default(),
         });
         self.previews
@@ -352,7 +356,9 @@ impl SessionManager {
             if let Err(err) = this.runtime.ledger().record(&owner, artifact.clone()).await {
                 tracing::warn!(conversation = %owner_id, error = %err, "could not record a preview's process");
             }
+            let updating = watched.updating.lock().await;
             let recorded = this.record_preview(preview).await;
+            drop(updating);
             if recorded.is_err() {
                 watched.ask_to_stop("it could not be recorded");
             }
@@ -493,7 +499,10 @@ impl SessionManager {
                 Err(err) => PreviewState::Stopped { reason: format!("lost its process: {err}") },
             },
             () = live.stop.cancelled() => {
-                terminate_group(&*platform, live.pid);
+                // Serialize with Pause: once stop is requested no later pause can win.
+                let updating = live.updating.lock().await;
+                terminate_group(&*platform, &live);
+                drop(updating);
                 if tokio::time::timeout(STOP_GRACE, child.wait()).await.is_err() {
                     // It didn't go: it and everything it started are killed.
                     let _ = platform.processes().kill_tree(live.pid);
@@ -502,12 +511,33 @@ impl SessionManager {
                 PreviewState::Stopped { reason: live.reason() }
             }
         };
+        live.stop.cancel();
+        let updating = live.updating.lock().await;
         // Reaped: what it left in its group goes too.
         let _ = platform.processes().kill_group(live.pid);
+        // A paused descendant may have left the group and lost its parent. Its saved
+        // identity still belongs to this preview, so it must not stay suspended forever.
+        let members = live
+            .paused_members
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        for member in members {
+            if crate::machine::still(&*platform, member) {
+                let _ = platform.processes().kill_tree(member.pid);
+            }
+            if !crate::machine::still(&*platform, member) {
+                self.runtime
+                    .ledger()
+                    .forget(&preview_owner(&live.conversation), process_artifact(member))
+                    .await;
+            }
+        }
         self.runtime
             .ledger()
             .forget(&preview_owner(&live.conversation), artifact)
             .await;
+        drop(updating);
         self.end_preview(&live, state).await;
         self.previews
             .lock()
@@ -523,8 +553,11 @@ impl SessionManager {
             PreviewState::Exited { status, .. } => status.clone(),
             PreviewState::Stopped { reason } => format!("stopped: {reason}"),
             PreviewState::Running => "running".into(),
+            PreviewState::Paused => "paused".into(),
         };
         let log = self.store_log(live, &status).await;
+        let path = live.log.clone();
+        let url = blocking(move || Ok(log_url(&path))).await.ok().flatten();
         let _updating = live.updating.lock().await;
         let preview = match self.core.board(id).await {
             Ok(board) => board.previews.get(&live.id).cloned(),
@@ -548,6 +581,7 @@ impl SessionManager {
                 ))
                 .await;
             }
+            preview.url = preview.url.or(url);
             preview.state = state;
             preview.ended_at_ms = Some(now_ms());
             if log.is_some() {
@@ -621,7 +655,7 @@ impl SessionManager {
         let Some(mut current) = current else {
             return;
         };
-        if !current.state.is_running() || current.log.as_deref() == Some(alias) {
+        if !current.state.is_live() || current.log.as_deref() == Some(alias) {
             return;
         }
         current.log = Some(alias.to_owned());
@@ -704,6 +738,224 @@ impl SessionManager {
         ))
     }
 
+    /// The UI reads a bounded tail without storing a fresh artifact on every poll.
+    pub async fn preview_log_tail(
+        &self,
+        id: ConversationId,
+        preview_id: String,
+        lines: u32,
+    ) -> Result<(String, Option<String>)> {
+        let live = self.previews.get(&id, &preview_id);
+        // URL discovery can read disk without blocking the executor or holding up Pause.
+        // Once discovered it is persisted, so subsequent polls need only read the tail.
+        let known = self.core.board(&id).await?;
+        let url = match (&live, known.previews.get(&preview_id)) {
+            (Some(live), Some(preview)) if preview.url.is_none() => {
+                let path = live.log.clone();
+                blocking(move || Ok(log_url(&path))).await?
+            }
+            _ => None,
+        };
+        // End recording and file removal cannot race the live read.
+        let _updating = match &live {
+            Some(live) => Some(live.updating.lock().await),
+            None => None,
+        };
+        let board = self.core.board(&id).await?;
+        let mut preview =
+            board.previews.get(&preview_id).cloned().ok_or_else(|| {
+                Error::Invalid(format!("there is no {preview_id} in this session"))
+            })?;
+        if preview.url.is_none() && url.is_some() {
+            preview.url = url;
+            self.record_preview(preview.clone()).await?;
+        }
+        let bytes = if preview.state.is_live()
+            && let Some(live) = &live
+        {
+            let path = live.log.clone();
+            blocking(move || {
+                let mut file = std::fs::File::open(&path).map_err(|err| io_error(&path, &err))?;
+                let size = file.metadata().map_err(|err| io_error(&path, &err))?.len();
+                file.seek(std::io::SeekFrom::Start(
+                    size.saturating_sub(TAIL_BYTES_MAX as u64),
+                ))
+                .map_err(|err| io_error(&path, &err))?;
+                let mut bytes = Vec::new();
+                file.take(TAIL_BYTES_MAX as u64)
+                    .read_to_end(&mut bytes)
+                    .map_err(|err| io_error(&path, &err))?;
+                Ok(bytes)
+            })
+            .await?
+        } else if let Some(output) = preview
+            .log
+            .as_ref()
+            .and_then(|alias| board.outputs.get(alias))
+        {
+            self.core
+                .read_blob_range(
+                    output.blob.clone(),
+                    output.bytes.saturating_sub(TAIL_BYTES_MAX as u64),
+                    TAIL_BYTES_MAX as u32,
+                )
+                .await?
+                .0
+        } else {
+            Vec::new()
+        };
+        Ok((tail(&bytes, lines.clamp(1, TAIL_MAX)), preview.url))
+    }
+
+    /// Pausing keeps the live process and its cleanup owner, but does not count as running.
+    pub async fn pause_preview(&self, id: ConversationId, preview_id: String) -> Result<()> {
+        self.set_preview_paused(id, preview_id, true).await
+    }
+
+    pub async fn resume_preview(&self, id: ConversationId, preview_id: String) -> Result<()> {
+        self.set_preview_paused(id, preview_id, false).await
+    }
+
+    async fn set_preview_paused(
+        &self,
+        id: ConversationId,
+        preview_id: String,
+        paused: bool,
+    ) -> Result<()> {
+        let live = self
+            .previews
+            .get(&id, &preview_id)
+            .ok_or_else(|| Error::Invalid("the preview has ended".into()))?;
+        let _updating = live.updating.lock().await;
+        let mut preview = self
+            .core
+            .board(&id)
+            .await?
+            .previews
+            .get(&preview_id)
+            .cloned()
+            .ok_or_else(|| Error::Invalid("the preview has ended".into()))?;
+        if live.stop.is_cancelled() || live.ended.is_cancelled() || !preview.state.is_live() {
+            return Err(Error::Invalid(
+                "the preview is stopping or has ended".into(),
+            ));
+        }
+        if (preview.state == PreviewState::Paused) == paused {
+            return Ok(());
+        }
+        if let Err(err) = self.signal_preview(&live, paused).await {
+            // A failed ledger write or signal may follow a partially suspended tree.
+            if paused {
+                let _ = self.signal_preview(&live, false).await;
+            }
+            return Err(err);
+        }
+        preview.state = if paused {
+            PreviewState::Paused
+        } else {
+            PreviewState::Running
+        };
+        if let Err(err) = self.record_preview(preview).await {
+            // Never leave an unrecorded suspended process behind.
+            let _ = self.signal_preview(&live, !paused).await;
+            return Err(err);
+        }
+        if let Ok(conv) = self.conv(&id) {
+            conv.note(format!(
+                "[preview] {preview_id} was {} by the user.",
+                if paused { "paused" } else { "resumed" }
+            ))
+            .await;
+        }
+        Ok(())
+    }
+
+    async fn signal_preview(&self, live: &LivePreview, paused: bool) -> Result<()> {
+        let platform = self.runtime.platform();
+        if let Some(root) = crate::machine::proc_of(&**platform, live.pid) {
+            if paused {
+                // Record each identity durably before suspending it. Parents stop before
+                // children, so a child cannot fork past the walk. A restart's ledger sweep
+                // can then kill even a detached member whose original parent has died.
+                let owner = preview_owner(&live.conversation);
+                let processes = platform.processes();
+                let mut queue = vec![root.pid];
+                let mut visited = std::collections::HashSet::new();
+                while let Some(pid) = queue.pop() {
+                    if !visited.insert(pid) || visited.len() > 2_000 {
+                        continue;
+                    }
+                    let Some(member) = crate::machine::proc_of(&**platform, pid) else {
+                        continue;
+                    };
+                    self.runtime
+                        .ledger()
+                        .record(&owner, process_artifact(member))
+                        .await?;
+                    {
+                        let mut members = live
+                            .paused_members
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner());
+                        if !members.contains(&member) {
+                            members.push(member);
+                        }
+                    }
+                    if crate::machine::still(&**platform, member) {
+                        processes
+                            .suspend(pid)
+                            .map_err(|err| Error::Invalid(err.to_string()))?;
+                        queue.extend(processes.children(pid).unwrap_or_default());
+                    }
+                }
+            } else {
+                let members = live
+                    .paused_members
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
+                crate::machine::continue_tree(&**platform, root, &members);
+            }
+        }
+        signal_preview_group(live.pid, paused)
+    }
+
+    /// Only ended rows go; stored logs may still be referenced by the thread.
+    pub async fn clear_previews(&self, id: ConversationId) -> Result<()> {
+        let board = self.core.board(&id).await?;
+        let ids = board
+            .previews
+            .values()
+            .filter(|preview| !preview.state.is_live())
+            .map(|preview| preview.id.clone())
+            .collect::<Vec<_>>();
+        if !ids.is_empty() {
+            let cleared = ids.join(", ");
+            let logs = ids
+                .iter()
+                .filter_map(|id| {
+                    board.previews[id]
+                        .log
+                        .as_ref()
+                        .map(|alias| format!("{id}: read_artifact {alias}"))
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            self.core
+                .record_conversation(
+                    &id,
+                    vec![DomainEvent::PreviewsCleared {
+                        conversation_id: id.clone(),
+                        ids,
+                    }],
+                )
+                .await?;
+            if let Ok(conv) = self.conv(&id) {
+                conv.note(format!("[preview] The user cleared {cleared}. Their preview IDs are no longer available; stored logs remain readable through read_artifact. {logs}")).await;
+            }
+        }
+        Ok(())
+    }
+
     /// `stop_preview`: stops one preview, or every running one.
     pub(crate) async fn stop_preview_tool(
         &self,
@@ -733,6 +985,11 @@ impl SessionManager {
     /// The user's Stop on a preview chip: stops `preview`, or every running preview of the
     /// conversation.
     pub async fn stop_preview(&self, id: ConversationId, preview: Option<String>) -> Result<()> {
+        if preview.is_none() {
+            self.core.board(&id).await?;
+            self.stop_previews(&id, USER_STOP).await;
+            return Ok(());
+        }
         self.stop_previews_of(&id, preview.as_deref(), USER_STOP)
             .await
             .map(drop)
@@ -811,7 +1068,7 @@ impl SessionManager {
         for preview in board
             .sorted_previews()
             .into_iter()
-            .filter(|preview| preview.state.is_running())
+            .filter(|preview| preview.state.is_live())
         {
             let live = LivePreview {
                 conversation: id.clone(),
@@ -823,6 +1080,7 @@ impl SessionManager {
                 stop: CancellationToken::new(),
                 ended: CancellationToken::new(),
                 snapshot: Mutex::default(),
+                paused_members: Mutex::default(),
                 updating: tokio::sync::Mutex::default(),
             };
             self.end_preview(
@@ -848,6 +1106,13 @@ impl SessionManager {
     }
 }
 
+fn process_artifact(member: crate::machine::builds::Proc) -> Artifact {
+    Artifact::Process {
+        pid: member.pid,
+        started_at_ms: Some(member.started_ms as f64),
+    }
+}
+
 /// Asks each of `live` to stop for `reason`, and waits until each one's end is recorded.
 async fn stop_all(live: &[Arc<LivePreview>], reason: &str) {
     for preview in live {
@@ -858,16 +1123,67 @@ async fn stop_all(live: &[Arc<LivePreview>], reason: &str) {
     }
 }
 
+/// Previews lead their own group. Processes::suspend targets only one PID, so signal the
+/// group explicitly to include the shell's children as well.
+fn signal_preview_group(pid: u32, paused: bool) -> Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let pid = i32::try_from(pid).map_err(|err| Error::Invalid(err.to_string()))?;
+        let signal = if paused {
+            nix::sys::signal::Signal::SIGSTOP
+        } else {
+            nix::sys::signal::Signal::SIGCONT
+        };
+        nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pid), signal)
+            .map_err(|err| Error::Invalid(format!("could not signal the preview: {err}")))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (pid, paused);
+        Err(Error::Invalid(
+            "pausing previews is unsupported on this platform".into(),
+        ))
+    }
+}
+
 /// SIGTERM to the process group `pid` leads (still the caller's child: not yet reaped).
-fn terminate_group(platform: &dyn brigadier_sandbox::Platform, pid: u32) {
+fn terminate_group(platform: &dyn brigadier_sandbox::Platform, live: &LivePreview) {
+    let pid = live.pid;
     #[cfg(unix)]
     {
-        let _ = platform;
         if let Ok(pid) = i32::try_from(pid) {
             let _ = nix::sys::signal::killpg(
                 nix::unistd::Pid::from_raw(pid),
                 nix::sys::signal::Signal::SIGTERM,
             );
+        }
+        if let Some(root) = crate::machine::proc_of(platform, live.pid) {
+            let members = live
+                .paused_members
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            let mut descendants = platform
+                .processes()
+                .descendants(live.pid)
+                .unwrap_or_default();
+            descendants.extend(
+                members
+                    .iter()
+                    .filter(|proc| crate::machine::still(platform, **proc))
+                    .map(|proc| proc.pid),
+            );
+            descendants.sort_unstable();
+            descendants.dedup();
+            for child in descendants {
+                if platform.processes().group_of(child) != Some(live.pid) {
+                    let _ = platform.processes().terminate(child);
+                }
+            }
+            // SIGTERM is pending when a stopped process receives SIGCONT, letting it quit.
+            let _ = signal_preview_group(live.pid, false);
+            crate::machine::continue_tree(platform, root, &members);
+        } else {
+            let _ = signal_preview_group(live.pid, false);
         }
     }
     #[cfg(not(unix))]
@@ -1183,6 +1499,60 @@ fn short_name(command: &str) -> String {
     format!("{cut}…")
 }
 
+/// Startup messages retain the server address even after its tail has scrolled away.
+fn log_url(path: &Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    file.take(16 * 1024).read_to_end(&mut bytes).ok()?;
+    preview_url(&bytes)
+}
+
+fn preview_url(bytes: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut plain = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for code in chars.by_ref() {
+                if ('@'..='~').contains(&code) {
+                    break;
+                }
+            }
+        } else {
+            plain.push(ch);
+        }
+    }
+    for (at, _) in plain.match_indices("http") {
+        let candidate = plain[at..]
+            .split(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '\"' | '\'' | '`'))
+            .next()?
+            .trim_end_matches([')', ']', '}', ',', ';', '.']);
+        let Some(address) = candidate
+            .strip_prefix("http://")
+            .or_else(|| candidate.strip_prefix("https://"))
+        else {
+            continue;
+        };
+        let authority = address.split(['/', '?', '#']).next().unwrap_or_default();
+        let (host, port) = authority
+            .split_once(':')
+            .map_or((authority, None), |(host, port)| (host, Some(port)));
+        if !matches!(host, "localhost" | "127.0.0.1") {
+            continue;
+        }
+        if port.is_some_and(|port| {
+            port.is_empty()
+                || !port.bytes().all(|b| b.is_ascii_digit())
+                || port.parse::<u16>().is_err()
+        }) {
+            continue;
+        }
+        return Some(candidate.to_owned());
+    }
+    None
+}
+
 /// A log file's bytes (at most the last [`OUTPUT_MAX_BYTES`], marked when cut) and its size;
 /// nothing for a log that isn't there.
 fn read_log(path: &Path) -> (Vec<u8>, u64) {
@@ -1240,6 +1610,7 @@ fn state_words(preview: &Preview) -> String {
             Some(pid) => format!("running, pid {pid}"),
             None => "running".into(),
         },
+        PreviewState::Paused => "paused by the user".into(),
         PreviewState::Exited { status, .. } => format!("ended on its own ({status})"),
         PreviewState::Stopped { reason } => format!("stopped ({reason})"),
     }
@@ -1266,6 +1637,133 @@ fn io_error(path: &Path, err: &std::io::Error) -> Error {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn paused_preview_members_survive_ledger_replay_without_their_parent() {
+        use crate::manager::flow::{Flow, Options, Reply, eventually};
+
+        let mut flow = Flow::start(
+            "preview-paused-crash",
+            Options::default(),
+            Arc::new(|_| Box::pin(async { Reply::text("[quiet]") })),
+        )
+        .await;
+        let platform = flow.manager.runtime.platform().clone();
+        let pid_file = flow.repo.join("detached.pid");
+        let mut spec = flow.manager.runtime.cli_env().spec(Path::new("python3"));
+        spec.args = vec![
+            "-c".into(),
+            r#"
+import os, sys, time
+if os.fork() == 0:
+    os.setsid()
+    with open(sys.argv[1], 'w') as f: f.write(str(os.getpid()))
+while True: time.sleep(0.03)
+"#
+            .into(),
+            pid_file.as_os_str().to_owned(),
+        ];
+        let mut child = platform.processes().piped_command(&spec).spawn().unwrap();
+        eventually("the detached preview process", || {
+            std::fs::read_to_string(&pid_file).is_ok_and(|pid| !pid.is_empty())
+        })
+        .await;
+        let detached: u32 = std::fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+        let live = LivePreview {
+            conversation: flow.conversation.clone(),
+            id: "preview-1".into(),
+            pid: child.id(),
+            workspace: flow.repo.clone(),
+            log: flow.repo.join("unused.log"),
+            reason: Mutex::default(),
+            stop: CancellationToken::new(),
+            ended: CancellationToken::new(),
+            snapshot: Mutex::default(),
+            paused_members: Mutex::default(),
+            updating: tokio::sync::Mutex::default(),
+        };
+        flow.manager.signal_preview(&live, true).await.unwrap();
+        let owner = preview_owner(&flow.conversation);
+        let member = crate::machine::proc_of(&*platform, detached).unwrap();
+        assert!(
+            flow.manager
+                .runtime
+                .ledger()
+                .artifacts(&owner)
+                .contains(&process_artifact(member))
+        );
+        // Lose both the in-memory membership and the leader, just as a crash can. The
+        // detached process is now unreachable through the original recorded root.
+        drop(live);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(crate::machine::still(&*platform, member));
+        flow.restart().await;
+        eventually("the replayed ledger to kill the suspended orphan", || {
+            !crate::machine::still(&*platform, member)
+        })
+        .await;
+        assert!(flow.manager.runtime.ledger().artifacts(&owner).is_empty());
+        flow.stop().await;
+    }
+
+    #[test]
+    fn preview_urls_strip_color_and_only_accept_local_http_addresses() {
+        assert_eq!(
+            preview_url(b"Local: \x1b[36mhttp://localhost:\x1b[1m5173\x1b[22m/\x1b[0m"),
+            Some("http://localhost:5173/".into())
+        );
+        assert_eq!(
+            preview_url(b"(http://127.0.0.1:8080/path?q=1)."),
+            Some("http://127.0.0.1:8080/path?q=1".into())
+        );
+        for bad in [
+            "https://localhost.evil/",
+            "http://127.0.0.1@evil/",
+            "http://localhost:nope/",
+            "http://localhost:99999/",
+            "https://example.com/",
+        ] {
+            assert_eq!(preview_url(bad.as_bytes()), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn old_preview_events_load_without_a_url_and_clears_keep_active_rows() {
+        let old = serde_json::json!({"type":"previewUpdated", "preview": {
+            "id":"preview-3", "conversationId":"c", "name":"web", "command":"serve",
+            "workdir":"/work", "workspace":"/work", "state":{"type":"running"}, "startedAtMs":1
+        }});
+        let event: DomainEvent = serde_json::from_value(old).unwrap();
+        let mut board = crate::board::Board::default();
+        board.apply(&event, 1);
+        assert_eq!(board.previews["preview-3"].url, None);
+        assert_eq!(board.preview_number, 3);
+        let clear = DomainEvent::PreviewsCleared {
+            conversation_id: ConversationId("c".into()),
+            ids: vec!["preview-3".into()],
+        };
+        board.apply(&clear, 2);
+        assert_eq!(board.previews.len(), 1);
+        let mut preview = board.previews["preview-3"].clone();
+        preview.state = PreviewState::Paused;
+        board.apply(
+            &DomainEvent::PreviewUpdated {
+                preview: preview.clone(),
+            },
+            3,
+        );
+        board.apply(&clear, 4);
+        assert_eq!(board.previews.len(), 1);
+        preview.state = PreviewState::Exited {
+            code: Some(0),
+            status: "exit 0".into(),
+        };
+        board.apply(&DomainEvent::PreviewUpdated { preview }, 5);
+        board.apply(&clear, 6);
+        assert!(board.previews.is_empty());
+        assert_eq!(board.preview_number, 3);
+    }
 
     /// A folder in the temp directory, removed when dropped however the test ends.
     struct Temp(PathBuf);

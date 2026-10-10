@@ -118,6 +118,8 @@ function summary(event: DomainEvent): string {
       return `${event.command} ${event.cached ? "cached" : event.status}${event.bypassed ? ` (not cached: ${event.bypassed})` : ""}`;
     case "threadLooked":
       return `${event.reads.length} read${event.reads.length === 1 ? "" : "s"}, ${event.searches.length} search${event.searches.length === 1 ? "" : "es"}`;
+    case "previewsCleared":
+      return `${event.ids.length} finished previews cleared`;
     case "previewUpdated":
       return `${event.preview.id} ${event.preview.state.type}`;
     case "overnightUpdated":
