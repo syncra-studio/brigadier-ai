@@ -328,6 +328,8 @@
   --radius-thread: 1rem;
   --radius-composer: 1.375rem;
   --radius-bubble: 1.375rem;
+  /* A command's Shell box in the thread. */
+  --radius-shell: 0.78125rem;
   --radius-rail: 1.25rem;
   /* Menus and tooltips: rounder than cards. */
   --radius-menu: 1.25rem;
@@ -676,6 +678,7 @@
   --radius-thread: 0.75rem;
   --radius-composer: 1.125rem;
   --radius-bubble: 1.125rem;
+  --radius-shell: 0.625rem;
   --radius-rail: 1rem;
   --radius-menu: 1rem;
   --radius-summary: 1rem;

@@ -15,6 +15,10 @@ import { getThreadItem } from "@/state/actions";
  */
 
 const BOX = "border-border bg-code-surface rounded-control mt-1 flex flex-col border text-sm";
+
+/** A command's box: a faint card, its command up to two lines, and the end of its output. */
+const SHELL = "border-foreground/16 bg-foreground/8 rounded-shell mt-1 flex flex-col overflow-hidden border";
+const SHELL_TEXT = "text-code font-mono whitespace-pre-wrap wrap-anywhere";
 const BODY = "text-code max-h-60 overflow-auto px-3 py-1 font-mono whitespace-pre-wrap";
 
 /** Output this long shows its head and tail, with the lines between folded. */
@@ -59,22 +63,16 @@ export function ShellBox({ command, output, status, exit }: {
   const printed = output?.trimEnd() ?? "";
   const end = ending(status, exit);
   return (
-    <div data-slot="shell-card" className={BOX}>
-      <span className="text-muted-foreground px-3 pt-2 text-xs">Shell</span>
-      <pre className={BODY}>
-        {`$ ${unwrapCommand(command)}`}
-        {printed ? (
-          <>
-            {"\n"}
-            <Output text={printed} />
-          </>
-        ) : (
-          <span className="text-muted-foreground">{"\nNo output"}</span>
-        )}
-      </pre>
+    <div data-slot="shell-card" className={SHELL}>
+      <span className="text-foreground/70 text-label px-3 pt-2">Shell</span>
+      <pre data-slot="shell-command" className={cn(SHELL_TEXT, "text-foreground line-clamp-2 px-3 pt-1")}>{`$ ${unwrapCommand(command)}`}</pre>
+      {/* Its newest line in view, the older ones fading out above it. */}
+      <div data-slot="shell-output" className="max-h-shell-output scroll-edge-fade flex flex-col-reverse overflow-y-auto px-3 py-2 [--spacing-scroll-fade-bottom:0] [--spacing-scroll-fade-top:var(--spacing-shell-fade)]">
+        <pre className={cn(SHELL_TEXT, "text-foreground/70")}>{printed ? <Output text={printed} /> : "No output"}</pre>
+      </div>
       <span
         className={cn(
-          "border-border border-t px-3 py-1.5 text-end text-xs",
+          "border-foreground/16 border-t px-3 py-1.5 text-end text-xs",
           end === "✓ Success" ? "text-muted-foreground" : end === "Running" ? "shimmer" : "text-destructive",
         )}
       >
