@@ -545,6 +545,9 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
                 || told.folder_trusted != Some(now.folder_trusted) =>
             {
                 let reason = match (told.folder_trusted, now.folder_trusted) {
+                    (_, false) if told.permission == Some(now.permission) => {
+                        "This project's folder isn't trusted any more. From now on:"
+                    }
                     (_, false) => {
                         "This project's folder isn't trusted, so this session now asks first:"
                     }
@@ -1672,6 +1675,13 @@ mod environment_tests {
             assert_eq!(
                 sent[0].text.contains("suggest_full_access"),
                 now.folder_trusted
+            );
+            // The level didn't drop, so the note doesn't say it now asks first.
+            assert_eq!(
+                sent[0]
+                    .text
+                    .contains("isn't trusted any more. From now on:"),
+                !now.folder_trusted
             );
             // Persist and recover the note over the older role instructions.
             let note = entry(PERMISSION_LABEL, Some(sent[0].told.clone()));
