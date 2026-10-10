@@ -655,3 +655,32 @@ The thirteen points were folded in:
   `Run`-source item; the run's report keeps the list. Items listed in a session before this build are resolved
   the next time its requests settle.
 - **A question in the thread's text** makes no request wait, in runs too (§5 Q6): runs never ask the user.
+
+### 8.5 From building phase 4 (2026-10-10)
+- **The user's answer stays in its request.** "Yes, implement this plan" reaches the thread as a `[decision]`, not as
+  a new user message, so a request keeps one work block (Q7). The plan card stays in view above the work it
+  started; the work's own answer comes after it.
+- **The plan card holds nothing up**, like the merge card (§8.4). Once the plan is proposed the request is done:
+  its work folds and "Worked for" stops counting. While no reply follows it, the plan is the request's answer, and a
+  line written before it folds into the work.
+- **Typed changes:**
+  - On the thread's own plan, they reject it with that message. The thread revises it and proposes again; the new
+    revision supersedes the old one. Only a request's newest plan stays in view. Earlier revisions fold into the
+    work and read "Earlier plan".
+  - On a lead's outline, they are the go-ahead, with the user's words as its corrections (§6.2). There is no
+    second card.
+- **In plan mode**, the thread proposes a lead's outline with `propose_plan`, and the user's Yes starts that lead.
+- **Skip and ✕** both put "Implement this plan?" aside. The plan stays proposed.
+- **A plan written as a document is always the user's to decide**, at every permission level. The context card's
+  Plan section shows its title with a bulb and opens it, and does not ask a second time. A single-phase plan shows
+  no phase row of its own.
+- **A plan the thread builds itself** (no phase went to a worker) takes its progress from its request. Its first
+  phase is at work while the request works, and all its phases are done once the request is. Without this rule it
+  read "Approved, not started" forever.
+- **While the side panel shows a plan**, its card in the thread is only its header, with the button that closes it
+  there.
+- **The card's header holds Copy and Open.** The target's Download and Rate are left out: Copy covers the text, and
+  a plan has nothing to rate.
+- **Where the writing guidance lives.** The plan's shape is in the `propose_plan` tool description and the
+  plan-mode note, not in the thread prompt, which has a size test. Live runs showed one rule worth stating: one
+  short line per bullet, leaving out detail the code will show anyway.
