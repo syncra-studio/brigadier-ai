@@ -70,7 +70,7 @@ export const Names: FC<{ taskIds: readonly string[]; glyph?: boolean }> = ({ tas
 
 /** The glyphs of a sentence's workers, up front: one each, the first four. */
 const Glyphs: FC<{ taskIds: readonly string[] }> = ({ taskIds }) => (
-  <span aria-hidden className="inline-flex h-5 shrink-0 items-center gap-1.5">
+  <span aria-hidden className="inline-flex shrink-0 items-center gap-1.5">
     {taskIds.slice(0, 4).map((id) => (
       <WorkerGlyph key={id} taskId={id} className="size-4" />
     ))}
@@ -129,12 +129,13 @@ export const TeamSentence: FC<{ row: BlockRow }> = ({ row }) => {
     <ThreadActivity
       data-slot="task-row"
       data-kind={word}
-      className={cn(ROW, "items-start")}
+      className={ROW}
       detail={word === "started" ? <Briefs tasks={known} /> : undefined}
       detailClassName={cn(ROW_DETAIL, "max-h-none")}
     >
       <Glyphs taskIds={ids} />
-      <span className="min-w-0">
+      {/* One line: a sentence too long for it truncates; its detail names every worker. */}
+      <span className="min-w-0 truncate">
         <Names taskIds={ids} /> {verb(word, tasks)}
       </span>
     </ThreadActivity>

@@ -8,7 +8,7 @@ import {
   questionRound,
   questionRowWords,
 } from "@/app/conversation/cards/questionRound";
-import { CHEVRON, OPENS, ROW } from "@/components/assistant-ui/elements/activity-row";
+import { CHEVRON, OPENS, ROW, ROW_TOGGLE } from "@/components/assistant-ui/elements/activity-row";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
@@ -35,7 +35,7 @@ export const QuestionCardView = memo(function QuestionCardView({ cardId }: { car
   const round = questionRound(question);
   return (
     <Collapsible data-slot="question-row">
-      <CollapsibleTrigger className={cn(ROW, "group hover:text-foreground rounded-control w-fit text-start")}>
+      <CollapsibleTrigger className={cn(ROW, ROW_TOGGLE)}>
         {icon}
         <span className="truncate">{words}</span>
         <ChevronRight aria-hidden className={CHEVRON} />

@@ -151,6 +151,24 @@
   /* The one gap between a thread's activity items (groups, team sentences, commentary), the
      lead's and a worker's alike (THREAD-UX-PLAN.md §3.7). */
   --spacing-activity: 1rem;
+  /* An activity row (a step, a group, a thought, a team sentence) and its line: 21px; the rows of
+     an open group 4px apart; the chevron of a row, a work header or a tray that opens. */
+  --spacing-activity-row: 1.3125rem;
+  --spacing-activity-row-gap: 0.25rem;
+  --spacing-chevron: 0.875rem;
+  /* An open group lists its rows up to this, then scrolls under a fade of fold-fade; a command's
+     output shows this much of its end; a settled thought this much of its text. */
+  --spacing-group-list: 14rem;
+  --spacing-group-fade: 1.5rem;
+  --spacing-shell-output: 9rem;
+  --spacing-shell-fade: 2rem;
+  --spacing-thought: 8.75rem;
+  /* A turn's work folding: the slide it opens from and closes to. */
+  --spacing-fold-slide: 0.5rem;
+  /* The answer's action bar: its gap under the answer, its buttons and their gap. */
+  --spacing-answer-actions-gap: 0.375rem;
+  --spacing-answer-action: 1.625rem;
+  --spacing-answer-actions-between: 0.125rem;
   /* A worker's expanded run of actions shows this many rows, then scrolls. */
   --spacing-action-list: calc(var(--spacing-row-sm) * 9);
   /* The composer's / menu shows ten rows and half of the next, so it reads as scrollable. */
@@ -438,6 +456,8 @@
   --color-toolbar-pressed-hover: var(--toolbar-pressed-hover);
   --color-panel-tab: var(--panel-tab);
   --color-divider: var(--divider);
+  --color-row-chevron: var(--row-chevron);
+  --color-work-rule: var(--work-rule);
   --color-toggle-on: var(--toggle-on);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
@@ -514,6 +534,10 @@
   /* The page surface's hairline edge over the chrome (as its shadow-page ring draws it). */
   --page-edge: color-mix(in oklab, oklch(1 0 0) 6%, var(--chrome));
   --divider: oklch(0.985 0.002 var(--tint) / 8%);
+  /* An activity row's chevron: always there, quieter than the row's words; white with them on
+     hover. The rule under a turn's work header. */
+  --row-chevron: color-mix(in oklab, var(--foreground) 25%, transparent);
+  --work-rule: oklch(1 0 0 / 8.2%);
   /* The titlebar's icon buttons: the glyph at rest, and the wash while hovered, held down,
      switched on (aria-pressed) and switched on and hovered. All follow the foreground, so a
      light theme gets its own. */
@@ -598,6 +622,18 @@
   --spacing-row: 1.625rem;
   --spacing-row-sm: 1.375rem;
   --spacing-activity: 0.75rem;
+  --spacing-activity-row: 1.25rem;
+  --spacing-activity-row-gap: 0.1875rem;
+  --spacing-chevron: 0.75rem;
+  --spacing-group-list: 12rem;
+  --spacing-group-fade: 1.25rem;
+  --spacing-shell-output: 7.875rem;
+  --spacing-shell-fade: 1.5rem;
+  --spacing-thought: 7.5rem;
+  --spacing-fold-slide: 0.375rem;
+  --spacing-answer-actions-gap: 0.25rem;
+  --spacing-answer-action: 1.375rem;
+  --spacing-answer-actions-between: 0.125rem;
   --spacing-kbd: 0.9375rem;
   --spacing-menu: 7rem;
   --spacing-composer: 2.25rem;
