@@ -604,10 +604,14 @@ const SEATBELT_NETWORK: &str = r#"(allow network-outbound)
 // Preview-only: IOSurface is needed to paint WebKit and Chromium windows (without it
 // Chromium cannot allocate its backing surfaces and Tauri's paint smoke never completes).
 // Chromium/Electron register this bundle-id + PID service to give ports to their helpers.
+// Restrict registration to dev/test identities: a wildcard could squat a production app's
+// rendezvous name. Custom packaged apps must use a dev identity or Full access.
+// Chromium's single-instance socket binds only inside this preview's private temp folder.
 // Do not permit arbitrary Mach registration, GPU clients, shared caches or sandbox extensions.
 const SEATBELT_GUI: &str = r#"(allow iokit-open (iokit-user-client-class "IOSurfaceRootUserClient"))
 (allow mach-register
-  (global-name-regex #"^[A-Za-z0-9_.-]+\.MachPortRendezvousServer\.[0-9]+$"))
+  (global-name-regex #"^(ai\.brigadier\.dev|com\.github\.Electron|org\.chromium\.Chromium|com\.google\.chrome\.for\.testing)\.MachPortRendezvousServer\.[0-9]+$"))
+(allow network-bind (local unix-socket (subpath (param "PREVIEW_TMP"))))
 "#;
 
 impl Seatbelt {
@@ -639,11 +643,11 @@ impl Seatbelt {
     fn wrap(
         spec: SpawnSpec,
         policy: &SandboxPolicy,
-        gui: bool,
+        preview_temp: Option<&Path>,
         unix_sockets: &[PathBuf],
     ) -> Result<SpawnSpec> {
         let mut profile = Self::profile(policy);
-        if gui {
+        if preview_temp.is_some() {
             profile.push_str(SEATBELT_GUI);
         }
         for index in 0..unix_sockets.len() {
@@ -654,9 +658,9 @@ impl Seatbelt {
         let mut args: Vec<OsString> = vec!["-p".into(), profile.into()];
         for (index, root) in policy.writable_roots.iter().enumerate() {
             // Seatbelt matches resolved paths, so symlinks such as /tmp must be resolved first.
-            let root = if gui {
-                // A validated preview data directory may not have been created yet. Resolve
-                // its existing ancestors, not its parent as an extra writable root.
+            let root = if preview_temp.is_some() {
+                // Scoped roots may not exist yet. Resolve existing ancestors without
+                // granting the parent directory any extra write access.
                 resolved_path(root)
             } else {
                 root.canonicalize()?
@@ -679,6 +683,12 @@ impl Seatbelt {
             args.push("-D".into());
             args.push(define);
         }
+        if let Some(temp) = preview_temp {
+            let mut define = OsString::from("PREVIEW_TMP=");
+            define.push(resolved_path(temp).as_os_str());
+            args.push("-D".into());
+            args.push(define);
+        }
         args.push("--".into());
         args.push(spec.program.into_os_string());
         args.extend(spec.args);
@@ -695,7 +705,7 @@ impl Seatbelt {
 
 impl Sandbox for Seatbelt {
     fn confine(&self, spec: SpawnSpec, policy: &SandboxPolicy) -> Result<SpawnSpec> {
-        Self::wrap(spec, policy, false, &[])
+        Self::wrap(spec, policy, None, &[])
     }
 
     fn confine_preview(
@@ -703,8 +713,9 @@ impl Sandbox for Seatbelt {
         spec: SpawnSpec,
         policy: &SandboxPolicy,
         unix_sockets: &[PathBuf],
+        preview_temp: &Path,
     ) -> Result<SpawnSpec> {
-        Self::wrap(spec, policy, true, unix_sockets)
+        Self::wrap(spec, policy, Some(preview_temp), unix_sockets)
     }
 }
 
@@ -765,6 +776,12 @@ mod tests {
         use std::net::TcpListener;
         use std::os::unix::net::UnixListener;
 
+        // Re-execute this test inside the generated profile to bind a real Unix socket.
+        const SOCKET_PROBE: &str = "BRIGADIER_PREVIEW_SOCKET_PROBE";
+        if let Some(path) = std::env::var_os(SOCKET_PROBE) {
+            let _listener = UnixListener::bind(path).unwrap();
+            return;
+        }
         let dir =
             Temp(std::env::temp_dir().join(format!("brig-preview-policy-{}", std::process::id())));
         let writable = dir.join("writable");
@@ -772,16 +789,47 @@ mod tests {
         std::fs::create_dir_all(&denied).unwrap();
         std::fs::write(denied.join("token"), "secret").unwrap();
         std::fs::write(dir.join("readable"), "public").unwrap();
+        let other_writable = dir.join("other-writable");
+        std::fs::create_dir(&other_writable).unwrap();
         let socket_path = dir.join("allowed.sock");
         let other_path = dir.join("other.sock");
         let allowed_socket = UnixListener::bind(&socket_path).unwrap();
         let other_socket = UnixListener::bind(&other_path).unwrap();
         let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut policy = SandboxPolicy {
-            writable_roots: vec![writable.clone()],
+            writable_roots: vec![writable.clone(), other_writable.clone()],
             deny_read: vec![denied],
             network: false,
         };
+        let socket_probe = Seatbelt
+            .confine_preview(
+                SpawnSpec {
+                    program: std::env::current_exe().unwrap(),
+                    args: vec![
+                        "--exact".into(),
+                        "macos::tests::gui_preview_keeps_filesystem_and_network_confinement".into(),
+                    ],
+                    ..SpawnSpec::default()
+                },
+                &policy,
+                &[],
+                &writable,
+            )
+            .unwrap();
+        let bound = Command::new(&socket_probe.program)
+            .args(&socket_probe.args)
+            .env(SOCKET_PROBE, writable.join("bound.sock"))
+            .output()
+            .unwrap();
+        assert!(bound.status.success(), "{bound:?}");
+        assert!(writable.join("bound.sock").exists());
+        // A second writable root does not gain permission to bind a socket.
+        let denied_bind = Command::new(&socket_probe.program)
+            .args(&socket_probe.args)
+            .env(SOCKET_PROBE, other_writable.join("bound.sock"))
+            .output()
+            .unwrap();
+        assert!(!denied_bind.status.success(), "{denied_bind:?}");
         let run = |program: &str, args: Vec<OsString>, policy: &SandboxPolicy| {
             let spec = Seatbelt
                 .confine_preview(
@@ -792,6 +840,7 @@ mod tests {
                     },
                     policy,
                     std::slice::from_ref(&socket_path),
+                    &writable,
                 )
                 .unwrap();
             Command::new(spec.program).args(spec.args).output().unwrap()
@@ -852,7 +901,7 @@ mod tests {
         assert!(run("/usr/bin/nc", args, &policy).status.success());
 
         let spec = Seatbelt
-            .confine_preview(SpawnSpec::new("/bin/true"), &policy, &[])
+            .confine_preview(SpawnSpec::new("/bin/true"), &policy, &[], &writable)
             .unwrap();
         let profile = spec.args[1].to_str().unwrap();
         assert!(profile.contains(SEATBELT_GUI));

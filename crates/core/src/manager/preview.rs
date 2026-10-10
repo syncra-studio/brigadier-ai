@@ -23,7 +23,8 @@
 //! thread's access instead. At Full access it runs as it is. On macOS, other levels use
 //! Brigadier's GUI Seatbelt profile even when Codex is installed: the same writable roots,
 //! denied reads, network and Unix socket grants, plus window surfaces and Chromium helper
-//! rendezvous. A private temp directory and the validated app data directory are writable.
+//! rendezvous for dev/test identities. A private temp directory and a newly created,
+//! validated app data directory are writable.
 //! Chromium/Electron may need `--no-sandbox` to avoid nesting their sandbox; Brigadier's
 //! outer confinement still applies to every helper. Linux keeps the command sandbox path.
 //!
@@ -236,30 +237,33 @@ impl SessionManager {
             )
             .await?;
         #[cfg(target_os = "macos")]
-        let (env, writable_roots) = {
+        let (env, writable_roots, preview_temp) = {
             let mut env = env;
             let mut roots = Vec::new();
+            let mut preview_temp = None;
             if launch.access != Access::Full {
                 let temp = self.preview_temp(&owner).await?;
                 for name in ["TMPDIR", "MAC_CHROMIUM_TMPDIR"] {
                     env.entry(name.into())
                         .or_insert_with(|| temp.to_string_lossy().into_owned());
                 }
-                roots.push(temp);
+                preview_temp = Some(temp);
                 if let Some(data) = env.get(brigadier_sandbox::DATA_DIR_ENV) {
-                    // check_env and check_own_repo already validated this exact directory.
-                    roots.push(resolved(&workdir.join(data)));
+                    // Validation excludes protected folders; creation claims a new directory
+                    // atomically, so an existing folder can never become a new write grant.
+                    roots.push(create_preview_data(&workdir.join(data))?);
                 }
             }
-            (env, roots)
+            (env, roots, preview_temp)
         };
         #[cfg(not(target_os = "macos"))]
-        let writable_roots = Vec::new();
+        let (writable_roots, preview_temp): (Vec<PathBuf>, Option<PathBuf>) = (Vec::new(), None);
         let mut spec = self.preview_spec(
             &launch.access,
             &workdir,
             &script(&command, &env),
             &writable_roots,
+            preview_temp.as_deref(),
         )?;
         brigadier_providers::cli::apply_session_env(
             &mut spec,
@@ -410,16 +414,21 @@ impl SessionManager {
         workdir: &Path,
         script: &str,
         writable_roots: &[PathBuf],
+        preview_temp: Option<&Path>,
     ) -> Result<brigadier_sandbox::SpawnSpec> {
         if *access == Access::Full {
             return self.run_spec(access, workdir, script);
         }
         if cfg!(target_os = "macos") {
+            let temp = preview_temp.ok_or_else(|| {
+                Error::Invalid("a preview needs its private temp directory".into())
+            })?;
             let mut spec = self.runtime.cli_env().spec(Path::new(super::run::SHELL));
             spec.args = vec!["-c".into(), script.into()];
             spec.cwd = Some(workdir.to_owned());
             let mut policy = super::run::seatbelt_policy(access, workdir);
             policy.writable_roots.extend_from_slice(writable_roots);
+            policy.writable_roots.push(temp.to_owned());
             let unix_sockets = match access {
                 Access::Scoped { unix_sockets, .. } => unix_sockets.as_slice(),
                 _ => &[],
@@ -428,7 +437,7 @@ impl SessionManager {
                 .runtime
                 .platform()
                 .sandbox()
-                .confine_preview(spec, &policy, unix_sockets)
+                .confine_preview(spec, &policy, unix_sockets, temp)
                 .map_err(|err| {
                     Error::Invalid(format!("the preview can't be sandboxed here: {err}"))
                 });
@@ -915,6 +924,35 @@ fn check_env(env: &BTreeMap<String, String>, workdir: &Path, protected: &[PathBu
     Ok(())
 }
 
+/// A preview may gain a new data directory, never adopt another process's temp folder.
+#[cfg(target_os = "macos")]
+fn create_preview_data(path: &Path) -> Result<PathBuf> {
+    use std::os::unix::fs::DirBuilderExt as _;
+
+    let dir = resolved(path);
+    let reserved = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.starts_with("brigadier-pv-") || name.starts_with("brigadier-test-")
+        });
+    if reserved {
+        return Err(Error::Invalid(
+            "BRIGADIER_DATA_DIR must not name a brigadier-pv- or brigadier-test- folder".into(),
+        ));
+    }
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&dir)
+        .map_err(|err| {
+            Error::Invalid(format!(
+                "BRIGADIER_DATA_DIR must name a new folder with an existing parent; {}: {err}",
+                dir.display()
+            ))
+        })?;
+    Ok(dir)
+}
+
 /// `path` as the file system resolves it (`/tmp` → `/private/tmp`), down to the part of it
 /// that exists; the rest, which doesn't exist yet, as written (`..` and `.` taken out).
 fn resolved(path: &Path) -> PathBuf {
@@ -1106,10 +1144,6 @@ mod tests {
         .await;
         let manager = &flow.manager;
         // This must remain Seatbelt when the login environment resolves Codex, too.
-        eprintln!(
-            "preview routing with Codex: {:?}",
-            manager.runtime.cli_env().resolve(ProviderKind::Codex)
-        );
         let owner = preview_owner(&flow.conversation);
         let temp = manager.preview_temp(&owner).await.unwrap();
         assert!(temp.is_dir());
@@ -1123,7 +1157,7 @@ mod tests {
                 })
         );
         let data = temp.join("new-app-data");
-        let extra = [temp.clone(), data.clone()];
+        let extra = [data.clone()];
         let command = format!(
             "mkdir {}; touch {}/probe",
             shell_quote(data.to_str().unwrap()),
@@ -1142,7 +1176,7 @@ mod tests {
             },
         ] {
             let spec = manager
-                .preview_spec(&access, &flow.repo, &command, &extra)
+                .preview_spec(&access, &flow.repo, &command, &extra, Some(&temp))
                 .unwrap();
             assert_eq!(spec.program, Path::new("/usr/bin/sandbox-exec"));
             let profile = spec.args[1].to_str().unwrap();
@@ -1164,7 +1198,7 @@ mod tests {
             std::fs::remove_dir(&data).unwrap();
         }
         let full = manager
-            .preview_spec(&Access::Full, &flow.repo, "true", &extra)
+            .preview_spec(&Access::Full, &flow.repo, "true", &extra, None)
             .unwrap();
         let run = manager.run_spec(&Access::Full, &flow.repo, "true").unwrap();
         assert_eq!(full.program, run.program);
@@ -1226,13 +1260,19 @@ mod tests {
                 "{value}"
             );
         }
-        // A folder not made yet inside a protected one, written through a symbolic link.
-        let root =
-            Temp(std::env::temp_dir().join(format!("brigadier-own-{}", uuid::Uuid::new_v4())));
+        // Keep this under /tmp even when macOS's TMPDIR is /var/folders, so these cases
+        // exercise protected-folder validation rather than the /tmp requirement.
+        let temp = resolved(&std::env::temp_dir());
+        let temp = if temp.starts_with(resolved(Path::new("/tmp"))) {
+            temp
+        } else {
+            PathBuf::from("/tmp")
+        };
+        let root = Temp(temp.join(format!("brigadier-own-{}", uuid::Uuid::new_v4())));
         let own = root.join("data");
         std::fs::create_dir_all(&own).unwrap();
         std::os::unix::fs::symlink(&own, root.join("link")).unwrap();
-        let via_link = root.join("link/new/../sub");
+        let via_link = root.join("link/new/sub");
         assert!(
             check_env(
                 &env("BRIGADIER_DATA_DIR", via_link.to_str().unwrap()),
@@ -1254,6 +1294,26 @@ mod tests {
             )
             .is_err()
         );
+        // The same path is otherwise valid; only the protected-folder rule rejects it.
+        assert!(
+            check_env(
+                &env("BRIGADIER_DATA_DIR", via_link.to_str().unwrap()),
+                workdir,
+                &[]
+            )
+            .is_ok()
+        );
+        #[cfg(target_os = "macos")]
+        {
+            let fresh = root.join("fresh-data");
+            assert_eq!(create_preview_data(&fresh).unwrap(), resolved(&fresh));
+            assert!(create_preview_data(&fresh).is_err());
+            assert!(create_preview_data(&root.join("link")).is_err());
+            for name in ["brigadier-pv-new", "brigadier-test-new"] {
+                assert!(create_preview_data(&root.join(name)).is_err());
+                assert!(!root.join(name).exists());
+            }
+        }
         assert!(check_env(&env("1BAD", "x"), workdir, &protected).is_err());
         assert!(check_env(&env("A B", "x"), workdir, &protected).is_err());
     }

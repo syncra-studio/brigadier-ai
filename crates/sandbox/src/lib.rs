@@ -166,13 +166,15 @@ pub trait Sandbox: Send + Sync {
 
     /// Preview windows and their helpers, still held to the policy. The Unix socket grants
     /// are explicit exceptions to a disabled network, not permission to connect anywhere.
+    /// `preview_temp` is the private writable folder where GUI helpers may bind Unix sockets.
     fn confine_preview(
         &self,
         spec: SpawnSpec,
         policy: &SandboxPolicy,
         unix_sockets: &[PathBuf],
+        preview_temp: &Path,
     ) -> Result<SpawnSpec> {
-        let _ = unix_sockets;
+        let _ = (unix_sockets, preview_temp);
         self.confine(spec, policy)
     }
 }
