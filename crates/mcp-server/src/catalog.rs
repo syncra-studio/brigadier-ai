@@ -112,7 +112,7 @@ const APPROVE_OUTLINE: &str = "Give a lead the go-ahead on its outline as soon a
 judged it: don't wait for its plan review, which runs in the background and may arrive after the \
 go-ahead (then send the lead the findings you agree with by message_worker). Put what the \
 outline gets wrong, and anything the brief implies, in `corrections`; the brief wins any \
-conflict. Under \"Ask for approval\" this shows the user a \"Start this plan?\" card and the \
+conflict. Under \"Ask for approval\" this shows the user an \"Implement this plan?\" card and the \
 go-ahead goes once they start it. Returns at once.";
 
 const START_VERIFIER: &str = "Your call, for big or risky work only: start a fresh verifier \
@@ -655,7 +655,7 @@ mod tests {
             .unwrap();
         let description = approve.description.as_deref().unwrap();
         assert!(description.contains("don't wait for its plan review"));
-        assert!(description.contains("Start this plan?"));
+        assert!(description.contains("Implement this plan?"));
         assert!(names.contains(&"start_verifier".to_owned()));
     }
 
