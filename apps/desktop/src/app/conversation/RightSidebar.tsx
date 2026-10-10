@@ -135,7 +135,8 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
     >
       <SidebarReveal side="right" open={panel.open} hidden={!panel.open} resizing={panel.resizing}>
         <div ref={content} className="right-sidebar-panel-width flex h-full flex-col">
-          <div role="tablist" aria-label="Right sidebar" data-tauri-drag-region className="h-titlebar flex shrink-0 items-center gap-1 ps-2 pe-icon-button-lg">
+          <div role="tablist" aria-label="Right sidebar" data-tauri-drag-region className="relative h-titlebar flex shrink-0 items-center gap-1 ps-2 pe-icon-button-lg">
+            {panel.open && <span aria-hidden className="bg-divider absolute start-0 h-5 w-px" />}
             <TitlebarTips>
               {TABS.map(({ id, title, Icon }, index) => (
                 <TitlebarButton

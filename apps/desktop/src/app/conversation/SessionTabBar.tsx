@@ -74,7 +74,7 @@ export function tabTitle(tab: SessionTab): string {
 
 /** A tab's look: 32px and rounded, the one in front lifted, the others muted. */
 const TAB =
-  "group/tab relative flex h-8 min-w-session-tab-min flex-[0_1_var(--spacing-panel-tab)] items-center gap-1 rounded-lg ps-2 pe-1 text-sm select-none";
+  "group/tab relative flex h-8 w-panel-tab min-w-session-tab-min flex-[0_1_var(--spacing-panel-tab)] items-center gap-1 rounded-lg ps-2 pe-1 text-sm select-none";
 
 /** Mouse down with the middle button would start autoscroll. */
 function noAutoscroll(event: ReactMouseEvent): void {
@@ -220,30 +220,14 @@ export function SessionTabBar({
     <header
       data-tauri-drag-region
       data-slot="session-tabs"
-      className="h-titlebar ease-sidebar ps-clear-2 flex shrink-0 items-center gap-1 pe-1 transition-[padding] duration-300 motion-reduce:transition-none"
+      className="session-titlebar-divider relative h-titlebar ease-sidebar ps-clear-2 flex shrink-0 items-center gap-1 pe-1 transition-[padding] duration-300 motion-reduce:transition-none"
     >
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <button type="button" data-chat-title aria-pressed={active === CHAT_TAB}
-            title={conversation.title} onClick={() => selectTab(id, CHAT_TAB)}
-            onDoubleClick={archived ? undefined : onRename}
-            className={cn("max-w-session-title shrink-0 truncate px-1 text-sm font-medium", active !== CHAT_TAB && "text-muted-foreground")}>
-            {title}
-          </button>
-        </ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuItem disabled={archived} onSelect={onRename}>Rename</ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
-      {archived && <Badge variant="outline">Archived</Badge>}
-      <ChatActions conversation={conversation} onRename={onRename} compact />
       <div
-        ref={strip}
         role="tablist"
         aria-label="Session tabs"
         tabIndex={-1}
         data-tauri-drag-region
-        className="hide-scrollbar flex min-w-0 flex-1 scroll-px-1 items-center gap-0.5 overflow-x-auto"
+        className="flex min-w-0 shrink items-center gap-0.5"
         onKeyDown={(event) => {
           // Alt+←/→ moved the tab itself (its drag handle's keys).
           if (event.defaultPrevented || event.altKey) return;
@@ -264,82 +248,128 @@ export function SessionTabBar({
           const target = order[next]!;
           selectTab(id, target);
           requestAnimationFrame(() => {
-            if (target === CHAT_TAB) strip.current?.parentElement?.querySelector<HTMLElement>("[data-chat-title]")?.focus();
-            else strip.current?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(target)}"] [role="tab"]`)?.focus();
+            strip.current?.parentElement
+              ?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(target)}"] [role="tab"]`)
+              ?.focus();
           });
         }}
       >
-        <div ref={listRef} className="contents">
-          {shown.map((tab) => {
-            const index = tabs.findIndex((entry) => entry.id === tab.id);
-            const selected = tab.id === active;
-            const name = tabTitle(tab);
-            const handlers = grip(tab.id, index);
-            return (
-              <TabMenu key={tab.id} conversationId={id} tab={tab}>
-                <div
-                  data-session-tab
-                  data-tab-id={tab.id}
-                  data-active={selected || undefined}
-                  data-dragging={dragging === tab.id || undefined}
-                  className={cn(
-                    TAB,
-                    selected
-                      ? "bg-panel-tab shadow-panel-tab"
-                      : "text-toolbar-foreground hover:bg-toolbar-hover",
-                    "data-dragging:z-10 data-dragging:opacity-80",
-                  )}
-                >
-                  {/* The tab itself is the drag handle; Alt+←/→ moves it from the keyboard. */}
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={selected}
-                    tabIndex={selected ? 0 : -1}
-                    title={tab.kind === "file" ? tab.path : name}
-                    onPointerDown={handlers.onPointerDown}
-                    onPointerMove={handlers.onPointerMove}
-                    onPointerUp={handlers.onPointerUp}
-                    onPointerCancel={handlers.onPointerCancel}
-                    onMouseDown={noAutoscroll}
-                    onMouseUp={middleClose(tab.id)}
-                    onClick={() => selectTab(id, tab.id)}
-                    onDoubleClick={() => keepTabOpen(id, tab.id)}
-                    onKeyDown={(event) => {
-                      if (event.altKey) handlers.onKeyDown(event);
-                    }}
-                    className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
-                  >
-                    {tab.kind === "file" ? (
-                      <FileTypeIcon name={tab.path} className="size-icon-sm shrink-0" />
-                    ) : tab.kind === "browser" ? <Globe className="size-icon-sm shrink-0" />
-                      : tab.kind === "terminal" ? <Terminal className="size-icon-sm shrink-0" />
-                      : tab.kind === "sideChat" ? <Chat className="size-icon-sm shrink-0" />
-                      : tab.kind === "document" ? <Document className="size-icon-sm shrink-0" /> : (
-                      <DiffGlyph className="size-icon-sm shrink-0" />
-                    )}
-                    <span className={cn("min-w-0 truncate", tab.kind === "file" && tab.preview && "italic")}>
-                      {name}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`Close ${name}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      closeTab(id, tab.id);
-                    }}
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <div
+              data-tab-id={CHAT_TAB}
+              data-active={active === CHAT_TAB || undefined}
+              className={cn(
+                TAB,
+                "max-w-session-title shrink-0",
+                active === CHAT_TAB
+                  ? "bg-panel-tab shadow-panel-tab"
+                  : "text-toolbar-foreground hover:bg-toolbar-hover",
+              )}
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={active === CHAT_TAB}
+                tabIndex={active === CHAT_TAB ? 0 : -1}
+                title={conversation.title}
+                onClick={() => selectTab(id, CHAT_TAB)}
+                onDoubleClick={archived ? undefined : onRename}
+                className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
+              >
+                <Chat aria-hidden className="size-icon-sm shrink-0" />
+                <span className="min-w-0 truncate">{title}</span>
+              </button>
+              {archived && <Badge variant="outline" className="shrink-0">Archived</Badge>}
+              <ChatActions
+                conversation={conversation}
+                onRename={onRename}
+                compact
+                className="shrink-0 opacity-0 transition-opacity group-hover/tab:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100"
+              />
+            </div>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem disabled={archived} onSelect={onRename}>Rename</ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+        <div
+          ref={strip}
+          data-tauri-drag-region
+          className="hide-scrollbar flex min-w-0 shrink scroll-px-1 items-center gap-0.5 overflow-x-auto"
+        >
+          <div ref={listRef} className="contents">
+            {shown.map((tab) => {
+              const index = tabs.findIndex((entry) => entry.id === tab.id);
+              const selected = tab.id === active;
+              const name = tabTitle(tab);
+              const handlers = grip(tab.id, index);
+              return (
+                <TabMenu key={tab.id} conversationId={id} tab={tab}>
+                  <div
+                    data-session-tab
+                    data-tab-id={tab.id}
+                    data-active={selected || undefined}
+                    data-dragging={dragging === tab.id || undefined}
                     className={cn(
-                      "hover:bg-toolbar-hover flex size-5 shrink-0 items-center justify-center rounded-full opacity-60 hover:opacity-100",
-                      !selected && "invisible group-focus-within/tab:visible group-hover/tab:visible",
+                      TAB,
+                      selected
+                        ? "bg-panel-tab shadow-panel-tab"
+                        : "text-toolbar-foreground hover:bg-toolbar-hover",
+                      "data-dragging:z-10 data-dragging:opacity-80",
                     )}
                   >
-                    <X aria-hidden className="size-icon-xs" />
-                  </button>
-                </div>
-              </TabMenu>
-            );
-          })}
+                    {/* The tab itself is the drag handle; Alt+←/→ moves it from the keyboard. */}
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={selected}
+                      tabIndex={selected ? 0 : -1}
+                      title={tab.kind === "file" ? tab.path : name}
+                      onPointerDown={handlers.onPointerDown}
+                      onPointerMove={handlers.onPointerMove}
+                      onPointerUp={handlers.onPointerUp}
+                      onPointerCancel={handlers.onPointerCancel}
+                      onMouseDown={noAutoscroll}
+                      onMouseUp={middleClose(tab.id)}
+                      onClick={() => selectTab(id, tab.id)}
+                      onDoubleClick={() => keepTabOpen(id, tab.id)}
+                      onKeyDown={(event) => {
+                        if (event.altKey) handlers.onKeyDown(event);
+                      }}
+                      className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
+                    >
+                      {tab.kind === "file" ? (
+                        <FileTypeIcon name={tab.path} className="size-icon-sm shrink-0" />
+                      ) : tab.kind === "browser" ? <Globe className="size-icon-sm shrink-0" />
+                        : tab.kind === "terminal" ? <Terminal className="size-icon-sm shrink-0" />
+                        : tab.kind === "sideChat" ? <Chat className="size-icon-sm shrink-0" />
+                        : tab.kind === "document" ? <Document className="size-icon-sm shrink-0" /> : (
+                        <DiffGlyph className="size-icon-sm shrink-0" />
+                      )}
+                      <span className={cn("min-w-0 truncate", tab.kind === "file" && tab.preview && "italic")}>
+                        {name}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Close ${name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        closeTab(id, tab.id);
+                      }}
+                      className={cn(
+                        "hover:bg-toolbar-hover flex size-5 shrink-0 items-center justify-center rounded-full opacity-60 hover:opacity-100",
+                        !selected && "invisible group-focus-within/tab:visible group-hover/tab:visible",
+                      )}
+                    >
+                      <X aria-hidden className="size-icon-xs" />
+                    </button>
+                  </div>
+                </TabMenu>
+              );
+            })}
+          </div>
         </div>
       </div>
       <DropdownMenu>
@@ -360,6 +390,7 @@ export function SessionTabBar({
         </Badge>
       )}
       <PreviewChip conversationId={id} />
+      <div data-tauri-drag-region className="min-w-0 flex-1 self-stretch" />
       {children}
       <Dialog open={confirmClose !== null} onOpenChange={(open) => { if (!open) useTabCloseAsk.setState({ confirm: null }); }}>
         <DialogContent>

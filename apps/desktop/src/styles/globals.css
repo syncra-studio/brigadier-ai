@@ -184,6 +184,19 @@
   );
 }
 
+/* Sessions continue the sidebar boundary into the titlebar. When collapsed, clear the
+   fixed navigation controls just as ps-clear-* does for the tabs. */
+@utility session-titlebar-divider {
+  &::before {
+    content: "";
+    @apply pointer-events-none absolute top-1/2 h-5 w-px -translate-y-1/2 bg-divider transition-[inset-inline-start] duration-300 ease-sidebar motion-reduce:transition-none;
+    inset-inline-start: max(
+      0%,
+      calc(var(--spacing-titlebar-nav-end) + var(--spacing) - var(--spacing-surface-inset) - var(--sidebar-shown))
+    );
+  }
+}
+
 /* A corner of the page surface: it paints the window chrome (and the surface's hairline edge)
    outside the surface's rounded corner, over whatever the columns draw there, so the corner
    stays round whichever column's background reaches it. Each corner's utility places its cap
