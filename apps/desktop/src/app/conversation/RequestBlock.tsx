@@ -19,6 +19,7 @@ import { type FC, lazy, Suspense, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { ThinkingRow } from "@/app/conversation/ThinkingRow";
+import { WorkFold } from "@/app/conversation/WorkFold";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { InlineImageText } from "@/app/conversation/InlineImage";
 import { MentionText } from "@/app/conversation/Mentions";
@@ -174,26 +175,26 @@ const WorkHeader: FC<{
   const phaseElapsed = useElapsed(phase?.startedAtMs ?? 0, phase?.endedAtMs ?? null, !!phase && !phase.settled);
   const now = useTicking(!phase && isLive(meta.state));
   const elapsed = phase ? phaseElapsed : turnTime(meta, now);
-  if (!phase && meta.state === "working" && !foldable && !quota && elapsed < HEADER_AFTER_MS) return null;
   // Waiting on its own question card, the turn still works: the card says it waits.
   const state = waitsOnCard(meta) ? "working" : meta.state;
   const label = phase ? phaseLabel(phase, elapsed) : headerLabel(state, elapsed, quota || meta.quotaWait);
   const text = (
     <span
+      data-slot="request-work-label"
       className={cn(
-        "text-sm",
-        meta.state === "failed" && !phase ? "text-destructive" : "text-muted-foreground",
+        "text-sm leading-(--spacing-activity-row) tabular-nums",
+        meta.state === "failed" && !phase ? "text-destructive" : "text-foreground/50",
+        foldable && "group-hover:text-foreground group-focus-visible:text-foreground",
       )}
     >
       {label}
     </span>
   );
+  // The label, 8px, then a hairline rule across the column.
+  const rule = "border-work-rule flex items-center border-b pb-2";
   if (!foldable) {
     return (
-      <div
-        data-slot="request-work-header"
-        className="border-border flex items-center border-b pb-2"
-      >
+      <div data-slot="request-work-header" className={rule}>
         {text}
       </div>
     );
@@ -204,13 +205,13 @@ const WorkHeader: FC<{
       data-slot="request-work-header"
       aria-expanded={open}
       onClick={(event) => onToggle(event.currentTarget)}
-      className="group border-border flex items-center gap-1 border-b pb-2 text-start"
+      className={cn(rule, "group gap-1 text-start")}
     >
       {text}
       <ChevronRight
         aria-hidden
         className={cn(
-          "text-muted-foreground size-icon-xs transition-[rotate] duration-150 ease-in-out motion-reduce:transition-none",
+          "text-foreground/50 size-chevron group-hover:text-foreground group-focus-visible:text-foreground shrink-0 transition-[rotate,color] duration-150 ease-standard motion-reduce:transition-none",
           open && "rotate-90",
         )}
       />
@@ -360,7 +361,7 @@ const SteerBubble: FC<{ text: string; atMs: number; attachments: readonly Attach
       data-slot="request-steer"
       className="group/steer flex max-w-7/10 min-w-0 flex-col items-end gap-y-1 self-end"
     >
-      <div className="bg-muted text-foreground rounded-thread max-w-full min-w-0 px-4 py-2 whitespace-pre-wrap wrap-anywhere">
+      <div className="bg-muted text-foreground rounded-bubble max-w-full min-w-0 px-4 py-2.5 whitespace-pre-wrap wrap-anywhere">
         <InlineImageText text={text} attachments={attachments} Text={MentionText} />
       </div>
       <div className="text-muted-foreground flex items-center gap-1 opacity-0 transition-opacity group-hover/steer:opacity-100 group-focus-within/steer:opacity-100">
@@ -469,24 +470,27 @@ export const RequestBlock: FC = () => {
   // A run's block is live until the run is over, whatever still waits on the user: that waits in the panel.
   const live = phase ? !phase.settled : isLive(meta.state);
   const last = meta.texts.length - 1;
-  // The final answer is streaming: the workers it waited for are all over. The work folds now,
-  // when the final answer starts.
+  const sequence = blockSequence(meta);
+  // The final answer is streaming: the workers it waited for are all over, or a session's thread
+  // writes after its work (it writes nothing between its steps but one opening line, before them).
+  // The work folds now, when the final answer starts.
+  const streamingAt = sequence.findIndex((entry) => entry.kind === "text" && entry.index === last);
+  const workBefore = sequence.slice(0, Math.max(0, streamingAt)).some((entry) => entry.kind === "orchestrator" || entry.kind === "row" || entry.kind === "card");
   const answering =
     meta.state === "working" &&
-    meta.rows.length > 0 &&
+    (meta.rows.length > 0 || (meta.session && workBefore)) &&
     !workersActive &&
     meta.texts[last]?.position === Number.POSITIVE_INFINITY;
   const done = phase ? phase.settled : meta.state === "done" || answering;
   // A run over folds to its outcome; the thread's replies during it go into the fold.
   const answer = answerIndex(meta.texts, done && !phase);
-  const sequence = blockSequence(meta);
   const activity = turnActivity(sequence);
   // The answer and the cards that stay in view are outside the fold.
   const folded = activity.filter((item) => item.type === "group" || foldsAway(item.entry, answer));
   const kept = meta.cards.filter((card) => card.keep);
-  const foldable = done && folded.length > 0;
+  const parts = workParts(done ? folded : activity, live && !done);
+  const foldable = done && parts.some((part) => part.type === "work" && part.items.length > 0);
   const outcome = done ? (phase?.outcome ?? null) : null;
-  const shown = foldable && fold.state !== null;
   const turn = turnPhase(meta, live, answering);
   const header =
     phase !== null ||
@@ -505,85 +509,81 @@ export const RequestBlock: FC = () => {
       data-turn-phase={turn}
       data-turn-live={live ? "true" : undefined}
       data-turn-steers={String(meta.steers.length)}
-      className="group/answer relative flex flex-col gap-2 px-2"
+      className="group/answer gap-answer-actions-gap relative flex flex-col px-2"
     >
       {/* A run picks its models itself: not a change the user made. */}
       {!phase && <ModelChanged model={meta.texts[last]?.model ?? null} picked={meta.picked} />}
-      {header && (
-        <WorkHeader
-          meta={meta}
-          phase={phase}
-          open={fold.open}
-          foldable={foldable}
-          quota={quotaWait !== null && meta.state === "working" && !workersActive}
-          onToggle={fold.toggle}
-        />
-      )}
-      {done ? (
-        <>
-          {shown && (
-            <div
-              data-slot="request-fold"
-              data-fold={fold.state}
-              className={cn(
-                "grid grid-rows-[1fr]",
-                fold.state === "opening" && "animate-fold-open motion-reduce:animate-fold-fade-in",
-                fold.state === "closing" && "animate-fold-close motion-reduce:animate-fold-fade-out",
-              )}
-            >
-              {/* min-w-0: a long unbroken line (a branch in code) wraps instead of widening the fold. */}
-              <div className={cn("flex min-h-0 min-w-0 flex-col gap-activity", fold.state !== "open" && "overflow-hidden")}>
-                <ActivityItems activity={folded} live={false} streaming={() => false} />
-              </div>
-            </div>
-          )}
-          {/* The user's own follow-ups stay in view when the work folds. */}
-          {!shown &&
-            meta.steers.map((steer) => (
-              <SteerBubble
-                key={`steer:${steer.position}`}
-                text={steer.text}
-                atMs={steer.atMs}
-                attachments={steer.attachments}
-              />
-            ))}
-          {kept.map((card) => (
-            <CardEntry key={`${card.type}:${card.id}`} card={card} />
-          ))}
-          {outcome && (
-            <p data-slot="phase-outcome" className="text-foreground text-sm leading-relaxed wrap-break-word">
-              {outcome}
-            </p>
-          )}
-          {answer !== null && (
-            <div
-              data-slot="aui_assistant-message-content"
-              className="text-foreground leading-relaxed wrap-break-word"
-            >
-              <ReplyText index={answer} streaming={answering} report={(report || meta.session) && !answering} />
-            </div>
-          )}
-        </>
-      ) : (
-        <div data-slot="request-work" data-follow-content className="gap-activity flex flex-col">
-          <ActivityItems
-            activity={activity}
-            live={live}
-            streaming={(entry) => entry.kind === "text" && meta.texts[entry.index]?.position === Number.POSITIVE_INFINITY}
+      <div data-slot="request-body" className="flex min-w-0 flex-col">
+        {header && (
+          <WorkHeader
+            meta={meta}
+            phase={phase}
+            open={fold.open}
+            foldable={foldable}
+            quota={quotaWait !== null && meta.state === "working" && !workersActive}
+            onToggle={fold.toggle}
           />
-          {sequence.map((entry) => entry.kind === "thinking" && entry.live && <SequenceEntry key={entryKey(entry)} entry={entry} streaming={false} />)}
-          {live && (
-            <ThreadStatus
-              requestIds={meta.requestIds}
-              // A live run works on, whatever the thread's last turn came to.
-              state={isLive(meta.state) ? meta.state : "working"}
-              thinkingLive={sequence.some((entry) => entry.kind === "thinking" && entry.live)}
-              compacting={meta.compactions.some((compaction) => compaction.inTurn && compaction.state === "running")}
-              quotaWait={quotaWait}
-            />
-          )}
-        </div>
-      )}
+        )}
+        {/* The work, cut at the user's follow-ups: each run of it folds on its own, and the
+            bubbles between them stay mounted whether it is open or folded, so nothing below
+            them pops in or out when it settles (THREAD-PARITY-PLAN.md §4.2). */}
+        {parts.map((part, index) =>
+          part.type === "steer" ? (
+            <div key={entryKey(part.entry)} className={cn("flex min-w-0 flex-col", (header || index > 0) && "pt-activity")}>
+              <SequenceEntry entry={part.entry} streaming={false} />
+            </div>
+          ) : (
+            <WorkFold key={`work:${index}`} open={!done || fold.open}>
+              <div
+                data-slot="request-work"
+                data-follow-content={live && index === parts.length - 1 ? "" : undefined}
+                className={cn("gap-activity flex min-w-0 flex-col", (header || index > 0) && "pt-activity")}
+              >
+                <ActivityItems
+                  activity={part.items}
+                  live={live && !done && index === parts.length - 1}
+                  streaming={(entry) => !done && entry.kind === "text" && meta.texts[entry.index]?.position === Number.POSITIVE_INFINITY}
+                />
+                {live && !done && index === parts.length - 1 && (
+                  <>
+                    {sequence.map((entry) => entry.kind === "thinking" && entry.live && <SequenceEntry key={entryKey(entry)} entry={entry} streaming={false} />)}
+                    <ThreadStatus
+                      requestIds={meta.requestIds}
+                      // A live run works on, whatever the thread's last turn came to.
+                      state={isLive(meta.state) ? meta.state : "working"}
+                      thinkingLive={sequence.some((entry) => entry.kind === "thinking" && entry.live)}
+                      compacting={meta.compactions.some((compaction) => compaction.inTurn && compaction.state === "running")}
+                      quotaWait={quotaWait}
+                    />
+                  </>
+                )}
+              </div>
+            </WorkFold>
+          ),
+        )}
+        {done && (
+          <>
+            {kept.map((card) => (
+              <div key={`${card.type}:${card.id}`} className="pt-activity flex min-w-0 flex-col">
+                <CardEntry card={card} />
+              </div>
+            ))}
+            {outcome && (
+              <p data-slot="phase-outcome" className="text-foreground pt-activity text-sm leading-relaxed wrap-break-word">
+                {outcome}
+              </p>
+            )}
+            {answer !== null && (
+              <div
+                data-slot="aui_assistant-message-content"
+                className={cn("text-foreground leading-relaxed wrap-break-word", (header || parts.length > 0) && "pt-activity")}
+              >
+                <ReplyText index={answer} streaming={answering} report={(report || meta.session) && !answering} />
+              </div>
+            )}
+          </>
+        )}
+      </div>
       {/* A run's work is merged from its card, never undone behind the run's back. */}
       {!live && meta.session && !isRunRequest(meta.requestId) && <TurnDiff requestId={meta.requestId} />}
       {!meta.session && <TurnMemories requestIds={meta.requestIds} />}
@@ -606,30 +606,39 @@ export const RequestBlock: FC = () => {
   );
 };
 
-/** How long the folded work takes to open and to close; keep in step with globals.css. */
-const FOLD_OPEN_MS = 300;
-const FOLD_CLOSE_MS = 150;
-
 /**
- * The folded work of a turn: shut (`null`), opening, open or closing. It stays mounted while it
- * closes, and the header keeps its place on screen while the work opens or closes under it.
+ * Whether a finished turn's work is open. It folds by default, and the header keeps its place on
+ * screen while the work opens or closes under it.
  */
 function useFold() {
-  const [state, setState] = useState<"opening" | "open" | "closing" | null>(null);
-  useEffect(() => {
-    if (state !== "opening" && state !== "closing") return;
-    const timer = window.setTimeout(
-      () => setState(state === "opening" ? "open" : null),
-      state === "opening" ? FOLD_OPEN_MS : FOLD_CLOSE_MS,
-    );
-    return () => window.clearTimeout(timer);
-  }, [state]);
-  const open = state === "opening" || state === "open";
+  const [open, setOpen] = useState(false);
   const toggle = (header: HTMLElement) => {
     preserveAnchor(header);
-    setState(open ? "closing" : "opening");
+    setOpen(!open);
   };
-  return { state, open, toggle };
+  return { open, toggle };
+}
+
+/** A turn's work cut at the user's follow-ups: runs of work, and the steered bubbles between them. */
+type WorkPart = { type: "work"; items: Activity<LeadStep, Entry>[] } | { type: "steer"; entry: Entry };
+
+/**
+ * The work in runs between its steered bubbles. A live turn always ends on a run, where its live
+ * line goes, even right after a bubble.
+ */
+function workParts(items: readonly Activity<LeadStep, Entry>[], live: boolean): WorkPart[] {
+  const parts: WorkPart[] = [];
+  for (const item of items) {
+    if (item.type === "entry" && item.entry.kind === "steer") {
+      parts.push({ type: "steer", entry: item.entry });
+      continue;
+    }
+    const last = parts.at(-1);
+    if (last?.type === "work") last.items.push(item);
+    else parts.push({ type: "work", items: [item] });
+  }
+  if (live && parts.at(-1)?.type !== "work") parts.push({ type: "work", items: [] });
+  return parts;
 }
 
 /** The line shown when a turn ran on another model than the one picked (a fallback). */
@@ -674,7 +683,8 @@ const AnswerActions: FC<{
     <ActionBarPrimitive.Root
       autohide="never"
       className={cn(
-        "text-muted-foreground -ms-1 flex min-h-7.5 items-center gap-1",
+        // 26px buttons 2px apart, their 16px icons at half white.
+        "text-foreground/50 gap-answer-actions-between -ms-1 flex items-center [&_.aui-button-icon]:size-answer-action",
         !latest && "opacity-0 group-hover/answer:opacity-100 group-focus-within/answer:opacity-100",
       )}
     >
