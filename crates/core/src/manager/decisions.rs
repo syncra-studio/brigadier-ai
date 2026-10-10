@@ -10,7 +10,9 @@
 //! - **Waiting on you**, an overnight run's list only (THREAD-PARITY-PLAN §5 Q6): nobody is
 //!   there to ask, so what only the user can do is kept for the morning. A session lists
 //!   nothing: the user is there, so a decision goes on a card and what only they can do is a
-//!   line of the thread's answer. In a run, the list holds a worker's `needs_user` lines (only
+//!   line of the thread's answer. Computer use's missing permissions are the one exception,
+//!   listed in a session too: Brigadier asks for them itself and closes the item once they're
+//!   in. In a run, the list holds a worker's `needs_user` lines (only
 //!   what a done-when criterion needs), what the orchestrator notes, what the run's rules
 //!   declined, and cards left unanswered (the watchdog, with [`WaitingSource::Card`]). An item
 //!   is listed once per config key or criterion it names (`account_id`, `p2-c2`), under the
@@ -141,7 +143,9 @@ impl SessionManager {
         let added = {
             let _held = self.waiting.lock().await;
             let board = self.core.board(conversation_id).await?;
-            if waiting_run(&source, request_id.as_deref(), &board).is_none() {
+            if !listed_anywhere(&source)
+                && waiting_run(&source, request_id.as_deref(), &board).is_none()
+            {
                 return Err(Error::Invalid(SAY_IT_IN_THE_ANSWER.into()));
             }
             let what = named(&what, &board);
@@ -497,10 +501,14 @@ fn over_for_the_lead(board: &Board, item: &WaitingItem) -> bool {
 /// Whether a card still waits for the user.
 /// An item whose card was answered or expired is over, as is one of a run that ended once its
 /// report keeps it (a report a restart still owes reads the list first), and one of no run
-/// (listed before sessions stopped listing anything).
+/// (listed before sessions stopped listing anything). Computer use's permission ask stays
+/// until the permissions are in.
 fn wait_settled(board: &Board, item: &WaitingItem) -> bool {
     if matches!(&item.source, WaitingSource::Card { card_id } if !card_open(board, card_id)) {
         return true;
+    }
+    if listed_anywhere(&item.source) {
+        return false;
     }
     let Some(run) = waiting_run(&item.source, item.request_id.as_deref(), board) else {
         return true;
@@ -886,6 +894,12 @@ fn reason_head(why: &str) -> String {
     } else {
         format!("{head}.")
     }
+}
+
+/// Whether an item is listed outside an overnight run too: computer use's missing permissions,
+/// which Brigadier asks for itself, hold up no request and close once they're in.
+fn listed_anywhere(source: &WaitingSource) -> bool {
+    matches!(source, WaitingSource::Computer)
 }
 
 /// The overnight run an item belongs to: its own, its task's, or its request's.
@@ -1655,6 +1669,11 @@ mod tests {
         assert!(wait_settled(
             &board,
             &item("w2", WaitingSource::Orchestrator, "Sign in to npm.")
+        ));
+        // Computer use's permission ask stays until the permissions are in.
+        assert!(!wait_settled(
+            &board,
+            &item("w3", WaitingSource::Computer, "Let workers use apps.")
         ));
     }
 
