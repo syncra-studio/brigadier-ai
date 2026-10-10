@@ -62,7 +62,7 @@ test("storage refreshes, reviews, frees up space and chooses items", { timeout: 
   // Cancel removes nothing.
   assert.deepEqual(seen.afterCancel, { dialog: false, calls: 1 });
   assert.deepEqual((seen.usage as string[][])[0], ["storefront-web", "14.0 GB", "1.0 GB", "2.0 GB", "200.0 MB", "17.2 GB"]);
-  assert.deepEqual((seen.usage as string[][])[1][0], "billing-api · repository not found");
+  assert.deepEqual((seen.usage as string[][])[1]?.[0], "billing-api · repository not found");
   assert.equal((seen.usage as string[][]).length, 7);
   assert.deepEqual(seen.selection, { type: "settings", page: "archived" });
   assert.deepEqual(seen.calls, ["clean scan-2 done,build,logs"]);

@@ -4,8 +4,8 @@
 //! running in the menu bar. Quit (menu-bar item, Cmd+Q or a system quit) asks the daemon to
 //! drain and exit, waits for its acknowledgement, then exits the app.
 
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use brigadier_ipc::app::{BridgeEvent, RunningChat};
 #[cfg(target_os = "macos")]
@@ -33,6 +33,35 @@ static IN_MENU_BAR: AtomicBool = AtomicBool::new(false);
 /// The code the process exits with once the event loop returns. Tauri's runtime turns
 /// `app.exit(code)` into a plain exit, so the event loop itself always reports 0.
 static EXIT_CODE: AtomicI32 = AtomicI32::new(0);
+
+/// Until when (ms since the Unix epoch) Settings records a key press. Meanwhile the menu's own
+/// items (Settings…, Open Folder…, Close Window) reach the page as key presses instead of acting.
+static KEY_CAPTURE_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
+/// Longest a recording holds those items, should the page never say it ended.
+const KEY_CAPTURE_LIMIT: Duration = Duration::from_secs(60);
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| {
+            u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+        })
+}
+
+/// Settings starts (`true`) or ends recording a key press.
+pub fn set_key_capture(on: bool) {
+    let until = if on {
+        now_ms().saturating_add(u64::try_from(KEY_CAPTURE_LIMIT.as_millis()).unwrap_or(u64::MAX))
+    } else {
+        0
+    };
+    KEY_CAPTURE_UNTIL_MS.store(until, Ordering::Release);
+}
+
+#[cfg(target_os = "macos")]
+fn capturing_keys() -> bool {
+    now_ms() < KEY_CAPTURE_UNTIL_MS.load(Ordering::Acquire)
+}
 
 pub fn is_quitting() -> bool {
     QUITTING.load(Ordering::Acquire)
@@ -261,6 +290,19 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
         if let Some(shortcut) = event.id().as_ref().strip_prefix("pane:") {
             let _ = app.emit_to(MAIN_WINDOW, "pane-shortcut", shortcut);
             return;
+        }
+        // While Settings records a key press, the menu's own items are key presses too.
+        if capturing_keys() {
+            let key = match event.id().as_ref() {
+                "close-main-window" => Some("close-window"),
+                SETTINGS_ITEM => Some("settings"),
+                OPEN_FOLDER_ITEM => Some("open-folder"),
+                _ => None,
+            };
+            if let Some(key) = key {
+                let _ = app.emit_to(MAIN_WINDOW, "pane-shortcut", key);
+                return;
+            }
         }
         if event.id().as_ref() == "close-main-window" {
             if let Some(window) = app.get_webview_window(MAIN_WINDOW) {

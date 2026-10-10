@@ -3,6 +3,7 @@ import {
   AvatarProfile,
   Branch,
   Cursor,
+  KeyboardShortcut,
   Robot,
   Shuffle,
   SettingsCog,
@@ -20,6 +21,7 @@ import { CONFIGURATION_ROWS, ConfigurationPage } from "@/app/settings/Configurat
 import { GENERAL_ROWS, GeneralPage } from "@/app/settings/GeneralPage";
 import { GIT_ROWS, GitPage } from "@/app/settings/GitPage";
 import { STORAGE_ROWS, StoragePage } from "@/app/settings/StoragePage";
+import { SHORTCUTS_ROWS, ShortcutsPage } from "@/app/settings/ShortcutsPage";
 import { PROVIDERS_ROWS, ProvidersPage } from "@/app/providers/ProvidersPage";
 import { ROUTING_PAGE_ROWS, RoutingPage } from "@/app/routing/RoutingPage";
 import { computerUseAvailable } from "@/state/computerAccess";
@@ -113,6 +115,14 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "Personal",
     component: ConfigurationPage,
     rows: Object.values(CONFIGURATION_ROWS),
+  },
+  {
+    id: "shortcuts",
+    label: "Keyboard shortcuts",
+    icon: KeyboardShortcut,
+    group: "Personal",
+    component: ShortcutsPage,
+    rows: SHORTCUTS_ROWS,
   },
   {
     id: "usage",

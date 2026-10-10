@@ -338,6 +338,13 @@ fn open_url(app: tauri::AppHandle, url: String) -> Result<(), IpcError> {
         })
 }
 
+/// Settings starts or ends recording a key press (search by keystrokes): meanwhile the menu's
+/// own items reach the page as key presses.
+#[tauri::command]
+fn set_key_capture(on: bool) {
+    shell::set_key_capture(on);
+}
+
 /// The conversations running now, which the menu-bar item lists under "Running".
 #[tauri::command]
 fn set_running_chats(app: tauri::AppHandle, chats: Vec<RunningChat>) {
@@ -683,6 +690,7 @@ fn main() {
             open_url,
             reveal_path,
             set_running_chats,
+            set_key_capture,
             browser::browser_open,
             browser::browser_navigate,
             browser::browser_place,
