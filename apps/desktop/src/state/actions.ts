@@ -797,7 +797,6 @@ export async function restoreKeptWork(taskId: string): Promise<RestoreOutcome> {
   return outcome;
 }
 
-
 export async function readArtifact(id: string, offset: number, limit: number) {
   const { text } = await request({ method: "readArtifact", id, offset, limit });
   return text;
