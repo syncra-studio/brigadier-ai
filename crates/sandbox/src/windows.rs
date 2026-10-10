@@ -316,6 +316,11 @@ impl Processes for WindowsProcesses {
         command
     }
 
+    // An exited process's handle is not a running process: `is_alive` already says so.
+    fn is_zombie(&self, _pid: u32) -> bool {
+        false
+    }
+
     fn is_alive(&self, pid: u32) -> bool {
         let Ok(handle) = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION) else {
             return false;

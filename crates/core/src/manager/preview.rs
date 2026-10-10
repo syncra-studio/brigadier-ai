@@ -526,7 +526,7 @@ impl SessionManager {
             if crate::machine::still(&*platform, member) {
                 let _ = platform.processes().kill_tree(member.pid);
             }
-            if !crate::machine::still(&*platform, member) {
+            if crate::machine::gone(&*platform, member) {
                 self.runtime
                     .ledger()
                     .forget(&preview_owner(&live.conversation), process_artifact(member))
@@ -871,7 +871,16 @@ impl SessionManager {
     }
 
     async fn signal_preview(&self, live: &LivePreview, paused: bool) -> Result<()> {
-        let platform = self.runtime.platform();
+        self.signal_preview_on(live, paused, self.runtime.platform())
+            .await
+    }
+
+    async fn signal_preview_on(
+        &self,
+        live: &LivePreview,
+        paused: bool,
+        platform: &Arc<dyn brigadier_sandbox::Platform>,
+    ) -> Result<()> {
         if let Some(root) = crate::machine::proc_of(&**platform, live.pid) {
             if paused {
                 // Record each identity durably before suspending it. Parents stop before
@@ -881,18 +890,25 @@ impl SessionManager {
                 let processes = platform.processes();
                 // Members from an earlier pause may have lost the parent that led to them,
                 // and a detached one is beyond the group signal: walk from each of them too.
-                // One whose identity no longer matches is not ours any more.
-                // Dropped members' ledger records go too, as the stop path forgets them.
+                // One that has ended or whose PID was reused is not ours any more: it is
+                // dropped, and its ledger record with it, as the stop path forgets them. One
+                // whose identity cannot be checked now is not walked, but stays, so the stop
+                // path and a restart's ledger sweep still try to end it.
                 let (known, dropped): (Vec<_>, Vec<_>) = {
                     let mut members = live
                         .paused_members
                         .lock()
                         .unwrap_or_else(|p| p.into_inner());
-                    let (known, dropped) = std::mem::take(&mut *members)
+                    let (dropped, kept) = std::mem::take(&mut *members)
                         .into_iter()
-                        .partition(|member| crate::machine::still(&**platform, *member));
-                    *members = known;
-                    (members.clone(), dropped)
+                        .partition(|member| crate::machine::gone(&**platform, *member));
+                    *members = kept;
+                    let known = members
+                        .iter()
+                        .copied()
+                        .filter(|member| crate::machine::still(&**platform, *member))
+                        .collect();
+                    (known, dropped)
                 };
                 for member in dropped {
                     self.runtime
@@ -916,6 +932,9 @@ impl SessionManager {
                         continue;
                     };
                     if !crate::machine::still(&**platform, member) {
+                        if !crate::machine::gone(&**platform, member) {
+                            continue;
+                        }
                         let tracked = {
                             let mut members = live
                                 .paused_members
@@ -1880,6 +1899,65 @@ while True:
         flow.manager.signal_preview(&live, false).await.unwrap();
         drop(kill);
         child.wait().unwrap();
+        flow.stop().await;
+    }
+
+    #[tokio::test]
+    async fn failed_identity_checks_keep_paused_members_and_their_ledger_records() {
+        use crate::machine::tests::Unreadable;
+        use crate::manager::flow::{Flow, Options, Reply};
+
+        let flow = Flow::start(
+            "preview-unreadable-member",
+            Options::default(),
+            Arc::new(|_| Box::pin(async { Reply::text("[quiet]") })),
+        )
+        .await;
+        let platform = flow.manager.runtime.platform().clone();
+        let spec = flow.manager.runtime.cli_env().spec(Path::new("/bin/cat"));
+        let mut child = platform.processes().piped_command(&spec).spawn().unwrap();
+        let mut detached = platform.processes().piped_command(&spec).spawn().unwrap();
+        let member = crate::machine::proc_of(&*platform, detached.id()).unwrap();
+        let live = LivePreview {
+            conversation: flow.conversation.clone(),
+            id: "preview-1".into(),
+            pid: child.id(),
+            workspace: flow.repo.clone(),
+            log: flow.repo.join("unused.log"),
+            reason: Mutex::default(),
+            stop: CancellationToken::new(),
+            ended: CancellationToken::new(),
+            snapshot: Mutex::default(),
+            paused_members: Mutex::new(vec![member]),
+            updating: tokio::sync::Mutex::default(),
+        };
+        let owner = preview_owner(&flow.conversation);
+        let ledger = flow.manager.runtime.ledger();
+        ledger
+            .record(&owner, process_artifact(member))
+            .await
+            .unwrap();
+        platform.processes().suspend(member.pid).unwrap();
+        // Fail either at the initial partition or after it has accepted the member into
+        // the walk (gone and still each read its identity once).
+        for readable_checks in [0, 2] {
+            let unreadable: Arc<dyn brigadier_sandbox::Platform> = Arc::new(Unreadable(
+                platform.clone(),
+                member.pid,
+                readable_checks.into(),
+            ));
+            let result = flow
+                .manager
+                .signal_preview_on(&live, true, &unreadable)
+                .await;
+            assert!(result.is_ok(), "{result:?}");
+            assert!(live.paused_members.lock().unwrap().contains(&member));
+            assert!(ledger.artifacts(&owner).contains(&process_artifact(member)));
+        }
+        child.kill().unwrap();
+        detached.kill().unwrap();
+        child.wait().unwrap();
+        detached.wait().unwrap();
         flow.stop().await;
     }
 

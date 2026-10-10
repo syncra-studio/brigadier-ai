@@ -94,6 +94,9 @@ pub trait Processes: Send + Sync {
     fn piped_command(&self, spec: &SpawnSpec) -> std::process::Command;
     /// Whether a process with this id currently exists.
     fn is_alive(&self, pid: u32) -> bool;
+    /// Whether `pid` has exited but its parent has not reaped it yet: it still answers
+    /// [`Processes::is_alive`], but nothing of it runs any more.
+    fn is_zombie(&self, pid: u32) -> bool;
     /// Asks a process to exit (SIGTERM on Unix). On Windows this terminates it.
     fn terminate(&self, pid: u32) -> Result<()>;
     /// Kills a process and everything it started: its process group and, walking the process

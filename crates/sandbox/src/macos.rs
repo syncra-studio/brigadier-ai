@@ -67,6 +67,9 @@ impl Processes for MacProcesses {
     fn is_alive(&self, pid: u32) -> bool {
         unix::is_alive(pid)
     }
+    fn is_zombie(&self, pid: u32) -> bool {
+        is_zombie(pid)
+    }
     fn terminate(&self, pid: u32) -> Result<()> {
         unix::terminate(pid)
     }
@@ -228,6 +231,36 @@ fn timebase() -> (u32, u32) {
             (1, 1)
         }
     })
+}
+
+/// Whether `pid` is a zombie, per its `kinfo_proc` from `KERN_PROC_PID` (`proc_pidinfo`
+/// fails for a zombie, as it has no task any more).
+fn is_zombie(pid: u32) -> bool {
+    // `struct kinfo_proc` (libc does not define it on Apple platforms): 648 bytes, with
+    // `kp_proc.p_stat` at offset 36 on 64-bit macOS.
+    const SIZE: usize = 648;
+    const P_STAT: usize = 36;
+    let Ok(pid) = libc::c_int::try_from(pid) else {
+        return false;
+    };
+    let mut buffer = [0u8; SIZE];
+    let mut size = SIZE;
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
+    // SAFETY: `buffer` is writable for `size` bytes and the call writes at most that many,
+    // updating `size`; the result is checked before `buffer` is read.
+    #[allow(unsafe_code)]
+    let read = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            4,
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    // No such process leaves `size` at 0.
+    read == 0 && size == SIZE && u32::from(buffer[P_STAT]) == libc::SZOMB
 }
 
 /// Every process id on the machine, per `proc_listallpids`.

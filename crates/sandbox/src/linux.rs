@@ -80,6 +80,14 @@ impl Processes for LinuxProcesses {
     fn is_alive(&self, pid: u32) -> bool {
         unix::is_alive(pid)
     }
+    fn is_zombie(&self, pid: u32) -> bool {
+        // Field 3 (state), the first after the closing parenthesis of comm.
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            stat.rfind(')')
+                .and_then(|index| stat[index + 1..].split_whitespace().next())
+                == Some("Z")
+        })
+    }
     fn terminate(&self, pid: u32) -> Result<()> {
         unix::terminate(pid)
     }

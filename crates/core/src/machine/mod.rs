@@ -297,6 +297,18 @@ pub(crate) fn still(platform: &dyn Platform, proc: Proc) -> bool {
             .is_some_and(|now| (now.started_ms - proc.started_ms).abs() < 1_000)
 }
 
+/// Whether `proc` has certainly ended: it no longer runs, it is a zombie, or its PID now
+/// belongs to a process started at another time. Unlike `!still`, a check that fails (its
+/// start time unreadable) proves nothing, so a caller keeps what it knows about `proc`.
+pub(crate) fn gone(platform: &dyn Platform, proc: Proc) -> bool {
+    let processes = platform.processes();
+    !processes.is_alive(proc.pid)
+        || processes.is_zombie(proc.pid)
+        || processes
+            .start_time_ms(proc.pid)
+            .is_ok_and(|now| (now.round() as i64 - proc.started_ms).abs() >= 1_000)
+}
+
 /// The heavy commands running under `cli` (a CLI process Brigadier started), the topmost
 /// heavy process of each branch. A CLI never counts, but the ledger also tracks the group
 /// leaders of the commands a CLI runs: one that is itself heavy is the command, and what it
@@ -510,7 +522,7 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 #[cfg(all(test, unix))]
-mod tests {
+pub(crate) mod tests {
     use std::process::{Child, Command};
 
     use super::*;
@@ -918,6 +930,130 @@ mod tests {
         assert!(!watch.eased_within(Duration::ZERO).await);
         watch.guard.fake(parse_fake("calm"));
         assert!(watch.eased_within(Duration::ZERO).await);
+    }
+
+    /// The native platform, with a chosen PID failing identity reads after a countdown.
+    pub(crate) struct Unreadable(
+        pub Arc<dyn Platform>,
+        pub u32,
+        pub std::sync::atomic::AtomicUsize,
+    );
+
+    impl Platform for Unreadable {
+        fn name(&self) -> &'static str {
+            self.0.name()
+        }
+        fn paths(&self) -> &brigadier_sandbox::AppPaths {
+            self.0.paths()
+        }
+        fn private_fs(&self) -> &dyn brigadier_sandbox::PrivateFs {
+            self.0.private_fs()
+        }
+        fn processes(&self) -> &dyn brigadier_sandbox::Processes {
+            self
+        }
+        fn credentials(&self) -> &dyn brigadier_sandbox::CredentialStore {
+            self.0.credentials()
+        }
+        fn shell(&self) -> &dyn brigadier_sandbox::Shell {
+            self.0.shell()
+        }
+        fn sandbox(&self) -> &dyn brigadier_sandbox::Sandbox {
+            self.0.sandbox()
+        }
+        fn machine(&self) -> &dyn brigadier_sandbox::Machine {
+            self.0.machine()
+        }
+    }
+
+    impl brigadier_sandbox::Processes for Unreadable {
+        fn spawn_detached(
+            &self,
+            spec: &brigadier_sandbox::SpawnSpec,
+        ) -> brigadier_sandbox::Result<brigadier_sandbox::DetachedChild> {
+            self.0.processes().spawn_detached(spec)
+        }
+        fn piped_command(&self, spec: &brigadier_sandbox::SpawnSpec) -> Command {
+            self.0.processes().piped_command(spec)
+        }
+        fn is_alive(&self, pid: u32) -> bool {
+            self.0.processes().is_alive(pid)
+        }
+        fn is_zombie(&self, pid: u32) -> bool {
+            self.0.processes().is_zombie(pid)
+        }
+        fn terminate(&self, pid: u32) -> brigadier_sandbox::Result<()> {
+            self.0.processes().terminate(pid)
+        }
+        fn kill_tree(&self, pid: u32) -> brigadier_sandbox::Result<()> {
+            self.0.processes().kill_tree(pid)
+        }
+        fn kill_group(&self, pid: u32) -> brigadier_sandbox::Result<()> {
+            self.0.processes().kill_group(pid)
+        }
+        fn descendants(&self, pid: u32) -> brigadier_sandbox::Result<Vec<u32>> {
+            self.0.processes().descendants(pid)
+        }
+        fn children(&self, pid: u32) -> brigadier_sandbox::Result<Vec<u32>> {
+            self.0.processes().children(pid)
+        }
+        fn group_of(&self, pid: u32) -> Option<u32> {
+            self.0.processes().group_of(pid)
+        }
+        fn command_line(&self, pid: u32) -> Option<Vec<String>> {
+            self.0.processes().command_line(pid)
+        }
+        fn suspend(&self, pid: u32) -> brigadier_sandbox::Result<()> {
+            self.0.processes().suspend(pid)
+        }
+        fn resume(&self, pid: u32) -> brigadier_sandbox::Result<()> {
+            self.0.processes().resume(pid)
+        }
+        fn cpu_time_ms(&self, pid: u32) -> Option<u64> {
+            self.0.processes().cpu_time_ms(pid)
+        }
+        fn start_time_ms(&self, pid: u32) -> brigadier_sandbox::Result<f64> {
+            if pid != self.1
+                || self
+                    .2
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                        left.checked_sub(1)
+                    })
+                    .is_ok()
+            {
+                return self.0.processes().start_time_ms(pid);
+            }
+            Err(std::io::Error::other("unreadable").into())
+        }
+        fn in_dir(&self, dir: &Path) -> brigadier_sandbox::Result<Vec<u32>> {
+            self.0.processes().in_dir(dir)
+        }
+    }
+
+    #[test]
+    fn only_an_ended_zombie_or_reused_process_is_gone() {
+        let dir = TempDir::new();
+        let platform = platform(dir.path());
+        let mut sleeper = Command::new("/bin/sleep").arg("300").spawn().unwrap();
+        let proc = proc_of(&*platform, sleeper.id()).unwrap();
+        assert!(still(&*platform, proc) && !gone(&*platform, proc));
+        let reused = Proc {
+            started_ms: proc.started_ms - 5_000,
+            ..proc
+        };
+        assert!(!still(&*platform, reused) && gone(&*platform, reused));
+        // A failed identity check is no proof the process ended.
+        let unreadable = Unreadable(platform.clone(), proc.pid, 0.into());
+        assert!(!still(&unreadable, proc) && !gone(&unreadable, proc));
+
+        // Exited but not reaped yet: a signal still reaches it, and only its state shows it
+        // has ended.
+        sleeper.kill().unwrap();
+        wait_for(|| platform.processes().is_zombie(proc.pid).then_some(()));
+        assert!(platform.processes().is_alive(proc.pid));
+        assert!(gone(&*platform, proc) && gone(&unreadable, proc));
+        sleeper.wait().unwrap();
+        assert!(gone(&*platform, proc));
     }
 
     #[test]
