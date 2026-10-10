@@ -2,6 +2,7 @@
 
 > Status: plan, 2026-10-11, from the 2026-10-10 grill of three real sessions (Q1–Q12) and the audit behind it.
 > Revised the same day after the Codex plan review (all 12 findings adopted, §10) and the user's answers (§8).
+> Revised again after the second Codex plan review (all 8 findings adopted, §10.2), as the first commit of phase 1.
 > Branch `session-fixes-plan` from `main` at `7d8898ff`. File:line references are to `7d8898ff`.
 > Next: the user's approval → a `/delegator` build run, phase by phase (§6, §7).
 > Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`, `C/` = `apps/desktop/src/app/conversation/`.
@@ -91,8 +92,10 @@ Everything else in THREAD-PLAN and THREAD-PARITY-PLAN stands.
 2. **The engine checks; it doesn't build.** A new `check_merge(worktree, tip, ours, theirs, report)` in
    `M/landing.rs` runs before a merge task lands:
    - **No conflict markers** in the tree: reuse `conflict_marker` (`:1848`) over the files the merge touched.
-   - **Both parents present:** the tip is a merge commit whose parents include `ours` (the target's tip at the
-     start, or a descendant of it) and `theirs` (the base tip it merged).
+   - **Both inputs merged:** HEAD's ancestry holds a merge commit whose parents include `ours` (the target's tip
+     at the start, or a descendant of it) and `theirs` (the base tip it merged), and both `ours` and `theirs` are
+     ancestors of HEAD. HEAD itself need not be that merge: an ordinary correction commit after it (a fix the tests
+     asked for, a file restored after a refusal) is fine. The checks below run on HEAD's final tree.
    - **Nothing vanished.** Each path is classified against the merge base:
      - Added or changed by one side, untouched by the other: it must be in the tip, unless the report's `deleted`
        lists it with a reason.
@@ -108,6 +111,13 @@ Everything else in THREAD-PLAN and THREAD-PARITY-PLAN stands.
    `TaskKind::Merge` landing as a fast-forward of the target to the checked merge commit. The engine does this
    itself after `check_merge` passes (and, for the base, after the consent check). The worker commits only on its
    own branch. `keep_paths` stays for normal task commits.
+   - **The move stays atomic.** The fast-forward keeps today's expected-tip check (`LandRequest::expected_tip`,
+     `LandBlock::TipMoved`, `M/landing.rs:453-466`): it moves the target only if the target is still at the tip the
+     check ran against.
+   - **When the target moved** (another task landed, or the thread committed, while the merge worker ran), nothing
+     lands. The same merge worker is resumed (Q4) against the new target: "`<target>` moved to <sha>; merge it in
+     too, then build, test and submit again." `check_merge` and the affected checks then run again, with `ours` the
+     new tip. No rebase of a merge, and no merge built by the engine.
 4. **The consent check before merging into the base stays in the engine** (`finish_session`, `merge_consent`,
    `M/landing.rs:1378-1720`). When a session merge stops at conflicts (`:1497-1517`), the thread is told to delegate
    a merge task. That worker merges the base into the session branch as above. `finish_session` then merges on the
@@ -123,6 +133,11 @@ Everything else in THREAD-PLAN and THREAD-PARITY-PLAN stands.
   - Main adds 18 files and the session adds 3, with a conflict in one: after the merge task, the landed tip has two
     parents and all 21 files.
   - A worker that leaves a marker is refused, nothing lands, and the worker hears the file.
+  - A refused merge repaired by a later ordinary commit (the missing file restored on top of the merge) lands: the
+    merge is in HEAD's ancestry, both inputs are ancestors, and the final tree passes.
+  - Concurrent landing: another task lands on the target while the merge worker runs. The fast-forward is refused
+    by the expected-tip check, nothing of the other task is lost, the same merge worker is resumed against the new
+    tip, and its second merge lands with both landings' files.
   - A worker that deletes a base file without listing it is refused; listed with a reason, it lands.
   - Modify/delete: `main` changed `c.ts` and the session deleted it. A merge that drops it without a reason is
     refused, naming it as contested; one that keeps `main`'s version lands; one that lists it with a reason lands.
@@ -215,11 +230,17 @@ Everything else in THREAD-PLAN and THREAD-PARITY-PLAN stands.
      (`M/mod.rs:277-278`), which finds overdue runs. And a resumed session skips the wind-down admission check
      (`admit_run_task` vs `admit_new_run_task`, `M/overnight/admission.rs:154-180`). So `recover` first classifies
      each task's overnight run, with `resume_runs`' own deadline and Stop logic split out as a pure function:
-     - **Running:** the task resumes as above.
-     - **Winding down, or past its deadline but not yet ended** (PLAN §10.9): the task resumes only to hand off.
-       Its first input says: "[Brigadier] You were interrupted, and the overnight run is ending. Start nothing new;
-       write your handoff and submit your report now." The same applies to a crash resume (step 1) during a wind-down.
-     - **Stopped by the user, or ended:** no resume. The task stops as today, with the run's reason.
+     - **Running** (before its wind-down instant): the task resumes as above.
+     - **Winding down, inside the wind-down allowance** (the run is `WindingDown` and now is before its cleanup
+       cutoff, `cutoff_ms` in `M/overnight/wind_down.rs:411`; or the restart found it past its wind-down instant but
+       before its deadline, so it enters the wind-down now): the task may resume only to hand off. Its first input
+       says: "[Brigadier] You were interrupted, and the overnight run is ending. Start nothing new; write your
+       handoff and submit your report now." The same applies to a crash resume (step 1) during a wind-down.
+     - **Past the deadline or the cleanup cutoff, stopped by the user, or ended:** nothing resumes, not even to
+       hand off. PLAN §10.9 sends a clock jump past the deadline straight to report and cleanup, and §10.10's
+       recovery order step 4 admits no replacement once it is crossed. The task's work is preserved mechanically
+       (§10.9 step 3: its commits and branch kept, unverified diffs, untracked task files and the transcript saved as
+       artifacts), it stops with the run's reason, and the report lists it as unfinished.
    - A task the user stopped, or one in a conversation whose workers the user stopped all at once, never resumes.
    - The same order applies on every start: no worker resumes before its run's state is known.
 3. **Vendor switch only for quota, rate limits, auth or an outage:** `AttemptEnd::Limit`, `ErrorKind::Auth`, and
@@ -239,8 +260,9 @@ Everything else in THREAD-PLAN and THREAD-PARITY-PLAN stands.
   - A second exit with no report in between stops the task with both exits named.
   - A usage-limit end still hands on.
   - After a simulated restart, a running task resumes instead of stopping.
-  - After a restart past an overnight run's deadline, or after its Stop, no task of that run resumes. In a
-    winding-down run, the resumed task gets only the hand-off input and starts no new session.
+  - After a restart past an overnight run's deadline or its cleanup cutoff, or after the run ended, no task of
+    that run resumes; each task's work is kept (branch, commits, saved diff) and the report lists it. In a run
+    winding down inside its allowance, the resumed task gets only the hand-off input and starts no new session.
 - Live, dev build: `kill -9` one Claude worker's CLI PID (one we started). Its row reads "Interrupted — resuming",
   and the same session id continues (`orchestrator.logged` / worker `sessionStarted` with the same `nativeId`).
   `run_check` on the already-passed check is `cached: true`.
@@ -651,20 +673,27 @@ source. In B, each "study the reference app" worker spent 6–12M tokens reading
    - Only for **study tasks**: scout and research tasks whose brief names an app or binary to study, chosen by the
      thread with a `study: true` flag on `delegate_task`.
    - Behind tool search, like `computer`.
-2. **Pinned and verified.** Brigadier installs one pinned version into its data dir with `npm install --prefix
-   <data>/tools/rea --ignore-scripts rea-agents@6.3.0`, on first use and with a progress row.
-   - It checks the tarball's `sha512` integrity against the value pinned in our code, and checks npm provenance
-     with `npm audit signatures`.
+2. **Pinned and verified, the whole tree.** Brigadier ships a reviewed `package.json` and `package-lock.json` for
+   REA (`rea-agents@6.3.0` and every transitive dependency, each with its `integrity` value) and installs from them
+   into its data dir with `npm ci --prefix <data>/tools/rea --ignore-scripts`, on first use and with a progress row.
+   `npm ci` installs exactly the lockfile and fails if the manifest and lockfile disagree (npm v11 docs, `npm ci`).
+   - It checks the top-level tarball's `sha512` against the value pinned in our code and npm provenance with `npm
+     audit signatures`, and only then exposes the install (it is written to a staging folder and moved into place
+     after these checks pass).
    - It runs `node <prefix>/node_modules/rea-agents/scripts/rea.mjs mcp` directly: no `npx`, no global install.
-   - A version bump is a code change with its new pin, reviewed like any dependency.
+   - A version bump is a code change with its new manifest, lockfile and pin, reviewed like any dependency.
 3. **Never `rea setup`, never `rea update`.** No change to `~/.claude.json`, `~/.codex`, skills or Hopper.
    - Phase 3 checks, from REA's docs and code, whether its cache and state folder can be moved. If yes, it goes to
      the task's scratch folder.
    - If not, `~/.rea` is granted to study tasks as a writable root and documented as REA's own folder.
 4. **Static analysis by default.** The brief says: static JS/Electron/ASAR and .NET first. Native engines are used
    only if `rea doctor` finds one already installed; Brigadier never installs one.
-5. **Sandbox:** the study task's sandbox reads the target app and writes its scratch folder (and REA's cache, step
-   3). REA runs inside it as the CLI's child.
+5. **Sandbox: Brigadier's own wrapper, not the CLI's.** An MCP server is a separate process the CLI starts; the
+   CLI's command sandbox doesn't cover it (Codex's permissions docs, "Scope and enforcement": the sandbox governs
+   command execution, MCP servers have their own controls). So the server entry runs REA under Brigadier's Seatbelt
+   wrapper (the one `run` uses, `crates/sandbox`): the target app read-only, the task's scratch folder (and REA's
+   cache, step 3) writable, nothing else writable. Linux and Windows get the same through their `crates/sandbox`
+   backends, or no REA where a backend can't express it.
 6. **The worker guidance** for study tasks:
    - Start with `analyze_javascript_application` or `inspect_artifact` on the target, follow features with
      `trace_application_feature`, and cite REA's evidence ids in the report.
@@ -674,7 +703,10 @@ source. In B, each "study the reference app" worker spent 6–12M tokens reading
 **Verify.**
 - Rust tests:
   - A study task's spec lists the REA server, and other tasks' don't.
-  - The install uses `--ignore-scripts` and the pinned version, and refuses a tarball whose integrity differs.
+  - The install is `npm ci --ignore-scripts` from the shipped manifest and lockfile, refuses a tarball whose
+    integrity differs, and exposes nothing before its checks pass.
+  - Confinement through a real MCP call: REA, started by the study task's server entry, can read the target and
+    write the scratch folder, and an `extract_artifact` aimed outside them fails with "Operation not permitted".
   - No user config file is written (a fake `HOME` stays unchanged).
 - **Measured:** one frozen study question about an Electron app's bundle (for example "how does it show a file
   preview beside the chat, and what triggers it"), with its expected findings written down first. Run once with REA
@@ -831,9 +863,16 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
      scratch and test folders, worker home, CLI home.
    - **Other sessions' temp and test folders:** `/tmp/brigadier-<12 hex>` (`CLAUDE_CODE_TMPDIR`) and
      `brigadier-test-*`, except the session's own.
-2. **Below Full access (the CLIs' own sandboxes).** `commit_roots` stops granting `refs`, `logs` and
-   `packed-refs.lock`. A writer gets its own git dir, `objects`, and its own branch's ref, `.lock` and reflog. The
-   thread also gets `refs/remotes/` for push tracking.
+2. **Below Full access (the CLIs' own sandboxes).** `commit_roots` stops granting the whole `refs` and `logs`. A
+   writer gets its own git dir, `objects`, and its own branch's ref, `.lock` and reflog. The thread also gets
+   `refs/remotes/` for push tracking.
+   - **`packed-refs.lock` stays granted; `packed-refs` itself is protected.** A commit in a linked worktree takes
+     and gives back the shared lock, and without it every Codex commit printed "Unable to create
+     packed-refs.lock: Operation not permitted" (`3278280c`, docs/evidence/2026-10-07-thread-phase1.md:55). Holding
+     the lock is harmless on its own: replacing `packed-refs` means renaming the lock over it, which needs write
+     access to `packed-refs`, and that is not granted. Phase 1 proves both halves by test (a commit prints no git
+     error; a rename of the lock over `packed-refs` fails). If the test shows a sandbox can't keep them apart, the
+     alternative is chosen by test before the grant changes, never by dropping the lock.
    - Claude also gets the protected set as `filesystem.denyWrite`, plus `Edit`/`Write`/`NotebookEdit` deny rules, as
      already done for `hooks` and `config` (`P/claude/mod.rs:614-627`): its file tools work outside the OS sandbox.
    - Codex needs no deny list: no writable root covers a protected path.
@@ -856,11 +895,31 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
    - `packed-refs` stays writable at Full access, so the user's own branch work isn't broken.
    - Editing `packed-refs` by hand would be deliberate evasion, outside the threat model (a careless agent). Step 5
      catches it.
-5. **The engine's ref check** (the backstop). The engine records every live branch it owns with its tip, and checks
-   them before any landing or merge and after every thread turn. A live task or session branch that was moved or
-   deleted outside the engine is restored at its recorded tip, and the thread is told: `[restored
-   brigadier/…/session: it was deleted outside Brigadier]`. This also covers platforms whose sandbox can't express
-   allow-all-but rules (Linux and Windows today).
+5. **The engine's ref check** (the backstop). The engine records every live branch it owns with its tip and its
+   owner (a task branch: that task's worker; the session branch: the thread). It checks them before any landing or
+   merge (the caller: the landing task's worker) and after every thread turn (the caller: the thread). Workers
+   commit on their own branches and the thread commits small edits on the session branch, both outside the engine,
+   so the check tells legitimate moves from damage:
+   - **The caller's own branch moved** (any move, a rewrite such as `--amend` included): legitimate. Its new tip
+     is recorded.
+   - **Any branch moved forward** (the new tip descends from the recorded one): commits were added, nothing can be
+     lost, and a concurrent worker's or the thread's commits look exactly like this. Its new tip is recorded, never
+     restored.
+   - **A protected target deleted, or moved so its recorded tip is no longer an ancestor:** restored at its
+     recorded tip, and the thread is told: `[restored brigadier/…/session: it was deleted outside Brigadier]`. The
+     protected targets for a caller are the branches of step 1: other sessions' task and session branches, and,
+     for a worker, the session branch. A live branch deleted by its own owner is restored too (bug 5): no session
+     deletes a branch the engine still uses. A rewrite of another branch while its own worker is live is
+     ambiguous (the worker may have amended it): its new tip is recorded and the old tip logged with the note
+     `[brigadier/…/task-5 was rewritten while its worker ran: <old> → <new>]`.
+   - **The base (`main`)** is the user's branch, not the engine's: the user may move or reset it from their own
+     terminal at any time. The check never restores it. A deletion or non-forward move of the base seen at a check
+     is told to the thread, which tells the user. The sandbox (steps 2–3) is the base's protection.
+   - **Serialized with landings.** Every move the engine makes (a landing's fast-forward or rebase, a merge into
+     the base, a branch it creates or deletes) and the check itself run under one per-repository ref lock in the
+     engine, and the engine updates its recorded tip inside that same critical section. So the check never sees
+     the engine's own move as foreign, and a restore can't undo a landing that ran a moment earlier.
+   - This also covers platforms whose sandbox can't express allow-all-but rules (Linux and Windows today).
 6. **A `clean_up` tool** (plumbing) for the thread:
    - It lists and removes only what the ledger records under this conversation's owners (`session:`, `task:`,
      `review:`, `review-hold:`, `workers:`, `orch:` of this id) and that is no longer in use: merged task branches
@@ -876,12 +935,22 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
 - Rust tests:
   - `clean_up` removes this session's merged task branch and keeps another conversation's.
   - The protected set for a worker and for the thread: the right refs, folders and exceptions; `commit_roots` no
-    longer contains `refs`, `logs` or `packed-refs.lock`.
+    longer contains the whole `refs` or `logs`, and still contains `packed-refs.lock` (not `packed-refs`).
   - The ref check restores a deleted live task branch and leaves a merged, released one deleted.
+  - Commits survive the check: a worker's commits on its task branch (an `--amend` included) and the thread's
+    commit on the session branch are recorded, not restored, whether the check runs before another task's landing
+    or after the thread's turn. A concurrent worker's new commits on its own branch survive a check whose caller is
+    the thread.
+  - A worker's force-move of the session branch to an older commit is restored at the check before its landing; a
+    `main` moved by the user is never touched.
+  - Serialization: a landing and a check started together never restore the landing's move (the recorded tip is
+    updated under the same lock).
 - Sandbox tests (macOS, with a real `git` and `sandbox-exec`), under the Full-access profile and under each CLI's
   scoped sandbox settings:
   - `git branch -D brigadier/<other>/task-1` fails, with the ref loose and again with it packed; the ref survives.
-  - `git update-ref refs/heads/main <sha>` fails; a commit on the session's own branch works.
+  - `git update-ref refs/heads/main <sha>` fails; a commit on the session's own branch works and prints no git
+    error (a Codex worker included: the shared `packed-refs.lock` is taken and given back).
+  - Renaming a file over `packed-refs` (`mv packed-refs.lock packed-refs`, after taking the lock) fails.
   - `rm -rf /tmp/brigadier-test-*` removes only the session's own folders; `rm -rf /tmp/brigadier-<other temp>`
     fails; `rm -rf /tmp/my-scratch` works.
   - Codex's built-in shell (a Codex thread at Full access, live) gets the same refusals.
@@ -930,14 +999,24 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
      "waiting for another build" on its row), and is never paused once running.
    - The heat pause skips a process tree that runs a test binary (`is_heavy` classification gains "test").
    - A CLI's own shell builds keep today's behaviour.
-3. `run_check` sets `TMPDIR` to the task's test folder itself and strips a leading `ulimit -n N;` and `TMPDIR=… ` /
-   `export TMPDIR=…;` from the command before keying the cache (`M/checks.rs`). The worker prompt says not to add
-   them.
+3. `run_check` sets `TMPDIR` to the task's test folder itself. It drops a leading prefix only when the prefix is
+   proven redundant with the environment and limits it already runs the command with, and then runs the command
+   without it, so the cache key is always the command actually executed (`M/checks.rs`):
+   - `TMPDIR=<dir> ` or `export TMPDIR=<dir>;` where `<dir>` is exactly the task's test folder that `run_check`
+     sets anyway.
+   - `ulimit -n N;` where N is at most the soft limit the check already gets (step 1). Its only effect, raising the
+     limit to N, is already met.
+   - Anything else stays in the command and in the key, and runs as written: a `TMPDIR` pointing elsewhere, a
+     `ulimit -n` above the limit or any other `ulimit`, other variables.
+   - The worker prompt says not to add these prefixes.
 
 **Verify.**
 - Rust tests:
   - The daemon's spawned child reports `ulimit -n` ≥ 8192.
-  - Two `run_check` calls with and without the `ulimit`/`TMPDIR` prefix on the same tree → the second is `cached`.
+  - Two `run_check` calls with and without a redundant `ulimit -n 8192;` / `TMPDIR=<test folder>` prefix on the same
+    tree → the second is `cached`, and the command run is the one without the prefix.
+  - A `TMPDIR=/somewhere/else` prefix, or a `ulimit -n` above the effective limit, keeps its own cache entry and is
+    run as written.
   - A check queued behind the lease is never sent SIGSTOP (a fake platform records signals).
 - Live: two workers run `cargo test` at once. The second waits, then runs, with no `Too many open files` and no
   timing failure.
@@ -1057,13 +1136,18 @@ THREAD-PARITY §5). The user's answer: the gentlest way, a full start-over only 
 2. Bug 8: the daemon's `RLIMIT_NOFILE`; `run_check` queued before spawn, never paused mid-run; canonical check keys
    with the `TMPDIR`/`ulimit` handling; worker prompt line (revision note).
 3. Bug 6's protection: the protected set per session; `commit_roots` narrowed to the session's own branch; Claude's
-   `denyWrite` and file-tool deny rules; the Full-access Seatbelt profile for every CLI and for `run`/`run_check`;
-   the engine's ref check with restore. The sandbox tests of bug 6.
+   `denyWrite` and file-tool deny rules; `packed-refs.lock` kept, `packed-refs` protected; the Full-access Seatbelt
+   profile for every CLI and for `run`/`run_check`; the engine's ref check (own branch and forward moves recorded,
+   protected targets restored, the base never restored, one ref lock shared with landings). The sandbox tests of
+   bug 6.
 4. Q4: crash → resume (same session, model, worktree, the interrupted note); daemon restart → resume, with each
-   overnight run's state classified first; "died twice" stop; vendor switch only for limits, auth or an outage; the
+   overnight run's state classified first (hand-off only inside the wind-down allowance, nothing past the deadline or
+   cutoff); "died twice" stop; vendor switch only for limits, auth or an outage; the
    "Interrupted — resuming" row.
-5. Q2: the merge brief (real git), `check_merge` with contested and uncontested deletions, merge landing as an
-   engine fast-forward with no litter guard. Then delete the pre-merge code and its tests.
+5. Q2: the merge brief (real git), `check_merge` (the merge in HEAD's ancestry, both inputs ancestors, the final
+   tree; contested and uncontested deletions), merge landing as an engine fast-forward with the expected-tip check
+   and no litter guard, the same worker resumed when the target moved. Then delete the pre-merge code and its
+   tests.
 
 **Why this order inside the phase.**
 - Bug 1 first: every live check after it needs workers that survive a landing.
@@ -1074,15 +1158,18 @@ THREAD-PARITY §5). The user's answer: the gentlest way, a full start-over only 
 
 **Done when:**
 - Bug 1's three checks pass; the live run shows 0 Claude workers killed by a landing.
-- Bug 8: `ulimit -n` ≥ 8192 in a worker's `run_check`; a second identical check with a different prefix is cached;
-  0 SIGSTOP to a running check (signal log).
+- Bug 8: `ulimit -n` ≥ 8192 in a worker's `run_check`; a second identical check with a redundant prefix is cached,
+  and one with a non-redundant prefix is not; 0 SIGSTOP to a running check (signal log).
 - Bug 6: its sandbox tests pass at Full access and under both CLIs' scoped sandboxes; the live "clean up everything"
-  request at Full access, on Claude and on Codex, leaves a parallel session intact; a normal commit, a merge task and
-  a push still work at every level.
+  request at Full access, on Claude and on Codex, leaves a parallel session intact; a normal commit (with no
+  `packed-refs.lock` error on Codex), a merge task and a push still work at every level; worker and thread commits
+  survive the ref check, and a concurrent worker's commits survive a check made for the thread.
 - Q4's tests pass; live `kill -9` of a worker CLI resumes the same `nativeId`; a second kill stops the task with both
-  exits named; a restart past an overnight deadline resumes nothing.
-- Q2's tests pass. Live replay of B's merge lands a two-parent commit with all of `main`'s files (`git diff --stat`
-  shows none missing), and the thread doesn't ask the user about conflicts.
+  exits named; a restart past an overnight deadline or cleanup cutoff resumes nothing and keeps each task's work in
+  the report; a restart inside the wind-down allowance resumes a task only to hand off.
+- Q2's tests pass, the correction-commit and concurrent-landing cases included. Live replay of B's merge lands a
+  two-parent commit with all of `main`'s files (`git diff --stat` shows none missing), and the thread doesn't ask
+  the user about conflicts.
 - Live checks that involve the app use computer use on the dev build, never the installed app.
 
 **Risks.**
@@ -1128,8 +1215,9 @@ THREAD-PARITY §5). The user's answer: the gentlest way, a full start-over only 
 4. Q6.2 and Q6.3: prompt changes for checks and code reading; the Codex reading line.
 5. Q6.4: worker handoff at 200k.
 6. Q6.5: the article settings, each checked against the installed CLI's docs.
-7. REA for study tasks: the pinned, verified install; the server for study tasks only; the guidance; its measured
-   study question, with and without.
+7. REA for study tasks: the install from the reviewed manifest and lockfile (`npm ci --ignore-scripts`); the server
+   for study tasks only, under Brigadier's sandbox wrapper; the guidance; its measured study question, with and
+   without.
 8. Q6.6: Brain facts in the pack, the "Brain first" steer, `learned` write-back, per-worker Brain metrics on the row
    and in the Inspector.
 9. The "after" run, verified independently, written to `docs/evidence/<date>-session-fixes-tokens.md`.
@@ -1148,9 +1236,9 @@ THREAD-PARITY §5). The user's answer: the gentlest way, a full start-over only 
   version and dropped if it isn't listed.
 - A landed worker's session files are now kept until its batch settles. They are small, and the session's merge or
   deletion releases them all.
-- **REA's supply chain:** one maintainer and a fast release pace. Pin the version and its integrity, require
-  provenance, install with `--ignore-scripts`, never `npx`, never `rea setup` or `rea update`. A new version is a
-  reviewed code change.
+- **REA's supply chain:** one maintainer and a fast release pace. Ship a reviewed manifest and lockfile with every
+  dependency's integrity, require provenance, install with `npm ci --ignore-scripts`, never `npx`, never `rea setup`
+  or `rea update`. A new version is a reviewed code change.
 
 ### Phase 4: the thread's behaviour (Q1, Q3, Q9, bugs 4–7, computer use)
 **Scope:**
@@ -1300,6 +1388,8 @@ From the audit backlog, left out on purpose:
 
 ## 10. Review triage (Codex plan review, 2026-10-11)
 
+### 10.1 First review
+
 The review's 12 findings were checked against the code at `7d8898ff`. All 12 hold and are adopted. None was proved
 wrong. One goes further than the review said.
 
@@ -1333,3 +1423,18 @@ wrong. One goes further than the review said.
   - Per-task clones with separate ref stores would hold too, but they rebuild the whole worktree model (warm clones,
     landings, `is_merged`) for the same protection.
 
+### 10.2 Second review (verdict REVISE, 8 findings)
+
+Checked against the code at `95b2498c` (= `main` 7d8898ff plus the plan). All 8 hold and are adopted; none was
+rejected. Two adoptions are narrower than the review's wording, for the reasons given.
+
+| # | Finding | Checked in the code | Adopted in |
+|---|---|---|---|
+| 1 | Ref restoration can undo legitimate commits | Workers commit on their task branches and the thread on the session branch, outside the engine; step 5 restored "a live branch moved outside the engine", which is every such commit. A check run for one caller also sees other workers' concurrent commits | Bug 6 step 5: the caller's own branch and any forward move are recorded, never restored; only protected targets deleted or rewound are restored; one per-repository ref lock shared with landings, the recorded tip updated inside it. **Narrower:** the base (`main`) is never restored, only reported: it is the user's branch and the user may move or reset it from their own terminal; the sandbox protects it from sessions. A rewrite of a branch whose own worker is live is ambiguous (an `--amend`) and is recorded and logged, not restored. Tests: worker and thread commits survive |
+| 2 | Recovery after a deadline contradicts PLAN §10.9 | §10.9: "A clock jump past the deadline goes straight to report/cleanup"; §10.10 recovery step 4 admits no replacement once crossed; `resume_run` already ends an overdue run (`M/overnight/recovery.rs:76-86`); the cutoff is `cutoff_ms` (`M/overnight/wind_down.rs:411`) | Q4 step 2: hand-off-only resume only inside the wind-down allowance (before the cutoff); past the deadline or cutoff nothing resumes, the work is preserved mechanically (§10.9 step 3) and reported. Q4 verify and phase 1 done-when |
+| 3 | REA isn't confined by the CLI's sandbox | MCP servers are processes the CLI starts outside its command sandbox (Codex permissions docs, "Scope and enforcement"); Brigadier starts Codex's app-server directly | REA step 5: REA runs under Brigadier's own sandbox wrapper (`crates/sandbox`), target read-only, the task's output writable; a test through a real MCP call. Built in phase 3 |
+| 4 | Dropping `packed-refs.lock` brings back a git error | `3278280c` and docs/evidence/2026-10-07-thread-phase1.md:55: without the lock every Codex commit printed "Unable to create packed-refs.lock" | Bug 6 step 2: the lock stays granted, `packed-refs` itself is protected (renaming the lock over it needs write access to it); both proved by test, and any alternative chosen by test first |
+| 5 | HEAD must be the merge commit, breaking the correction loop | Q2 step 2 required "the tip is a merge commit"; Q2's own refusal asks the worker to restore files, which it does with a new commit | Q2 step 2: the merge commit in HEAD's ancestry, both inputs ancestors of HEAD, the checks on the final tree; a test of a refused merge repaired by a later commit |
+| 6 | No recovery when the target advances | Today's landing keeps an expected tip and retries on `LandBlock::TipMoved` (`M/landing.rs:453-466`); the plan's fast-forward had no such path | Q2 step 3: the expected-tip check kept; on a moved target nothing lands and the same merge worker is resumed against the new tip, then re-validated; a concurrent-landing test and done-when case |
+| 7 | Cache normalization can equate different commands | Bug 8 stripped any `TMPDIR=…` and `ulimit -n N` before keying | Bug 8 step 3: only prefixes proven redundant with what `run_check` already sets (TMPDIR equal to the task's test folder; `ulimit -n N` at or below the effective limit) are dropped, and the command runs without them, so the key is the command executed; everything else stays in the key |
+| 8 | REA's install isn't fully pinned | Only the top-level package and tarball were pinned; about 148 transitive dependencies weren't | REA step 2: a reviewed manifest and lockfile with integrity values, `npm ci --ignore-scripts` (npm v11 `npm ci` docs), the install exposed only after its checks pass. Built in phase 3 |
