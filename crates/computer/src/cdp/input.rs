@@ -360,6 +360,9 @@ pub enum Choice<'a> {
     At(usize),
 }
 
+/// How long a list's type-ahead keeps what was typed: Chromium's is a second.
+const TYPE_AHEAD_FORGETS: std::time::Duration = std::time::Duration::from_millis(1100);
+
 /// Picks a `<select>`'s option with the keyboard, as a person would without opening its menu:
 /// focus, then type the option's label. Returns the option's place in its list.
 pub fn pick_option(
@@ -417,49 +420,46 @@ pub fn pick_option(
     if selected(conn)? == index as i64 {
         return Ok(index);
     }
+    let chord_of = |c: char| Chord {
+        mods: Mods {
+            shift: c.is_uppercase(),
+            ..Mods::default()
+        },
+        key: c.to_lowercase().collect(),
+    };
     focus(conn, el)?;
     // Typing a label selects the first option it begins; the keys are the page's own input.
     for c in label.chars() {
         cancel.check()?;
-        let chord = Chord {
-            mods: Mods {
-                shift: c.is_uppercase(),
-                ..Mods::default()
-            },
-            key: c.to_lowercase().collect(),
-        };
         if c == ' ' {
-            key(conn, page, &Chord::parse("space").unwrap_or(chord))?;
+            key(conn, page, &Chord::parse("space").unwrap_or(chord_of(c)))?;
         } else {
-            key(conn, page, &chord)?;
+            key(conn, page, &chord_of(c))?;
         }
     }
     if selected(conn)? == index as i64 {
         return Ok(index);
     }
-    // Labels that share their start: step with the arrow keys from where typing left it.
-    for _ in 0..options.len() {
-        cancel.check()?;
-        let now = selected(conn)?;
-        if now == index as i64 {
-            return Ok(index);
+    // Typing stops at the first option a label begins (two may share it). An arrow key would
+    // open a Mac list's menu rather than step. Once the list forgets what was typed, its first
+    // letter again steps to the next option it begins, round the list.
+    if let Some(first) = label.chars().next() {
+        let until = std::time::Instant::now() + TYPE_AHEAD_FORGETS;
+        while std::time::Instant::now() < until {
+            cancel.check()?;
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        let dir = if now < index as i64 { "down" } else { "up" };
-        key(
-            conn,
-            page,
-            &Chord::parse(dir).unwrap_or_else(|| Chord {
-                mods: Mods::default(),
-                key: dir.into(),
-            }),
-        )?;
-    }
-    if selected(conn)? == index as i64 {
-        return Ok(index);
+        for _ in 0..options.len() {
+            cancel.check()?;
+            key(conn, page, &chord_of(first))?;
+            if selected(conn)? == index as i64 {
+                return Ok(index);
+            }
+        }
     }
     err(
         ErrorCode::NotSettable,
-        format!("the keyboard didn't pick {label:?}; click the menu and pick it instead"),
+        format!("the list didn't take {label:?}; click the menu and pick it instead"),
     )
 }
 
