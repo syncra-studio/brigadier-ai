@@ -20,7 +20,7 @@ export type StatusHead = { text: string; tone: StatusTone };
 export type ThreadStatusView = { head: StatusHead | null };
 
 export type StatusInput = {
-  board: Pick<Board, "tasks" | "approvals" | "questions" | "plans" | "waiting" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps">;
+  board: Pick<Board, "tasks" | "approvals" | "questions" | "plans" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps">;
   requestIds: readonly string[];
   state: BlockState;
   /** A live thinking snippet shows at the end of the work. */
@@ -36,7 +36,7 @@ function quotaWords(resetsAtMs: number | null): string {
 }
 
 /** What only the user can do for these requests, in a few words; `null` when nothing. */
-function needsYou({ board, requestIds, state }: StatusInput, leadRunning: boolean, workers: readonly Task[]): string | null {
+function needsYou({ board, requestIds }: StatusInput, leadRunning: boolean, workers: readonly Task[]): string | null {
   const ours = (id: string | null) => id !== null && requestIds.includes(id);
   if (Object.values(board.approvals).some((card) => ours(card.requestId) && card.state.type === "pending")) {
     return "Waiting for your approval";
@@ -44,9 +44,6 @@ function needsYou({ board, requestIds, state }: StatusInput, leadRunning: boolea
   if (Object.values(board.questions).some((card) => ours(card.requestId) && card.answer === null && card.answeredAtMs === null)) {
     return "Waiting for your answer";
   }
-  const items = Object.values(board.waiting).filter((item) => ours(item.requestId));
-  const [only] = items;
-  if (only) return items.length === 1 ? `Waiting for you · ${only.what}` : "Waiting for you";
   // The user works in a worker's own session: the request waits until they close it.
   if (workers.some((task) => task.state === "takenOver")) return "Working in your terminal";
   // The lead reviews a proposed plan and lands a ready change itself while its turn runs.
@@ -55,8 +52,6 @@ function needsYou({ board, requestIds, state }: StatusInput, leadRunning: boolea
     return "Waiting for your approval";
   }
   if (workers.some((task) => task.state === "readyToLand" && !task.run)) return "Waiting for your approval";
-  // Waiting with no card: the lead asked in its reply, unless a worker's pause explains it.
-  if (state === "waiting" && !workers.some((task) => task.state === "paused")) return "Waiting for your answer";
   return null;
 }
 
@@ -109,6 +104,9 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
     const text = busy.length === 1 ? "Waiting for a worker" : `Waiting for ${busy.length} workers`;
     return { head: { text, tone: working ? "busy" : "still" } };
   }
+  // Waiting with nothing above to show (an overnight run's list): no line. A question in the
+  // lead's text waits for nothing; the user is asked on cards.
+  if (state === "waiting") return none;
   // Between the lead's turns (a message just sent, a change being landed): it still works.
   return { head: { text: "Thinking", tone: "busy" } };
 }

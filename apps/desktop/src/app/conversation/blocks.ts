@@ -715,6 +715,24 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
   return merged;
 }
 
+/**
+ * A finished block's answer, by its index in `texts`: the request's last reply, so an ending
+ * written again after a late fix replaces the earlier one in place, which folds into the work
+ * (THREAD-PARITY-PLAN §4.6). `null` while it works, or with no reply.
+ */
+export function answerIndex(texts: readonly unknown[], done: boolean): number | null {
+  return done && texts.length > 0 ? texts.length - 1 : null;
+}
+
+/**
+ * Whether an entry of a finished block folds under "Worked for …": everything but its answer
+ * and the cards that stay in view (decisions, failures, what needs the user).
+ */
+export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
+  if (entry.kind === "text") return entry.index !== answer;
+  return entry.kind !== "card" || !entry.card.keep;
+}
+
 /** Whether a block still has work running or waiting. */
 export function isLive(state: BlockState): boolean {
   return state === "working" || state === "waiting";

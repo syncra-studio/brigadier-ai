@@ -33,7 +33,9 @@ import {
   type BlockOrchestratorStep,
   type BlockRow,
   type BlockState,
+  answerIndex,
   blockSequence,
+  foldsAway,
   isFinal,
   isLive,
   isRunRequest,
@@ -47,7 +49,6 @@ import { ThreadStatus } from "@/app/conversation/ThreadStatus";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
 import { useViewConversation } from "@/app/conversation/viewContext";
-import { WorkerLine } from "@/app/conversation/WorkerChip";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import {
   BranchPicker,
@@ -254,7 +255,10 @@ const ReplyText: FC<{ index: number; streaming: boolean; report?: boolean }> = (
   />
 );
 
-/** A run's morning report: what it came to in view, its details folded under "Details". */
+/**
+ * A session's answer or a run's morning report: what it came to in view, its `### Details`
+ * (the checks run, review findings, what wasn't tested) folded under "Details".
+ */
 const ReportText: FC<TextMessagePartProps> = (props) => {
   const report = splitReport(props.text);
   if (!report) return <MessageText {...props} />;
@@ -370,34 +374,6 @@ const SteerBubble: FC<{ text: string; atMs: number; attachments: readonly Attach
 };
 
 /**
- * What only the user can do for this request, as a short list at the end of its answer. Each is
- * marked done from the side panel's "Waiting on you".
- */
-const WaitingOnYou: FC<{ requestIds: string[] }> = ({ requestIds }) => {
-  const items = useBoard(
-    useShallow((s) =>
-      Object.values(s.board?.waiting ?? {})
-        .filter((item) => item.requestId !== null && requestIds.includes(item.requestId))
-        .toSorted((a, b) => a.createdAtMs - b.createdAtMs)
-        .map((item) => item.what),
-    ),
-  );
-  if (items.length === 0) return null;
-  return (
-    <div data-slot="answer-waiting" className="flex flex-col gap-1 text-sm">
-      <p className="text-foreground font-medium">Waiting on you</p>
-      <ul className="text-foreground/80 flex list-disc flex-col gap-0.5 ps-5">
-        {items.map((what) => (
-          <li key={what} className="wrap-break-word">
-            <WorkerLine text={what} />
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-};
-
-/**
  * A turn's activity in order (THREAD-UX-PLAN.md §3.1): its work groups and everything else as it
  * is. The live and the folded turn render the same items, so nothing moves when the turn ends;
  * only its last group, while the turn is live, says the step it is on.
@@ -502,16 +478,11 @@ export const RequestBlock: FC = () => {
     meta.texts[last]?.position === Number.POSITIVE_INFINITY;
   const done = phase ? phase.settled : meta.state === "done" || answering;
   // A run over folds to its outcome; the thread's replies during it go into the fold.
-  const answer = done && last >= 0 && !phase ? last : null;
+  const answer = answerIndex(meta.texts, done && !phase);
   const sequence = blockSequence(meta);
   const activity = turnActivity(sequence);
   // The answer and the cards that stay in view are outside the fold.
-  const folded = activity.filter((item) =>
-    item.type === "group" ||
-    (item.entry.kind === "text"
-      ? item.entry.index !== answer
-      : item.entry.kind !== "card" || !item.entry.card.keep),
-  );
+  const folded = activity.filter((item) => item.type === "group" || foldsAway(item.entry, answer));
   const kept = meta.cards.filter((card) => card.keep);
   const foldable = done && folded.length > 0;
   const outcome = done ? (phase?.outcome ?? null) : null;
@@ -589,10 +560,9 @@ export const RequestBlock: FC = () => {
               data-slot="aui_assistant-message-content"
               className="text-foreground leading-relaxed wrap-break-word"
             >
-              <ReplyText index={answer} streaming={answering} report={report && !answering} />
+              <ReplyText index={answer} streaming={answering} report={(report || meta.session) && !answering} />
             </div>
           )}
-          {!answering && <WaitingOnYou requestIds={meta.requestIds} />}
         </>
       ) : (
         <div data-slot="request-work" data-follow-content className="gap-activity flex flex-col">

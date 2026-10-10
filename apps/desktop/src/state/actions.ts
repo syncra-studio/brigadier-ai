@@ -797,10 +797,6 @@ export async function restoreKeptWork(taskId: string): Promise<RestoreOutcome> {
   return outcome;
 }
 
-/** The user did something only they could do ("Waiting on you"); the orchestrator hears it. */
-export async function resolveWaiting(conversationId: string, id: string): Promise<void> {
-  await request({ method: "resolveWaiting", conversationId, id });
-}
 
 export async function readArtifact(id: string, offset: number, limit: number) {
   const { text } = await request({ method: "readArtifact", id, offset, limit });
