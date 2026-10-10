@@ -11,6 +11,7 @@ import {
   currentRequestPlan,
   planProgress,
   planStepStatus,
+  stepStates,
 } from "@/app/conversation/planProgress";
 import { mono } from "@/components/assistant-ui/elements/surfaces";
 import { Spinner } from "@/components/glyphs/spinner";
@@ -81,7 +82,8 @@ function useRunningPlan(requestId: string | null) {
       (plan?.steps ?? []).map((step) => step.taskId ? s.board?.tasks[step.taskId]?.state : undefined),
     ),
   );
-  return plan ? { plan, states } : null;
+  const request = useBoard((s) => (requestId ? s.board?.requests[requestId]?.state.type : undefined));
+  return plan ? { plan, states: stepStates(plan, states, request) } : null;
 }
 
 const Pill: FC<{ tip: ReactNode; label?: string; children: ReactNode }> = ({ tip, label, children }) => (

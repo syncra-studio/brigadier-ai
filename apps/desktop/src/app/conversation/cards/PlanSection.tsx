@@ -2,7 +2,7 @@ import { Lightbulb } from "@openai/apps-sdk-ui/components/Icon";
 import { memo, useContext, useId, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { planStepStatus, planProgress } from "@/app/conversation/planProgress";
+import { planStepStatus, planProgress, stepStates } from "@/app/conversation/planProgress";
 import { SidePanelContext } from "@/app/conversation/SidePanel";
 import { taskState } from "@/app/conversation/rowWords";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
@@ -132,10 +132,15 @@ export const PlanSection = memo(function PlanSection({
     if (setup?.type !== "session") return null;
     return setup.permission === "askForApproval" || setup.planMode ? "user" : "brigadier";
   });
+  const request = useBoard((s) => (plan?.requestId ? s.board?.requests[plan.requestId]?.state.type : undefined));
   const { openTab } = useContext(SidePanelContext);
   if (!plan) return null;
 
-  const states = plan.steps.map((_, index) => (steps[index * 3 + 1] ?? undefined) as TaskState | undefined);
+  const states = stepStates(
+    plan,
+    plan.steps.map((_, index) => (steps[index * 3 + 1] ?? undefined) as TaskState | undefined),
+    request,
+  );
   const statuses = states.map(planStepStatus);
   const proposed = plan.state.type === "proposed";
   const allDone =
