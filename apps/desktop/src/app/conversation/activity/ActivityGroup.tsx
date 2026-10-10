@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import type { GroupItem, Thought as ThoughtItem } from "@/app/conversation/activity/group";
 import { stepLabel, type StepWords, summarize } from "@/app/conversation/activity/words";
 import { ThinkingRow } from "@/app/conversation/ThinkingRow";
-import { CHEVRON, OPENS, ROW, WORK_ICONS } from "@/components/assistant-ui/elements/activity-row";
+import { CHEVRON, OPENS, ROW, ROW_TOGGLE, WORK_ICONS } from "@/components/assistant-ui/elements/activity-row";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { ItemStatus } from "@/ipc/generated";
@@ -19,7 +19,7 @@ function StepIcon({ words }: { words: StepWords }) {
 }
 
 function Thought({ thought }: { thought: ThoughtItem }) {
-  return <ThinkingRow text={thought.text} startedAtMs={thought.startedAtMs} endedAtMs={thought.endedAtMs} live={false} />;
+  return <ThinkingRow text={thought.text} ms={thought.ms} live={false} />;
 }
 
 /**
@@ -70,7 +70,7 @@ export function ActivityGroup<S>({ items, live, describe, renderStep }: {
       : summarize(described.map((step) => step.words));
   return (
     <Collapsible data-slot="work-group">
-      <CollapsibleTrigger className={cn(ROW, "group hover:text-foreground rounded-control w-full text-start")}>
+      <CollapsibleTrigger className={cn(ROW, ROW_TOGGLE)}>
         {head && <StepIcon words={head.words} />}
         {/* A live group's step changes in place: its words cross-fade, with no jump. */}
         <span

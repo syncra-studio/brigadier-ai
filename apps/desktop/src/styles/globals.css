@@ -487,10 +487,6 @@
 }
 
 /* Fade the older edge of a live summary while keeping its newest two lines visible. */
-@utility thinking-snippet {
-  mask-image: linear-gradient(to bottom, transparent, black 25%);
-}
-
 /* A settled thought taller than its box fades out at the bottom edge (THREAD-UX-PLAN.md §3.3). */
 @utility thinking-fade {
   mask-image: linear-gradient(to bottom, black calc(100% - 1.5rem), transparent);

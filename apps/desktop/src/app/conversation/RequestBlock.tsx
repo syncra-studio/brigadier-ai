@@ -282,7 +282,7 @@ const SequenceEntry: FC<{ entry: Entry; streaming: boolean }> = ({ entry, stream
   switch (entry.kind) {
     case "thinking":
       // Only the live thought is an entry: a settled one sits in its work group.
-      return entry.live ? <ThinkingRow text={entry.segment.text} startedAtMs={entry.segment.startedAtMs} endedAtMs={entry.segment.updatedAtMs} live /> : null;
+      return entry.live ? <ThinkingRow text={entry.segment.text} live /> : null;
     case "text":
       return (
         <div

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { type Activity, groupActivity, type Sorted, turnActivity, workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
+import { type Activity, groupActivity, type Sorted, thoughtOf, thoughtTopic, turnActivity, workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
 import { blockSequence, buildBlocks } from "@/app/conversation/blocks";
 import type { ThreadEntry } from "@/components/transcript/activity";
 import type { TranscriptItem } from "@/components/transcript/transcript";
@@ -16,7 +16,7 @@ const sort = (entry: Entry): Sorted<string> =>
   "step" in entry
     ? { type: "step", key: entry.step, step: entry.step }
     : "thought" in entry
-      ? { type: "thought", thought: { key: entry.thought, text: entry.thought, startedAtMs: 0, endedAtMs: 4000 } }
+      ? { type: "thought", thought: { key: entry.thought, text: entry.thought, ms: 4000 } }
       : { type: "break" };
 
 /** The activity as letters: `[s1 t1]` a group, `"x"` an entry. */
@@ -134,6 +134,56 @@ test("T1's unfolded turn: one row per run of work, thinking inside its groups, n
   }
   const thoughts = groups.flatMap((group) => (group.type === "group" ? group.items : [])).filter((inner) => inner.type === "thought");
   assert.ok(thoughts.length > 0, "the session's thinking is kept, inside the groups");
+});
+
+const segment = (text: string, startedAtMs: number, updatedAtMs: number) => ({
+  itemId: "r1",
+  requestId: "q1",
+  text,
+  position: 1,
+  startedAtMs,
+  updatedAtMs,
+  throughPosition: 1,
+  complete: true,
+});
+
+test("a thought with no words has no row, however long it took", () => {
+  assert.equal(thoughtOf(segment("", 0, 0)), null);
+  assert.equal(thoughtOf(segment("  \n ", 0, 9000)), null);
+  // A worker's empty reasoning is skipped the same way.
+  const [group] = workerActivity([
+    { kind: "actions", key: "a", items: [command("c1", "ls") as never] },
+    { kind: "item", item: reasoning("r1", "") },
+    { kind: "actions", key: "b", items: [command("c2", "pwd") as never] },
+  ], false);
+  assert.ok(group?.type === "group" && group.items.every((item) => item.type === "step"));
+});
+
+test("a thought's row says what it was about: its heading, else its first sentence", () => {
+  assert.equal(thoughtTopic("**Checking the tests**\n\nI should run them first."), "Checking the tests");
+  assert.equal(thoughtTopic("I want to analyze the panel before asking. Then I could delegate."), "I want to analyze the panel before asking.");
+  assert.equal(thoughtTopic("Reading `blocks.ts` and\nthe *fold* code"), "Reading blocks.ts and the fold code");
+  // Live, the newest heading; settled, the first.
+  const streamed = "**Reading the code**\n\nSome text.\n\n**Planning the fix**\n\nMore.";
+  assert.equal(thoughtTopic(streamed, "newest"), "Planning the fix");
+  assert.equal(thoughtTopic(streamed, "first"), "Reading the code");
+  assert.equal(thoughtTopic(""), "");
+});
+
+test("a thought's time is the provider's own: one that arrived whole has none", () => {
+  assert.equal(thoughtOf(segment("Whole at once.", 5000, 5000))?.ms, 0);
+  assert.equal(thoughtOf(segment("Streamed over four seconds.", 1000, 5000))?.ms, 4000);
+  // Two thoughts in a row add their own times, never the gap between them.
+  const [group] = groupActivity([{ step: "s1" }, { thought: "t1" }, { thought: "t2" }], sort);
+  assert.ok(group?.type === "group");
+  const thought = group.items.find((item) => item.type === "thought");
+  assert.equal(thought?.type === "thought" ? thought.thought.ms : null, 8000);
+});
+
+test("the live line is one line, whatever the thought streams", () => {
+  for (const text of ["", "line one\nline two\nline three", "**A**\n\nbody\n\n**B**\nmore", "x".repeat(500)]) {
+    assert.doesNotMatch(thoughtTopic(text, "newest") || "Thinking", /\n/);
+  }
 });
 
 function notice(key: string, cli?: "started" | "exited"): ThreadEntry {

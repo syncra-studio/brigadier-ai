@@ -11,8 +11,11 @@ import type { ThreadEntry } from "@/components/transcript/activity";
  * way, so nothing moves when the turn ends.
  */
 
-/** A thought, as both threads keep one. */
-export type Thought = { key: string; text: string; startedAtMs: number; endedAtMs: number };
+/**
+ * A thought, as both threads keep one: its text and how long the provider reasoned, from its
+ * own reasoning events (0 when that wasn't measured: a thought that arrived in one piece).
+ */
+export type Thought = { key: string; text: string; ms: number };
 
 export type GroupItem<S> = { type: "step"; key: string; step: S } | { type: "thought"; thought: Thought };
 
@@ -59,7 +62,8 @@ function joinThoughts<S>(items: GroupItem<S>[]): GroupItem<S>[] {
     const last = out.at(-1);
     if (item.type === "thought" && last?.type === "thought") {
       const text = [last.thought.text, item.thought.text].filter((part) => part.trim()).join("\n\n");
-      out[out.length - 1] = { type: "thought", thought: { ...last.thought, text, endedAtMs: item.thought.endedAtMs } };
+      // Each one's own reasoning time, never the time between them.
+      out[out.length - 1] = { type: "thought", thought: { ...last.thought, text, ms: last.thought.ms + item.thought.ms } };
       continue;
     }
     out.push(item);
@@ -106,10 +110,35 @@ function placeThoughts<S, E>(items: Activity<S, E>[]): Activity<S, E>[] {
   return out;
 }
 
-/** A finished thinking segment as a thought; one under a second with no text isn't shown. */
+/**
+ * A finished thinking segment as a thought; one with no text isn't shown at all. Its time runs
+ * from its first streamed piece to its last, so one that arrived whole has none.
+ */
 export function thoughtOf(segment: ThinkingSegment): Thought | null {
-  if (!segment.text.trim() && segment.updatedAtMs - segment.startedAtMs < 1000) return null;
-  return { key: segment.itemId, text: segment.text, startedAtMs: segment.startedAtMs, endedAtMs: segment.updatedAtMs };
+  if (!segment.text.trim()) return null;
+  return { key: segment.itemId, text: segment.text, ms: Math.max(0, segment.updatedAtMs - segment.startedAtMs) };
+}
+
+/** A heading line a model writes over a part of its thinking: `**Checking the tests**`. */
+const HEADING = /^\s*\*\*(.+?)\*\*\s*$/;
+
+/**
+ * What a thought is about, in one line: its first (or, while it streams, its newest) heading,
+ * else its first sentence; "" when it has no words. The row truncates it to the line.
+ */
+export function thoughtTopic(text: string, which: "first" | "newest" = "first"): string {
+  const lines = text.split("\n");
+  const headings = lines.flatMap((line) => HEADING.exec(line)?.[1]?.trim() || []);
+  const heading = which === "first" ? headings[0] : headings.at(-1);
+  if (heading) return heading;
+  const plain = lines
+    .filter((line) => !HEADING.test(line))
+    .join(" ")
+    .replace(/[*_`#>]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const sentence = /^.+?[.!?…](?=\s|$)/.exec(plain)?.[0] ?? plain;
+  return sentence.trim();
 }
 
 /** Whether the lead's step is work it did itself (a group's step), rather than news of its team. */
@@ -192,8 +221,8 @@ export function workerActivity(entries: readonly ThreadEntry[], live: boolean): 
       const { item } = entry;
       // The thought it is thinking now is the live line's.
       if (live && item.streaming && entry === last) return { type: "skip" };
-      if (!item.text.trim() && item.endedAtMs - item.startedAtMs < 1000) return { type: "skip" };
-      return { type: "thought", thought: { key: item.key, text: item.text, startedAtMs: item.startedAtMs, endedAtMs: item.endedAtMs } };
+      if (!item.text.trim()) return { type: "skip" };
+      return { type: "thought", thought: { key: item.key, text: item.text, ms: Math.max(0, item.endedAtMs - item.startedAtMs) } };
     }
     return { type: "break" };
   }) as Activity<ActionItem, ThreadEntry>[]; // An action is always a step or skipped, never an entry.

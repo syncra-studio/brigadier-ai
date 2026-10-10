@@ -356,7 +356,7 @@ export function WorkerThread({ task }: { task: Task }) {
         )}
         {recent.map((item, index) => show(item, previous.length + index))}
         {calls.length > 0 && <ComputerTimeline conversationId={task.conversationId} taskId={task.id} live={computerLive} looks={looks} />}
-        {thinking && <ThinkingRow text={thinking.text} startedAtMs={thinking.startedAtMs} endedAtMs={thinking.endedAtMs} live />}
+        {thinking && <ThinkingRow text={thinking.text} live />}
         {now && <div className="shimmer truncate text-sm motion-reduce:animate-none">{now}</div>}
         {!working && !workerDone(task) && <p className="text-foreground/65 text-sm">{workerPreview(task)}</p>}
         <Answer task={task} text={finalReply} />
