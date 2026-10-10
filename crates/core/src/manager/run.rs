@@ -54,7 +54,7 @@ pub(crate) const RUN_TIMEOUT_MAX: Duration = Duration::from_secs(1800);
 /// elsewhere still holds them).
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
 /// The shell commands run in.
-const SHELL: &str = "/bin/sh";
+pub(super) const SHELL: &str = "/bin/sh";
 
 /// How long an approved `run_unsandboxed` command waits for its call.
 const PASS_TTL: Duration = Duration::from_secs(120);
@@ -267,43 +267,45 @@ impl SessionManager {
         let mut spec = self.runtime.cli_env().spec(Path::new(SHELL));
         spec.args = shell_args.iter().map(Into::into).collect();
         spec.cwd = Some(workdir.to_owned());
-        let (writable_roots, network, deny_read) = match access {
-            Access::Scoped {
-                write_cwd,
-                writable_roots,
-                network,
-                deny_read,
-                ..
-            } => {
-                let mut roots = writable_roots.clone();
-                if *write_cwd {
-                    roots.push(workdir.to_owned());
-                }
-                (roots, *network, deny_read.clone())
-            }
-            Access::Workspace { extra_roots } => {
-                let mut roots = extra_roots.clone();
-                roots.push(workdir.to_owned());
-                (roots, true, Vec::new())
-            }
-            Access::ReadOnly | Access::Full => (Vec::new(), false, Vec::new()),
-        };
-        let writable_roots = writable_roots
-            .into_iter()
-            .filter(|root| root.exists())
-            .collect();
         self.runtime
             .platform()
             .sandbox()
-            .confine(
-                spec,
-                &brigadier_sandbox::SandboxPolicy {
-                    writable_roots,
-                    network,
-                    deny_read,
-                },
-            )
+            .confine(spec, &seatbelt_policy(access, workdir))
             .map_err(|err| Error::Invalid(err.to_string()))
+    }
+}
+
+/// The access's filesystem and network policy, shared by commands and GUI previews.
+pub(super) fn seatbelt_policy(access: &Access, workdir: &Path) -> brigadier_sandbox::SandboxPolicy {
+    let (writable_roots, network, deny_read) = match access {
+        Access::Scoped {
+            write_cwd,
+            writable_roots,
+            network,
+            deny_read,
+            ..
+        } => {
+            let mut roots = writable_roots.clone();
+            if *write_cwd {
+                roots.push(workdir.to_owned());
+            }
+            (roots, *network, deny_read.clone())
+        }
+        Access::Workspace { extra_roots } => {
+            let mut roots = extra_roots.clone();
+            roots.push(workdir.to_owned());
+            (roots, true, Vec::new())
+        }
+        Access::ReadOnly | Access::Full => (Vec::new(), false, Vec::new()),
+    };
+    let writable_roots = writable_roots
+        .into_iter()
+        .filter(|root| root.exists())
+        .collect();
+    brigadier_sandbox::SandboxPolicy {
+        writable_roots,
+        network,
+        deny_read,
     }
 }
 

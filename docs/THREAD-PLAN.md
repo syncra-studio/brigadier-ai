@@ -166,6 +166,7 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
   - Logs go to the blob store.
   - They are stopped by `stop_preview`, stop, archive, delete, merge (Q9) and daemon quit.
   - For Brigadier itself, the preview recipe uses a dev identity and a scratch `BRIGADIER_DATA_DIR`. It never uses `ai.brigadier.app`.
+  - macOS previews below Full access use Brigadier's GUI Seatbelt profile even with Codex installed: IOSurface rendering and bounded Chromium helper rendezvous registration, with the session's write roots, denied reads, network and Unix socket grants. A private, ledger-tracked short temp folder supplies `MAC_CHROMIUM_TMPDIR`; the validated `BRIGADIER_DATA_DIR` under `/tmp` is writable, not `/tmp` as a whole. Chromium/Electron may need `--no-sandbox` for their nested sandbox; the inherited outer sandbox remains enforced. Browser profiles belong in writable roots. Workers and ordinary `run` retain their current sandbox restrictions; Linux is unchanged.
   - UI: a "Running · Stop" chip in the thread header.
 - **Keep** the kill-at-task-end sweep (`crates/core/src/ledger.rs:489-521`, `M/workers.rs:1561-1578`). It only touches the worker's own worktree and scratch, which is what Q6 wants. Previews don't live there.
 

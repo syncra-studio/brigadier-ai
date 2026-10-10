@@ -163,6 +163,18 @@ pub struct SandboxPolicy {
 pub trait Sandbox: Send + Sync {
     /// Rewrites `spec` so that the spawned process runs inside the OS sandbox.
     fn confine(&self, spec: SpawnSpec, policy: &SandboxPolicy) -> Result<SpawnSpec>;
+
+    /// Preview windows and their helpers, still held to the policy. The Unix socket grants
+    /// are explicit exceptions to a disabled network, not permission to connect anywhere.
+    fn confine_preview(
+        &self,
+        spec: SpawnSpec,
+        policy: &SandboxPolicy,
+        unix_sockets: &[PathBuf],
+    ) -> Result<SpawnSpec> {
+        let _ = unix_sockets;
+        self.confine(spec, policy)
+    }
 }
 
 /// Options that change where Brigadier keeps its data.

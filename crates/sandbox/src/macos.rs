@@ -601,6 +601,15 @@ const SEATBELT_NETWORK: &str = r#"(allow network-outbound)
 (allow network-bind (local ip "localhost:*"))
 "#;
 
+// Preview-only: IOSurface is needed to paint WebKit and Chromium windows (without it
+// Chromium cannot allocate its backing surfaces and Tauri's paint smoke never completes).
+// Chromium/Electron register this bundle-id + PID service to give ports to their helpers.
+// Do not permit arbitrary Mach registration, GPU clients, shared caches or sandbox extensions.
+const SEATBELT_GUI: &str = r#"(allow iokit-open (iokit-user-client-class "IOSurfaceRootUserClient"))
+(allow mach-register
+  (global-name-regex #"^[A-Za-z0-9_.-]+\.MachPortRendezvousServer\.[0-9]+$"))
+"#;
+
 impl Seatbelt {
     fn profile(policy: &SandboxPolicy) -> String {
         let mut profile = String::from(SEATBELT_BASE);
@@ -626,12 +635,32 @@ impl Seatbelt {
     }
 }
 
-impl Sandbox for Seatbelt {
-    fn confine(&self, spec: SpawnSpec, policy: &SandboxPolicy) -> Result<SpawnSpec> {
-        let mut args: Vec<OsString> = vec!["-p".into(), Self::profile(policy).into()];
+impl Seatbelt {
+    fn wrap(
+        spec: SpawnSpec,
+        policy: &SandboxPolicy,
+        gui: bool,
+        unix_sockets: &[PathBuf],
+    ) -> Result<SpawnSpec> {
+        let mut profile = Self::profile(policy);
+        if gui {
+            profile.push_str(SEATBELT_GUI);
+        }
+        for index in 0..unix_sockets.len() {
+            profile.push_str(&format!(
+                "(allow network-outbound (remote unix-socket (path-literal (param \"UNIX_SOCKET_{index}\"))))\n"
+            ));
+        }
+        let mut args: Vec<OsString> = vec!["-p".into(), profile.into()];
         for (index, root) in policy.writable_roots.iter().enumerate() {
             // Seatbelt matches resolved paths, so symlinks such as /tmp must be resolved first.
-            let root = root.canonicalize()?;
+            let root = if gui {
+                // A validated preview data directory may not have been created yet. Resolve
+                // its existing ancestors, not its parent as an extra writable root.
+                resolved_path(root)
+            } else {
+                root.canonicalize()?
+            };
             let mut define = OsString::from(format!("WRITABLE_ROOT_{index}="));
             define.push(root.as_os_str());
             args.push("-D".into());
@@ -641,6 +670,12 @@ impl Sandbox for Seatbelt {
             let path = resolved_path(path);
             let mut define = OsString::from(format!("DENY_READ_{index}="));
             define.push(path.as_os_str());
+            args.push("-D".into());
+            args.push(define);
+        }
+        for (index, path) in unix_sockets.iter().enumerate() {
+            let mut define = OsString::from(format!("UNIX_SOCKET_{index}="));
+            define.push(resolved_path(path).as_os_str());
             args.push("-D".into());
             args.push(define);
         }
@@ -655,6 +690,21 @@ impl Sandbox for Seatbelt {
             cwd: spec.cwd,
             low_priority: spec.low_priority,
         })
+    }
+}
+
+impl Sandbox for Seatbelt {
+    fn confine(&self, spec: SpawnSpec, policy: &SandboxPolicy) -> Result<SpawnSpec> {
+        Self::wrap(spec, policy, false, &[])
+    }
+
+    fn confine_preview(
+        &self,
+        spec: SpawnSpec,
+        policy: &SandboxPolicy,
+        unix_sockets: &[PathBuf],
+    ) -> Result<SpawnSpec> {
+        Self::wrap(spec, policy, true, unix_sockets)
     }
 }
 
@@ -708,6 +758,133 @@ mod tests {
         let denied = read("run/ipc.token");
         assert!(!denied.status.success(), "{denied:?}");
         assert!(denied.stdout.is_empty());
+    }
+
+    #[test]
+    fn gui_preview_keeps_filesystem_and_network_confinement() {
+        use std::net::TcpListener;
+        use std::os::unix::net::UnixListener;
+
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brig-preview-policy-{}", std::process::id())));
+        let writable = dir.join("writable");
+        let denied = writable.join("secret");
+        std::fs::create_dir_all(&denied).unwrap();
+        std::fs::write(denied.join("token"), "secret").unwrap();
+        std::fs::write(dir.join("readable"), "public").unwrap();
+        let socket_path = dir.join("allowed.sock");
+        let other_path = dir.join("other.sock");
+        let allowed_socket = UnixListener::bind(&socket_path).unwrap();
+        let other_socket = UnixListener::bind(&other_path).unwrap();
+        let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut policy = SandboxPolicy {
+            writable_roots: vec![writable.clone()],
+            deny_read: vec![denied],
+            network: false,
+        };
+        let run = |program: &str, args: Vec<OsString>, policy: &SandboxPolicy| {
+            let spec = Seatbelt
+                .confine_preview(
+                    SpawnSpec {
+                        program: program.into(),
+                        args,
+                        ..SpawnSpec::default()
+                    },
+                    policy,
+                    std::slice::from_ref(&socket_path),
+                )
+                .unwrap();
+            Command::new(spec.program).args(spec.args).output().unwrap()
+        };
+        let shell = |command: &str, path: &Path| {
+            run(
+                "/bin/sh",
+                vec!["-c".into(), command.into(), "probe".into(), path.into()],
+                &policy,
+            )
+        };
+        assert!(
+            shell("printf ok > \"$1\"", &writable.join("ok"))
+                .status
+                .success()
+        );
+        assert!(
+            !shell("printf bad > \"$1\"", &dir.join("outside"))
+                .status
+                .success()
+        );
+        assert!(
+            !shell("cat \"$1\"", &writable.join("secret/token"))
+                .status
+                .success()
+        );
+        assert!(shell("cat \"$1\"", &dir.join("readable")).status.success());
+        allowed_socket.set_nonblocking(true).unwrap();
+        other_socket.set_nonblocking(true).unwrap();
+        let connect = |path: &Path| {
+            run(
+                "/usr/bin/curl",
+                vec![
+                    "--unix-socket".into(),
+                    path.into(),
+                    "--max-time".into(),
+                    "1".into(),
+                    "--noproxy".into(),
+                    "*".into(),
+                    "http://localhost/".into(),
+                ],
+                &policy,
+            )
+        };
+        let connected = connect(&socket_path);
+        assert!(allowed_socket.accept().is_ok(), "{connected:?}");
+        let _ = connect(&other_path);
+        assert!(other_socket.accept().is_err());
+        let args = vec![
+            "-z".into(),
+            "-w".into(),
+            "1".into(),
+            "127.0.0.1".into(),
+            tcp.local_addr().unwrap().port().to_string().into(),
+        ];
+        assert!(!run("/usr/bin/nc", args.clone(), &policy).status.success());
+        policy.network = true;
+        assert!(run("/usr/bin/nc", args, &policy).status.success());
+
+        let spec = Seatbelt
+            .confine_preview(SpawnSpec::new("/bin/true"), &policy, &[])
+            .unwrap();
+        let profile = spec.args[1].to_str().unwrap();
+        assert!(profile.contains(SEATBELT_GUI));
+        assert!(profile.contains("(allow mach-lookup)"));
+        assert!(profile.contains(SEATBELT_NETWORK));
+        assert!(profile.contains("(subpath (param \"WRITABLE_ROOT_0\"))"));
+        assert!(profile.contains("(deny file-read* (subpath (param \"DENY_READ_0\")))"));
+        let ordinary = Seatbelt
+            .confine(SpawnSpec::new("/bin/true"), &policy)
+            .unwrap();
+        assert!(!ordinary.args[1].to_str().unwrap().contains(SEATBELT_GUI));
+
+        // New preview data roots work, but neither their parent nor symlink targets become
+        // writable. Denied reads above still override the base read-anywhere rule.
+        let fresh = dir.join("not-created-yet");
+        policy.writable_roots = vec![fresh.clone()];
+        assert!(
+            run("/bin/mkdir", vec![fresh.into()], &policy)
+                .status
+                .success()
+        );
+        std::os::unix::fs::symlink(&dir.0, writable.join("escape")).unwrap();
+        policy.writable_roots = vec![writable.clone()];
+        assert!(
+            !run(
+                "/usr/bin/touch",
+                vec![writable.join("escape/escaped").into()],
+                &policy
+            )
+            .status
+            .success()
+        );
     }
 
     #[test]

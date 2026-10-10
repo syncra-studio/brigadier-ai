@@ -20,13 +20,12 @@
 //!   command output is (`super::tool_output`), and the final log is stored when it ends.
 //!
 //! **Access.** The daemon starts it, so the CLI's sandbox doesn't hold it; it gets the
-//! thread's access instead. At Full access it runs as it is. At the scoped levels (Approve for
-//! me, Ask for approval) it runs under the thread's own sandbox profile through `codex
-//! sandbox`, as the Codex thread's `run` does ([`super::run`]); a Claude thread on a machine
-//! without Codex gets Brigadier's own Seatbelt profile with the same writable folders and
-//! network. Neither sandbox lets a process register Mach services, so a multi-process
-//! Chromium app (Electron, a Tauri dev window's helpers) can't start sandboxed: such a preview
-//! needs Full access, or a `--single-process` flag where the app has one.
+//! thread's access instead. At Full access it runs as it is. On macOS, other levels use
+//! Brigadier's GUI Seatbelt profile even when Codex is installed: the same writable roots,
+//! denied reads, network and Unix socket grants, plus window surfaces and Chromium helper
+//! rendezvous. A private temp directory and the validated app data directory are writable.
+//! Chromium/Electron may need `--no-sandbox` to avoid nesting their sandbox; Brigadier's
+//! outer confinement still applies to every helper. Linux keeps the command sandbox path.
 //!
 //! **Brigadier itself.** A preview never touches the installed app's data: the daemon's own
 //! `BRIGADIER_DATA_DIR` is never passed on, one the thread sets may not name the installed
@@ -209,12 +208,6 @@ impl SessionManager {
         )?;
         check_own_repo(&workspace, &env, &command)?;
         let scratch = self.owned_dir("orch", &id.0);
-        let mut spec = self.preview_spec(&launch.access, &workdir, &script(&command, &env))?;
-        brigadier_providers::cli::apply_session_env(
-            &mut spec,
-            &super::workers::worker_env(&scratch),
-            &[brigadier_sandbox::DATA_DIR_ENV.to_owned()],
-        );
         let name = args
             .name
             .map(|name| name.trim().to_owned())
@@ -242,6 +235,37 @@ impl SessionManager {
                 },
             )
             .await?;
+        #[cfg(target_os = "macos")]
+        let (env, writable_roots) = {
+            let mut env = env;
+            let mut roots = Vec::new();
+            if launch.access != Access::Full {
+                let temp = self.preview_temp(&owner).await?;
+                for name in ["TMPDIR", "MAC_CHROMIUM_TMPDIR"] {
+                    env.entry(name.into())
+                        .or_insert_with(|| temp.to_string_lossy().into_owned());
+                }
+                roots.push(temp);
+                if let Some(data) = env.get(brigadier_sandbox::DATA_DIR_ENV) {
+                    // check_env and check_own_repo already validated this exact directory.
+                    roots.push(resolved(&workdir.join(data)));
+                }
+            }
+            (env, roots)
+        };
+        #[cfg(not(target_os = "macos"))]
+        let writable_roots = Vec::new();
+        let mut spec = self.preview_spec(
+            &launch.access,
+            &workdir,
+            &script(&command, &env),
+            &writable_roots,
+        )?;
+        brigadier_providers::cli::apply_session_env(
+            &mut spec,
+            &super::workers::worker_env(&scratch),
+            &[brigadier_sandbox::DATA_DIR_ENV.to_owned()],
+        );
         let log = dir.join(format!("{preview_id}.log"));
         let file = {
             let (dir, log) = (dir.clone(), log.clone());
@@ -348,22 +372,72 @@ impl SessionManager {
         ))
     }
 
-    /// What runs a preview's `script` in `workdir` held to `access`: the shell itself at full
-    /// access; else the thread's sandbox profile through `codex sandbox`, or Brigadier's own
-    /// Seatbelt profile with the same folders, network and denied reads where Codex isn't
-    /// installed.
+    /// A short, private folder for Chromium's Unix socket (long worktree paths overflow
+    /// sun_path). Track it before creating it so cancellation and launch failures are swept.
+    #[cfg(target_os = "macos")]
+    async fn preview_temp(&self, owner: &str) -> Result<PathBuf> {
+        #[cfg(not(test))]
+        let root = PathBuf::from("/tmp");
+        // Tests keep all their writes beneath their isolated TMPDIR.
+        #[cfg(test)]
+        let root = std::env::temp_dir();
+        let dir = root.join(format!(
+            "brigadier-pv-{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..16]
+        ));
+        self.runtime
+            .ledger()
+            .record(
+                owner,
+                Artifact::ScratchDir {
+                    path: dir.to_string_lossy().into_owned(),
+                },
+            )
+            .await?;
+        self.runtime
+            .platform()
+            .private_fs()
+            .create_private_dir(&dir)
+            .map_err(|err| Error::Invalid(err.to_string()))?;
+        Ok(dir)
+    }
+
+    /// Full access uses run_spec. Other macOS previews always use GUI Seatbelt, independently
+    /// of Codex's installation. Elsewhere, retain the existing command sandbox selection.
     fn preview_spec(
         &self,
         access: &Access,
         workdir: &Path,
         script: &str,
+        writable_roots: &[PathBuf],
     ) -> Result<brigadier_sandbox::SpawnSpec> {
-        if *access == Access::Full
-            || self
+        if *access == Access::Full {
+            return self.run_spec(access, workdir, script);
+        }
+        if cfg!(target_os = "macos") {
+            let mut spec = self.runtime.cli_env().spec(Path::new(super::run::SHELL));
+            spec.args = vec!["-c".into(), script.into()];
+            spec.cwd = Some(workdir.to_owned());
+            let mut policy = super::run::seatbelt_policy(access, workdir);
+            policy.writable_roots.extend_from_slice(writable_roots);
+            let unix_sockets = match access {
+                Access::Scoped { unix_sockets, .. } => unix_sockets.as_slice(),
+                _ => &[],
+            };
+            return self
                 .runtime
-                .cli_env()
-                .resolve(ProviderKind::Codex)
-                .is_some()
+                .platform()
+                .sandbox()
+                .confine_preview(spec, &policy, unix_sockets)
+                .map_err(|err| {
+                    Error::Invalid(format!("the preview can't be sandboxed here: {err}"))
+                });
+        }
+        if self
+            .runtime
+            .cli_env()
+            .resolve(ProviderKind::Codex)
+            .is_some()
         {
             return self.run_spec(access, workdir, script);
         }
@@ -821,8 +895,11 @@ fn check_env(env: &BTreeMap<String, String>, workdir: &Path, protected: &[PathBu
             let climbs = Path::new(value)
                 .components()
                 .any(|part| part == std::path::Component::ParentDir);
+            let temp = resolved(Path::new("/tmp"));
             if value.trim().is_empty()
                 || climbs
+                || dir == temp
+                || !dir.starts_with(&temp)
                 || protected.iter().any(|own| {
                     let own = resolved(own);
                     dir.starts_with(&own) || own.starts_with(&dir)
@@ -1016,6 +1093,87 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn macos_preview_uses_gui_seatbelt_and_tracks_its_private_temp() {
+        use crate::manager::flow::{Flow, Options, Reply};
+
+        let flow = Flow::start(
+            "preview-profile",
+            Options::default(),
+            Arc::new(|_| Box::pin(async { Reply::text("[quiet]") })),
+        )
+        .await;
+        let manager = &flow.manager;
+        // This must remain Seatbelt when the login environment resolves Codex, too.
+        eprintln!(
+            "preview routing with Codex: {:?}",
+            manager.runtime.cli_env().resolve(ProviderKind::Codex)
+        );
+        let owner = preview_owner(&flow.conversation);
+        let temp = manager.preview_temp(&owner).await.unwrap();
+        assert!(temp.is_dir());
+        assert!(
+            manager
+                .runtime
+                .ledger()
+                .artifacts(&owner)
+                .contains(&Artifact::ScratchDir {
+                    path: temp.to_string_lossy().into_owned(),
+                })
+        );
+        let data = temp.join("new-app-data");
+        let extra = [temp.clone(), data.clone()];
+        let command = format!(
+            "mkdir {}; touch {}/probe",
+            shell_quote(data.to_str().unwrap()),
+            shell_quote(temp.to_str().unwrap())
+        );
+        for access in [
+            Access::Workspace {
+                extra_roots: Vec::new(),
+            },
+            Access::Scoped {
+                write_cwd: false,
+                writable_roots: vec![flow.repo.clone()],
+                network: false,
+                deny_read: vec![flow.repo.join("secret")],
+                unix_sockets: vec![flow.repo.join("granted.sock")],
+            },
+        ] {
+            let spec = manager
+                .preview_spec(&access, &flow.repo, &command, &extra)
+                .unwrap();
+            assert_eq!(spec.program, Path::new("/usr/bin/sandbox-exec"));
+            let profile = spec.args[1].to_str().unwrap();
+            assert!(profile.contains("IOSurfaceRootUserClient"));
+            assert!(profile.contains("MachPortRendezvousServer"));
+            if matches!(access, Access::Scoped { .. }) {
+                assert!(profile.contains("DENY_READ_0"));
+                assert!(profile.contains("UNIX_SOCKET_0"));
+                assert!(!profile.contains("(allow network-outbound)"));
+            }
+            let out = manager
+                .runtime
+                .platform()
+                .processes()
+                .piped_command(&spec)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+            std::fs::remove_dir(&data).unwrap();
+        }
+        let full = manager
+            .preview_spec(&Access::Full, &flow.repo, "true", &extra)
+            .unwrap();
+        let run = manager.run_spec(&Access::Full, &flow.repo, "true").unwrap();
+        assert_eq!(full.program, run.program);
+        assert_eq!(full.args, run.args);
+        assert!(manager.runtime.ledger().dispose(&owner).await.is_clean());
+        assert!(!temp.exists());
+        flow.stop().await;
+    }
+
     #[test]
     fn a_preview_runs_inside_the_workspace_only() {
         let root =
@@ -1058,6 +1216,9 @@ mod tests {
             "/Users/x/Library/Application Support/Brigadier",
             "/Users/x/Library/Application Support/Brigadier/sub",
             "/Users/x/Library",
+            "/tmp",
+            "/private/tmp",
+            "/etc",
             "",
         ] {
             assert!(

@@ -651,3 +651,42 @@ async fn quit_stops_previews_and_the_launch_sweep_ends_a_crashs_leftovers() {
     assert!(flow.manager.runtime.ledger().artifacts(&owner).is_empty());
     flow.stop().await;
 }
+
+/// The actual start path provisions and tracks a short temporary directory for Chromium.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn a_sandboxed_preview_gets_a_private_writable_temp_directory() {
+    let replies = Replies::default();
+    let flow = Flow::start(
+        "preview-temp",
+        Options {
+            permission: crate::model::PermissionLevel::ApproveForMe,
+            ..Options::default()
+        },
+        thread(replies.clone()),
+    )
+    .await;
+    flow.say("start test -d \"$MAC_CHROMIUM_TMPDIR\" && touch \"$MAC_CHROMIUM_TMPDIR/probe\" && echo \"$MAC_CHROMIUM_TMPDIR\"").await;
+    flow.until("the temporary folder", |_| {
+        !replies.lock().unwrap().is_empty()
+    })
+    .await;
+    let reply = replies.lock().unwrap()[0].1.clone();
+    let dir = PathBuf::from(reply.lines().last().unwrap());
+    assert!(
+        dir.file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("brigadier-pv-"),
+        "{reply}"
+    );
+    assert!(dir.join("probe").is_file(), "{reply}");
+    let owner = format!("preview:{}", flow.conversation);
+    let ledger = flow.manager.runtime.ledger();
+    assert!(ledger.artifacts(&owner).contains(&Artifact::ScratchDir {
+        path: dir.to_string_lossy().into_owned()
+    }));
+    assert!(ledger.dispose(&owner).await.is_clean());
+    assert!(!dir.exists());
+    flow.stop().await;
+}

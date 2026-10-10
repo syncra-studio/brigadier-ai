@@ -628,17 +628,47 @@ fn end_in_dir(platform: &dyn Platform, dir: &Path) -> std::result::Result<(), St
     }
 }
 
-/// Removes a folder Brigadier created, only inside its data directory or a task's test data
-/// folder in the temp directory.
+/// Removes a folder Brigadier created: inside its data directory, a task's test data
+/// folder, or a recorded preview's short temp folder. Preview removal never follows links.
 fn remove_scratch(data_dir: &Path, dir: &Path) -> std::io::Result<()> {
     let inside = dir.starts_with(data_dir) && dir != data_dir;
     if !inside {
+        if preview_temp_folder(dir) {
+            if !dir.try_exists()? {
+                return Ok(());
+            }
+            let root = dir
+                .parent()
+                .ok_or_else(|| std::io::Error::other("no temp parent"))?;
+            let bound =
+                brigadier_sandbox::removal::bind(root, dir).map_err(std::io::Error::other)?;
+            return brigadier_sandbox::removal::delete(&bound).map_err(std::io::Error::other);
+        }
         return remove_test_data_folder(dir);
     }
     match std::fs::remove_dir_all(dir) {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         other => other,
     }
+}
+
+/// Only this preview-owned name at the temp root is eligible, and only when ledger-recorded.
+fn preview_temp_folder(dir: &Path) -> bool {
+    let root = Path::new("/tmp");
+    #[cfg(test)]
+    let test_root = std::env::temp_dir();
+    #[cfg(test)]
+    let root = if dir.parent() == Some(test_root.as_path()) {
+        test_root.as_path()
+    } else {
+        root
+    };
+    dir.parent() == Some(root)
+        && dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_prefix("brigadier-pv-"))
+            .is_some_and(|id| id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// Removes a task's test data folder, and nothing else.
@@ -726,8 +756,19 @@ impl brigadier_providers::Ledger for OwnerLedger {
 mod test_folder_tests {
     #[test]
     fn a_tasks_test_data_folder_may_be_removed_and_nothing_else_outside_the_data_dir() {
-        use super::test_data_folder;
+        use super::{preview_temp_folder, test_data_folder};
         use std::path::Path;
+        assert!(preview_temp_folder(Path::new(
+            "/tmp/brigadier-pv-0123456789abcdef"
+        )));
+        for path in [
+            "/tmp",
+            "/tmp/brigadier-pv-0123456789abcdef/sub",
+            "/tmp/brigadier-pv-other",
+            "/Users/x/brigadier-pv-0123456789abcdef",
+        ] {
+            assert!(!preview_temp_folder(Path::new(path)), "{path}");
+        }
         assert!(test_data_folder(Path::new("/tmp/brigadier-test-40cf6d11")));
         assert!(!test_data_folder(Path::new(
             "/tmp/brigadier-test-40cf6d11/sub"
