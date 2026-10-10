@@ -97,13 +97,15 @@ Write the body in markdown, in this shape:
 # A short title: what gets built, in a few words
 One sentence: what changes, in the user's terms.
 ## Changes
-- One bullet per change: the file and symbol in `code` and exactly what it does there.
+- One bullet per change: the file and symbol in `code` and what changes there, in one line.
 ## Checks
-- How each change is verified: the test added or run, the command, what to look at in the app.
+- How the work is verified: the tests added or run, the commands, what to look at in the app.
 ## Assumptions
 - Each choice you made that the user might make otherwise: defaults, edge cases, what is left out.
 
-Plain, specific words; no preamble, no restating the request, no filler (\"This plan will…\", \
+Each bullet is one short line: the reader scans it. Detail the code will show anyway (error \
+messages, exit codes, every case a test covers) stays out unless the user must decide it. Plain, \
+specific words; no preamble, no restating the request, no filler (\"This plan will…\", \
 \"robust\", \"seamless\"). Most plans fit in 8 to 15 lines; bigger work may need more, but never pad.";
 
 const APPROVE_OUTLINE: &str = "Give a lead the go-ahead on its outline as soon as you have \
@@ -633,7 +635,15 @@ mod tests {
         let names: Vec<_> = tools.iter().map(|tool| tool.name.to_string()).collect();
         assert!(names.contains(&"plan_phases".to_owned()));
         assert!(names.contains(&"approve_outline".to_owned()));
-        assert!(!names.contains(&"propose_plan".to_owned()));
+        // The plan the user decides is a document in a fixed shape, short lines first.
+        let propose = tools
+            .iter()
+            .find(|tool| tool.name == "propose_plan")
+            .unwrap();
+        let shape = propose.description.as_deref().unwrap();
+        for part in ["## Changes", "## Checks", "## Assumptions", "one short line"] {
+            assert!(shape.contains(part), "{part}");
+        }
         let approve = tools
             .iter()
             .find(|tool| tool.name == "approve_outline")
