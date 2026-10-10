@@ -2,7 +2,7 @@ import { ChevronRight, Globe } from "@openai/apps-sdk-ui/components/Icon";
 import type { ReactNode } from "react";
 
 import type { GroupItem, Thought as ThoughtItem } from "@/app/conversation/activity/group";
-import { stepLabel, type StepWords, summarize } from "@/app/conversation/activity/words";
+import { labelParts, stepLabel, type StepWords, summarize } from "@/app/conversation/activity/words";
 import { ThinkingRow } from "@/app/conversation/ThinkingRow";
 import { CHEVRON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE, WORK_ICONS } from "@/components/assistant-ui/elements/activity-row";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
@@ -16,6 +16,19 @@ export type Described = { words: StepWords; status: ItemStatus; exit?: number | 
 function StepIcon({ words }: { words: StepWords }) {
   const Icon = words.web ? Globe : WORK_ICONS[words.kind];
   return <Icon aria-hidden className="size-4 shrink-0" />;
+}
+
+/** A step's words in two tones: the verb in the row's, what it acts on a step fainter; white together on hover. */
+function Words({ words, label }: { words: StepWords; label: string }) {
+  const { verb, object, rest } = labelParts(words, label);
+  if (!object) return <>{label}</>;
+  return (
+    <>
+      {verb}
+      <span className="text-row-object group-hover:text-foreground group-focus-visible:text-foreground">{object}</span>
+      {rest}
+    </>
+  );
 }
 
 function Thought({ thought }: { thought: ThoughtItem }) {
@@ -44,7 +57,7 @@ export function StepRow({ words, status, exit = null, detail, suffix, slot }: De
     >
       <StepIcon words={words} />
       <span className={cn("min-w-0 truncate", running && "shimmer")}>
-        {stepLabel(words, status, exit)}
+        {running ? stepLabel(words, status, exit) : <Words words={words} label={stepLabel(words, status, exit)} />}
       </span>
       {suffix && <span className="shrink-0 tabular-nums">{suffix}</span>}
     </ThreadActivity>
@@ -86,7 +99,7 @@ export function ActivityGroup<S>({ items, live, describe, renderStep }: {
           key={live ? label : undefined}
           className={cn("min-w-0 truncate", live && "animate-in fade-in duration-160 motion-reduce:animate-none", running && "shimmer")}
         >
-          {label}
+          {current && oneStep && !running ? <Words words={current.words} label={label} /> : label}
         </span>
         <ChevronRight aria-hidden className={cn(CHEVRON, running && "group-data-[state=closed]:hidden")} />
       </CollapsibleTrigger>

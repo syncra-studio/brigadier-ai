@@ -8,6 +8,7 @@ import {
   hunkDiff,
   isPlumbing,
   itemCall,
+  labelParts,
   stepLabel,
   stepWords,
   summarize,
@@ -158,4 +159,18 @@ test("an edit's diff text splits back into its files", () => {
     { path: "/r/b.md", diff: "@@ -1 +1 @@\n context\n+new" },
   ]);
   assert.equal(hunkDiff({ path: "f", removed: ["x"], added: ["y", "z"] }), "-x\n+y\n+z");
+});
+
+test("a row's words split into its verb and, a step fainter, what it acts on", () => {
+  const edited = stepWords({ name: "Edit", detail: "/r/src/math.ts", status: "completed" });
+  assert.deepEqual(labelParts(edited, stepLabel(edited, "completed")), { verb: "Edited ", object: "math.ts", rest: "" });
+  const ran = stepWords({ name: "Bash", detail: "pnpm test", status: "failed" });
+  assert.deepEqual(labelParts(ran, stepLabel(ran, "completed", 1)), { verb: "Ran ", object: "pnpm test", rest: " — failed (exit 1)" });
+  const searched = stepWords({ name: "Grep", detail: "sidebar", status: "completed" });
+  assert.deepEqual(labelParts(searched, stepLabel(searched, "completed")), { verb: "Searched code for ", object: "“sidebar”", rest: "" });
+  // Words with nothing to act on are all verb.
+  const listed = stepWords({ name: "Glob", detail: null, status: "completed" });
+  assert.deepEqual(labelParts(listed, stepLabel(listed, "completed")), { verb: "Listed files", object: "", rest: "" });
+  const read = stepWords({ name: "Read", detail: null, status: "completed" });
+  assert.deepEqual(labelParts(read, stepLabel(read, "completed")), { verb: "Read a file", object: "", rest: "" });
 });

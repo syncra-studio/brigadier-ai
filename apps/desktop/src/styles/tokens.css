@@ -459,6 +459,7 @@
   --color-panel-tab: var(--panel-tab);
   --color-divider: var(--divider);
   --color-row-chevron: var(--row-chevron);
+  --color-row-object: var(--row-object);
   --color-work-rule: var(--work-rule);
   --color-toggle-on: var(--toggle-on);
   --color-sidebar: var(--sidebar);
@@ -539,6 +540,9 @@
   /* An activity row's chevron: always there, quieter than the row's words; white with them on
      hover. The rule under a turn's work header. */
   --row-chevron: color-mix(in oklab, var(--foreground) 25%, transparent);
+  /* What an activity row acts on (the file in "Edited math.ts", the command in "Ran pnpm test"): a step
+     fainter than its verb's 60%, as measured on the target's rows. */
+  --row-object: color-mix(in oklab, var(--foreground) 48%, transparent);
   --work-rule: oklch(1 0 0 / 8.2%);
   /* Live words ("Thinking", a running step): dim, with a brighter band sweeping across. */
   --live-text: color-mix(in oklab, var(--foreground) 38.5%, transparent);
