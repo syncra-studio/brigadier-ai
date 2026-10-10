@@ -1641,9 +1641,9 @@ impl SessionManager {
     }
 
     /// Consent `held` over from a merge that stopped at conflicts, unless it was used, or the
-    /// user since they gave it wrote something that waits, says "no", "wait" or "stop", holds
-    /// the merge or puts a condition on it ([`merge_consent::takes_back`]), or answered "Not
-    /// yet" on a merge card. `refused` is why fresh consent was refused.
+    /// user since they gave it wrote something that waits, says "no", "wait", "not yet" or
+    /// "don't", holds the merge or puts a condition on it ([`merge_consent::takes_back`]), or
+    /// answered "Not yet" on a merge card. `refused` is why fresh consent was refused.
     async fn held_consent(
         &self,
         id: &ConversationId,
@@ -1840,16 +1840,18 @@ fn unresolved_base_merge(
     Ok(unresolved)
 }
 
-/// Whether `line` is a conflict marker as git writes one: exactly seven marker characters,
-/// `=======` alone on its line, the others alone or followed by a space. A heading's
-/// underline (`==========`) is not one.
+/// Whether `line` opens, splits or closes a conflict as git writes one: a run of at least
+/// seven `<`, `|` or `>`, alone on its line or followed by a space. The width follows the
+/// file's `conflict-marker-size`, so it isn't fixed. A `=======` separator only ever stands
+/// between such an opener and closer, so it adds nothing, and a heading's underline
+/// (`==========`) never counts.
 fn conflict_marker(line: &[u8]) -> bool {
     let line = line.strip_suffix(b"\r").unwrap_or(line);
-    match line.get(..7) {
-        Some(b"=======") => line.len() == 7,
-        Some(b"<<<<<<<" | b">>>>>>>" | b"|||||||") => line.get(7).is_none_or(|byte| *byte == b' '),
-        _ => false,
-    }
+    let Some(&first) = line.first().filter(|byte| b"<|>".contains(byte)) else {
+        return false;
+    };
+    let run = line.iter().take_while(|byte| **byte == first).count();
+    run >= 7 && line.get(run).is_none_or(|byte| *byte == b' ')
 }
 
 /// The user's consent to a session merge.
@@ -2120,24 +2122,43 @@ mod tests {
 
     #[test]
     fn only_git_conflict_markers_count_not_heading_underlines() {
+        let unresolved = |content: &str| {
+            content
+                .split('\n')
+                .any(|line| conflict_marker(line.as_bytes()))
+        };
+        // Default markers, and 32 wide from `conflict-marker-size=32`.
+        for width in [7, 32] {
+            let (open, split, close) = ("<".repeat(width), "=".repeat(width), ">".repeat(width));
+            let content = format!("a\n{open} ours\nb\n{split}\nc\n{close} theirs\nd\n");
+            assert!(unresolved(&content), "{content}");
+            let content = format!(
+                "{open}\r\nb\r\n|||||||{}\r\n{split}\r\n{close}\r\n",
+                "|".repeat(width - 7)
+            );
+            assert!(unresolved(&content), "{content}");
+        }
+        // A resolution with heading underlines of every width.
+        let resolved =
+            "Title\n=======\n\nPart\n==========\n\nMore\n================================\n";
+        assert!(!unresolved(resolved));
         for line in [
             "<<<<<<<",
             "<<<<<<< ours",
-            "=======",
-            "=======\r",
             ">>>>>>> theirs\r",
             "||||||| base",
+            "<<<<<<<<",
+            ">>>>>>>>> theirs",
         ] {
             assert!(conflict_marker(line.as_bytes()), "{line:?}");
         }
         for line in [
+            "=======",
             "==========",
-            "======== ",
-            "======= ",
-            "<<<<<<<<",
+            "<<<<<<",
             "<<<<<<<\tours",
-            ">>>>>>>>> theirs",
-            "======",
+            ">>>>>>>>x",
+            "<<< <<<<",
             "",
         ] {
             assert!(!conflict_marker(line.as_bytes()), "{line:?}");

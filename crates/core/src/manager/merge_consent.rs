@@ -234,26 +234,54 @@ pub(super) fn proposes(reply: &str, branch: &str, base: &str) -> bool {
     })
 }
 
-/// Words that, opening a clause, stop what goes on whatever it is about: "No.", "Wait, …".
+/// Words that, anywhere in a message, stop what goes on whatever it is about: "please wait",
+/// "hold on", "don't do it", "stop for now".
 const STOPS: &[&str] = &[
-    "no", "nope", "nah", "wait", "stop", "hold", "cancel", "abort", "pause",
+    "wait",
+    "stop",
+    "hold",
+    "hang",
+    "cancel",
+    "abort",
+    "pause",
+    "halt",
+    "dont",
+    "never",
+    "nevermind",
+    "later",
 ];
 
+/// Words that, opening or ending a clause, answer no: "No.", "actually no", "nope, leave it".
+const NOS: &[&str] = &["no", "nope", "nah"];
+
+/// Pairs that put it off wherever they stand: "not yet", "not now".
+const NOT_YET: &[[&str; 2]] = &[["not", "yet"], ["not", "now"], ["changed", "my"]];
+
 /// What in a message the user wrote after they consented takes the consent back or puts it
-/// off: a clause that opens with a "no", "wait" or "stop", or, in a message that speaks of
-/// the merge, a hold or a condition. `None` when nothing does: "tell me when it's done" is
-/// about something else.
+/// off: a stop word anywhere ("wait", "hold on", "don't"), "not yet", a clause that opens or
+/// ends with a "no", or, in a message that speaks of the merge, a hold or a condition. `None`
+/// when nothing does: "tell me when it's done" is about something else. In doubt it takes
+/// it back: asking again is the safe failure.
 pub(super) fn takes_back(message: &str) -> Option<String> {
     let tokens = clause_words(&normalize(message));
-    let opens = |at: usize| at == 0 || tokens[at - 1].1 != tokens[at].1;
-    if let Some((_, (word, _))) = tokens
-        .iter()
-        .enumerate()
-        .find(|(at, (word, _))| STOPS.contains(&word.as_str()) && opens(*at))
-    {
+    let edge = |at: usize| {
+        at == 0
+            || tokens[at - 1].1 != tokens[at].1
+            || tokens.get(at + 1).is_none_or(|next| next.1 != tokens[at].1)
+    };
+    if let Some((_, (word, _))) = tokens.iter().enumerate().find(|(at, (word, _))| {
+        STOPS.contains(&word.as_str()) || (NOS.contains(&word.as_str()) && edge(*at))
+    }) {
         return Some(format!("says \"{word}\""));
     }
     let words: Vec<String> = tokens.into_iter().map(|(word, _)| word).collect();
+    if let Some(pair) = words.windows(2).find(|pair| {
+        NOT_YET
+            .iter()
+            .any(|stop| pair[0] == stop[0] && pair[1] == stop[1])
+    }) {
+        return Some(format!("says \"{} {}\"", pair[0], pair[1]));
+    }
     if !says_merge(&words) {
         return None;
     }
@@ -403,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn a_later_message_takes_consent_back_only_when_it_holds_the_merge() {
+    fn a_later_message_takes_consent_back_when_it_stops_or_holds_the_merge() {
         for message in [
             "wait!",
             "No.",
@@ -414,16 +442,34 @@ mod tests {
             "only merge once the review passes",
             "merge it after the docs are fixed",
             "let's not merge it yet",
+            "please wait",
+            "not yet",
+            "Not now, the demo is on",
+            "don't do it",
+            "hold on",
+            "Hold off for a bit",
+            "stop for now",
+            "actually no",
+            "no",
+            "Nope, leave it",
+            "cancel that",
+            "hang on a second",
+            "never mind",
+            "I changed my mind",
+            "do it later",
+            "Don't forget the changelog",
         ] {
             assert!(takes_back(message).is_some(), "{message}");
         }
         for message in [
             "Resolve the conflict.",
             "resolve it and tell me when it's done",
+            "after that, also fix the typo in the README",
             "If the tests are slow, run only the core crate",
-            "Don't forget the changelog",
             "There's no rush, check it after lunch",
             "That's not what I meant by the README",
+            "ok, go ahead and resolve it",
+            "thanks, keep me posted",
         ] {
             assert_eq!(takes_back(message), None, "{message}");
         }
