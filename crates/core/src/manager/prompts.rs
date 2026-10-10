@@ -973,11 +973,14 @@ const CUT_HEAD: &str = "[…cut; read_artifact ";
 const CUT_TAIL: &str = " reads all ";
 
 /// What a worker wrote after its report (see [`report_envelope`]), shown as
-/// [`late_findings_text`] gives it.
+/// [`late_findings_text`] gives it. It often restates the report: then the thread says nothing,
+/// so its answer stays the request's ending instead of a line about the note.
 pub(crate) fn late_findings_envelope(task: &Task, shown: &str) -> String {
     format!(
         "[report task-{} · addendum] The worker wrote this after its report, which left it out; \
-         it is kept with the report:\n{shown}\n[/report]",
+         it is kept with the report:\n{shown}\n[/report] If it changes nothing you told the user \
+         or the work still to do, reply exactly {QUIET}. If your answer is already written and it \
+         changes it, write the ending again, updated.",
         task.number
     )
 }
@@ -1027,6 +1030,29 @@ mod tests {
         assert!(
             shown.ends_with("[…cut; read_artifact blob1 reads all 9000 bytes]"),
             "{shown}"
+        );
+    }
+
+    /// A worker's note after its report often restates it: the thread then says nothing, so its
+    /// answer stays the request's ending rather than a line about the note.
+    #[test]
+    fn a_note_after_a_report_that_changes_nothing_is_answered_quietly() {
+        let envelope = late_findings_envelope(&task("claude", None), "All 4 tests pass.");
+        assert!(
+            envelope.starts_with("[report task-1 · addendum]"),
+            "{envelope}"
+        );
+        assert!(
+            envelope.contains("All 4 tests pass.\n[/report]"),
+            "{envelope}"
+        );
+        assert!(
+            envelope.contains("If it changes nothing you told the user or the work still to do, reply exactly [quiet]."),
+            "{envelope}"
+        );
+        assert!(
+            envelope.contains("write the ending again, updated"),
+            "{envelope}"
         );
     }
 
