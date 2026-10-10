@@ -19,6 +19,7 @@ export function WorkFold({ open, children }: { open: boolean; children: ReactNod
   const [mounted, setMounted] = useState(open);
   const body = useRef<HTMLDivElement>(null);
   const running = useRef<Animation[]>([]);
+  const growing = useRef<ResizeObserver | null>(null);
   const was = useRef(open);
   // Mounted the moment it opens; with less motion, gone the moment it closes.
   if (open && !mounted) setMounted(true);
@@ -35,13 +36,15 @@ export function WorkFold({ open, children }: { open: boolean; children: ReactNod
     const from = running.current.length > 0 ? element.getBoundingClientRect().height : open ? 0 : element.offsetHeight;
     for (const animation of running.current) animation.cancel();
     running.current = [];
+    growing.current?.disconnect();
+    growing.current = null;
     // It clips only while it moves: open, focus rings and shadows inside it show in full.
     element.dataset.moving = "";
     if (reducedMotion()) {
       delete element.dataset.moving;
       return;
     }
-    const to = open ? inner.offsetHeight : 0;
+    let to = open ? inner.offsetHeight : 0;
     const slide = `translateY(calc(${getComputedStyle(element).getPropertyValue("--spacing-fold-slide")} * -1))`;
     const timing = { ...(open ? OPEN : CLOSE), fill: open ? ("none" as const) : ("forwards" as const) };
     const height = element.animate([{ height: `${from}px` }, { height: `${to}px` }], timing);
@@ -52,14 +55,39 @@ export function WorkFold({ open, children }: { open: boolean; children: ReactNod
       timing,
     );
     running.current = [height, fade];
-    height.onfinish = () => {
+    const finish = () => {
       running.current = [];
+      growing.current?.disconnect();
+      growing.current = null;
       if (open) delete element.dataset.moving;
       // Closed, it stays at 0 (the fill) until it is gone; open, it is back to its own height,
       // which is the height it ended on.
       if (!open) setMounted(false);
     };
+    height.onfinish = finish;
+    // What grows while it opens (a card whose view loads just then) moves the height it opens
+    // to: from where it is, over the time left, so it never ends on a jump.
+    if (open && typeof ResizeObserver !== "undefined") {
+      const started = performance.now();
+      growing.current = new ResizeObserver(() => {
+        const target = inner.offsetHeight;
+        const current = running.current[0];
+        if (target === to || !current) return;
+        const now = element.getBoundingClientRect().height;
+        current.onfinish = null;
+        current.cancel();
+        to = target;
+        const left = Math.max(0, OPEN.duration - (performance.now() - started));
+        const next = element.animate([{ height: `${now}px` }, { height: `${to}px` }], { ...timing, duration: left });
+        next.onfinish = finish;
+        running.current = [next, fade];
+      });
+      growing.current.observe(inner);
+    }
   }, [open]);
+
+  // Gone midway: it stops watching what it held.
+  useLayoutEffect(() => () => growing.current?.disconnect(), []);
 
   if (!mounted) return null;
   return (
