@@ -1794,6 +1794,7 @@ impl SessionManager {
                 let run = self.run_setting(&conv.id).await;
                 // Read before the prompt is: a switch in between is told again in a note.
                 let reviewed = self.reviews_on();
+                let writing = prompts::git_writing(&self.core.settings());
                 let prompt = self
                     .thread_prompt(
                         &conversation,
@@ -1812,6 +1813,7 @@ impl SessionManager {
                     workspace.as_ref().map(super::thread::ThreadWorkspace::told),
                 );
                 current.review_work = reviewed;
+                current.git_writing = writing;
                 // A Codex thread runs long commands through `run`; a Claude thread's own Bash
                 // output is trimmed by its hook (THREAD-PLAN.md Q4).
                 let commands = super::run::run_tools(choice.provider, permission);
@@ -4105,6 +4107,7 @@ impl SessionManager {
                     workspace,
                 );
                 current.review_work = self.reviews_on();
+                current.git_writing = prompts::git_writing(&self.core.settings());
                 current
             }
             ConversationKind::Chat => {

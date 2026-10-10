@@ -1763,6 +1763,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                     .supervisor
                     .spawn(async move { sessions.reviews_switched(on).await });
             }
+            if brigadier_core::git_writing_changed(&before, &settings) {
+                // Workers at work hear it at once; threads before their next turn.
+                let sessions = daemon.sessions.clone();
+                daemon
+                    .supervisor
+                    .spawn(async move { sessions.git_writing_switched().await });
+            }
             // New rules or rankings, or an agent or model turned back on, may let work waiting
             // for quota run now.
             if before.accounts != settings.accounts

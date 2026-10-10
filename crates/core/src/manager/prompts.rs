@@ -3,7 +3,9 @@
 
 use brigadier_providers::ProviderKind;
 
-use crate::model::{Conversation, Environment, PermissionLevel, Project, Setup};
+use crate::model::{
+    Conversation, Environment, GitStyle, PermissionLevel, Project, Settings, Setup,
+};
 use crate::work::{
     ArtifactRef, ContextInjection, InjectionKind, Report, Task, TaskKind, Told, WorkerRole,
 };
@@ -354,6 +356,7 @@ const PREFERENCES_LABEL: &str = "preferences";
 const WORKSPACE_LABEL: &str = "workspace";
 const REVIEWS_ON_LABEL: &str = "reviews on";
 const REVIEWS_OFF_LABEL: &str = "reviews off";
+const GIT_WRITING_LABEL: &str = "git writing";
 
 /// What the thread does while the user has reviews off; it replaces what its instructions say
 /// about reviews (Settings' "Review the work").
@@ -393,6 +396,9 @@ pub(crate) struct Current {
     pub short_replies: bool,
     /// Whether the work is reviewed (Settings' "Review the work"); on unless set.
     pub review_work: bool,
+    /// What the user's Git settings say about writing commits and pull requests
+    /// ([`git_writing`]); `None` while they follow the repository.
+    pub git_writing: Option<String>,
     pub permission: PermissionLevel,
     pub folder_trusted: bool,
     /// Where accepted work lands and the permission level, as the instructions say them
@@ -435,6 +441,7 @@ impl Current {
             today: today(),
             short_replies,
             review_work: true,
+            git_writing: None,
             permission,
             folder_trusted: trusted,
             plain: setting_texts(conversation, trusted, None),
@@ -451,6 +458,7 @@ impl Current {
             today: today(),
             short_replies: false,
             review_work: true,
+            git_writing: None,
             permission: PermissionLevel::ApproveForMe,
             folder_trusted: true,
             plain: (String::new(), String::new()),
@@ -479,6 +487,7 @@ impl Current {
             preferences: Some(preferences_fingerprint(&self.preferences)),
             workspace: self.workspace.clone(),
             review_work: session.then_some(self.review_work),
+            git_writing: session.then(|| git_writing_fingerprint(self.git_writing.as_deref())),
         }
     }
 }
@@ -557,6 +566,18 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
                 },
                 told: Told {
                     review_work: Some(now.review_work),
+                    ..Told::default()
+                },
+            });
+        }
+        // Instructions from before the setting told every session to follow the repository.
+        let writing = git_writing_fingerprint(now.git_writing.as_deref());
+        if told.git_writing.as_deref().unwrap_or("") != writing {
+            notes.push(Note {
+                text: git_writing_note(now.git_writing.as_deref()),
+                label: GIT_WRITING_LABEL,
+                told: Told {
+                    git_writing: Some(writing),
                     ..Told::default()
                 },
             });
@@ -687,6 +708,9 @@ pub(crate) fn fill_told(told: &mut Told, older: &Told) {
         told.workspace.clone_from(&older.workspace);
     }
     told.review_work = told.review_work.or(older.review_work);
+    if told.git_writing.is_none() {
+        told.git_writing.clone_from(&older.git_writing);
+    }
 }
 
 /// What the current CLI session was last told, from its log's instruction entries (logged at
@@ -764,6 +788,74 @@ fn preference_lines(preferences: &[String]) -> String {
         text.push_str(preference);
     }
     text
+}
+
+/// The Conventional Commits rules for a commit message.
+pub(crate) const CONVENTIONAL_COMMITS: &str = "Follow Conventional Commits 1.0.0: a subject `type(scope): description`, where type is one of feat, fix, docs, style, refactor, perf, test, build, ci, chore or revert, the scope is optional, and the description is imperative and lowercase with no period; a `!` after the type or scope and a `BREAKING CHANGE:` footer for a breaking change; then, only when the change needs it, a blank line and a short body.";
+
+/// The Conventional Commits rules for a pull request.
+const CONVENTIONAL_PRS: &str = "Give the title the Conventional Commits form `type(scope): description` (feat, fix, docs, refactor, perf, test, build, ci, chore…), and the body a short summary of what changed and why, then how it was tested.";
+
+/// How commit messages are to be written by `style` and the user's `instructions`; `None`:
+/// like the repository (empty custom instructions count as that).
+pub(crate) fn commit_rules(style: GitStyle, instructions: &str) -> Option<String> {
+    match style {
+        GitStyle::Repository => None,
+        GitStyle::Conventional => Some(CONVENTIONAL_COMMITS.to_owned()),
+        GitStyle::Custom => {
+            let text = instructions.trim();
+            (!text.is_empty()).then(|| format!("Follow the user's instructions:\n{text}"))
+        }
+    }
+}
+
+/// The same for a pull request's title and body.
+fn pr_rules(style: GitStyle, instructions: &str) -> Option<String> {
+    match style {
+        GitStyle::Repository => None,
+        GitStyle::Conventional => Some(CONVENTIONAL_PRS.to_owned()),
+        GitStyle::Custom => {
+            let text = instructions.trim();
+            (!text.is_empty()).then(|| format!("Follow the user's instructions:\n{text}"))
+        }
+    }
+}
+
+/// What the user's Git settings say about how an agent writes commit messages and pull
+/// requests; `None` while both follow the repository, which the instructions already ask.
+pub(crate) fn git_writing(settings: &Settings) -> Option<String> {
+    let commits = commit_rules(settings.commit_style, &settings.commit_instructions);
+    let prs = pr_rules(settings.pr_style, &settings.pr_instructions);
+    if commits.is_none() && prs.is_none() {
+        return None;
+    }
+    let repository = "Follow this repository's conventions (its recent history, its templates).";
+    Some(format!(
+        "Git writing (the user's settings; they win over what the repository does):\n- Commit messages: {}\n- Pull requests, title and body (only when the user asks you to open one): {}",
+        commits.as_deref().unwrap_or(repository),
+        prs.as_deref().unwrap_or(repository),
+    ))
+}
+
+/// The instructions' part about git writing, after the rest; empty while it says nothing.
+pub(crate) fn git_writing_section(settings: &Settings) -> String {
+    git_writing(settings).map_or_else(String::new, |text| format!("\n\n{text}"))
+}
+
+/// Tells a running session the user changed how it writes commit messages and pull requests:
+/// its CLI keeps the instructions it started with. `writing` is [`git_writing`] now.
+pub(crate) fn git_writing_note(writing: Option<&str>) -> String {
+    match writing {
+        Some(text) => format!(
+            "[settings] The user changed how commit messages and pull requests are written. From now on, this replaces what your instructions say about it:\n{text}\nDon't mention this note."
+        ),
+        None => "[settings] The user changed how commit messages and pull requests are written: from now on, follow this repository's conventions for both (its recent history, its templates), whatever your instructions or earlier notes said. Don't mention this note.".to_owned(),
+    }
+}
+
+/// [`git_writing`]'s fingerprint, as [`Told`] keeps it: empty while it says nothing.
+pub(crate) fn git_writing_fingerprint(writing: Option<&str>) -> String {
+    writing.map_or_else(String::new, |text| fingerprint(&[text]))
 }
 
 /// For a Codex worker that writes, while the user leaves AI co-authors out of commits (Claude

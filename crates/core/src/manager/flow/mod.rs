@@ -1514,6 +1514,8 @@ mod ending_tests;
 #[cfg(test)]
 mod engine_tests;
 #[cfg(test)]
+mod git_writing_tests;
+#[cfg(test)]
 mod litter_tests;
 #[cfg(test)]
 mod overnight_tests;

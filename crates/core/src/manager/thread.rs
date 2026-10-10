@@ -296,6 +296,7 @@ impl SessionManager {
         if !self.reviews_on() {
             prompt.push_str(&super::prompts::reviews_off_section());
         }
+        prompt.push_str(&super::prompts::git_writing_section(&self.core.settings()));
         if let Some(workspace) = workspace {
             prompt.push_str(&super::instructions::for_thread(&workspace.path).await);
         }

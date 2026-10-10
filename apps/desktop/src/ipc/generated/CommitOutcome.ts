@@ -3,4 +3,8 @@
 /**
  * The user's commit, as made.
  */
-export type CommitOutcome = { commit: string, message: string, branch: string, pushed: boolean, };
+export type CommitOutcome = { commit: string, message: string, branch: string, pushed: boolean, 
+/**
+ * Why the message wasn't written by the model the user chose, when it wasn't.
+ */
+note: string | null, };

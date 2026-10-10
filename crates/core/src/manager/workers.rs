@@ -240,6 +240,10 @@ pub(crate) struct TaskLive {
     /// What the worker was last told of the user's "Review the work" setting: its brief, or a
     /// note since ([`REVIEWS_UNKNOWN`] counts as on, as every brief said before the switch).
     reviews_told: std::sync::atomic::AtomicU8,
+    /// What the worker was last told of how the user has commits and pull requests written
+    /// ([`prompts::git_writing_fingerprint`]): its brief, or a note since. `None`: unknown,
+    /// which counts as following the repository, as every brief said before the setting.
+    git_writing_told: std::sync::Mutex<Option<String>>,
 }
 
 /// [`TaskLive::reviews_told`]'s values.
@@ -275,6 +279,31 @@ impl TaskLive {
             .swap(told, std::sync::atomic::Ordering::SeqCst);
         let was_on = before != REVIEWS_TOLD_OFF;
         (was_on != on).then(|| prompts::worker_reviews_note(on))
+    }
+
+    /// Records that the worker was told `writing` ([`prompts::git_writing`]) in its brief.
+    pub(crate) fn told_git_writing(&self, writing: Option<&str>) {
+        *self
+            .git_writing_told
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(prompts::git_writing_fingerprint(writing));
+    }
+
+    /// The note a worker that builds needs with its next message when what it was told of
+    /// git writing isn't `writing` any more; it counts as told from then on.
+    pub(crate) fn git_writing_note(&self, task: &Task, writing: Option<&str>) -> Option<String> {
+        if task.kind != TaskKind::Implement {
+            return None;
+        }
+        let now = prompts::git_writing_fingerprint(writing);
+        let before = self
+            .git_writing_told
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .replace(now.clone())
+            .unwrap_or_default();
+        (before != now).then(|| prompts::git_writing_note(writing))
     }
 
     /// Records why the running model must hand the task on when its turn ends.
@@ -567,6 +596,7 @@ impl TaskLive {
             turn_end: tokio::sync::Mutex::new(()),
             takeover: tokio::sync::Mutex::new(None),
             reviews_told: std::sync::atomic::AtomicU8::new(REVIEWS_UNKNOWN),
+            git_writing_told: std::sync::Mutex::new(None),
         }
     }
 
@@ -1442,6 +1472,14 @@ impl SessionManager {
             extra.push_str("\n\n");
             extra.push_str(prompts::NO_AI_COAUTHORS);
         }
+        // Read once: what the brief says is what the worker counts as told.
+        let writing = prompts::git_writing(&self.core.settings());
+        if task.kind == TaskKind::Implement
+            && let Some(text) = &writing
+        {
+            extra.push_str("\n\n");
+            extra.push_str(text);
+        }
         if self.held_by_plan_mode(task).await {
             extra.push_str("\n\n");
             extra.push_str(super::phases::PLAN_MODE_HOLD);
@@ -1457,6 +1495,7 @@ impl SessionManager {
                 )),
             );
             self.task_live(task).told_reviews(reviewed);
+            self.task_live(task).told_git_writing(writing.as_deref());
         }
 
         let worker_grant = self.grants.issue(
@@ -3358,6 +3397,42 @@ impl SessionManager {
 
     /// [`Self::message_worker`] for news that answers nothing (a review's outcome): a question
     /// the worker is waiting on stays open for the orchestrator.
+    /// The user changed how commits and pull requests are written: a worker that builds hears
+    /// it at once while it works, one between turns with its next message, and the thread in a
+    /// note before its next turn.
+    pub async fn git_writing_switched(&self) {
+        let writing = prompts::git_writing(&self.core.settings());
+        let workers: Vec<_> = self.tasks_lock().values().cloned().collect();
+        for live in workers {
+            let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await else {
+                continue;
+            };
+            if task.kind != TaskKind::Implement || task.state.is_final() || !live.busy().await {
+                continue;
+            }
+            let Some(note) = live.git_writing_note(&task, writing.as_deref()) else {
+                continue;
+            };
+            let rounds = task.rework_rounds;
+            match self
+                .tell_worker(&task.conversation_id, &task, note, "Brigadier")
+                .await
+            {
+                // A note is no rework round.
+                Ok(_) => {
+                    let _ = self
+                        .update_task(&task.conversation_id, &task.id, |t| {
+                            t.rework_rounds = t.rework_rounds.min(rounds);
+                        })
+                        .await;
+                }
+                Err(err) => {
+                    tracing::info!(task = %task.id, error = %err, "a worker took no note that git writing changed");
+                }
+            }
+        }
+    }
+
     pub(crate) async fn tell_worker(
         &self,
         conversation_id: &ConversationId,
@@ -3472,9 +3547,16 @@ impl SessionManager {
                 false,
             ));
         }
-        // A worker told otherwise of reviews hears the user's setting with this message.
+        // A worker told otherwise of reviews or git writing hears the user's settings with
+        // this message.
         let text = match live.reviews_note(task, self.reviews_on()) {
             Some(note) if text.is_empty() => note.to_owned(),
+            Some(note) => format!("{note}\n\n{text}"),
+            None => text,
+        };
+        let writing = prompts::git_writing(&self.core.settings());
+        let text = match live.git_writing_note(task, writing.as_deref()) {
+            Some(note) if text.is_empty() => note,
             Some(note) => format!("{note}\n\n{text}"),
             None => text,
         };
