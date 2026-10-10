@@ -1,4 +1,4 @@
-import { Check, Copy, ExpandSm, Lightbulb } from "@openai/apps-sdk-ui/components/Icon";
+import { Check, CollapseSm, Copy, ExpandSm, Lightbulb } from "@openai/apps-sdk-ui/components/Icon";
 import { type ComponentProps, type ReactNode, useContext, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -8,7 +8,7 @@ import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
-import { type PlanDoc, type PlanDocRef, planDoc, showPlanDoc } from "@/state/planDoc";
+import { type PlanDoc, type PlanDocRef, planDoc, showPlanDoc, usePlanTab } from "@/state/planDoc";
 
 /**
  * A plan as a document (THREAD-PARITY-PLAN.md §6): a card in the thread with "Plan" and a bulb
@@ -130,7 +130,11 @@ export function PlanDocCard({ docRef }: { docRef: PlanDocRef }) {
     const state = docRef.type === "plan" ? s.board?.plans[docRef.id]?.state.type : null;
     return state === "rejected" || state === "superseded";
   });
-  const { openTab } = useContext(SidePanelContext);
+  const { openTab, closeTab, state, visible } = useContext(SidePanelContext);
+  // While the side panel shows this plan, its card here is only its header.
+  const tabRef = usePlanTab((s) => (conversationId ? s.shown[conversationId] : undefined));
+  const inPanel =
+    visible && state.active === "plan" && tabRef?.type === docRef.type && tabRef.id === docRef.id;
   if (!doc) return null;
   const open = () => {
     if (!conversationId) return;
@@ -145,31 +149,33 @@ export function PlanDocCard({ docRef }: { docRef: PlanDocRef }) {
         <>
           <CopyPlan markdown={doc.markdown} />
           <TooltipIconButton
-            tooltip="Open in side panel"
+            tooltip={inPanel ? "Close the side panel's plan" : "Open in side panel"}
             side="top"
             className="text-foreground/50 hover:text-foreground [&_svg]:size-icon-sm"
-            onClick={open}
+            onClick={inPanel ? () => closeTab("plan") : open}
           >
-            <ExpandSm />
+            {inPanel ? <CollapseSm /> : <ExpandSm />}
           </TooltipIconButton>
         </>
       }
     >
       {/* The plan's text holds headings and lists, which a button can't: a div acts as one. */}
-      <div
-        role="button"
-        tabIndex={0}
-        aria-label={`Open the plan: ${doc.title}`}
-        onClick={open}
-        onKeyDown={(event) => {
-          if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
-          event.preventDefault();
-          open();
-        }}
-        className="focus-visible:ring-ring rounded-b-plan cursor-pointer px-5 pb-4 text-start outline-none focus-visible:ring-2"
-      >
-        <PlanClip markdown={doc.markdown} />
-      </div>
+      {!inPanel && (
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label={`Open the plan: ${doc.title}`}
+          onClick={open}
+          onKeyDown={(event) => {
+            if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+            event.preventDefault();
+            open();
+          }}
+          className="focus-visible:ring-ring rounded-b-plan cursor-pointer px-5 pb-4 text-start outline-none focus-visible:ring-2"
+        >
+          <PlanClip markdown={doc.markdown} />
+        </div>
+      )}
     </PlanFrame>
   );
 }
