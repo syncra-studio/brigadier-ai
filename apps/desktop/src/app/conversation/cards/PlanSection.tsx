@@ -145,13 +145,16 @@ export const PlanSection = memo(function PlanSection({
   const proposed = plan.state.type === "proposed";
   const allDone =
     plan.state.type === "approved" && statuses.length > 0 && statuses.every((status) => status === "done");
+  // A plan written as a document is one row that opens it; a single phase of it is the plan
+  // itself, not a row of its own.
+  const phaseRows = !plan.body || plan.steps.length > 1;
 
   return (
     <SummarySection
       foldKey="plan"
       title="Plan"
-      count={plan.steps.length}
-      defaultFolded={allDone}
+      count={phaseRows ? plan.steps.length : undefined}
+      defaultFolded={allDone && !plan.body}
       data-card="plan"
       id={`plan-${plan.id}`}
       tabIndex={-1}
@@ -206,7 +209,7 @@ export const PlanSection = memo(function PlanSection({
           {statusLine(plan, statuses)}
         </p>
       </div>
-      <ol className="flex flex-col">
+      <ol hidden={!phaseRows} className="flex flex-col">
         {plan.steps.map((step, index) => {
           const taskId = steps[index * 3] as string | null | undefined;
           const word = steps[index * 3 + 2] as string | null | undefined;
