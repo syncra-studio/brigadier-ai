@@ -9,6 +9,7 @@
 
 pub mod clone;
 pub mod footprint;
+pub mod limits;
 mod machine;
 mod paths;
 mod process;

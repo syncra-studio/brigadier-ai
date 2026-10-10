@@ -176,6 +176,12 @@ fn main() -> ExitCode {
             return ExitCode::from(EXIT_FATAL);
         }
     };
+    // Every CLI, build and test inherits the daemon's open-files limit, and launchd's soft one
+    // (256) is too few for a test suite.
+    match brigadier_sandbox::limits::raise_open_files() {
+        Ok(limits) => tracing::info!(soft = limits.soft, hard = limits.hard, "open-files limit"),
+        Err(err) => tracing::warn!(error = %err, "could not raise the open-files limit"),
+    }
     match start(platform, args.standby) {
         Ok(code) => code,
         Err(err) => {
