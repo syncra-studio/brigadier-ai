@@ -92,7 +92,8 @@ disabledProviders: Array<ProviderKind>,
 hiddenModels: Array<ModelRef>, 
 /**
  * Every model Brigadier has seen in its agent's list. One seen after its agent's first
- * list starts without worker tasks (a rule the Routing page's switch removes).
+ * list starts without worker tasks (a "Don't give work" rule, which the user removes in
+ * Settings → Providers).
  */
 knownModels: Array<ModelRef>, 
 /**

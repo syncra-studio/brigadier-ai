@@ -30,8 +30,6 @@ export type SettingsPageId =
   | "configuration"
   | "usage"
   | "providers"
-  | "accounts"
-  | "routing"
   | "git"
   | "computerUse"
   | "storage"

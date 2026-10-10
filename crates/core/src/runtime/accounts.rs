@@ -44,7 +44,7 @@ impl Runtime {
         match &account.account {
             None => Ok(self.provider(account.provider)),
             Some(id) if self.is_removing(id) => Err(Error::Invalid(
-                "that account is being removed in Settings → Accounts".into(),
+                "that account is being removed in Settings → Providers".into(),
             )),
             Some(id) => self
                 .accounts()
@@ -52,7 +52,7 @@ impl Runtime {
                 .filter(|live| live.entry.provider == account.provider)
                 .map(|live| live.provider.clone())
                 .ok_or_else(|| {
-                    Error::Invalid("that account was removed in Settings → Accounts".into())
+                    Error::Invalid("that account was removed in Settings → Providers".into())
                 }),
         }
     }

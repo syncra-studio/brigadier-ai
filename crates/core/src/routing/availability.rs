@@ -1,5 +1,4 @@
-//! Which agents and models the user lets Brigadier use, as the Providers and Routing pages
-//! set them:
+//! Which agents and models the user lets Brigadier use, as Settings → Providers sets them:
 //!
 //! - An agent switched off ([`Settings::disabled_providers`]) and a model made unavailable
 //!   ([`Settings::hidden_models`]) are out of every picker and get no work at all, routed or
@@ -17,7 +16,7 @@ use brigadier_router::{
 
 use crate::model::{ModelChoice, ModelRef, SETTINGS_VERSION, Settings};
 
-/// The kinds of work the orchestrator hands to workers: what the Routing page's switch is
+/// The kinds of work the orchestrator hands to workers: what a "Don't give work" rule is
 /// about. Not `chat` (a Chat's stand-in) or `orchestrate`.
 pub const WORKER_CATEGORIES: [TaskCategory; 7] = [
     TaskCategory::Scout,

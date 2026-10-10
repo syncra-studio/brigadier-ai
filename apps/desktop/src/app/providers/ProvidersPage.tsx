@@ -1,10 +1,13 @@
-import { ChevronRight, Reload } from "@openai/apps-sdk-ui/components/Icon";
-import { useState } from "react";
+import { Reload } from "@openai/apps-sdk-ui/components/Icon";
+import { useEffect, useMemo, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { agentState, SetupTerminal } from "@/app/onboarding/SetupTerminal";
-import { modelSummary } from "@/app/routing/models";
+import { type Revealed } from "@/app/providers/AccountRows";
+import { ProviderCard } from "@/app/providers/ProviderCard";
+import { learnedKey, ModelRow, ProjectPicker } from "@/app/routing/models";
+import { RANKINGS_ROWS, RatingsSection } from "@/app/routing/RankingsSection";
+import { AdvancedRouting, ROUTING_ROWS, RoutingKinds } from "@/app/routing/routing";
 import {
   SettingsAdvanced,
   SettingsButton,
@@ -12,87 +15,188 @@ import {
   SettingsPage,
   SettingsRow,
   SettingsSection,
-  SettingsSwitch,
+  SwitchSetting,
 } from "@/app/settings/parts";
-import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { useNow } from "@/hooks/use-now";
-import type { MergedModel, ModelInfo, ProviderKind, ProviderOverview } from "@/ipc/generated";
+import type { Learned } from "@/ipc/generated";
 import { formatAgo } from "@/lib/format";
-import { PROVIDERS } from "@/lib/routing";
-import { providerStatusText } from "@/lib/setup";
+import { PROVIDERS, ruleSentence } from "@/lib/routing";
+import { useModelGroups } from "@/lib/setup";
 import { refreshProviders } from "@/state/actions";
+import { accountsOf, loadAccounts, refreshAccounts } from "@/state/accounts";
 import { reopenOnboarding } from "@/state/onboarding";
-import { modelAvailable, providerOn, setModelAvailable, setProviderOn } from "@/state/providers";
+import { modelAvailable } from "@/state/providers";
+import { useRankingsRefresh } from "@/state/rankings";
 import { useApp } from "@/state/store";
 import { useUsage, useUsageRefresh } from "@/state/usage";
 
-/** The Providers page's rows, for Settings search; the page renders this copy. */
+/**
+ * The Providers page's rows, for Settings search; the page renders this copy. It holds what the
+ * Providers, Accounts and Routing pages did: a row whose place moved says where (`target`).
+ */
 export const PROVIDERS_ROWS = {
+  switch: {
+    label: "Switch to another account when one runs out",
+    description:
+      "A chat that hits its account's limit carries on with your next account. When every account is used up, Brigadier uses the other provider.",
+  },
   agents: {
     label: "Agents",
     description:
-      "The coding agents on this computer that do Brigadier's work, with your own subscriptions.",
+      "The coding agents on this computer that do Brigadier's work, with your own subscriptions. Each has a switch.",
+    target: PROVIDER_LABELS.claude,
+  },
+  accounts: {
+    label: "Accounts",
+    description: "Each agent's accounts: who is signed in, the plan, how much is used, and Use.",
+    target: PROVIDER_LABELS.claude,
+  },
+  add: {
+    label: "Add account",
+    description: "Sign in to another Claude Code or Codex account.",
+    target: PROVIDER_LABELS.claude,
+  },
+  own: {
+    label: "This computer's login",
+    description: "Also used by your terminal.",
+    target: PROVIDER_LABELS.claude,
   },
   models: {
-    label: "Available models",
+    label: "Use this model",
     description:
-      "Available models show in the model picker when you start a chat or session, and can be used on Routing.",
+      "Each model's switch, formerly Available models: on, it shows in the model pickers and Brigadier can give it work.",
+    target: "Models",
   },
+  workers: {
+    label: "Models Brigadier can give work to",
+    description: "Now a rule under Advanced › Rules: “Don't give work” keeps a model from tasks.",
+    target: ROUTING_ROWS.rules.label,
+  },
+  whoDoesWhat: ROUTING_ROWS.simple,
   advanced: {
     label: "Advanced",
-    description: "Where each agent is installed, its version, and the first-run setup.",
+    description:
+      "Where each agent is installed, the first-run setup, the full routing order and backup models, settings per project or area, rules, each model's scores, and where the ratings come from.",
+    target: "Installed agents",
+  },
+  installed: {
+    label: "Installed agents",
+    description: "Where each agent is installed, and its version.",
   },
   setup: {
     label: "Run the first-run setup again",
     description: "Walks through connecting the agents and adding projects.",
   },
+  kinds: ROUTING_ROWS.kinds,
+  modes: { ...ROUTING_ROWS.modes, target: ROUTING_ROWS.kinds.label },
+  areas: { ...ROUTING_ROWS.areas, target: ROUTING_ROWS.kinds.label },
+  reset: { ...ROUTING_ROWS.reset, target: ROUTING_ROWS.kinds.label },
+  rules: ROUTING_ROWS.rules,
+  details: {
+    label: "Model details",
+    description:
+      "Brigadier scores each model 0–10 per kind of work from the model registry, then adjusts the scores from how its tasks went.",
+  },
+  ratings: RANKINGS_ROWS.ratings,
+  refresh: { ...RANKINGS_ROWS.refresh, target: RANKINGS_ROWS.ratings.label },
+  registry: {
+    label: "Model registry",
+    description: "The published list the models' ratings start from.",
+    target: RANKINGS_ROWS.ratings.label,
+  },
 } as const;
 
-/** What an agent switched off means, on its row. */
-const OFF_NOTE = "Off: its models are hidden from the model picker and Routing, and it gets no work.";
+/** What Advanced holds, by the labels Settings may bring into view there. */
+const ADVANCED_LABELS: readonly string[] = [
+  PROVIDERS_ROWS.installed.label,
+  PROVIDERS_ROWS.setup.label,
+  PROVIDERS_ROWS.kinds.label,
+  PROVIDERS_ROWS.rules.label,
+  PROVIDERS_ROWS.details.label,
+  PROVIDERS_ROWS.ratings.label,
+];
+
+/** The account rows showing their email, kept only while the page is open. */
+function useRevealed(): Revealed {
+  const [shown, setShown] = useState<ReadonlySet<string>>(() => new Set());
+  return useMemo(
+    () => ({
+      has: (key: string) => shown.has(key),
+      toggle: (key: string) =>
+        setShown((current) => {
+          const next = new Set(current);
+          if (!next.delete(key)) next.add(key);
+          return next;
+        }),
+    }),
+    [shown],
+  );
+}
 
 /**
- * The Providers page: the agents Brigadier runs, each with how it stands, the one action that
- * gets it working (Install or Sign in) and a switch; then which of their models are available.
- * Where they're installed and the first-run setup wait under Advanced.
+ * Settings › Providers: the switch for moving chats between accounts, then each agent (how it
+ * stands and its switch, its accounts, its models), then who does each kind of work. Where the
+ * agents are installed, the first-run setup and routing in full wait under Advanced.
  */
 export function ProvidersPage() {
-  // The models' plain descriptions ("Most capable · Best for …") come with the usage view.
+  // The models' plain descriptions and scores come with the usage view.
   useUsageRefresh();
-  const merged = useUsage((s) => s.view?.models);
+  const view = useUsage((s) => s.view);
+  const picked = useUsage((s) => s.projectId);
   const overviews = useApp((s) => s.providers.view?.providers);
+  const accounts = useApp((s) => s.accounts?.accounts);
+  const settings = useApp((s) => s.settings);
+  const projects = useApp((s) => s.projects);
+  // Names of every model (a rule may name one that isn't available).
+  const groups = useModelGroups();
+  const rankings = useRankingsRefresh();
+  const revealed = useRevealed();
   const now = useNow(30_000);
   const refresh = useAction();
-  // The agent being installed or signed in.
-  const [setup, setSetup] = useState<{ provider: ProviderKind; install: boolean } | null>(null);
-  const checkedAtMs = Math.max(0, ...(overviews ?? []).map((overview) => overview.checkedAtMs ?? 0));
-  const overviewOf = (provider: ProviderKind) =>
-    overviews?.find((entry) => entry.provider === provider);
-  // Its terminal closes by itself once the agent is installed or signed in.
-  const settingUp =
-    setup && agentState(overviewOf(setup.provider)) === (setup.install ? "install" : "signIn")
-      ? setup
-      : null;
+  useEffect(() => {
+    loadAccounts().catch((error: unknown) => console.error("reading the accounts failed", error));
+  }, []);
+
+  const checkedAtMs = Math.max(
+    0,
+    ...(overviews ?? []).map((overview) => overview.checkedAtMs ?? 0),
+    ...(accounts ?? []).map((account) => account.checkedAtMs ?? 0),
+  );
+  const merged = view?.models ?? null;
+  // Adjustments read for another project than the one picked are not shown while it is read.
+  const forPicked = view?.projectId === picked;
+  const learned = useMemo(
+    () =>
+      new Map<string, Learned>(
+        forPicked && view
+          ? view.learned.map((entry) => [learnedKey(entry.provider, entry.model, entry.category), entry])
+          : [],
+      ),
+    [view, forPicked],
+  );
+  const detailed = (merged ?? []).filter((model) =>
+    modelAvailable(settings, { provider: model.provider, id: model.id }),
+  );
+  // A model's "Allow in Rules" brings its rule into view, opening Advanced for it.
+  const advancedLabels = [
+    ...ADVANCED_LABELS,
+    ...settings.routingOverrides.map((rule) => ruleSentence(rule, groups, projects)),
+  ];
 
   return (
     <SettingsPage
       wide
       title="Providers"
-      description="The coding agents Brigadier runs, such as Claude Code and Codex. Connect them and choose which of their models you use."
+      description="The coding agents Brigadier runs, your accounts with them, and which of their models do what."
       actions={
         <>
           {checkedAtMs > 0 && (
             <span className="text-muted-foreground text-xs">Checked {formatAgo(checkedAtMs, now)}</span>
           )}
           <SettingsButton
-            aria-label="Check the agents again"
+            aria-label="Check the agents and accounts again"
             disabled={refresh.busy}
-            onClick={() => refresh.run(refreshProviders)}
+            onClick={() => refresh.run(() => Promise.all([refreshProviders(), refreshAccounts()]))}
           >
             <Reload className={refresh.busy ? "animate-spin motion-reduce:animate-none" : undefined} />
             Check again
@@ -100,40 +204,30 @@ export function ProvidersPage() {
         </>
       }
     >
-      <SettingsSection title={PROVIDERS_ROWS.agents.label} description={PROVIDERS_ROWS.agents.description}>
-        <SettingsCard>
-          {PROVIDERS.map((provider) => (
-            <AgentRow
-              key={provider}
-              provider={provider}
-              overview={overviewOf(provider)}
-              busy={settingUp?.provider === provider}
-              onSetUp={(install) => setSetup({ provider, install })}
-            />
-          ))}
-        </SettingsCard>
-        {settingUp && (
-          <SetupTerminal
-            key={`${settingUp.provider}:${settingUp.install}`}
-            provider={settingUp.provider}
-            install={settingUp.install}
-            onClose={() => {
-              setSetup(null);
-              void refreshProviders(settingUp.provider).catch(() => {});
-            }}
-          />
-        )}
-      </SettingsSection>
+      <SettingsCard>
+        <SwitchSetting setting="switchAccounts" row={PROVIDERS_ROWS.switch} />
+      </SettingsCard>
 
-      <SettingsSection title={PROVIDERS_ROWS.models.label} description={PROVIDERS_ROWS.models.description}>
-        <AvailableModels overviews={overviews} merged={merged ?? null} />
-      </SettingsSection>
+      {PROVIDERS.map((provider) => (
+        <ProviderCard
+          key={provider}
+          provider={provider}
+          overview={overviews?.find((entry) => entry.provider === provider)}
+          accounts={accounts === undefined ? null : accountsOf(accounts, provider)}
+          merged={merged}
+          groups={groups}
+          now={now}
+          revealed={revealed}
+        />
+      ))}
 
-      <SettingsAdvanced description={PROVIDERS_ROWS.advanced.description}>
-        <SettingsSection title="Installed agents">
+      <RoutingKinds groups={groups} />
+
+      <SettingsAdvanced description={PROVIDERS_ROWS.advanced.description} labels={advancedLabels}>
+        <SettingsSection title={PROVIDERS_ROWS.installed.label} description={PROVIDERS_ROWS.installed.description}>
           <SettingsCard>
             {PROVIDERS.map((provider) => {
-              const status = overviewOf(provider)?.status;
+              const status = overviews?.find((entry) => entry.provider === provider)?.status;
               return (
                 <SettingsRow
                   key={provider}
@@ -155,166 +249,39 @@ export function ProvidersPage() {
                 </SettingsRow>
               );
             })}
-          </SettingsCard>
-        </SettingsSection>
-        <SettingsSection>
-          <SettingsCard>
             <SettingsRow label={PROVIDERS_ROWS.setup.label} description={PROVIDERS_ROWS.setup.description}>
               <SettingsButton onClick={() => reopenOnboarding()}>Run setup</SettingsButton>
             </SettingsRow>
           </SettingsCard>
         </SettingsSection>
+        <AdvancedRouting groups={groups} />
+        <SettingsSection title={PROVIDERS_ROWS.details.label} description={PROVIDERS_ROWS.details.description}>
+          <SettingsCard>
+            <SettingsRow
+              label="Learned in"
+              description="The project the details show the adjustments for, or all of them."
+            >
+              <ProjectPicker projectId={picked} />
+            </SettingsRow>
+          </SettingsCard>
+          {merged === null ? (
+            <p className="text-muted-foreground text-xs">Reading the models…</p>
+          ) : (
+            <SettingsCard>
+              {detailed.map((model) => (
+                <ModelRow
+                  key={`${model.provider}/${model.id}`}
+                  model={model}
+                  learned={learned}
+                  projectId={picked}
+                  groups={groups}
+                />
+              ))}
+            </SettingsCard>
+          )}
+        </SettingsSection>
+        <RatingsSection rankings={rankings} merged={merged} registry={view?.registry ?? null} now={now} />
       </SettingsAdvanced>
     </SettingsPage>
-  );
-}
-
-/**
- * One agent: its logo and name, how it stands in words, Install or Sign in when that's what it
- * needs, and "Use Claude Code".
- */
-function AgentRow({
-  provider,
-  overview,
-  busy,
-  onSetUp,
-}: {
-  provider: ProviderKind;
-  overview: ProviderOverview | undefined;
-  busy: boolean;
-  onSetUp: (install: boolean) => void;
-}) {
-  const on = useApp((s) => providerOn(s.settings, provider));
-  const toggle = useAction();
-  const state = agentState(overview);
-  const label = PROVIDER_LABELS[provider];
-  const needs = state === "install" || state === "signIn";
-  return (
-    <SettingsRow
-      label={
-        <span className="flex items-center gap-2">
-          <ProviderGlyph provider={provider} className="size-icon-md shrink-0" />
-          {label}
-        </span>
-      }
-      description={
-        on ? (
-          <span className="flex items-center gap-1.5">
-            {needs && <span aria-hidden className="bg-warning size-1.5 shrink-0 rounded-full" />}
-            {providerStatusText(overview)}
-          </span>
-        ) : (
-          OFF_NOTE
-        )
-      }
-      error={toggle.error}
-    >
-      {on && needs && (
-        <SettingsButton disabled={busy} onClick={() => onSetUp(state === "install")}>
-          {state === "install" ? "Install" : "Sign in"}
-        </SettingsButton>
-      )}
-      <SettingsSwitch
-        label={`Use ${label}`}
-        checked={on}
-        disabled={toggle.busy}
-        onCheckedChange={(next) => toggle.run(() => setProviderOn(provider, next))}
-      />
-    </SettingsRow>
-  );
-}
-
-/** Each agent that's on, with its models and a switch each; older models folded away. */
-function AvailableModels({
-  overviews,
-  merged,
-}: {
-  overviews: readonly ProviderOverview[] | undefined;
-  merged: readonly MergedModel[] | null;
-}) {
-  const disabled = useApp((s) => s.settings.disabledProviders);
-  const on = PROVIDERS.filter((provider) => !disabled.includes(provider));
-  if (on.length === 0) {
-    return <p className="text-muted-foreground text-xs">Turn an agent on to choose its models.</p>;
-  }
-  return (
-    <div className="flex flex-col gap-4 pt-2">
-      {on.map((provider) => {
-        const overview = overviews?.find((entry) => entry.provider === provider);
-        const models = overview?.models?.models ?? [];
-        const label = PROVIDER_LABELS[provider];
-        const state = agentState(overview);
-        const current = models.filter((model) => !model.legacy);
-        const older = models.filter((model) => model.legacy);
-        return (
-          <div key={provider} className="flex flex-col gap-1.5">
-            <h3 className="text-foreground/80 flex items-center gap-1.5 px-1 text-xs font-medium">
-              <ProviderGlyph provider={provider} className="size-icon-sm shrink-0" />
-              {label}
-            </h3>
-            {models.length === 0 ? (
-              <p className="text-muted-foreground px-1 text-xs">
-                {state === "checking"
-                  ? "Checking…"
-                  : state === "install"
-                    ? `Install ${label} to see its models.`
-                    : state === "signIn"
-                      ? `Sign in to ${label} to see its models.`
-                      : "Reading the models…"}
-              </p>
-            ) : (
-              <SettingsCard>
-                {current.map((model) => (
-                  <ModelRow key={model.id} provider={provider} model={model} merged={merged} />
-                ))}
-                {older.length > 0 && (
-                  <Collapsible>
-                    <CollapsibleTrigger className="text-muted-foreground hover:text-foreground group flex w-full items-center gap-1.5 px-4 py-2.5 text-xs">
-                      <ChevronRight
-                        aria-hidden
-                        className="size-icon-xs transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
-                      />
-                      {older.length} older {older.length === 1 ? "model" : "models"}
-                    </CollapsibleTrigger>
-                    <CollapsibleContent className="flex flex-col">
-                      {older.map((model) => (
-                        <ModelRow key={model.id} provider={provider} model={model} merged={merged} />
-                      ))}
-                    </CollapsibleContent>
-                  </Collapsible>
-                )}
-              </SettingsCard>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/** A model: its name, what it's like in a few words, and whether it's available. */
-function ModelRow({
-  provider,
-  model,
-  merged,
-}: {
-  provider: ProviderKind;
-  model: ModelInfo;
-  merged: readonly MergedModel[] | null;
-}) {
-  const ref = { provider, id: model.id };
-  const available = useApp((s) => modelAvailable(s.settings, ref));
-  const toggle = useAction();
-  const known = merged?.find((entry) => entry.provider === provider && entry.id === model.id);
-  const summary = modelSummary(model, known);
-  return (
-    <SettingsRow label={model.displayName} description={summary || undefined} error={toggle.error}>
-      <SettingsSwitch
-        label={`${model.displayName} available`}
-        checked={available}
-        disabled={toggle.busy}
-        onCheckedChange={(next) => toggle.run(() => setModelAvailable(ref, next))}
-      />
-    </SettingsRow>
   );
 }

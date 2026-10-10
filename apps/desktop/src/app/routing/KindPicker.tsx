@@ -40,7 +40,7 @@ function everywhereRanking(rankings: readonly Ranking[], category: TaskCategory)
 }
 
 /**
- * One kind of work in the Routing page's simple view: its name in plain words, what it does, and
+ * One kind of work in Providers' "Who does what": its name in plain words, what it does, and
  * a picker: Automatic (Brigadier picks; what it would pick now shows) or one model the user
  * chose. A chosen model that can't take a task (out of quota) hands it to Automatic, and the row
  * says so.

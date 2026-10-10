@@ -6,7 +6,7 @@ import { formatDateTime, formatTime } from "@/lib/format";
  * doing or how it ended, and whether its researched ratings are in use.
  */
 
-/** A running refresh is asked about this often while the Routing page shows it. */
+/** A running refresh is asked about this often while Settings › Providers shows it. */
 export const RANKINGS_POLL_MS = 2_000;
 
 /** Whether a refresh in this state is still running: the page polls it and keeps the button off. */

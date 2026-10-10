@@ -1,12 +1,10 @@
 import {
   Archive,
-  AvatarProfile,
   Branch,
   Cursor,
   KeyboardShortcut,
   Mic,
   Robot,
-  Shuffle,
   SettingsCog,
   SettingsSlider,
   Storage,
@@ -15,7 +13,6 @@ import {
 } from "@openai/apps-sdk-ui/components/Icon";
 import { lazy, type ComponentType, type SVGProps } from "react";
 
-import { ACCOUNTS_ROWS, AccountsPage } from "@/app/settings/AccountsPage";
 import { ARCHIVED_ROWS, ArchivedPage } from "@/app/settings/ArchivedPage";
 import { COMPUTER_USE_ROWS, ComputerUsePage } from "@/app/settings/ComputerUsePage";
 import { CONFIGURATION_ROWS, ConfigurationPage } from "@/app/settings/ConfigurationPage";
@@ -25,7 +22,6 @@ import { STORAGE_ROWS, StoragePage } from "@/app/settings/StoragePage";
 import { VOICE_ROWS, VoicePage } from "@/app/settings/VoicePage";
 import { SHORTCUTS_ROWS, ShortcutsPage } from "@/app/settings/ShortcutsPage";
 import { PROVIDERS_ROWS, ProvidersPage } from "@/app/providers/ProvidersPage";
-import { ROUTING_PAGE_ROWS, RoutingPage } from "@/app/routing/RoutingPage";
 import { computerUseAvailable } from "@/state/computerAccess";
 import type { SettingsPageId } from "@/state/store";
 
@@ -145,26 +141,11 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   {
     id: "providers",
     label: "Providers",
+    formerly: ["Accounts", "Routing"],
     icon: Robot,
     group: "Agents",
     component: ProvidersPage,
     rows: Object.values(PROVIDERS_ROWS),
-  },
-  {
-    id: "accounts",
-    label: "Accounts",
-    icon: AvatarProfile,
-    group: "Agents",
-    component: AccountsPage,
-    rows: Object.values(ACCOUNTS_ROWS),
-  },
-  {
-    id: "routing",
-    label: "Routing",
-    icon: Shuffle,
-    group: "Agents",
-    component: RoutingPage,
-    rows: Object.values(ROUTING_PAGE_ROWS),
   },
   {
     id: "git",

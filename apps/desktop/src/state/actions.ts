@@ -206,26 +206,29 @@ export function shownBeforeSettings(): Selection {
   return beforeSettings;
 }
 
-/** Pages merged into Configurations, by the row each one opens at. */
+/** Pages merged into another, by the page they are part of now and the row each opens at. */
 const MERGED_SETTINGS_PAGES = {
-  conversations: "Model for sessions",
-  personalization: "Memories",
-} as const;
+  conversations: { page: "configuration", row: "Model for sessions" },
+  personalization: { page: "configuration", row: "Memories" },
+  accounts: { page: "providers", row: "Switch to another account when one runs out" },
+  routing: { page: "providers", row: "Who does what" },
+} as const satisfies Record<string, { page: SettingsPageId; row: string }>;
 
 /** A Settings page's id, or one of a page since merged into another. */
 export type SettingsPageLink = SettingsPageId | keyof typeof MERGED_SETTINGS_PAGES;
 
 /**
  * Shows a page of Settings (what to go back to is remembered by `select`). A merged page's id
- * opens Configurations at the row it held.
+ * opens the page it is part of at the row it held.
  */
 export function openSettings(page: SettingsPageLink = "general"): void {
-  if (page === "conversations" || page === "personalization") {
-    select({ type: "settings", page: "configuration" });
-    revealSetting(MERGED_SETTINGS_PAGES[page]);
+  if (Object.hasOwn(MERGED_SETTINGS_PAGES, page)) {
+    const merged = MERGED_SETTINGS_PAGES[page as keyof typeof MERGED_SETTINGS_PAGES];
+    select({ type: "settings", page: merged.page });
+    revealSetting(merged.row);
     return;
   }
-  select({ type: "settings", page });
+  select({ type: "settings", page: page as SettingsPageId });
 }
 
 /** Leaves Settings for what was shown before it (a new chat if that conversation is gone). */

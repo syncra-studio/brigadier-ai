@@ -88,28 +88,3 @@ export function setModelAvailable(model: ModelRef, available: boolean): Promise<
     };
   });
 }
-
-/**
- * Lets the orchestrator give `model` worker tasks, or not. Allowing it also drops a model-wide
- * `never` rule the old switch left, so the switch always does what it shows.
- */
-export function setModelWorks(model: ModelRef, works: boolean): Promise<Settings> {
-  const rule: OverrideRule = {
-    id: crypto.randomUUID(),
-    effect: "never",
-    target: { type: "model", provider: model.provider, id: model.id },
-    categories: [...WORKER_CATEGORIES],
-    areas: [],
-    projectId: null,
-    createdAtMs: Date.now(),
-  };
-  return editSettings((settings) => {
-    const rules = settings.routingOverrides;
-    const next = works
-      ? rules.filter((existing) => !isWorkerRule(existing, model) && !blocksModel(existing, model))
-      : rules.some((existing) => isWorkerRule(existing, model))
-        ? rules
-        : [...rules, rule];
-    return { ...settings, routingOverrides: next };
-  });
-}

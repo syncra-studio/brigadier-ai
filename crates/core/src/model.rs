@@ -612,7 +612,8 @@ pub struct Settings {
     /// Models the Providers page makes unavailable: hidden from every picker and never used.
     pub hidden_models: Vec<ModelRef>,
     /// Every model Brigadier has seen in its agent's list. One seen after its agent's first
-    /// list starts without worker tasks (a rule the Routing page's switch removes).
+    /// list starts without worker tasks (a "Don't give work" rule, which the user removes in
+    /// Settings → Providers).
     pub known_models: Vec<ModelRef>,
     /// The user's extra CLI accounts (Settings → Accounts), in the order they were added. The
     /// user's own login, the one their terminal uses, is each provider's first account and is

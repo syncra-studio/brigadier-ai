@@ -1,18 +1,11 @@
-import { DotsHorizontal, Plus, Reload } from "@openai/apps-sdk-ui/components/Icon";
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { DotsHorizontal, Eye, EyeOff, Plus } from "@openai/apps-sdk-ui/components/Icon";
+import { type ReactNode, useCallback, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { SetupTerminal } from "@/app/onboarding/SetupTerminal";
-import {
-  SettingsButton,
-  SettingsCard,
-  SettingsPage,
-  SettingsRow,
-  SettingsSection,
-  SwitchSetting,
-} from "@/app/settings/parts";
+import { SettingsButton, SettingsCard, SettingsRow } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,92 +15,29 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { useNow } from "@/hooks/use-now";
-import type { AccountView, ProviderKind } from "@/ipc/generated";
-import { formatAgo, formatCountdown } from "@/lib/format";
-import { glance, tone, used } from "@/lib/quota";
-import { PROVIDERS } from "@/lib/routing";
+import type { AccountView, ProviderKind, QuotaWindow } from "@/ipc/generated";
+import { hasEmail, maskEmailsIn } from "@/lib/email";
+import { formatCountdown } from "@/lib/format";
+import { glance, usageTone, used } from "@/lib/quota";
 import {
   accountLabel,
-  accountsOf,
   addAccount,
-  loadAccounts,
   makeDefaultAccount,
   refreshAccounts,
   removeAccount,
   renameAccount,
   signInAccount,
 } from "@/state/accounts";
-import { useApp } from "@/state/store";
-
-/** The Accounts page's rows, for Settings search; the page renders this copy. */
-export const ACCOUNTS_ROWS = {
-  switch: {
-    label: "Switch to another account when one runs out",
-    description:
-      "A chat that hits its account's limit carries on with your next account. When every account is used up, Brigadier uses the other provider.",
-  },
-  add: {
-    label: "Add account",
-    description: "Sign in to another Claude Code or Codex account.",
-  },
-  own: {
-    label: "This computer's login",
-    description: "Also used by your terminal.",
-  },
-} as const;
 
 /** How long after its sign-in ends an account may take to read as signed in. */
 const SIGN_IN_SLACK_MS = 2000;
 
-/**
- * Settings → Accounts: each agent's accounts (the computer's own login first) with who is signed
- * in and how much is left, a row adding another, then the switch for moving chats between them.
- */
-export function AccountsPage() {
-  const views = useApp((s) => s.accounts?.accounts);
-  const now = useNow(30_000);
-  const refresh = useAction();
-  useEffect(() => {
-    loadAccounts().catch((error: unknown) => console.error("reading the accounts failed", error));
-  }, []);
-  const checkedAtMs = Math.max(0, ...(views ?? []).map((view) => view.checkedAtMs ?? 0));
+/** Which account rows show their email: the page's own state, so leaving it hides them again. */
+export type Revealed = { has: (key: string) => boolean; toggle: (key: string) => void };
 
-  return (
-    <SettingsPage
-      title="Accounts"
-      description="Sign in once to each of your accounts, then pick the one new chats use."
-      actions={
-        <>
-          {checkedAtMs > 0 && (
-            <span className="text-muted-foreground text-xs">Checked {formatAgo(checkedAtMs, now)}</span>
-          )}
-          <SettingsButton
-            aria-label="Check the accounts again"
-            disabled={refresh.busy}
-            onClick={() => refresh.run(refreshAccounts)}
-          >
-            <Reload className={refresh.busy ? "animate-spin motion-reduce:animate-none" : undefined} />
-            Check again
-          </SettingsButton>
-        </>
-      }
-    >
-      {PROVIDERS.map((provider) => (
-        <ProviderAccounts
-          key={provider}
-          provider={provider}
-          views={views === undefined ? null : accountsOf(views, provider)}
-          now={now}
-        />
-      ))}
-      <SettingsSection>
-        <SettingsCard>
-          <SwitchSetting setting="switchAccounts" row={ACCOUNTS_ROWS.switch} />
-        </SettingsCard>
-      </SettingsSection>
-    </SettingsPage>
-  );
+/** The key a row's reveal goes by: the account's id, or the provider's own login. */
+export function revealKey(view: AccountView): string {
+  return view.account.account ?? `own:${view.account.provider}`;
 }
 
 /**
@@ -116,15 +46,20 @@ export function AccountsPage() {
  */
 type SigningIn = { id: string | null; fresh: boolean; exitedAtMs: number | null };
 
-/** One agent's accounts as a list, ending in a row that adds another and shows its sign-in. */
-function ProviderAccounts({
+/**
+ * One agent's accounts as a card (the computer's own login first), ending in a row that adds
+ * another and shows its sign-in.
+ */
+export function ProviderAccounts({
   provider,
   views,
   now,
+  revealed,
 }: {
   provider: ProviderKind;
   views: AccountView[] | null;
   now: number;
+  revealed: Revealed;
 }) {
   const label = PROVIDER_LABELS[provider];
   const [signing, setSigning] = useState<SigningIn | null>(null);
@@ -174,66 +109,90 @@ function ProviderAccounts({
   };
 
   return (
-    <SettingsSection title={label}>
-      <SettingsCard>
-        {views === null ? (
-          <SettingsRow label="Reading the accounts…" />
-        ) : (
-          shown.map((view) => (
-            <AccountRow
-              key={view.account.account ?? "own"}
-              view={view}
-              now={now}
-              busy={active !== null}
-              onSignIn={start}
-            />
-          ))
-        )}
-        {active ? (
-          <SetupTerminal
-            bare
-            provider={provider}
-            install={false}
-            openTerminal={openTerminal}
-            check={null}
-            onExited={onExited}
-            onClose={close}
+    <SettingsCard>
+      {views === null ? (
+        <SettingsRow label="Reading the accounts…" />
+      ) : (
+        shown.map((view) => (
+          <AccountRow
+            key={revealKey(view)}
+            view={view}
+            now={now}
+            busy={active !== null}
+            revealed={revealed.has(revealKey(view))}
+            onReveal={() => revealed.toggle(revealKey(view))}
+            onSignIn={start}
           />
-        ) : (
-          <button
-            type="button"
-            aria-label={`Add a ${label} account`}
-            disabled={views === null}
-            onClick={() => start(null)}
-            className="text-muted-foreground hover:text-foreground hover:bg-foreground/5 flex items-center gap-3 px-4 py-3 text-left text-sm transition-colors disabled:opacity-50"
-          >
-            <span className="border-divider flex size-8 shrink-0 items-center justify-center rounded-full border border-dashed">
-              <Plus className="size-icon-sm" />
-            </span>
-            {anySignedIn ? `Add another ${label} account` : `Add a ${label} account`}
-          </button>
-        )}
-      </SettingsCard>
-    </SettingsSection>
+        ))
+      )}
+      {active ? (
+        <SetupTerminal
+          bare
+          provider={provider}
+          install={false}
+          openTerminal={openTerminal}
+          check={null}
+          onExited={onExited}
+          onClose={close}
+        />
+      ) : (
+        <button
+          type="button"
+          aria-label={`Add a ${label} account`}
+          disabled={views === null}
+          onClick={() => start(null)}
+          className="text-muted-foreground hover:text-foreground hover:bg-foreground/5 flex items-center gap-3 px-4 py-3 text-left text-sm transition-colors disabled:opacity-50"
+        >
+          <span className="border-divider flex size-8 shrink-0 items-center justify-center rounded-full border border-dashed">
+            <Plus className="size-icon-sm" />
+          </span>
+          {anySignedIn ? `Add another ${label} account` : `Add a ${label} account`}
+        </button>
+      )}
+    </SettingsCard>
   );
 }
 
-/** Short names for usage windows in an account's summary line. */
-const SHORT_WINDOW: Record<string, string> = { "5-hour": "5h", Weekly: "week" };
+/** Short names for usage windows on an account's row. */
+const SHORT_WINDOW: Record<string, string> = { "5-hour": "5h", Weekly: "Week" };
+
+/** What an account is called and who signed in, masked unless its row is revealed. */
+export function accountNames(
+  view: AccountView,
+  revealed: boolean,
+): { title: string; email: string | null; editable: string } {
+  const own = view.account.account === undefined;
+  const email = view.status?.email ?? null;
+  const renamed = !own && view.name !== "" && view.name !== email;
+  const show = (text: string) => (revealed ? text : maskEmailsIn(text));
+  const title = renamed ? show(view.name) : email ? show(email) : accountLabel(view);
+  return {
+    title,
+    // Under a name of its own, the email shows on the line below.
+    email: renamed && email ? show(email) : null,
+    // The name to edit: never one taken from the email, and an email-like one only revealed.
+    editable: !renamed || (hasEmail(view.name) && !revealed) ? "" : view.name,
+  };
+}
 
 /**
- * One account: who it is, its plan and how much of each window is used, then Use (or In use for
- * the one new chats start on). Rename, Sign in again and Remove sit in its menu.
+ * One account: who it is (its email masked until its eye is pressed), its plan and a bar for
+ * how much of each window is used, then Use (or In use for the one new chats start on).
+ * Rename, Sign in again and Remove sit in its menu.
  */
 function AccountRow({
   view,
   now,
   busy,
+  revealed,
+  onReveal,
   onSignIn,
 }: {
   view: AccountView;
   now: number;
   busy: boolean;
+  revealed: boolean;
+  onReveal: () => void;
   /** Signs in to the account `id` again. */
   onSignIn: (id: string) => void;
 }) {
@@ -244,9 +203,8 @@ function AccountRow({
   const [renaming, setRenaming] = useState(false);
   const status = view.status;
   const signedIn = status?.loggedIn === true;
-  const email = status?.email ?? null;
-  const renamed = !own && view.name !== "" && view.name !== email;
-  const title = renamed ? view.name : (email ?? accountLabel(view));
+  const { title, email, editable } = accountNames(view, revealed);
+  const hidden = hasEmail(view.name) || Boolean(status?.email);
   const windows = signedIn && view.quota ? glance(view.quota) : [];
 
   const details: ReactNode[] = [];
@@ -254,24 +212,14 @@ function AccountRow({
   else if (!status.path) details.push(`${PROVIDER_LABELS[provider]} isn't installed`);
   else if (!signedIn) details.push("Not signed in");
   else {
-    if (renamed && email) details.push(email);
+    if (email) details.push(email);
     if (status.plan) details.push(capitalize(status.plan));
-    for (const window of windows) {
-      const percent = used(window);
-      const resets =
-        window.resetsAtMs !== null ? `, resets in ${formatCountdown(window.resetsAtMs, now)}` : "";
-      details.push(
-        <span key={window.id} className={tone(percent).text} title={`${window.label}: ${percent}% used${resets}`}>
-          {SHORT_WINDOW[window.label] ?? window.label.toLowerCase()} {percent}%
-        </span>,
-      );
-    }
-    if (signedIn && view.quotaAtMs === null) details.push("usage not read yet");
+    if (view.quotaAtMs === null) details.push("usage not read yet");
   }
   if (own) details.push("your terminal's login");
 
   return (
-    <div className="flex items-center gap-3 px-4 py-3">
+    <div data-slot="account-row" className="flex items-center gap-3 px-4 py-3">
       <span
         aria-hidden
         className="bg-foreground/10 text-foreground/80 flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-medium"
@@ -281,14 +229,31 @@ function AccountRow({
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         {renaming && id ? (
           <RenameField
-            name={view.name || accountLabel(view)}
+            name={editable}
             onDone={(name) => {
               setRenaming(false);
               if (name !== null && name !== view.name) action.run(() => renameAccount(id, name));
             }}
           />
         ) : (
-          <span className="text-label truncate font-medium">{title}</span>
+          <span className="flex min-w-0 items-center gap-1">
+            <span data-slot="account-title" className="text-label truncate font-medium">
+              {title}
+            </span>
+            {hidden && (
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                aria-label={revealed ? "Hide email" : "Show email"}
+                aria-pressed={revealed}
+                className="text-muted-foreground shrink-0"
+                onClick={onReveal}
+              >
+                {revealed ? <EyeOff /> : <Eye />}
+              </Button>
+            )}
+          </span>
         )}
         <span className="text-foreground/65 flex flex-wrap gap-x-1.5 text-xs tabular-nums">
           {details.map((detail, index) => (
@@ -298,6 +263,13 @@ function AccountRow({
             </span>
           ))}
         </span>
+        {windows.length > 0 && (
+          <span className="flex flex-wrap gap-x-4 gap-y-1 pt-1">
+            {windows.map((window) => (
+              <UsageBar key={window.id} window={window} now={now} />
+            ))}
+          </span>
+        )}
         {view.error && <span className="text-destructive text-xs">{view.error}</span>}
         <ErrorLine error={action.error} />
       </div>
@@ -349,6 +321,26 @@ function AccountRow({
   );
 }
 
+/** A usage window: its short name, a bar of how much is used, and the share. */
+function UsageBar({ window, now }: { window: QuotaWindow; now: number }) {
+  const percent = used(window);
+  const usage = usageTone(percent, { normal: { text: "text-foreground/65" } });
+  const resets = window.resetsAtMs !== null ? `, resets in ${formatCountdown(window.resetsAtMs, now)}` : "";
+  return (
+    <span
+      data-slot="account-usage"
+      className="flex items-center gap-1.5 text-xs tabular-nums"
+      title={`${window.label}: ${percent}% used${resets}`}
+    >
+      <span className="text-foreground/65">{SHORT_WINDOW[window.label] ?? window.label}</span>
+      <span aria-hidden className="bg-foreground/10 h-1 w-16 overflow-hidden rounded-full">
+        <span className={`block h-full rounded-full ${usage.fill}`} style={{ width: `${percent}%` }} />
+      </span>
+      <span className={usage.text}>{percent}%</span>
+    </span>
+  );
+}
+
 /** The account's name, editable: Enter or leaving the field keeps it, Escape drops the edit. */
 function RenameField({ name, onDone }: { name: string; onDone: (name: string | null) => void }) {
   const [value, setValue] = useState(name);
@@ -361,6 +353,7 @@ function RenameField({ name, onDone }: { name: string; onDone: (name: string | n
   return (
     <Input
       aria-label="Account name"
+      placeholder="Name this account"
       autoFocus
       value={value}
       className="h-7 max-w-xs"

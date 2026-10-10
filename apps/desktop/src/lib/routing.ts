@@ -24,7 +24,7 @@ export { isFable } from "@/lib/setup";
 export { isNoWorkRule, noWorkRule, WORKER_CATEGORIES } from "@/lib/workRules";
 
 /**
- * Routing in words: the names the Usage page, worker cards, the Routing page and the
+ * Routing in words: the names the Usage page, worker cards, the Providers page and the
  * Inspector's preview share, and the sentences they build (hand-offs, rules, reset times).
  */
 
@@ -61,7 +61,7 @@ export const CATEGORY_LABELS: Record<TaskCategory, string> = {
   orchestrate: "orchestration",
 };
 
-/** The kinds of work the Routing page ranks (the orchestrator keeps its own picker). */
+/** The kinds of work the Providers page ranks (the orchestrator keeps its own picker). */
 export const RANKED_CATEGORIES: readonly TaskCategory[] = [
   "scout",
   "research",
@@ -86,7 +86,7 @@ export const KIND_HINTS: Record<TaskCategory, string> = {
   orchestrate: "Plans and delegates a session's work.",
 };
 
-/** A kind of work in plain words, as the Routing page names it: "Write code". */
+/** A kind of work in plain words, as the Providers page names it: "Write code". */
 export const PLAIN_KIND_NAMES: Record<TaskCategory, string> = {
   scout: "Explore the code",
   research: "Research",
