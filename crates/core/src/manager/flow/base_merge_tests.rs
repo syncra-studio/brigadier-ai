@@ -25,6 +25,28 @@ async fn conflicting_session(keep_session: bool) -> Flow {
                     })).await;
                         assert!(!reply.is_error, "{}", reply.text);
                         return Reply::text("[quiet]");
+                    } else if turn.input.contains("Bring main in again") {
+                        // A merge task with the base merge as subject would drop the base parent.
+                        let reply = turn.call("delegate_task", json!({
+                            "kind": "merge", "title": "Resolve task-1's conflict",
+                            "effort": "high", "spec": "Resolve it.", "subject": "task-1"
+                        })).await;
+                        assert!(reply.is_error, "{}", reply.text);
+                        assert!(
+                            reply.text.contains("Stop task-1 with stop_worker, then delegate a new merge task without `subject`"),
+                            "{}",
+                            reply.text
+                        );
+                        let reply = turn.call("stop_worker", json!({
+                            "task": "task-1", "reason": "Merged again on the moved branch"
+                        })).await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        let reply = turn.call("delegate_task", json!({
+                            "kind": "merge", "title": "Resolve the base conflict again",
+                            "effort": "high", "spec": "Keep both sides' intent and check the result."
+                        })).await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        return Reply::text("[quiet]");
                     }
                     return Reply::text("Ready.");
                 }
@@ -74,6 +96,11 @@ async fn conflicting_session(keep_session: bool) -> Flow {
 }
 
 fn branch(flow: &Flow) -> String {
+    session(flow).0
+}
+
+/// The session branch and its worktree.
+fn session(flow: &Flow) -> (String, std::path::PathBuf) {
     match flow
         .core
         .conversation(&flow.conversation)
@@ -82,9 +109,14 @@ fn branch(flow: &Flow) -> String {
         .unwrap()
     {
         Setup::Session {
-            environment: Environment::NewWorktree { branch, .. },
+            environment:
+                Environment::NewWorktree {
+                    branch,
+                    path: Some(path),
+                    ..
+                },
             ..
-        } => branch,
+        } => (branch, path.into()),
         other => panic!("{other:?}"),
     }
 }
@@ -109,8 +141,9 @@ async fn conflict(flow: &Flow, words: &str) {
 }
 
 async fn reported_merge(flow: &Flow) -> Task {
-    // A neutral follow-up must not consume the original consent.
-    flow.say("Resolve the conflict.").await;
+    // A neutral follow-up must not consume the original consent, even with a "when" in it.
+    flow.say("Resolve the conflict and tell me when it's done.")
+        .await;
     let board = flow
         .until("the merge worker's report", |board| {
             board
@@ -345,8 +378,9 @@ async fn unresolved_markers_cannot_land_on_the_carried_consent() {
             .await
             .is_err()
     );
-    // Retry after removing every hunk. The rejected attempt changed no session/base ref.
-    std::fs::write(&path, "# Session and Base\n").unwrap();
+    // Retry after removing every hunk: a heading's underline is no marker. The rejected
+    // attempt changed no session/base ref.
+    std::fs::write(&path, "Session and Base\n================\n").unwrap();
     let task = Flow::task(&flow.board().await, 1).clone();
     let reply = flow
         .manager
@@ -355,6 +389,10 @@ async fn unresolved_markers_cannot_land_on_the_carried_consent() {
         .unwrap();
     assert!(reply.contains("Landed"), "{reply}");
     finish(&flow, "merge it").await;
+    assert_eq!(
+        git(&flow.repo, &["show", "main:README.md"]),
+        "Session and Base\n================"
+    );
     flow.stop().await;
 }
 
@@ -453,5 +491,72 @@ async fn held_consent_does_not_cover_an_unrelated_merge_parent() {
         .to_string();
     assert!(error.contains("consent doesn't cover it"), "{error}");
     assert_eq!(git(&flow.repo, &["show", "main:README.md"]), "# Base");
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_base_merge_that_conflicts_at_landing_is_merged_again_without_subject() {
+    let flow = conflicting_session(false).await;
+    conflict(&flow, "merge it").await;
+    let task = reported_merge(&flow).await;
+    // Other work lands on the session branch meanwhile, over the same lines.
+    let (target, worktree) = session(&flow);
+    std::fs::write(worktree.join("README.md"), "# Session, again\n").unwrap();
+    git(&worktree, &["commit", "-qam", "Other work"]);
+    let session_tip = git(&flow.repo, &["rev-parse", &target]);
+    let base_tip = git(&flow.repo, &["rev-parse", "main"]);
+    let reply = flow
+        .manager
+        .land_phase(&flow.conversation, task)
+        .await
+        .unwrap();
+    assert!(
+        reply.contains(
+            "Stop task-1 with stop_worker, then delegate a new merge task without `subject`"
+        ),
+        "{reply}"
+    );
+    assert_eq!(git(&flow.repo, &["rev-parse", &target]), session_tip);
+    flow.settled().await;
+    flow.say("Bring main in again.").await;
+    let board = flow
+        .until("the second merge worker's report", |board| {
+            board
+                .tasks
+                .values()
+                .any(|task| task.number == 2 && task.state == TaskState::Reported)
+        })
+        .await;
+    assert_eq!(Flow::task(&board, 1).state, TaskState::Stopped);
+    let task = Flow::task(&board, 2).clone();
+    assert!(task.subject.is_none());
+    let reply = flow
+        .manager
+        .land_phase(&flow.conversation, task)
+        .await
+        .unwrap();
+    assert!(reply.contains("Landed"), "{reply}");
+    let landed = Flow::task(&flow.board().await, 2).landed.clone().unwrap();
+    let parents = git(&flow.repo, &["rev-list", "--parents", "-n", "1", &landed]);
+    assert_eq!(
+        parents.split_whitespace().collect::<Vec<_>>(),
+        [landed.as_str(), &session_tip, &base_tip]
+    );
+    flow.settled().await;
+    // The consent held over didn't cover the other work: the user's fresh yes does.
+    let error = flow
+        .manager
+        .finish_session(&flow.conversation, "merge it", None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("consent doesn't cover it"), "{error}");
+    flow.say("merge it").await;
+    flow.settled().await;
+    finish(&flow, "merge it").await;
+    assert_eq!(
+        git(&flow.repo, &["show", "main:README.md"]),
+        "# Session and Base"
+    );
     flow.stop().await;
 }

@@ -96,7 +96,20 @@ impl SessionManager {
                                 .into(),
                         ));
                     }
-                    (Some(reference), _) => Some(self.find_task(id, reference).await?),
+                    (Some(reference), kind) => {
+                        let subject = self.find_task(id, reference).await?;
+                        // A merge of the session's base lands only as a merge with the base.
+                        if kind == TaskKind::Merge
+                            && let Some(workspace) = &subject.workspace
+                            && workspace.base_merge.is_some()
+                        {
+                            return Err(Error::Invalid(super::landing::base_merge_conflict(
+                                subject.number,
+                                workspace.target.as_deref().unwrap_or_default(),
+                            )));
+                        }
+                        Some(subject)
+                    }
                     (None, TaskKind::Review) => {
                         return Err(Error::Invalid(
                             "a review task needs `subject`: the task whose change it reviews"

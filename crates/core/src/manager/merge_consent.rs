@@ -234,10 +234,29 @@ pub(super) fn proposes(reply: &str, branch: &str, base: &str) -> bool {
     })
 }
 
+/// Words that, opening a clause, stop what goes on whatever it is about: "No.", "Wait, …".
+const STOPS: &[&str] = &[
+    "no", "nope", "nah", "wait", "stop", "hold", "cancel", "abort", "pause",
+];
+
 /// What in a message the user wrote after they consented takes the consent back or puts it
-/// off: a "no", "wait" or "don't", or a condition. `None` when nothing does.
+/// off: a clause that opens with a "no", "wait" or "stop", or, in a message that speaks of
+/// the merge, a hold or a condition. `None` when nothing does: "tell me when it's done" is
+/// about something else.
 pub(super) fn takes_back(message: &str) -> Option<String> {
-    let words = words(&normalize(message));
+    let tokens = clause_words(&normalize(message));
+    let opens = |at: usize| at == 0 || tokens[at - 1].1 != tokens[at].1;
+    if let Some((_, (word, _))) = tokens
+        .iter()
+        .enumerate()
+        .find(|(at, (word, _))| STOPS.contains(&word.as_str()) && opens(*at))
+    {
+        return Some(format!("says \"{word}\""));
+    }
+    let words: Vec<String> = tokens.into_iter().map(|(word, _)| word).collect();
+    if !says_merge(&words) {
+        return None;
+    }
     if let Some(word) = words.iter().find(|word| holds(word)) {
         return Some(format!("says \"{word}\""));
     }
@@ -380,6 +399,33 @@ mod tests {
                 latest
             };
             assert!(!ok(quoted, latest, Some(PROPOSAL)), "{latest}");
+        }
+    }
+
+    #[test]
+    fn a_later_message_takes_consent_back_only_when_it_holds_the_merge() {
+        for message in [
+            "wait!",
+            "No.",
+            "ok, wait",
+            "Stop, I changed my mind",
+            "don't merge",
+            "Hold off on the merge",
+            "only merge once the review passes",
+            "merge it after the docs are fixed",
+            "let's not merge it yet",
+        ] {
+            assert!(takes_back(message).is_some(), "{message}");
+        }
+        for message in [
+            "Resolve the conflict.",
+            "resolve it and tell me when it's done",
+            "If the tests are slow, run only the core crate",
+            "Don't forget the changelog",
+            "There's no rush, check it after lunch",
+            "That's not what I meant by the README",
+        ] {
+            assert_eq!(takes_back(message), None, "{message}");
         }
     }
 

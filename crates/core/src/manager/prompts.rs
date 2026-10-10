@@ -762,13 +762,17 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String 
         }
     };
     let write_rules = if task.kind.writes() {
-        let commits = if task.route.choice.provider == brigadier_providers::ProviderKind::Codex {
-            "Commit each finished step with a short plain message if you can; when your sandbox can't write git's files, leave the changes: Brigadier commits them when you ask for a review or report."
+        // A merge worker runs no git command that changes anything: Brigadier builds the commit
+        // from the files (its brief).
+        let commits = if task.kind == TaskKind::Merge {
+            ""
+        } else if task.route.choice.provider == brigadier_providers::ProviderKind::Codex {
+            " Commit each finished step with a short plain message if you can; when your sandbox can't write git's files, leave the changes: Brigadier commits them when you ask for a review or report."
         } else {
-            "Commit each finished step with a short plain message."
+            " Commit each finished step with a short plain message."
         };
         format!(
-            "\n- Work only inside this worktree, on its branch. {commits} Don't switch branches or touch other checkouts. What you leave uncommitted is committed for you when your work lands.\n- List every file you changed, created or deleted in the report's `changes`: new files that aren't listed are left out when your work lands.\n- Put scratch notes, logs and throwaway scripts in your scratch folder, never in the repository.\n- Don't write new tests unless the task asks for them. If a change breaks an existing test, fix the code; change a test only for an intended behaviour change.\n- Before you report, check your own work: format, lint, build, and the tests of what you touched.{role}",
+            "\n- Work only inside this worktree, on its branch.{commits} Don't switch branches or touch other checkouts. What you leave uncommitted is committed for you when your work lands.\n- List every file you changed, created or deleted in the report's `changes`: new files that aren't listed are left out when your work lands.\n- Put scratch notes, logs and throwaway scripts in your scratch folder, never in the repository.\n- Don't write new tests unless the task asks for them. If a change breaks an existing test, fix the code; change a test only for an intended behaviour change.\n- Before you report, check your own work: format, lint, build, and the tests of what you touched.{role}",
             role = match task.role {
                 Some(WorkerRole::Lead) | None if task.kind == TaskKind::Implement => LEAD_STEPS,
                 _ => "",
@@ -1138,6 +1142,14 @@ mod tests {
         let verifier = worker(&task("claude", Some("verifier")));
         assert!(!verifier.contains("submit_outline"));
         assert!(verifier.contains("check your own work"));
+        // Brigadier commits a merge worker's resolution: its rules ask for no commit.
+        for provider in ["claude", "codex"] {
+            let mut merge = task(provider, None);
+            merge.kind = TaskKind::Merge;
+            let merge = worker(&merge);
+            assert!(!merge.contains("Commit each finished step"), "{merge}");
+            assert!(merge.contains("Work only inside this worktree, on its branch. Don't switch"));
+        }
     }
 
     #[test]

@@ -913,6 +913,9 @@ impl SessionManager {
         let target = workspace.target.ok_or_else(|| {
             Error::Invalid(format!("task-{} has no target branch", subject.number))
         })?;
+        if workspace.base_merge.is_some() {
+            return Err(Error::Invalid(base_merge_conflict(subject.number, &target)));
+        }
         let reported: Vec<String> = subject
             .report
             .as_ref()
@@ -1638,8 +1641,9 @@ impl SessionManager {
     }
 
     /// Consent `held` over from a merge that stopped at conflicts, unless it was used, or the
-    /// user since they gave it wrote something that waits, says "no", "wait" or a condition,
-    /// or answered "Not yet" on a merge card. `refused` is why fresh consent was refused.
+    /// user since they gave it wrote something that waits, says "no", "wait" or "stop", holds
+    /// the merge or puts a condition on it ([`merge_consent::takes_back`]), or answered "Not
+    /// yet" on a merge card. `refused` is why fresh consent was refused.
     async fn held_consent(
         &self,
         id: &ConversationId,
@@ -1829,17 +1833,23 @@ fn unresolved_base_merge(
         let Some(content) = repo.file_at(tip, &path).map_err(git_error)? else {
             continue;
         };
-        if content.split(|byte| *byte == b'\n').any(|line| {
-            let Some(marker @ (b'<' | b'=' | b'>' | b'|')) = line.first() else {
-                return false;
-            };
-            let width = line.iter().take_while(|byte| *byte == marker).count();
-            width >= 7 && (width == line.len() || line[width].is_ascii_whitespace())
-        }) {
+        if content.split(|byte| *byte == b'\n').any(conflict_marker) {
             unresolved.push(path);
         }
     }
     Ok(unresolved)
+}
+
+/// Whether `line` is a conflict marker as git writes one: exactly seven marker characters,
+/// `=======` alone on its line, the others alone or followed by a space. A heading's
+/// underline (`==========`) is not one.
+fn conflict_marker(line: &[u8]) -> bool {
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    match line.get(..7) {
+        Some(b"=======") => line.len() == 7,
+        Some(b"<<<<<<<" | b">>>>>>>" | b"|||||||") => line.get(7).is_none_or(|byte| *byte == b' '),
+        _ => false,
+    }
 }
 
 /// The user's consent to a session merge.
@@ -2002,12 +2012,22 @@ fn conflicts_line(paths: &[String], base: &str) -> String {
 
 /// What the orchestrator does about a task whose work conflicts with the target.
 fn conflict_step(task: &Task, target: &str) -> String {
-    if task.workspace.as_ref().is_some_and(|w| w.on_snapshot) {
-        return snapshot_conflict(task.number);
+    match &task.workspace {
+        Some(w) if w.on_snapshot => return snapshot_conflict(task.number),
+        Some(w) if w.base_merge.is_some() => return base_merge_conflict(task.number, target),
+        _ => {}
     }
     format!(
         "Delegate a merge task with subject task-{}: Brigadier merges `{target}` into its work and the merge worker resolves the conflicts.",
         task.number
+    )
+}
+
+/// Why a merge of the session's base gets no merge task: one with it as subject would land
+/// as one commit, without the base's tip as its second parent.
+pub(super) fn base_merge_conflict(number: u32, target: &str) -> String {
+    format!(
+        "task-{number} merged the session's base into `{target}`, and a merge task with it as subject would land without the base as a parent. Stop task-{number} with stop_worker, then delegate a new merge task without `subject`: Brigadier merges the base into the current `{target}` again and the merge worker resolves the conflicts."
     )
 }
 
@@ -2096,6 +2116,32 @@ mod tests {
         let (text, _) = merge_offer("session", "main", Some(&paths));
         assert!(text.contains("20 files conflict"));
         assert!(!text.contains("file-19.rs"));
+    }
+
+    #[test]
+    fn only_git_conflict_markers_count_not_heading_underlines() {
+        for line in [
+            "<<<<<<<",
+            "<<<<<<< ours",
+            "=======",
+            "=======\r",
+            ">>>>>>> theirs\r",
+            "||||||| base",
+        ] {
+            assert!(conflict_marker(line.as_bytes()), "{line:?}");
+        }
+        for line in [
+            "==========",
+            "======== ",
+            "======= ",
+            "<<<<<<<<",
+            "<<<<<<<\tours",
+            ">>>>>>>>> theirs",
+            "======",
+            "",
+        ] {
+            assert!(!conflict_marker(line.as_bytes()), "{line:?}");
+        }
     }
 
     #[test]
