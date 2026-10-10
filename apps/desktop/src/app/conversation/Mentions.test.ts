@@ -52,7 +52,9 @@ test("the mention menu refreshes checkout files on opening, not on each keystrok
   const config = {
     cacheDir: join(scratch, "vite-cache"),
     logLevel: "error",
-    server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, watch: null },
+    // The page logs the failed listing: Vite forwards its console to the log when it detects an
+    // agent's shell (AI_AGENT), which would read as a compilation error here.
+    server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, watch: null, forwardConsole: false },
   };
   // Vite logs each request's start (>) and end (<), so a page that never finishes loading names
   // the request it waits on.

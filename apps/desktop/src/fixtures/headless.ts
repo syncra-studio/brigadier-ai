@@ -53,7 +53,9 @@ async function serveFixtures(t: TestContext): Promise<{ url: string; scratch: st
   const config = {
     cacheDir: join(scratch, "vite-cache"),
     logLevel: "error",
-    server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, watch: null },
+    // Vite forwards the page's console to its log when it detects an agent's shell (AI_AGENT),
+    // which would read as a compilation error here: the page's console stays its own.
+    server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, watch: null, forwardConsole: false },
   };
   // Vite logs each request's start (>) and end (<), so a page that never finishes loading names
   // the request it waits on.
