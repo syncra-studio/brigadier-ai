@@ -228,9 +228,10 @@ export function openNotificationSettings(): Promise<void> {
   return invoke<void>("open_notification_settings");
 }
 
-/** Rust chooses and remembers the destination; this call never accepts a write path. */
-export function saveDocument(id: string, text: string, directory: string | null, name: string): Promise<string | null> {
-  return invoke("save_document", { id, text, directory, name });
+/** Rust chooses and remembers the destination; this call never accepts a write path. `choose`
+ * asks for a destination even when one is remembered (Save As). */
+export function saveDocument(id: string, text: string, directory: string | null, name: string, choose = false): Promise<string | null> {
+  return invoke("save_document", { id, text, directory, name, choose });
 }
 
 /** Release the native save grant when a document leaves the reopen history. */
