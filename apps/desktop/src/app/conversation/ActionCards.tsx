@@ -25,6 +25,7 @@ import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
 import { pendingActionKeys, type PendingAction } from "@/app/conversation/pendingActions";
+import { CodeSpans } from "@/app/conversation/cards/codeSpans";
 import { PlanCardLink } from "@/app/conversation/cards/PlanCardLink";
 import { questionRound } from "@/app/conversation/cards/questionRound";
 import { revealOvernight } from "@/app/conversation/summaryState";
@@ -695,7 +696,7 @@ function ChoiceCard({
   detail?: ReactNode;
   /** Between the question and the answers (the files asked about). */
   extra?: ReactNode;
-  choices: { label: string; description?: string | null; recommended?: boolean }[];
+  choices: { label: string; description?: ReactNode; recommended?: boolean }[];
   /** The answer lit at first. */
   initial: number;
   /** What the free-text row holds at first (an answer typed before paging back). */
@@ -963,7 +964,7 @@ function QuestionAction({
       title={
         uncommitted
           ? "Should workers see your uncommitted changes?"
-          : item.text
+          : <CodeSpans text={item.text} />
       }
       detail={
         uncommitted ? (
@@ -982,7 +983,7 @@ function QuestionAction({
       }
       choices={item.options.map((option, index) => ({
         label: option.label,
-        description: option.description,
+        description: option.description && <CodeSpans text={option.description} />,
         recommended: item.recommended === index,
       }))}
       initial={picked >= 0 ? picked : (item.recommended ?? 0)}

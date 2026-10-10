@@ -1,6 +1,7 @@
 import { ChevronRight, QuestionMarkCircle } from "@openai/apps-sdk-ui/components/Icon";
 import { memo } from "react";
 
+import { CodeSpans } from "@/app/conversation/cards/codeSpans";
 import {
   answerWords,
   questionAnswers,
@@ -43,7 +44,7 @@ export const QuestionCardView = memo(function QuestionCardView({ cardId }: { car
         <dl className="flex flex-col gap-3 pt-2 pb-1 text-sm">
           {round.map((item, index) => (
             <div key={index} className="flex flex-col gap-1">
-              <dt className="text-foreground/60 whitespace-pre-wrap wrap-anywhere">{item.text}</dt>
+              <dt className="text-foreground/60 whitespace-pre-wrap wrap-anywhere"><CodeSpans text={item.text} /></dt>
               <dd className="text-foreground/30 whitespace-pre-wrap wrap-anywhere">
                 {answerWords(item, answers[index] ?? "")}
               </dd>

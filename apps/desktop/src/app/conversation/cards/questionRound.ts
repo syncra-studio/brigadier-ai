@@ -45,3 +45,14 @@ export function questionRowWords(question: Question): string {
     }
   }
 }
+
+/**
+ * A card line's parts: plain text, and the `code` spans written in backticks (a branch, a
+ * file), without the backticks. An unclosed backtick stays as written.
+ */
+export function codeParts(text: string): { text: string; code: boolean }[] {
+  return text
+    .split(/`([^`\n]+)`/)
+    .map((part, index) => ({ text: part, code: index % 2 === 1 }))
+    .filter((part) => part.text !== "");
+}
