@@ -562,6 +562,7 @@ impl SessionManager {
             record_to: None,
             redactor: secrets::redactor(vec![grant]),
             owned_cwd: codex,
+            sweep_dir: codex.then(|| scratch.clone()),
             auto_compact: true,
             // A Brain job hands nothing on: no sub-agents at all (Codex runs without them,
             // Claude without its Agent tool).

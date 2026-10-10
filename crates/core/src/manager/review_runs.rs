@@ -742,6 +742,7 @@ impl SessionManager {
             record_to: None,
             redactor: None,
             owned_cwd: true,
+            sweep_dir: Some(checkout.to_owned()),
             auto_compact: true,
             // It hands nothing on: no sub-agents.
             allowed_models: Some(AllowedModels::default()),

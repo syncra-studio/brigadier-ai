@@ -160,6 +160,66 @@ async fn a_worker_hold_moving_from_heat_to_memory_says_so_and_warning_releases_i
     flow.stop().await;
 }
 
+/// A session's Claude workers share one folder for the prompt cache: no worker's CLI may sweep
+/// it when it ends, or every other worker of the session dies with it (bug 1). Each sweeps only
+/// its own scratch folder.
+#[tokio::test]
+async fn claude_workers_sharing_a_folder_never_sweep_it() {
+    let flow = Flow::start(
+        "shared-home",
+        Options::default(),
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if turn.input.contains("[report task-") {
+                    return Reply::text("[quiet]");
+                }
+                for title in ["Add a", "Add b"] {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "high", "title": title, "kind": "implement",
+                                   "spec": "Look, then report."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                }
+                return Reply::text("[quiet]");
+            }
+            let reply = turn
+                .call("submit_report", json!({"summary": "Nothing to change."}))
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        }),
+    )
+    .await;
+    flow.say("Add a and b.").await;
+    flow.settled().await;
+    let workers: Vec<_> =
+        flow.specs
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(kind, spec)| {
+                *kind == brigadier_providers::ProviderKind::Claude
+                    && spec.append_system_prompt.as_deref().is_some_and(|prompt| {
+                        !prompt.contains(crate::manager::prompts::THREAD_OPENING)
+                    })
+                    && !spec.add_dirs.is_empty()
+            })
+            .map(|(_, spec)| spec.clone())
+            .collect();
+    assert_eq!(workers.len(), 2, "{workers:#?}");
+    assert_eq!(workers[0].cwd, workers[1].cwd, "one shared folder");
+    for spec in &workers {
+        let sweep = spec.sweep_dir.as_ref().expect("its own folder is swept");
+        assert_ne!(sweep, &spec.cwd, "the shared folder is never swept");
+        assert!(!sweep.starts_with(&spec.cwd), "{}", sweep.display());
+    }
+    assert_ne!(workers[0].sweep_dir, workers[1].sweep_dir);
+    flow.stop().await;
+}
+
 /// A copy of a real store (`BRIGADIER_FLOW_STORE`, made read-only with `sqlite3 "file:…?mode=ro"
 /// ".backup …"`): the thread engine's first start deletes every conversation in it, and they
 /// all load long enough to be deleted. Run by hand: `BRIGADIER_FLOW_STORE=/tmp/brig-store-copy.db

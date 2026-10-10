@@ -127,7 +127,7 @@ impl SessionManager {
             .await
             .map_err(|err| err.to_string())?;
         let spec = SessionSpec {
-            cwd: home,
+            cwd: home.clone(),
             model: Some(REVIEWER_MODEL.into()),
             effort: Some(REVIEWER_EFFORT.into()),
             fast: false,
@@ -143,6 +143,7 @@ impl SessionManager {
             record_to: None,
             redactor: None,
             owned_cwd: true,
+            sweep_dir: Some(home),
             auto_compact: false,
             allowed_models: Some(AllowedModels::default()),
             auto_review: false,

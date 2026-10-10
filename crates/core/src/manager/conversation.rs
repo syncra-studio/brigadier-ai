@@ -1926,6 +1926,7 @@ impl SessionManager {
             record_to: None,
             redactor: grant_redactor.clone(),
             owned_cwd: true,
+            sweep_dir: Some(dir.clone()),
             // An orchestrator is reborn, never compacted.
             auto_compact: conv.kind == ConversationKind::Chat,
             allowed_models: None,

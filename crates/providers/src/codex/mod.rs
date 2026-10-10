@@ -269,9 +269,7 @@ impl Codex {
                 recorder,
                 redactor,
                 ledger,
-                owned_dir: session
-                    .filter(|session| session.owned_cwd)
-                    .map(|_| cwd.to_owned()),
+                sweep_dir: session.and_then(|session| session.sweep_dir.clone()),
             },
         )?;
         Ok((Arc::new(Rpc::new(process)), stdout))
@@ -2116,6 +2114,7 @@ mod tests {
             record_to: None,
             redactor: None,
             owned_cwd: false,
+            sweep_dir: None,
             auto_compact: true,
             allowed_models,
             auto_review: false,

@@ -333,6 +333,7 @@ impl SessionManager {
             // folder): sweeping the folder when the fork ends would end that CLI too, mid-turn.
             // The fork's own process tree still ends with it.
             owned_cwd: false,
+            sweep_dir: None,
             auto_compact: false,
             allowed_models: None,
             auto_review: false,

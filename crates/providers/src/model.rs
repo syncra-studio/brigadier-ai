@@ -946,6 +946,10 @@ pub struct SessionSpec {
     /// undo what the CLI persists about that exact folder in the user's own configuration
     /// (Codex's project trust entry). Raw sessions in the user's folders are never owned.
     pub owned_cwd: bool,
+    /// A folder that is this session's alone (its own scratch folder or worktree, never a
+    /// folder shared with other sessions): whatever still runs inside it when the CLI goes is
+    /// ended too. `None`: only the CLI's own tree is ended.
+    pub sweep_dir: Option<PathBuf>,
     /// The CLI may compact its context on its own as it fills up. Off for orchestrators,
     /// which are reborn instead (PLAN.md §2): Claude's auto-compact is switched off; Codex's
     /// cannot be, so its limit is raised as far as Codex allows (90% of the window).

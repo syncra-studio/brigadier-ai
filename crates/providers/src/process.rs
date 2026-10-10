@@ -62,10 +62,11 @@ pub struct Options {
     pub redactor: Option<Arc<Redactor>>,
     /// Records the group and session leaders the CLI starts, for the crash sweep.
     pub ledger: Option<Arc<dyn Ledger>>,
-    /// A folder Brigadier created for this CLI alone (its working directory). Whatever still
-    /// runs inside it when the CLI goes is ended too: that finds a server that detached from
-    /// the tree before a walk saw it.
-    pub owned_dir: Option<PathBuf>,
+    /// A folder that is this CLI's alone ([`SessionSpec::sweep_dir`](crate::SessionSpec::sweep_dir)),
+    /// not necessarily its working directory: several CLIs may share a working directory. Whatever
+    /// still runs inside it when the CLI goes is ended too: that finds a server that detached
+    /// from the tree before a walk saw it.
+    pub sweep_dir: Option<PathBuf>,
 }
 
 /// The processes seen below the CLI, by pid, with their start times.
@@ -73,7 +74,7 @@ struct Tree {
     root: u32,
     platform: Arc<dyn Platform>,
     seen: Mutex<HashMap<u32, Option<f64>>>,
-    owned_dir: Option<PathBuf>,
+    sweep_dir: Option<PathBuf>,
 }
 
 impl Tree {
@@ -111,7 +112,7 @@ impl Tree {
     }
 
     /// Kills every process seen that still runs and is still the one seen (same start time),
-    /// with its own tree and group, then whatever still works inside the owned folder. Returns
+    /// with its own tree and group, then whatever still works inside the swept folder. Returns
     /// how many were running.
     fn end_all(&self) -> usize {
         let processes = self.platform.processes();
@@ -125,7 +126,7 @@ impl Tree {
                 ended += 1;
             }
         }
-        if let Some(dir) = &self.owned_dir {
+        if let Some(dir) = &self.sweep_dir {
             match processes.in_dir(dir) {
                 Ok(pids) => {
                     for pid in pids {
@@ -156,7 +157,7 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
         recorder,
         redactor,
         ledger,
-        owned_dir,
+        sweep_dir,
     } = options;
     let mut command = tokio::process::Command::from(platform.processes().piped_command(spec));
     command.stdin(Stdio::piped()).kill_on_drop(false);
@@ -206,7 +207,7 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
         root: pid,
         platform: platform.clone(),
         seen: Mutex::new(HashMap::new()),
-        owned_dir,
+        sweep_dir,
     });
     let (exit_tx, exit) = watch::channel(None);
     let tracked = tree.clone();
@@ -395,4 +396,61 @@ fn is_same(processes: &dyn brigadier_sandbox::Processes, pid: u32, started: Opti
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// Two CLIs started in one folder (a session's Claude workers share theirs): ending one
+    /// ends only what runs in its own swept folder, never the other CLI. Sweeping the shared
+    /// folder instead is exactly what killed the other workers at every landing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ending_a_cli_spares_another_in_the_same_folder() {
+        let root = std::env::temp_dir().join(format!("brigadier-sweep-{}", uuid::Uuid::new_v4()));
+        let shared = root.join("shared");
+        let own = root.join("own");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::create_dir_all(&own).unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(root.join("data")),
+        })
+        .unwrap();
+        let start = |program: &str, arg: Option<&str>, sweep_dir: Option<PathBuf>| {
+            let mut spec = SpawnSpec::new(program);
+            if let Some(arg) = arg {
+                spec = spec.arg(arg);
+            }
+            spec.cwd = Some(shared.clone());
+            spawn(
+                platform.clone(),
+                &spec,
+                Options {
+                    sweep_dir,
+                    ..Options::default()
+                },
+            )
+            .unwrap()
+            .process
+        };
+
+        let other = start("sleep", Some("30"), None);
+        let first = start("cat", None, Some(own.clone()));
+        first.shutdown(Duration::from_secs(5)).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            other.is_running(),
+            "a CLI ending swept another one's folder"
+        );
+
+        // The old behaviour, the shared folder swept, does kill it: the test tells them apart.
+        let sweeper = start("cat", None, Some(shared.clone()));
+        sweeper.shutdown(Duration::from_secs(5)).await;
+        let ended = tokio::time::timeout(Duration::from_secs(5), other.exited()).await;
+        assert!(
+            ended.is_ok(),
+            "sweeping the shared folder should end the other CLI"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

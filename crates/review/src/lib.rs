@@ -281,7 +281,7 @@ async fn run_codex_review(
         &spec,
         Options {
             ledger: Some(run.ledger.clone()),
-            owned_dir: Some(run.cwd.to_owned()),
+            sweep_dir: Some(run.cwd.to_owned()),
             ..Options::default()
         },
     )

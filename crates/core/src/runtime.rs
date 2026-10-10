@@ -1467,6 +1467,7 @@ fn spec_for(session: &RawSession, origin: Origin, record_to: Option<PathBuf>) ->
         record_to,
         redactor: None,
         owned_cwd: false,
+        sweep_dir: None,
         auto_compact: true,
         allowed_models: None,
         auto_review: false,

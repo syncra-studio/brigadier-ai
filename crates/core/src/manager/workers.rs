@@ -1482,6 +1482,13 @@ impl SessionManager {
             record_to: None,
             redactor: redactor.clone(),
             owned_cwd: true,
+            // The shared worker folder is never one worker's to sweep: ending what runs there
+            // when one CLI goes would kill every other Claude worker of the session.
+            sweep_dir: Some(if home.is_some() {
+                workspace.scratch.clone()
+            } else {
+                cwd.clone()
+            }),
             auto_compact: true,
             allowed_models: Some(allowed_models.clone()),
             auto_review: self.permission(&conversation_id) == PermissionLevel::ApproveForMe,

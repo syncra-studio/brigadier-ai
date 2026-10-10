@@ -1007,7 +1007,7 @@ impl Provider for Claude {
                     recorder,
                     redactor: spec.redactor.clone(),
                     ledger: Some(ledger.clone()),
-                    owned_dir: spec.owned_cwd.then(|| cwd.clone()),
+                    sweep_dir: spec.sweep_dir.clone(),
                 },
             )?;
             ledger
@@ -1843,6 +1843,7 @@ mod tests {
             record_to: None,
             redactor: None,
             owned_cwd: false,
+            sweep_dir: None,
             auto_compact: true,
             allowed_models: Some(allowed(ids, &["claude-opus-5-5", "claude-fable-5-1"])),
             auto_review: false,

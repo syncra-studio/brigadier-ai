@@ -257,6 +257,7 @@ impl SessionManager {
             record_to: None,
             redactor: None,
             owned_cwd: true,
+            sweep_dir: Some(scratch.clone()),
             auto_compact: true,
             allowed_models: None,
             auto_review: false,
