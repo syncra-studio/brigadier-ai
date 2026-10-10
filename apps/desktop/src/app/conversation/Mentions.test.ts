@@ -64,14 +64,26 @@ test("the mention menu refreshes checkout files on opening, not on each keystrok
     const checkout = join(${JSON.stringify(scratch)}, "checkout");
     mkdirSync(checkout);
     execFileSync("git", ["init", "--quiet", checkout]);
+    let failNext = false;
     const requests = { name: "requests", configureServer(server) {
       server.middlewares.use((request, response, next) => {
+        if (request.url === "/mention-test/fail-next") {
+          failNext = true;
+          response.end("ready");
+          return;
+        }
         if (request.url === "/mention-test/create") {
           writeFileSync(join(checkout, "hello.txt"), "hello");
           response.end("created");
           return;
         }
         if (request.url === "/mention-test/files") {
+          if (failNext) {
+            failNext = false;
+            response.statusCode = 503;
+            response.end("Listing unavailable");
+            return;
+          }
           const files = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: checkout, encoding: "utf8" }).split("\\0").filter(Boolean);
           response.setHeader("Content-Type", "application/json");
           response.end(JSON.stringify({ method: "listFiles", files, truncated: false }));
@@ -143,8 +155,9 @@ test("the mention menu refreshes checkout files on opening, not on each keystrok
       `DOM:\n${stdout}`,
     ].join("\n"));
   }
-  const result = JSON.parse(serialized) as { error?: string; calls: number; chatCalls: number };
+  const result = JSON.parse(serialized) as { error?: string; calls: number; chatCalls: number; opens: number };
   assert.equal(result.error, undefined);
-  assert.equal(result.calls, 3, "Mount and two menu openings each fetch once");
+  assert.equal(result.calls, 4, "Mount and three menu openings each fetch once, including a failed refresh");
   assert.equal(result.chatCalls, 0, "Plain chats never list checkout files");
+  assert.equal(result.opens, 2, "An inline onOpen fires once per opening despite rerenders");
 });

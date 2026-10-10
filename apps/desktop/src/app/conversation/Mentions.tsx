@@ -206,7 +206,6 @@ export function useCheckoutFiles(
     id: string;
     /** The landings it was listed after. */
     landed: number;
-    refresh: number;
     files: string[];
     truncated: boolean;
   } | null>(null);
@@ -214,11 +213,25 @@ export function useCheckoutFiles(
     if (!id) return;
     let live = true;
     listFiles(id)
-      .then((list) => live && setFetched({ id, landed, refresh, ...list }))
-      .catch(() => live && setFetched({ id, landed, refresh, files: [], truncated: false }));
+      .then((list) => {
+        if (!live) return;
+        setFetched((previous) =>
+          previous?.id === id &&
+          previous.truncated === list.truncated &&
+          previous.files.length === list.files.length &&
+          previous.files.every((file, index) => file === list.files[index])
+            ? previous
+            : { id, landed, ...list },
+        );
+      })
+      .catch(() => {
+        // Keep the last good list when a refresh fails.
+      });
     return () => {
       live = false;
     };
+    // A menu opening explicitly requests a fresh listing even when the checkout is unchanged.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
   }, [id, landed, refresh]);
   return fetched && fetched.id === id ? fetched : null;
 }

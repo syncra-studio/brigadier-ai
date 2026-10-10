@@ -52,6 +52,14 @@ It renders task rows and the expanded background-workers strip with a fixed cloc
 including live activity, waits, checks and a completed worker. This standalone entry
 is absent from the production build.
 
+# Mention refresh
+
+`http://localhost:1426/fixtures/mentions-refresh.html` backs
+`src/app/conversation/Mentions.test.ts`. The test supplies `/mention-test/*` middleware
+to list a disposable checkout, create a file, and fail a refresh. Run it through
+`pnpm test`; the page needs that middleware. It checks menu openings, newly created
+files, failed refreshes, and plain chats. This entry is absent from the production build.
+
 # Phase flow
 
 `http://localhost:1426/fixtures/flow.html` renders a session run the phase way from synthetic data

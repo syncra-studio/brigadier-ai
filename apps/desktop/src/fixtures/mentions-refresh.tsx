@@ -1,19 +1,28 @@
 /** Exercises the real menu against files created on disk after the composer mounts. */
 import { AssistantRuntimeProvider, ComposerPrimitive, useLocalRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { Mentions } from "@/app/conversation/Mentions";
+import { ComposerMentions } from "@/components/assistant-ui/elements/composer-mentions";
 import type { Conversation, Request } from "@/ipc/generated";
 
 let calls = 0;
+let settled = 0;
 mockIPC(async (command, payload) => {
   const request = (payload as { request: Request }).request;
   if (command !== "ipc_request" || request.method !== "listFiles") {
     throw new Error(`Unexpected IPC: ${command}`);
   }
   calls++;
-  return (await fetch("/mention-test/files")).json();
+  try {
+    const response = await fetch("/mention-test/files");
+    if (!response.ok) throw new Error("Listing unavailable");
+    return await response.json();
+  } finally {
+    settled++;
+  }
 });
 
 const session: Conversation = {
@@ -22,14 +31,22 @@ const session: Conversation = {
   forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
 };
 
-function Fixture({ conversation }: { conversation: Conversation }) {
+const emptySearch = () => [];
+let opens = 0;
+function Fixture({ conversation, inline = false }: { conversation: Conversation; inline?: boolean }) {
+  const [, setOpenCount] = useState(0);
   const runtime = useLocalRuntime({ async run() { throw new Error("No model calls in this fixture"); } });
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <ComposerPrimitive.Root>
         <ComposerPrimitive.Unstable_TriggerPopoverRoot>
           <ComposerPrimitive.Input />
-          <Mentions conversation={conversation} targets={[]} />
+          {inline ? (
+            <ComposerMentions search={emptySearch} onOpen={() => {
+              opens++;
+              setOpenCount(opens);
+            }} />
+          ) : <Mentions conversation={conversation} targets={[]} />}
         </ComposerPrimitive.Unstable_TriggerPopoverRoot>
       </ComposerPrimitive.Root>
     </AssistantRuntimeProvider>
@@ -68,7 +85,13 @@ async function exercise() {
   await until(hasFile, "New file did not appear without switching sessions");
   await type("@hello.txt");
   await until(hasFile, "Typing more lost the file");
+  await type("");
+  await until(() => !menu(), "Menu did not close before failed refresh");
+  await fetch("/mention-test/fail-next", { method: "POST" });
+  await type("@hello");
+  await until(() => settled === 4, "Failed refresh did not settle");
   await pause();
+  if (!hasFile()) throw new Error("Failed refresh cleared the last good file list");
   const sessionCalls = calls;
   const row = [...menu()!.querySelectorAll("button")].find((button) => button.textContent?.includes("hello.txt"));
   if (!row) throw new Error("File cannot be selected");
@@ -81,7 +104,19 @@ async function exercise() {
   await until(() => !!menu(), "Plain chat menu did not open");
   await pause();
   if (hasFile()) throw new Error("Session files leaked into a plain chat");
-  return { calls: sessionCalls, chatCalls: calls - sessionCalls };
+  const chatCalls = calls - sessionCalls;
+  root.render(<Fixture key="inline" conversation={session} inline />);
+  await pause();
+  await type("@a");
+  await until(() => opens > 0, "Inline callback did not run");
+  await type("@ab");
+  if (opens !== 1) throw new Error("Inline callback ran again while the menu stayed open");
+  await type("");
+  await until(() => !menu(), "Inline menu did not close");
+  await type("@a");
+  await until(() => opens > 1, "Inline callback did not run on reopening");
+  await pause();
+  return { calls: sessionCalls, chatCalls, opens };
 }
 void exercise().then(
   (result) => finish(result),

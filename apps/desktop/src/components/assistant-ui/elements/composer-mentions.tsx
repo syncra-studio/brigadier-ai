@@ -121,10 +121,14 @@ function MentionList({
   children: ReactNode[];
 }) {
   const list = useRef<HTMLDivElement>(null);
+  const onOpenRef = useRef(onOpen);
+  useEffect(() => {
+    onOpenRef.current = onOpen;
+  });
   const { highlightedIndex, query } = unstable_useTriggerPopoverScopeContext();
   useEffect(() => {
-    onOpen?.();
-  }, [onOpen]);
+    onOpenRef.current?.();
+  }, []);
   useEffect(() => {
     if (highlightedIndex < 0) return;
     list.current?.querySelector("[data-highlighted]")?.scrollIntoView({ block: "nearest" });
