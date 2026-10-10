@@ -369,7 +369,7 @@ function CleanDialog({
     <Dialog open={ask !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         data-slot="storage-dialog"
-        className="flex max-h-full max-w-xl flex-col"
+        className="flex max-h-full max-w-lg flex-col"
         showCloseButton={!cleaning}
       >
         {ask && cleaned ? (
@@ -593,7 +593,7 @@ function ChooseDialog({
     });
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onCancel()}>
-      <DialogContent data-slot="storage-choose" className="flex max-h-full max-w-xl flex-col">
+      <DialogContent data-slot="storage-choose" className="flex max-h-full max-w-lg flex-col">
         <DialogHeader>
           <DialogTitle>{STORAGE_ROWS.choose.label}</DialogTitle>
           <DialogDescription>
@@ -672,7 +672,7 @@ function PickRow({
 function UsageDialog({ open, report, onClose }: { open: boolean; report: StorageReport; onClose: () => void }) {
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent data-slot="storage-usage" className="flex max-h-full max-w-2xl flex-col">
+      <DialogContent data-slot="storage-usage" className="flex max-h-full max-w-lg flex-col">
         <DialogHeader>
           <DialogTitle>{STORAGE_ROWS.usage.label}</DialogTitle>
           <DialogDescription>{STORAGE_ROWS.usage.description}</DialogDescription>
