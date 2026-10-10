@@ -125,6 +125,11 @@ function PlanClip({ markdown }: { markdown: string }) {
 export function PlanDocCard({ docRef }: { docRef: PlanDocRef }) {
   const conversationId = useBoard((s) => s.board?.conversationId ?? null);
   const doc = usePlanDoc(docRef);
+  // A revision the user sent back, which a newer one replaced.
+  const earlier = useBoard((s) => {
+    const state = docRef.type === "plan" ? s.board?.plans[docRef.id]?.state.type : null;
+    return state === "rejected" || state === "superseded";
+  });
   const { openTab } = useContext(SidePanelContext);
   if (!doc) return null;
   const open = () => {
@@ -134,7 +139,7 @@ export function PlanDocCard({ docRef }: { docRef: PlanDocRef }) {
   };
   return (
     <PlanFrame
-      label="Plan"
+      label={earlier ? "Earlier plan" : "Plan"}
       aria-label={`Plan: ${doc.title}`}
       actions={
         <>
