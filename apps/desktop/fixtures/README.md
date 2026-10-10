@@ -107,3 +107,11 @@ each kind from a `brigadier-computer bench --quick --replay` run
 (`src/fixtures/boards/computer-bench-run.json`); every screenshot reads as a 1×1 image. Open it,
 then step with ←/→, Home and End on its toolbar, or Play. `ComputerTimelineRender.test.ts` drives
 the same page in headless Chromium.
+
+# Computer use
+
+`http://localhost:1426/fixtures/computer-use.html` renders Settings → Computer use over faked
+permissions; nothing reaches a daemon or the system. `?state=missing` (the default), `half`, `ready`,
+`restarting` or `problem` picks what they read as; `?press=See%20the%20screen` presses that row's
+Allow… once shown, so Start over and Open System Settings appear. Check again reads the faked state
+again. `ComputerUsePageRender.test.ts` drives the same page in headless Chromium with `?drive=1`.

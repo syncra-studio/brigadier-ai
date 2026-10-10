@@ -31,7 +31,8 @@ doesn't run a model of its own.
 macOS asks you once for two permissions, for an item named **Brigadier Computer Use** (Brigadier's icon, listed
 apart from Brigadier itself):
 
-1. Open Brigadier's **Settings → Computer use**.
+1. Open Brigadier's **Settings → Computer use**. The card at the top says **Ready** once both are allowed, and
+   **Finish setup** with how many are still needed until then.
 2. Next to **Control apps**, press **Allow…**. macOS shows its own prompt, then System Settings opens at Privacy &
    Security → **Device Control and Data Access** (macOS 27's name for the list called Accessibility before). Turn on
    **Brigadier Computer Use**.
@@ -40,8 +41,10 @@ apart from Brigadier itself):
    Brigadier Computer Use restarts by itself to use the new permission.
 
 You don't need to come back and click anything: the page reads the permissions every second or two while one is
-missing, and each row turns to **Allowed** on its own. It keeps reading them every few seconds while it is open, so a
-permission you turn off later shows as **Not allowed yet** too, and a worker that asks for it is told it's missing.
+missing, and each row turns to **Allowed** on its own (the refresh button on the status card reads them at once). It
+keeps reading them every few seconds while it is open, so a permission you turn off later shows as **Not allowed**
+too, and a worker that asks for it is told it's missing. **Open System Settings** on a row opens its list without
+asking for anything, to check the switch or turn it off.
 
 The permissions belong to Brigadier Computer Use, not to Brigadier or a terminal, and they stay when Brigadier
 updates. If a worker needs them before you've given them, the conversation shows the same two Allow buttons.
@@ -60,11 +63,11 @@ open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibil
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"   # Screen & System Audio Recording
 ```
 
-**On, but still "Not allowed yet"?** The switch belongs to an older build of Brigadier Computer Use: macOS ties a
+**On, but still "Not allowed"?** The switch belongs to an older build of Brigadier Computer Use: macOS ties a
 grant to the build it was given to, and an unsigned build changes with every rebuild. After you've pressed **Allow…**
-once, the row also offers **Start over**. It makes Brigadier Computer Use forget its own entry for that permission
-(only its own, with macOS's `tccutil reset`), then macOS asks again; turn the new entry on. Signed builds keep their
-grants across rebuilds and updates.
+once, a **Start over** link shows under the rows. It makes Brigadier Computer Use forget its own entry for that
+permission (only its own, with macOS's `tccutil reset`), then macOS asks again; turn the new entry on. Signed builds
+keep their grants across rebuilds and updates.
 
 ### Opening the dev build (for Brigadier's developers)
 
