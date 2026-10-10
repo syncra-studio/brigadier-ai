@@ -785,6 +785,7 @@ async fn starts_over_on_older_instructions(thread: ProviderKind) {
         .unwrap();
     assert!(rules.contains("started in one batch"), "{rules}");
     assert!(rules.contains("To interview the user"), "{rules}");
+    assert!(rules.contains("propose_merge, propose_plan"), "{rules}");
     assert!(
         specs.iter().all(|(provider, _)| *provider == thread),
         "{specs:#?}"

@@ -7,7 +7,7 @@ import type { Plan, PlanState, TaskState, UserRequest } from "@/ipc/generated";
 function plan(state: PlanState, id = "plan", createdAtMs = 1): Plan {
   return {
     id, conversationId: "session", requestId: "request", position: createdAtMs,
-    title: "Plan", steps: ["First", "Second", "Third"].map((title, index) => ({ title, detail: null, taskId: `task-${index}`, stage: "pending" as const, startedAtMs: null, endedAtMs: null, outline: null })),
+    title: "Plan", body: null, steps: ["First", "Second", "Third"].map((title, index) => ({ title, detail: null, taskId: `task-${index}`, stage: "pending" as const, startedAtMs: null, endedAtMs: null, outline: null })),
     state, createdAtMs, decidedAtMs: null,
   };
 }

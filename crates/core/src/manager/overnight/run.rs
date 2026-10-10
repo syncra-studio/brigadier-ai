@@ -971,6 +971,7 @@ mod tests {
             request_id: None,
             position: 0,
             title: "Plan".into(),
+            body: None,
             steps: numbers
                 .iter()
                 .map(|n| PlanStep {

@@ -550,6 +550,21 @@ pub struct PlanPhases {
     pub phases: Vec<PlanStepInput>,
 }
 
+/// `propose_plan`: the thread's plan, as a document on a card the user reads and decides on.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProposePlan {
+    /// What gets built, in a few words ("Add a --version flag"): the card's title.
+    pub title: String,
+    /// The plan in markdown: `# Title`, one summary sentence, then `## Changes`, `## Checks`
+    /// and `## Assumptions`, each a short list.
+    pub body: String,
+    /// Only for work in parts that must run one after another: the phases, in order, each
+    /// built by its own lead. Leave it out for work of one part.
+    #[serde(default)]
+    pub phases: Option<Vec<PlanStepInput>>,
+}
+
 /// `approve_outline`: let a lead build from its outline, with your corrections.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -720,6 +735,7 @@ pub enum OrchestratorCall {
     Remember(Remember),
     SearchTranscript(SearchTranscript),
     PlanPhases(PlanPhases),
+    ProposePlan(ProposePlan),
     ApproveOutline(ApproveOutline),
     StartVerifier(TaskRef),
     RequestApproval(RequestApproval),
@@ -759,6 +775,7 @@ impl OrchestratorCall {
             Self::Remember(_) => "remember",
             Self::SearchTranscript(_) => "search_transcript",
             Self::PlanPhases(_) => "plan_phases",
+            Self::ProposePlan(_) => "propose_plan",
             Self::ApproveOutline(_) => "approve_outline",
             Self::StartVerifier(_) => "start_verifier",
             Self::RequestApproval(_) => "request_approval",

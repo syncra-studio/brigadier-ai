@@ -20,7 +20,7 @@ use super::workers::relanding_pending;
 use crate::board::Board;
 use crate::model::{ConversationId, ConversationKind};
 use crate::overnight::{OvernightRun, OvernightState};
-use crate::work::{CardState, PlanState, QuestionKind, RequestState, Task, TaskId, TaskState};
+use crate::work::{CardState, QuestionKind, RequestState, Task, TaskId, TaskState};
 
 impl SessionManager {
     /// What a request waits for, if anything. A question in the thread's text makes nothing
@@ -426,6 +426,8 @@ fn open_question_cards(board: &Board, request: &str) -> bool {
 /// What only the user can do holds the request up (a card, a worker's question, a paused or
 /// held worker, an overnight run's "Waiting on you" item), quota and the thread's own question
 /// cards aside. A session lists no items, and one listed before it stopped makes nothing wait.
+/// A proposed plan holds nothing up either: its card is the request's answer, and the user's
+/// yes makes the request work again (THREAD-PARITY-PLAN §6).
 fn waits_on_user(board: &Board, request: &str) -> bool {
     let of = |id: &Option<String>| id.as_deref() == Some(request);
     board.waiting.values().any(|item| {
@@ -440,10 +442,6 @@ fn waits_on_user(board: &Board, request: &str) -> bool {
                 && q.is_open()
                 && matches!(q.kind, QuestionKind::UncommittedChanges { .. })
         })
-        || board
-            .plans
-            .values()
-            .any(|p| of(&p.request_id) && p.state == PlanState::Proposed)
         || board.tasks.values().any(|task| {
             of(&task.request_id)
                 && (task.state == TaskState::ReadyToLand

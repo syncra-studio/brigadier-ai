@@ -1678,6 +1678,7 @@ mod tests {
             request_id: Some(super::super::run::run_request(&run)),
             position: 0,
             title: "Speed".into(),
+            body: None,
             steps: vec![
                 crate::work::PlanStep {
                     title: "Measure".into(),

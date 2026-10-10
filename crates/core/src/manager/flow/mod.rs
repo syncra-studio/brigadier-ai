@@ -257,6 +257,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "land_phase" => ToolCall::Orchestrator(O::LandPhase(arg(name, args))),
         "finish_session" => ToolCall::Orchestrator(O::FinishSession(arg(name, args))),
         "propose_merge" => ToolCall::Orchestrator(O::ProposeMerge(arg(name, args))),
+        "propose_plan" => ToolCall::Orchestrator(O::ProposePlan(arg(name, args))),
         "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
         "route_follow_up" => ToolCall::Orchestrator(O::RouteFollowUp(arg(name, args))),
         "list_tasks" => ToolCall::Orchestrator(O::ListTasks),
@@ -1455,6 +1456,8 @@ mod engine_tests;
 mod litter_tests;
 #[cfg(test)]
 mod overnight_tests;
+#[cfg(test)]
+mod plan_tests;
 mod preview_tests;
 #[cfg(test)]
 mod prewarm_tests;

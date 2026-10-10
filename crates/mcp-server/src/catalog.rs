@@ -6,8 +6,8 @@ use std::sync::{Arc, OnceLock};
 use brigadier_core::tools::{
     AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch,
     DelegateTask, EndRun, FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser,
-    OrchestratorCall, PlanPhases, PreviewLog, ProposeMerge, ProposeOvernight, QueryBrain,
-    ReadArtifact, RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role,
+    OrchestratorCall, PlanPhases, PreviewLog, ProposeMerge, ProposeOvernight, ProposePlan,
+    QueryBrain, ReadArtifact, RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role,
     RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript,
     SettleStep, StartPreview, StopPreview, StopWorker, SubmitOutline, SubmitReport, TaskRef,
     ToolCall, WorkerCall,
@@ -85,6 +85,26 @@ const PLAN_PHASES: &str = "Split a big request into phases that must run one aft
 lead. Records the phases for the user's progress pill; nothing is reviewed or approved here. \
 Then delegate phase 1's lead (delegate_task, kind implement, phase 1), and each next phase once \
 the one before it has landed.";
+
+const PROPOSE_PLAN: &str = "Put your plan before the user, as a document on a card they read and \
+then accept (\"Yes, implement this plan\") or send back with the changes they want. Use it when \
+plan mode is on, or when the user asks for a plan. Look first (read the code yourself, or a scout \
+for more), so the plan names the real files and symbols; ask_user before it only what only the user \
+can decide. Call it once, then reply [quiet]: the card is your answer. A yes comes back as a \
+message: build it then. Changes come back too: propose the revised plan again.
+
+Write the body in markdown, in this shape:
+# A short title: what gets built, in a few words
+One sentence: what changes, in the user's terms.
+## Changes
+- One bullet per change: the file and symbol in `code` and exactly what it does there.
+## Checks
+- How each change is verified: the test added or run, the command, what to look at in the app.
+## Assumptions
+- Each choice you made that the user might make otherwise: defaults, edge cases, what is left out.
+
+Plain, specific words; no preamble, no restating the request, no filler (\"This plan will…\", \
+\"robust\", \"seamless\"). Most plans fit in 8 to 15 lines; bigger work may need more, but never pad.";
 
 const APPROVE_OUTLINE: &str = "Give a lead the go-ahead on its outline as soon as you have \
 judged it: don't wait for its plan review, which runs in the background and may arrive after the \
@@ -334,6 +354,7 @@ fn orchestrator_tools() -> Vec<Tool> {
             input_schema::<SearchTranscript>(),
         ),
         tool("plan_phases", PLAN_PHASES, input_schema::<PlanPhases>()),
+        tool("propose_plan", PROPOSE_PLAN, input_schema::<ProposePlan>()),
         tool(
             "approve_outline",
             APPROVE_OUTLINE,
@@ -483,6 +504,7 @@ pub fn parse_call(
                     OrchestratorCall::SearchTranscript(args::<SearchTranscript>(name, arguments)?)
                 }
                 "plan_phases" => OrchestratorCall::PlanPhases(args(name, arguments)?),
+                "propose_plan" => OrchestratorCall::ProposePlan(args(name, arguments)?),
                 "approve_outline" => OrchestratorCall::ApproveOutline(args(name, arguments)?),
                 "start_verifier" => OrchestratorCall::StartVerifier(args(name, arguments)?),
                 "request_approval" => OrchestratorCall::RequestApproval(args(name, arguments)?),

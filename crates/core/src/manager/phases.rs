@@ -11,6 +11,7 @@ use tokio::sync::oneshot;
 use super::SessionManager;
 use super::cards::CardAnswer;
 use super::conversation::Envelope;
+use super::prompts::QUIET;
 use super::workers::TaskExtra;
 use crate::model::{ConversationId, PermissionLevel};
 use crate::tools::{ApproveOutline, PlanPhases, TaskRef};
@@ -132,6 +133,7 @@ impl SessionManager {
             request_id,
             position: 0,
             title: title.trim().to_owned(),
+            body: None,
             steps,
             state: PlanState::Approved {
                 by: PlanApprover::Orchestrator,
@@ -141,6 +143,76 @@ impl SessionManager {
         };
         self.store_plan(&plan).await?;
         Ok(plan)
+    }
+
+    /// `propose_plan`: the thread's plan as a document, for the user to decide on its card
+    /// ("Implement this plan?"). It replaces the request's earlier proposal, one the user sent
+    /// back with changes included, and closes a proposal still open elsewhere in the session:
+    /// one plan waits for the user at a time. Its phases (one, named after it, when it lists
+    /// none) are what the work's progress follows once the user says yes.
+    pub(crate) async fn propose_plan(
+        &self,
+        id: &ConversationId,
+        args: crate::tools::ProposePlan,
+    ) -> Result<String> {
+        let title = args.title.trim().to_owned();
+        let body = args.body.trim().to_owned();
+        if title.is_empty() || body.is_empty() {
+            return Err(Error::Invalid(
+                "a plan needs its title and its body (the plan in markdown)".into(),
+            ));
+        }
+        if self.overnight.active.get(id).is_some() {
+            return Err(Error::Invalid(
+                "An overnight run has its plan already: work through it. propose_plan is for a session's own requests.".into(),
+            ));
+        }
+        let mut steps: Vec<PlanStep> = args
+            .phases
+            .unwrap_or_default()
+            .into_iter()
+            .map(|phase| PlanStep {
+                title: phase.title,
+                detail: phase.detail,
+                ..Default::default()
+            })
+            .collect();
+        if steps.is_empty() {
+            steps.push(PlanStep {
+                title: title.clone(),
+                ..Default::default()
+            });
+        }
+        let request_id = self.request_for(id, None).await;
+        let _held = self.plans.lock().await;
+        let board = self.core.board(id).await?;
+        for earlier in board.plans.values().filter(|plan| {
+            plan.state == PlanState::Proposed
+                || (plan.request_id == request_id
+                    && matches!(plan.state, PlanState::Rejected { .. }))
+        }) {
+            let mut replaced = earlier.clone();
+            replaced.state = PlanState::Superseded;
+            replaced.decided_at_ms = Some(now_ms());
+            self.store_plan(&replaced).await?;
+        }
+        let plan = Plan {
+            id: CardId::generate(),
+            conversation_id: id.clone(),
+            request_id,
+            position: 0,
+            title,
+            body: Some(body),
+            steps,
+            state: PlanState::Proposed,
+            created_at_ms: now_ms(),
+            decided_at_ms: None,
+        };
+        self.store_plan(&plan).await?;
+        Ok(format!(
+            "The plan \"{}\" is on its card in the thread, with \u{201c}Implement this plan?\u{201d} for the user. Reply with exactly {QUIET} now and do nothing more for it: build nothing until their answer arrives as a message (yes, or the changes they want).",
+            plan.title
+        ))
     }
 
     /// Changes a plan as it is stored now.
@@ -369,8 +441,14 @@ impl SessionManager {
             )));
         }
         let outline = self.redact_for(&live, &outline).await;
-        // A request of one phase gets its plan now: its outline, stage and pill live there.
-        let (plan, index) = match self.phase_of(&task).await {
+        // A request of one phase gets its plan now: its outline, stage and pill live there. A
+        // plan the user said yes to keeps the lead delegated without its phase number: the lead
+        // takes its first phase nobody has taken.
+        let adopted = match self.phase_of(&task).await {
+            Some(found) => Some(found),
+            None => self.adopt_user_plan(&task).await?,
+        };
+        let (plan, index) = match adopted {
             Some(found) => found,
             None => {
                 let step = PlanStep {
@@ -412,7 +490,7 @@ impl SessionManager {
         let task = self.task_by_id(conversation_id, task_id).await?;
         let next = if plan_mode {
             format!(
-                "Plan mode is on: show the user this outline in plain words and wait. Once they turn plan mode off or tell you to go, call approve_outline (task-{}) with any changes they asked for.",
+                "Plan mode is on: the user decides. Put this outline before them as your plan with propose_plan (in the plan's shape, its Changes from the outline), then reply [quiet]. Their yes gives task-{} its go-ahead; build nothing before it.",
                 task.number
             )
         } else {
@@ -436,6 +514,40 @@ impl SessionManager {
             self.spawn(async move { manager.review_plan(&task, &outline).await });
         }
         Ok("Outline received. End your turn now: the go-ahead, with any corrections, arrives as your next message. Build nothing before it.".into())
+    }
+
+    /// The first free phase of the user's plan for `task`'s request (one proposed with
+    /// `propose_plan` and approved), given to `task`.
+    async fn adopt_user_plan(&self, task: &Task) -> Result<Option<(Plan, usize)>> {
+        let board = self.core.board(&task.conversation_id).await?;
+        let Some(plan) = board
+            .plans
+            .values()
+            .filter(|plan| {
+                plan.request_id == task.request_id
+                    && plan.body.is_some()
+                    && matches!(plan.state, PlanState::Approved { .. })
+            })
+            .max_by_key(|plan| plan.created_at_ms)
+        else {
+            return Ok(None);
+        };
+        let Some(index) = plan.steps.iter().position(|step| step.task_id.is_none()) else {
+            return Ok(None);
+        };
+        let number = plan.steps[index].number_at(index);
+        self.update_task(&task.conversation_id, &task.id, |t| {
+            t.phase = Some(number);
+            t.role.get_or_insert(WorkerRole::Lead);
+        })
+        .await?;
+        let plan = self
+            .change_plan(&task.conversation_id, &plan.id, |plan| {
+                plan.steps[index].task_id = Some(task.id.clone());
+                Ok(())
+            })
+            .await?;
+        Ok(Some((plan, index)))
     }
 
     /// Whose work a review of `task` checks: the phase's lead (the vendor that wrote the
@@ -487,7 +599,7 @@ impl SessionManager {
         }
         if self.plan_mode(id) {
             return Err(Error::Invalid(
-                "Plan mode is on: the user decides. Show them the outline and wait; approve it once they turn plan mode off or tell you to go.".into(),
+                "Plan mode is on: the user decides. Put the outline before them with propose_plan; their yes gives its lead the go-ahead.".into(),
             ));
         }
         let corrections = args
@@ -512,7 +624,7 @@ impl SessionManager {
                 .await?;
             let manager = self.arc();
             self.spawn(async move { manager.outline_decided(lead, corrections, rx).await });
-            return Ok("The user decides on the outline now (\u{201c}Start this plan?\u{201d}). Their answer arrives as a message; carry on with anything else.".into());
+            return Ok("The user decides on the outline now, on its plan card (\u{201c}Implement this plan?\u{201d}). Their answer arrives as a message; carry on with anything else.".into());
         }
         self.go_ahead(&lead, corrections).await?;
         Ok(format!(
@@ -521,7 +633,7 @@ impl SessionManager {
         ))
     }
 
-    /// The user answered the "Start this plan?" card.
+    /// The user answered the outline's "Implement this plan?" card.
     async fn outline_decided(
         &self,
         lead: Task,
@@ -542,14 +654,32 @@ impl SessionManager {
                     ),
                 }
             }
-            Ok(CardAnswer::Decision(ApprovalDecision::Deny { message })) => format!(
-                "[decision] The user did not start task-{}'s outline{}. The lead still waits: send it the changes with approve_outline, or stop it.",
-                lead.number,
-                if message.trim().is_empty() {
-                    String::new()
-                } else {
-                    format!(": {message}")
+            // What the user typed instead of a yes goes to the lead as corrections, with the
+            // thread's: the same go-ahead, so one answer releases the lead and no second card
+            // opens.
+            Ok(CardAnswer::Decision(ApprovalDecision::Deny { message }))
+                if !message.trim().is_empty() =>
+            {
+                let theirs = format!("From the user: {}", message.trim());
+                let all = match &corrections {
+                    Some(ours) => format!("{theirs}\n{ours}"),
+                    None => theirs,
+                };
+                match self.go_ahead(&lead, Some(all)).await {
+                    Ok(()) => format!(
+                        "[decision] The user started task-{}'s outline with these changes: \u{201c}{}\u{201d}. The lead has them and builds now.",
+                        lead.number,
+                        message.trim()
+                    ),
+                    Err(err) => format!(
+                        "[decision] The user started task-{}'s outline with changes, but the go-ahead could not reach it: {err}",
+                        lead.number
+                    ),
                 }
+            }
+            Ok(CardAnswer::Decision(ApprovalDecision::Deny { .. })) => format!(
+                "[decision] The user did not start task-{}'s outline. The lead still waits: send it the changes with approve_outline, or stop it.",
+                lead.number
             ),
             // Withdrawn (the lead ended) or expired: nothing to say.
             _ => return,

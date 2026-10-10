@@ -578,19 +578,57 @@ impl SessionManager {
                 steps.join("\n")
             ),
         );
+        // A lead that outlined in plan mode has its go-ahead in the user's yes: one answer.
+        let mut started = Vec::new();
+        if approve {
+            let board = self.core.board(&conversation_id).await?;
+            let mut waiting: Vec<_> = board
+                .tasks
+                .values()
+                .filter(|task| {
+                    task.request_id == plan.request_id
+                        && task.state == crate::work::TaskState::Blocked
+                        && task.blocked_reason.as_deref()
+                            == Some(super::phases::WAITING_FOR_GO_AHEAD)
+                })
+                .cloned()
+                .collect();
+            waiting.sort_by_key(|task| task.number);
+            for lead in waiting {
+                match self.go_ahead(&lead, None).await {
+                    Ok(()) => started.push(format!("task-{}", lead.number)),
+                    Err(err) => {
+                        tracing::warn!(task = %lead.id, error = %err, "could not start an outline");
+                    }
+                }
+            }
+        }
         let text = if approve {
+            let how = if !started.is_empty() {
+                format!(
+                    "Brigadier gave {} the go-ahead on its outline: it builds now.",
+                    started.join(" and ")
+                )
+            } else if plan.steps.len() > 1 {
+                "Delegate each phase's lead in order (delegate_task, kind implement, `phase` its number), each once the one before it has landed.".to_owned()
+            } else {
+                "Delegate its lead with `phase: 1` (delegate_task, kind implement), or make a tiny change yourself.".to_owned()
+            };
             format!(
-                "[decision] The user approved the plan \"{}\". Go ahead, and pass each phase's number as `phase` when you delegate its lead.",
+                "[decision] The user chose \u{201c}Yes, implement this plan\u{201d} for \u{201c}{}\u{201d}, and plan mode is off. Build it now, as the plan says. {how}",
                 plan.title
             )
         } else {
-            format!(
-                "[decision] The user rejected the plan \"{}\"{}",
-                plan.title,
-                message
-                    .map(|m| format!(": {m}"))
-                    .unwrap_or_else(|| ".".into())
-            )
+            match message.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+                Some(changes) => format!(
+                    "[decision] The user did not take the plan \u{201c}{}\u{201d} as it is. What they want changed: \u{201c}{changes}\u{201d}. Revise the plan to match and propose it again with propose_plan; build nothing yet.",
+                    plan.title
+                ),
+                None => format!(
+                    "[decision] The user did not take the plan \u{201c}{}\u{201d}. Build nothing; wait for what they say next.",
+                    plan.title
+                ),
+            }
         };
         self.deliver_for(
             &conversation_id,

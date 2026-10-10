@@ -85,7 +85,7 @@ const PASTE_HEAD_BYTES: usize = 150_000;
 const PASTE_TAIL_BYTES: usize = 50_000;
 const ENDED_UNEXPECTEDLY: &str = "The CLI session ended unexpectedly.";
 /// Sent with every turn while the session is in plan mode.
-const PLAN_MODE_NOTE: &str = "[plan mode] The user turned plan mode on: change nothing. Scouts and research may look around; for work to do, delegate its lead, which writes an outline and stops. Show the user the outline in plain words and wait: once they turn plan mode off or tell you to go, call approve_outline. Merging, landing and finish_session are refused until then.";
+const PLAN_MODE_NOTE: &str = "[plan mode] The user turned plan mode on: they want a plan to decide on before anything changes. Change nothing. Look around yourself (read, search, project_map) or with scouts, ask_user only what only they can decide, then write the plan and propose it with propose_plan, in its shape: a short title, one summary sentence, then Changes, Checks and Assumptions. Reply [quiet] after it: the plan card is your answer. Their yes turns plan mode off and comes back as a message; build only then. Merging, landing and finish_session are refused until then.";
 
 /// Where a sent message went.
 #[derive(Debug, Clone)]

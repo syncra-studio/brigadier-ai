@@ -393,6 +393,7 @@ impl SessionManager {
             OrchestratorCall::Remember(args) => self.remember_tool(id, args).await,
             OrchestratorCall::SearchTranscript(args) => self.search_transcript_tool(id, args).await,
             OrchestratorCall::PlanPhases(args) => self.plan_phases(id, args).await,
+            OrchestratorCall::ProposePlan(args) => self.propose_plan(id, args).await,
             OrchestratorCall::ApproveOutline(args) => self.approve_outline(id, args).await,
             OrchestratorCall::StartVerifier(args) => {
                 // A verifier changes code: in plan mode nothing does.

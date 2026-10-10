@@ -13,7 +13,7 @@ test("the plan section shows its phases and state, without approval or review wo
     const { PlanSection } = await server.ssrLoadModule("/src/app/conversation/cards/PlanSection.tsx");
     const { emptyBoard, BoardStoreContext } = await server.ssrLoadModule("/src/state/board.ts");
     const plan: Plan = {
-      id: "p", conversationId: "c", requestId: "r", position: 0, title: "Small plan",
+      id: "p", conversationId: "c", requestId: "r", position: 0, title: "Small plan", body: null,
       steps: [{ title: "Do it", detail: null, taskId: null, stage: "pending", startedAtMs: null, endedAtMs: null, outline: null }],
       state: { type: "approved", by: "orchestrator" },
       createdAtMs: 0, decidedAtMs: 1,

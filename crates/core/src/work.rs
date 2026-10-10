@@ -893,7 +893,7 @@ pub enum ApprovalSubject {
         #[ts(skip)]
         live: bool,
     },
-    /// Ask for approval: start a phase from its lead's outline ("Start this plan?").
+    /// Ask for approval: start a phase from its lead's outline ("Implement this plan?").
     Outline {
         task_id: TaskId,
         title: String,
@@ -1179,6 +1179,10 @@ pub struct Plan {
     pub request_id: Option<String>,
     pub position: i64,
     pub title: String,
+    /// The plan as the user reads it, in markdown: a title, a one-line summary, then its
+    /// sections (`propose_plan`). Absent for a plan of phases alone (`plan_phases`).
+    #[serde(default)]
+    pub body: Option<String>,
     /// Its phases, in order.
     pub steps: Vec<PlanStep>,
     pub state: PlanState,
