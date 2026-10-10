@@ -328,8 +328,13 @@ impl SessionManager {
                     prompts::QUIET
                 ))
             }
-            OrchestratorCall::MessageWorker(args) => {
+            OrchestratorCall::MessageWorker(mut args) => {
                 let mut task = crate::heap(|| self.find_task(id, &args.task)).await?;
+                if !args.attachments.is_empty() {
+                    let given =
+                        crate::heap(|| self.find_attachments(id, &args.attachments)).await?;
+                    args.text = self.with_files(&task, given, args.text).await?;
+                }
                 // A later request's turn hands the worker its question: the report that
                 // answers it, and the reply after it, belong to the request that asked.
                 if !task.state.is_final()
@@ -951,6 +956,47 @@ impl SessionManager {
     }
 
     /// The user's attachments in this conversation, by id.
+    /// A message to a worker with the user's attachments written into its scratch folder, like
+    /// a new task's, and their paths named after the text: it reads them there.
+    async fn with_files(
+        &self,
+        task: &Task,
+        attachments: Vec<AttachmentRef>,
+        text: String,
+    ) -> Result<String> {
+        let scratch = task
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.scratch.clone())
+            .filter(|scratch| !scratch.is_empty())
+            .ok_or_else(|| {
+                Error::Invalid(format!(
+                    "task-{} has no folder to put files in yet; send them once it has started",
+                    task.number
+                ))
+            })?;
+        let carrier = Task {
+            attachments,
+            ..task.clone()
+        };
+        let files = self
+            .worker_files(&carrier, std::path::Path::new(&scratch))
+            .await;
+        if files.len() < carrier.attachments.len() {
+            return Err(Error::Invalid(
+                "an attachment couldn't be given to the worker; check its id".into(),
+            ));
+        }
+        let paths: Vec<String> = files
+            .iter()
+            .map(|file| file.path.display().to_string())
+            .collect();
+        Ok(format!(
+            "{text}\n\nFiles with this message (open each one): {}",
+            paths.join(", ")
+        ))
+    }
+
     async fn find_attachments(
         &self,
         id: &ConversationId,

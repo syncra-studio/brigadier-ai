@@ -203,6 +203,10 @@ pub struct MessageWorker {
     pub task: String,
     /// The answer or instruction.
     pub text: String,
+    /// Ids of the user's attachments the worker should get as files with it (marked
+    /// screenshots of a mockup, say).
+    #[serde(default)]
+    pub attachments: Vec<String>,
 }
 
 /// `answer_worker`: answer the question a worker waits on (`ask_orchestrator`).

@@ -93,6 +93,7 @@ How to work:
 - Split independent parts into workers that run at once (separate questions, writers on separate files, a check needing no other part's result), started in one batch: several delegate_task calls in one message, each one job with its own "done when". Dependent parts run one after another (plan_phases). Meanwhile do your own small work: reads, searches, checks, tiny edits.
 - Each delegate_task names its effort: "medium" for small, bounded work (a file or two, a UI tweak or small feature, copy, a bug in a known place); "low" for a mechanical edit; "high" only for cross-area, risky or unclear work.
 - A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part (screenshots in the chat only if the user asked; a worker's live check is evidence in its report), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository, research tasks check current docs and operate tasks use apps on screen (over about five GUI steps, or exploring an app), when that is more than a quick look by you or the worker on the task.{computer}
+{MOCKUPS}
 - Answer a worker's question ([question from task-N]) at once with answer_worker. message_worker steers a running worker, or sends a reported one back with the exact gaps.
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
 - Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect. {CHECK_PREFIXES}
@@ -174,6 +175,9 @@ pub(crate) const LATE_EVENT: &str = "A late event after your answer (a review, a
 /// Where the thread sends a live look at an app (SESSION-FIXES-PLAN.md "Computer use"): to the
 /// workers, which have the computer tools, so screenshots stay out of its own context.
 const COMPUTER_ROUTING: &str = "\n- On this Mac every worker can open an app, look at it and use it with the computer tools; you can't. So a visible UI change, however small, goes to a worker whose \"done when\" includes \"check it in the running dev build with the computer tools\"; a GUI job over about five steps is an operate task. Before you say a preview or dev app runs, check its process or have a worker look. A mockup's final comparison is a live capture.";
+/// When the thread offers a mockup before a visible UI change, and how the mockup goes from
+/// the user's yes to the side-by-side (SESSION-FIXES-PLAN.md Q10).
+const MOCKUPS: &str = "- A visible UI change that isn't a small fix (a new control, panel, screen or layout): first ask_user \"Want a mockup first?\" (Yes / Skip; say if part of it can't be faked). Yes: delegate_task with mockup: true, then ask only what its screenshots can't show; the user's marked notes go to that worker (message_worker with their attachments). On their yes to the work, land the mockup, then delegate with matches_mockup; if they drop it, stop the mockup.";
 
 /// How the thread interviews the user: rounds of question cards over a tree of decisions.
 const GRILLING: &str = "
@@ -397,6 +401,9 @@ pub(crate) struct Revision {
     pub worker: &'static str,
 }
 
+/// The mockup offer's revision (Q10); its note and tests follow this number.
+pub(crate) const MOCKUP_REVISION: u32 = 16;
+
 /// Every revision since notes carried them, oldest first. Add one entry per instruction
 /// change, in the commit that changes the instructions; never renumber.
 pub(crate) const REVISIONS: &[Revision] = &[
@@ -482,6 +489,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         } else {
             ""
         },
+    },
+    Revision {
+        number: MOCKUP_REVISION,
+        thread: "From now on, offer a mockup before a visible UI change that isn't a small fix (a new control, panel, screen or layout): one ask_user question, \"Want a mockup first?\", options Yes and Skip, recommending Yes when the look is still open and Skip when the request pins it down; say so if part of the screen can't be faked. Skip: work as usual. Yes: delegate_task with mockup: true; the user sees its screenshots in the Mockup tab, and you ask only what the picture can't show. Their notes come as one message with marked screenshots: send them to the same mockup worker with message_worker, which now takes attachments. On the user's yes to the real work, land the mockup and delegate the work with matches_mockup naming the mockup's task; it reports the live app beside the mockup. If they drop the idea, stop the mockup's worker.",
+        worker: "From now on, observe takes save_as, a file name: it keeps that screenshot in your outputs folder for your report. A task that builds a mockup says so in its brief, and so does one that must match a mockup.",
     },
 ];
 
@@ -888,7 +900,8 @@ const WORKER_MOCKUP_MATCH: &str = "
 
 The user approved a mockup of this change: its screenshots are among your attachments (mockup-1.png, …), and its preview page may be in this worktree. Build the real change to look like them; where the task and the mockup differ, the task wins.
 - Once it's built, check it live: start the build this task made the way the project starts it (with a scratch data folder when the app has one, never the user's installed copy of the app or its data), open each screen a mockup shows at the same window size, and capture it with the computer tools: observe with save_as \"live-1.png\", \"live-2.png\", …, numbered as the mockup screenshots they match. Without the computer tools, take them with the project's screenshot scripts under the same names.
-- Under verification, compare each pair: what matches, and each difference with whether you fixed it or why it stays.";
+- Then save each pair side by side as compare-1.png, compare-2.png, … in your outputs folder: the mockup on the left, the live capture on the right, each labelled (for example a small HTML page showing both, screenshotted with a headless browser). Open each one and check both halves show.
+- Under verification, for each pair: the screen's name, the three files, what matches, and each difference with whether you fixed it or why it stays.";
 
 /// A worker's pointer to the code index tools (PLAN.md §7).
 const WORKER_CODE_TOOLS: &str = "
@@ -1696,7 +1709,8 @@ mod tests {
         assert!(brief.contains("The user approved a mockup of this change"));
         assert!(brief.contains("observe with save_as \"live-1.png\""));
         assert!(brief.contains("never the user's installed copy of the app or its data"));
-        assert!(brief.contains("compare each pair"));
+        assert!(brief.contains("save each pair side by side as compare-1.png"));
+        assert!(brief.contains("for each pair: the screen's name, the three files"));
         // It is still the work's lead: outline when big, one review.
         assert!(brief.contains("call review_code once"));
         assert!(!brief.contains("This task builds a mockup"));
@@ -1882,6 +1896,7 @@ mod environment_tests {
                     );
                     assert!(prompt.starts_with(THREAD_OPENING));
                     assert!(prompt.contains("Delegate by default"));
+                    assert!(prompt.contains(&callable(MOCKUPS, provider)));
                     assert!(prompt.contains("Never answer \"I can't\""));
                     assert!(prompt.contains("only in files you have already read"));
                     assert!(prompt.contains(&format!("--trailer \"{THREAD_TRAILER}\"")));
@@ -2005,13 +2020,13 @@ mod environment_tests {
         assert!(worktree.contains("call finish_session without user_words"));
         assert!(worktree.contains("that is their consent too"));
         assert!(!worktree.contains("there is no card"));
-        // Every byte is paid for on every call: it stays near 14 KB, code rules included
+        // Every byte is paid for on every call: it stays near 15 KB, code rules included
         // (the old orchestrator's 11,371 bytes, the interview the user wanted built in, and
         // the suggest_full_access hint of the sandboxed levels, bug 8's check prefixes, and
         // the review findings the thread records and sends back to their worker, Q7 and Q6.1,
         // and bug 4's late-event rule, Q3's held merge, Q1's CI watch, Q9's lines
-        // while work runs, bug 6's clean_up and computer use's routing).
-        assert!(codex.len() < 14_600, "{}", codex.len());
+        // while work runs, bug 6's clean_up and computer use's routing, and Q10's mockup offer).
+        assert!(codex.len() < 15_100, "{}", codex.len());
     }
 
     #[test]
@@ -2354,6 +2369,54 @@ mod environment_tests {
         assert!(prompt.contains("its landing gets only a re-check of the high ones"));
         assert!(prompt.contains("goes to the user as a list"));
         assert!(LEAD_STEPS.contains("may come back to you in this same session"));
+    }
+
+    /// Q10's revision: a thread told the one before hears exactly the mockup offer, once, and
+    /// a resumed worker its own line; one told it hears nothing. Relative to
+    /// `MOCKUP_REVISION`, so a renumbering at merge changes only that const.
+    #[test]
+    fn a_thread_told_the_revision_before_hears_the_mockup_offer_once() {
+        let mockup = REVISIONS
+            .iter()
+            .find(|revision| revision.number == MOCKUP_REVISION)
+            .expect("the mockup revision is listed");
+        assert_eq!(
+            REVISIONS.last().map(|revision| revision.number),
+            Some(MOCKUP_REVISION),
+            "the newest revision"
+        );
+        let now = current("approveForMe", None, &[]);
+        let mut older = now.told();
+        older.revision = Some(MOCKUP_REVISION - 1);
+        let sent = notes(&older, &now);
+        assert_eq!(labels(&sent), vec![REVISION_LABEL]);
+        assert_eq!(sent[0].text, format!("[instructions] {}", mockup.thread));
+        assert!(sent[0].text.contains("\"Want a mockup first?\""));
+        assert!(sent[0].text.contains("delegate_task with mockup: true"));
+        assert!(sent[0].text.contains("matches_mockup"));
+        assert_eq!(sent[0].told.revision, Some(MOCKUP_REVISION));
+        let mut heard = sent[0].told.clone();
+        fill_told(&mut heard, &older);
+        assert!(notes(&heard, &now).is_empty());
+        older.revision = Some(MOCKUP_REVISION);
+        assert!(notes(&older, &now).is_empty());
+
+        assert_eq!(
+            revision_note(MOCKUP_REVISION - 1, true),
+            Some(format!("[instructions] {}", mockup.worker))
+        );
+        assert!(mockup.worker.contains("observe takes save_as"));
+        assert_eq!(revision_note(MOCKUP_REVISION, true), None);
+    }
+
+    /// The thread's own instructions carry the offer that the note tells open threads.
+    #[test]
+    fn the_threads_instructions_offer_a_mockup_before_a_visible_ui_change() {
+        assert!(MOCKUPS.contains("A visible UI change that isn't a small fix"));
+        assert!(MOCKUPS.contains("ask_user \"Want a mockup first?\" (Yes / Skip"));
+        assert!(MOCKUPS.contains("delegate_task with mockup: true"));
+        assert!(MOCKUPS.contains("message_worker with their attachments"));
+        assert!(MOCKUPS.contains("land the mockup, then delegate with matches_mockup"));
     }
 
     #[test]
