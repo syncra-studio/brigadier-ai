@@ -442,6 +442,7 @@ export async function send(
           conversationId,
           text: outgoing.text,
           attachments: outgoing.attachments,
+          mentions: outgoing.mentions,
           createdAtMs: Date.now(),
           queuedIds: queue?.items.map((item) => item.id) ?? [],
         },

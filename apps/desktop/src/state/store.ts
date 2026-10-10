@@ -11,6 +11,7 @@ import type {
   EnvironmentKind,
   EventEnvelope,
   Message,
+  Mention,
   ModelChoice,
   PermissionLevel,
   Project,
@@ -97,6 +98,7 @@ export type PendingMessage = {
   conversationId: string;
   text: string;
   attachments: AttachmentRef[];
+  mentions?: readonly Mention[];
   createdAtMs: number;
   /** Queue items already seen before this send could be admitted. */
   queuedIds?: readonly string[];
@@ -489,6 +491,13 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
             entry.conversationId === event.conversationId &&
             !entry.queuedIds?.includes(item.id) &&
             entry.text === item.text &&
+            (entry.mentions?.length ?? 0) === item.mentions.length &&
+            (entry.mentions ?? []).every((mention, index) => {
+              const queued = item.mentions[index];
+              if (mention.type === "file") return queued?.type === "file" && mention.path === queued.path;
+              if (mention.type === "task") return queued?.type === "task" && mention.id === queued.id;
+              return queued?.type === "chat" && mention.id === queued.id && mention.title === queued.title;
+            }) &&
             entry.attachments.length === item.attachments.length &&
             entry.attachments.every((attachment, index) => {
               const queued = item.attachments[index];

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
-import type { EventEnvelope, Message, QueuedMessage, SendOutcome } from "@/ipc/generated";
+import type { EventEnvelope, Message, Mention, QueuedMessage, SendOutcome } from "@/ipc/generated";
 import { send } from "@/state/actions";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
 import { applyEvents, emptyThread, useApp } from "@/state/store";
@@ -129,4 +129,36 @@ test("a queued response identifies its item before its event can consume another
   await sent;
   queue([item]);
   assert.deepEqual(useApp.getState().pending.map((entry) => entry.localId), ["second"]);
+});
+
+
+test("a queued item matches the send's mentions as well as its visible text", async () => {
+  const mentions: [Mention, Mention, Mention] = [{ type: "file", path: "first.ts" }, { type: "task", id: "one" }, { type: "chat", id: "chat-one", title: "Same title" }];
+  const sent = send({ text: item.text, attachments: [], mentions });
+  assert.deepEqual(useApp.getState().pending[0]?.mentions, mentions);
+  queue([{ ...item, mentions: [{ type: "file", path: "second.ts" }, mentions[1], mentions[2]] }]);
+  assert.equal(useApp.getState().pending.length, 1);
+  queue([{ ...item, id: "task-mention", mentions: [mentions[0], { type: "task", id: "two" }, mentions[2]] }], 2);
+  assert.equal(useApp.getState().pending.length, 1);
+  queue([{ ...item, id: "chat-mention", mentions: [mentions[0], mentions[1], { type: "chat", id: "chat-two", title: "Same title" }] }], 3);
+  assert.equal(useApp.getState().pending.length, 1);
+  const matching = { ...item, id: "matching-mentions", mentions };
+  queue([matching], 4);
+  assert.equal(useApp.getState().pending.length, 0);
+  reply({ type: "queued", item: matching });
+  await sent;
+});
+
+test("an idle admission preceding an identical follow-up stays in chat while that follow-up queues", async () => {
+  const sent = start();
+  useApp.setState((state) => ({ pending: [...state.pending, { localId: "second", conversationId: id, text: item.text, attachments: [], createdAtMs: 10 }] }));
+  // The daemon records the first admission before that request can cause the next send to queue.
+  receive({ type: "messageAppended", message }, 1);
+  queue([item], 2);
+  assert.equal(useApp.getState().threads[id]?.items.length, 1);
+  assert.equal(useApp.getState().pending.length, 0);
+  assert.equal(useBoard.getState().board?.queue.items.length, 1);
+  reply({ type: "sent", message });
+  await sent;
+  assert.equal(chatCount(), 1);
 });
