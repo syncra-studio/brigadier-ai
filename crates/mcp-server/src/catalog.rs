@@ -641,7 +641,12 @@ mod tests {
             .find(|tool| tool.name == "propose_plan")
             .unwrap();
         let shape = propose.description.as_deref().unwrap();
-        for part in ["## Changes", "## Checks", "## Assumptions", "one short line"] {
+        for part in [
+            "## Changes",
+            "## Checks",
+            "## Assumptions",
+            "one short line",
+        ] {
             assert!(shape.contains(part), "{part}");
         }
         let approve = tools
