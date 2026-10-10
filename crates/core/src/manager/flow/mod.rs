@@ -1543,6 +1543,8 @@ mod held_merge_tests;
 #[cfg(test)]
 mod litter_tests;
 #[cfg(test)]
+mod mockup_tests;
+#[cfg(test)]
 mod overnight_tests;
 #[cfg(test)]
 mod plan_tests;

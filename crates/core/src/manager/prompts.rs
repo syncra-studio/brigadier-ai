@@ -6,7 +6,8 @@ use brigadier_providers::ProviderKind;
 use crate::model::{Conversation, Environment, PermissionLevel, Project, Setup};
 use crate::tools::THREAD_TOOLS;
 use crate::work::{
-    ArtifactRef, ContextInjection, InjectionKind, Report, Task, TaskKind, Told, WorkerRole,
+    ArtifactRef, ContextInjection, InjectionKind, MockupPart, Report, Task, TaskKind, Told,
+    WorkerRole,
 };
 
 /// Logged on `orch:<id>` when a conversation's CLI files were removed: the next CLI session
@@ -869,6 +870,26 @@ const WORKER_VOICE: &str = "
 /// What a lead does besides building: its outline when the work is big, and its own review.
 const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. As soon as your work is committed, call review_code once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks, and its findings arrive as a message. Fix each finding you agree with and say why for those you don't. Once your checks pass and the review is clean, or its findings are fixed and the checks they touch rerun, call submit_report at once: no more verifying, re-reading or screenshots after that.\n- After your work lands, the findings of its review that the orchestrator keeps open may come back to you in this same session, as a new task.";
 
+/// What a worker that builds a mockup does instead of the change (SESSION-FIXES-PLAN.md Q10):
+/// a static preview from the real components with fake data, shown as screenshots.
+const WORKER_MOCKUP: &str = "
+
+This task builds a mockup the user asked to see before the change is made, not the change itself:
+- Build a static preview of the screen as it will look: the project's real components and styles with fake data, on a preview page of its own (in the project's fixture or story gallery when it has one, next to the pages already there). Never a drawing, and never copies of the components. Change nothing in the product's code or behaviour: only the preview page and its fake data.
+- Show the change in its real place on the screen at the app's usual window size, and each state the user should see (empty, many items, a narrow window) in a screenshot of its own.
+- Take the screenshots with a headless browser (the project's own screenshot or fixture scripts when it has them, else Playwright with an installed Chromium) and save them in your outputs folder as mockup-1.png, mockup-2.png, …, in the order to look at them. Open each one and check it shows what you meant.
+- A part you can't fake (it needs live state no preview can have): say so in the report and show the rest.
+- Don't send an outline and don't call review_code: a mockup is a quick look, reviewed only if it lands. Report what each screenshot shows, the preview page's path and the command that serves it.
+- Notes on the mockup may come back: change the preview to match them, take the screenshots again under the same names and report again.";
+
+/// What the real work after a mockup does besides building (Q10): match the mockup, then
+/// capture the live app with the computer tools for the side-by-side.
+const WORKER_MOCKUP_MATCH: &str = "
+
+The user approved a mockup of this change: its screenshots are among your attachments (mockup-1.png, …), and its preview page may be in this worktree. Build the real change to look like them; where the task and the mockup differ, the task wins.
+- Once it's built, check it live: start the build this task made the way the project starts it (with a scratch data folder when the app has one, never the user's installed copy of the app or its data), open each screen a mockup shows at the same window size, and capture it with the computer tools: observe with save_as \"live-1.png\", \"live-2.png\", …, numbered as the mockup screenshots they match. Without the computer tools, take them with the project's screenshot scripts under the same names.
+- Under verification, compare each pair: what matches, and each difference with whether you fixed it or why it stays.";
+
 /// A worker's pointer to the code index tools (PLAN.md §7).
 const WORKER_CODE_TOOLS: &str = "
 - Your first message may start with what the Brain knows about your task: start from it. Before you read code, ask the Brain: query_brain (what earlier work found: modules, decisions, conventions). Then find the code with code_search (definitions and files by name), code_refs (where a symbol is defined and used) or project_map (the repository at a glance), never by shell listings and greps first. Then read only the lines you need (a line range, not the whole file): your context is precious.";
@@ -987,6 +1008,8 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String 
         format!(
             "\n- Work only inside this worktree, on its branch.{commits} Don't switch branches or touch other checkouts, and never delete a branch, worktree or temp folder: Brigadier cleans up after you, and \"Operation not permitted\" on one is Brigadier protecting it. {leftovers}{listed}\n- Put scratch notes, logs and throwaway scripts in your scratch folder, never in the repository.\n- Don't write new tests unless the task asks for them. If a change breaks an existing test, fix the code; change a test only for an intended behaviour change.\n- Before you report, check your own work: format, lint, build, and the full test suite, once.{reading}{role}",
             role = match task.role {
+                // A mockup is a quick look: no outline, no review until it lands.
+                _ if task.mockup == Some(MockupPart::Builds) => "",
                 Some(WorkerRole::Lead) | None if task.kind == TaskKind::Implement => LEAD_STEPS,
                 _ => "",
             }
@@ -1002,9 +1025,15 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String 
     } else {
         "You report to the orchestrator, who speaks for the user: treat its answers as the user's. Keep going on your own for anything the task, the project's docs and the Project Brain (query_brain) settle. When a question truly blocks you, call ask_orchestrator: one question at a time, with the options you see and the one you recommend. It waits for the answer."
     };
-    let code_rules = match task.kind {
-        TaskKind::Implement | TaskKind::Merge => WORKER_CODE_RULES.to_owned(),
-        TaskKind::Operate => operate_rules(task),
+    let code_rules = match (task.kind, &task.mockup) {
+        (TaskKind::Implement, Some(MockupPart::Builds)) => {
+            format!("{WORKER_CODE_RULES}{WORKER_MOCKUP}")
+        }
+        (TaskKind::Implement, Some(MockupPart::Matches { .. })) => {
+            format!("{WORKER_CODE_RULES}{WORKER_MOCKUP_MATCH}")
+        }
+        (TaskKind::Implement | TaskKind::Merge, _) => WORKER_CODE_RULES.to_owned(),
+        (TaskKind::Operate, _) => operate_rules(task),
         _ => String::new(),
     };
     // An overnight run's Waiting on you holds only what its done-when needs (PLAN.md §10.11).
@@ -1640,6 +1669,40 @@ mod tests {
         // Other kinds hear none of it.
         let lead = worker_brief(&task("claude", Some("lead")), "", "");
         assert!(!lead.contains("How to operate"));
+    }
+
+    /// Q10: a mockup's worker builds a preview, not the change, and skips the lead's outline
+    /// and review; the real work matches the mockup and captures the live app to compare; a
+    /// plain task hears neither.
+    #[test]
+    fn a_mockup_brief_builds_a_preview_and_the_real_work_captures_the_live_app() {
+        let mut mockup = task("claude", Some("lead"));
+        mockup.mockup = Some(MockupPart::Builds);
+        let brief = worker_brief(&mockup, "", "");
+        assert!(brief.contains("This task builds a mockup the user asked to see"));
+        assert!(brief.contains("the project's real components and styles with fake data"));
+        assert!(brief.contains("save them in your outputs folder as mockup-1.png"));
+        assert!(brief.contains("Change nothing in the product's code or behaviour"));
+        assert!(brief.contains("How to write code"));
+        assert!(!brief.contains("call review_code once"));
+        assert!(!brief.contains("send your outline with submit_outline"));
+        assert!(!brief.contains("save_as"));
+
+        let mut real = task("claude", Some("lead"));
+        real.mockup = Some(MockupPart::Matches {
+            task: crate::work::TaskId("t2".into()),
+        });
+        let brief = worker_brief(&real, "", "");
+        assert!(brief.contains("The user approved a mockup of this change"));
+        assert!(brief.contains("observe with save_as \"live-1.png\""));
+        assert!(brief.contains("never the user's installed copy of the app or its data"));
+        assert!(brief.contains("compare each pair"));
+        // It is still the work's lead: outline when big, one review.
+        assert!(brief.contains("call review_code once"));
+        assert!(!brief.contains("This task builds a mockup"));
+
+        let plain = worker_brief(&task("claude", Some("lead")), "", "");
+        assert!(!plain.contains("mockup"));
     }
 }
 
