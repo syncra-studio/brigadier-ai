@@ -1093,6 +1093,9 @@ impl SessionManager {
             messages: Vec::new(),
             rework_rounds: 0,
             native_session: None,
+            told_revision: None,
+            deaths: Vec::new(),
+            resuming: false,
             takeover: None,
             trial_slot: waits && trial_slot,
             created_at_ms: now,
@@ -1410,13 +1413,23 @@ impl SessionManager {
         }
         let prompt = prompts::worker_system(&native);
         // A new CLI session hears its task first; a resumed or forked one has it already.
-        if let (Origin::New, Some(first)) = (&origin, first) {
-            first.parts.insert(
+        match (&origin, first) {
+            (Origin::New, Some(first)) => first.parts.insert(
                 0,
                 brigadier_providers::InputPart::Text(prompts::worker_brief(
                     task, &repo_note, &extra,
                 )),
-            );
+            ),
+            // A resumed or forked session keeps the instructions it started with: it hears
+            // what changed since, once (SESSION-FIXES-PLAN.md §6).
+            (_, Some(first)) => {
+                if let Some(note) = prompts::revision_note(task.told_revision.unwrap_or(0), true) {
+                    first
+                        .parts
+                        .insert(0, brigadier_providers::InputPart::Text(note));
+                }
+            }
+            (_, None) => {}
         }
 
         let worker_grant = self.grants.issue(
@@ -1678,7 +1691,16 @@ impl SessionManager {
         cli.session
             .send(first)
             .await
-            .map_err(|err| Error::Provider(err.to_string()))
+            .map_err(|err| Error::Provider(err.to_string()))?;
+        // It started on the current instructions, or heard what changed in `first`.
+        if task.told_revision != Some(prompts::revision()) {
+            let _ = self
+                .update_task(&conversation_id, &task.id, |t| {
+                    t.told_revision = Some(prompts::revision());
+                })
+                .await;
+        }
+        Ok(())
     }
 
     /// Why a worker can't be resumed; a run lists it under What got in the way.
@@ -1702,6 +1724,16 @@ impl SessionManager {
     /// Starts a worker whose CLI session stopped (the conversation hibernated) again,
     /// resuming its CLI session.
     async fn revive_worker(&self, live: &Arc<TaskLive>, task: &Task, text: String) -> Result<()> {
+        // One start at a time: a worker resumed meanwhile, after its CLI ended, takes the
+        // message in the turn it runs.
+        let _handing = live.reroute.lock().await;
+        if let Some(cli) = live.cli().await {
+            return cli
+                .session
+                .steer(TurnInput::text(text))
+                .await
+                .map_err(|err| Error::Provider(err.to_string()));
+        }
         let Some(native_id) = self.last_worker_native_id(task).await else {
             return Err(self.cannot_resume(task).await);
         };
@@ -1715,11 +1747,13 @@ impl SessionManager {
                 if t.report.is_some() {
                     t.rework_rounds += 1;
                 }
+                // Sent work after it stopped for dying twice: it gets its chances again.
+                t.deaths.clear();
             })
             .await?;
         let from = live.generation().await;
         if self.worker_over_handoff(live, &task.id).await {
-            self.hand_over_worker(live, &task, from, None, Some(text), Handover::Size)
+            self.hand_over(live, &task, from, None, Some(text), Handover::Size)
                 .await?;
         } else {
             self.launch_worker(
@@ -2356,6 +2390,8 @@ impl SessionManager {
     ) {
         let mut deltas: Vec<ProviderEvent> = Vec::new();
         let mut deadline: Option<tokio::time::Instant> = None;
+        // How its CLI ended, once it did.
+        let mut exit: Option<String> = None;
         loop {
             let flush_at = async {
                 match deadline {
@@ -2383,7 +2419,19 @@ impl SessionManager {
                         self.record_worker_events(&live.id, std::mem::take(&mut deltas)).await;
                         let mut exited = false;
                         for event in self.session_events(EventSource::Task(&live.id), &cli, event) {
-                            exited |= matches!(event, ProviderEvent::Exited { .. });
+                            if let ProviderEvent::Exited {
+                                code,
+                                signal,
+                                stderr_tail,
+                            } = &event
+                            {
+                                exited = true;
+                                exit = Some(super::worker_resume::exit_words(
+                                    *code,
+                                    *signal,
+                                    stderr_tail.as_deref(),
+                                ));
+                            }
                             self.on_worker_event(&live, &cli, event).await;
                         }
                         if exited {
@@ -2419,14 +2467,17 @@ impl SessionManager {
             && !task.state.is_final()
             && task.report.is_none()
         {
-            // Another model takes over (up to a few times for errors, then the task fails).
-            let end = live.take_cutoff().await.unwrap_or(AttemptEnd::Error {
-                kind: brigadier_providers::ErrorKind::Process,
-                message: "The worker's CLI exited before it reported.".into(),
-            });
             let manager = self.arc();
             let live = live.clone();
-            self.spawn(async move { manager.hand_off(&live, end, from).await });
+            match live.take_cutoff().await {
+                // Its model was cut off (a limit, a logout, an outage): another takes over.
+                Some(end) => self.spawn(async move { manager.hand_off(&live, end, from).await }),
+                // It crashed or was killed: the same session resumes (SESSION-FIXES-PLAN.md Q4).
+                None => {
+                    let exit = exit.unwrap_or_else(|| "its CLI ended".to_owned());
+                    self.spawn(async move { manager.worker_died(&live, exit, from).await });
+                }
+            }
         }
     }
 
@@ -3060,6 +3111,8 @@ impl SessionManager {
         };
         let reported = |task: &mut Task| {
             task.report = Some(report.clone());
+            // It reached a report: a later crash resumes it again.
+            task.deaths.clear();
             task.outputs.clone_from(&outputs);
             task.state = TaskState::Reported;
             task.blocked_reason = None;

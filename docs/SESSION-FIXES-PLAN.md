@@ -243,12 +243,20 @@ Everything else in THREAD-PLAN and THREAD-PARITY-PLAN stands.
        artifacts), it stops with the run's reason, and the report lists it as unfinished.
    - A task the user stopped, or one in a conversation whose workers the user stopped all at once, never resumes.
    - The same order applies on every start: no worker resumes before its run's state is known.
+   - **As built:** the verdict is the pure `overnight::interrupted(run, now)` (`M/overnight/wind_down.rs`), used by
+     both the crash resume and `recover`. A run records when it began winding down (`winding_since_ms`, stamped
+     wherever a run is recorded `WindingDown`), so its cutoff counts from there across restarts; `wind_down_run`
+     uses the same instant. A restart with no recorded CLI session stops the task as before.
 3. **Vendor switch only for quota, rate limits, auth or an outage:** `AttemptEnd::Limit`, `ErrorKind::Auth`, and
    `Overloaded/Server/Network` after the transient retry (`fallback::verdict`, `M/fallback.rs:66-90`). Never for
    `ErrorKind::Process`.
 4. **Twice in a row → stop and say what kills it.** A task that dies again within its next resumed attempt (no
    report between) stops with `blocked_reason` set to the two exits (code or signal, the last stderr line) and the
    thread is told `[task-N stopped: died twice] …`. The thread tells the user.
+   - **As built:** "stops" is `TaskState::Blocked` with that reason, its worktree and session kept, so
+     `message_worker` resumes it once the cause is fixed (and clears its deaths) and `stop_task` ends it. The CLI's
+     exit now carries its signal (`ProviderEvent::Exited.signal`). The thread's instructions gained no line (its
+     byte budget is spent); the message names what to do, and revision 2's note tells open threads.
 5. **Check results stay cached per tree.** `check_results` already keys by tree and command. Bug 8 makes the command
    key canonical, so a resumed worker's re-run of a passed check answers from the cache.
 6. **Its row** reads "Interrupted — resuming" while the resumed CLI starts (`C/workerPresentation.ts` state words).

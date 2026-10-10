@@ -107,3 +107,11 @@ test("a worker in the user's terminal waits on the user, in plain words everywhe
   assert.equal(workerState(worker), "is in your terminal");
   assert.equal(workerPreview(worker), "Working in your terminal");
 });
+
+test("a worker whose process ended reads interrupted while its session resumes", () => {
+  const worker = task({ resuming: true });
+  assert.deepEqual(taskState(worker), { word: "Interrupted — resuming", tone: "live" });
+  assert.equal(workerPreview(worker), "Interrupted — resuming");
+  assert.equal(workerWorking(worker), true);
+  assert.deepEqual(taskState(task({ resuming: false })), { word: "Working", tone: "live" });
+});

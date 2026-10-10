@@ -116,7 +116,8 @@ impl SessionManager {
                 return;
             }
         }
-        let cutoff = cutoff_ms(&run, now_ms());
+        // Counted from when it began winding down: a restart doesn't give it a new allowance.
+        let cutoff = cutoff_ms(&run, run.winding_since_ms.unwrap_or_else(now_ms));
         tracing::info!(run = %run.id, stop = ?run.stop, cutoff, "overnight run winding down");
         // Live workers hand off; nothing new starts (the fence is the run's state).
         if let Ok(board) = self.core.board(&run.conversation_id).await {
@@ -408,7 +409,7 @@ fn still_works(task: &crate::work::Task) -> bool {
 
 /// When live work stops at the latest: a deadline run keeps the last part of its reserve for
 /// the report; a Stop without one waits a bounded time.
-fn cutoff_ms(run: &OvernightRun, now: i64) -> i64 {
+pub(super) fn cutoff_ms(run: &OvernightRun, now: i64) -> i64 {
     let allowance = now + STOP_ALLOWANCE_MS;
     match (&run.directives.deadline, run.wind_down_at_ms) {
         (Deadline::At { time }, Some(wind_down)) => {
@@ -440,8 +441,65 @@ pub(super) fn to_you(text: &str) -> String {
         })
 }
 
+/// What becomes of a run task whose worker was interrupted (its CLI ended without a report, or
+/// Brigadier restarted), by the run's state at `now` (SESSION-FIXES-PLAN.md Q4). A task of no
+/// run resumes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Interrupted {
+    /// The run carries on: the worker resumes and continues.
+    Resume,
+    /// The run is ending, inside its allowance: the worker resumes only to hand off.
+    HandOff { reason: String },
+    /// Past the deadline or the cleanup cutoff, stopped by the user, or ended: nothing
+    /// resumes, and the task stops with its work kept.
+    Keep { reason: String },
+}
+
+/// [`Interrupted`] for a task of `run` (`None`: its run is gone) at `now`.
+pub(crate) fn interrupted(run: Option<&OvernightRun>, now: i64) -> Interrupted {
+    let Some(run) = run else {
+        return Interrupted::Keep {
+            reason: "the run ended".into(),
+        };
+    };
+    // Winding down since `since`: inside the allowance, a hand-off; after it, nothing.
+    let ending = |since: i64, stop: Option<&StopReason>| {
+        let reason = stop_words(stop);
+        if now < cutoff_ms(run, since) {
+            Interrupted::HandOff { reason }
+        } else {
+            Interrupted::Keep { reason }
+        }
+    };
+    match run.state {
+        OvernightState::Preparing | OvernightState::Running | OvernightState::WaitingQuota => {
+            match run.wind_down_at_ms {
+                // Past its wind-down instant: it winds down now, for its deadline.
+                Some(at) if now >= at => ending(now, Some(&StopReason::Deadline)),
+                _ => Interrupted::Resume,
+            }
+        }
+        OvernightState::WindingDown if run.stop != Some(StopReason::Stopped) => {
+            ending(run.winding_since_ms.unwrap_or(now), run.stop.as_ref())
+        }
+        _ => Interrupted::Keep {
+            reason: stop_words(run.stop.as_ref()),
+        },
+    }
+}
+
+/// What a worker resumed only to hand off hears first.
+pub(crate) fn interrupted_hand_off(reason: &str) -> String {
+    HAND_OFF.replace(
+        "[Brigadier] The overnight run is ending now ({reason}).",
+        &format!(
+            "[Brigadier] You were interrupted (your process ended), and the overnight run is ending ({reason}). Check what was running (its output may be lost)."
+        ),
+    )
+}
+
 /// Why the run ended, as the thread and its workers are told.
-fn stop_words(stop: Option<&StopReason>) -> String {
+pub(super) fn stop_words(stop: Option<&StopReason>) -> String {
     match stop {
         Some(StopReason::Stopped) => "the user stopped the run".into(),
         Some(StopReason::Deadline) => "the run reached its deadline".into(),
@@ -464,6 +522,82 @@ mod tests {
             "Speed",
             Vec::new(),
         )
+    }
+
+    /// A run with a deadline two hours away, winding down an hour and forty minutes before it.
+    fn with_deadline(now: i64) -> OvernightRun {
+        let mut run = running();
+        let at = now + 2 * 60 * 60_000;
+        run.directives.deadline = Deadline::At {
+            time: crate::overnight::ResolvedTime {
+                at_ms: at,
+                local_date: String::new(),
+                local_time: String::new(),
+                day: String::new(),
+                offset: String::new(),
+                time_zone: String::new(),
+            },
+        };
+        run.wind_down_at_ms = Some(at - 20 * 60_000);
+        run
+    }
+
+    #[test]
+    fn an_interrupted_task_resumes_hands_off_or_keeps_its_work_by_its_runs_state() {
+        let now = 1_000_000_000_000;
+        // A running run: it resumes; a gone run: nothing.
+        assert_eq!(
+            interrupted(Some(&with_deadline(now)), now),
+            Interrupted::Resume
+        );
+        assert!(matches!(interrupted(None, now), Interrupted::Keep { .. }));
+        // Past its wind-down instant, before the deadline: it winds down now, a hand-off.
+        let run = with_deadline(now);
+        let later = run.wind_down_at_ms.unwrap() + 60_000;
+        assert_eq!(
+            interrupted(Some(&run), later),
+            Interrupted::HandOff {
+                reason: "the run reached its deadline".into()
+            }
+        );
+        // Past the deadline: nothing resumes.
+        let past = now + 3 * 60 * 60_000;
+        assert!(matches!(
+            interrupted(Some(&run), past),
+            Interrupted::Keep { .. }
+        ));
+        // Winding down: inside the allowance a hand-off, after it nothing.
+        let mut winding = with_deadline(now);
+        winding.state = OvernightState::WindingDown;
+        winding.stop = Some(StopReason::Deadline);
+        winding.winding_since_ms = Some(now);
+        assert!(matches!(
+            interrupted(Some(&winding), now + 60_000),
+            Interrupted::HandOff { .. }
+        ));
+        assert!(matches!(
+            interrupted(Some(&winding), now + STOP_ALLOWANCE_MS),
+            Interrupted::Keep { .. }
+        ));
+        // Stopped by the user, reporting or finished: nothing.
+        winding.stop = Some(StopReason::Stopped);
+        assert!(matches!(
+            interrupted(Some(&winding), now + 60_000),
+            Interrupted::Keep { .. }
+        ));
+        for state in [OvernightState::Reporting, OvernightState::Finished] {
+            let mut ended = with_deadline(now);
+            ended.state = state;
+            assert!(matches!(
+                interrupted(Some(&ended), now),
+                Interrupted::Keep { .. }
+            ));
+        }
+        assert!(
+            interrupted_hand_off("the run reached its deadline").starts_with(
+                "[Brigadier] You were interrupted (your process ended), and the overnight run is ending (the run reached its deadline)."
+            )
+        );
     }
 
     #[test]

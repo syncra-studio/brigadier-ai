@@ -85,14 +85,23 @@ pub(crate) struct Reply {
     pub context_tokens: Option<i64>,
     /// The turn fails on this usage limit of its account.
     pub limit: Option<brigadier_providers::LimitHit>,
+    /// The CLI dies mid-turn on this signal, saying "Killed" on stderr.
+    pub crash: Option<i32>,
 }
 
 impl Reply {
     pub fn text(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
-            context_tokens: None,
-            limit: None,
+            ..Self::default()
+        }
+    }
+
+    /// The CLI dies mid-turn, killed by `signal`.
+    pub fn crashed(signal: i32) -> Self {
+        Self {
+            crash: Some(signal),
+            ..Self::default()
         }
     }
 
@@ -382,6 +391,11 @@ pub(crate) type Specs = Arc<Mutex<Vec<(ProviderKind, SessionSpec)>>>;
 /// every test in the process; each test names its own sessions.
 pub(crate) static REFUSED_RESUMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+/// A worker session's brief, by native session: a resumed session still has it, as a real
+/// CLI's transcript does.
+static BRIEFS: std::sync::LazyLock<Mutex<std::collections::HashMap<String, String>>> =
+    std::sync::LazyLock::new(Mutex::default);
+
 /// Terminals a test holds as they open, by native session: the open tells the first sender
 /// it got there, then waits for the receiver's answer (`true`: the terminal fails to open).
 #[allow(clippy::type_complexity)]
@@ -583,6 +597,7 @@ impl Provider for FakeCli {
             } else {
                 self.script.clone()
             };
+            let brief = BRIEFS.lock().unwrap().get(&native_id).cloned();
             let session = Arc::new(FakeSession {
                 kind: self.kind,
                 behavior: self.behavior.clone(),
@@ -598,7 +613,7 @@ impl Provider for FakeCli {
                 events: Mutex::new(Some(tx)),
                 turns: std::sync::atomic::AtomicU32::new(0),
                 answers: Answers::default(),
-                brief: Mutex::new(None),
+                brief: Mutex::new(brief),
                 running: Arc::default(),
                 stops: Arc::default(),
                 steer_tx,
@@ -783,6 +798,10 @@ impl ProviderSession for FakeSession {
                 let mut brief = self.brief.lock().unwrap();
                 if worker && brief.is_none() {
                     *brief = Some(input_text(&input));
+                    BRIEFS
+                        .lock()
+                        .unwrap()
+                        .insert(self.native_id.clone(), input_text(&input));
                 }
                 match &*brief {
                     Some(brief) => format!("{}\n\n{brief}", self.prompt),
@@ -836,6 +855,16 @@ impl ProviderSession for FakeSession {
                         .await;
                 }
                 running.store(false, std::sync::atomic::Ordering::SeqCst);
+                if let Some(signal) = reply.crash {
+                    let _ = tx
+                        .send(ProviderEvent::Exited {
+                            code: None,
+                            signal: Some(signal),
+                            stderr_tail: Some("Killed".into()),
+                        })
+                        .await;
+                    return;
+                }
                 let status = if let Some(limit) = reply.limit {
                     let _ = tx
                         .send(ProviderEvent::Error {
@@ -910,6 +939,7 @@ impl ProviderSession for FakeSession {
                 let _ = tx
                     .send(ProviderEvent::Exited {
                         code: Some(0),
+                        signal: None,
                         stderr_tail: None,
                     })
                     .await;
@@ -1511,6 +1541,8 @@ mod preview_tests;
 mod prewarm_tests;
 #[cfg(test)]
 mod reads_tests;
+#[cfg(test)]
+mod resume_tests;
 #[cfg(test)]
 mod takeover_tests;
 #[cfg(test)]

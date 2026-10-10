@@ -647,6 +647,10 @@ pub enum ProviderEvent {
     /// The CLI process ended.
     Exited {
         code: Option<i32>,
+        /// The signal that ended it, when one did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        signal: Option<i32>,
         /// The last lines it wrote to stderr, when it failed.
         stderr_tail: Option<String>,
     },

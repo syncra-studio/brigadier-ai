@@ -14,6 +14,7 @@ use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::board::Board;
+use crate::manager::worker_resume::INTERRUPTED;
 use crate::model::{Environment, OvernightRunId, Setup};
 use crate::overnight::{OvernightRun, OvernightState, ProposedPhase, ProposedPlan, StopReason};
 use crate::work::{PhaseStage, Plan, ReviewKind, ReviewState, StepOutcome, TaskState, WorkerRole};
@@ -876,7 +877,7 @@ async fn a_restart_mid_run_resumes_it_on_the_thread() {
                         .input
                         .contains("Brigadier restarted during the overnight run")
                     {
-                        inner.delegate(&turn, 1).await;
+                        // Its lead resumes itself: the thread waits for the report.
                         return Reply::text(QUIET);
                     }
                     return inner.turn(&turn).await;
@@ -887,6 +888,7 @@ async fn a_restart_mid_run_resumes_it_on_the_thread() {
                     released.notified().await;
                     return Reply::default();
                 }
+                assert!(turn.input.contains(INTERRUPTED), "{}", turn.input);
                 build(&turn).await
             }
         }),
@@ -926,6 +928,187 @@ async fn a_restart_mid_run_resumes_it_on_the_thread() {
     let branch = run.workspace.as_ref().expect("a branch").branch.clone();
     let files = super::git(&flow.repo, &["ls-tree", "-r", "--name-only", &branch]);
     assert!(files.contains("p1.txt"), "{files}");
+    // The same lead finished it, resumed in its own session: no second lead.
+    let leads: Vec<_> = board
+        .tasks
+        .values()
+        .filter(|task| task.role == Some(WorkerRole::Lead))
+        .collect();
+    assert_eq!(leads.len(), 1, "{leads:#?}");
+    flow.stop().await;
+}
+
+/// A deadline run whose lead is mid-turn (it committed p1.txt and left p1b.txt uncommitted)
+/// when Brigadier quits; before the restart, the run is recorded winding down since
+/// `winding_for_ms` ago. What the lead hears after the restart is returned through `heard`.
+async fn restart_while_winding_down(
+    name: &str,
+    winding_for_ms: i64,
+) -> (Flow, OvernightRunId, Arc<Mutex<Vec<String>>>) {
+    let restarted = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(tokio::sync::Notify::new());
+    let heard: Arc<Mutex<Vec<String>>> = Arc::default();
+    let thread = Arc::new(Thread {
+        order: vec![1],
+        ..Default::default()
+    });
+    let (after, released, told, inner) = (
+        restarted.clone(),
+        release.clone(),
+        heard.clone(),
+        thread.clone(),
+    );
+    let mut flow = Flow::start(
+        name,
+        Options::default(),
+        script(move |turn| {
+            let (after, released, told, inner) =
+                (after.clone(), released.clone(), told.clone(), inner.clone());
+            async move {
+                if turn.is_orchestrator() {
+                    return inner.turn(&turn).await;
+                }
+                if !after.load(Ordering::SeqCst) {
+                    turn.write("p1.txt", "1\n");
+                    turn.git(&["add", "p1.txt"]);
+                    turn.git(&["commit", "-qm", "Add p1.txt"]);
+                    turn.write("p1b.txt", "half\n");
+                    released.notified().await;
+                    return Reply::default();
+                }
+                told.lock().unwrap().push(turn.input.clone());
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "Goal and where it stands: half done. Done: p1.txt. Next steps: finish p1b.txt."}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("Handed off.")
+            }
+        }),
+    )
+    .await;
+    let later = jiff::Zoned::now()
+        .checked_add(jiff::Span::new().hours(2))
+        .unwrap();
+    let words = format!(
+        "/overnight Make one file. Until {}.",
+        later.strftime("%H:%M")
+    );
+    let run = start_run(&flow, &words, 1).await;
+    flow.until("the lead to commit", |board| {
+        board.tasks.values().any(|task| {
+            task.role == Some(WorkerRole::Lead)
+                && task.state == TaskState::Running
+                && task.native_session.is_some()
+        })
+    })
+    .await;
+    // Until it is mid-turn, its uncommitted file written.
+    loop {
+        let board = flow.board().await;
+        let task = board
+            .tasks
+            .values()
+            .find(|task| task.role == Some(WorkerRole::Lead));
+        if task
+            .and_then(|task| task.workspace.as_ref())
+            .and_then(|workspace| workspace.worktree.as_ref())
+            .is_some_and(|dir| PathBuf::from(dir).join("p1b.txt").exists())
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let mut winding = run_of(&flow.board().await, &run.id);
+    winding.state = OvernightState::WindingDown;
+    winding.stop = Some(StopReason::Deadline);
+    winding.winding_since_ms = Some(crate::now_ms() - winding_for_ms);
+    flow.manager.record_run(&winding).await.unwrap();
+    restarted.store(true, Ordering::SeqCst);
+    flow.restart().await;
+    release.notify_waiters();
+    (flow, run.id, heard)
+}
+
+/// The lead's sessions after the first: resumed ones and fresh ones.
+fn later_lead_starts(flow: &Flow) -> Vec<Origin> {
+    flow.specs
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, spec)| {
+            spec.append_system_prompt
+                .as_deref()
+                .is_some_and(|prompt| prompt.starts_with("You are a Brigadier worker."))
+        })
+        .skip(1)
+        .map(|(_, spec)| spec.origin.clone())
+        .collect()
+}
+
+/// A restart past the run's cleanup cutoff resumes nothing, not even to hand off: the lead
+/// stops with its work kept (its commit and a work-in-progress commit of the rest on its
+/// branch), and the report lists it as unfinished.
+#[tokio::test]
+async fn a_restart_past_the_cleanup_cutoff_resumes_nothing_and_keeps_the_work() {
+    let (flow, run_id, heard) =
+        restart_while_winding_down("overnight-past-cutoff", 60 * 60_000).await;
+    let board = finished(&flow, &run_id).await;
+    assert!(
+        heard.lock().unwrap().is_empty(),
+        "{:?}",
+        heard.lock().unwrap()
+    );
+    assert_eq!(
+        later_lead_starts(&flow),
+        Vec::new(),
+        "no session resumed or started"
+    );
+    let lead = board
+        .tasks
+        .values()
+        .find(|task| task.role == Some(WorkerRole::Lead))
+        .expect("the lead");
+    assert_eq!(lead.state, TaskState::Stopped);
+    let error = lead.error.clone().unwrap_or_default();
+    assert!(
+        error.starts_with("Interrupted, and not resumed: the run reached its deadline"),
+        "{error}"
+    );
+    let Some(crate::work::KeptWork::Branch { branch, .. }) = &lead.kept else {
+        panic!("its work is kept on its branch: {:?}", lead.kept);
+    };
+    let files = super::git(&flow.repo, &["ls-tree", "-r", "--name-only", branch]);
+    assert!(
+        files.contains("p1.txt") && files.contains("p1b.txt"),
+        "{files}"
+    );
+    let report = report_text(&flow, &run_of(&board, &run_id)).await;
+    assert!(
+        report.contains("Stopped before it finished: “Phase 1”"),
+        "{report}"
+    );
+    flow.stop().await;
+}
+
+/// A restart inside the run's wind-down allowance resumes the lead's own session only to hand
+/// off: it hears so first, and no fresh session starts.
+#[tokio::test]
+async fn a_restart_inside_the_wind_down_allowance_resumes_a_worker_only_to_hand_off() {
+    let (flow, run_id, heard) = restart_while_winding_down("overnight-hand-off", 60_000).await;
+    finished(&flow, &run_id).await;
+    let heard = heard.lock().unwrap().clone();
+    assert!(
+        heard.first().is_some_and(|first| first.starts_with(
+            "[Brigadier] You were interrupted (your process ended), and the overnight run is ending (the run reached its deadline)."
+        ) && first.contains("Goal and where it stands")),
+        "{heard:?}"
+    );
+    let starts = later_lead_starts(&flow);
+    assert_eq!(starts.len(), 1, "{starts:?}");
+    assert!(matches!(starts[0], Origin::Resume { .. }), "{starts:?}");
     flow.stop().await;
 }
 

@@ -80,6 +80,7 @@ mod usage_view;
 pub mod warm;
 mod watchdog;
 mod worker_handoff;
+mod worker_resume;
 mod workers;
 
 use std::collections::{HashMap, HashSet};

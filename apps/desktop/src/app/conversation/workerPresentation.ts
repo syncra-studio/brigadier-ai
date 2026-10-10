@@ -28,6 +28,7 @@ export function workerState(task: Task): string {
 export function workerPreview(task: Task): string | null {
   if (workerDone(task)) return task.state === "failed" || task.state === "stopped" || task.state === "rejected"
     ? workerState(task) : null;
+  if (task.resuming) return "Interrupted — resuming";
   if (workerWorking(task)) {
     const objective = task.spec.split("\n").map((line) => line.trim()).find((line) => /^(?:goal|objective):/i.test(line));
     return objective ? objective.replace(/^(?:goal|objective):\s*/i, "").replace(/task-\d+/gi, "worker").slice(0, 60) : "Working";

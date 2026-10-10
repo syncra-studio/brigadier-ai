@@ -491,6 +491,10 @@ pub struct OvernightRun {
     pub state: OvernightState,
     /// When wind-down starts; set at Start for a deadline.
     pub wind_down_at_ms: Option<i64>,
+    /// When it began winding down: its cleanup cutoff counts from here, across restarts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub winding_since_ms: Option<i64>,
     /// Its branch and worktree, once Start made them.
     #[serde(default)]
     pub workspace: Option<RunWorkspace>,
@@ -565,6 +569,7 @@ impl OvernightRun {
             generation: 1,
             state: OvernightState::Running,
             wind_down_at_ms: None,
+            winding_since_ms: None,
             workspace: None,
             verified_commit: None,
             gaps: Vec::new(),

@@ -346,11 +346,18 @@ pub(crate) struct Revision {
 
 /// Every revision since notes carried them, oldest first. Add one entry per instruction
 /// change, in the commit that changes the instructions; never renumber.
-pub(crate) const REVISIONS: &[Revision] = &[Revision {
-    number: 1,
-    thread: "From now on, give run_check the bare command: checks already run with a high open-files limit and their own TMPDIR, so never prefix `ulimit -n …;` or `TMPDIR=…`; a prefix only makes the cache miss.",
-    worker: "From now on, give run_check the bare command: it already runs with a high open-files limit and TMPDIR set to your test data folder, so never prefix `ulimit -n …;` or `TMPDIR=…`; a prefix only makes the cache miss.",
-}];
+pub(crate) const REVISIONS: &[Revision] = &[
+    Revision {
+        number: 1,
+        thread: "From now on, give run_check the bare command: checks already run with a high open-files limit and their own TMPDIR, so never prefix `ulimit -n …;` or `TMPDIR=…`; a prefix only makes the cache miss.",
+        worker: "From now on, give run_check the bare command: it already runs with a high open-files limit and TMPDIR set to your test data folder, so never prefix `ulimit -n …;` or `TMPDIR=…`; a prefix only makes the cache miss.",
+    },
+    Revision {
+        number: 2,
+        thread: "From now on, a worker whose process ends (a crash, a kill, a restart) resumes itself in the same session instead of handing on to another model. [task-N stopped: died twice] means it ended again before reporting: tell the user what kills it (both exits are named), then message_worker it once the cause is fixed, or stop_task.",
+        worker: "",
+    },
+];
 
 /// The instructions' current revision.
 pub(crate) fn revision() -> u32 {
@@ -1746,10 +1753,13 @@ mod environment_tests {
         older.revision = None;
         assert_eq!(labels(&notes(&older, &now)), vec![REVISION_LABEL]);
         assert_eq!(
-            revision_note(revision() - 1, true),
-            Some(format!("[instructions] {}", newest.worker))
+            revision_note(0, true),
+            Some(format!("[instructions] {}", REVISIONS[0].worker))
         );
         assert_eq!(revision_note(revision(), true), None);
+        // Revision 2: the thread hears that workers resume themselves; workers hear nothing.
+        assert!(REVISIONS[1].thread.contains("[task-N stopped: died twice]"));
+        assert_eq!(revision_note(1, true), None);
         // Revision 1: checks get no prefixes.
         assert!(
             REVISIONS[0]

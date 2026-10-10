@@ -155,6 +155,15 @@ impl SessionManager {
                         .await;
                         continue;
                     }
+                    // Its CLI session resumes, once its overnight run's state allows it
+                    // (SESSION-FIXES-PLAN.md Q4).
+                    TaskState::Running | TaskState::Starting
+                        if conversation.lifecycle == Lifecycle::Active
+                            && task.native_session.is_some() =>
+                    {
+                        self.resume_after_restart(&task).await;
+                        continue;
+                    }
                     _ => {}
                 }
                 let _ = self

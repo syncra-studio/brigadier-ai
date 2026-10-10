@@ -187,7 +187,8 @@ impl SessionManager {
         Box::pin(self.hand_over(live, task, from, None, None, why))
     }
 
-    async fn hand_over(
+    /// [`Self::hand_over_worker`] for a caller that holds the task's `reroute` lock.
+    pub(crate) async fn hand_over(
         &self,
         live: &Arc<TaskLive>,
         task: &Task,
@@ -283,6 +284,7 @@ impl SessionManager {
                     super::watchdog::spoken(silent)
                 )
             }
+            Handover::Interrupted => " after its process ended".to_owned(),
         };
         self.record_worker_event(
             &task.id,
@@ -469,6 +471,8 @@ pub(crate) enum Handover {
     Size,
     /// It went silent mid-turn (for `silent` ms) and didn't answer a nudge.
     Stalled { silent: i64 },
+    /// Its process ended before it reported, and its session couldn't be resumed.
+    Interrupted,
 }
 
 /// What the fresh session's first message says about the hand-over.
@@ -510,6 +514,9 @@ fn handover_text(
              hang without a timeout, or start a server in the foreground",
             super::watchdog::spoken(silent)
         ),
+        Handover::Interrupted => "Your earlier session's process ended before it reported, and \
+             the session couldn't be resumed. Check what was running (its output may be lost)"
+            .to_owned(),
     };
     let mut text = format!(
         "[Brigadier] You are continuing task-{} in a fresh session. {why}; you are the same \

@@ -40,6 +40,8 @@ const TRACK_EVERY: Duration = Duration::from_secs(1);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Exit {
     pub code: Option<i32>,
+    /// The signal that ended it, when one did (a `kill -9`, a crash).
+    pub signal: Option<i32>,
 }
 
 pub struct CliProcess {
@@ -242,9 +244,10 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
         // and in groups of their own.
         let _ = reaper.processes().kill_group(pid);
         let ended = left.end_all();
-        let code = status.ok().and_then(|status| status.code());
-        tracing::debug!(pid, code, ended, "cli process exited");
-        exit_tx.send_replace(Some(Exit { code }));
+        let code = status.as_ref().ok().and_then(|status| status.code());
+        let signal = status.ok().and_then(exit_signal);
+        tracing::debug!(pid, code, signal, ended, "cli process exited");
+        exit_tx.send_replace(Some(Exit { code, signal }));
     });
 
     Ok(Spawned {
@@ -309,7 +312,10 @@ impl CliProcess {
         match exit.wait_for(Option::is_some).await {
             Ok(exit) => exit.expect("checked by wait_for"),
             // The waiter task is gone; the process was reaped with it.
-            Err(_) => Exit { code: None },
+            Err(_) => Exit {
+                code: None,
+                signal: None,
+            },
         }
     }
 
@@ -340,7 +346,10 @@ impl CliProcess {
         }
         tokio::time::timeout(REAP_WAIT, self.exited())
             .await
-            .unwrap_or(Exit { code: None })
+            .unwrap_or(Exit {
+                code: None,
+                signal: None,
+            })
     }
 }
 
@@ -392,6 +401,18 @@ fn is_same(processes: &dyn brigadier_sandbox::Processes, pid: u32, started: Opti
         && processes
             .start_time_ms(pid)
             .is_ok_and(|now| (now - started).abs() < 1_000.0)
+}
+
+/// The signal that ended a process, when one did.
+#[cfg(unix)]
+fn exit_signal(status: std::process::ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal()
+}
+
+#[cfg(not(unix))]
+fn exit_signal(_status: std::process::ExitStatus) -> Option<i32> {
+    None
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

@@ -1621,6 +1621,7 @@ async fn read_loop(
         .events
         .send(ProviderEvent::Exited {
             code: exit.code,
+            signal: exit.signal,
             stderr_tail: (exit.code != Some(0))
                 .then(|| process.stderr_tail())
                 .flatten(),

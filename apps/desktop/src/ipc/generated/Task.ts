@@ -139,6 +139,10 @@ messages: Array<string>,
  */
 reworkRounds: number, 
 /**
+ * While its CLI session starts again after it was interrupted.
+ */
+resuming: boolean, 
+/**
  * While the user has the worker's session open in a terminal ([`TaskState::TakenOver`]).
  */
 takeover?: Takeover, createdAtMs: number, updatedAtMs: number, };

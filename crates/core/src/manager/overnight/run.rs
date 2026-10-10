@@ -166,6 +166,7 @@ impl SessionManager {
             return None;
         }
         change(&mut now)?;
+        super::stamp_winding(&mut now);
         if let Err(err) = self.record_run(&now).await {
             tracing::warn!(run = %run.id, error = %err, "could not record an overnight run");
             return None;

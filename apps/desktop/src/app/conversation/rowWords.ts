@@ -55,6 +55,8 @@ export function writes(task: Task): boolean {
 
 /** A worker's state in a word or two, the same on its row wherever it shows. */
 export function taskState(task: Task): RowState {
+  // Its process ended and its own session starts again.
+  if (task.resuming) return { word: "Interrupted — resuming", tone: "live" };
   const wait = task.quotaWait || task.state === "queued" || task.state === "blocked" || task.state === "paused"
     ? taskWaitWords(task)
     : null;

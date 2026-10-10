@@ -14,6 +14,7 @@ mod recovery;
 mod report;
 pub(crate) mod run;
 mod wind_down;
+pub(crate) use wind_down::{Interrupted, interrupted, interrupted_hand_off};
 mod workspace;
 
 pub(crate) use workspace::run_owner;
@@ -128,6 +129,7 @@ impl SessionManager {
             generation: 0,
             state: OvernightState::Proposed,
             wind_down_at_ms: None,
+            winding_since_ms: None,
             workspace: None,
             verified_commit: None,
             gaps: Vec::new(),
@@ -548,6 +550,7 @@ impl SessionManager {
             generation: 0,
             state: OvernightState::Proposed,
             wind_down_at_ms: None,
+            winding_since_ms: None,
             gaps: Vec::new(),
             obstacles: Vec::new(),
             report_message_id: None,
@@ -598,6 +601,7 @@ impl SessionManager {
         }
         let mut run = before.clone();
         change(&mut run, &board)?;
+        stamp_winding(&mut run);
         run.commands.push(AppliedCommand {
             id: command_id,
             at_ms: now_ms(),
@@ -618,8 +622,13 @@ impl SessionManager {
     pub(crate) async fn record_runs(
         &self,
         conversation_id: &ConversationId,
-        events: Vec<DomainEvent>,
+        mut events: Vec<DomainEvent>,
     ) -> Result<()> {
+        for event in &mut events {
+            if let DomainEvent::OvernightUpdated { run } = event {
+                stamp_winding(run);
+            }
+        }
         self.core
             .record_conversation(conversation_id, events.clone())
             .await?;
@@ -775,6 +784,13 @@ fn infos(phases: &[OvernightPhase]) -> Vec<PhaseInfo> {
 
 /// When wind-down starts for a run started at `started` with its report due at `due`: a
 /// reserve of a third of the run, at most 20 minutes.
+/// Notes when a run began winding down, the first time it is recorded so.
+pub(super) fn stamp_winding(run: &mut OvernightRun) {
+    if run.state == OvernightState::WindingDown && run.winding_since_ms.is_none() {
+        run.winding_since_ms = Some(now_ms());
+    }
+}
+
 fn wind_down_at(started: i64, due: i64) -> i64 {
     let reserve = ((due - started) / 3).clamp(0, WIND_DOWN_MAX_MS);
     due - reserve

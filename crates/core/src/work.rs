@@ -804,6 +804,19 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub native_session: Option<String>,
+    /// The instructions' revision its CLI session last heard (`prompts::revision`): a
+    /// resumed session hears the newer notes once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub told_revision: Option<u32>,
+    /// How its CLI ended without a report since it last reported ("signal 9: …"): the first
+    /// time it resumes, the second time the task stops (SESSION-FIXES-PLAN.md Q4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(skip)]
+    pub deaths: Vec<String>,
+    /// While its CLI session starts again after it was interrupted.
+    #[serde(default)]
+    pub resuming: bool,
     /// While the user has the worker's session open in a terminal ([`TaskState::TakenOver`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
