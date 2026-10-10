@@ -131,14 +131,6 @@ export function freeLine(plan: Sweep): string {
   return `${formatBytes(plan.bytes)} can be freed. Review what goes before anything is removed.`;
 }
 
-/** The line under the page's heading. */
-export function summary(report: StorageReport, plan: Sweep): string {
-  const uses = `Brigadier uses ${formatBytes(report.totalBytes)} on this computer.`;
-  if (plan.ids.length === 0) return `${uses} Nothing to free up: Brigadier is tidy.`;
-  if (plan.bytes === 0) return `${uses} A few small leftovers can be tidied up.`;
-  return `${uses} ${formatBytes(plan.bytes)} can be freed.`;
-}
-
 /** The one button's words (and the confirmation's). */
 export function action(plan: Sweep): string {
   if (plan.ids.length === 0) return "Nothing to free up";

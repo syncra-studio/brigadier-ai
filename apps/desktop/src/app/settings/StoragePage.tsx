@@ -1,5 +1,5 @@
 import { ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { CheckboxRow, ErrorLine, errorText } from "@/app/dialogs/fields";
 import {
@@ -8,12 +8,12 @@ import {
   confirmation,
   count,
   failure,
+  freeLine,
   grouped,
   picked,
   result,
-  summary,
   sweep,
-  type Kept,
+  usageParts,
   type Sweep,
 } from "@/app/settings/freeUpSpace";
 import {
@@ -39,14 +39,31 @@ import {
 import { revealPath } from "@/ipc/client";
 import type { CleanItem, CleanReport, SharedPart, StorageReport } from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";
+import { openSettings } from "@/state/actions";
 import { cleanStorage, openUninstall, scanStorage } from "@/state/storage";
 import { useApp } from "@/state/store";
 
 /** The Storage page's rows, for the page and for Settings search. */
 export const STORAGE_ROWS = {
+  computer: {
+    label: "This computer",
+    description: "What Brigadier keeps on this computer, and what of it can go.",
+  },
   storage: {
     label: "Free up space",
-    description: "What Brigadier keeps on this computer, and what of it can go.",
+    description: "Review what can go before anything is removed.",
+  },
+  archived: {
+    label: "Archived chats",
+    description: "Restore or delete archived sessions and chats.",
+  },
+  choose: {
+    label: "Choose items yourself",
+    description: "Anything that can be removed, including Brains, models and recordings.",
+  },
+  usage: {
+    label: "Disk use per project",
+    description: "What each project's work folders, Brain and conversations use.",
   },
   uninstall: {
     label: "Uninstall Brigadier",
@@ -66,17 +83,79 @@ const SHARED: Record<SharedPart, string> = {
 };
 
 /**
- * Settings → Storage: Free up space. A scan when the page opens shows what can go, in a few
- * plain groups, and what is kept on purpose with why; one button removes the safe part after
- * a confirmation, and the page then says what it freed. Choosing items by hand and disk use per
- * project are under Advanced.
+ * Settings → Storage. What Brigadier uses on this computer (a bar of its parts, scanned when the
+ * page opens and again on Refresh), then a row to free up space: Review opens what can go, in a
+ * few plain groups, and what is kept on purpose with why; its one button removes the safe part
+ * and the dialog then says what it freed. Choosing items by hand and disk use per project are
+ * under Advanced.
  */
 export function StoragePage() {
-  // A new scan starts afresh.
-  const [scans, setScans] = useState(0);
+  const [report, setReport] = useState<StorageReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(true);
+  const [cleaning, setCleaning] = useState(false);
+  const [cleaned, setCleaned] = useState<CleanReport | null>(null);
+  const [cleanError, setCleanError] = useState<string | null>(null);
+  // Only the latest scan's answer counts.
+  const latest = useRef(0);
+
+  // Asks the daemon; the state says "looking" already (on open) or is set so by `scan`.
+  const look = useCallback(() => {
+    const id = ++latest.current;
+    scanStorage().then(
+      (scanned) => {
+        if (id !== latest.current) return;
+        setReport(scanned);
+        setScanning(false);
+      },
+      (cause: unknown) => {
+        if (id !== latest.current) return;
+        setError(`Couldn't look: ${errorText(cause)}`);
+        setScanning(false);
+      },
+    );
+  }, []);
+  useEffect(look, [look]);
+  const scan = () => {
+    setScanning(true);
+    setError(null);
+    look();
+  };
+
+  const clean = (ids: string[]) => {
+    if (!report) return;
+    setCleaning(true);
+    setCleanError(null);
+    cleanStorage(report.scanId, ids).then(
+      (done) => {
+        setCleaning(false);
+        setCleaned(done);
+      },
+      (cause: unknown) => {
+        setCleaning(false);
+        setCleanError(errorText(cause));
+      },
+    );
+  };
+
   return (
-    <SettingsPage title="Storage" wide>
-      <FreeUpSpace key={scans} onScanAgain={() => setScans((n) => n + 1)} />
+    <SettingsPage title="Storage">
+      <StorageBody
+        report={report}
+        error={error}
+        scanning={scanning}
+        cleaning={cleaning}
+        cleaned={cleaned}
+        cleanError={cleanError}
+        onRefresh={scan}
+        onClean={clean}
+        onDone={() => {
+          // A finished clean changed the disk: look again.
+          setCleaned(null);
+          setCleanError(null);
+          if (cleaned) scan();
+        }}
+      />
       <SettingsSection>
         <SettingsCard>
           <SettingsRow
@@ -93,96 +172,242 @@ export function StoragePage() {
   );
 }
 
-/** One scan, and cleaning what it found. */
-function FreeUpSpace({ onScanAgain }: { onScanAgain: () => void }) {
-  const [report, setReport] = useState<StorageReport | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [cleaning, setCleaning] = useState(false);
-  const [cleaned, setCleaned] = useState<CleanReport | null>(null);
+/** What a dialog asks to remove: the sweep (Review) or items chosen by hand. */
+type Ask = { title: string; plan: Sweep };
 
-  useEffect(() => {
-    let current = true;
-    scanStorage().then(
-      (scanned) => current && setReport(scanned),
-      (cause: unknown) => current && setError(`Couldn't look: ${errorText(cause)}`),
-    );
-    return () => {
-      current = false;
-    };
-  }, []);
-
-  const clean = (ids: string[]) => {
-    if (!report) return;
-    setCleaning(true);
-    setError(null);
-    cleanStorage(report.scanId, ids).then(
-      (done) => {
-        setCleaning(false);
-        setCleaned(done);
-      },
-      (cause: unknown) => {
-        setCleaning(false);
-        setError(errorText(cause));
-      },
-    );
-  };
-
-  return (
-    <FreeUpSpaceBody
-      report={report}
-      error={error}
-      cleaning={cleaning}
-      cleaned={cleaned}
-      onClean={clean}
-      onScanAgain={onScanAgain}
-    />
-  );
-}
-
-/** Free up space for one scan: looking, what can go, the result. */
-export function FreeUpSpaceBody({
+/** The page for one scan: what is used, freeing up space, Advanced. */
+export function StorageBody({
   report,
   error,
+  scanning,
   cleaning,
   cleaned,
+  cleanError,
+  onRefresh,
   onClean,
-  onScanAgain,
+  onDone,
 }: {
   report: StorageReport | null;
   error: string | null;
+  scanning: boolean;
   cleaning: boolean;
   cleaned: CleanReport | null;
+  cleanError: string | null;
+  onRefresh: () => void;
   onClean: (ids: string[]) => void;
-  onScanAgain: () => void;
+  /** The dialog closed after a clean or a failed one. */
+  onDone: () => void;
 }) {
-  const [confirming, setConfirming] = useState<Sweep | null>(null);
-
-  if (!report) {
-    return (
-      <SettingsSection title={STORAGE_ROWS.storage.label}>
-        <SettingsCard>
-          <div role="status" className="text-foreground/65 flex items-center gap-2 px-4 py-3 text-xs">
-            {!error && <Spinner className="size-icon-sm animate-spin" />}
-            {error ?? "Looking at what Brigadier keeps on this computer…"}
-          </div>
-        </SettingsCard>
-        {error && (
-          <div className="flex justify-end">
-            <SettingsButton onClick={onScanAgain}>Try again</SettingsButton>
-          </div>
-        )}
-      </SettingsSection>
-    );
-  }
-
-  const plan = sweep(report);
-  if (cleaned) {
-    return <Result cleaned={cleaned} onScanAgain={onScanAgain} />;
-  }
+  const [ask, setAsk] = useState<Ask | null>(null);
+  const [choosing, setChoosing] = useState(false);
+  const [viewingUsage, setViewingUsage] = useState(false);
+  const plan = report ? sweep(report) : null;
 
   return (
     <>
-      <SettingsSection title={STORAGE_ROWS.storage.label} description={summary(report, plan)}>
+      <SettingsSection title={STORAGE_ROWS.computer.label} description={STORAGE_ROWS.computer.description}>
+        <div data-setting={STORAGE_ROWS.computer.label} className="flex flex-col gap-3 pt-2">
+          <div className="flex min-h-7 items-center justify-between gap-4">
+            <span role="status" className="text-label flex min-w-0 items-center gap-2 font-semibold">
+              {!report && !error && <Spinner className="size-icon-sm animate-spin" />}
+              {report
+                ? `${formatBytes(report.totalBytes)} used by Brigadier`
+                : (error ?? "Looking at what Brigadier keeps on this computer…")}
+            </span>
+            <SettingsButton onClick={onRefresh} disabled={scanning}>
+              {scanning && report ? (
+                <>
+                  <Spinner className="size-icon-sm animate-spin" />
+                  Updating…
+                </>
+              ) : report || !error ? (
+                "Refresh"
+              ) : (
+                "Try again"
+              )}
+            </SettingsButton>
+          </div>
+          {report && <UsageBar report={report} />}
+          {report && error && <ErrorLine error={error} />}
+        </div>
+      </SettingsSection>
+
+      <div className="flex flex-col gap-4">
+        <SettingsCard>
+          <SettingsRow
+            label={STORAGE_ROWS.storage.label}
+            description={plan ? freeLine(plan) : STORAGE_ROWS.storage.description}
+          >
+            <SettingsButton
+              disabled={!report || cleaning}
+              onClick={() => plan && setAsk({ title: "Free up space", plan })}
+            >
+              Review
+            </SettingsButton>
+          </SettingsRow>
+        </SettingsCard>
+        <SettingsCard>
+          <SettingsRow label={STORAGE_ROWS.archived.label} description={STORAGE_ROWS.archived.description}>
+            <SettingsButton onClick={() => openSettings("archived")}>Manage</SettingsButton>
+          </SettingsRow>
+        </SettingsCard>
+      </div>
+
+      <SettingsAdvanced description="Choose items yourself, and see disk use per project.">
+        <SettingsCard>
+          <SettingsRow label={STORAGE_ROWS.choose.label} description={STORAGE_ROWS.choose.description}>
+            <SettingsButton disabled={!report || cleaning} onClick={() => setChoosing(true)}>
+              Choose…
+            </SettingsButton>
+          </SettingsRow>
+          <SettingsRow label={STORAGE_ROWS.usage.label} description={STORAGE_ROWS.usage.description}>
+            <SettingsButton disabled={!report} onClick={() => setViewingUsage(true)}>
+              View
+            </SettingsButton>
+          </SettingsRow>
+        </SettingsCard>
+      </SettingsAdvanced>
+
+      {report && (
+        <ChooseDialog
+          // Each opening starts from the safe items picked.
+          key={choosing ? report.scanId : "closed"}
+          open={choosing}
+          report={report}
+          onCancel={() => setChoosing(false)}
+          onRemove={(ids) => {
+            setChoosing(false);
+            setAsk({ title: "Remove chosen items", plan: picked(report, ids) });
+          }}
+        />
+      )}
+      {report && <UsageDialog open={viewingUsage} report={report} onClose={() => setViewingUsage(false)} />}
+      <CleanDialog
+        ask={ask}
+        cleaning={cleaning}
+        cleaned={cleaned}
+        error={cleanError}
+        onConfirm={() => ask && onClean(ask.plan.ids)}
+        onClose={() => {
+          if (cleaning) return;
+          setAsk(null);
+          if (cleaned || cleanError) onDone();
+        }}
+      />
+    </>
+  );
+}
+
+/** The bar of what Brigadier uses, its legend and the data folder. */
+function UsageBar({ report }: { report: StorageReport }) {
+  const parts = usageParts(report);
+  const total = Math.max(1, parts.reduce((sum, part) => sum + part.bytes, 0));
+  const mac = useApp((s) => s.info?.platform === "macos");
+  return (
+    <>
+      <div
+        data-slot="storage-bar"
+        role="img"
+        aria-label={parts.map((part) => `${part.label} ${formatBytes(part.bytes)}`).join(", ")}
+        className="bg-foreground/8 flex h-6 overflow-hidden rounded-full"
+      >
+        {parts
+          .filter((part) => part.bytes > 0)
+          .map((part) => (
+            <span
+              key={part.key}
+              className={`${part.color} h-full min-w-1 shrink-0`}
+              style={{ width: `${(part.bytes / total) * 100}%` }}
+            />
+          ))}
+      </div>
+      <ul className="flex flex-wrap gap-x-4 gap-y-1.5">
+        {parts.map((part) => (
+          <li key={part.key} className="grid grid-cols-[auto_auto] items-center gap-x-1.5 gap-y-0.5">
+            <span aria-hidden className={`${part.color} size-2 rounded-full`} />
+            <span className="text-foreground/65 text-label">{part.label}</span>
+            <span className="text-foreground/65 col-start-1 col-end-3 text-xs tabular-nums">
+              {formatBytes(part.bytes)}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {report.dataDir && (
+        <button
+          type="button"
+          title={mac ? "Reveal in Finder" : "Show in folder"}
+          className="text-foreground/65 hover:text-foreground w-fit text-start text-xs break-all"
+          onClick={() => void revealPath(report.dataDir).catch(() => {})}
+        >
+          {report.dataDir}
+        </button>
+      )}
+    </>
+  );
+}
+
+/**
+ * Review: what goes, group by group, and what is kept on purpose. The dialog is the
+ * confirmation; after the clean it says what it freed and what stayed.
+ */
+function CleanDialog({
+  ask,
+  cleaning,
+  cleaned,
+  error,
+  onConfirm,
+  onClose,
+}: {
+  ask: Ask | null;
+  cleaning: boolean;
+  cleaned: CleanReport | null;
+  error: string | null;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog open={ask !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent
+        data-slot="storage-dialog"
+        className="flex max-h-full max-w-xl flex-col"
+        showCloseButton={!cleaning}
+      >
+        {ask && cleaned ? (
+          <Result cleaned={cleaned} onDone={onClose} />
+        ) : (
+          ask && (
+            <Review ask={ask} cleaning={cleaning} error={error} onConfirm={onConfirm} onCancel={onClose} />
+          )
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Review({
+  ask,
+  cleaning,
+  error,
+  onConfirm,
+  onCancel,
+}: {
+  ask: Ask;
+  cleaning: boolean;
+  error: string | null;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const { plan } = ask;
+  const empty = plan.ids.length === 0;
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle>{ask.title}</DialogTitle>
+        <DialogDescription>
+          {empty ? "Nothing to free up: Brigadier is tidy." : "These go. Open a group to see each item and why."}
+        </DialogDescription>
+      </DialogHeader>
+      <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
         <SettingsCard>
           {plan.groups.map((group) => (
             <GroupRow
@@ -199,7 +424,7 @@ export function FreeUpSpaceBody({
           {plan.kept.length > 0 && (
             <GroupRow
               title="Kept on purpose"
-              detail={keptDetail(plan.kept)}
+              detail={count(plan.kept.length, "thing", "things")}
               bytes={plan.keptBytes}
               muted
             >
@@ -208,41 +433,20 @@ export function FreeUpSpaceBody({
               ))}
             </GroupRow>
           )}
-          <div className="flex items-center justify-end gap-3 px-4 py-3">
-            <ErrorLine error={error} />
-            <Button
-              type="button"
-              size="sm"
-              disabled={cleaning || plan.ids.length === 0}
-              onClick={() => setConfirming(plan)}
-            >
-              {cleaning ? "Freeing up…" : action(plan)}
-            </Button>
-          </div>
         </SettingsCard>
-      </SettingsSection>
-
-      <SettingsAdvanced description="Choose items yourself, and see disk use per project.">
-        <ChooseItems report={report} cleaning={cleaning} onRemove={(ids) => setConfirming(picked(report, ids))} />
-        <SettingsSection title="Disk use">
-          <Usage report={report} />
-        </SettingsSection>
-      </SettingsAdvanced>
-
-      <Confirm
-        plan={confirming}
-        onCancel={() => setConfirming(null)}
-        onConfirm={() => {
-          if (confirming) onClean(confirming.ids);
-          setConfirming(null);
-        }}
-      />
+      </div>
+      {!empty && <p className="text-foreground/65 text-xs">{confirmation(plan).footer}</p>}
+      <ErrorLine error={error} />
+      <DialogFooter>
+        <Button type="button" variant="ghost" disabled={cleaning} onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="button" disabled={cleaning || empty} onClick={onConfirm}>
+          {cleaning ? "Freeing up…" : action(plan)}
+        </Button>
+      </DialogFooter>
     </>
   );
-}
-
-function keptDetail(kept: Kept[]): string {
-  return count(kept.length, "thing", "things");
 }
 
 /** A group's line, opening to its items. */
@@ -320,91 +524,56 @@ function RevealButton({ path }: { path: string }) {
   );
 }
 
-/** "Free up 12.6 GB?": what goes, group by group, and that nothing else is touched. */
-function Confirm({
-  plan,
-  onCancel,
-  onConfirm,
-}: {
-  plan: Sweep | null;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const words = plan ? confirmation(plan) : null;
-  return (
-    <Dialog open={plan !== null} onOpenChange={(open) => !open && onCancel()}>
-      <DialogContent className="max-w-md">
-        {plan && words && (
-          <>
-            <DialogHeader>
-              <DialogTitle>{words.title}</DialogTitle>
-              <DialogDescription>These go:</DialogDescription>
-            </DialogHeader>
-            <ul className="grid gap-1 text-sm">
-              {words.lines.map((line) => (
-                <li key={line}>{line}</li>
-              ))}
-            </ul>
-            <p className="text-muted-foreground text-xs">{words.footer}</p>
-            <DialogFooter>
-              <Button type="button" variant="ghost" onClick={onCancel}>
-                Cancel
-              </Button>
-              <Button type="button" onClick={onConfirm}>
-                {action(plan)}
-              </Button>
-            </DialogFooter>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/** What a clean freed, and what stayed. */
-function Result({ cleaned, onScanAgain }: { cleaned: CleanReport; onScanAgain: () => void }) {
+/** What a clean freed, and what stayed with why. */
+function Result({ cleaned, onDone }: { cleaned: CleanReport; onDone: () => void }) {
   const words = result(cleaned);
   return (
-    <SettingsSection title={STORAGE_ROWS.storage.label}>
-      <SettingsCard>
-        <div role="status" className="grid gap-1 px-4 py-3">
-          <span className="text-label font-medium">{words.title}</span>
-          {words.lines.map((line) => (
-            <span key={line} className="text-foreground/65 text-xs">
-              {line}
-            </span>
-          ))}
-        </div>
-        {cleaned.failures.length > 0 && (
-          <ul className="grid gap-2 px-4 py-3">
-            {cleaned.failures.map((failed, index) => {
-              const why = failure(failed);
-              return (
-                <li key={index} className="grid gap-0.5">
-                  <span className="text-label">{failed.label}</span>
-                  <span className="text-xs">{why.plain}</span>
-                  <span className="text-foreground/50 text-xs break-all">{why.detail}</span>
-                </li>
-              );
-            })}
-          </ul>
+    <>
+      <DialogHeader>
+        <DialogTitle>{words.title}</DialogTitle>
+        {words.lines.length > 0 && (
+          <DialogDescription asChild>
+            <div role="status" className="grid gap-1">
+              {words.lines.map((line) => (
+                <span key={line}>{line}</span>
+              ))}
+            </div>
+          </DialogDescription>
         )}
-        <div className="flex justify-end px-4 py-3">
-          <SettingsButton onClick={onScanAgain}>Scan again</SettingsButton>
-        </div>
-      </SettingsCard>
-    </SettingsSection>
+      </DialogHeader>
+      {cleaned.failures.length > 0 && (
+        <ul className="-mx-1 grid min-h-0 flex-1 gap-2 overflow-y-auto px-1">
+          {cleaned.failures.map((failed, index) => {
+            const why = failure(failed);
+            return (
+              <li key={index} className="grid gap-0.5">
+                <span className="text-label">{failed.label}</span>
+                <span className="text-xs">{why.plain}</span>
+                <span className="text-foreground/50 text-xs break-all">{why.detail}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <DialogFooter>
+        <Button type="button" onClick={onDone}>
+          Done
+        </Button>
+      </DialogFooter>
+    </>
   );
 }
 
 /** Advanced: every item that can go, picked by hand (the safe ones start picked). */
-function ChooseItems({
+function ChooseDialog({
+  open,
   report,
-  cleaning,
+  onCancel,
   onRemove,
 }: {
+  open: boolean;
   report: StorageReport;
-  cleaning: boolean;
+  onCancel: () => void;
   onRemove: (ids: Set<string>) => void;
 }) {
   const [chosen, setChosen] = useState(
@@ -423,37 +592,38 @@ function ChooseItems({
       return next;
     });
   return (
-    <SettingsSection
-      title="Choose items"
-      description="Everything that can be removed, including what the sweep leaves: work folders with unsaved changes (kept as a commit on their branch first), Brains, models and recordings."
-    >
-      <SettingsCard>
-        {groups.length === 0 && (
-          <p className="text-foreground/65 px-4 py-3 text-xs">Nothing can be removed.</p>
-        )}
-        {groups.map((group) => (
-          <div key={group.category} className="grid gap-2 px-4 py-3">
-            <h3 className="text-label font-medium">{group.title}</h3>
-            {group.items.map((item) => (
-              <PickRow key={item.id} item={item} checked={chosen.has(item.id)} onCheckedChange={(on) => pick(item.id, on)} />
-            ))}
-          </div>
-        ))}
-        <div className="flex justify-end px-4 py-3">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={cleaning || plan.ids.length === 0}
-            onClick={() => onRemove(chosen)}
-          >
+    <Dialog open={open} onOpenChange={(next) => !next && onCancel()}>
+      <DialogContent data-slot="storage-choose" className="flex max-h-full max-w-xl flex-col">
+        <DialogHeader>
+          <DialogTitle>{STORAGE_ROWS.choose.label}</DialogTitle>
+          <DialogDescription>
+            Everything that can be removed, including what Free up space leaves: work folders with
+            unsaved changes (kept as a commit on their branch first), Brains, models and recordings.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="-mx-1 grid min-h-0 flex-1 gap-4 overflow-y-auto px-1">
+          {groups.length === 0 && <p className="text-foreground/65 text-xs">Nothing can be removed.</p>}
+          {groups.map((group) => (
+            <div key={group.category} className="grid gap-2">
+              <h3 className="text-label font-medium">{group.title}</h3>
+              {group.items.map((item) => (
+                <PickRow key={item.id} item={item} checked={chosen.has(item.id)} onCheckedChange={(on) => pick(item.id, on)} />
+              ))}
+            </div>
+          ))}
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="button" disabled={plan.ids.length === 0} onClick={() => onRemove(chosen)}>
             {plan.ids.length === 0
               ? "Remove"
               : `Remove ${count(plan.ids.length, "item", "items")} (${formatBytes(plan.bytes)})`}
           </Button>
-        </div>
-      </SettingsCard>
-    </SettingsSection>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -495,6 +665,23 @@ function PickRow({
       </span>
       {item.path && <RevealButton path={item.path} />}
     </div>
+  );
+}
+
+/** Advanced: disk use per project. */
+function UsageDialog({ open, report, onClose }: { open: boolean; report: StorageReport; onClose: () => void }) {
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent data-slot="storage-usage" className="flex max-h-full max-w-2xl flex-col">
+        <DialogHeader>
+          <DialogTitle>{STORAGE_ROWS.usage.label}</DialogTitle>
+          <DialogDescription>{STORAGE_ROWS.usage.description}</DialogDescription>
+        </DialogHeader>
+        <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
+          <Usage report={report} />
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

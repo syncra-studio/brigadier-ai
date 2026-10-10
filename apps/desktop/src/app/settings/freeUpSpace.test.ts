@@ -4,7 +4,7 @@ import React from "react";
 import ReactDOMServer from "react-dom/server";
 import { createServer } from "vite";
 
-import { action, confirmation, failure, freeLine, picked, result, summary, sweep, usageParts } from "@/app/settings/freeUpSpace";
+import { action, confirmation, failure, freeLine, picked, result, sweep, usageParts } from "@/app/settings/freeUpSpace";
 import type { CleanItem, StorageReport } from "@/ipc/generated";
 
 const GB = 1024 ** 3;
@@ -82,9 +82,8 @@ test("the sweep takes only safe items of the plain groups, and lists what is kep
   assert.equal(plan.keptBytes, 6 * GB);
 });
 
-test("the summary, the button, the confirmation and the result say it plainly", () => {
+test("the button, the confirmation and the result say it plainly", () => {
   const plan = sweep(report);
-  assert.equal(summary(report, plan), "Brigadier uses 31.0 GB on this computer. 11.4 GB can be freed.");
   assert.equal(action(plan), "Free up 11.4 GB");
   const words = confirmation(plan);
   assert.equal(words.title, "Free up 11.4 GB?");
@@ -97,7 +96,6 @@ test("the summary, the button, the confirmation and the result say it plainly", 
   assert.equal(words.footer, "3 things are kept on purpose. Nothing else is touched.");
 
   const tidy = { ...report, items: [], kept: [] };
-  assert.equal(summary(tidy, sweep(tidy)), "Brigadier uses 31.0 GB on this computer. Nothing to free up: Brigadier is tidy.");
   assert.equal(action(sweep(tidy)), "Nothing to free up");
 
   assert.deepEqual(result({ removed: 5, reclaimedBytes: 11 * GB, trashedBytes: 0, failures: [], codexThreadsDeleted: 0 }), {
@@ -144,41 +142,54 @@ test("choosing by hand takes what is picked and can be removed, never a kept ite
   assert.equal(confirmation(plan).footer, "1 item goes to the Trash. 3 things are kept on purpose. Nothing else is touched.");
 });
 
-test("the screen shows the groups, what is kept, and one button", async () => {
+test("the page shows what is used, the Free up space row and Advanced", async () => {
   const server = await createServer({
     server: { middlewareMode: true, ws: false },
     appType: "custom",
     ssr: { noExternal: ["@openai/apps-sdk-ui"] },
   });
   try {
-    const { FreeUpSpaceBody } = await server.ssrLoadModule("/src/app/settings/StoragePage.tsx");
+    const { StorageBody } = await server.ssrLoadModule("/src/app/settings/StoragePage.tsx");
     const render = (props: Record<string, unknown>) =>
       ReactDOMServer.renderToStaticMarkup(
-        React.createElement(FreeUpSpaceBody, {
+        React.createElement(StorageBody, {
           report,
           error: null,
+          scanning: false,
           cleaning: false,
           cleaned: null,
+          cleanError: null,
+          onRefresh: () => {},
           onClean: () => {},
-          onScanAgain: () => {},
+          onDone: () => {},
           ...props,
         }),
       );
     const html = render({});
+    assert.match(html, />31\.0 GB used by Brigadier</);
+    assert.match(html, />Refresh</);
+    assert.match(html, /data-slot="storage-bar"/);
+    assert.match(html, />Work folders</);
+    assert.match(html, />\/data</);
     assert.match(html, /11\.4 GB can be freed/);
-    assert.match(html, />Finished sessions’ work folders</);
-    assert.match(html, />Kept on purpose</);
-    assert.match(html, />Free up 11\.4 GB</);
+    assert.match(html, />Review</);
+    assert.match(html, />Archived chats</);
+    assert.match(html, />Manage</);
     assert.match(html, />Advanced</);
-    assert.doesNotMatch(html, /Temporary files/);
+    // The groups live in the Review dialog, not on the page.
+    assert.doesNotMatch(html, /Finished sessions’ work folders/);
 
-    const looking = render({ report: null });
+    const looking = render({ report: null, scanning: true });
     assert.match(looking, /Looking at what Brigadier keeps/);
+    assert.doesNotMatch(looking, /storage-bar/);
 
-    const done = render({ cleaned: { removed: 5, reclaimedBytes: 11 * GB, trashedBytes: 0, failures: [], codexThreadsDeleted: 0 } });
-    assert.match(done, />Freed 11\.0 GB\.</);
-    assert.match(done, />Scan again</);
-    assert.doesNotMatch(done, /Free up 11/);
+    const updating = render({ scanning: true });
+    assert.match(updating, /Updating…/);
+    assert.match(updating, /used by Brigadier/);
+
+    const failed = render({ report: null, error: "Couldn't look: boom" });
+    assert.match(failed, /Couldn&#x27;t look: boom/);
+    assert.match(failed, />Try again</);
   } finally {
     await server.close();
   }
