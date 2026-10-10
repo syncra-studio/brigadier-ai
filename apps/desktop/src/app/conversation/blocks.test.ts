@@ -1,10 +1,24 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import { type Block, type BoardDigest, blockSequence, buildBlocks, foldTurns, judgementCall, type ThreadNode } from "@/app/conversation/blocks";
+import { settledSession } from "@/fixtures/settledSession";
+import {
+  answerIndex,
+  type Block,
+  type BoardDigest,
+  blockSequence,
+  buildBlocks,
+  foldsAway,
+  foldTurns,
+  judgementCall,
+  type ThreadNode,
+} from "@/app/conversation/blocks";
+import { splitReport } from "@/app/conversation/phaseView";
 import { checkersOf, checkResult, checksCount, machineWords, taskRowDetail, taskState } from "@/app/conversation/rowWords";
-import type { Decision, MachineStep, Message, OrchestratorStep, OvernightRun, Plan, Task, UserRequest } from "@/ipc/generated";
+import type { Decision, EventEnvelope, MachineStep, Message, OrchestratorStep, OvernightRun, Plan, Task, UserRequest } from "@/ipc/generated";
+import { applyToBoard, emptyBoard } from "@/state/board";
 
 // The board of the first real overnight run (2026-10-03), from its stored events
 // (scripts/extract-board-fixture.mjs), in the shape a run has now: one request for the whole run,
@@ -336,4 +350,67 @@ test("a turn still waiting on the user keeps itself and every later turn out of 
   assert.equal(folded.hidden, 1);
   assert.deepEqual(folded.tree.nodes.map((kept) => kept.id), ["u2", "r2", "u3", "r3", "u4", "r4", "u5", "r5"]);
   assert.equal(foldTurns({ nodes: nodes.map((kept) => ({ ...kept, block: { ...kept.block, state: "done" } as Block })), headId: "r5" }, 2).hidden, 3);
+});
+
+// The user's session of 2026-10-09 (a grill, then the right sidebar and tabs built), from its
+// stored events. Its last request ended twice, the same merge question each time: once when the
+// work landed, again after a late review's fix landed, while two "Waiting on you" items kept it
+// waiting, unfolded.
+const grill = JSON.parse(
+  readFileSync(new URL("../../fixtures/boards/thread-grill-2026-10-09.events.json", import.meta.url), "utf8"),
+) as { conversationId: string; events: EventEnvelope[] };
+
+function grillBlocks(events: readonly EventEnvelope[]) {
+  let replayed = emptyBoard(grill.conversationId);
+  const said: Message[] = [];
+  for (const envelope of events) {
+    replayed = applyToBoard(replayed, envelope);
+    if (envelope.event.type === "messageAppended") said.push({ ...envelope.event.message, seq: envelope.streamSeq });
+  }
+  return { board: replayed, blocks: buildBlocks(said, {}, false, replayed, []) };
+}
+
+test("a request whose ending was written again shows only the newest, the first in its fold", () => {
+  const merge = { branch: "brigadier/9a2b00c9/session", base: "main" };
+  const { board: settled, blocks } = grillBlocks(settledSession(grill.conversationId, grill.events, merge));
+  // Nothing is listed for the user, and the request is done while the merge card waits.
+  assert.deepEqual(settled.waiting, {});
+  const last = blocks.at(-1);
+  assert.ok(last);
+  assert.equal(last.state, "done");
+  const card = Object.values(settled.questions).find((question) => question.kind.type === "merge");
+  assert.equal(card?.requestId, last.key.replace("request:", ""));
+  assert.equal(card?.answeredAtMs, null);
+  // Two endings: the newest is the answer, the first folds into the work with the rest.
+  const endings = last.texts.filter((text) => text.text.includes("should I merge"));
+  assert.equal(endings.length, 2);
+  const answer = answerIndex(last.texts, last.state === "done");
+  assert.equal(answer, last.texts.length - 1);
+  assert.ok(last.texts[answer!]!.text.startsWith("I fixed the four problems the last review found"));
+  const shown = sequence(last).filter((entry) => !foldsAway(entry, answer));
+  assert.deepEqual(shown.filter((entry) => entry.kind === "text").map((entry) => entry.kind === "text" && entry.index), [answer]);
+  const first = last.texts.findIndex((text) => text === endings[0]);
+  assert.ok(sequence(last).some((entry) => entry.kind === "text" && entry.index === first && foldsAway(entry, answer)));
+  // As recorded, the items kept it waiting: nothing was the answer, and nothing folded.
+  const before = grillBlocks(grill.events);
+  assert.equal(before.blocks.at(-1)?.state, "waiting");
+  assert.equal(Object.keys(before.board.waiting).length, 2);
+  assert.equal(answerIndex(before.blocks.at(-1)!.texts, false), null);
+});
+
+test("an answer with a Details section shows its head and folds the rest", () => {
+  const answer = [
+    "The right sidebar and the tabs are on `brigadier/9a2b00c9/session`.",
+    "To check: the native save dialog, which the scripted checks can't open.",
+    "",
+    "### Details",
+    "- Desktop tests (190), typecheck, lint and build pass.",
+    "- The review found four problems; all four are fixed.",
+  ].join("\n");
+  assert.deepEqual(splitReport(answer), {
+    head: "The right sidebar and the tabs are on `brigadier/9a2b00c9/session`.\nTo check: the native save dialog, which the scripted checks can't open.",
+    details: "- Desktop tests (190), typecheck, lint and build pass.\n- The review found four problems; all four are fixed.",
+  });
+  // Without one, the answer shows whole.
+  assert.equal(splitReport("Merged into `main`."), null);
 });

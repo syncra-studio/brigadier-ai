@@ -93,6 +93,12 @@ dev daemon, 2026-10-08) through the board reducer from its stored events
 Unfold "Worked for" and its groups to compare the activity rows; `activity/group.test.ts` reads the
 same events.
 
+`?session=grill` replays the user's session of 2026-10-09 instead (a grill, then the right sidebar
+and tabs built; `src/fixtures/boards/thread-grill-2026-10-09.events.json`) as this build settles it
+(`src/fixtures/settledSession.ts`): no "Waiting on you", its last request done with its newest ending
+as the answer and the first in the fold, and the merge asked on a card. `recorded=1` replays it as
+stored; `summary=1` pins the side panel. `blocks.test.ts` reads the same events.
+
 # Computer timeline
 
 `http://localhost:1426/fixtures/computer-timeline.html` renders a finished worker's thread whose
