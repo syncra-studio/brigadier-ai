@@ -187,11 +187,15 @@ impl SessionManager {
         let _held = self.plans.lock().await;
         let board = self.core.board(id).await?;
         // A lead that outlined in plan mode waits for the user's yes to this document: its
-        // phase moves here with its outline, and the plan it outlined under gives way.
+        // phase moves here with its outline, and the plan it outlined under gives way. (Outside
+        // plan mode its outline has a card of its own.)
+        let plan_mode = self.plan_mode(id);
         let mut waiting: Vec<&Task> = board
             .tasks
             .values()
-            .filter(|task| task.request_id == request_id && Self::waits_for_go_ahead(task))
+            .filter(|task| {
+                plan_mode && task.request_id == request_id && Self::waits_for_go_ahead(task)
+            })
             .collect();
         waiting.sort_by_key(|task| task.number);
         for lead in waiting {
