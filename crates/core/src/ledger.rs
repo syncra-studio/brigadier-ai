@@ -298,7 +298,6 @@ impl CleanupLedger {
             self.state().disposing.insert(owner.to_owned());
         }
         let artifacts = self.artifacts(owner);
-        let was_empty = artifacts.is_empty();
         // Processes first, so nothing is still writing the files removed next.
         let (processes, files): (Vec<Artifact>, Vec<Artifact>) =
             artifacts.into_iter().partition(is_process);
@@ -308,14 +307,13 @@ impl CleanupLedger {
             .extend(self.remove(owner, files).await.failures);
         if leftovers.is_clean() {
             // Everything in the snapshot is gone. Artifacts recorded meanwhile stay, both here
-            // and on replay. When none did, the last removal already ended the request on
-            // replay, unless there was no removal at all.
-            if (was_empty || !self.artifacts(owner).is_empty())
-                && let Err(err) = self
-                    .append(DomainEvent::CleanupFinished {
-                        owner: owner.to_owned(),
-                    })
-                    .await
+            // and on replay. Always end the request durably: a record's event can be stored
+            // before it shows in memory, so memory can't tell whether one raced this disposal.
+            if let Err(err) = self
+                .append(DomainEvent::CleanupFinished {
+                    owner: owner.to_owned(),
+                })
+                .await
             {
                 tracing::warn!(owner, error = %err, "could not record a finished cleanup");
             }
@@ -1077,7 +1075,8 @@ mod tests {
                 "cleanup.recorded",
                 "cleanup.finished",
                 "cleanup.requested",
-                "cleanup.removed"
+                "cleanup.removed",
+                "cleanup.finished"
             ]
         );
         for ledger in [&reloaded, &fixture.load().await] {
@@ -1126,7 +1125,7 @@ mod tests {
         assert!(path.is_dir());
         assert_eq!(reloaded.artifacts(owner), vec![artifact]);
 
-        // When nothing is recorded meanwhile, the removal alone ends the request.
+        // When nothing is recorded meanwhile, the request still ends with a finish.
         assert!(reloaded.dispose(owner).await.is_clean());
         assert!(!path.exists());
         let (kinds, _) = fixture.kinds(owner).await;
@@ -1139,7 +1138,8 @@ mod tests {
                 "cleanup.removed",
                 "cleanup.finished",
                 "cleanup.requested",
-                "cleanup.removed"
+                "cleanup.removed",
+                "cleanup.finished"
             ]
         );
         assert!(fixture.load().await.disposing().is_empty());
