@@ -670,6 +670,11 @@ The thirteen points were folded in:
   - On a lead's outline, they are the go-ahead, with the user's words as its corrections (§6.2). There is no
     second card.
 - **In plan mode**, the thread proposes a lead's outline with `propose_plan`, and the user's Yes starts that lead.
+  - The lead's phase and outline move into each revision the thread proposes, and the plan it outlined under gives
+    way. So after the Yes, its progress, verifier and reviews still know the lead and its outline.
+  - The Yes reaches the lead with the plan the user approved, which wins over its outline. A revision made on the
+    user's changes then gets built, not the first outline.
+  - While the lead waits on the proposed plan, its request is done: the card holds nothing up here either.
 - **Skip and ✕** both put "Implement this plan?" aside. The plan stays proposed.
 - **A plan written as a document is always the user's to decide**, at every permission level. The context card's
   Plan section shows its title with a bulb and opens it, and does not ask a second time. A single-phase plan shows
