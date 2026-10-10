@@ -283,11 +283,10 @@ mod embedded {
                 if !web_page(&url) || !favicon_data(&data_url) {
                     return;
                 }
-                let step = limit
-                    .lock()
-                    .expect("favicon lock")
-                    .offer(url, data_url, Instant::now());
-                match step {
+                // The lock is held while sending, so a page load's reset and `Load` can't fall
+                // between a favicon's step and its event.
+                let mut held = limit.lock().expect("favicon lock");
+                match held.offer(url, data_url, Instant::now()) {
                     FaviconStep::Send { url, data_url } => {
                         let _ = on_favicon.send(BrowserEvent::Favicon { url, data_url });
                     }
@@ -296,9 +295,8 @@ mod embedded {
                         tauri::async_runtime::spawn(async move {
                             loop {
                                 tokio::time::sleep(wait).await;
-                                let step =
-                                    limit.lock().expect("favicon lock").flush(Instant::now());
-                                match step {
+                                let mut held = limit.lock().expect("favicon lock");
+                                match held.flush(Instant::now()) {
                                     FaviconStep::Later(remaining) => wait = remaining,
                                     FaviconStep::Send { url, data_url } => {
                                         let _ = on_favicon
@@ -327,8 +325,9 @@ mod embedded {
             })
             .with_on_page_load_handler(move |event, url| {
                 let loading = matches!(event, PageLoadEvent::Started);
+                let mut held = load_limit.lock().expect("favicon lock");
                 if loading {
-                    load_limit.lock().expect("favicon lock").reset();
+                    held.reset();
                 }
                 let _ = on_load.send(BrowserEvent::Load { url, loading });
             })
