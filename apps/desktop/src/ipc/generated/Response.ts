@@ -87,7 +87,7 @@ provider: ProviderKind,
  * The task's checkout when the terminal starts elsewhere (a read-only Codex worker
  * starts in its scratch folder).
  */
-checkout?: string, } | { "method": "openSideChat", conversation: Conversation, } | { "method": "writeTerminal" } | { "method": "resizeTerminal" } | { "method": "clearTerminal" } | { "method": "closeTerminal" } | { "method": "getComputerAccess", access: ComputerAccess, } | { "method": "allowComputerAccess", access: ComputerAccess, } | { "method": "getDictation", dictation: DictationStatus, } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation", dictationId: string, } | { "method": "appendDictation" } | { "method": "finishDictation" } | { "method": "cancelDictation" } | { "method": "rateMessage" } | { "method": "getSessionDiff", 
+checkout?: string, } | { "method": "openSideChat", conversation: Conversation, } | { "method": "writeTerminal" } | { "method": "resizeTerminal" } | { "method": "clearTerminal" } | { "method": "closeTerminal" } | { "method": "getComputerAccess", access: ComputerAccess, } | { "method": "allowComputerAccess", access: ComputerAccess, } | { "method": "openComputerSettings" } | { "method": "getDictation", dictation: DictationStatus, } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation", dictationId: string, } | { "method": "appendDictation" } | { "method": "finishDictation" } | { "method": "cancelDictation" } | { "method": "rateMessage" } | { "method": "getSessionDiff", 
 /**
  * Absent for Chats and local-checkout sessions.
  */

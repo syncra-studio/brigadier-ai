@@ -301,6 +301,11 @@ pub enum Request {
         #[serde(default)]
         start_over: bool,
     },
+    /// Opens the pane of System Settings that lists Brigadier Computer Use for one permission,
+    /// without asking for it (to check it there, or turn it off).
+    OpenComputerSettings {
+        grant: ComputerGrant,
+    },
     /// Whether dictation (the composer's Dictate button) can run, and its speech model.
     GetDictation,
     /// Downloads the speech model into the data folder. Answered at once; progress and the
@@ -1040,6 +1045,7 @@ pub enum Response {
     AllowComputerAccess {
         access: ComputerAccess,
     },
+    OpenComputerSettings,
     GetDictation {
         dictation: DictationStatus,
     },

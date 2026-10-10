@@ -36,18 +36,22 @@ export function computerUseAvailable(): boolean {
   return useApp.getState().info?.platform === "macos";
 }
 
-let reading = false;
+let reading: Promise<void> | null = null;
 
 /** Reads the permissions again (the user may have changed them in System Settings). One read at a time. */
 export function readComputerAccess(): void {
-  if (reading) return;
-  reading = true;
-  request({ method: "getComputerAccess" })
+  void checkComputerAccess();
+}
+
+/** {@link readComputerAccess}, settled when that read is (Settings' Check again). */
+export function checkComputerAccess(): Promise<void> {
+  reading ??= request({ method: "getComputerAccess" })
     .then((response) => set(response.access))
     .catch((error: unknown) => console.error("computer access read failed", error))
     .finally(() => {
-      reading = false;
+      reading = null;
     });
+  return reading;
 }
 
 /** How often a shown permission row reads again while one is missing or the helper restarts. */
@@ -91,4 +95,9 @@ export function useLiveComputerAccess(): ComputerAccess | null {
  */
 export async function allowComputerAccess(grant: ComputerGrant, startOver = false): Promise<void> {
   set((await request({ method: "allowComputerAccess", grant, startOver })).access);
+}
+
+/** Opens the System Settings list for one permission, without asking for it. */
+export async function openComputerSettings(grant: ComputerGrant): Promise<void> {
+  await request({ method: "openComputerSettings", grant });
 }

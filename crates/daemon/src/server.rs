@@ -1290,6 +1290,20 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 access: computer_access(permissions),
             }
         }
+        Request::OpenComputerSettings { grant } => {
+            #[cfg(target_os = "macos")]
+            std::process::Command::new("/usr/bin/open")
+                .arg(computer_pane_url(grant))
+                .spawn()
+                .map_err(|e| {
+                    IpcError::from(brigadier_core::Error::Invalid(format!(
+                        "couldn't open System Settings: {e}"
+                    )))
+                })?;
+            #[cfg(not(target_os = "macos"))]
+            let _ = grant;
+            Response::OpenComputerSettings
+        }
         Request::GetDictation
         | Request::DownloadDictationModel
         | Request::CancelDictationDownload

@@ -52,7 +52,7 @@ sessionId?: string, cols: number, rows: number, } | { "method": "openSideChat", 
  * Start over: first forget Brigadier Computer Use's own entry for this permission,
  * left by an older build that the system no longer matches.
  */
-startOver: boolean, } | { "method": "getDictation" } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation" } | { "method": "appendDictation", dictationId: string, 
+startOver: boolean, } | { "method": "openComputerSettings", grant: ComputerGrant, } | { "method": "getDictation" } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation" } | { "method": "appendDictation", dictationId: string, 
 /**
  * 16 kHz mono 16-bit little-endian PCM, base64-encoded.
  */
