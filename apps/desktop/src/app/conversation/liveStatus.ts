@@ -7,7 +7,7 @@ import { type Board, RETRYING } from "@/state/board";
 
 /**
  * The status line's tone: `busy` shimmers, `still` waits on something that is not the user,
- * `needsYou` waits on the user.
+ * `needsYou` waits on the user and shimmers as well.
  */
 export type StatusTone = "busy" | "still" | "needsYou";
 
