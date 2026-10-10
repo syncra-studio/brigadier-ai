@@ -27,7 +27,7 @@ use brigadier_git::{
     PrepareOutcome, SeriesOutcome, litter,
 };
 
-use super::cards::{merge_chosen, merge_label};
+use super::cards::{MERGE_RESOLVING, merge_chosen, merge_label};
 use super::conversation::Envelope;
 use super::workers::Workspace;
 use super::{SessionManager, blocking, git_error, merge_consent};
@@ -207,9 +207,17 @@ impl SessionManager {
         let repo = self.task_repo(task)?;
         let reported = self.phase_reported(task).await;
         let squash = task.kind == crate::work::TaskKind::Merge;
+        let base_merge = workspace
+            .base_merge
+            .clone()
+            .filter(|_| squash && task.subject.is_none());
         let on_snapshot = workspace.on_snapshot;
         let leftovers = self.commit_message(format!(
             "{}\n\nWhat task-{} left uncommitted, committed as it landed.",
+            task.title, task.number
+        ));
+        let merged_message = self.commit_message(format!(
+            "{}\n\ntask-{} merged the session's base into `{target}` and resolved its conflicts.",
             task.title, task.number
         ));
         let omit_ai_coauthors = self.core.settings().omit_ai_coauthors;
@@ -217,6 +225,39 @@ impl SessionManager {
         let moved = blocking(move || {
             let repo = git.open(&repo).map_err(git_error)?;
             let worktree = git.open_worktree(&worktree).map_err(git_error)?;
+            // A merge task with no subject merged the base into the branch: the base's tip it
+            // started from is the landed commit's second parent, and only the worker's own
+            // edits since its start meet the litter guard (the base's files land as they are).
+            let merge_start = base_merge.as_ref().map(|merge| Oid(merge.start.clone()));
+            let base_merge = match base_merge {
+                Some(merge) => {
+                    let start = Oid(merge.start);
+                    let own = worktree
+                        .changes(&start)
+                        .map_err(git_error)?;
+                    let mut excluded = Vec::new();
+                    keep_paths(&own, &reported, &mut excluded);
+                    let (_, incoming) = repo.diff_scope(&base, &start).map_err(git_error)?;
+                    let blocked: Vec<_> = excluded.iter()
+                        .filter(|file| {
+                            incoming.contains(&file.path)
+                                || own.iter().any(|change| {
+                                    change.path == file.path
+                                        && matches!(&change.kind, ChangeKind::Renamed { from } if incoming.contains(from))
+                                })
+                        })
+                        .map(|file| file.path.as_str())
+                        .collect();
+                    if !blocked.is_empty() {
+                        return Err(Error::Invalid(format!(
+                            "Excluded worker edits overlap incoming base changes in: {}. Nothing landed. Restore these files from the merge task's start commit `{}` before retrying; dropping them would lose the base's changes.",
+                            blocked.join(", "), start.0
+                        )));
+                    }
+                    Some((Oid(merge.base_tip), own))
+                }
+                None => None,
+            };
             let mut tries = 0;
             loop {
                 tries += 1;
@@ -237,16 +278,57 @@ impl SessionManager {
                             return Ok(Moved::Conflicts { onto, paths });
                         }
                     };
-                    let include = keep_paths(&changes, &reported, &mut excluded);
-                    match worktree
-                        .commit_candidate(&include, &leftovers)
-                        .map_err(git_error)?
-                    {
-                        CommitOutcome::Committed { commit, .. } => (commit, 1, false),
-                        CommitOutcome::HookFailed { output } => {
+                    let include = match &base_merge {
+                        Some((_, own)) => {
+                            let mut left_out = Vec::new();
+                            keep_paths(own, &reported, &mut left_out);
+                            let include = changes
+                                .iter()
+                                .filter(|change| !left_out.iter().any(|e| e.path == change.path))
+                                .map(|change| change.path.clone())
+                                .collect();
+                            excluded.extend(left_out);
+                            include
+                        }
+                        None => keep_paths(&changes, &reported, &mut excluded),
+                    };
+                    let message = if base_merge.is_some() {
+                        &merged_message
+                    } else {
+                        &leftovers
+                    };
+                    let outcome = worktree
+                        .commit_candidate(&include, message)
+                        .map_err(git_error)?;
+                    match (outcome, &base_merge) {
+                        (CommitOutcome::HookFailed { output }, _) => {
                             return Ok(Moved::HookFailed { output });
                         }
-                        CommitOutcome::Empty => return Ok(Moved::Nothing { excluded }),
+                        // The resolution becomes a merge with the base's tip as its second
+                        // parent, so the branch then merges into the base cleanly. Its
+                        // message is cleaned first: a range over a merge holds the base's
+                        // commits too.
+                        (CommitOutcome::Committed { commit, .. }, Some((merged_in, _))) => {
+                            if omit_ai_coauthors
+                                && let Err(err) = worktree.clean_ai_coauthors(&onto, &commit)
+                            {
+                                tracing::warn!(error = %err, "could not leave AI co-authors out of the merge that lands");
+                            }
+                            let merge = worktree.merge_parent(merged_in).map_err(git_error)?;
+                            (merge, 1, false)
+                        }
+                        // The branch's side kept as it is: the merge still lands, or the next
+                        // merge into the base meets the same conflicts.
+                        (CommitOutcome::Empty, Some((merged_in, _))) => {
+                            let merge = worktree
+                                .commit_merge(merged_in, message)
+                                .map_err(git_error)?;
+                            (merge, 1, false)
+                        }
+                        (CommitOutcome::Committed { commit, .. }, None) => (commit, 1, false),
+                        (CommitOutcome::Empty, None) => {
+                            return Ok(Moved::Nothing { excluded });
+                        }
                     }
                 } else {
                     // 1. What it left uncommitted.
@@ -345,7 +427,7 @@ impl SessionManager {
                 }
                 // The messages as the user wants them, before they land: the worker's branch
                 // moves to the rewritten commits, so it is found merged once they have landed.
-                let tip = if omit_ai_coauthors {
+                let tip = if omit_ai_coauthors && base_merge.is_none() {
                     match worktree.clean_ai_coauthors(&onto, &tip) {
                         Ok(cleaned) => cleaned.unwrap_or(tip),
                         Err(err) => {
@@ -356,6 +438,15 @@ impl SessionManager {
                 } else {
                     tip
                 };
+                if let Some(start) = &merge_start {
+                    let unresolved = unresolved_base_merge(&repo, start, &tip)?;
+                    if !unresolved.is_empty() {
+                        return Err(Error::Invalid(format!(
+                            "Unresolved conflict markers remain in: {}. Nothing landed. Have the merge worker resolve every hunk and report again.",
+                            unresolved.join(", ")
+                        )));
+                    }
+                }
                 // 4. Fast-forward.
                 let request = LandRequest {
                     branch: target.clone(),
@@ -607,7 +698,13 @@ impl SessionManager {
         // Its one review, by the other vendor, starts now and runs on its own.
         {
             let manager = self.arc();
-            let (task, from, tip) = (task.clone(), from.clone(), new_tip.clone());
+            let from = task
+                .workspace
+                .as_ref()
+                .and_then(|workspace| workspace.base_merge.as_ref())
+                .map(|merge| Oid(merge.start.clone()))
+                .unwrap_or_else(|| from.clone());
+            let (task, tip) = (task.clone(), new_tip.clone());
             self.spawn(async move { manager.review_landing(&task, from, tip).await });
         }
         for landed in &tasks {
@@ -847,6 +944,93 @@ impl SessionManager {
         Ok((start.onto, start.commit))
     }
 
+    /// A merge task with no subject starts from the session branch `target` with the current
+    /// tip of its base `base_branch` merged in by Brigadier, conflict markers left in the
+    /// files: the branch's tip (the task's base), that commit, and the base's tip. The
+    /// landing makes the resolution a merge of the two tips ([`Self::move_commits`]).
+    pub(crate) async fn base_merge_start(
+        &self,
+        repo: &Path,
+        target: &str,
+        base_branch: &str,
+    ) -> Result<(Oid, Oid, Oid)> {
+        let (git, repo, target, base_branch) = (
+            self.git.clone(),
+            repo.to_owned(),
+            target.to_owned(),
+            base_branch.to_owned(),
+        );
+        let message = format!("WIP: `{base_branch}` merged into `{target}`");
+        let start = blocking(move || {
+            git.open(&repo)
+                .map_err(git_error)?
+                .merge_branch_for_resolution(&target, &base_branch, &message)
+                .map_err(git_error)
+        })
+        .await?;
+        Ok((start.work, start.commit, start.onto))
+    }
+
+    /// What a merge worker with no subject reads: the session's base merged into its branch,
+    /// and the conflicts Brigadier left in its worktree.
+    pub(crate) async fn base_merge_brief(&self, task: &Task, workspace: &Workspace) -> String {
+        let target = workspace.target.clone().unwrap_or_default();
+        let base_branch = match self.core.conversation(&task.conversation_id) {
+            Ok(conversation) => match conversation.setup {
+                Some(Setup::Session {
+                    environment: Environment::NewWorktree { base, .. },
+                    ..
+                }) => base,
+                _ => String::new(),
+            },
+            Err(_) => String::new(),
+        };
+        let merge = match (
+            workspace.worktree.clone(),
+            workspace.base.clone(),
+            workspace.base_merge.clone(),
+        ) {
+            (Some(path), Some(base), Some((start, _))) => {
+                let git = self.git.clone();
+                blocking(move || {
+                    git.open(&path)
+                        .map_err(git_error)?
+                        .merge_after(&base, &start)
+                        .map_err(git_error)
+                })
+                .await
+                .ok()
+                .flatten()
+            }
+            _ => None,
+        };
+        let conflicts = match &merge {
+            Some(merge) if merge.clean => {
+                "It merged without conflicts: check that both sides still fit together.".to_owned()
+            }
+            Some(merge) => {
+                let sides = format!(
+                    "`git show {}:<path>` shows `{target}`'s side and `git show {}:<path>` `{base_branch}`'s (reading is fine)",
+                    merge.work.0, merge.onto.0
+                );
+                if merge.conflicts.is_empty() {
+                    format!(
+                        "Git reported a conflict it could not pin to one file (for example a folder renamed on one side). Compare both sides: {sides}. Resolve it by editing the files, keeping both sides' intent."
+                    )
+                } else {
+                    format!(
+                        "Conflicts in: {}. Text conflicts are marked in the file: the first side (after `<<<<<<<`) is `{target}`'s, the second (before `>>>>>>>`) is `{base_branch}`'s. Binary files, a file deleted on one side, a mode change or a file against a folder carry no markers: {sides}. Resolve each by editing the files, keeping both sides' intent, and leave no marker behind.",
+                        merge.conflicts.join(", ")
+                    )
+                }
+            }
+            None => "Resolve every conflict it left by editing the files, keeping both sides' intent, and leave no marker behind.".to_owned(),
+        };
+        format!(
+            "\n\nBrigadier has merged the current `{base_branch}` into the session branch `{target}` in this worktree, so the session can merge into `{base_branch}` cleanly. {conflicts} Make sure it builds and its tests pass. Run no git command that changes anything (no merge, commit, rebase, checkout or reset): Brigadier builds the merge commit from the files. List every file you edit in the report's `changes`."
+        )
+    }
+
     /// Something stopped a landing: the task goes to `state` and the orchestrator hears why,
     /// and decides what happens next.
     pub(super) async fn landing_problem(&self, task: &Task, reason: &str, state: TaskState) {
@@ -1007,7 +1191,7 @@ impl SessionManager {
             if base_tip.0 != expected_base
                 && !repo.ancestor(&base_tip, &tip).map_err(git_error)?
             {
-                return Err(Error::Invalid(format!("`{}` moved since this work was verified. Nothing merged; review and verify the new base before merging.", workspace.base)));
+                return Err(Error::Invalid(format!("`{}` moved since this work was verified. Nothing merged. Once the run has ended, the session can bring the new `{}` in with a regular merge of it into the session branch, if the user asks.", workspace.base, workspace.base)));
             }
             // A base already included in this phase-verified candidate is safe. Otherwise
             // its change must be verified again before it merges.
@@ -1015,7 +1199,7 @@ impl SessionManager {
             let message = format!("Merge verified overnight work into {}", workspace.base);
             let (commit, base_tip) = match repo.prepare_merge_commit(&workspace.base, &tip, &message).map_err(git_error)? {
                 MergeOutcome::Ready { commit, base_tip, .. } => (commit, base_tip),
-                MergeOutcome::Conflicts { paths } => return Err(Error::Invalid(format!("The verified work conflicts in: {}. Resolve and verify these files before merging.", paths.join(", ")))),
+                MergeOutcome::Conflicts { paths } => return Err(Error::Invalid(format!("The run's verified work conflicts with `{}` in: {}. Nothing merged. Once the run has ended, the session can resolve it with a regular merge of `{}` into the session branch, if the user asks.", workspace.base, paths.join(", "), workspace.base))),
             };
             if base_tip != approved_base_tip {
                 return Err(Error::Invalid("The base moved while preparing the merge; look again. Nothing merged.".into()));
@@ -1059,6 +1243,7 @@ impl SessionManager {
             ));
         }
         let Some(Setup::Session {
+            repo,
             environment: Environment::NewWorktree { base, branch, .. },
             ..
         }) = self.core.conversation(id)?.setup
@@ -1113,11 +1298,35 @@ impl SessionManager {
         let note = note
             .map(|line| line.trim().to_owned())
             .filter(|line| !line.is_empty());
+        // Whether the merge would stop at conflicts, looked at ahead: the card then offers to
+        // resolve them. A look that fails shows the plain card.
+        let (git, repo_path, base_name, branch_name) = (
+            self.git.clone(),
+            PathBuf::from(&repo),
+            base.clone(),
+            branch.clone(),
+        );
+        let conflicts = blocking(move || {
+            let repo = git.open(&repo_path).map_err(git_error)?;
+            match repo
+                .prepare_merge(&base_name, &branch_name, "Merge")
+                .map_err(git_error)?
+            {
+                MergeOutcome::Conflicts { paths } => Ok(Some(paths)),
+                MergeOutcome::Ready { .. } => Ok(None),
+            }
+        })
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(conversation = %id, error = %err, "could not look ahead at the session merge");
+            None
+        });
+        let (text, label) = merge_offer(&branch, &base, conflicts.as_deref());
         let item = QuestionItem {
-            text: format!("Merge `{branch}` into `{base}`?"),
+            text,
             options: vec![
                 QuestionOption {
-                    label: merge_label(&base),
+                    label,
                     description: note,
                 },
                 QuestionOption {
@@ -1130,6 +1339,12 @@ impl SessionManager {
         let kind = QuestionKind::Merge {
             branch: branch.clone(),
             base: base.clone(),
+            conflicted: conflicts.is_some(),
+            conflicts: conflicts
+                .unwrap_or_default()
+                .into_iter()
+                .take(CONFLICTS_SHOWN)
+                .collect(),
         };
         self.open_round(id, None, kind, vec![item]).await?;
         Ok(format!(
@@ -1180,10 +1395,10 @@ impl SessionManager {
             ));
         };
         let conv = self.conv(id)?;
-        let (asked_in, wrote) = {
+        let (consent, wrote) = {
             let wrote = conv.user_wrote.lock().await;
-            let asked_in = self.merge_consent(id, user_words, &branch, &base).await?;
-            (asked_in, *wrote)
+            let consent = self.merge_consent(id, user_words, &branch, &base).await?;
+            (consent, *wrote)
         };
         // What the thread committed itself gets its review before the branch is merged.
         self.scan_thread_commits(id, self.thread_turn_running(id).await)
@@ -1207,37 +1422,88 @@ impl SessionManager {
                 .filter(|m| !m.trim().is_empty())
                 .unwrap_or_else(|| format!("Merge {branch} into {base}")),
         );
-        let (git, repo_path, base_name, branch_name) = (
+        enum Prepared {
+            Ready(Oid, Oid, Oid, u32),
+            Conflicts(Vec<String>, Oid),
+            /// Other work landed on the branch since its consent carried over.
+            Moved,
+        }
+        let (git, repo_path, base_name, branch_name, held) = (
             self.git.clone(),
             PathBuf::from(&repo),
             base.clone(),
             branch.clone(),
+            consent.held.clone(),
         );
         let prepared = blocking(move || {
             let repo = git.open(&repo_path).map_err(git_error)?;
+            let tip = repo
+                .branch_tip(&branch_name)
+                .map_err(git_error)?
+                .ok_or_else(|| Error::Invalid("the session branch is gone".into()))?;
+            // Consent carried over from a merge that stopped at conflicts covers the branch as
+            // it was then, or that with the base merged in.
+            if let Some(held) = &held
+                && tip != *held
+            {
+                let first = repo.resolve(&format!("{}^1", tip.0));
+                let second = repo.resolve(&format!("{}^2", tip.0));
+                let base_tip = repo.resolve(&base_name).map_err(git_error)?;
+                let merges_base = match second {
+                    Ok(second) => repo.ancestor(&second, &base_tip).map_err(git_error)?,
+                    Err(_) => false,
+                };
+                if first.ok().as_ref() != Some(held) || !merges_base {
+                    return Ok(Prepared::Moved);
+                }
+            }
             let outcome = repo
-                .prepare_merge(&base_name, &branch_name, &message)
+                .prepare_merge_commit(&base_name, &tip, &message)
                 .map_err(git_error)?;
             match outcome {
                 MergeOutcome::Ready {
                     commit, base_tip, ..
                 } => {
-                    let tip = repo
-                        .branch_tip(&branch_name)
-                        .map_err(git_error)?
-                        .ok_or_else(|| Error::Invalid("the session branch is gone".into()))?;
                     let commits = repo.count_commits(&base_tip, &tip).map_err(git_error)?;
-                    Ok(Ok((commit, base_tip, tip, commits)))
+                    Ok(Prepared::Ready(commit, base_tip, tip, commits))
                 }
-                MergeOutcome::Conflicts { paths } => Ok(Err(paths)),
+                MergeOutcome::Conflicts { paths } => Ok(Prepared::Conflicts(paths, tip)),
             }
         })
         .await?;
+        #[cfg(test)]
+        {
+            let pause = conv.merge_pause.lock().unwrap().clone();
+            if let Some((reached, release)) = pause {
+                reached.notify_one();
+                release.notified().await;
+            }
+        }
         let (commit, base_tip, session_tip, commits) = match prepared {
-            Ok(ready) => ready,
-            Err(paths) => {
+            Prepared::Ready(commit, base_tip, tip, commits) => (commit, base_tip, tip, commits),
+            Prepared::Moved => {
                 return Err(Error::Invalid(format!(
-                    "`{branch}` conflicts with the current `{base}` in: {}. Nothing was merged. Brigadier resolves conflicts only between a task and the session branch, not between the session branch and `{base}`: tell the user which files conflict, so they can merge the two branches themselves; call finish_session again if they ask.",
+                    "[not merged] Other work landed on `{branch}` since its merge stopped at conflicts, and the user's consent doesn't cover it. Nothing was merged. Ask with propose_merge."
+                )));
+            }
+            Prepared::Conflicts(paths, tip) => {
+                // The merge used no consent: it carries over to the merge once the base is
+                // merged into the branch, recorded only if what the user wrote since the
+                // first look still allows it.
+                let now = conv.user_wrote.lock().await;
+                if *now != wrote {
+                    return Err(wrote_meanwhile());
+                }
+                let consent = self.merge_consent(id, user_words, &branch, &base).await?;
+                *conv.merge_held.lock().unwrap() = Some(HeldConsent {
+                    asked_in: consent.asked_in,
+                    at_ms: consent.at_ms,
+                    branch: branch.clone(),
+                    base: base.clone(),
+                    tip,
+                });
+                return Err(Error::Invalid(format!(
+                    "`{branch}` conflicts with the current `{base}` in: {}. Nothing was merged, and the user's consent to this merge still holds. Don't ask the user: delegate a merge task without `subject` now. Brigadier merges `{base}` into `{branch}` in its worktree and the merge worker resolves the conflicts. As soon as it lands, call finish_session again with the same user_words: it merges on that consent unless the user writes \"wait\", \"no\" or a condition meanwhile.",
                     paths.join(", ")
                 )));
             }
@@ -1247,22 +1513,12 @@ impl SessionManager {
                 "`{branch}` has no commits that `{base}` lacks"
             )));
         }
-        #[cfg(test)]
-        {
-            let pause = conv.merge_pause.lock().unwrap().clone();
-            if let Some((reached, release)) = pause {
-                reached.notify_one();
-                release.notified().await;
-            }
-        }
         // The last look at consent and the landing are one step for what the user writes: a
         // "wait" sent while the merge was prepared stops it; one sent now comes after it.
         let landing = {
             let now = conv.user_wrote.lock().await;
             if *now != wrote {
-                return Err(Error::Invalid(
-                    "[not merged] The user wrote again while the merge was being prepared: read what they said. Nothing was merged; call finish_session again only if their latest message asks for it.".into(),
-                ));
+                return Err(wrote_meanwhile());
             }
             self.merge_consent(id, user_words, &branch, &base).await?;
             let (git, repo_path, session_branch) =
@@ -1329,10 +1585,11 @@ impl SessionManager {
                 branch: branch.clone(),
                 base: base.clone(),
                 commits,
-                asked_in: Some(asked_in),
+                asked_in: Some(consent.asked_in),
             },
         )
         .await;
+        *conv.merge_held.lock().unwrap() = None;
         // The session's work is merged: what showed it stops, and its worktree and branch go
         // (THREAD-PLAN.md Q9).
         self.stop_previews(id, "the session was merged").await;
@@ -1344,21 +1601,114 @@ impl SessionManager {
         ))
     }
 
-    /// The user message that gives consent to the session's merge: the latest on the branch
-    /// shown, with `user_words` in it ([`merge_consent::check`]), nothing the user wrote waiting
-    /// after it, and no merge asked in it already.
+    /// The user's consent to the session's merge: given now ([`Self::fresh_consent`]), or
+    /// carried over from a merge that stopped at conflicts with the base, while the user took
+    /// nothing back since they gave it ([`Self::held_consent`]).
     async fn merge_consent(
         &self,
         id: &ConversationId,
         user_words: &str,
         branch: &str,
         base: &str,
-    ) -> Result<String> {
-        let refuse = |why: String| {
-            Error::Invalid(format!(
-                "[not merged] {why}. Nothing was merged. Merge only once the user consents: ask with propose_merge and wait for their answer, or when their latest message asks for it in words."
-            ))
+    ) -> Result<Consent> {
+        let fresh = self.fresh_consent(id, user_words, branch, base).await;
+        let held = self
+            .conv(id)?
+            .merge_held
+            .lock()
+            .unwrap()
+            .clone()
+            .filter(|held| held.branch == branch && held.base == base);
+        // A new yes replaces the held one. Reusing the same yes still checks what has
+        // happened since the conflict, even when it remains the latest user message.
+        if let Ok(consent) = &fresh
+            && held
+                .as_ref()
+                .is_none_or(|held| held.asked_in != consent.asked_in)
+        {
+            return fresh;
+        }
+        let refused = fresh.err().unwrap_or_else(|| {
+            not_consented("the original merge consent no longer covers this branch".into())
+        });
+        match held {
+            Some(held) => self.held_consent(id, held, refused).await,
+            None => Err(refused),
+        }
+    }
+
+    /// Consent `held` over from a merge that stopped at conflicts, unless it was used, or the
+    /// user since they gave it wrote something that waits, says "no", "wait" or a condition,
+    /// or answered "Not yet" on a merge card. `refused` is why fresh consent was refused.
+    async fn held_consent(
+        &self,
+        id: &ConversationId,
+        held: HeldConsent,
+        refused: Error,
+    ) -> Result<Consent> {
+        let board = self.core.board(id).await?;
+        if board.orchestrator_steps.iter().any(|step| {
+            matches!(&step.kind, OrchestratorStepKind::Merged { asked_in: Some(done), .. } if *done == held.asked_in)
+        }) {
+            return Err(refused);
+        }
+        if board
+            .queue
+            .items
+            .iter()
+            .any(|item| item.queued_at_ms.max(item.edited_at_ms.unwrap_or(0)) >= held.at_ms)
+        {
+            return Err(not_consented(
+                "the user wrote again since (it waits in the queue): read it first".into(),
+            ));
+        }
+        let not_yet = board.questions.values().any(|question| {
+            matches!(&question.kind, QuestionKind::Merge { branch, base, .. } if *branch == held.branch && *base == held.base)
+                && question.id.to_string() != held.asked_in
+                && question.answered_at_ms.is_some_and(|at| at >= held.at_ms)
+                && !question
+                    .answer
+                    .as_deref()
+                    .is_some_and(|answer| merge_chosen(answer, &held.base))
+        });
+        if not_yet {
+            return Err(not_consented(
+                "the user answered \"Not yet\" on the merge card since they consented; don't ask again until they bring it up".into(),
+            ));
+        }
+        let messages = match &board.head {
+            Some((head, _)) => self.core.branch(id, head).await?,
+            None => self.core.all_messages(id).await?,
         };
+        for message in messages.iter().filter(|message| {
+            message.role == MessageRole::User
+                && message.id != held.asked_in
+                && message.created_at_ms >= held.at_ms
+        }) {
+            if let Some(why) = merge_consent::takes_back(&message.text) {
+                return Err(not_consented(format!(
+                    "the user wrote since they consented, and their message {why}"
+                )));
+            }
+        }
+        Ok(Consent {
+            asked_in: held.asked_in,
+            at_ms: held.at_ms,
+            held: Some(held.tip),
+        })
+    }
+
+    /// The user message that gives consent to the session's merge: the latest on the branch
+    /// shown, with `user_words` in it ([`merge_consent::check`]), nothing the user wrote waiting
+    /// after it, and no merge asked in it already.
+    async fn fresh_consent(
+        &self,
+        id: &ConversationId,
+        user_words: &str,
+        branch: &str,
+        base: &str,
+    ) -> Result<Consent> {
+        let refuse = not_consented;
         let board = self.core.board(id).await?;
         let messages = match &board.head {
             Some((head, _)) => self.core.branch(id, head).await?,
@@ -1386,7 +1736,7 @@ impl SessionManager {
             .questions
             .values()
             .filter(|question| {
-                matches!(&question.kind, QuestionKind::Merge { branch: b, base: a } if b == branch && a == base)
+                matches!(&question.kind, QuestionKind::Merge { branch: b, base: a, .. } if b == branch && a == base)
                     && question.answer.is_some()
             })
             .max_by_key(|question| question.answered_at_ms);
@@ -1414,7 +1764,11 @@ impl SessionManager {
                     "the user wrote again since (it waits in the queue): read it first".into(),
                 ));
             }
-            return Ok(asked);
+            return Ok(Consent {
+                asked_in: asked,
+                at_ms: answered,
+                held: None,
+            });
         }
         let Some(latest) = latest else {
             return Err(refuse("the user hasn't written anything".into()));
@@ -1435,7 +1789,11 @@ impl SessionManager {
             .filter(|message| message.role == MessageRole::Assistant)
             .map(|message| message.text.as_str());
         merge_consent::check(user_words, &latest.text, before, branch, base).map_err(refuse)?;
-        Ok(latest.id.clone())
+        Ok(Consent {
+            asked_in: latest.id.clone(),
+            at_ms: latest.created_at_ms,
+            held: None,
+        })
     }
 
     /// A commit message Brigadier writes, without AI co-authors while the user leaves them out.
@@ -1453,6 +1811,68 @@ impl SessionManager {
             _ => Err(Error::Invalid("tasks belong to a session".into())),
         }
     }
+}
+
+/// Check the committed result after hooks, before either branch can receive it.
+fn unresolved_base_merge(
+    repo: &brigadier_git::Repo,
+    start: &Oid,
+    tip: &Oid,
+) -> Result<Vec<String>> {
+    let first = repo.resolve(&format!("{}^1", start.0)).map_err(git_error)?;
+    let merge = repo
+        .merge_after(&first, start)
+        .map_err(git_error)?
+        .ok_or_else(|| Error::Invalid("the base merge's start is not a merge commit".into()))?;
+    let mut unresolved = Vec::new();
+    for path in merge.conflicts {
+        let Some(content) = repo.file_at(tip, &path).map_err(git_error)? else {
+            continue;
+        };
+        if content.split(|byte| *byte == b'\n').any(|line| {
+            let Some(marker @ (b'<' | b'=' | b'>' | b'|')) = line.first() else {
+                return false;
+            };
+            let width = line.iter().take_while(|byte| *byte == marker).count();
+            width >= 7 && (width == line.len() || line[width].is_ascii_whitespace())
+        }) {
+            unresolved.push(path);
+        }
+    }
+    Ok(unresolved)
+}
+
+/// The user's consent to a session merge.
+pub(super) struct Consent {
+    /// The user message, or merge card, that gave it.
+    asked_in: String,
+    /// When they gave it.
+    at_ms: i64,
+    /// Carried over from a merge that stopped at conflicts: the branch's tip then.
+    held: Option<Oid>,
+}
+
+/// The consent a session merge had when it stopped at conflicts with the base: it carries
+/// over to the merge once the base is merged into the branch.
+#[derive(Clone)]
+pub(super) struct HeldConsent {
+    asked_in: String,
+    at_ms: i64,
+    branch: String,
+    base: String,
+    tip: Oid,
+}
+
+fn not_consented(why: String) -> Error {
+    Error::Invalid(format!(
+        "[not merged] {why}. Nothing was merged. Merge only once the user consents: ask with propose_merge and wait for their answer, or when their latest message asks for it in words."
+    ))
+}
+
+fn wrote_meanwhile() -> Error {
+    Error::Invalid(
+        "[not merged] The user wrote again while the merge was being prepared: read what they said. Nothing was merged; call finish_session again only if their latest message asks for it.".into(),
+    )
 }
 
 /// What the code reviews of the work merged now say, for the thread to tell the user: those it
@@ -1539,6 +1959,47 @@ fn landed_line(task: &Task, target: &str) -> String {
     }
 }
 
+/// The most conflicting files a merge card names.
+const CONFLICTS_SHOWN: usize = 3;
+
+/// "3 files conflict with `main`: a.rs, b.rs, c.rs.", the first few named.
+fn merge_offer(branch: &str, base: &str, conflicts: Option<&[String]>) -> (String, String) {
+    match conflicts {
+        None => (
+            format!("Merge `{branch}` into `{base}`?"),
+            merge_label(base),
+        ),
+        Some(paths) => (
+            format!(
+                "Merge `{branch}` into `{base}`? {}",
+                conflicts_line(paths, base)
+            ),
+            MERGE_RESOLVING.to_owned(),
+        ),
+    }
+}
+
+fn conflicts_line(paths: &[String], base: &str) -> String {
+    let shown: Vec<String> = paths
+        .iter()
+        .take(CONFLICTS_SHOWN)
+        .map(|path| format!("`{path}`"))
+        .collect();
+    let more = paths.len().saturating_sub(CONFLICTS_SHOWN);
+    match paths.len() {
+        0 => format!("It conflicts with `{base}`."),
+        1 => format!("1 file conflicts with `{base}`: {}.", shown[0]),
+        count if more == 0 => format!(
+            "{count} files conflict with `{base}`: {}.",
+            shown.join(", ")
+        ),
+        count => format!(
+            "{count} files conflict with `{base}`: {} and {more} more.",
+            shown.join(", ")
+        ),
+    }
+}
+
 /// What the orchestrator does about a task whose work conflicts with the target.
 fn conflict_step(task: &Task, target: &str) -> String {
     if task.workspace.as_ref().is_some_and(|w| w.on_snapshot) {
@@ -1618,6 +2079,24 @@ fn keep_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_conflict_without_paths_still_offers_resolution_and_old_cards_load() {
+        let (text, label) = merge_offer("session", "main", Some(&[]));
+        assert!(text.contains("conflicts with `main`"));
+        assert_eq!(label, MERGE_RESOLVING);
+        let old: QuestionKind = serde_json::from_value(serde_json::json!({
+            "type": "merge", "branch": "session", "base": "main"
+        }))
+        .unwrap();
+        assert!(
+            matches!(old, QuestionKind::Merge { conflicted: false, conflicts, .. } if conflicts.is_empty())
+        );
+        let paths = (0..20).map(|i| format!("file-{i}.rs")).collect::<Vec<_>>();
+        let (text, _) = merge_offer("session", "main", Some(&paths));
+        assert!(text.contains("20 files conflict"));
+        assert!(!text.contains("file-19.rs"));
+    }
 
     #[test]
     fn a_runs_landing_line_leaves_out_the_branch_its_report_already_names() {

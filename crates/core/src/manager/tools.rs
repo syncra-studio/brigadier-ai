@@ -7,7 +7,7 @@ use brigadier_providers::{FileSearch, ProviderKind, SearchKind};
 use super::SessionManager;
 use super::prompts;
 use super::workers::route_label;
-use crate::model::{ConversationId, DomainEvent, PermissionLevel};
+use crate::model::{ConversationId, DomainEvent, Environment, PermissionLevel, Setup};
 use crate::tools::{NoteKind, OrchestratorCall, ToolReply, WorkerCall};
 use crate::work::{
     ApprovalSubject, ArtifactRef, AttachmentRef, DecisionSource, InjectionKind, OrchestratorStep,
@@ -103,14 +103,33 @@ impl SessionManager {
                                 .into(),
                         ));
                     }
-                    // Brigadier prepares a merge from the conflicting task's work; with no
-                    // task there is nothing to prepare, and the worker can't merge by itself.
+                    // With no task, Brigadier merges the session's base into the session
+                    // branch: only a new worktree has a base, and a run's branch merges only
+                    // its verified work.
                     (None, TaskKind::Merge) => {
-                        return Err(Error::Invalid(
-                            "a merge task needs `subject`: the task whose work conflicts with \
-                             the session's branch"
-                                .into(),
-                        ));
+                        if self.overnight.active.get(id).is_some() {
+                            return Err(Error::Invalid(
+                                "an overnight run is going: its branch takes no merge of the \
+                                 base; a merge task needs `subject`, the task whose work \
+                                 conflicts with the run's branch"
+                                    .into(),
+                            ));
+                        }
+                        if !matches!(
+                            self.core.conversation(id)?.setup,
+                            Some(Setup::Session {
+                                environment: Environment::NewWorktree { .. },
+                                ..
+                            })
+                        ) {
+                            return Err(Error::Invalid(
+                                "a merge task needs `subject`, the task whose work conflicts \
+                                 with the session's branch: this session works on a local \
+                                 checkout, so it has no base to merge in"
+                                    .into(),
+                            ));
+                        }
+                        None
                     }
                     (None, _) => None,
                 };

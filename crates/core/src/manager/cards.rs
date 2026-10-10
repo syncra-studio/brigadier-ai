@@ -433,8 +433,17 @@ impl SessionManager {
                 )
                 .await;
             }
-            QuestionKind::Merge { branch, base } => {
-                let text = if merge_chosen(&answers[0], base) {
+            QuestionKind::Merge {
+                branch,
+                base,
+                conflicted,
+                ..
+            } => {
+                let text = if merge_chosen(&answers[0], base) && *conflicted {
+                    format!(
+                        "[answer] The user chose to merge `{branch}` into `{base}` and have its conflicts resolved. Call finish_session now, without user_words: it names the merge task that resolves them, and the merge goes through on this answer once that lands."
+                    )
+                } else if merge_chosen(&answers[0], base) {
                     format!(
                         "[answer] The user chose to merge `{branch}` into `{base}`. Call finish_session now, without user_words."
                     )
@@ -738,9 +747,13 @@ pub(crate) fn merge_label(base: &str) -> String {
     format!("Merge into {base}")
 }
 
+/// The label of a merge card's yes when the branch conflicts with the base.
+pub(crate) const MERGE_RESOLVING: &str = "Merge & resolve conflicts";
+
 /// Whether a merge card's answer chose the merge.
 pub(crate) fn merge_chosen(answer: &str, base: &str) -> bool {
-    answer.trim() == merge_label(base)
+    let answer = answer.trim();
+    answer == merge_label(base) || answer == MERGE_RESOLVING
 }
 
 /// A round's answers as the asker reads them: each question, then its answer.

@@ -18,7 +18,7 @@ function mergeCard(conversationId: string, requestId: string, branch: string, ba
     taskId: null,
     requestId,
     position: Number.MAX_SAFE_INTEGER,
-    kind: { type: "merge", branch, base },
+    kind: { type: "merge", branch, base, conflicted: false, conflicts: [] },
     text: `Merge \`${branch}\` into \`${base}\`?`,
     options: [`Merge into ${base}`, "Not yet"],
     recommended: null,

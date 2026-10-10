@@ -97,6 +97,9 @@ pub(crate) struct Workspace {
     pub scratch: PathBuf,
     /// Folders copied in from the user's checkout (dependency installs, build caches).
     pub warmed: Vec<String>,
+    /// A merge of the session's base into its branch: the commit it started from and the
+    /// base's tip merged in.
+    pub base_merge: Option<(Oid, Oid)>,
 }
 
 /// A worker's CLI session as [`SessionManager::worker_session`] makes it.
@@ -1155,6 +1158,12 @@ impl SessionManager {
                     target: workspace.target.clone(),
                     scratch: workspace.scratch.to_string_lossy().into_owned(),
                     warmed: workspace.warmed.clone(),
+                    base_merge: workspace.base_merge.as_ref().map(|(start, base_tip)| {
+                        crate::work::BaseMerge {
+                            start: start.0.clone(),
+                            base_tip: base_tip.0.clone(),
+                        }
+                    }),
                 });
             })
             .await?;
@@ -1271,6 +1280,9 @@ impl SessionManager {
             target: recorded.target,
             scratch: PathBuf::from(recorded.scratch),
             warmed: recorded.warmed,
+            base_merge: recorded
+                .base_merge
+                .map(|merge| (Oid(merge.start), Oid(merge.base_tip))),
         };
         let project = conversation
             .project_id
@@ -1381,6 +1393,7 @@ impl SessionManager {
                 self.review_brief(subject, &workspace.scratch).await
             }
             (TaskKind::Merge, Some(subject)) => self.merge_brief(subject, &workspace).await,
+            (TaskKind::Merge, None) => self.base_merge_brief(task, &workspace).await,
             _ => String::new(),
         };
         let omit_ai_coauthors = self.core.settings().omit_ai_coauthors;
@@ -1820,6 +1833,7 @@ impl SessionManager {
                 target: None,
                 scratch,
                 warmed: Vec::new(),
+                base_merge: None,
             });
         }
         // An overnight run's work lands on the run's branch, recorded with the task so it
@@ -1837,6 +1851,7 @@ impl SessionManager {
         };
         // Reviews and checks look at the candidate commit; a merge task continues from the
         // conflicting task's work (kept as a WIP commit on its branch).
+        let mut base_merge = None;
         let (base, start, on_snapshot) = match (task.kind, subject) {
             (TaskKind::Review | TaskKind::Verify, Some(subject)) if subject.candidate.is_some() => {
                 let commit = Oid(subject
@@ -1849,6 +1864,18 @@ impl SessionManager {
             (TaskKind::Merge, Some(subject)) => {
                 let (base, start) = self.merge_start(subject).await?;
                 (base, start, false)
+            }
+            // With no subject, the session's base merged into its branch.
+            (TaskKind::Merge, None) => {
+                let Environment::NewWorktree { base, .. } = environment else {
+                    return Err(Error::Invalid(
+                        "a merge task without subject needs a new-worktree session".into(),
+                    ));
+                };
+                let (branch_tip, start, base_tip) =
+                    self.base_merge_start(&repo, &target, base).await?;
+                base_merge = Some((start.clone(), base_tip));
+                (branch_tip, start, false)
             }
             // A review of a worker's work, or a phase's verifier, starts at the work's last
             // commit; the verifier's commits go on top of it. So does a fix of work that hasn't
@@ -1916,6 +1943,7 @@ impl SessionManager {
             target: Some(target),
             scratch,
             warmed,
+            base_merge,
         })
     }
 

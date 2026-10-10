@@ -333,6 +333,20 @@ pub struct TaskWorkspace {
     #[serde(default)]
     #[ts(skip)]
     pub warmed: Vec<String>,
+    /// A merge task with no subject: the base merged into the session branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub base_merge: Option<BaseMerge>,
+}
+
+/// Where a merge of the session's base into its branch started: the two-parent commit with
+/// conflict markers left in its files, and the base's tip it merged in, which the commit that
+/// lands gets as its second parent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaseMerge {
+    pub start: String,
+    pub base_tip: String,
 }
 
 /// A structured report, the only part of a worker's work that enters the orchestrator's
@@ -939,8 +953,18 @@ pub enum QuestionKind {
     /// Local checkout with uncommitted changes: should workers start from them?
     UncommittedChanges { files: Vec<String> },
     /// The thread asks once whether to merge the session branch into its base
-    /// (`propose_merge`); the answer "Merge into {base}" is the user's consent.
-    Merge { branch: String, base: String },
+    /// (`propose_merge`); the answer "Merge into {base}" is the user's consent, or "Merge &
+    /// resolve conflicts" when the branch was found to conflict with the base as it was asked.
+    Merge {
+        branch: String,
+        base: String,
+        /// The branch conflicted with the base when the card was made.
+        #[serde(default)]
+        conflicted: bool,
+        /// The files it conflicted in, the first few (none when git couldn't pin it to one).
+        #[serde(default)]
+        conflicts: Vec<String>,
+    },
 }
 
 /// One answer a question suggests: a short label, and a line on what it means.

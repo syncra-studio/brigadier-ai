@@ -183,9 +183,10 @@ impl SessionManager {
     }
 
     /// The pre-warm a new task of `kind` in session `id` takes, as the task's id: only a
-    /// writing task with no subject and no run, made at the session's permission level now.
+    /// writing task with no subject and no run, made at the session's permission level now;
+    /// never a merge, which starts from a merge Brigadier makes.
     pub(crate) fn claim_prewarm(&self, id: &ConversationId, kind: TaskKind) -> Option<TaskId> {
-        if !kind.writes() {
+        if !kind.writes() || kind == TaskKind::Merge {
             return None;
         }
         let permission = self.permission(id);
@@ -233,6 +234,7 @@ impl SessionManager {
                         target: Some(warm.target),
                         scratch: warm.scratch,
                         warmed: warm.warmed,
+                        base_merge: None,
                     });
                 }
                 Ok(None) => "its session's branch changed",

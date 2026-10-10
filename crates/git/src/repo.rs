@@ -1310,6 +1310,72 @@ impl Repo {
         })
     }
 
+    /// Brings `other` into `branch` for a merge worker to finish, without touching any checkout
+    /// or ref: committed with parents `branch`'s tip and `other`'s, conflict markers left in
+    /// the files (`branch`'s side first, `other`'s second). In the [`MergeStart`], `work` is
+    /// `branch`'s tip and `onto` is `other`'s.
+    pub fn merge_branch_for_resolution(
+        &self,
+        branch: &str,
+        other: &str,
+        message: &str,
+    ) -> Result<MergeStart> {
+        let tip = |name: &str| {
+            self.branch_tip(name)?
+                .ok_or_else(|| Error::Invalid(format!("branch {name} does not exist")))
+        };
+        let (work, onto) = (tip(branch)?, tip(other)?);
+        let (tree, conflicts) = self.marked_merge(&work, &onto)?;
+        let commit = self.commit_tree(&tree, &[&work, &onto], message, false)?;
+        Ok(MergeStart {
+            commit,
+            work,
+            onto,
+            clean: conflicts.is_none(),
+            conflicts: conflicts.unwrap_or_default(),
+        })
+    }
+
+    /// The merge [`Repo::merge_branch_for_resolution`] made on `base`: the first commit after
+    /// `base` on `head`'s first-parent line, when it merges `base` with one other commit;
+    /// `None` otherwise.
+    pub fn merge_after(&self, base: &Oid, head: &Oid) -> Result<Option<MergeStart>> {
+        valid_oid(base)?;
+        valid_oid(head)?;
+        let range = format!("{}..{}", base.0, head.0);
+        let list = self.cmd(
+            &[
+                "rev-list",
+                "--first-parent",
+                "--reverse",
+                "--parents",
+                &range,
+            ],
+            true,
+        )?;
+        let Some(line) = parse::text(&list)?.lines().next().map(str::to_owned) else {
+            return Ok(None);
+        };
+        let ids: Vec<Oid> = line
+            .split_whitespace()
+            .map(|id| Oid(id.to_owned()))
+            .collect();
+        let [commit, work, onto] = ids.as_slice() else {
+            return Ok(None);
+        };
+        if work != base {
+            return Ok(None);
+        }
+        let (_, conflicts) = self.marked_merge(work, onto)?;
+        Ok(Some(MergeStart {
+            commit: commit.clone(),
+            work: work.clone(),
+            onto: onto.clone(),
+            clean: conflicts.is_none(),
+            conflicts: conflicts.unwrap_or_default(),
+        }))
+    }
+
     /// The merge [`Repo::merge_for_resolution`] made as `commit` from work based on `base`,
     /// read back from the commit's two parents; `None` when it has not exactly two.
     pub fn merge_at(&self, commit: &Oid, base: &Oid) -> Result<Option<MergeStart>> {

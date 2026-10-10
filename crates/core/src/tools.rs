@@ -146,7 +146,8 @@ pub struct DelegateTask {
     /// cross-area, risky or unclear work.
     pub effort: String,
     /// For `review` tasks: the task whose candidate commit is reviewed, e.g. "task-2". For
-    /// `merge` tasks: the task whose work conflicts with the branch it lands on. For a `fix`:
+    /// `merge` tasks: the task whose work conflicts with the branch it lands on; none to merge
+    /// the session's base into the session branch (finish_session says when). For a `fix`:
     /// the task whose work it fixes (the phase's verifier); it continues from that work and
     /// lands it with its own.
     #[serde(default)]
@@ -617,6 +618,8 @@ pub struct ReviewPlan {
 pub struct FinishSession {
     /// The user's own words that ask for the merge, quoted exactly from their latest message
     /// ("yes, merge it"). Leave it out when the user chose "Merge" on your propose_merge card.
+    /// After a conflict-resolution task lands, retry with the same words (or no words for a
+    /// card): the original consent still holds unless the user has taken it back.
     #[serde(default)]
     pub user_words: String,
     /// The merge commit message, when a merge commit is needed.

@@ -664,6 +664,8 @@ mod tests {
         merge.kind = QuestionKind::Merge {
             branch: "brigadier/c/session".into(),
             base: "main".into(),
+            conflicted: false,
+            conflicts: Vec::new(),
         };
         asked.questions.insert(card.id.clone(), card);
         assert_eq!(wait(&asked, "r1"), Some(Wait::Card));

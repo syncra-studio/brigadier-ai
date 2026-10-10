@@ -575,6 +575,53 @@ impl Worktree {
         Ok(Some(cleaned))
     }
 
+    /// HEAD written again as a merge: the same tree, message and author, its parent first and
+    /// `parent` second. HEAD (and so its branch) moves to it with a CAS update; the index and
+    /// files stay as they are.
+    pub fn merge_parent(&self, parent: &Oid) -> Result<Oid> {
+        valid_oid(parent)?;
+        self.ensure_idle()?;
+        let head = self.head()?;
+        let first = self.repo.resolve(&format!("{}^", head.0))?;
+        let (message, author) = self.authored(&head)?;
+        let tree = self.repo.tree_of(&head.0)?;
+        let merge = self
+            .repo
+            .commit_tree_with(&tree, &[&first, parent], &message, &author)?;
+        self.move_head(&head, &merge)?;
+        Ok(merge)
+    }
+
+    /// A merge of `parent` into HEAD that keeps HEAD's tree, with git config's identity: HEAD
+    /// (and so its branch) moves to it with a CAS update; the index and files stay as they are.
+    pub fn commit_merge(&self, parent: &Oid, message: &str) -> Result<Oid> {
+        valid_oid(parent)?;
+        self.ensure_idle()?;
+        let head = self.head()?;
+        let tree = self.repo.tree_of(&head.0)?;
+        let merge = self
+            .repo
+            .commit_tree(&tree, &[&head, parent], message, false)?;
+        self.move_head(&head, &merge)?;
+        Ok(merge)
+    }
+
+    fn move_head(&self, head: &Oid, merge: &Oid) -> Result<()> {
+        self.repo.cmd(
+            &[
+                "update-ref",
+                "-m",
+                "Brigadier merge commit",
+                "HEAD",
+                &merge.0,
+                &head.0,
+            ],
+            false,
+        )?;
+        *self.prepared.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        Ok(())
+    }
+
     /// Preserve all remaining tracked/untracked non-ignored work as one WIP commit. Plumbing
     /// intentionally avoids validation hooks so unfinished work can survive worktree removal.
     /// Identity comes from git config. Nothing is created for a clean checkout.

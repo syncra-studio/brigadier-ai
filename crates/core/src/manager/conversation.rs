@@ -273,6 +273,10 @@ pub(crate) struct ConvLive {
     pub(super) user_wrote: tokio::sync::Mutex<u64>,
     /// Serializes the full-access notice check and write, including persisted notices.
     pub(super) full_access_notice: tokio::sync::Mutex<()>,
+    /// The consent of a session merge that stopped at conflicts with the base, carried over
+    /// to the merge once the base is merged into the branch. Kept in memory only: after a
+    /// restart the thread asks again.
+    pub(super) merge_held: std::sync::Mutex<Option<super::landing::HeldConsent>>,
     /// Tests: what a merge waits for once prepared, before its last look at consent.
     #[cfg(test)]
     pub(super) merge_pause:
@@ -301,6 +305,7 @@ impl ConvLive {
             retry: tokio::sync::Mutex::new(()),
             user_wrote: tokio::sync::Mutex::new(0),
             full_access_notice: tokio::sync::Mutex::new(()),
+            merge_held: std::sync::Mutex::new(None),
             #[cfg(test)]
             merge_pause: std::sync::Mutex::new(None),
             #[cfg(test)]

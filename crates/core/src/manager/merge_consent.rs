@@ -234,6 +234,19 @@ pub(super) fn proposes(reply: &str, branch: &str, base: &str) -> bool {
     })
 }
 
+/// What in a message the user wrote after they consented takes the consent back or puts it
+/// off: a "no", "wait" or "don't", or a condition. `None` when nothing does.
+pub(super) fn takes_back(message: &str) -> Option<String> {
+    let words = words(&normalize(message));
+    if let Some(word) = words.iter().find(|word| holds(word)) {
+        return Some(format!("says \"{word}\""));
+    }
+    words
+        .iter()
+        .find(|word| CONDITIONS.contains(&word.as_str()))
+        .map(|word| format!("puts a condition on it (\"{word}\")"))
+}
+
 /// Whether `quoted`, the words the thread passed, give consent in `latest`, the user's latest
 /// message; `before` is the thread's reply right before it. The error says why not.
 pub(super) fn check(
