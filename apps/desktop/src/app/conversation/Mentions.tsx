@@ -204,8 +204,6 @@ export function useCheckoutFiles(
   );
   const [fetched, setFetched] = useState<{
     id: string;
-    /** The landings it was listed after. */
-    landed: number;
     files: string[];
     truncated: boolean;
   } | null>(null);
@@ -221,11 +219,16 @@ export function useCheckoutFiles(
           previous.files.length === list.files.length &&
           previous.files.every((file, index) => file === list.files[index])
             ? previous
-            : { id, landed, ...list },
+            : { id, ...list },
         );
       })
-      .catch(() => {
-        // Keep the last good list when a refresh fails.
+      .catch((error: unknown) => {
+        console.error("listing the checkout's files failed", error);
+        if (!live) return;
+        // Keep the last good list when a refresh fails; with none, show an empty one.
+        setFetched((previous) =>
+          previous?.id === id ? previous : { id, files: [], truncated: false },
+        );
       });
     return () => {
       live = false;
