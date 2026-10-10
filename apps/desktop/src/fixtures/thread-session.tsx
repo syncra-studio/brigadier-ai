@@ -91,26 +91,30 @@ useApp.setState({
   connection: { status: "connected", daemon: null, reason: null },
 });
 
-mockIPC((command, payload) => {
-  if (command !== "ipc_request") return null;
-  const req = (payload as { request: Request }).request;
-  switch (req.method) {
-    case "getPullRequest":
-      return { method: req.method, pullRequest: null };
-    case "getRunDiff":
-      return { method: req.method, diff: null };
-    case "listFiles":
-      return { method: req.method, files: [], truncated: false };
-    case "getComputerAccess":
-    case "allowComputerAccess":
-      return { method: req.method, access: { available: true, accessibility: false, screenRecording: true, problem: null } };
-    // A step's full call, as its row opens to: a command gives its line from the step itself.
-    case "getThreadItem":
-      return { method: req.method, item: { input: null, output: "a1b2c3d Example change\nf4e5d6c Example fix", exit: 0, ms: 1200 } };
-    default:
-      return { method: req.method };
-  }
-});
+// In the app's own window (a dev build pointed at this page) its IPC is real and can't be
+// replaced: the few requests the page makes go to that build's daemon instead.
+if (!("__TAURI_INTERNALS__" in window)) {
+  mockIPC((command, payload) => {
+    if (command !== "ipc_request") return null;
+    const req = (payload as { request: Request }).request;
+    switch (req.method) {
+      case "getPullRequest":
+        return { method: req.method, pullRequest: null };
+      case "getRunDiff":
+        return { method: req.method, diff: null };
+      case "listFiles":
+        return { method: req.method, files: [], truncated: false };
+      case "getComputerAccess":
+      case "allowComputerAccess":
+        return { method: req.method, access: { available: true, accessibility: false, screenRecording: true, problem: null } };
+      // A step's full call, as its row opens to: a command gives its line from the step itself.
+      case "getThreadItem":
+        return { method: req.method, item: { input: null, output: "a1b2c3d Example change\nf4e5d6c Example fix", exit: 0, ms: 1200 } };
+      default:
+        return { method: req.method };
+    }
+  });
+}
 
 /** The app's window layout (App.tsx) around the session, without its dialogs. */
 function SessionPage() {
