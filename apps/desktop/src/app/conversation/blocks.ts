@@ -1,4 +1,4 @@
-import { isPlumbing, toolHasOwnResult } from "@/app/conversation/activity/words";
+import { isPlumbing, toolHasOwnResult, toolName } from "@/app/conversation/activity/words";
 import type { CardType } from "@/app/conversation/cards/CardBody";
 import { decisionWords } from "@/app/conversation/rowWords";
 import type {
@@ -289,7 +289,7 @@ function keepPlan(plan: Plan): boolean {
 
 type Placed =
   | { kind: "message"; position: number; message: Message; text: string }
-  | { kind: "card"; position: number; requestId: string | null; card: BlockCard }
+  | { kind: "card"; position: number; requestId: string | null; card: BlockCard; atMs?: number }
   | { kind: "thinking"; position: number; requestId: string | null; segment: ThinkingSegment; atMs: number }
   | { kind: "task"; position: number; requestId: string | null; id: string }
   | { kind: "row"; position: number; requestId: string | null; row: BlockRow; atMs: number }
@@ -312,15 +312,18 @@ type Placed =
 function createdAt(board: BoardDigest, item: Exclude<Placed, { kind: "message" }>): number {
   if (item.kind === "task") return board.tasks[item.id]?.createdAtMs ?? 0;
   if (item.kind === "row" || item.kind === "orchestrator" || item.kind === "compaction" || item.kind === "thinking") return item.atMs;
+  if (item.atMs !== undefined) return item.atMs;
   const { type, id } = item.card;
   const card =
     type === "task"
       ? board.tasks[id]
-      : type === "approval"
+      : type === "approval" || type === "outline"
         ? board.approvals[id]
         : type === "question"
           ? board.questions[id]
-          : board.plans[id];
+          : type === "plan"
+            ? board.plans[id]
+            : undefined;
   return card?.createdAtMs ?? 0;
 }
 
@@ -374,6 +377,22 @@ export function buildBlocks(
     })),
   ].toSorted((a, b) => a.position - b.position);
   for (const step of board.orchestratorSteps) {
+    // A plan being written shows as its card, "Writing plan", until the plan itself arrives.
+    if (step.kind.type === "tool" && toolName(step.kind.name) === "propose_plan") {
+      const written = Object.values(board.plans).some(
+        (plan) => !!plan.body && plan.requestId === step.requestId && plan.position > step.position,
+      );
+      if (step.kind.status === "inProgress" && !written) {
+        placed.push({
+          kind: "card",
+          position: step.position,
+          requestId: step.requestId,
+          card: { type: "writingPlan", id: `writing:${step.position}`, position: step.position, keep: true },
+          atMs: step.atMs,
+        });
+      }
+      continue;
+    }
     // Plumbing shows by what came of it: a worker's sentence, a card, the merge.
     if (step.kind.type === "tool" && isPlumbing(step.kind.name)) continue;
     if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "tool")) continue;
@@ -441,10 +460,41 @@ export function buildBlocks(
       card: { type: "question", id: question.id, position: question.position, keep: false },
     });
   }
+  // A plan the user reads as a document (one proposed with a body, or a lead's outline) stays
+  // in the thread in any state, where it was proposed; a request's newest one stays in view, and
+  // the revisions it replaced fold into the work.
+  const documents: Placed[] = [];
   for (const plan of Object.values(board.plans)) {
-    // A session's plan at work lives in the side panel and the composer's phase pill; only one
-    // that waits on a decision shows in the thread. A superseded plan no longer shows; a
-    // plan of an overnight run's request keeps its row.
+    if (!plan.body) continue;
+    documents.push({
+      kind: "card",
+      position: plan.position,
+      requestId: plan.requestId,
+      card: { type: "plan", id: plan.id, position: plan.position, keep: false },
+    });
+  }
+  for (const approval of Object.values(board.approvals)) {
+    if (approval.subject.type !== "outline") continue;
+    documents.push({
+      kind: "card",
+      position: approval.position,
+      requestId: approval.requestId,
+      card: { type: "outline", id: approval.id, position: approval.position, keep: false },
+    });
+  }
+  const newest = new Map<string | null, BlockCard>();
+  for (const item of documents) {
+    if (item.kind !== "card") continue;
+    const shown = newest.get(item.requestId);
+    if (!shown || shown.position < item.card.position) newest.set(item.requestId, item.card);
+  }
+  for (const card of newest.values()) card.keep = true;
+  placed.push(...documents);
+  for (const plan of Object.values(board.plans)) {
+    if (plan.body) continue;
+    // A session's plan of phases alone lives in the side panel and the composer's phase pill;
+    // only one that waits on a decision shows in the thread. A superseded plan no longer
+    // shows; a plan of an overnight run's request keeps its row.
     if (plan.state.type === "superseded" || (!isRunRequest(plan.requestId) && !keepPlan(plan))) continue;
     placed.push({
       kind: "card",
@@ -722,6 +772,18 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
  */
 export function answerIndex(texts: readonly unknown[], done: boolean): number | null {
   return done && texts.length > 0 ? texts.length - 1 : null;
+}
+
+/**
+ * Whether a block ends with a plan the user reads (a kept plan or outline card after its last
+ * reply): the plan is its answer, and a line written before it folds into the work.
+ */
+export function endsWithPlan(sequence: readonly SequenceEntry[]): boolean {
+  for (const entry of sequence.toReversed()) {
+    if (entry.kind === "text") return false;
+    if (entry.kind === "card" && entry.card.keep && (entry.card.type === "plan" || entry.card.type === "outline")) return true;
+  }
+  return false;
 }
 
 /**

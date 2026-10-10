@@ -35,6 +35,7 @@ import {
   type BlockRow,
   type BlockState,
   answerIndex,
+  endsWithPlan,
   blockSequence,
   foldsAway,
   isFinal,
@@ -500,7 +501,7 @@ export const RequestBlock: FC = () => {
     meta.texts[last]?.position === Number.POSITIVE_INFINITY;
   const done = phase ? phase.settled : meta.state === "done" || answering;
   // A run over folds to its outcome; the thread's replies during it go into the fold.
-  const answer = answerIndex(meta.texts, done && !phase);
+  const answer = endsWithPlan(sequence) ? null : answerIndex(meta.texts, done && !phase);
   const activity = turnActivity(sequence);
   // The answer and the cards that stay in view are outside the fold.
   const folded = activity.filter((item) => item.type === "group" || foldsAway(item.entry, answer));

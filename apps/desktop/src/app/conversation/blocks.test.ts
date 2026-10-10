@@ -10,6 +10,7 @@ import {
   type BoardDigest,
   blockSequence,
   buildBlocks,
+  endsWithPlan,
   foldsAway,
   foldTurns,
   judgementCall,
@@ -251,6 +252,59 @@ test("machine rows show in their request's block, each on its own line", () => {
     ["Paused cargo test to let the Mac cool down"],
     ["Resumed cargo test"],
   ]);
+});
+
+test("a plan shows as its document: writing it, then the newest revision in view and the plan as the answer", () => {
+  const request = "plan-request";
+  const user = { ...messages[0]!, id: request, seq: 320, requestId: request, text: "Add a --version flag" };
+  const opening = { ...messages[0]!, id: "opening", seq: 321, role: "assistant" as const, requestId: request, parentId: request, text: "I'll look at the CLI first." };
+  const writing: OrchestratorStep = {
+    requestId: request,
+    position: 400,
+    atMs: user.createdAtMs + 5,
+    kind: { type: "tool", itemId: "call-1", name: "mcp__brigadier__propose_plan", detail: null, status: "inProgress", throughPosition: 400 },
+  };
+  const plan = (id: string, position: number, state: Plan["state"]): Plan => ({
+    id,
+    conversationId: user.conversationId,
+    requestId: request,
+    position,
+    title: "Add a --version flag",
+    body: "# Add a --version flag\n\nPrint the version.\n\n## Changes\n- `src/main.rs`",
+    steps: [],
+    state,
+    createdAtMs: user.createdAtMs + position,
+    decidedAtMs: null,
+  });
+  const digest = (plans: Plan[], steps: OrchestratorStep[]): BoardDigest => ({
+    ...board,
+    tasks: {},
+    plans: Object.fromEntries(plans.map((p) => [p.id, p])),
+    requests: { [request]: { ...Object.values(board.requests)[0]!, id: request, startedAtMs: user.createdAtMs, state: { type: "done" } } },
+    orchestratorSteps: steps,
+    decisions: [],
+  });
+  const cardsOf = (d: BoardDigest) => {
+    const block = buildBlocks([user, opening], {}, false, d, []).find((candidate) => candidate.key === request);
+    assert.ok(block);
+    return { block, cards: block.cards.map((card) => [card.type, card.id, card.keep]) };
+  };
+  // While the call runs: "Writing plan", and nothing yet the answer.
+  assert.deepEqual(cardsOf(digest([], [writing])).cards, [["writingPlan", "writing:400", true]]);
+  // The plan arrived before its call reported done: the plan alone.
+  assert.deepEqual(cardsOf(digest([plan("p1", 401, { type: "proposed" })], [writing])).cards, [["plan", "p1", true]]);
+  // Sent back and proposed again: the newest stays in view, the older folds; the plan is the answer.
+  const done = { ...writing, kind: { ...writing.kind, status: "completed" as const } };
+  const { block, cards } = cardsOf(
+    digest([plan("p1", 401, { type: "rejected", message: "smaller" }), plan("p2", 405, { type: "proposed" })], [done]),
+  );
+  assert.deepEqual(cards, [["plan", "p1", false], ["plan", "p2", true]]);
+  assert.ok(endsWithPlan(sequence(block)));
+  // Once a reply comes after it (the work it started), that reply is the answer again.
+  const after = { ...opening, id: "after", seq: 500, text: "Done." };
+  const later = buildBlocks([user, opening, after], {}, false, digest([plan("p2", 405, { type: "approved", by: "user" })], [done]), []).find((b) => b.key === request);
+  assert.ok(later);
+  assert.ok(!endsWithPlan(sequence(later)));
 });
 
 test("a run's decision shows in the thread unless its kind says it is a phase's outcome", () => {

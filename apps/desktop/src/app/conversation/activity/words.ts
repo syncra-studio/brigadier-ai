@@ -77,6 +77,7 @@ export function isPlumbing(name: string): boolean {
 const OTHER: Record<string, [doing: string, done: string]> = {
   search_transcript: ["Searching earlier messages", "Searched earlier messages"],
   plan_phases: ["Planning the work", "Planned the work"],
+  propose_plan: ["Writing plan", "Wrote a plan"],
   propose_overnight: ["Planning the work", "Planned the work"],
   approve_outline: ["Reviewing an outline", "Reviewed an outline"],
   settle_step: ["Settling a phase", "Settled a phase"],
