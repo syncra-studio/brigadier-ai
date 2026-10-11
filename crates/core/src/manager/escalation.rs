@@ -311,6 +311,10 @@ fn describe(request: &ApprovalRequest) -> String {
     text.push(':');
     if let Some(command) = &request.command {
         text.push_str(&format!("\n```\n{command}\n```"));
+        // A command run with `with_additional_permissions` (Codex): what it would reach.
+        if !request.paths.is_empty() {
+            text.push_str("\nWith these permissions beyond its sandbox:");
+        }
     }
     for path in &request.paths {
         text.push_str(&format!("\n- {path}"));

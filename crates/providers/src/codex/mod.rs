@@ -73,9 +73,9 @@ const PROFILE: &str = "brigadier";
 /// `sandbox_permissions_preserving_denied_reads`). This feature ("Allow exec tools to request
 /// additional permissions while staying sandboxed", under development, off by default) lets a
 /// command ask for more folders or the network, approved like an escalation and added to the
-/// profile with its denies kept. On only where Codex's auto-reviewer answers (Approve for me):
+/// profile with its denies kept. On only at Approve for me, where Brigadier's reviewer answers:
 /// the app-server leaves the requested paths out of a client's approval request unless the
-/// client opts into its experimental API, so a user's card couldn't show them.
+/// client opts into its experimental API, which such a session does ([`Rpc::initialize`]).
 const ADDITIONAL_PERMISSIONS_FEATURE: &str = "exec_permission_approvals";
 
 /// What a profiled session at Approve for me is told about leaving its sandbox.
@@ -288,7 +288,7 @@ impl Codex {
         let (rpc, stdout) = self.app_server(&cwd, None, None, None).await?;
         let reader = tokio::spawn(control_reader(rpc.clone(), stdout));
         let result = async {
-            rpc.initialize().await?;
+            rpc.initialize(false).await?;
             work(&rpc).await
         }
         .await;
@@ -805,8 +805,10 @@ async fn open_thread(
     home: Option<String>,
     ledger: &dyn Ledger,
 ) -> Result<Opened> {
-    rpc.initialize().await?;
     let profiled = profile.is_some();
+    // Where a command may ask for more folders or the network (the feature, see
+    // [`profile_config`]), Brigadier's reviewer must read what it asks for.
+    rpc.initialize(profiled && spec.auto_review).await?;
     let config = thread_config(rpc, spec, cwd, profile).await?;
     // Only a folder Brigadier created may have its trust entry recorded and undone. Codex keys
     // trust on the main checkout for a worktree, which is the user's: watched, never touched.
@@ -1602,7 +1604,9 @@ impl Rpc {
         }
     }
 
-    async fn initialize(&self) -> Result<()> {
+    /// `experimental`: opts into the app-server's experimental API, whose command approvals
+    /// carry the folders and network the command asks for (`additionalPermissions`).
+    async fn initialize(&self, experimental: bool) -> Result<()> {
         let _: Value = self
             .call(
                 "initialize",
@@ -1612,7 +1616,10 @@ impl Rpc {
                         title: Some("Brigadier".into()),
                         version: env!("CARGO_PKG_VERSION").into(),
                     },
-                    capabilities: None,
+                    capabilities: experimental.then(|| p::InitializeCapabilities {
+                        experimental_api: true,
+                        ..Default::default()
+                    }),
                 },
             )
             .await?;

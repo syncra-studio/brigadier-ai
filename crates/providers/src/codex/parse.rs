@@ -587,7 +587,11 @@ impl Parser {
                         tool: "commandExecution".into(),
                         command: ask.command.clone(),
                         cwd: ask.cwd.map(|cwd| cwd.to_string()),
-                        paths: Vec::new(),
+                        paths: ask
+                            .additional_permissions
+                            .as_ref()
+                            .map(requested_permissions)
+                            .unwrap_or_default(),
                         reason: reason.or_else(|| {
                             ask.network_approval_context
                                 .map(|network| format!("network access to {}", network.host))
@@ -1058,6 +1062,38 @@ fn item_status(completed: bool) -> ItemStatus {
     }
 }
 
+/// What a command run with `with_additional_permissions` asks for beyond its sandbox, one
+/// line each (`write /path`, `read /path`, `network`). The app-server sends it only to a
+/// client that opted into its experimental API.
+fn requested_permissions(asked: &p::AdditionalPermissionProfile) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(files) = &asked.file_system {
+        for (access, paths) in [("read", &files.read), ("write", &files.write)] {
+            for path in paths.iter().flatten() {
+                lines.push(format!("{access} {path}"));
+            }
+        }
+        for entry in files.entries.iter().flatten() {
+            let path = match &entry.path {
+                p::FileSystemPath::Path { path } => path.to_string(),
+                p::FileSystemPath::GlobPattern { pattern } => pattern.clone(),
+                p::FileSystemPath::Special { value } => {
+                    serde_json::to_string(value).unwrap_or_default()
+                }
+            };
+            lines.push(format!("{} {path}", entry.access));
+        }
+    }
+    if asked
+        .network
+        .as_ref()
+        .is_some_and(|network| network.enabled == Some(true))
+    {
+        lines.push("network".into());
+    }
+    lines
+}
+
 fn decode<T: DeserializeOwned>(method: &str, params: Value, out: &mut Vec<Output>) -> Option<T> {
     match serde_json::from_value(params) {
         Ok(value) => Some(value),
@@ -1350,6 +1386,33 @@ mod tests {
                 "/w/b.rs".into(),
                 "/root".into()
             ])
+        );
+    }
+
+    #[test]
+    fn a_command_approval_names_the_permissions_it_asks_for() {
+        let mut parser = Parser::live();
+        let asked = json!({ "id": 8, "method": "item/commandExecution/requestApproval", "params": {
+            "itemId": "c1", "command": "rm -rf /other/wt", "cwd": "/w", "startedAtMs": 0,
+            "threadId": "t1", "turnId": "u1",
+            "additionalPermissions": {
+                "fileSystem": { "write": ["/other/wt"], "entries": [
+                    { "access": "read", "path": { "type": "path", "path": "/data" } },
+                ]},
+                "network": { "enabled": true },
+            },
+        }});
+        let request = events(&mut parser, &asked)
+            .into_iter()
+            .find_map(|event| match event {
+                ProviderEvent::ApprovalRequested { request } => Some(request),
+                _ => None,
+            })
+            .expect("an approval");
+        assert_eq!(request.command.as_deref(), Some("rm -rf /other/wt"));
+        assert_eq!(
+            request.paths,
+            vec!["write /other/wt", "read /data", "network"]
         );
     }
 
