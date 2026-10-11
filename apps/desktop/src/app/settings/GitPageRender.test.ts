@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { renderFixturePage } from "@/fixtures/headless";
 
 const AUTOMATIC = "A fast, light model Brigadier picks for each message. When an agent is out of quota, another one writes.";
-const WRITER = "The model that writes a commit message when you commit from the Source panel with the message left blank.";
+const WRITER = "The model that writes a commit message when you commit from the Source panel without one";
 
 // The real page in Chromium over a faked daemon: the writer model and its Automatic choice, the
 // styles, an instructions box that saves on ⌘S, once typing pauses and as it goes, and the
@@ -20,10 +20,11 @@ test("git settings: writer model, styles, instructions that save themselves, bra
     "Branch prefix",
   ]);
   assert.equal(seen.writer, "Automatic");
-  assert.equal(seen.writerLine, `${WRITER} Automatic: a fast, light model Brigadier picks for each message. When an agent is out of quota, another one writes.`);
+  // Automatic's own line is in the menu (below), not under the row.
+  assert.equal(seen.writerLine, WRITER);
   assert.equal(seen.boxes, 0, "no instruction box until Custom instructions");
   assert.equal(seen.picked, "Sonnet 5.5Low");
-  assert.equal(seen.gone, `${WRITER} It isn't available now, so Automatic writes them.`);
+  assert.equal(seen.gone, "Not available now, so Automatic writes them");
   assert.deepEqual((seen.writerMenu as string[])[0], `Automatic${AUTOMATIC}`);
   assert.deepEqual(seen.automatic, { trigger: "Automatic", saved: null });
   assert.deepEqual(seen.styles, [

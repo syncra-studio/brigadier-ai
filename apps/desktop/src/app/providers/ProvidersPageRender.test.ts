@@ -24,10 +24,10 @@ test("Providers masks emails, reveals one row until the page is left, and brings
   ]);
   assert.deepEqual(seen.models, [
     "Opus 5.5",
-    "Sonnet 5.5Gets no tasks: a rule under Advanced keeps it to chats and sessions you pick it for.",
-    "Fable 5.1Brigadier never gives work to Fable models. You can still pick one for a chat or session.",
+    "Sonnet 5.5Gets no tasks: a rule under Advanced keeps it to chats and sessions you pick it for",
+    "Fable 5.1Brigadier never gives work to Fable models; you can still pick one for a chat or session",
     "GPT-6",
-    "GPT-6 LunaNewBrigadier gives it no tasks until you allow it.Allow in Rules",
+    "GPT-6 LunaNewBrigadier gives it no tasks until you allow itAllow in Rules",
   ]);
   assert.equal(seen.advancedAtFirst, false);
   // Only the row whose eye was pressed, and only until the page is left.
@@ -40,8 +40,8 @@ test("Providers masks emails, reveals one row until the page is left, and brings
     advanced: true,
     rulesInView: true,
     rules: [
-      "Don't give Claude Sonnet 5.5 workYou can still pick it for a chat or session.",
-      "Don't give Codex GPT-6 Luna workNew model: Brigadier gives it no tasks until you remove this rule.",
+      "Don't give Claude Sonnet 5.5 workYou can still pick it for a chat or session",
+      "Don't give Codex GPT-6 Luna workNew model: Brigadier gives it no tasks until you remove this rule",
     ],
   });
   assert.equal(seen.advancedAgain, false);

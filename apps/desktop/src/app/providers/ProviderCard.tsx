@@ -27,14 +27,14 @@ import {
 import { useApp } from "@/state/store";
 
 /** What an agent switched off means, under its name. */
-const OFF_NOTE = "Off: its models are hidden from the model picker, and it gets no work.";
+const OFF_NOTE = "Off: its models are hidden from the model picker, and it gets no work";
 
 /** The line under a model Brigadier gives no tasks to whatever the user chooses. */
 export const FABLE_NOTE =
-  "Brigadier never gives work to Fable models. You can still pick one for a chat or session.";
+  "Brigadier never gives work to Fable models; you can still pick one for a chat or session";
 
 /** The line under a model a "Don't give work" rule keeps from tasks. */
-const NO_WORK_NOTE = "Gets no tasks: a rule under Advanced keeps it to chats and sessions you pick it for.";
+const NO_WORK_NOTE = "Gets no tasks: a rule under Advanced keeps it to chats and sessions you pick it for";
 
 /**
  * One agent: its name with how it stands, the one action that gets it working (Install or Sign
@@ -202,7 +202,7 @@ function ModelRow({
     FABLE_NOTE
   ) : fresh ? (
     <span className="flex flex-wrap items-center gap-x-2">
-      Brigadier gives it no tasks until you allow it.
+      Brigadier gives it no tasks until you allow it
       <button
         type="button"
         className="text-link hover:underline"

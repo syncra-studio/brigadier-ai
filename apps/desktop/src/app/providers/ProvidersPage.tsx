@@ -38,38 +38,38 @@ export const PROVIDERS_ROWS = {
   switch: {
     label: "Switch to another account when one runs out",
     description:
-      "A chat that hits its account's limit carries on with your next account. When every account is used up, Brigadier uses the other provider.",
+      "A chat that hits its account's limit carries on with your next account, then with the other provider",
   },
   agents: {
     label: "Agents",
     description:
-      "The coding agents on this computer that do Brigadier's work, with your own subscriptions. Each has a switch.",
+      "The coding agents that do Brigadier's work with your own subscriptions, each with a switch",
     target: PROVIDER_LABELS.claude,
   },
   accounts: {
     label: "Accounts",
-    description: "Each agent's accounts: who is signed in, the plan, how much is used, and Use.",
+    description: "Each agent's accounts: who is signed in, the plan, how much is used, and Use",
     target: PROVIDER_LABELS.claude,
   },
   add: {
     label: "Add account",
-    description: "Sign in to another Claude Code or Codex account.",
+    description: "Sign in to another Claude Code or Codex account",
     target: PROVIDER_LABELS.claude,
   },
   own: {
     label: "This computer's login",
-    description: "Also used by your terminal.",
+    description: "Also used by your terminal",
     target: PROVIDER_LABELS.claude,
   },
   models: {
     label: "Use this model",
     description:
-      "Each model's switch, formerly Available models: on, it shows in the model pickers and Brigadier can give it work.",
+      "Each model's switch, formerly Available models: on, it shows in the model pickers and Brigadier can give it work",
     target: "Models",
   },
   workers: {
     label: "Models Brigadier can give work to",
-    description: "Now a rule under Advanced › Rules: “Don't give work” keeps a model from tasks.",
+    description: "Now a rule under Advanced › Rules: “Don't give work” keeps a model from tasks",
     target: ROUTING_ROWS.rules.label,
   },
   whoDoesWhat: ROUTING_ROWS.simple,
@@ -81,11 +81,11 @@ export const PROVIDERS_ROWS = {
   },
   installed: {
     label: "Installed agents",
-    description: "Where each agent is installed, and its version.",
+    description: "Where each agent is installed, and its version",
   },
   setup: {
     label: "Run the first-run setup again",
-    description: "Walks through connecting the agents and adding projects.",
+    description: "Walks through connecting the agents and adding projects",
   },
   kinds: ROUTING_ROWS.kinds,
   modes: { ...ROUTING_ROWS.modes, target: ROUTING_ROWS.kinds.label },
@@ -101,7 +101,7 @@ export const PROVIDERS_ROWS = {
   refresh: { ...RANKINGS_ROWS.refresh, target: RANKINGS_ROWS.ratings.label },
   registry: {
     label: "Model registry",
-    description: "The published list the models' ratings start from.",
+    description: "The published list the models' ratings start from",
     target: RANKINGS_ROWS.ratings.label,
   },
 } as const;
@@ -259,7 +259,7 @@ export function ProvidersPage() {
           <SettingsCard>
             <SettingsRow
               label="Learned in"
-              description="The project the details show the adjustments for, or all of them."
+              description="The project the details show the adjustments for, or all of them"
             >
               <ProjectPicker projectId={picked} />
             </SettingsRow>

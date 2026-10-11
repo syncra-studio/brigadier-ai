@@ -80,22 +80,22 @@ export function lastRefresh(refresh: RankingsRefresh, researcher: string | null)
 }
 
 const OUTCOME: Record<"done" | "failed" | "cancelled" | "superseded", string> = {
-  done: "finished.",
-  failed: "failed.",
-  cancelled: "stopped.",
-  superseded: "replaced by a newer published model list.",
+  done: "finished",
+  failed: "failed",
+  cancelled: "stopped",
+  superseded: "replaced by a newer published model list",
 };
 
 /** Which ratings are in use: the researched ones, since when, or the published ones. */
 export function overlayStatus(refresh: RankingsRefresh): string {
   const at = refresh.overlayAtMs;
   if (refresh.overlayApplied) {
-    return at !== null ? `Researched ratings from ${formatDateTime(at)}.` : "Researched ratings.";
+    return at !== null ? `Researched ratings from ${formatDateTime(at)}` : "Researched ratings";
   }
   if (at !== null) {
-    return `The published ratings. The research from ${formatDateTime(at)} isn't used: a newer published model list replaced it.`;
+    return `The published ratings; the research from ${formatDateTime(at)} isn't used, as a newer published model list replaced it`;
   }
-  return "The published ratings.";
+  return "The published ratings";
 }
 
 const EFFORT_PREFIX = "defaultEffort.";

@@ -54,7 +54,7 @@ import { useApp } from "@/state/store";
 export const ARCHIVED_ROWS = {
   archived: {
     label: "Archived sessions and chats",
-    description: "Hidden from the sidebar and cleaned up; restore one to continue it.",
+    description: "Hidden from the sidebar and cleaned up; restore one to continue it",
   },
 } as const;
 

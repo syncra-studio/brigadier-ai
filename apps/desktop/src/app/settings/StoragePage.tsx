@@ -50,28 +50,28 @@ import { useApp } from "@/state/store";
 export const STORAGE_ROWS = {
   computer: {
     label: "This computer",
-    description: "What Brigadier keeps on this computer, and what of it can go.",
+    description: "What Brigadier keeps on this computer, and what of it can go",
   },
   storage: {
     label: "Free up space",
-    description: "Review what can go before anything is removed.",
+    description: "Review what can go before anything is removed",
   },
   archived: {
     label: "Archived chats",
-    description: "Restore or delete archived sessions and chats.",
+    description: "Restore or delete archived sessions and chats",
   },
   choose: {
     label: "Choose items yourself",
-    description: "Anything that can be removed, including Brains, models and recordings.",
+    description: "Anything that can be removed, including Brains, models and recordings",
   },
   usage: {
     label: "Disk use per project",
-    description: "What each project's work folders, Brain and conversations use.",
+    description: "What each project's work folders, Brain and conversations use",
   },
   uninstall: {
     label: "Uninstall Brigadier",
     description:
-      "Removes what Brigadier created on this computer, then the app. Your repositories, your own branches and your files are not touched.",
+      "Removes what Brigadier created on this computer, then the app; your repositories, your own branches and your files stay",
   },
 } as const;
 

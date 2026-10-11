@@ -93,7 +93,7 @@ export function KindRow({
   if (outcome?.type === "wait") {
     note = `Tasks wait${outcome.resetsAtMs !== null ? ` ${formatCountdown(outcome.resetsAtMs, now)}` : ""}: ${outcome.reason}`;
   } else if (standIn && pickedName) {
-    note = `${pickedName} can't take tasks right now, so ${standIn} does until it can.`;
+    note = `${pickedName} can't take tasks right now, so ${standIn} does until it can`;
   }
 
   const trigger = (() => {

@@ -126,9 +126,9 @@ export function count(n: number, one: string, many: string): string {
 
 /** The Free up space row's line: what the one button would free. */
 export function freeLine(plan: Sweep): string {
-  if (plan.ids.length === 0) return "Nothing to free up: Brigadier is tidy.";
-  if (plan.bytes === 0) return `${count(plan.ids.length, "small leftover", "small leftovers")} can be tidied up.`;
-  return `${formatBytes(plan.bytes)} can be freed. Review what goes before anything is removed.`;
+  if (plan.ids.length === 0) return "Nothing to free up: Brigadier is tidy";
+  if (plan.bytes === 0) return `${count(plan.ids.length, "small leftover", "small leftovers")} can be tidied up`;
+  return `${formatBytes(plan.bytes)} can be freed; review what goes before anything is removed`;
 }
 
 /** The one button's words (and the confirmation's). */

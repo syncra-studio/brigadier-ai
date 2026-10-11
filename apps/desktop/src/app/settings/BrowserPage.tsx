@@ -27,43 +27,43 @@ import { type Selection, useApp } from "@/state/store";
 export const BROWSER_ROWS = {
   browser: {
     label: "Browser",
-    description: "Use Brigadier's built-in browser for web pages, in a tab beside your session.",
+    description: "Use Brigadier's built-in browser for web pages, in a tab beside your session",
   },
   webLinks: {
     label: "Open web links in",
-    description: "Where links in answers, search results and pull requests open.",
+    description: "Where links in answers, search results and pull requests open",
   },
   localLinks: {
     label: "Open local dev URLs in",
-    description: "Where localhost and other local development sites open, such as a running preview.",
+    description: "Where localhost and other local development sites open, such as a running preview",
   },
   fullUrl: {
     label: "Show full URL",
-    description: "Include the path, query, and fragment in the address bar.",
+    description: "Include the path, query and fragment in the address bar",
   },
   data: {
     label: "Browsing data",
-    description: "Clear the built-in browser's history, cookies, site data, cache and download history.",
+    description: "Clear the built-in browser's history, cookies, site data, cache and download history",
   },
   history: {
     label: "Browsing history",
-    description: "View and remove pages you visited in the built-in browser.",
+    description: "View and remove pages you visited in the built-in browser",
   },
   location: {
     label: "Location",
-    description: "Where files you download in the built-in browser are saved.",
+    description: "Where files you download in the built-in browser are saved",
   },
   askDownloads: {
     label: "Ask where to save downloads",
-    description: "Choose the folder and name for each download.",
+    description: "Choose the folder and name for each download",
   },
   downloads: {
     label: "Download history",
-    description: "View the files you downloaded in the built-in browser.",
+    description: "View the files you downloaded in the built-in browser",
   },
   sites: {
     label: "Site settings",
-    description: "Which sites may use your camera and microphone in the built-in browser.",
+    description: "Which sites may use your camera and microphone in the built-in browser",
   },
 } as const;
 

@@ -45,37 +45,36 @@ export const GIT_ROWS = {
   writer: {
     label: WRITER_LABEL,
     description:
-      "The model that writes a commit message when you commit from the Source panel with the message left blank.",
+      "The model that writes a commit message when you commit from the Source panel without one",
   },
   commitStyle: {
     label: COMMIT_LABEL,
     description:
-      "How commit messages are written: the ones Brigadier writes for you and the agents’ own commits.",
+      "How commit messages are written: the ones Brigadier writes for you and the agents’ own commits",
   },
   commitInstructions: {
     label: "Commit instructions",
-    description: "Your own guidance for commit messages, with Custom instructions.",
+    description: "Your own guidance for commit messages, with Custom instructions",
     target: COMMIT_LABEL,
   },
   prStyle: {
     label: PR_LABEL,
     description:
-      "How an agent writes a pull request’s title and description when you ask it to open one.",
+      "How an agent writes a pull request’s title and description when you ask it to open one",
   },
   prInstructions: {
     label: "Pull request instructions",
-    description: "Your own guidance for pull requests, with Custom instructions.",
+    description: "Your own guidance for pull requests, with Custom instructions",
     target: PR_LABEL,
   },
   branchPrefix: {
     label: "Branch prefix",
-    description:
-      "Put before the names of the branches Brigadier makes for sessions, forks and workers, and the name Create branch suggests. Existing branches keep their names.",
+    description: "Starts the names of new branches Brigadier makes or suggests; a project’s own prefix wins",
   },
   omitAiCoauthors: {
     label: "Leave out AI co-author lines",
     description:
-      "Commits from the Source panel and the agents' commits leave out Co-authored-by lines that name an AI. People's stay.",
+      "Commits from the Source panel and the agents' commits leave out Co-authored-by lines that name an AI, not people's",
   },
 } as const;
 
@@ -167,13 +166,8 @@ function WriterRow() {
   return (
     <SettingsRow
       label={GIT_ROWS.writer.label}
-      description={
-        value === null
-          ? `${GIT_ROWS.writer.description} Automatic: ${AUTOMATIC_HINT.charAt(0).toLowerCase()}${AUTOMATIC_HINT.slice(1)}`
-          : gone
-            ? `${GIT_ROWS.writer.description} It isn't available now, so Automatic writes them.`
-            : GIT_ROWS.writer.description
-      }
+      // Automatic's own line is in the menu, beside it.
+      description={gone ? "Not available now, so Automatic writes them" : GIT_ROWS.writer.description}
       error={save.error}
     >
       <ModelSelector
@@ -369,12 +363,7 @@ function BranchPrefixRow() {
   return (
     <SettingsRow
       label={GIT_ROWS.branchPrefix.label}
-      description={
-        <>
-          {GIT_ROWS.branchPrefix.description} A project’s own prefix (Create branch › Set prefix)
-          wins over this one.
-        </>
-      }
+      description={GIT_ROWS.branchPrefix.description}
       htmlFor={id}
       error={problem ?? save.error}
     >

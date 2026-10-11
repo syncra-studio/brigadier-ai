@@ -20,7 +20,7 @@ test("storage refreshes, reviews, frees up space and chooses items", { timeout: 
     "Logs &amp; recordings900.0 MB",
     "Other4.6 GB",
   ]);
-  assert.equal(seen.freeRow, "Free up space11.4 GB can be freed. Review what goes before anything is removed.Review");
+  assert.equal(seen.freeRow, "Free up space11.4 GB can be freed; review what goes before anything is removedReview");
   assert.equal(seen.scansAtOpen, 1);
   assert.equal(seen.revealed, "open");
   assert.equal(seen.scansAfterRefresh, 2);

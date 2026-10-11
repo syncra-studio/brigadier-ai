@@ -76,16 +76,16 @@ export const RANKED_CATEGORIES: readonly TaskCategory[] = [
 
 /** What each kind of work is, under its heading. */
 export const KIND_HINTS: Record<TaskCategory, string> = {
-  scout: "Looks around the repository and answers a question.",
-  research: "Reads docs and the web.",
-  implement: "Changes code; lands as one commit.",
-  review: "Reviews another task's change or a plan.",
-  merge: "Resolves conflicts between a task and its target branch.",
-  verify: "Runs the project's checks.",
-  operate: "Uses apps on this Mac to reach a result; changes no code.",
-  chat: "Takes over a Chat whose model hits its limit.",
-  orchestrate: "Plans and delegates a session's work.",
-  gitText: "Writes the commit messages Brigadier writes for you, on a fast, light model.",
+  scout: "Looks around the repository and answers a question",
+  research: "Reads docs and the web",
+  implement: "Changes code; lands as one commit",
+  review: "Reviews another task's change or a plan",
+  merge: "Resolves conflicts between a task and its target branch",
+  verify: "Runs the project's checks",
+  operate: "Uses apps on this Mac to reach a result; changes no code",
+  chat: "Takes over a Chat whose model hits its limit",
+  orchestrate: "Plans and delegates a session's work",
+  gitText: "Writes the commit messages Brigadier writes for you, on a fast, light model",
 };
 
 /** A kind of work in plain words, as the Providers page names it: "Write code". */

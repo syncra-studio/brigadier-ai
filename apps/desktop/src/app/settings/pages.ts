@@ -70,17 +70,17 @@ const InspectorPage = lazy(() =>
 
 // What search finds on the Inspector's page: its tabs.
 const INSPECTOR_ROWS: readonly SettingsRowCopy[] = [
-  { label: "Events", description: "The live event stream." },
-  { label: "Orchestrator", description: "The open session's orchestrator context." },
-  { label: "Project Brains", description: "What each project's Brain holds." },
-  { label: "Processes", description: "The processes Brigadier runs." },
-  { label: "Performance", description: "Metrics against the performance budgets." },
-  { label: "Providers", description: "Raw provider sessions." },
-  { label: "Routing preview", description: "What routing would pick." },
+  { label: "Events", description: "The live event stream" },
+  { label: "Orchestrator", description: "The open session's orchestrator context" },
+  { label: "Project Brains", description: "What each project's Brain holds" },
+  { label: "Processes", description: "The processes Brigadier runs" },
+  { label: "Performance", description: "Metrics against the performance budgets" },
+  { label: "Providers", description: "Raw provider sessions" },
+  { label: "Routing preview", description: "What routing would pick" },
 ];
 
 const USAGE_ROWS: readonly SettingsRowCopy[] = [
-  { label: "Usage windows", description: "How much of each agent's usage is left." },
+  { label: "Usage windows", description: "How much of each agent's usage is left" },
 ];
 
 export const SETTINGS_GROUPS: readonly SettingsGroup[] = ["Personal", "Agents", "Browser & Data", "System", "end"];

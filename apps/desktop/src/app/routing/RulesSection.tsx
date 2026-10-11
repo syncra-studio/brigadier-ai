@@ -29,8 +29,8 @@ export const RULES_ROW = {
 function noWorkNote(rule: OverrideRule): string | null {
   if (!isNoWorkRule(rule)) return null;
   return isNewModelRule(rule)
-    ? "New model: Brigadier gives it no tasks until you remove this rule."
-    : "You can still pick it for a chat or session.";
+    ? "New model: Brigadier gives it no tasks until you remove this rule"
+    : "You can still pick it for a chat or session";
 }
 
 /**
@@ -51,7 +51,7 @@ function shadowedBy(rule: OverrideRule, rankings: readonly Ranking[]): string | 
     ),
   );
   if (manual.length === 0) return null;
-  return `Not used for ${joinWords(manual.map((category) => CATEGORY_LABELS[category]))}: your list decides there.`;
+  return `Not used for ${joinWords(manual.map((category) => CATEGORY_LABELS[category]))}: your list decides there`;
 }
 
 /**
@@ -87,7 +87,7 @@ export function RulesSection({ groups }: { groups: readonly ModelGroup[] }) {
       )}
       <SettingsCard>
         {rules.length === 0 ? (
-          <SettingsRow label="No rules" description="Routing is limited only by Brigadier's own rules." />
+          <SettingsRow label="No rules" description="Routing is limited only by Brigadier's own rules" />
         ) : (
           rules.map((rule) => {
             const sentence = ruleSentence(rule, groups, projects);

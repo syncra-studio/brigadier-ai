@@ -32,7 +32,7 @@ export const BROWSER_IMPORT_ROWS = {
   import: {
     label: "Import from your browser",
     description:
-      "Bring cookies and browsing history from Safari, Chrome, Arc, Dia, Brave, Edge, Firefox, Zen and other browsers.",
+      "Bring cookies and browsing history from Safari, Chrome, Arc, Dia, Brave, Edge, Firefox, Zen and other browsers",
   },
 } as const;
 

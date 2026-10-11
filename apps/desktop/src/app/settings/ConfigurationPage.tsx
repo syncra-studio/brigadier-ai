@@ -86,12 +86,12 @@ export const CONFIGURATION_ROWS = {
   fullAccessNotice: {
     label: "Show the Full access notice",
     description:
-      "A card above the composer while a conversation's workers run without the OS sandbox.",
+      "A card above the composer while a conversation's workers run without the OS sandbox",
   },
   enrichBrain: {
     label: "Use spare quota to deepen the Brain",
     description:
-      "Before a usage window resets with quota left, a cheap model studies your projects further.",
+      "Before a usage window resets with quota left, a cheap model studies your projects further",
   },
 } as const;
 

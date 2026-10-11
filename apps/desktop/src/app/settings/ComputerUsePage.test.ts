@@ -39,8 +39,8 @@ test("computer use shows a status, each permission's state and one action, Start
     assert.match(html, /role="status"/);
     assert.match(html, />Control apps</);
     assert.match(html, />See the screen</);
-    assert.match(html, /Lets workers click, type and read app windows\./);
-    assert.match(html, /Lets workers look at app windows to check their work\./);
+    assert.match(html, /Lets workers click, type and read app windows</);
+    assert.match(html, /Lets workers look at app windows to check their work</);
     assert.equal(count(html, /Not allowed</g), 2);
     assert.deepEqual(buttons(html), ["Check again", "Allow…", "Allow…", ""]);
     assert.match(html, /aria-label="Where to find it"/);

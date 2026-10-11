@@ -24,10 +24,10 @@ import { useApp } from "@/state/store";
 
 /** The Voice page's rows, for the page and for Settings search. */
 export const VOICE_ROWS = {
-  microphone: { label: "Microphone", description: "Used for dictation." },
-  language: { label: "Language", description: "The language you dictate in." },
-  words: { label: "Word list", description: "Names and terms dictation should recognise." },
-  model: { label: "Speech model", description: "Dictation runs on this computer with this model." },
+  microphone: { label: "Microphone", description: "Used for dictation" },
+  language: { label: "Language", description: "The language you dictate in" },
+  words: { label: "Word list", description: "Names and terms dictation should recognise" },
+  model: { label: "Speech model", description: "Dictation runs on this computer with this model" },
 } as const;
 
 /**
@@ -87,7 +87,7 @@ function MicrophoneRow() {
   return (
     <SettingsRow
       label={VOICE_ROWS.microphone.label}
-      description={unnamed ? `${VOICE_ROWS.microphone.description} Their names show once you have dictated.` : VOICE_ROWS.microphone.description}
+      description={unnamed ? `${VOICE_ROWS.microphone.description}; names show once you have dictated` : VOICE_ROWS.microphone.description}
       error={save.error}
     >
       <SettingsSelect
@@ -207,8 +207,8 @@ function SpeechModelRow() {
     : model
       ? `Downloading… ${formatBytes(model.received)} of ${formatBytes(model.total || status.modelBytes)}`
       : status.installed
-        ? `Downloaded, ${size}. ${VOICE_ROWS.model.description}`
-        : `Not downloaded yet, ${size}. It downloads when you first dictate, or now.`;
+        ? `Downloaded, ${size}; dictation runs on this computer with it`
+        : `Not downloaded yet, ${size}; it downloads when you first dictate, or now`;
   return (
     <SettingsRow label={VOICE_ROWS.model.label} description={line} error={remove.error ?? (model ? null : modelError)}>
       {status && model && <SettingsButton onClick={cancelSpeechModelDownload}>Cancel</SettingsButton>}

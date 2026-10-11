@@ -15,11 +15,11 @@ test("voice settings: microphone, language, words and the speech model; Read alo
   assert.equal(seen.secondFocused, true);
   assert.deepEqual(seen.wordsSaved, ["Brigadier", "Jane Doe"]);
   assert.deepEqual(seen.wordsAfterRemove, { saved: ["Jane Doe"], fields: ["Jane Doe"] });
-  assert.equal(seen.modelFirst, "Speech modelNot downloaded yet, 141.0 MB. It downloads when you first dictate, or now.Download");
+  assert.equal(seen.modelFirst, "Speech modelNot downloaded yet, 141.0 MB; it downloads when you first dictate, or nowDownload");
   assert.equal(seen.downloading, "Speech modelDownloading… 47.0 MB of 141.0 MBCancel");
   assert.equal(seen.cancelled, seen.modelFirst);
   assert.equal(seen.afterDrop, seen.modelFirst);
-  assert.equal(seen.downloaded, "Speech modelDownloaded, 141.0 MB. Dictation runs on this computer with this model.Remove");
+  assert.equal(seen.downloaded, "Speech modelDownloaded, 141.0 MB; dictation runs on this computer with itRemove");
   assert.equal(seen.removed, seen.modelFirst);
   // Read aloud speaks an answer's words in the system's default voice, even where settings an
   // earlier version saved still name another.

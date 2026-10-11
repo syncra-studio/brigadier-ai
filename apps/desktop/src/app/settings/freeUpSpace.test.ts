@@ -225,6 +225,6 @@ test("the disk use parts add up to the scan's total, the rest in Other", () => {
 });
 
 test("the Free up space line says what the button frees", () => {
-  assert.equal(freeLine(sweep({ ...report, items: [] })), "Nothing to free up: Brigadier is tidy.");
-  assert.match(freeLine(sweep(report)), /^11\.\d GB can be freed\./);
+  assert.equal(freeLine(sweep({ ...report, items: [] })), "Nothing to free up: Brigadier is tidy");
+  assert.match(freeLine(sweep(report)), /^11\.\d GB can be freed; review what goes before anything is removed$/);
 });
