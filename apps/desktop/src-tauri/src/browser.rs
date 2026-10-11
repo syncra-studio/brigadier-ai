@@ -3,13 +3,14 @@
 //! It is a plain `wry` webview, not a Tauri one: Tauri gives each of its webviews the app's IPC
 //! bridge, init scripts and custom protocols, and a web page must get none of that. This one
 //! has no app IPC bridge or custom protocols. Its metadata-only handler accepts a bounded PNG
-//! favicon for this tab, with no commands or access to the app. `NO_CAPTURE` takes the
-//! microphone, camera and speech APIs away. Every tab keeps its cookies and site data in one
+//! favicon for this tab, with no commands or access to the app. `NO_CAPTURE` takes screen
+//! capture and speech recognition away (and on Windows the camera and microphone). Every tab keeps its cookies and site data in one
 //! saved store of its own, apart from the app's own webview and kept per Brigadier data folder
 //! (macOS: a WebKit data store named from the folder; Windows: a WebView2 folder in it), so
 //! sign-ins last like in any browser. It opens only web pages, sends popups to the system
-//! browser, and on macOS denies the page the camera and microphone (wry's own delegate would
-//! grant them; see `browser_ui`). It is made when the tab first loads a page and dropped when
+//! browser, and on macOS gives a page the camera or microphone only as the user chose for its
+//! site (Settings › Browser › Site settings; wry's own delegate would grant them; see
+//! `browser_ui`). It is made when the tab first loads a page and dropped when
 //! the tab closes. Linux has no embedded page (Tauri's window there is a GTK box a child can't
 //! be laid over); its tab opens pages in the system browser.
 
@@ -18,8 +19,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use brigadier_ipc::app::{
-    BrowserBounds, BrowserClear, BrowserDownload, BrowserEvent, BrowserOptions, BrowserVisit,
-    HistoryFilter,
+    BrowserBounds, BrowserClear, BrowserDownload, BrowserEvent, BrowserOptions, BrowserSite,
+    BrowserVisit, HistoryFilter, SitePermission,
 };
 use brigadier_ipc::protocol::{ErrorCode, IpcError};
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
@@ -45,11 +46,25 @@ fn allowed(url: &str) -> bool {
     matches!(scheme.as_deref(), Some("http" | "https" | "about" | "blob"))
 }
 
-/// Run in every frame of the tab's pages before their own scripts: takes away the
-/// microphone, camera and speech recognition APIs. The app itself may use the microphone
-/// (dictation), and asking for it here would make the system ask the user on a page's behalf;
-/// a page that still asks is refused (macOS: `browser_ui`; Windows: WebView2 asks the user).
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+/// Run in every frame of the tab's pages before their own scripts: takes away screen capture
+/// and speech recognition (which would listen through the app's own microphone use). On macOS
+/// a page may ask for the camera and microphone, answered per site in `browser_ui`.
+#[cfg(target_os = "macos")]
+const NO_CAPTURE: &str = r#"(() => {
+  const gone = (target, name) => {
+    try {
+      Object.defineProperty(target, name, { get: () => undefined, configurable: false });
+    } catch {}
+  };
+  if (window.MediaDevices) gone(MediaDevices.prototype, "getDisplayMedia");
+  for (const name of ["SpeechRecognition", "webkitSpeechRecognition"]) {
+    gone(window, name);
+  }
+})();"#;
+
+/// Windows has no per-site choices: the camera and microphone APIs go too, so the app's
+/// dictation microphone is never asked for on a page's behalf.
+#[cfg(target_os = "windows")]
 const NO_CAPTURE: &str = r#"(() => {
   const gone = (target, name) => {
     try {
@@ -713,6 +728,31 @@ pub fn browser_downloads(query: String) -> Vec<BrowserDownload> {
 pub fn browser_downloads_remove(ids: Option<Vec<i64>>) -> Result<(), IpcError> {
     browser_store::with(|store| store.remove_downloads(ids.as_deref(), None))
         .ok_or_else(|| failed("the download history can't be changed now"))
+}
+
+/// The sites that asked for the camera or microphone, with the user's choices.
+#[tauri::command]
+pub fn browser_sites() -> Vec<BrowserSite> {
+    browser_store::with(|store| store.sites()).unwrap_or_default()
+}
+
+/// Sets what the site `origin` may use: the camera, the microphone, or both.
+#[tauri::command]
+pub fn browser_site_set(
+    origin: String,
+    camera: Option<SitePermission>,
+    microphone: Option<SitePermission>,
+) -> Result<(), IpcError> {
+    browser_store::with(|store| {
+        if let Some(choice) = camera {
+            store.set_site(&origin, browser_store::Device::Camera, choice)?;
+        }
+        if let Some(choice) = microphone {
+            store.set_site(&origin, browser_store::Device::Microphone, choice)?;
+        }
+        Ok(())
+    })
+    .ok_or_else(|| failed("the site settings can't be changed now"))
 }
 
 /// Runs `action` with the browser's data store on the main thread, and waits for its answer.

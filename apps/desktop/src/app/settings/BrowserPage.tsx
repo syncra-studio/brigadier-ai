@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useAction } from "@/app/conversation/useAction";
 import { BrowserDownloads } from "@/app/settings/BrowserDownloads";
 import { BrowserHistory } from "@/app/settings/BrowserHistory";
+import { BrowserSiteSettings } from "@/app/settings/BrowserSiteSettings";
 import { ClearBrowsingDataDialog } from "@/app/settings/ClearBrowsingDataDialog";
 import {
   SettingsButton,
@@ -60,6 +61,10 @@ export const BROWSER_ROWS = {
     label: "Download history",
     description: "View the files you downloaded in the built-in browser.",
   },
+  sites: {
+    label: "Site settings",
+    description: "Which sites may use your camera and microphone in the built-in browser.",
+  },
 } as const;
 
 const PAGE_DESCRIPTION = "The built-in browser, where links open, and what it keeps.";
@@ -75,7 +80,7 @@ export function BrowserPage() {
   const on = useApp((s) => s.settings.browserEnabled);
   const embedded = useApp((s) => s.info?.platform !== "linux");
   const mac = useApp((s) => s.info?.platform === "macos");
-  const [view, setView] = useState<"page" | "history" | "downloads">("page");
+  const [view, setView] = useState<"page" | "history" | "downloads" | "sites">("page");
   const [clearing, setClearing] = useState(false);
   const [cleared, setCleared] = useState(0);
   const clearDialog = (
@@ -86,6 +91,7 @@ export function BrowserPage() {
       onCleared={() => setCleared((count) => count + 1)}
     />
   );
+  if (on && mac && view === "sites") return <BrowserSiteSettings onBack={() => setView("page")} />;
   if (on && embedded && view === "downloads") return <BrowserDownloads onBack={() => setView("page")} />;
   if (on && embedded && view === "history") {
     return (
@@ -125,6 +131,15 @@ export function BrowserPage() {
             {mac && <SwitchSetting setting="browserAskDownloads" row={BROWSER_ROWS.askDownloads} />}
             <SettingsRow label={BROWSER_ROWS.downloads.label} description={BROWSER_ROWS.downloads.description}>
               <SettingsButton onClick={() => setView("downloads")}>Manage</SettingsButton>
+            </SettingsRow>
+          </SettingsCard>
+        </SettingsSection>
+      )}
+      {on && mac && (
+        <SettingsSection title="Browser permissions">
+          <SettingsCard>
+            <SettingsRow label={BROWSER_ROWS.sites.label} description={BROWSER_ROWS.sites.description}>
+              <SettingsButton onClick={() => setView("sites")}>Manage</SettingsButton>
             </SettingsRow>
           </SettingsCard>
         </SettingsSection>

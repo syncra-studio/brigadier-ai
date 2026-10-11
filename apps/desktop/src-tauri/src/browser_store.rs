@@ -377,6 +377,21 @@ impl Store {
     }
 }
 
+/// The answer to a page asking for several devices at once: blocked if any is, allowed only if
+/// all are, else the system asks.
+pub fn combined(choices: &[SitePermission]) -> SitePermission {
+    if choices.contains(&SitePermission::Block) || choices.is_empty() {
+        SitePermission::Block
+    } else if choices
+        .iter()
+        .all(|choice| *choice == SitePermission::Allow)
+    {
+        SitePermission::Allow
+    } else {
+        SitePermission::Ask
+    }
+}
+
 /// The browser's store, opened on first use.
 static STORE: Mutex<Option<Store>> = Mutex::new(None);
 
@@ -544,6 +559,15 @@ mod tests {
         assert_eq!(store.downloads("").unwrap().len(), 1);
         store.remove_downloads(Some(&[running]), None).unwrap();
         assert!(store.downloads("").unwrap().is_empty());
+    }
+
+    #[test]
+    fn asking_for_both_devices_needs_both_allowed() {
+        use SitePermission::{Allow, Ask, Block};
+        assert_eq!(combined(&[Allow, Allow]), Allow);
+        assert_eq!(combined(&[Allow, Ask]), Ask);
+        assert_eq!(combined(&[Ask, Block]), Block);
+        assert_eq!(combined(&[]), Block);
     }
 
     #[test]

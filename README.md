@@ -42,16 +42,19 @@ docs/          plan and design notes
   The crate is pinned to the release `tauri-runtime-wry` uses, since two copies of wry would
   register the same native classes. Linux has no embedded page: its tab opens pages in the
   system browser.
-- `objc2`, `objc2-foundation`, `objc2-web-kit`, `block2` (macOS, the releases wry is built on):
-  the Browser tab's page gets its own WebKit UI delegate, because wry's grants every camera and
-  microphone request. Ours denies them without a prompt, sends popups to the system browser and
-  leaves file uploads to wry's. This module, `apps/desktop/src-tauri/src/browser_ui.rs`, is the
-  app shell's WebKit exception to the workspace's `unsafe_code = "deny"` (the sandbox crate's OS
-  calls are the only others): calling WebKit through objc2 needs `unsafe`. The `#[allow(unsafe_code)]` sits on that module alone, and each `unsafe` in it says
-  why it holds. WebKit asks macOS for the microphone before it asks the delegate, so the page
-  also gets a script, before any of its own and in every frame, that takes
-  `navigator.mediaDevices`, `getUserMedia` and the speech-recognition APIs away for good
-  (`NO_CAPTURE` in `browser.rs`). Windows' WebView2 asks the user itself.
+- `objc2`, `objc2-foundation`, `objc2-web-kit`, `objc2-app-kit`, `block2` (macOS, the releases
+  wry is built on): the Browser tab's page gets its own WebKit UI delegate, because wry's grants
+  every camera and microphone request. Ours answers them from the site's choice in Settings ›
+  Browser › Site settings (Allow, Block, or Ask: WebKit's own question), sends popups to the
+  system browser and leaves file uploads to wry's. The same module clears the browser's saved
+  WebKit data store, counts its sites and shows the save panel for downloads. This module,
+  `apps/desktop/src-tauri/src/browser_ui.rs`, is the app shell's WebKit exception to the
+  workspace's `unsafe_code = "deny"` (the sandbox crate's OS calls are the only others): calling
+  WebKit through objc2 needs `unsafe`. The `#[allow(unsafe_code)]` sits on that module alone, and
+  each `unsafe` in it says why it holds. The page also gets a script, before any of its own and
+  in every frame, that takes screen capture and the speech-recognition APIs away for good
+  (`NO_CAPTURE` in `browser.rs`); on Windows, whose WebView2 has no per-site choices here, it
+  takes the camera and microphone APIs away too.
 - Overnight run notifications use a small macOS UserNotifications adapter under the app's
   bundle identity, retaining a stable notification ID and session/run activation payload.
   `overnight_notifications.rs::mac` is the shell's other narrowly scoped unsafe exception:

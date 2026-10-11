@@ -1,6 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { BrowserClear, BrowserDownload, BrowserVisit, HistoryFilter } from "@/ipc/generated";
+import type {
+  BrowserClear,
+  BrowserDownload,
+  BrowserSite,
+  BrowserVisit,
+  HistoryFilter,
+  SitePermission,
+} from "@/ipc/generated";
 
 /*
  * What the built-in browser remembers (its history, downloads and site choices, kept by the
@@ -93,4 +100,16 @@ const RANGE_MS: Record<Exclude<ClearRange, "all">, number> = {
 /** Where a cleared time range starts; null: all time. */
 export function rangeStart(range: ClearRange, nowMs: number): number | null {
   return range === "all" ? null : nowMs - RANGE_MS[range];
+}
+
+export function browserSites(): Promise<BrowserSite[]> {
+  return invoke<BrowserSite[]>("browser_sites");
+}
+
+/** Sets what a site may use without asking: its camera, its microphone, or both. */
+export function setSite(
+  origin: string,
+  choice: { camera?: SitePermission; microphone?: SitePermission },
+): Promise<void> {
+  return invoke("browser_site_set", { origin, camera: choice.camera ?? null, microphone: choice.microphone ?? null });
 }

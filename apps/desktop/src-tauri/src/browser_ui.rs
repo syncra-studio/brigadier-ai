@@ -2,8 +2,9 @@
 //! `unsafe` code (README, "Dependency notes").
 //!
 //! wry's own delegate grants every camera and microphone request a page makes. That is right
-//! for the app's page, but a web page in the Browser tab must never listen or watch, so the
-//! tab's webview gets this delegate instead: it denies media capture, sends popups
+//! for the app's page, but a web page in the Browser tab may listen or watch only as the user
+//! chose for its site, so the tab's webview gets this delegate instead: it answers media
+//! capture from the site's choices (Allow, Block, or Ask: WebKit's own question), sends popups
 //! (`window.open`, `target=_blank`) to the system browser, and leaves the file picker to wry's
 //! delegate as before. It also reaches the browser's saved WebKit data store (clearing it,
 //! counting its sites) and asks where to save a download. Talking to WebKit through objc2 needs `unsafe`; every use says why it
@@ -13,6 +14,7 @@ use std::cell::RefCell;
 use std::ptr::NonNull;
 
 use block2::{DynBlock, RcBlock};
+use brigadier_ipc::app::SitePermission;
 use objc2::rc::Retained;
 use objc2::runtime::{NSObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
@@ -31,6 +33,8 @@ use objc2_web_kit::{
     WKWebsiteDataTypeWebSQLDatabases, WKWindowFeatures,
 };
 use wry::WebViewExtMacOS;
+
+use crate::browser_store::{self, Device};
 
 struct Ivars {
     /// wry's delegate, which still shows the file picker.
@@ -63,15 +67,32 @@ define_class!(
             decision: &DynBlock<dyn Fn(WKPermissionDecision)>,
         ) {
             // SAFETY: plain property reads on the origin WebKit passed in.
-            let (scheme, host) = unsafe { (origin.protocol(), origin.host()) };
-            let kind = match kind {
-                WKMediaCaptureType::Camera => "camera",
-                WKMediaCaptureType::Microphone => "microphone",
-                WKMediaCaptureType::CameraAndMicrophone => "camera and microphone",
-                _ => "media",
+            let (scheme, host, port) = unsafe { (origin.protocol(), origin.host(), origin.port()) };
+            let origin = if port > 0 {
+                format!("{scheme}://{host}:{port}")
+            } else {
+                format!("{scheme}://{host}")
             };
-            tracing::info!(origin = %format!("{scheme}://{host}"), kind, "Browser tab: media capture denied");
-            decision.call((WKPermissionDecision::Deny,));
+            let devices: &[Device] = match kind {
+                WKMediaCaptureType::Camera => &[Device::Camera],
+                WKMediaCaptureType::Microphone => &[Device::Microphone],
+                WKMediaCaptureType::CameraAndMicrophone => &[Device::Camera, Device::Microphone],
+                _ => &[],
+            };
+            // Every site that asks is listed in Site settings, with the user's choices.
+            let now = browser_store::now_ms();
+            let choices: Option<Vec<SitePermission>> = devices
+                .iter()
+                .map(|device| browser_store::with(|store| store.site_asked(&origin, *device, now)))
+                .collect();
+            let answer = match choices.map(|choices| browser_store::combined(&choices)) {
+                Some(SitePermission::Allow) => WKPermissionDecision::Grant,
+                // WebKit's own question, naming the site.
+                Some(SitePermission::Ask) => WKPermissionDecision::Prompt,
+                _ => WKPermissionDecision::Deny,
+            };
+            tracing::info!(%origin, ?devices, ?answer, "Browser tab: camera or microphone asked for");
+            decision.call((answer,));
         }
 
         #[unsafe(method_id(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]

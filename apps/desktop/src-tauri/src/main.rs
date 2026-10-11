@@ -704,7 +704,9 @@ fn main() {
             browser::browser_clear,
             browser::browser_site_count,
             browser::browser_downloads,
-            browser::browser_downloads_remove
+            browser::browser_downloads_remove,
+            browser::browser_sites,
+            browser::browser_site_set
         ])
         .build(context)
         .unwrap_or_else(|err| {
