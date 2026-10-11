@@ -2003,10 +2003,15 @@ impl SessionManager {
             task.number,
             &task.id.0[task.id.0.len() - 8..]
         ));
-        let branch = task
-            .kind
-            .writes()
-            .then(|| task_branch(&task.conversation_id, task.number, &task.title));
+        let branch = match task.kind.writes() {
+            true => Some(task_branch(
+                &self.branch_prefix(&task.conversation_id).await,
+                &task.conversation_id,
+                task.number,
+                &task.title,
+            )),
+            false => None,
+        };
         let spec = match &branch {
             Some(name) => WorktreeSpec::NewBranch {
                 name: name.clone(),
@@ -2020,6 +2025,9 @@ impl SessionManager {
         let warmed = self
             .make_worktree(owner, &repo, &worktree, spec, warm, &task.id)
             .await?;
+        if let Some(name) = &branch {
+            self.note_branch_made(&repo, name).await;
+        }
         Ok(Workspace {
             repo,
             worktree: Some(worktree),
@@ -2185,28 +2193,36 @@ impl SessionManager {
                     branch.clone(),
                     start.clone(),
                 );
-                blocking(move || {
+                let made = blocking(move || {
                     let repo = git.open(&repo_path).map_err(git_error)?;
                     if let Some(parent) = path.parent() {
                         std::fs::create_dir_all(parent)
                             .map_err(|err| Error::Invalid(err.to_string()))?;
                     }
-                    let spec = match repo.branch_tip(&name).map_err(git_error)? {
-                        Some(_) => WorktreeSpec::Branch { name },
-                        None => WorktreeSpec::NewBranch {
-                            name,
-                            start: match &from {
-                                Some(commit) => repo.resolve(commit),
-                                None => repo.branch_commit(&base_name),
-                            }
-                            .map_err(git_error)?,
-                        },
+                    let (spec, made) = match repo.branch_tip(&name).map_err(git_error)? {
+                        Some(_) => (WorktreeSpec::Branch { name }, false),
+                        None => (
+                            WorktreeSpec::NewBranch {
+                                name,
+                                start: match &from {
+                                    Some(commit) => repo.resolve(commit),
+                                    None => repo.branch_commit(&base_name),
+                                }
+                                .map_err(git_error)?,
+                            },
+                            true,
+                        ),
                     };
                     repo.add_worktree(&path, spec)
-                        .map(|_| ())
+                        .map(|_| made)
                         .map_err(git_error)
                 })
                 .await?;
+                // A branch that was there already (the user's, or one a restored session
+                // made before) is only Brigadier's when its records say so.
+                if made {
+                    self.note_branch_made(repo, &branch).await;
+                }
                 if let Some(Setup::Session {
                     repo,
                     permission,
@@ -3781,10 +3797,15 @@ impl SessionManager {
             .target
             .clone()
             .ok_or_else(|| Error::Invalid("the task has no target branch".into()))?;
-        let name = workspace
-            .branch
-            .clone()
-            .unwrap_or_else(|| task_branch(&conversation_id, task.number, &task.title));
+        let name = match workspace.branch.clone() {
+            Some(name) => name,
+            None => task_branch(
+                &self.branch_prefix(&conversation_id).await,
+                &conversation_id,
+                task.number,
+                &task.title,
+            ),
+        };
         let hash = artifact
             .id
             .parse()
@@ -4602,8 +4623,13 @@ fn job_name(title: &str, kind: TaskKind, subject: Option<&str>, used: &[String])
     }
 }
 
-/// `brigadier/<session>/task-<n>-<slug>`.
-pub(super) fn task_branch(conversation_id: &ConversationId, number: u32, title: &str) -> String {
+/// `<prefix><session>/task-<n>-<slug>`.
+pub(super) fn task_branch(
+    prefix: &str,
+    conversation_id: &ConversationId,
+    number: u32,
+    title: &str,
+) -> String {
     let session = conversation_id.short();
     let slug: String = title
         .to_lowercase()
@@ -4618,9 +4644,9 @@ pub(super) fn task_branch(conversation_id: &ConversationId, number: u32, title: 
     let slug: String = slug.chars().take(40).collect();
     let slug = slug.trim_end_matches('-');
     if slug.is_empty() {
-        format!("brigadier/{session}/task-{number}")
+        format!("{prefix}{session}/task-{number}")
     } else {
-        format!("brigadier/{session}/task-{number}-{slug}")
+        format!("{prefix}{session}/task-{number}-{slug}")
     }
 }
 

@@ -327,7 +327,8 @@ impl Setup {
     /// The setup a composer request asks for. A new-worktree session without a branch name
     /// gets `brigadier/<id.short()>/session`, next to its task branches; the runtime creates
     /// the branch and worktree when the session starts.
-    pub fn from_request(request: SetupRequest, id: &ConversationId) -> Self {
+    /// `prefix` goes before the name of a new worktree's branch when none was asked for.
+    pub fn from_request(request: SetupRequest, id: &ConversationId, prefix: &str) -> Self {
         match request {
             SetupRequest::Session {
                 repo,
@@ -345,7 +346,7 @@ impl Setup {
                         base,
                         branch: branch
                             .filter(|branch| !branch.trim().is_empty())
-                            .unwrap_or_else(|| format!("brigadier/{}/session", id.short())),
+                            .unwrap_or_else(|| format!("{prefix}{}/session", id.short())),
                         path: None,
                         start: None,
                     },
@@ -1632,6 +1633,12 @@ pub enum DomainEvent {
         repo: String,
         branches: Vec<KeptBranch>,
     },
+    /// Brigadier created `branch` in `repo` (a session's, a fork's or a worker's): what proves
+    /// it Brigadier's to delete later, whatever the branch prefix was or is.
+    BranchMade {
+        repo: String,
+        branch: String,
+    },
     /// These artifacts of `owner` are gone.
     CleanupRemoved {
         owner: String,
@@ -1912,6 +1919,7 @@ impl DomainEvent {
             Self::CleanupRecorded { .. } => "cleanup.recorded",
             Self::CleanupRemoved { .. } => "cleanup.removed",
             Self::BranchesKept { .. } => "branches.kept",
+            Self::BranchMade { .. } => "branch.made",
             Self::CleanupRequested { .. } => "cleanup.requested",
             Self::CleanupCompleted { .. } => "cleanup.completed",
             Self::CleanupFinished { .. } => "cleanup.finished",

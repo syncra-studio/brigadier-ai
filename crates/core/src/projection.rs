@@ -153,6 +153,7 @@ impl Projection {
             | DomainEvent::CleanupRecorded { .. }
             | DomainEvent::CleanupRemoved { .. }
             | DomainEvent::BranchesKept { .. }
+            | DomainEvent::BranchMade { .. }
             | DomainEvent::CleanupRequested { .. }
             | DomainEvent::CleanupCompleted { .. }
             | DomainEvent::CleanupFinished { .. }

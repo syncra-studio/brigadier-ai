@@ -121,8 +121,9 @@ impl SessionManager {
                 let start = self
                     .fork_commit(&repo, &environment, &board, &copied)
                     .await?;
+                let prefix = self.branch_prefix(&conversation.id).await;
                 let environment = self
-                    .fork_environment(&repo, &environment, place, &start, &id)
+                    .fork_environment(&repo, &environment, place, &start, &id, &prefix)
                     .await?;
                 Some(Setup::Session {
                     repo,
@@ -394,6 +395,7 @@ impl SessionManager {
         place: ForkPlace,
         start: &str,
         id: &ConversationId,
+        prefix: &str,
     ) -> Result<Environment> {
         let target = match environment {
             Environment::LocalCheckout { branch } => branch.clone(),
@@ -402,7 +404,7 @@ impl SessionManager {
         match place {
             ForkPlace::NewWorktree => Ok(Environment::NewWorktree {
                 base: target,
-                branch: format!("brigadier/{}/session", id.short()),
+                branch: format!("{prefix}{}/session", id.short()),
                 path: None,
                 start: Some(start.to_owned()),
             }),
@@ -415,7 +417,7 @@ impl SessionManager {
                         Environment::LocalCheckout { branch } => Some(branch.clone()),
                         Environment::NewWorktree { .. } => None,
                     },
-                    format!("brigadier/{}/fork", id.short()),
+                    format!("{prefix}{}/fork", id.short()),
                 );
                 blocking(move || {
                     let repo = git.open(Path::new(&repo)).map_err(git_error)?;

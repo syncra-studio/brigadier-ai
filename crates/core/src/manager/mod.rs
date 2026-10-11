@@ -19,6 +19,7 @@ mod accounts;
 mod add_project;
 mod brain_jobs;
 mod brains;
+mod branch_names;
 mod branches;
 mod cards;
 mod checks;
@@ -503,7 +504,8 @@ impl SessionManager {
             .await?;
         }
         let id = ConversationId::generate();
-        let setup = setup.map(|request| Setup::from_request(request, &id));
+        let (prefix, _) = self.branch_prefix_of(project_id.as_ref());
+        let setup = setup.map(|request| Setup::from_request(request, &id, &prefix));
         self.core
             .create_conversation(id, kind, project_id, title, setup, Origin::default())
             .await

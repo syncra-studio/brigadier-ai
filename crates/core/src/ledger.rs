@@ -49,6 +49,28 @@ struct State {
     /// Every CLI session Brigadier ever started, by its CLI's own id, kept after its files
     /// went: what proves a session's files found later are Brigadier's.
     native: HashMap<String, NativeSession>,
+    /// The branches Brigadier made (or kept for the user), by repository: what proves a branch
+    /// Brigadier's to delete.
+    made: HashSet<(String, String)>,
+}
+
+/// The branches Brigadier's records prove its own: those it made or kept for the user, and,
+/// from before it recorded them, those named like its own (`brigadier/…`) or an overnight
+/// run's (`overnight/…`). What it may delete.
+#[derive(Debug, Clone, Default)]
+pub struct BranchOwnership {
+    made: HashSet<(String, String)>,
+}
+
+impl BranchOwnership {
+    /// Whether `name` in the repository at `repo` is Brigadier's.
+    pub fn owns(&self, repo: &std::path::Path, name: &str) -> bool {
+        name.starts_with("brigadier/")
+            || name.starts_with("overnight/")
+            || self
+                .made
+                .contains(&(repo.to_string_lossy().into_owned(), name.to_owned()))
+    }
 }
 
 /// A CLI session Brigadier started, as its ledger recorded it.
@@ -174,6 +196,14 @@ impl CleanupLedger {
                     DomainEvent::CleanupCompleted { owner, .. } => {
                         state.artifacts.remove(&owner);
                         state.disposing.remove(&owner);
+                    }
+                    DomainEvent::BranchMade { repo, branch } => {
+                        state.made.insert((repo, branch));
+                    }
+                    DomainEvent::BranchesKept { repo, branches } => {
+                        for branch in branches {
+                            state.made.insert((repo.clone(), branch.name));
+                        }
                     }
                     _ => {}
                 }
@@ -507,8 +537,34 @@ impl CleanupLedger {
         if branches.is_empty() {
             return Ok(());
         }
+        {
+            let mut state = self.state();
+            for branch in &branches {
+                state.made.insert((repo.clone(), branch.name.clone()));
+            }
+        }
         self.append(DomainEvent::BranchesKept { repo, branches })
             .await
+    }
+
+    /// Records that Brigadier created `branch` in `repo`, once.
+    pub async fn record_branch_made(&self, repo: &std::path::Path, branch: &str) -> Result<()> {
+        let key = (repo.to_string_lossy().into_owned(), branch.to_owned());
+        if !self.state().made.insert(key.clone()) {
+            return Ok(());
+        }
+        self.append(DomainEvent::BranchMade {
+            repo: key.0,
+            branch: key.1,
+        })
+        .await
+    }
+
+    /// The branches Brigadier's records prove its own, as they are now.
+    pub fn branch_ownership(&self) -> BranchOwnership {
+        BranchOwnership {
+            made: self.state().made.clone(),
+        }
     }
 
     /// Removes these of `owner`'s artifacts now (the rest stay recorded); what can't be removed
