@@ -41,7 +41,7 @@ use crate::work::{ApprovalSubject, CardState, OrchestratorEntry, PlanState, Task
 const BYTES_PER_TOKEN: usize = 4;
 /// The briefing aims at this many tokens …
 const BRIEFING_TARGET: usize = 20_000 * BYTES_PER_TOKEN;
-/// … and never passes this unless the decision lines alone need it.
+/// … and never passes this unless the decisions alone need it (they are never cut).
 const BRIEFING_MAX: usize = 25_000 * BYTES_PER_TOKEN;
 
 /// A verbatim exchange: a user message and what followed it.
@@ -51,7 +51,6 @@ struct Exchange {
 }
 /// Section budgets.
 const HANDOFF_BUDGET: usize = 3_000 * BYTES_PER_TOKEN;
-const DECISIONS_BUDGET: usize = 4_000 * BYTES_PER_TOKEN;
 const STATE_BUDGET: usize = 2_000 * BYTES_PER_TOKEN;
 const BRAIN_BUDGET: usize = 5_000 * BYTES_PER_TOKEN;
 /// Exchanges (a user message and what followed it) carried verbatim at least …
@@ -465,39 +464,19 @@ impl SessionManager {
             + state.text.len()
             + search.text.len();
         let total_exchanges = exchanges.len();
-        // Newest first: as many exchanges as the target leaves room for, at least six.
-        let mut taken = 0;
-        let mut recent_bytes = 0;
-        for exchange in &exchanges {
-            let room = target.saturating_sub(fixed + brain.text.len());
-            if taken >= MIN_EXCHANGES && recent_bytes + exchange.text.len() > room {
-                break;
-            }
-            taken += 1;
-            recent_bytes += exchange.text.len();
+        let sizes: Vec<usize> = exchanges
+            .iter()
+            .map(|exchange| exchange.text.len())
+            .collect();
+        let fit = fit(fixed, brain.text.len(), &sizes, (target, max));
+        let taken = fit.taken;
+        if fit.brain < brain.text.len() {
+            brain.text = cut(&brain.text, fit.brain);
+            brain.truncated = true;
+            brain.note = Some("cut to fit the briefing".into());
         }
-        let mut overflow_note = None;
-        if fixed + brain.text.len() + recent_bytes > max {
-            // Over the cap: the Brain digest shrinks first, then the verbatim tail (down to
-            // three exchanges). Decision lines are never dropped.
-            let room = max.saturating_sub(fixed + recent_bytes);
-            if room < brain.text.len() {
-                brain.text = cut(&brain.text, room);
-                brain.truncated = true;
-                brain.note = Some("cut to fit the briefing".into());
-            }
-            while taken > MIN_EXCHANGES_OVERFLOW.min(total_exchanges)
-                && fixed + brain.text.len() + recent_bytes > max
-            {
-                taken -= 1;
-                recent_bytes -= exchanges[taken].text.len();
-            }
-            if taken < MIN_EXCHANGES.min(total_exchanges) {
-                overflow_note = Some(format!(
-                    "overflow: {taken} exchanges carried instead of {MIN_EXCHANGES}"
-                ));
-            }
-        }
+        let overflow_note = (taken < MIN_EXCHANGES.min(total_exchanges))
+            .then(|| format!("overflow: {taken} exchanges carried instead of {MIN_EXCHANGES}"));
         let mut chosen: Vec<&Exchange> = exchanges[..taken].iter().collect();
         chosen.reverse();
         let mut recent = Part::new(
@@ -647,47 +626,19 @@ impl SessionManager {
         if nodes.is_empty() {
             return (Part::new("decisions", String::new(), 0), 0);
         }
-        let lines: Vec<String> = nodes.iter().map(decision_line).collect();
-        let mut used: usize = lines.iter().map(|line| line.len() + 1).sum();
-        let mut bodies: Vec<Option<String>> = vec![None; nodes.len()];
-        let mut in_full = 0;
-        for (index, node) in nodes.iter().enumerate().rev() {
-            let body = node.body.trim();
-            if body.is_empty() || body == node.title {
-                in_full += 1;
-                continue;
-            }
-            let body = format!("    {}", body.replace('\n', "\n    "));
-            if used + body.len() + 1 > DECISIONS_BUDGET {
-                continue;
-            }
-            used += body.len() + 1;
-            bodies[index] = Some(body);
-            in_full += 1;
-        }
-        let mut text = String::from(
-            "[Decisions settled in this conversation, oldest first; all still hold unless replaced]\n",
-        );
-        for (line, body) in lines.iter().zip(&bodies) {
-            text.push_str(line);
-            text.push('\n');
-            if let Some(body) = body {
-                text.push_str(body);
-                text.push('\n');
-            }
-        }
-        let mut part = Part::new("decisions", text.trim_end().to_owned(), nodes.len() as u32);
-        part.truncated = in_full < nodes.len();
+        let mut part = Part::new("decisions", decision_text(&nodes), nodes.len() as u32);
+        let ledger_full = nodes.len() >= LEDGER_MAX as usize;
+        part.truncated = ledger_full;
         part.note = Some(format!(
-            "{in_full} of {} in full; the rest as lines (query_brain by id){}",
+            "all {} in full{}",
             nodes.len(),
-            if nodes.len() >= LEDGER_MAX as usize {
-                "; the ledger's newest lines only"
+            if ledger_full {
+                "; the ledger's newest only"
             } else {
                 ""
             }
         ));
-        (part, in_full as u32)
+        (part, nodes.len() as u32)
     }
 
     /// The live board, exactly (no model wrote it).
@@ -1173,6 +1124,58 @@ fn list_item(line: &str) -> &str {
     line
 }
 
+/// The briefing's decisions part: every decision as its line, with its body in full (they
+/// are never cut, SESSION-FIXES-PLAN Q5).
+fn decision_text(nodes: &[Node]) -> String {
+    let mut text = String::from(
+        "[Decisions settled in this conversation, oldest first; all still hold unless replaced]\n",
+    );
+    for node in nodes {
+        text.push_str(&decision_line(node));
+        text.push('\n');
+        let body = node.body.trim();
+        if !body.is_empty() && body != node.title {
+            text.push_str(&format!("    {}\n", body.replace('\n', "\n    ")));
+        }
+    }
+    text.trim_end().to_owned()
+}
+
+/// How much of a briefing's two flexible parts it carries.
+#[derive(Debug, PartialEq, Eq)]
+struct Fit {
+    /// The newest exchanges carried verbatim.
+    taken: usize,
+    /// Bytes of the Brain digest kept.
+    brain: usize,
+}
+
+/// Fits a briefing of `fixed` bytes that are never cut (the framing, handoff note, decisions,
+/// state), a Brain digest of `brain` bytes and the verbatim `exchanges` (their sizes, newest
+/// first) into `(target, max)`. As many exchanges as the target leaves room for, at least six.
+/// Over the cap the exchanges shrink first, down to three, and then the Brain digest
+/// (SESSION-FIXES-PLAN Q5). Only the fixed parts can still pass the cap.
+fn fit(fixed: usize, brain: usize, exchanges: &[usize], (target, max): (usize, usize)) -> Fit {
+    let mut taken = 0;
+    let mut recent = 0;
+    for size in exchanges {
+        let room = target.saturating_sub(fixed + brain);
+        if taken >= MIN_EXCHANGES && recent + size > room {
+            break;
+        }
+        taken += 1;
+        recent += size;
+    }
+    while taken > MIN_EXCHANGES_OVERFLOW.min(exchanges.len()) && fixed + brain + recent > max {
+        taken -= 1;
+        recent -= exchanges[taken];
+    }
+    Fit {
+        taken,
+        brain: brain.min(max.saturating_sub(fixed + recent)),
+    }
+}
+
 /// A decision as one briefing line: its node id, what it says, where it came from.
 fn decision_line(node: &Node) -> String {
     let origin = match node.provenance.origin {
@@ -1235,4 +1238,84 @@ impl RebirthPrep {
 /// The node holds as recorded (not stale; superseded ones aren't listed).
 fn is_fresh(node: &Node) -> bool {
     matches!(node.state, NodeState::Fresh)
+}
+
+#[cfg(test)]
+mod tests {
+    use brigadier_brain::Provenance;
+
+    use super::*;
+
+    fn decision(n: usize, body: &str) -> Node {
+        Node {
+            id: format!("d{n}"),
+            kind: NodeKind::Decision,
+            key: None,
+            title: format!("Decision {n}"),
+            body: body.into(),
+            state: NodeState::Fresh,
+            provenance: Provenance {
+                origin: NodeOrigin::User,
+                session_id: None,
+                task_id: None,
+                job_id: None,
+                worker: None,
+                commit: None,
+                recorded_at_ms: 0,
+            },
+            files: Vec::new(),
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            expires_at_ms: None,
+            embedded: false,
+        }
+    }
+
+    #[test]
+    fn every_decision_body_is_kept_whole() {
+        // Far more than the old 4k-token budget for bodies.
+        let nodes: Vec<Node> = (0..40)
+            .map(|n| decision(n, &format!("Why {n}: {}", "because ".repeat(200))))
+            .collect();
+        let text = decision_text(&nodes);
+        for node in &nodes {
+            assert!(text.contains(&format!("[{}]", node.id)));
+            assert!(text.contains(node.body.trim()), "{} cut", node.id);
+        }
+        assert!(text.len() > 4_000 * BYTES_PER_TOKEN, "past the old budget");
+    }
+
+    #[test]
+    fn over_the_cap_exchanges_shrink_before_the_brain_digest() {
+        let budget = (800, 1_000);
+        // Fits the target: all six, the digest whole.
+        assert_eq!(
+            fit(300, 100, &[50; 6], budget),
+            Fit {
+                taken: 6,
+                brain: 100
+            }
+        );
+        // Over the cap: exchanges go first, down to three, and the digest stays whole.
+        assert_eq!(
+            fit(500, 200, &[100; 8], budget),
+            Fit {
+                taken: 3,
+                brain: 200
+            }
+        );
+        // Still over with three: only then is the digest cut.
+        assert_eq!(
+            fit(500, 400, &[100; 8], budget),
+            Fit {
+                taken: 3,
+                brain: 200
+            }
+        );
+        // Decisions alone past the cap: never cut; the rest goes as far as it can.
+        assert_eq!(
+            fit(1_200, 400, &[100; 8], budget),
+            Fit { taken: 3, brain: 0 }
+        );
+    }
 }
