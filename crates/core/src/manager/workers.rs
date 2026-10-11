@@ -1948,10 +1948,11 @@ impl SessionManager {
                 (commit.clone(), commit, false)
             }
             (TaskKind::Merge, Some(subject)) => {
-                let (onto, work) = self.merge_start(subject, &target).await?;
+                let (onto, work, replaces) = self.merge_start(subject, &target).await?;
                 merge = Some(crate::work::MergeInputs {
                     incoming: work.0.clone(),
                     label: format!("task-{}'s work", subject.number),
+                    replaces: replaces.map(|tip| tip.0),
                 });
                 (onto, work, false)
             }
@@ -1966,6 +1967,7 @@ impl SessionManager {
                 merge = Some(crate::work::MergeInputs {
                     incoming: base_tip.0,
                     label: format!("`{base}`"),
+                    replaces: None,
                 });
                 (branch_tip.clone(), branch_tip, false)
             }

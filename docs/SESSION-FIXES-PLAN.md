@@ -91,7 +91,8 @@ Everything else in THREAD-PLAN and THREAD-PARITY-PLAN stands.
      in `crates/git`, once nothing calls them.
    - **As built:** a subject merge's worktree branch starts at the conflicting task's work (its WIP commit, each
      of its commits rebuilt without what its litter guard would leave out, so no litter reaches the landed
-     history: `Repo::work_without`) and merges the target in; a
+     history: `Repo::work_without`; the task's branch then counts as landed at the tip that rebuild replaced,
+     `MergeInputs.replaces`) and merges the target in; a
      no-subject merge's branch starts at the session tip and merges the base in. The task records what it merges
      in (`TaskWorkspace.merge`: the commit and its name). The squash landing went with the pre-merge
      (`prepare_candidate`, `merge_parent`, `commit_merge`, `unresolved_base_merge`). The worker instructions

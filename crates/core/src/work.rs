@@ -350,6 +350,10 @@ pub struct MergeInputs {
     pub incoming: String,
     /// Its name for the worker and the thread: "`main`", "task-3's work".
     pub label: String,
+    /// The conflicting task's branch tip `incoming` was rebuilt from without its litter, when
+    /// it was: that branch counts as landed at exactly this tip once `incoming` has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaces: Option<String>,
 }
 
 /// A structured report, the only part of a worker's work that enters the orchestrator's

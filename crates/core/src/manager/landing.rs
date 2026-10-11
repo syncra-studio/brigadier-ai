@@ -790,9 +790,16 @@ impl SessionManager {
             self.set_phase_stage(landed, PhaseStage::Done).await;
         }
         // The task branches are fully on the target now; they were Brigadier's, so they go
-        // too.
+        // too. A merge's conflicting task whose work was rebuilt without its litter landed
+        // as that rebuild: its branch counts as merged at the tip the rebuild replaced.
+        let rebuilt = task
+            .workspace
+            .as_ref()
+            .and_then(|w| w.merge.as_ref())
+            .and_then(|m| Some((Oid(m.replaces.clone()?), Oid(m.incoming.clone()))));
         for landed in &tasks {
             let branch = landed.workspace.as_ref().and_then(|w| w.branch.clone());
+            let rebuilt = rebuilt.clone().filter(|_| landed.id != task.id);
             self.dispose_task(landed, TaskState::Landed).await;
             if let (Some(branch), Ok(repo)) = (branch, self.task_repo(landed)) {
                 self.forget_branch(&repo, &branch);
@@ -804,8 +811,15 @@ impl SessionManager {
                     // not the target in a new-worktree session; the merge check here is the
                     // real one. Deleted only at the tip found merged: a commit added since
                     // then stays.
-                    if let Some(tip) = repo.branch_tip(&branch).map_err(git_error)?
-                        && repo.is_merged(&branch, &into).map_err(git_error)?
+                    let Some(tip) = repo.branch_tip(&branch).map_err(git_error)? else {
+                        return Ok(());
+                    };
+                    let landed = match &rebuilt {
+                        Some((replaced, incoming)) if *replaced == tip => incoming,
+                        _ => &tip,
+                    };
+                    if let Some(into) = repo.branch_tip(&into).map_err(git_error)?
+                        && repo.ancestor(landed, &into).map_err(git_error)?
                     {
                         repo.delete_branch_at(&branch, &tip).map_err(git_error)?;
                     }
@@ -892,8 +906,13 @@ impl SessionManager {
 
     /// A merge task with a subject starts from the conflicting task's work, kept as a WIP
     /// commit: the target's tip (where its merge starts) and that work, without the files the
-    /// landing's litter guard would leave out, so they reach neither the merge nor its history.
-    pub(crate) async fn merge_start(&self, subject: &Task, target: &str) -> Result<(Oid, Oid)> {
+    /// landing's litter guard would leave out, so they reach neither the merge nor its history;
+    /// and the task's branch tip that work replaces, when it was rebuilt.
+    pub(crate) async fn merge_start(
+        &self,
+        subject: &Task,
+        target: &str,
+    ) -> Result<(Oid, Oid, Option<Oid>)> {
         let workspace = subject
             .workspace
             .clone()
@@ -935,14 +954,15 @@ impl SessionManager {
             let work = worktree.head().map_err(git_error)?;
             // The subject's own checkout, so the commit uses the identity its WIP commit did.
             let repo = git.open(&path).map_err(git_error)?;
-            let work = repo
+            let without = repo
                 .work_without(&base, &work, &leave_out)
                 .map_err(git_error)?;
             let onto = repo
                 .branch_tip(&target)
                 .map_err(git_error)?
                 .ok_or_else(|| Error::Invalid(format!("branch {target} does not exist")))?;
-            Ok((onto, work))
+            let replaces = (without != work).then_some(work);
+            Ok((onto, without, replaces))
         })
         .await
     }

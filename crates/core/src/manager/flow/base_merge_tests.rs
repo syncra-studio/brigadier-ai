@@ -716,7 +716,10 @@ async fn a_conflicting_task_is_merged_by_a_merge_task_on_its_work() {
                     turn.git(&["add", "-A"]);
                     turn.git(&["commit", "-q", "--no-edit"]);
                 } else {
+                    // A stray log committed with the work: the litter guard leaves it out.
                     turn.write("README.md", "# Worker\n");
+                    turn.write("debug.log", "scratch\n");
+                    turn.git(&["add", "-f", "debug.log"]);
                     turn.git(&["commit", "-q", "-am", "Say Worker"]);
                 }
                 report(&turn, json!({})).await
@@ -734,6 +737,7 @@ async fn a_conflicting_task_is_merged_by_a_merge_task_on_its_work() {
         })
         .await;
     let work = Flow::task(&board, 1).clone();
+    let work_branch = work.workspace.as_ref().unwrap().branch.clone().unwrap();
     // The thread changed the same line on the session branch meanwhile.
     let (target, worktree) = session(&flow);
     std::fs::write(worktree.join("README.md"), "# Thread\n").unwrap();
@@ -763,6 +767,11 @@ async fn a_conflicting_task_is_merged_by_a_merge_task_on_its_work() {
     let merge = Flow::task(&board, 2).clone();
     let incoming = merge.workspace.as_ref().unwrap().merge.clone().unwrap();
     assert_eq!(incoming.label, "task-1's work");
+    // Rebuilt without the log, in place of task-1's branch tip.
+    assert_eq!(
+        incoming.replaces.as_deref(),
+        Some(git(&flow.repo, &["rev-parse", &work_branch]).as_str())
+    );
     let reply = flow
         .manager
         .land_phase(&flow.conversation, merge)
@@ -781,5 +790,22 @@ async fn a_conflicting_task_is_merged_by_a_merge_task_on_its_work() {
         git(&flow.repo, &["show", &format!("{target}:README.md")]),
         "# Worker and Thread"
     );
+    // No landed commit holds the log, and task-1's branch went as landed.
+    assert_eq!(
+        git(
+            &flow.repo,
+            &["log", "--format=%H", &target, "--", "debug.log"]
+        ),
+        ""
+    );
+    assert!(!try_git(
+        &flow.repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "-q",
+            &format!("refs/heads/{work_branch}")
+        ]
+    ));
     flow.stop().await;
 }
