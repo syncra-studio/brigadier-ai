@@ -3002,3 +3002,71 @@ async fn a_check_right_after_a_landing_rewrites_the_task_branch_keeps_the_rewrit
     flow.settled().await;
     flow.stop().await;
 }
+
+/// While only a worker runs (the thread's turn is over), the request still works and its span
+/// stays open, so "Working for …" ticks on (SESSION-FIXES-PLAN.md Q9.4); its answer ends it.
+#[tokio::test]
+async fn a_request_works_on_while_only_its_worker_runs() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let worker_gate = gate.clone();
+    let flow = Flow::start(
+        "ticking",
+        Options::default(),
+        script(move |turn| {
+            let gate = worker_gate.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    if turn.input.contains("[report task-1") {
+                        return Reply::text("The repository holds a README only.");
+                    }
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "high", "title": "Look around", "kind": "scout", "spec": "List the files."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Looking around with one worker.");
+                }
+                gate.notified().await;
+                let reply = turn
+                    .call("submit_report", json!({"summary": "A README only."}))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("Reported.")
+            }
+        }),
+    )
+    .await;
+    flow.say("What is in the repository?").await;
+    let board = flow
+        .until("the thread idle while its worker runs", |board| {
+            board.run == crate::work::RunState::Idle
+                && board
+                    .tasks
+                    .values()
+                    .any(|task| task.state == TaskState::Running)
+        })
+        .await;
+    let request = board.latest_request().unwrap().clone();
+    assert_eq!(request.state, RequestState::Working);
+    assert!(
+        request
+            .worked
+            .last()
+            .is_some_and(|span| span.to_ms.is_none()),
+        "its span stays open: {:?}",
+        request.worked
+    );
+    // Still so a moment later: nothing closes it while the worker runs.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let board = flow.board().await;
+    assert_eq!(board.requests[&request.id].state, RequestState::Working);
+    assert_eq!(board.requests[&request.id].worked, request.worked);
+    gate.notify_one();
+    let board = flow.settled().await;
+    let request = &board.requests[&request.id];
+    assert_eq!(request.state, RequestState::Done);
+    assert_eq!(request.worked.len(), 1, "one stretch: {:?}", request.worked);
+    flow.stop().await;
+}
