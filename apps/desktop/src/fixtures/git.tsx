@@ -11,8 +11,8 @@ import { useApp } from "@/state/store";
 /*
  * ?drive=1 opens the model menu and picks Automatic, makes a picked model unavailable, picks
  * Custom instructions, types in its box (Save, ⌘S, Saved, then a save once typing pauses),
- * types a prefix git refuses and one it takes, and leaves a pull request box with an edit,
- * then writes what it saw to #git-result (GitPageRender.test.ts reads it). ?custom=1 shows the
+ * types a prefix git refuses and one it takes, and leaves a pull request box with an edit
+ * (again while a save is on its way), then writes what it saw to #git-result (GitPageRender.test.ts reads it). ?custom=1 shows the
  * page with a picked model and custom commit instructions, for screenshots.
  */
 const params = new URLSearchParams(location.search);
@@ -91,12 +91,15 @@ useApp.setState((state) => ({
 
 /** Every settings write, as the daemon got it: the fields this page owns. */
 const writes: Partial<Settings>[] = [];
-mockIPC((command, payload) => {
+/** How long a settings write takes to land, in ms. */
+let slow = 0;
+mockIPC(async (command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   if (req.method === "updateSettings") {
     const { gitWriter, commitStyle, commitInstructions, prStyle, prInstructions, branchPrefix } = req.settings;
     writes.push({ gitWriter, commitStyle, commitInstructions, prStyle, prInstructions, branchPrefix });
+    if (slow > 0) await new Promise((resolve) => setTimeout(resolve, slow));
     return { method: req.method, settings: req.settings };
   }
   return { method: req.method };
@@ -227,6 +230,23 @@ function Fixture() {
       async () => {
         await new Promise((resolve) => setTimeout(resolve, 300));
         seen.pr = { style: settings().prStyle, instructions: settings().prInstructions, box: box("Pull request instructions") !== null };
+        // Again with a save on its way when the box goes: the edit typed meanwhile follows it.
+        slow = 800;
+        return openMenu("Pull requests");
+      },
+      () => pickMenu("Custom instructions"),
+      () => setValue(box("Pull request instructions"), "Title under 70 characters. Body in bullets."),
+      () => {
+        box("Pull request instructions")?.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "s", metaKey: true, bubbles: true, cancelable: true }),
+        );
+      },
+      () => setValue(box("Pull request instructions"), "Title under 70 characters. Body in bullets. No emoji."),
+      () => openMenu("Pull requests"),
+      () => pickMenu("Conventional Commits"),
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        seen.prDuringSave = settings().prInstructions;
         seen.writes = writes.length;
         setResult(JSON.stringify(seen));
       },

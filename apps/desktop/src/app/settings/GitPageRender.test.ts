@@ -47,4 +47,6 @@ test("git settings: writer model, styles, instructions that save themselves, bra
   assert.equal(seen.prefixSaved, "sg/");
   // Another style picked while the box had an edit: the edit was saved as the box went.
   assert.deepEqual(seen.pr, { style: "conventional", instructions: "Title under 70 characters.", box: false });
+  // Typed on while a save was on its way, then left: the newer edit is saved after it.
+  assert.equal(seen.prDuringSave, "Title under 70 characters. Body in bullets. No emoji.");
 });

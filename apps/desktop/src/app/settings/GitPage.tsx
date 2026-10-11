@@ -287,19 +287,27 @@ function useAutosave(saved: string, save: (text: string) => Promise<unknown>) {
     saveRef.current = save;
   });
 
+  // The save on its way, if any: an edit left behind when the box goes is saved after it.
+  const inFlight = useRef<Promise<unknown> | null>(null);
   const saveNow = () => {
     const [next, value] = begin(current.current);
     if (value === null) return;
     current.current = next;
     setState(next);
     setError(null);
-    saveRef.current(value).then(
-      () => setState((s) => landed(s)),
-      () => {
-        setError("Couldn't save your instructions. They'll be tried again.");
-        setState((s) => failed(s));
-      },
-    );
+    const saving = saveRef.current(value);
+    inFlight.current = saving;
+    saving
+      .then(
+        () => setState((s) => landed(s)),
+        () => {
+          setError("Couldn't save your instructions. They'll be tried again.");
+          setState((s) => failed(s));
+        },
+      )
+      .finally(() => {
+        if (inFlight.current === saving) inFlight.current = null;
+      });
   };
   const saveLater = useRef(saveNow);
   useEffect(() => {
@@ -318,8 +326,22 @@ function useAutosave(saved: string, save: (text: string) => Promise<unknown>) {
     const timer = window.setTimeout(() => setState((s) => quiet(s)), SAVED_MS);
     return () => window.clearTimeout(timer);
   }, [state.justSaved]);
-  // Leaving the page (or picking another style) saves what was typed.
-  useEffect(() => () => saveLater.current(), []);
+  // Leaving the page (or picking another style) saves what was typed, after the save on its
+  // way when there is one (the box is gone by then, so nothing waits on it).
+  useEffect(
+    () => () => {
+      const { draft } = current.current;
+      const saving = inFlight.current;
+      if (draft === null) return;
+      if (saving === null) {
+        saveLater.current();
+        return;
+      }
+      const after = () => void saveRef.current(draft).catch(() => {});
+      saving.then(after, after);
+    },
+    [],
+  );
 
   return {
     state,
