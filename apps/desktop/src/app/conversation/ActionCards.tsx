@@ -336,6 +336,10 @@ function describe(
           <ActionCardCode>
             {shownCommand(request.command)}
             {cwd && <span className="text-foreground/35 block">in {cwd}</span>}
+            {/* What the command asks for beyond its sandbox (`write /path`, `network`). */}
+            {request.paths.length > 0 && (
+              <span className="text-foreground/35 block">with {request.paths.join(", ")}</span>
+            )}
           </ActionCardCode>
         ) : request.paths.length > 0 ? (
           <ActionFileList files={request.paths.map((path) => ({ path }))} />
