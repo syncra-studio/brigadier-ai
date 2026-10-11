@@ -241,6 +241,15 @@ impl Board {
                         return;
                     }
                 }
+                // A held merge's later tips stay where it was held.
+                if let crate::work::OrchestratorStepKind::MergeHeld { asked_in, .. } = &step.kind
+                    && let Some(known) = self.orchestrator_steps.iter_mut().find(|known| {
+                        matches!(&known.kind, crate::work::OrchestratorStepKind::MergeHeld { asked_in: a, .. } if a == asked_in)
+                    })
+                {
+                    known.kind = step.kind;
+                    return;
+                }
                 step.position = stream_seq;
                 self.orchestrator_steps.push(step);
             }

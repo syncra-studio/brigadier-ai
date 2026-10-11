@@ -276,10 +276,13 @@ pub(crate) struct ConvLive {
     pub(super) user_wrote: tokio::sync::Mutex<u64>,
     /// Serializes the full-access notice check and write, including persisted notices.
     pub(super) full_access_notice: tokio::sync::Mutex<()>,
-    /// The consent of a session merge that stopped at conflicts with the base, carried over
-    /// to the merge once the base is merged into the branch. Kept in memory only: after a
-    /// restart the thread asks again.
-    pub(super) merge_held: std::sync::Mutex<Option<super::landing::HeldConsent>>,
+    /// The landing lock of the session's merge: `finish_session` holds it from its look at
+    /// the user's consent to the move of the base, and a Cancel of the held merge takes it, so
+    /// one of them wins (SESSION-FIXES-PLAN.md Q3).
+    pub(super) merge_lock: tokio::sync::Mutex<()>,
+    /// What the thread was last told of the held merge (its consent's `asked_in`, and
+    /// "due" or "waiting"), so each is said once.
+    pub(super) merge_told: std::sync::Mutex<Option<(String, &'static str)>>,
     /// The CLI session a turn on each provider resumes, as [`SessionManager::last_native_id`]
     /// last found it in the log, kept up to date as sessions start and reset.
     native_ids: std::sync::Mutex<NativeIds>,
@@ -311,7 +314,8 @@ impl ConvLive {
             retry: tokio::sync::Mutex::new(()),
             user_wrote: tokio::sync::Mutex::new(0),
             full_access_notice: tokio::sync::Mutex::new(()),
-            merge_held: std::sync::Mutex::new(None),
+            merge_lock: tokio::sync::Mutex::new(()),
+            merge_told: std::sync::Mutex::new(None),
             native_ids: std::sync::Mutex::new(NativeIds::default()),
             #[cfg(test)]
             merge_pause: std::sync::Mutex::new(None),

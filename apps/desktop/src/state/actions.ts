@@ -728,6 +728,12 @@ export async function answerQuestion(
   await request({ method: "answerQuestion", conversationId, cardId, answers });
 }
 
+/** Cancels the session's held merge; says what became of it ("Too late: already merged"). */
+export async function cancelMerge(conversationId: string): Promise<string> {
+  const { text } = await request({ method: "cancelMerge", conversationId });
+  return text;
+}
+
 export async function decidePlan(
   conversationId: string,
   cardId: string,

@@ -1391,6 +1391,16 @@ pub struct Finding {
     pub high: bool,
 }
 
+/// What the user's consent to the session's merge waits for (SESSION-FIXES-PLAN.md Q3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeCondition {
+    /// Nothing: the merge goes as soon as no worker writes.
+    Now,
+    /// "merge when done": the running work ending, said in words.
+    WorkersFinish,
+}
+
 /// What became of a finding, as the thread recorded it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
@@ -1638,6 +1648,29 @@ pub enum OrchestratorStepKind {
     /// A notice that something the user asked for needs more than the session's sandbox
     /// allows (`suggest_full_access`), with a button that switches the session to Full access.
     FullAccessSuggested { reason: String },
+    /// The user's merge, held until no worker writes (SESSION-FIXES-PLAN.md Q3): "Merging
+    /// after N workers finish". Pending until a `Merged`, `MergeCancelled` or `MergeStopped`
+    /// step with the same `asked_in`.
+    MergeHeld {
+        branch: String,
+        base: String,
+        /// The user message, or merge card, whose consent it holds.
+        asked_in: String,
+        /// When the user consented.
+        consented_at_ms: i64,
+        condition: MergeCondition,
+        /// The write tasks that ran when it was held.
+        waiting: Vec<TaskId>,
+        /// The branch's tip the consent covers: the tip when it was held, moved on by each of
+        /// the session's own landings on it. Other work on the branch isn't covered.
+        #[serde(default)]
+        tip: String,
+    },
+    /// The user cancelled the held merge (the pill's Cancel): its consent is spent.
+    MergeCancelled { asked_in: String },
+    /// The held merge stopped without merging (a writer failed or was stopped, or a finding
+    /// is open): its consent is spent, and the thread asks the user.
+    MergeStopped { asked_in: String, reason: String },
 }
 
 /// One step of the orchestrator, where it happened in the conversation.

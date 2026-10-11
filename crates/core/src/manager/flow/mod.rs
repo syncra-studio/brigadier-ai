@@ -1536,6 +1536,8 @@ mod engine_tests;
 #[cfg(test)]
 mod findings_tests;
 #[cfg(test)]
+mod held_merge_tests;
+#[cfg(test)]
 mod litter_tests;
 #[cfg(test)]
 mod overnight_tests;

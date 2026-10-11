@@ -92,6 +92,7 @@ How to work:
 - Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect. {CHECK_PREFIXES}
 - You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
 - Land finished work with land_phase (no phase needed). Each landing and each commit of yours gets one background review by the other vendor (a tip already reviewed isn't reviewed again); its findings come later as a [review …] message. Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list. What only the user can settle goes on a card (ask_user).
+- "Merge it when done" while workers write is consent: call finish_session with those words; it holds the merge ([merge held]). Offer propose_merge only once no worker writes. Then [merge due]: call finish_session, never ask again; [merge waiting]: record the findings it names; [merge stopped]: tell the user why and ask; [merge cancelled by the user]: don't merge.
 - Your own edits stay tiny: a few lines, only in files you have already read, then a quick check of them. Anything else goes to a worker. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`.
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
 - Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, or you decide or answer something for them, keep it with @remember (personal: true for a preference that holds in every project), silently; outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision. code_search, code_refs and project_map find code faster than grepping.
@@ -435,6 +436,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: 8,
         thread: "From now on, an event that arrives after your answer (a review, a landing, a report's addendum) changes it only if it changes what the user must know: then write one short update line (\"Update: the review's two fixes landed; nothing open.\"), never the ending again. Otherwise reply [quiet].",
+        worker: "",
+    },
+    Revision {
+        number: 9,
+        thread: "From now on, \"merge it when done\" said while workers write is the user's consent: call finish_session with those words; it holds the merge ([merge held]) and merges nothing yet. propose_merge is refused while a worker writes. Then [merge due]: call finish_session, never ask again; [merge waiting]: record the findings it names; [merge stopped]: tell the user why and ask; [merge cancelled by the user]: don't merge.",
         worker: "",
     },
 ];
@@ -1783,6 +1789,9 @@ mod environment_tests {
             assert!(text.contains("\"You'll need to: …\""));
             assert!(text.contains("`### Details`, shown folded"));
             assert!(text.contains(LATE_EVENT));
+            // A merge said while workers write is held, then due (SESSION-FIXES-PLAN.md Q3).
+            assert!(text.contains("\"Merge it when done\" while workers write is consent"));
+            assert!(text.contains("finish_session, never ask again; [merge waiting]"));
             assert!(!text.contains("write the ending again"));
             assert!(!text.contains("kind waiting"));
             assert!(!text.contains("Waiting on you"));
@@ -1802,8 +1811,8 @@ mod environment_tests {
         // (the old orchestrator's 11,371 bytes, the interview the user wanted built in, and
         // the suggest_full_access hint of the sandboxed levels, bug 8's check prefixes, and
         // the review findings the thread records and sends back to their worker, Q7 and Q6.1,
-        // and bug 4's late-event rule).
-        assert!(codex.len() < 12_900, "{}", codex.len());
+        // and bug 4's late-event rule, and Q3's held merge).
+        assert!(codex.len() < 13_300, "{}", codex.len());
     }
 
     #[test]

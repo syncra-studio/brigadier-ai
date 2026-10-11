@@ -97,15 +97,17 @@ async fn a_reviews_findings_are_items_the_thread_records_and_the_merge_lists_the
     .await;
     flow.say("Add notes.").await;
     flow.settled().await;
+    let recorded = replies.clone();
     let board = flow
-        .until("the thread to record the findings", |board| {
-            board.reviews.values().any(|review| {
-                review
-                    .items
-                    .iter()
-                    .all(|item| item.status != FindingStatus::New)
-                    && !review.items.is_empty()
-            })
+        .until("the thread to record the findings", move |board| {
+            !recorded.lock().unwrap().is_empty()
+                && board.reviews.values().any(|review| {
+                    review
+                        .items
+                        .iter()
+                        .all(|item| item.status != FindingStatus::New)
+                        && !review.items.is_empty()
+                })
         })
         .await;
     let review = board.reviews.values().next().unwrap();

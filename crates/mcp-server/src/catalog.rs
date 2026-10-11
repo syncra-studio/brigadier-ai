@@ -162,10 +162,13 @@ base branch, once the user consented: they chose \"Merge\" on your propose_merge
 user_words out), or their latest message asks for it in words (\"merge it\", also together with \
 the work: then merge as soon as it has landed, without asking again). Pass such words in \
 user_words, quoted exactly from that message. Brigadier checks the consent and refuses on a \
-question, a condition, a \"no\" or a \"wait\", or consent already used for a merge. Never merge \
-on silence. Returns when merged.";
+question, a condition, a \"no\" or a \"wait\", or consent already used for a merge; \"merge it \
+when done\" is consent. While workers write it holds the merge ([merge held]) and tells you \
+[merge due] once they land: call it again then, without asking. Never merge on silence. \
+Returns when merged.";
 
-const PROPOSE_MERGE: &str = "New-worktree sessions only: once the work has landed, ask the \
+const PROPOSE_MERGE: &str = "New-worktree sessions only: once the work has landed and no \
+worker writes, ask the \
 user on a card whether to merge the session branch into its base (\"Merge into main\" / \"Not \
 yet\"). Ask it once: Brigadier refuses a second card while one is open, or after \"Not yet\" until \
 the user writes again. `note` is one short line on what the merge brings and what the reviews \

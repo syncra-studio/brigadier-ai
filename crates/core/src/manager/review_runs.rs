@@ -1127,6 +1127,12 @@ impl SessionManager {
     /// orchestrator. A clean review of a landing or an outline is no news for the orchestrator:
     /// the context card shows it, and finish_session's answer says it.
     pub(super) async fn tell_review(&self, review: &ReviewRun, text: Option<&str>) {
+        self.tell_review_now(review, text).await;
+        // A merge held for the review's end looks again (SESSION-FIXES-PLAN.md Q3).
+        self.check_held_merge(&review.conversation_id).await;
+    }
+
+    async fn tell_review_now(&self, review: &ReviewRun, text: Option<&str>) {
         let review_text = text;
         let reviewer = review.reviewer.label();
         if let ReviewFor::Worker { task_id } = &review.notify
@@ -1390,6 +1396,8 @@ impl SessionManager {
         if !unrecorded.is_empty() {
             reply.push_str(&format!(" Still not recorded: {}.", unrecorded.join(", ")));
         }
+        // A merge held for these findings looks again.
+        self.check_held_merge(conversation_id).await;
         Ok(reply)
     }
 

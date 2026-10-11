@@ -156,6 +156,7 @@ export type { MachineStepKind } from "./MachineStepKind";
 export type { MachineStepReason } from "./MachineStepReason";
 export type { MemoryChange } from "./MemoryChange";
 export type { Mention } from "./Mention";
+export type { MergeCondition } from "./MergeCondition";
 export type { MergedModel } from "./MergedModel";
 export type { Message } from "./Message";
 export type { MessagePage } from "./MessagePage";

@@ -392,7 +392,7 @@ async fn a_wait_during_conflict_preparation_does_not_save_consent() {
     release.notify_one();
     let error = pending.await.unwrap().unwrap_err().to_string();
     assert!(error.contains("wrote again"), "{error}");
-    assert!(conv.merge_held.lock().unwrap().is_none());
+    assert!(crate::manager::landing::pending_merge(&flow.board().await).is_none());
     *conv.merge_pause.lock().unwrap() = None;
     flow.stop().await;
 }

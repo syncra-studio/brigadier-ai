@@ -577,6 +577,11 @@ pub enum Request {
         approve: bool,
         message: Option<String>,
     },
+    /// Cancels the session's held merge ("Merging after N workers finish"): its consent is
+    /// spent. A merge that already went answers "Too late: already merged".
+    CancelMerge {
+        conversation_id: ConversationId,
+    },
     /// Proposes an overnight run from the user's words and the plan read from them (`None`:
     /// a bare goal). Nothing runs until `startOvernight`. Every overnight command carries a
     /// client-chosen `commandId`; sending one again changes nothing.
@@ -1174,6 +1179,10 @@ pub enum Response {
     AnswerCard,
     AnswerQuestion,
     DecidePlan,
+    /// What became of the Cancel, for the user.
+    CancelMerge {
+        text: String,
+    },
     ProposeOvernight {
         run: Box<OvernightRun>,
     },

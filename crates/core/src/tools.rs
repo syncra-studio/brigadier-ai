@@ -619,8 +619,9 @@ pub struct ReviewPlan {
 pub struct FinishSession {
     /// The user's own words that ask for the merge, quoted exactly from their latest message
     /// ("yes, merge it"). Leave it out when the user chose "Merge" on your propose_merge card.
-    /// After a conflict-resolution task lands, retry with the same words (or no words for a
-    /// card): the original consent still holds unless the user has taken it back.
+    /// On `[merge due]` (the held merge's workers landed, or its conflict-resolution task
+    /// did), retry with the same words (or none): the consent still holds unless the user has
+    /// taken it back.
     #[serde(default)]
     pub user_words: String,
     /// The merge commit message, when a merge commit is needed.

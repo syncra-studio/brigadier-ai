@@ -1521,6 +1521,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| sessions.decide_plan(conversation_id, card_id, approve, message)).await?;
             Response::DecidePlan
         }
+        Request::CancelMerge { conversation_id } => Response::CancelMerge {
+            text: heap(|| sessions.cancel_merge(&conversation_id)).await?,
+        },
         Request::ProposeOvernight {
             conversation_id,
             command_id,

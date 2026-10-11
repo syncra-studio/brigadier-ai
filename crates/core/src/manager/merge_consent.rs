@@ -23,6 +23,111 @@ const CONDITIONS: &[&str] = &[
     "before", "soon",
 ];
 
+/// The one condition a merge may wait on (SESSION-FIXES-PLAN.md Q3): the running work
+/// ending. "merge when done", "merge once they finish", "merge it after the workers land",
+/// "merge when it's all in": a condition word, an optional subject from these, an optional
+/// verb, and a word for ending, closing its clause.
+pub(crate) use crate::work::MergeCondition;
+
+const FINISH_LEADS: &[&str] = &["when", "once", "after"];
+const FINISH_SUBJECTS: &[&[&str]] = &[
+    &["it"],
+    &["it's"],
+    &["they"],
+    &["they're"],
+    &["theyre"],
+    &["the", "workers"],
+    &["workers"],
+    &["the", "work"],
+    &["everything"],
+    &["everything's"],
+    &["all"],
+];
+const FINISH_VERBS: &[&str] = &["is", "are", "have", "has", "all", "s"];
+const FINISH_WORDS: &[&str] = &[
+    "done",
+    "finish",
+    "finished",
+    "finishes",
+    "land",
+    "landed",
+    "lands",
+    "complete",
+    "completed",
+    "completes",
+    "in",
+];
+
+/// The byte range in `message` (normalized) of a "when the work is done" clause, if it has
+/// one: from its condition word to its last word.
+fn finish_clause(message: &str) -> Option<std::ops::Range<usize>> {
+    let mut spans = Vec::new();
+    let mut start = None;
+    for (at, c) in message.char_indices() {
+        let in_word = c.is_alphanumeric() || c == '\'';
+        match (in_word, start) {
+            (true, None) => start = Some(at),
+            (false, Some(from)) => {
+                spans.push((from, at));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(from) = start {
+        spans.push((from, message.len()));
+    }
+    let word = |i: usize| -> Option<String> {
+        spans
+            .get(i)
+            .map(|&(from, to)| message[from..to].trim_matches('\'').replace("n't", "nt"))
+    };
+    // A clause ends at punctuation, the message's end, or an "and"/"then".
+    let closes = |i: usize| -> bool {
+        let Some(&(_, end)) = spans.get(i) else {
+            return true;
+        };
+        match spans.get(i + 1) {
+            None => true,
+            Some(&(next, _)) => {
+                message[end..next].contains(|c: char| ".,;:!?()\n\u{2014}\u{2013}\"".contains(c))
+                    || matches!(word(i + 1).as_deref(), Some("and" | "then"))
+            }
+        }
+    };
+    (0..spans.len()).find_map(|lead| {
+        if !word(lead).is_some_and(|w| FINISH_LEADS.contains(&w.as_str())) {
+            return None;
+        }
+        let mut at = lead + 1;
+        if let Some(subject) = FINISH_SUBJECTS.iter().find(|subject| {
+            subject
+                .iter()
+                .enumerate()
+                .all(|(k, w)| word(at + k).as_deref() == Some(w))
+        }) {
+            at += subject.len();
+        }
+        while word(at).is_some_and(|w| FINISH_VERBS.contains(&w.as_str()))
+            && word(at + 1).is_some_and(|w| {
+                FINISH_WORDS.contains(&w.as_str()) || FINISH_VERBS.contains(&w.as_str())
+            })
+        {
+            at += 1;
+        }
+        let finish = word(at)?;
+        // "in" ends the work only as "all in".
+        let ends = FINISH_WORDS.contains(&finish.as_str())
+            && (finish != "in" || word(at - 1).as_deref() == Some("all"));
+        (ends && closes(at)).then(|| spans[lead].0..spans[at].1)
+    })
+}
+
+/// `text` without the byte range `range`.
+fn without(text: &str, range: &std::ops::Range<usize>) -> String {
+    format!("{}{}", &text[..range.start], &text[range.end..])
+}
+
 /// What a plain yes is made of: a message of these words only agrees to a proposed merge.
 const AGREEMENT: &[&str] = &[
     "yes",
@@ -295,16 +400,45 @@ pub(super) fn takes_back(message: &str) -> Option<String> {
 }
 
 /// Whether `quoted`, the words the thread passed, give consent in `latest`, the user's latest
-/// message; `before` is the thread's reply right before it. The error says why not.
+/// message; `before` is the thread's reply right before it. The error says why not; a
+/// consent says what it waits for: nothing, or the running work ending ("merge when done").
 pub(super) fn check(
     quoted: &str,
     latest: &str,
     before: Option<&str>,
     branch: &str,
     base: &str,
-) -> Result<(), String> {
+) -> Result<MergeCondition, String> {
     let quoted = normalize(quoted);
     let quoted = quoted.trim_matches(|c: char| c == '"' || c == '\'' || c.is_whitespace());
+    let message = normalize(latest);
+    // "merge when done" is a plain yes that waits for the work: checked without its clause.
+    let (quoted, message, condition) = match finish_clause(&message) {
+        Some(clause) => {
+            let quoted = match finish_clause(quoted) {
+                Some(own) => without(quoted, &own),
+                None => quoted.to_owned(),
+            };
+            (
+                quoted,
+                without(&message, &clause),
+                MergeCondition::WorkersFinish,
+            )
+        }
+        None => (quoted.to_owned(), message, MergeCondition::Now),
+    };
+    plain_check(&quoted, &message, before, branch, base).map(|()| condition)
+}
+
+/// [`check`] of a normalized message with no "when done" clause.
+fn plain_check(
+    quoted: &str,
+    message: &str,
+    before: Option<&str>,
+    branch: &str,
+    base: &str,
+) -> Result<(), String> {
+    let quoted = quoted.trim();
     let quoted_words = words(quoted);
     if quoted_words.is_empty() {
         return Err(
@@ -312,7 +446,7 @@ pub(super) fn check(
                 .into(),
         );
     }
-    let message = normalize(latest);
+    let message = message.to_owned();
     let message_words = words(&message);
     // Word for word, whatever the punctuation between.
     if !format!(" {} ", message_words.join(" ")).contains(&format!(" {} ", quoted_words.join(" ")))
@@ -427,6 +561,52 @@ mod tests {
                 latest
             };
             assert!(!ok(quoted, latest, Some(PROPOSAL)), "{latest}");
+        }
+    }
+
+    /// SESSION-FIXES-PLAN.md Q3: the running work ending is the one condition a consent may
+    /// carry; any other still refuses.
+    #[test]
+    fn merge_when_done_waits_for_the_workers_and_other_conditions_refuse() {
+        let condition = |quoted: &str, latest: &str| {
+            check(quoted, latest, None, "brigadier/s1/session", "main")
+        };
+        for (quoted, latest) in [
+            ("merge when done", "merge when done"),
+            ("merge once they finish", "Merge once they finish."),
+            (
+                "merge it after the workers land",
+                "merge it after the workers land",
+            ),
+            ("merge when it's all in", "merge when it's all in"),
+            ("merge it", "Looks good, merge it when they're done"),
+            (
+                "merge into main once everything is complete",
+                "merge into main once everything is complete",
+            ),
+            (
+                "merge it when it has landed",
+                "merge it when it has landed, thanks",
+            ),
+        ] {
+            assert_eq!(
+                condition(quoted, latest),
+                Ok(MergeCondition::WorkersFinish),
+                "{latest}"
+            );
+        }
+        assert_eq!(condition("merge it", "merge it"), Ok(MergeCondition::Now));
+        for latest in [
+            "merge once the tests pass",
+            "merge after you fix the docs",
+            "merge it if the review is clean",
+            "merge when done if the review is clean",
+            "don't merge when done",
+            "merge when done? not sure",
+            "merge when the docs are in",
+            "explain the merge when done",
+        ] {
+            assert!(condition(latest, latest).is_err(), "{latest}");
         }
     }
 
