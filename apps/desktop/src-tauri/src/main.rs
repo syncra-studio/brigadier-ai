@@ -102,6 +102,13 @@ async fn notification_permission() -> overnight_notifications::Permission {
     overnight_notifications::permission().await
 }
 
+/// Asks the system to let Brigadier show notifications (Settings › General), and answers what
+/// the user chose once they did (still not asked after a minute without an answer).
+#[tauri::command]
+async fn ask_notification_permission() -> overnight_notifications::Permission {
+    overnight_notifications::ask_and_wait().await
+}
+
 /// Opens the system's notification settings at Brigadier.
 #[tauri::command]
 fn open_notification_settings(app: tauri::AppHandle) -> Result<(), String> {
@@ -384,6 +391,16 @@ fn notifier(app: tauri::AppHandle) -> Notify {
     })
 }
 
+/// Whether a Brigadier window is shown and focused, for the notifications that show only
+/// while it is in the background.
+fn in_front(app: tauri::AppHandle) -> bridge::InFront {
+    Box::new(move || {
+        app.webview_windows().values().any(|window| {
+            window.is_visible().unwrap_or(false) && window.is_focused().unwrap_or(false)
+        })
+    })
+}
+
 /// The window's backdrop behind the startup screen (the blur on macOS), from the config.
 fn startup_backdrop(app: &tauri::AppHandle) -> Option<tauri::utils::config::WindowEffectsConfig> {
     app.config()
@@ -610,6 +627,7 @@ fn main() {
                 platform.clone() as Arc<dyn Platform>,
                 launcher,
                 notifier(app.handle().clone()),
+                in_front(app.handle().clone()),
             );
             app.manage(documents::Documents::default());
             app.manage(AppState {
@@ -679,6 +697,7 @@ fn main() {
             ipc_request,
             ipc_subscribe,
             notification_permission,
+            ask_notification_permission,
             open_notification_settings,
             app_ready,
             startup_finished,

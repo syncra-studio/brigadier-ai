@@ -188,6 +188,20 @@ pub fn ask_permission() {
     mac::ask();
 }
 
+/// Asks for notification permission (Settings › General) and waits for the answer, up to a
+/// minute; elsewhere there is nothing to ask.
+pub async fn ask_and_wait() -> Permission {
+    ask_permission();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let now = permission().await;
+        if now != Permission::NotAsked || tokio::time::Instant::now() >= deadline {
+            return now;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
 #[cfg(target_os = "macos")]
 async fn submit(_app: &AppHandle, notice: &PendingRunNotification) -> Result<(), String> {
     mac::submit(notice).await

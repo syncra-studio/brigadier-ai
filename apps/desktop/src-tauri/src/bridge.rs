@@ -4,14 +4,18 @@
 //! listening, resubscribes from the last event it forwarded, pairs requests with responses,
 //! and forwards events and metrics to the webview channel. Requests made while disconnected
 //! wait in a bounded queue until the connection is back. It also raises the desktop
-//! notification for a card the user left unanswered for long.
+//! notifications: a request finished, and what needs the user (an approval, a question, a card
+//! left unanswered for long), as Settings › General › Notifications allows.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use brigadier_core::{ApprovalSubject, CardState, DomainEvent, WaitingItem, WaitingSource};
+use brigadier_core::{
+    ApprovalSubject, CardState, ConversationId, DomainEvent, NotifyFinished, Question,
+    RequestState, Settings, UserRequest, WaitingItem, WaitingSource,
+};
 use brigadier_ipc::app::BridgeEvent;
 use brigadier_ipc::protocol::{
     ClientFrame, ClientInfo, DaemonInfo, ErrorCode, EventEnvelope, IpcError, Outcome, Request,
@@ -46,6 +50,9 @@ type Reply = oneshot::Sender<Result<Response, IpcError>>;
 /// Shows a desktop notification as the app, given its title and body.
 pub type Notify = Box<dyn Fn(&str, &str) + Send + Sync>;
 
+/// Whether a Brigadier window is in front (shown and focused).
+pub type InFront = Box<dyn Fn() -> bool + Send + Sync>;
+
 /// Where the connection task is. Quitting waits out an attempt in flight, since that attempt
 /// may just have launched a daemon.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -79,13 +86,20 @@ struct Inner {
     last_seq: AtomicI64,
     stopping: AtomicBool,
     notify: Notify,
-    /// "Waiting on you" items and approvals already notified, so an update doesn't notify again.
+    in_front: InFront,
+    /// What was already notified (a "Waiting on you" item, an approval, a question, a request's
+    /// finish), so an update doesn't notify again.
     notified: Mutex<HashSet<String>>,
 }
 
 impl Bridge {
     /// Starts the connection task on Tauri's async runtime.
-    pub fn start(platform: Arc<dyn Platform>, launcher: Launcher, notify: Notify) -> Self {
+    pub fn start(
+        platform: Arc<dyn Platform>,
+        launcher: Launcher,
+        notify: Notify,
+        in_front: InFront,
+    ) -> Self {
         let (requests, queue) = mpsc::channel(QUEUED_REQUESTS);
         let bridge = Self {
             inner: Arc::new(Inner {
@@ -100,6 +114,7 @@ impl Bridge {
                 last_seq: AtomicI64::new(-1),
                 stopping: AtomicBool::new(false),
                 notify,
+                in_front,
                 notified: Mutex::new(HashSet::new()),
             }),
         };
@@ -368,8 +383,7 @@ impl Bridge {
             }
             ServerFrame::Event { event } => {
                 self.inner.last_seq.fetch_max(event.seq, Ordering::AcqRel);
-                self.notify_waiting(&event);
-                self.notify_approval(&event);
+                self.notify(&event);
                 self.emit(BridgeEvent::Event { event });
             }
             ServerFrame::Lagged { resume_after } => {
@@ -387,40 +401,163 @@ impl Bridge {
         None
     }
 
-    /// Tells the user, once per item, that a card they left unanswered for long is now
-    /// listed under "Waiting on you". The feed starts at the daemon's head and resumes after
-    /// the last event forwarded, so older items don't notify again.
-    fn notify_waiting(&self, event: &EventEnvelope) {
-        let Some(item) = stuck_card(event) else {
+    /// Tells the user, once each, what an event brings that they would want to know while
+    /// away: a request finished, or something needs them (a pending approval or question, a
+    /// card left unanswered for long and now listed under "Waiting on you"). The feed starts at
+    /// the daemon's head and resumes after the last event forwarded, so older ones don't notify
+    /// again. Whether it shows is up to the settings, read when it happens.
+    fn notify(&self, event: &EventEnvelope) {
+        let Some(notice) = notice_for(event) else {
             return;
         };
-        if self
+        if !self
             .inner
             .notified
             .lock()
             .expect("notified lock")
-            .insert(item.id)
+            .insert(notice.key.clone())
         {
-            (self.inner.notify)("Waiting on you", &item.what);
+            return;
         }
+        let bridge = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let Ok(Response::GetCatalog { catalog }) = bridge.request(Request::GetCatalog).await
+            else {
+                return;
+            };
+            if !allowed(notice.kind, &catalog.settings, (bridge.inner.in_front)()) {
+                return;
+            }
+            // A finished request is told under its conversation's name.
+            let title = match &notice.title {
+                Title::Fixed(title) => title.clone(),
+                Title::Conversation(id) => catalog
+                    .conversations
+                    .iter()
+                    .find(|conversation| &conversation.id == id)
+                    .map(|conversation| conversation.title.clone())
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or_else(|| "Finished".to_owned()),
+            };
+            (bridge.inner.notify)(&title, &notice.body);
+        });
     }
+}
 
-    /// Tells the user, once per approval, that a worker or the orchestrator waits for their
-    /// go-ahead (the thread shows the same request in the composer's place).
-    fn notify_approval(&self, event: &EventEnvelope) {
-        let Some((id, what)) = pending_approval(event) else {
-            return;
-        };
-        if self
-            .inner
-            .notified
-            .lock()
-            .expect("notified lock")
-            .insert(format!("approval:{id}"))
-        {
-            (self.inner.notify)("Awaiting approval", &what);
-        }
+/// What a desktop notification is about, as the settings tell them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// A request is done, or ended with an error.
+    Finished,
+    /// An approval, a question or a card waits for the user.
+    NeedsYou,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Title {
+    Fixed(String),
+    /// The conversation's name, read when the notification shows.
+    Conversation(ConversationId),
+}
+
+/// A desktop notification an event asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Notice {
+    /// Tells it apart from every other, so it shows once.
+    key: String,
+    kind: Kind,
+    title: Title,
+    body: String,
+}
+
+/// Whether the settings let a notification of `kind` show, with a Brigadier window in front
+/// or not. "Needs you" ones show wherever the user is: what waits may be in another
+/// conversation.
+fn allowed(kind: Kind, settings: &Settings, in_front: bool) -> bool {
+    match kind {
+        Kind::NeedsYou => settings.notify_needs_you,
+        Kind::Finished => match settings.notify_finished {
+            NotifyFinished::Background => !in_front,
+            NotifyFinished::Always => true,
+            NotifyFinished::Never => false,
+        },
     }
+}
+
+/// The notification an event asks for, if any.
+fn notice_for(event: &EventEnvelope) -> Option<Notice> {
+    if let Some(item) = stuck_card(event) {
+        return Some(Notice {
+            key: item.id,
+            kind: Kind::NeedsYou,
+            title: Title::Fixed("Waiting on you".to_owned()),
+            body: item.what,
+        });
+    }
+    if let Some((id, what)) = pending_approval(event) {
+        return Some(Notice {
+            key: format!("approval:{id}"),
+            kind: Kind::NeedsYou,
+            title: Title::Fixed("Awaiting approval".to_owned()),
+            body: what,
+        });
+    }
+    if let Some(question) = pending_question(event) {
+        return Some(Notice {
+            key: format!("question:{}", question.id.0),
+            kind: Kind::NeedsYou,
+            title: Title::Fixed("A question for you".to_owned()),
+            body: question
+                .round()
+                .first()
+                .map(|item| item.text.clone())
+                .unwrap_or(question.text),
+        });
+    }
+    let request = finished_request(event)?;
+    let body = match &request.state {
+        RequestState::Failed { error } => format!("Stopped with an error: {error}"),
+        _ => format!("Done: {}", request.preview),
+    };
+    Some(Notice {
+        key: format!(
+            "finished:{}:{}",
+            request.id,
+            request.ended_at_ms.unwrap_or_default()
+        ),
+        kind: Kind::Finished,
+        title: Title::Conversation(request.conversation_id),
+        body,
+    })
+}
+
+/// A request an event says is over, done or failed, as the daemon settles requests from what
+/// runs and waits. Not one the user stopped, one steered into another's answer (that one
+/// tells), or an overnight run's (its report's notification tells).
+fn finished_request(event: &EventEnvelope) -> Option<UserRequest> {
+    let raw = event.event.0.get();
+    // Most events aren't about requests: skip decoding them.
+    if !raw.contains("\"requestUpdated\"") {
+        return None;
+    }
+    let DomainEvent::RequestUpdated { request } = serde_json::from_str(raw).ok()? else {
+        return None;
+    };
+    let over = matches!(request.state, RequestState::Done | RequestState::Failed { .. });
+    (over && request.steered_into.is_none() && !brigadier_core::is_run_request(&request.id))
+        .then_some(request)
+}
+
+/// A question an event asks the user, while it is unanswered.
+fn pending_question(event: &EventEnvelope) -> Option<Question> {
+    let raw = event.event.0.get();
+    if !raw.contains("\"questionUpdated\"") {
+        return None;
+    }
+    let DomainEvent::QuestionUpdated { question } = serde_json::from_str(raw).ok()? else {
+        return None;
+    };
+    (question.answer.is_none() && question.answered_at_ms.is_none()).then_some(question)
 }
 
 /// An approval an event opens, as its id and what it asks in a line, if it opens one.
@@ -577,5 +714,100 @@ mod tests {
         };
         assert!(pending_approval(&envelope(&approval(outline, answered))).is_none());
         assert!(pending_approval(&envelope(&waiting(WaitingSource::Orchestrator))).is_none());
+    }
+
+    fn request(id: &str, state: RequestState) -> DomainEvent {
+        DomainEvent::RequestUpdated {
+            request: UserRequest {
+                id: id.into(),
+                conversation_id: ConversationId("c1".into()),
+                preview: "Add dark mode".into(),
+                state,
+                started_at_ms: 0,
+                ended_at_ms: Some(5),
+                steered_into: None,
+                steered_after: None,
+                undo: None,
+                worked: Vec::new(),
+                quota_wait: false,
+            },
+        }
+    }
+
+    #[test]
+    fn a_request_done_or_failed_notifies_once_under_its_conversation() {
+        let done = notice_for(&envelope(&request("m1", RequestState::Done))).unwrap();
+        assert_eq!(done.kind, Kind::Finished);
+        assert_eq!(done.title, Title::Conversation(ConversationId("c1".into())));
+        assert_eq!(done.body, "Done: Add dark mode");
+        assert_eq!(done.key, "finished:m1:5");
+        let failed = RequestState::Failed {
+            error: "The model is overloaded.".into(),
+        };
+        assert_eq!(
+            notice_for(&envelope(&request("m1", failed))).unwrap().body,
+            "Stopped with an error: The model is overloaded."
+        );
+        // Still working or waiting, stopped by the user, or an overnight run's: no notice.
+        for state in [
+            RequestState::Working,
+            RequestState::Waiting,
+            RequestState::Stopped,
+        ] {
+            assert!(notice_for(&envelope(&request("m1", state))).is_none());
+        }
+        assert!(notice_for(&envelope(&request("run-ab12-g1", RequestState::Done))).is_none());
+        let DomainEvent::RequestUpdated { request: mut steered } = request("m2", RequestState::Done)
+        else {
+            unreachable!()
+        };
+        steered.steered_into = Some("m1".into());
+        let steered = DomainEvent::RequestUpdated { request: steered };
+        assert!(notice_for(&envelope(&steered)).is_none());
+    }
+
+    #[test]
+    fn unanswered_questions_need_the_user() {
+        let mut question = brigadier_core::Question {
+            id: CardId("q1".into()),
+            conversation_id: ConversationId("c1".into()),
+            task_id: None,
+            request_id: None,
+            position: 0,
+            kind: brigadier_core::QuestionKind::Orchestrator,
+            text: "Which colour?".into(),
+            options: vec!["Blue".into()],
+            recommended: None,
+            items: Vec::new(),
+            answer: None,
+            answers: Vec::new(),
+            created_at_ms: 0,
+            answered_at_ms: None,
+        };
+        let asked = DomainEvent::QuestionUpdated {
+            question: question.clone(),
+        };
+        let notice = notice_for(&envelope(&asked)).unwrap();
+        assert_eq!(notice.kind, Kind::NeedsYou);
+        assert_eq!(notice.body, "Which colour?");
+        question.answer = Some("Blue".into());
+        question.answered_at_ms = Some(1);
+        assert!(notice_for(&envelope(&DomainEvent::QuestionUpdated { question })).is_none());
+    }
+
+    #[test]
+    fn the_settings_decide_which_notifications_show() {
+        let mut settings = Settings::default();
+        // By default: finished only in the background, what needs the user always.
+        assert!(allowed(Kind::Finished, &settings, false));
+        assert!(!allowed(Kind::Finished, &settings, true));
+        assert!(allowed(Kind::NeedsYou, &settings, true));
+        settings.notify_finished = NotifyFinished::Always;
+        assert!(allowed(Kind::Finished, &settings, true));
+        settings.notify_finished = NotifyFinished::Never;
+        assert!(!allowed(Kind::Finished, &settings, false));
+        settings.notify_needs_you = false;
+        assert!(!allowed(Kind::NeedsYou, &settings, false));
+        assert!(!allowed(Kind::NeedsYou, &settings, true));
     }
 }

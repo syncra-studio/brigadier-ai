@@ -230,6 +230,11 @@ export function notificationPermission(): Promise<NotificationPermission> {
   return invoke<NotificationPermission>("notification_permission");
 }
 
+/** Asks the OS to let Brigadier notify, and answers the user's choice once made. */
+export function askNotificationPermission(): Promise<NotificationPermission> {
+  return invoke<NotificationPermission>("ask_notification_permission");
+}
+
 /** Opens the system's notification settings at Brigadier. */
 export function openNotificationSettings(): Promise<void> {
   return invoke<void>("open_notification_settings");
