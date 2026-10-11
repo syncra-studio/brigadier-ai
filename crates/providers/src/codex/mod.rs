@@ -1173,8 +1173,10 @@ fn profile_config(config: &mut Map<String, Value>, profile: Value, auto_review: 
 /// At Approve for me ([`SessionSpec::auto_review`]) Codex's auto-reviewer settles a command
 /// that leaves the sandbox: it gets the rule to refuse what the protection keeps out.
 /// `auto_review.extra_policy` is "Additional local Markdown policy for automatic review,
-/// included alongside the main policy" (Codex config reference, codex-cli 0.162.1); a dotted
-/// key, like the feature in [`profile_config`], so the rest of `auto_review` stays.
+/// included alongside the main policy" (Codex config reference); a dotted key, like the feature
+/// in [`profile_config`], so the rest of `auto_review` stays. codex-cli 0.162.1 doesn't apply it
+/// yet (its reviewer's session holds no copy, checked live); `auto_review.policy` would, but it
+/// replaces the reviewer's whole built-in security policy (PLAN bug 6, "Gap left").
 fn approver_policy(config: &mut Map<String, Value>, spec: &SessionSpec) {
     if spec.auto_review
         && !matches!(spec.access, Access::Full | Access::ReadOnly)

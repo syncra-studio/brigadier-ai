@@ -957,11 +957,21 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
      list as a rule to refuse, unconditionally (a cleanup the user asked for included). The list is the paths,
      patterns and own exceptions of `SessionSpec::protection`, plus every checkout whose git folder is under them
      (`approver_rule`, `P/model.rs`). Claude's auto mode gets it as an `autoMode.hard_deny` entry after
-     `"$defaults"` (read from `--settings`: docs/en/auto-mode-config; `claude auto-mode config` lists it). Codex's
-     auto-review gets it as `auto_review.extra_policy` (Codex config reference, codex-cli 0.162.1). Brigadier's own
-     reviewer for a Claude thread's `run_unsandboxed` gets it in its prompt. At Ask for approval the user decides,
-     as before. The gap left: the rule binds a model, not the OS. An approver that ignores it still lets the
-     command through, and then the ref check (step 5) restores branches but not folders.
+     `"$defaults"` (read from `--settings`: docs/en/auto-mode-config; `claude auto-mode config` lists it). Brigadier's
+     own reviewer for a Claude thread's `run_unsandboxed` gets it in its prompt. Both refused live (X3, 2026-10-11).
+     At Ask for approval the user decides, as before.
+   - **Gap left: Codex's auto-review.** Brigadier sets `auto_review.extra_policy`, which the Codex config reference
+     documents ("Additional local Markdown policy for automatic review"). But codex-cli 0.162.1 doesn't apply it,
+     from a thread's config or from `codex exec -c`: the reviewer's session holds no copy of it, and on X4 the
+     reviewer approved deleting other sessions' branches (2026-10-11). `auto_review.policy` does reach the reviewer
+     and makes it refuse (tested with `codex exec -c`), but it replaces the reviewer's whole built-in Security Policy
+     section (exfiltration, credential probing, persistent weakening, destructive actions), so it isn't used.
+     Recommended follow-up (Phase 2 or its own task): at Approve for me, send a Codex session's escalations to
+     Brigadier (`approvals_reviewer: user`) and settle them with Brigadier's own reviewer and this rule, as for a
+     Claude thread's `run_unsandboxed`. Until then, the ref check (step 5) restores live sessions' branches, while
+     other sessions' worktrees, kept branches and folders can still go.
+   - Whatever the approver, the rule binds a model, not the OS. An approver that ignores it still lets the command
+     through.
 4. **Why git can't get around it.** Git's files backend takes the loose `<ref>.lock` for every update or delete of a
    ref, packed or not. So `git branch -D`, `git update-ref -d`, `git push . :ref`, `git worktree remove` and `rm -rf`
    on a protected path fail with "Operation not permitted".
