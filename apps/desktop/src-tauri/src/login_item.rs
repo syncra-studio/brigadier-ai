@@ -14,6 +14,7 @@ pub enum LoginItem {
     Off,
     On,
     /// Turned on, but macOS waits for the user to allow it in System Settings › Login Items.
+    #[cfg(target_os = "macos")]
     NeedsApproval,
 }
 

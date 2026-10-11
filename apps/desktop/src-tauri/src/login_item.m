@@ -7,9 +7,11 @@
 #include <string.h>
 
 // 0 off, 1 on, 2 waiting for the user's approval in System Settings, 3 not available.
+// An app that has never been a login item reads as not found, not as not registered: that is off.
 int32_t brigadier_login_item_status(void) {
     switch (SMAppService.mainAppService.status) {
-        case SMAppServiceStatusNotRegistered: return 0;
+        case SMAppServiceStatusNotRegistered:
+        case SMAppServiceStatusNotFound: return 0;
         case SMAppServiceStatusEnabled: return 1;
         case SMAppServiceStatusRequiresApproval: return 2;
         default: return 3;
