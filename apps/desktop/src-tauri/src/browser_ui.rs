@@ -7,8 +7,8 @@
 //! capture from the site's choices (Allow, Block, or Ask: WebKit's own question), sends popups
 //! (`window.open`, `target=_blank`) to the system browser, and leaves the file picker to wry's
 //! delegate as before. It also reaches the browser's saved WebKit data store (clearing it,
-//! counting its sites) and asks where to save a download. Talking to WebKit through objc2 needs `unsafe`; every use says why it
-//! holds.
+//! counting its sites, adding imported cookies) and asks where to save a download. Talking to
+//! WebKit through objc2 needs `unsafe`; every use says why it holds.
 
 use std::cell::RefCell;
 use std::ptr::NonNull;
@@ -16,11 +16,14 @@ use std::ptr::NonNull;
 use block2::{DynBlock, RcBlock};
 use brigadier_ipc::app::SitePermission;
 use objc2::rc::Retained;
-use objc2::runtime::{NSObject, ProtocolObject};
+use objc2::runtime::{AnyObject, NSObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{NSModalResponseOK, NSSavePanel};
 use objc2_foundation::{
-    MainThreadMarker, NSArray, NSDate, NSObjectProtocol, NSSet, NSString, NSURL, NSUUID,
+    MainThreadMarker, NSArray, NSDate, NSHTTPCookie, NSHTTPCookieDiscard, NSHTTPCookieDomain,
+    NSHTTPCookieExpires, NSHTTPCookieName, NSHTTPCookiePath, NSHTTPCookiePropertyKey,
+    NSHTTPCookieSecure, NSHTTPCookieValue, NSMutableDictionary, NSObjectProtocol, NSSet, NSString,
+    NSURL, NSUUID, ns_string,
 };
 use objc2_web_kit::{
     WKFrameInfo, WKMediaCaptureType, WKNavigationAction, WKOpenPanelParameters,
@@ -291,4 +294,169 @@ pub fn save_path(suggested: &std::path::Path) -> Option<std::path::PathBuf> {
     }
     let path = panel.URL()?.path()?;
     Some(std::path::PathBuf::from(path.to_string()))
+}
+
+/// `cookie` as WebKit takes it, built from its properties as wry 0.55.1 does
+/// (`cookie_into_wkwebview`): "HttpOnly" and "SameSite" have no Foundation key constants, so
+/// they go in by name. A domain with a leading dot is sent to its subdomains too; without one
+/// only to that host. `None` when Foundation refuses the properties.
+fn ns_cookie(cookie: &brigadier_browser_data::Cookie) -> Option<Retained<NSHTTPCookie>> {
+    use brigadier_browser_data::SameSite;
+    let truth = |on: bool| {
+        if on {
+            ns_string!("TRUE")
+        } else {
+            ns_string!("FALSE")
+        }
+    };
+    let (name, value, domain, path) = (
+        NSString::from_str(&cookie.name),
+        NSString::from_str(&cookie.value),
+        NSString::from_str(&cookie.domain),
+        NSString::from_str(if cookie.path.is_empty() {
+            "/"
+        } else {
+            &cookie.path
+        }),
+    );
+    // SAFETY: Foundation's exported constant keys, read only.
+    let properties = unsafe {
+        let properties: Retained<NSMutableDictionary<NSHTTPCookiePropertyKey, AnyObject>> =
+            NSMutableDictionary::from_slices(
+                &[
+                    NSHTTPCookieName,
+                    NSHTTPCookieValue,
+                    NSHTTPCookieDomain,
+                    NSHTTPCookiePath,
+                ],
+                &[&name, &value, &domain, &path],
+            );
+        match cookie.expires_unix {
+            Some(at) => {
+                let expires = NSDate::dateWithTimeIntervalSince1970(at as f64);
+                properties.insert(NSHTTPCookieExpires, &*expires);
+            }
+            None => properties.insert(NSHTTPCookieDiscard, truth(true)),
+        }
+        if cookie.secure {
+            properties.insert(NSHTTPCookieSecure, truth(true));
+        }
+        properties
+    };
+    properties.insert(ns_string!("HttpOnly"), truth(cookie.http_only));
+    match cookie.same_site {
+        Some(SameSite::Lax) => properties.insert(ns_string!("SameSite"), ns_string!("lax")),
+        Some(SameSite::Strict) => properties.insert(ns_string!("SameSite"), ns_string!("strict")),
+        _ => {}
+    }
+    // SAFETY: a dictionary of Foundation's cookie properties, as the method expects.
+    unsafe { NSHTTPCookie::cookieWithProperties(&properties) }
+}
+
+/// What a cookie is known by in the store, and the attributes it must keep.
+fn identity(
+    name: &str,
+    domain: &str,
+    path: &str,
+    value: &str,
+    http_only: bool,
+    secure: bool,
+) -> (String, String, String, String, bool, bool) {
+    let path = if path.is_empty() { "/" } else { path };
+    (
+        name.to_owned(),
+        domain.to_ascii_lowercase(),
+        path.to_owned(),
+        value.to_owned(),
+        http_only,
+        secure,
+    )
+}
+
+/// Adds `cookies` to the browser's data store with `WKHTTPCookieStore setCookie`, reporting each
+/// one WebKit has stored through `progress`, then reads the store back: `done` gets, per cookie,
+/// whether it is there with its name, domain, path, value, HttpOnly and Secure (setCookie's
+/// completion says nothing about success). On the main thread only (`done` gets nothing
+/// elsewhere).
+pub fn set_cookies(
+    identifier: [u8; 16],
+    cookies: Vec<brigadier_browser_data::Cookie>,
+    progress: impl Fn(usize) + 'static,
+    done: impl FnOnce(Vec<bool>) + 'static,
+) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        done(Vec::new());
+        return;
+    };
+    // SAFETY: a property read on a live data store, on the main thread.
+    let store = unsafe { data_store(identifier, mtm).httpCookieStore() };
+    let built: Vec<Option<Retained<NSHTTPCookie>>> = cookies.iter().map(ns_cookie).collect();
+    let total = built.iter().flatten().count();
+    let check = {
+        let store = store.clone();
+        let done = once(done);
+        move || {
+            let block = RcBlock::new(move |found: NonNull<NSArray<NSHTTPCookie>>| {
+                // SAFETY: WebKit passes a valid array for the call's duration.
+                let found = unsafe { found.as_ref() };
+                let stored: std::collections::HashSet<_> = found
+                    .iter()
+                    .map(|cookie| {
+                        identity(
+                            &cookie.name().to_string(),
+                            &cookie.domain().to_string(),
+                            &cookie.path().to_string(),
+                            &cookie.value().to_string(),
+                            cookie.isHTTPOnly(),
+                            cookie.isSecure(),
+                        )
+                    })
+                    .collect();
+                done(
+                    cookies
+                        .iter()
+                        .map(|cookie| {
+                            stored.contains(&identity(
+                                &cookie.name,
+                                &cookie.domain,
+                                &cookie.path,
+                                &cookie.value,
+                                cookie.http_only,
+                                cookie.secure,
+                            ))
+                        })
+                        .collect(),
+                );
+            });
+            // SAFETY: a live cookie store and a block WebKit copies, on the main thread.
+            unsafe { store.getAllCookies(&block) };
+        }
+    };
+    if total == 0 {
+        check();
+        return;
+    }
+    let state = std::rc::Rc::new(RefCell::new((0_usize, Some(check))));
+    let progress = std::rc::Rc::new(progress);
+    for cookie in built.iter().flatten() {
+        let (state, progress) = (state.clone(), progress.clone());
+        let block = RcBlock::new(move || {
+            let finished = {
+                let mut state = state.borrow_mut();
+                state.0 += 1;
+                progress(state.0);
+                if state.0 == total {
+                    state.1.take()
+                } else {
+                    None
+                }
+            };
+            if let Some(check) = finished {
+                check();
+            }
+        });
+        // SAFETY: a live cookie store, a valid cookie and a block WebKit copies, on the main
+        // thread.
+        unsafe { store.setCookie_completionHandler(cookie, Some(&block)) };
+    }
 }

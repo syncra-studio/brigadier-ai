@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 
 import type {
   BrowserClear,
@@ -6,6 +6,9 @@ import type {
   BrowserSite,
   BrowserVisit,
   HistoryFilter,
+  ImportProfile,
+  ImportProgress,
+  ImportResult,
   SitePermission,
 } from "@/ipc/generated";
 
@@ -112,4 +115,57 @@ export function setSite(
   choice: { camera?: SitePermission; microphone?: SitePermission },
 ): Promise<void> {
   return invoke("browser_site_set", { origin, camera: choice.camera ?? null, microphone: choice.microphone ?? null });
+}
+
+export function importProfiles(): Promise<ImportProfile[]> {
+  return invoke<ImportProfile[]>("browser_import_profiles");
+}
+
+/** Copies a profile's cookies and/or history into Brigadier's browser; `onProgress` hears how it goes. */
+export function importBrowser(
+  id: string,
+  kinds: { cookies: boolean; history: boolean },
+  onProgress: (progress: ImportProgress) => void,
+): Promise<ImportResult> {
+  return invoke<ImportResult>("browser_import", { id, ...kinds, progress: new Channel<ImportProgress>(onProgress) });
+}
+
+/** Opens System Settings at Full Disk Access (Safari's files need it). */
+export function openFullDiskAccess(): Promise<void> {
+  return invoke("browser_import_open_access");
+}
+
+/** The profile an import starts on: the default of a browser that isn't open, else the first. */
+export function firstProfile(profiles: readonly ImportProfile[]): ImportProfile | undefined {
+  const usable = profiles.filter((p) => p.readable && (p.hasCookies || p.hasHistory));
+  return (
+    usable.find((p) => p.isDefault && !p.running) ??
+    usable.find((p) => !p.running) ??
+    usable[0] ??
+    profiles[0]
+  );
+}
+
+const number = new Intl.NumberFormat();
+
+function counted(n: number, one: string, many: string): string {
+  return `${number.format(n)} ${n === 1 ? one : many}`;
+}
+
+/** An import's result in a few plain sentences. */
+export function importSummary(browser: string, result: ImportResult): string[] {
+  const lines: string[] = [];
+  const brought = [
+    result.cookies && !result.cookies.error ? counted(result.cookies.imported, "cookie", "cookies") : null,
+    result.history && !result.history.error ? counted(result.history.imported, "page", "pages") + " of history" : null,
+  ].filter(Boolean);
+  if (brought.length) lines.push(`Imported ${brought.join(" and ")} from ${browser}.`);
+  const cookies = result.cookies;
+  if (cookies?.error) lines.push(cookies.error);
+  else if (cookies) {
+    const left = cookies.rejected + cookies.skipped;
+    if (left > 0) lines.push(`${counted(left, "cookie", "cookies")} couldn't come across (expired, or a kind Brigadier's browser can't keep).`);
+  }
+  if (result.history?.error) lines.push(result.history.error);
+  return lines;
 }

@@ -8,6 +8,7 @@
 
 mod bridge;
 mod browser;
+mod browser_import;
 mod browser_store;
 mod documents;
 // WebKit's narrow unsafe boundary (the workspace denies it): see its header and the README.
@@ -706,7 +707,10 @@ fn main() {
             browser::browser_downloads,
             browser::browser_downloads_remove,
             browser::browser_sites,
-            browser::browser_site_set
+            browser::browser_site_set,
+            browser_import::browser_import_profiles,
+            browser_import::browser_import,
+            browser_import::browser_import_open_access
         ])
         .build(context)
         .unwrap_or_else(|err| {

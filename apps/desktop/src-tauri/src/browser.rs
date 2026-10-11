@@ -620,7 +620,7 @@ static ENABLED: AtomicBool = AtomicBool::new(true);
 static DOWNLOADS: Mutex<Option<BrowserOptions>> = Mutex::new(None);
 
 /// Refuses a page while the browser is off: whatever asks, nothing opens in it.
-fn enabled() -> Result<(), IpcError> {
+pub fn check_enabled() -> Result<(), IpcError> {
     if ENABLED.load(Ordering::Acquire) {
         Ok(())
     } else {
@@ -674,7 +674,7 @@ pub fn browser_open(
     agent: Option<bool>,
     events: Channel<BrowserEvent>,
 ) -> Result<(), IpcError> {
-    enabled()?;
+    check_enabled()?;
     web_page_only(&url)?;
     embedded::open(&app, id, url, bounds, agent.unwrap_or(false), events)
 }
@@ -682,7 +682,7 @@ pub fn browser_open(
 /// Shows `url` in the tab `id`'s webview, at `bounds`.
 #[tauri::command]
 pub fn browser_navigate(id: String, url: String, bounds: BrowserBounds) -> Result<(), IpcError> {
-    enabled()?;
+    check_enabled()?;
     web_page_only(&url)?;
     embedded::navigate(&id, &url, bounds)
 }
@@ -757,7 +757,7 @@ pub fn browser_site_set(
 
 /// Runs `action` with the browser's data store on the main thread, and waits for its answer.
 #[cfg(target_os = "macos")]
-async fn on_store<T: Send + 'static>(
+pub async fn on_store<T: Send + 'static>(
     app: &tauri::AppHandle,
     action: impl FnOnce([u8; 16], Box<dyn FnOnce(T)>) + Send + 'static,
 ) -> Result<T, IpcError> {
@@ -877,9 +877,9 @@ mod tests {
     #[test]
     fn nothing_opens_while_the_browser_is_off() {
         ENABLED.store(false, Ordering::Release);
-        assert!(enabled().is_err());
+        assert!(check_enabled().is_err());
         ENABLED.store(true, Ordering::Release);
-        assert!(enabled().is_ok());
+        assert!(check_enabled().is_ok());
     }
 
     fn offer(limit: &mut FaviconLimit, data_url: &str, now: Instant) -> FaviconStep {

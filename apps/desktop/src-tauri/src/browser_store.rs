@@ -2,8 +2,6 @@
 //! keeps in the browser's saved store): the pages it showed, its downloads, and which sites may
 //! use the camera or microphone. One SQLite file, `browser.sqlite`, in the browser's folder of
 //! Brigadier's data folder; nothing here leaves the machine.
-// Downloads, site choices and import use the rest as they arrive.
-#![allow(dead_code)]
 
 use std::path::Path;
 use std::sync::Mutex;

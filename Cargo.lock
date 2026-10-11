@@ -524,6 +524,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "block2",
+ "brigadier-browser-data",
  "brigadier-core",
  "brigadier-ipc",
  "brigadier-sandbox",

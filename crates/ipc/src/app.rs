@@ -186,6 +186,86 @@ pub struct BrowserClear {
     pub sites: bool,
 }
 
+/// Which kind of browser a profile belongs to, which decides what macOS asks before an import.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ImportFamily {
+    /// Chrome, Edge, Brave, Arc, Dia and the like: cookies need the browser's Keychain key.
+    Chromium,
+    /// Firefox, Zen and the like: nothing to ask.
+    Gecko,
+    /// Safari: needs Full Disk Access.
+    Safari,
+}
+
+/// Another browser's profile Settings › Browser › Import can copy from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportProfile {
+    pub id: String,
+    /// The browser's name, e.g. "Google Chrome".
+    pub browser: String,
+    /// The profile's name, e.g. "Person 1".
+    pub name: String,
+    pub family: ImportFamily,
+    pub has_cookies: bool,
+    pub has_history: bool,
+    /// False when its files can't be opened (Safari without Full Disk Access).
+    pub readable: bool,
+    /// The browser's own default profile.
+    pub is_default: bool,
+    /// The browser is open now; it must be quit first.
+    pub running: bool,
+}
+
+/// How an import is going, sent while it runs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ImportProgress {
+    /// Reading the other browser's files (and, for cookies, waiting on macOS's question).
+    Reading,
+    /// Adding cookies to Brigadier's browser.
+    Cookies { done: u32, total: u32 },
+    /// Adding history.
+    History,
+}
+
+/// What an import of cookies brought over.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CookieImport {
+    /// Now in Brigadier's browser.
+    pub imported: u32,
+    /// Read but not taken by Brigadier's browser.
+    pub rejected: u32,
+    /// Left out: expired, kept per site (which Brigadier's browser can't keep apart), or
+    /// unreadable.
+    pub skipped: u32,
+    /// Why none could be read, in plain words.
+    pub error: Option<String>,
+}
+
+/// What an import of history brought over.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryImport {
+    /// Pages added (ones already here are skipped).
+    pub imported: u32,
+    pub error: Option<String>,
+}
+
+/// The result of an import; a part is absent when it wasn't asked for.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportResult {
+    pub cookies: Option<CookieImport>,
+    pub history: Option<HistoryImport>,
+}
+
 /// Where the Browser tab's page sits in the window, in CSS pixels from its top left.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
