@@ -74,6 +74,13 @@ export function MockupView({ conversationId }: { conversationId: string }) {
   const items = useMemo(() => (mockup ? itemsOf(mockup, shown) : []), [mockup, shown]);
   // Compared with the live app, it opens on every pair side by side.
   const [view, setView] = useState<View>(() => (mockup?.status === "compared" ? "canvas" : "focused"));
+  // The comparison arriving while the tab is open shows it too.
+  const compared = mockup?.status === "compared";
+  const [wasCompared, setWasCompared] = useState(compared);
+  if (compared !== wasCompared) {
+    setWasCompared(compared);
+    if (compared) setView("canvas");
+  }
   const [picked, setPicked] = useState<string | null>(null);
   const [zoom, setZoom] = useState<Zoom>("fit");
   const [fitted, setFitted] = useState(100);
