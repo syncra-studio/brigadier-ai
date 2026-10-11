@@ -283,7 +283,7 @@ function FlowHeader({ source, title, description }: { source: ImportSource; titl
 }
 
 function ImportDialog({
-  flow,
+  flow: current,
   onClose,
   onImport,
   onRecheck,
@@ -293,16 +293,20 @@ function ImportDialog({
   onImport: (source: ImportSource, ids: string[], history: boolean) => void;
   onRecheck: (flow: Extract<Flow, { checking: boolean }>) => void;
 }) {
-  const importing = flow?.step === "importing";
+  // While it closes, the dialog keeps showing its last step instead of shrinking away blank.
+  const [last, setLast] = useState(current);
+  if (current !== null && current !== last) setLast(current);
+  const flow = current ?? last;
+  const importing = current?.step === "importing";
   // An import can't be walked away from halfway: no close button, Esc and clicks outside wait.
   const hold = (event: Event) => importing && event.preventDefault();
   return (
-    <Dialog open={flow !== null} onOpenChange={(open) => !open && !importing && onClose()}>
+    <Dialog open={current !== null} onOpenChange={(open) => !open && !importing && onClose()}>
       <DialogContent
         data-slot="import-dialog"
         data-step={flow?.step}
         className="max-w-md"
-        showCloseButton={!importing}
+        showCloseButton={flow?.step !== "importing"}
         onEscapeKeyDown={hold}
         onInteractOutside={hold}
       >
