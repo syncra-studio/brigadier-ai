@@ -169,6 +169,9 @@ pub struct SessionManager {
     /// Tasks being stopped: a landing that fails meanwhile (its worktree going away under
     /// it) is no news for the orchestrator.
     stopping: Mutex<HashSet<TaskId>>,
+    /// Held while a fix of landed work is checked and created, so two can't both find none
+    /// running (SESSION-FIXES-PLAN.md Q6.1: one fix at a time resumes a session).
+    fixes_starting: tokio::sync::Mutex<()>,
     waiters: Waiters,
     admitting: AtomicBool,
     background: TaskTracker,
@@ -264,6 +267,7 @@ impl SessionManager {
             task_writes: tokio::sync::Mutex::new(()),
             waiting: tokio::sync::Mutex::new(()),
             stopping: Mutex::new(HashSet::new()),
+            fixes_starting: tokio::sync::Mutex::new(()),
             waiters: Waiters::default(),
             admitting: AtomicBool::new(true),
             background: TaskTracker::new(),

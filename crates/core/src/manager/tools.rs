@@ -199,6 +199,11 @@ impl SessionManager {
                         && subject.landed.is_some()
                         && subject.review_hold.is_some()
                 });
+                // Held until the fix is on the board, so two at once can't both pass the check.
+                let _starting = match held {
+                    Some(_) => Some(self.fixes_starting.lock().await),
+                    None => None,
+                };
                 if let Some(held) = held
                     && let Some(fix) = crate::heap(|| self.core.board(id))
                         .await?
