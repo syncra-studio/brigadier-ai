@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use crate::sqlite::{columns, open_copy};
 use crate::{
     Cookie, Cookies, Error, Family, Profile, SameSite, Visit, WEBKIT_EPOCH_OFFSET_SECS, app_path,
-    existing_app, is_web_url, key_for, probe,
+    existing_app, is_web_url, key_for, opens_web_links, probe,
 };
 
 /// PBKDF2 salt Chromium uses on macOS.
@@ -210,8 +210,9 @@ pub(crate) fn discover(home: &Path, app_dirs: &[&Path]) -> Vec<Profile> {
     }
 
     // Unknown Chromium builds: `<X>` or `<X>/User Data` with a `Local State` and a profile
-    // that has a History file. Requiring History leaves out Electron apps, which keep a
-    // `Local State` and `Cookies` but no browsing history.
+    // that has a History file, whose `<X>.app` is installed and opens web links. Apps built on
+    // Chromium (Electron) keep a `Local State`, `Cookies` and sometimes a History too, but
+    // don't open web links; neither does a folder whose app is gone.
     let Ok(entries) = std::fs::read_dir(&support) else {
         return profiles;
     };
@@ -231,13 +232,18 @@ pub(crate) fn discover(home: &Path, app_dirs: &[&Path]) -> Vec<Profile> {
             {
                 continue;
             }
+            let Some(app) =
+                existing_app(app_dirs, &format!("{folder}.app")).filter(|app| opens_web_links(app))
+            else {
+                continue;
+            };
             let root = Root {
                 dir: dir.clone(),
                 browser: folder.clone(),
                 key: key_for(&folder),
                 service: format!("{folder} Safe Storage"),
                 account: folder.clone(),
-                app_path: existing_app(app_dirs, &format!("{folder}.app")),
+                app_path: Some(app),
             };
             let found = root_profiles(&root);
             if found.iter().any(|profile| profile.has_history) {

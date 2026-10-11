@@ -311,6 +311,28 @@ fn app_path(app_dirs: &[&Path], bundles: &[&str]) -> Option<PathBuf> {
     Some(dir.join(bundle))
 }
 
+/// Whether the app bundle at `app` says it opens web links (`http`/`https` among its
+/// `CFBundleURLSchemes`), as every browser does and apps built on Chromium (Electron) don't.
+fn opens_web_links(app: &Path) -> bool {
+    let Ok(info) = plist::Value::from_file(app.join("Contents/Info.plist")) else {
+        return false;
+    };
+    let types = info
+        .as_dictionary()
+        .and_then(|info| info.get("CFBundleURLTypes"))
+        .and_then(plist::Value::as_array);
+    types.into_iter().flatten().any(|kind| {
+        kind.as_dictionary()
+            .and_then(|kind| kind.get("CFBundleURLSchemes"))
+            .and_then(plist::Value::as_array)
+            .is_some_and(|schemes| {
+                schemes
+                    .iter()
+                    .any(|scheme| matches!(scheme.as_string(), Some("http" | "https")))
+            })
+    })
+}
+
 /// The app bundle in `app_dirs` named `bundle`, only if it exists.
 fn existing_app(app_dirs: &[&Path], bundle: &str) -> Option<PathBuf> {
     app_dirs

@@ -418,6 +418,7 @@ dependencies = [
  "aes",
  "cbc",
  "pbkdf2",
+ "plist",
  "rusqlite",
  "security-framework",
  "serde",

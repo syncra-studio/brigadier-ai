@@ -7,6 +7,25 @@ use std::path::Path;
 use brigadier_browser_data::{Family, Profile, discover_in};
 use common::*;
 
+/// An app bundle in `apps` whose Info.plist registers `schemes`.
+fn app(apps: &Path, name: &str, schemes: &[&str]) {
+    let contents = apps.join(format!("{name}.app/Contents"));
+    mkdirs(&contents);
+    let schemes: String = schemes
+        .iter()
+        .map(|s| format!("<string>{s}</string>"))
+        .collect();
+    std::fs::write(
+        contents.join("Info.plist"),
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\
+             <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key>\
+             <array>{schemes}</array></dict></array></dict></plist>\n"
+        ),
+    )
+    .unwrap();
+}
+
 fn local_state(dir: &Path, json: &str) {
     mkdirs(dir);
     std::fs::write(dir.join("Local State"), json).unwrap();
@@ -58,6 +77,14 @@ fn fixture_home(home: &Path, elsewhere: &Path) {
     touch(&electron.join("Cookies"));
     touch(&electron.join("Network/Cookies"));
     touch(&electron.join("Default/Cookies"));
+    // An Electron app that keeps a History too, and a Chromium folder whose app is gone.
+    let chatty = support.join("Chatty");
+    local_state(&chatty, "{}");
+    touch(&chatty.join("Default/History"));
+    touch(&chatty.join("Default/Cookies"));
+    let gone = support.join("Gone Browser");
+    local_state(&gone, "{}");
+    touch(&gone.join("Default/History"));
 
     // Firefox: a relative profile, an absolute one (the install default) and one never used.
     let firefox = support.join("Firefox");
@@ -128,6 +155,8 @@ fn finds_exactly_the_fixture_profiles() {
     let apps = tempfile::tempdir().unwrap();
     mkdirs(&apps.path().join("Dia.app"));
     mkdirs(&apps.path().join("Safari.app"));
+    app(apps.path(), "Helium", &["http", "https"]);
+    app(apps.path(), "Chatty", &["chatty"]);
     fixture_home(home.path(), elsewhere.path());
 
     let profiles = discover_in(home.path(), &[apps.path()]);
@@ -186,7 +215,10 @@ fn finds_exactly_the_fixture_profiles() {
         Some("Helium Safe Storage")
     );
     assert_eq!(helium.keychain_account.as_deref(), Some("Helium"));
-    assert_eq!(helium.app_path, None);
+    assert_eq!(
+        helium.app_path.as_deref(),
+        Some(apps.path().join("Helium.app").as_path())
+    );
 
     let opera = get("opera/Default");
     assert_eq!(
