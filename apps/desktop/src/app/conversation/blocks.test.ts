@@ -13,8 +13,10 @@ import {
   endsWithPlan,
   foldsAway,
   foldTurns,
+  isUpdate,
   judgementCall,
   type ThreadNode,
+  updateIndices,
 } from "@/app/conversation/blocks";
 import { splitReport } from "@/app/conversation/phaseView";
 import { checkersOf, checkResult, checksCount, machineWords, taskRowDetail, taskState } from "@/app/conversation/rowWords";
@@ -307,6 +309,46 @@ test("a plan shows as its document: writing it, then the newest revision in view
   const later = buildBlocks([user, opening, after], {}, false, digest([plan("p2", 405, { type: "approved", by: "user" })], [done]), []).find((b) => b.key === request);
   assert.ok(later);
   assert.ok(!endsWithPlan(sequence(later)));
+});
+
+test("a late event's update line shows under the answer, never as a new answer", () => {
+  const request = "late-request";
+  const user = { ...messages[0]!, id: request, seq: 600, requestId: request, text: "Add the Configuration page" };
+  const reply = (id: string, seq: number, text: string) =>
+    ({ ...messages[0]!, id, seq, role: "assistant" as const, requestId: request, parentId: request, text });
+  const opening = reply("opening", 601, "Starting two workers.");
+  const ending = reply("ending", 610, "The Configuration page is in. Merge it?");
+  const update = reply("update", 620, "Update: the review's two fixes landed; nothing open.");
+  const bold = reply("bold", 630, "**Update:** the second review is clean.");
+  const digest: BoardDigest = {
+    ...board,
+    tasks: {},
+    plans: {},
+    requests: { [request]: { ...Object.values(board.requests)[0]!, id: request, startedAtMs: user.createdAtMs, state: { type: "done" } } },
+    orchestratorSteps: [],
+    decisions: [],
+  };
+  const block = buildBlocks([user, opening, ending, update, bold], {}, false, digest, []).find((candidate) => candidate.key === request);
+  assert.ok(block);
+  assert.deepEqual(block.texts.map((text) => text.update), [false, false, true, true]);
+  // The ending stays the answer; both update lines show under it, in order, and don't fold.
+  const answer = answerIndex(block.texts, true);
+  assert.equal(block.texts[answer!]!.messageId, "ending");
+  assert.deepEqual(updateIndices(block.texts, answer), [2, 3]);
+  const shown = sequence(block).filter((entry) => entry.kind === "text" && !foldsAway(entry, answer));
+  assert.deepEqual(shown.map((entry) => entry.kind === "text" && entry.index), [1, 2, 3]);
+  // The opening line still folds into the work.
+  assert.ok(sequence(block).some((entry) => entry.kind === "text" && entry.index === 0 && foldsAway(entry, answer)));
+  // An ending written again is still the answer, the first one folded.
+  const again = reply("again", 640, "The Configuration page is in, with the review's fixes. Merge it?");
+  const rewritten = buildBlocks([user, opening, ending, update, again], {}, false, digest, []).find((candidate) => candidate.key === request)!;
+  assert.equal(rewritten.texts[answerIndex(rewritten.texts, true)!]!.messageId, "again");
+  assert.deepEqual(updateIndices(rewritten.texts, answerIndex(rewritten.texts, true)), []);
+  // Words that only mention an update aren't one; a block of update lines alone answers with its last.
+  assert.equal(isUpdate("The update: done"), false);
+  assert.equal(isUpdate("  update: lower case"), true);
+  assert.equal(answerIndex([{ update: true }, { update: true }], true), 1);
+  assert.equal(answerIndex([{ update: true }], false), null);
 });
 
 test("a run's decision shows in the thread unless its kind says it is a phase's outcome", () => {

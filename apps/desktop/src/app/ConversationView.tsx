@@ -271,7 +271,8 @@ function useItems(
         items.push((cache.get(node.id) as { item: Item }).item);
         continue;
       }
-      const answerId = block.texts.at(-1)?.messageId ?? null;
+      // The answer, not an update line under it.
+      const answerId = (block.texts.findLast((text) => !text.update) ?? block.texts.at(-1))?.messageId ?? null;
       const rating = (answerId && ratings[answerId]) || null;
       const sig = signature(block, picked, session, rework, rating);
       const texts = block.texts.map((text) => text.text);
@@ -283,7 +284,7 @@ function useItems(
         entry.texts.some((text, index) => text !== texts[index]);
       if (changed) {
         const meta: BlockMeta = {
-          texts: block.texts.map((text) => ({ position: text.position, model: text.model })),
+          texts: block.texts.map((text) => ({ position: text.position, model: text.model, update: text.update })),
           cards: block.cards,
           rows: block.rows,
           orchestratorSteps: block.orchestratorSteps,

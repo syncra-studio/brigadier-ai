@@ -42,6 +42,7 @@ import {
   isLive,
   isRunRequest,
   type SequenceEntry as Entry,
+  updateIndices,
   turnTime,
   waitsOnCard,
 } from "@/app/conversation/blocks";
@@ -86,7 +87,7 @@ const LazyCardBody = lazy(loadCardBody);
 /** What an assistant block carries in its message metadata (`custom.block`). */
 export type BlockMeta = {
   /** Per text part, in order: the reply's position (infinite while it streams) and model. */
-  texts: { position: number; model: ModelChoice | null }[];
+  texts: { position: number; model: ModelChoice | null; update: boolean }[];
   cards: BlockCard[];
   /** The workers' rows, in the order they started. */
   rows: BlockRow[];
@@ -485,6 +486,7 @@ export const RequestBlock: FC = () => {
   const done = phase ? phase.settled : meta.state === "done" || answering;
   // A run over folds to its outcome; the thread's replies during it go into the fold.
   const answer = endsWithPlan(sequence) ? null : answerIndex(meta.texts, done && !phase);
+  const updates = updateIndices(meta.texts, answer);
   const activity = turnActivity(sequence);
   // The answer, kept cards and access notices stay outside the fold.
   const folded = activity.filter((item) => item.type === "group" || foldsAway(item.entry, answer));
@@ -574,9 +576,19 @@ export const RequestBlock: FC = () => {
                 data-slot="aui_assistant-message-content"
                 className={cn("text-foreground leading-relaxed wrap-break-word", (header || parts.length > 0) && "pt-activity")}
               >
-                <ReplyText index={answer} streaming={answering} report={(report || meta.session) && !answering} />
+                <ReplyText index={answer} streaming={answering && updates.length === 0} report={(report || meta.session) && !answering} />
               </div>
             )}
+            {/* A late event's "Update: …" line: small, under the answer, never a new answer. */}
+            {updates.map((index) => (
+              <div
+                key={`update:${index}`}
+                data-slot="answer-update"
+                className="text-foreground/80 border-foreground/15 mt-activity border-s-2 ps-3 text-sm leading-relaxed wrap-break-word"
+              >
+                <ReplyText index={index} streaming={answering && index === last} />
+              </div>
+            ))}
           </>
         )}
       </div>

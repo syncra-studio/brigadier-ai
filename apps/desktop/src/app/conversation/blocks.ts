@@ -49,7 +49,14 @@ export type BlockText = {
   position: number;
   text: string;
   model: ModelChoice | null;
+  /** A short "Update: …" line after the answer, for a late event (SESSION-FIXES-PLAN.md bug 4). */
+  update: boolean;
 };
+
+/** Whether a reply is an update line: it starts with "Update:", bold or not. */
+export function isUpdate(text: string): boolean {
+  return /^\s*(\*\*|__)?update:/i.test(text);
+}
 
 /**
  * A row of a block's work that updates in place: a worker's task, with its landing folded into
@@ -578,6 +585,7 @@ export function buildBlocks(
         position: item.position,
         text: item.text,
         model: message.model,
+        update: isUpdate(item.text),
       });
       continue;
     }
@@ -607,6 +615,7 @@ export function buildBlocks(
       position: Number.POSITIVE_INFINITY,
       text: streaming.text,
       model: null,
+      update: isUpdate(streaming.text),
     });
   }
 
@@ -767,12 +776,21 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
 }
 
 /**
- * A finished block's answer, by its index in `texts`: the request's last reply, so an ending
- * written again after a late fix replaces the earlier one in place, which folds into the work
- * (THREAD-PARITY-PLAN §4.6). `null` while it works, or with no reply.
+ * A finished block's answer, by its index in `texts`: the request's last reply that isn't an
+ * update line, so an ending written again after a late fix replaces the earlier one in place,
+ * which folds into the work (THREAD-PARITY-PLAN §4.6), while a late event's "Update: …" line
+ * shows under the answer and leaves it in view (SESSION-FIXES-PLAN.md bug 4). `null` while it
+ * works, or with no reply.
  */
-export function answerIndex(texts: readonly unknown[], done: boolean): number | null {
-  return done && texts.length > 0 ? texts.length - 1 : null;
+export function answerIndex(texts: readonly { update?: boolean }[], done: boolean): number | null {
+  if (!done || texts.length === 0) return null;
+  const at = texts.findLastIndex((text) => !text.update);
+  return at >= 0 ? at : texts.length - 1;
+}
+
+/** The update lines under a finished block's answer: the replies after it, by index. */
+export function updateIndices(texts: readonly unknown[], answer: number | null): number[] {
+  return answer === null ? [] : texts.map((_, index) => index).filter((index) => index > answer);
 }
 
 /**
@@ -792,7 +810,8 @@ export function endsWithPlan(sequence: readonly SequenceEntry[]): boolean {
  * and the cards and access notices that stay in view (decisions, failures, what needs the user).
  */
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
-  if (entry.kind === "text") return entry.index !== answer;
+  // The answer, and the update lines after it, stay in view.
+  if (entry.kind === "text") return answer === null || entry.index < answer;
   if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "fullAccessSuggested")) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }
