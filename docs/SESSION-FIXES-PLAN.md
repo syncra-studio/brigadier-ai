@@ -385,6 +385,9 @@ Everything else in THREAD-PLAN and THREAD-PARITY-PLAN stands.
    - `WORKER_CODE_TOOLS` (`:681`) says: use `code_search` / `code_refs` before shell reads.
    - A Codex worker gets the same in its brief, plus "read with one `sed -n a,bp` per file, never `cd` then `cat`".
 4. **Worker handoff at 200k:** `WORKER_HANDOFF_MAX_TOKENS` 300k → 200k (`crates/core/src/knowledge.rs:222`).
+   - **Added after the A/B (`e0653432`):** the hand-off writes `checks.md`, each check of the task whose latest run
+     passed, the tree it passed on and the files changed since, so the fresh session reruns only the checks those
+     changes cover. The note gains a "Checks that passed" heading; revision 8 tells open workers.
 5. **The article's settings** for workers and the thread, in `settings()` (`P/claude/mod.rs:550`), each checked
    against `claude --help` / the settings docs of the installed version before use:
    - `disableBundledSkills` (or `skillOverrides` off);
@@ -1344,6 +1347,20 @@ THREAD-PARITY §5). The user's answer: the gentlest way, a full start-over only 
 - REA's measured study question is answered and written down. It missed its gate (≤ 0.5× the tokens without REA, both
   reaching the written findings), so REA is dropped.
 - Q7's daemon tests pass. The Brain counters show on the worker rows.
+
+**Outcome (2026-10-11): the measured gates were missed at n = 1**
+(`docs/evidence/2026-10-11-session-fixes-tokens.md`).
+- Worker tokens 0.81× before (gate ≤ 0.6×), the sum 0.83× (≤ 0.75×), `run_check` calls 20 against 12 (≤ half). The
+  Brain, per-provider, elapsed-time and fix-task gates pass. The blind review found neither arm's result complete,
+  which voids the comparison until a rerun. The arms ran on different Claude accounts; that is recorded.
+- **The user's decision:** fix the three causes the after arm showed, with no rerun now. A rerun with 3 runs per arm
+  is deferred until after phase 6, at the user's option. Until then the gates stand as missed.
+- **The three fixes:**
+  - `e0653432`: the cheaper hand-off (Q6.4 above).
+  - `63b077d5`: every worktree Brigadier makes gets an empty stand-in for each git-ignored Tauri `externalBin`
+    sidecar, so clippy and builds run in a fresh worktree.
+  - `abcd1e95`: a Claude worker's subagent (Agent tool) tokens are counted in its turn usage. The Agent tool stays.
+- The behaviour probes P3.1–P3.3 and the live check of the Brain counters wait for computer use.
 
 **Risks.**
 - The Brain may have little about a fresh area; the measurement must use an area the Brain has seen (B's).
