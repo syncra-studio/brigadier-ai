@@ -129,8 +129,8 @@ pub struct DelegateTask {
     /// A plain 2–4 word job name, unique among this chat's workers, e.g. "Add JSON output".
     /// Describe the job, without roles, phases or internal task ids.
     pub title: String,
-    /// What the task does. `implement` and `merge` tasks change code and land as one commit
-    /// each; the others only read and report.
+    /// What the task does. `implement` and `merge` tasks change code and land their commits
+    /// (a merge task's worker merges with git itself); the others only read and report.
     pub kind: TaskKind,
     /// The full task spec for the worker: goal, context, constraints, what "done" means and how
     /// to verify it. The worker sees nothing else of the conversation.
@@ -887,6 +887,11 @@ pub struct SubmitReport {
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "String", extend("default" = ""))]
     pub needs_user: Vec<String>,
+    /// Merge tasks only: each file you removed on purpose, with why, one per line
+    /// ("src/old.rs: main replaced it with src/new.rs").
+    #[serde(default, deserialize_with = "lines")]
+    #[schemars(with = "String", extend("default" = ""))]
+    pub deleted: Vec<String>,
     /// Review tasks only: the verdict on the reviewed change.
     #[serde(default)]
     pub verdict: Option<ReviewVerdict>,

@@ -1,7 +1,8 @@
 use crate::{
     Branch, Change, ChangeKind, CheckoutTrees, CollidingPath, CommitInfo, DiffStat, Environment,
-    Error, Git, LandBlock, LandOutcome, LandRequest, MergeOutcome, MergeStart, Oid, PatchOutcome,
-    RemoteState, RepoState, Result, RevertOutcome, Snapshot, Worktree, WorktreeInfo, WorktreeSpec,
+    Error, Git, LandBlock, LandOutcome, LandRequest, MergeAudit, MergeOutcome, Oid, PatchOutcome,
+    RemoteState, RepoState, Result, RevertOutcome, Side, Snapshot, Vanished, Worktree,
+    WorktreeInfo, WorktreeSpec,
     command::{TempIndex, check, failure, valid_oid, valid_path},
     parse,
 };
@@ -1301,130 +1302,112 @@ impl Repo {
         }
     }
 
-    /// Brings `branch` into a task's work for a merge worker to finish, without touching any
-    /// checkout or ref. The work's changes since `base`, with `leave_out` kept as it was at
-    /// `base`, are replayed onto
-    /// the branch tip as landing would, conflict markers left in the files (the branch's side
-    /// first, the work's second). The result is committed with parents the work (a commit on
-    /// `work` with `leave_out` reverted) and the branch tip; a worktree started there lets the worker
-    /// resolve the conflicts by editing files alone, without git.
-    pub fn merge_for_resolution(
+    /// `work` with `leave_out` as it was at `base` (restored where `base` had a file there,
+    /// removed otherwise), committed on top of it with `message`; `work` itself when nothing is
+    /// left out. A merge task starts from it, so a conflicting task's stray files don't reach
+    /// the merge.
+    pub fn work_without(
         &self,
         base: &Oid,
         work: &Oid,
         leave_out: &[String],
-        branch: &str,
         message: &str,
-    ) -> Result<MergeStart> {
+    ) -> Result<Oid> {
         valid_oid(base)?;
         valid_oid(work)?;
-        let onto = self
-            .branch_tip(branch)?
-            .ok_or_else(|| Error::Invalid(format!("branch {branch} does not exist")))?;
-        let work = if leave_out.is_empty() {
-            work.clone()
-        } else {
-            let tree = self.tree_reverting(work, base, leave_out)?;
-            self.commit_tree(&tree, &[work], "Work to merge, stray files left out", false)?
+        if leave_out.is_empty() {
+            return Ok(work.clone());
+        }
+        let tree = self.tree_reverting(work, base, leave_out)?;
+        self.commit_tree(&tree, &[work], message, false)
+    }
+
+    /// Every file path in `commit`'s tree.
+    pub fn paths_at(&self, commit: &Oid) -> Result<BTreeSet<String>> {
+        valid_oid(commit)?;
+        let listed = self.cmd(&["ls-tree", "-r", "-z", "--name-only", &commit.0], true)?;
+        Ok(listed
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| String::from_utf8_lossy(path).into_owned())
+            .collect())
+    }
+
+    /// A merge worker's result `tip` checked against the two sides it merged, `ours` and
+    /// `theirs` (SESSION-FIXES-PLAN.md Q2): whether both are merged into it, what of either
+    /// side's changes vanished from its tree, and the files the merge brought in or changed
+    /// (to look for conflict markers).
+    pub fn audit_merge(&self, tip: &Oid, ours: &Oid, theirs: &Oid) -> Result<MergeAudit> {
+        valid_oid(tip)?;
+        let merged = self.ancestor(ours, tip)?
+            && self.ancestor(theirs, tip)?
+            && (self.ancestor(ours, theirs)?
+                || self.ancestor(theirs, ours)?
+                || self.merge_joining(tip, ours, theirs)?);
+        let base = self.merge_base(ours, theirs)?;
+        let none = BTreeSet::new();
+        let ours_changes = self.tree_changes(&base, ours, &none)?;
+        let theirs_changes = self.tree_changes(&base, theirs, &none)?;
+        let present = self.paths_at(tip)?;
+        let missing = vanished(&ours_changes, &theirs_changes, |path| {
+            present.contains(path)
+        });
+        // What the merge itself wrote: a file as neither side has it. One taken whole from a
+        // side is as that side made it.
+        let differs = |side: &Oid| -> Result<BTreeSet<String>> {
+            Ok(self
+                .tree_changes(side, tip, &none)?
+                .into_iter()
+                .filter(|change| change.kind != ChangeKind::Deleted)
+                .map(|change| change.path)
+                .collect())
         };
-        let (tree, conflicts) = self.marked_replay(base, &onto, &work)?;
-        let commit = self.commit_tree(&tree, &[&work, &onto], message, false)?;
-        Ok(MergeStart {
-            commit,
-            work,
-            onto,
-            clean: conflicts.is_none(),
-            conflicts: conflicts.unwrap_or_default(),
+        let from_theirs = differs(theirs)?;
+        let touched = differs(ours)?
+            .into_iter()
+            .filter(|path| from_theirs.contains(path))
+            .collect();
+        Ok(MergeAudit {
+            merged,
+            missing,
+            touched,
         })
     }
 
-    /// Brings `other` into `branch` for a merge worker to finish, without touching any checkout
-    /// or ref: committed with parents `branch`'s tip and `other`'s, conflict markers left in
-    /// the files (`branch`'s side first, `other`'s second). In the [`MergeStart`], `work` is
-    /// `branch`'s tip and `onto` is `other`'s.
-    pub fn merge_branch_for_resolution(
-        &self,
-        branch: &str,
-        other: &str,
-        message: &str,
-    ) -> Result<MergeStart> {
-        let tip = |name: &str| {
-            self.branch_tip(name)?
-                .ok_or_else(|| Error::Invalid(format!("branch {name} does not exist")))
-        };
-        let (work, onto) = (tip(branch)?, tip(other)?);
-        let (tree, conflicts) = self.marked_merge(&work, &onto)?;
-        let commit = self.commit_tree(&tree, &[&work, &onto], message, false)?;
-        Ok(MergeStart {
-            commit,
-            work,
-            onto,
-            clean: conflicts.is_none(),
-            conflicts: conflicts.unwrap_or_default(),
-        })
-    }
-
-    /// The merge [`Repo::merge_branch_for_resolution`] made on `base`: the first commit after
-    /// `base` on `head`'s first-parent line, when it merges `base` with one other commit;
-    /// `None` otherwise.
-    pub fn merge_after(&self, base: &Oid, head: &Oid) -> Result<Option<MergeStart>> {
-        valid_oid(base)?;
-        valid_oid(head)?;
-        let range = format!("{}..{}", base.0, head.0);
-        let list = self.cmd(
+    /// Whether `tip`'s history holds a merge commit with one parent at or after `ours` and
+    /// another at or after `theirs`.
+    fn merge_joining(&self, tip: &Oid, ours: &Oid, theirs: &Oid) -> Result<bool> {
+        valid_oid(ours)?;
+        valid_oid(theirs)?;
+        let listed = self.cmd(
             &[
                 "rev-list",
-                "--first-parent",
-                "--reverse",
+                "--merges",
                 "--parents",
-                &range,
+                &tip.0,
+                &format!("^{}", ours.0),
+                &format!("^{}", theirs.0),
             ],
             true,
         )?;
-        let Some(line) = parse::text(&list)?.lines().next().map(str::to_owned) else {
-            return Ok(None);
-        };
-        let ids: Vec<Oid> = line
-            .split_whitespace()
-            .map(|id| Oid(id.to_owned()))
-            .collect();
-        let [commit, work, onto] = ids.as_slice() else {
-            return Ok(None);
-        };
-        if work != base {
-            return Ok(None);
+        for line in String::from_utf8_lossy(&listed).lines() {
+            let parents: Vec<Oid> = line
+                .split_whitespace()
+                .skip(1)
+                .map(|p| Oid(p.to_owned()))
+                .collect();
+            for (i, one) in parents.iter().enumerate() {
+                if !self.ancestor(ours, one)? {
+                    continue;
+                }
+                for (j, other) in parents.iter().enumerate() {
+                    if i != j && self.ancestor(theirs, other)? {
+                        return Ok(true);
+                    }
+                }
+            }
         }
-        let (_, conflicts) = self.marked_merge(work, onto)?;
-        Ok(Some(MergeStart {
-            commit: commit.clone(),
-            work: work.clone(),
-            onto: onto.clone(),
-            clean: conflicts.is_none(),
-            conflicts: conflicts.unwrap_or_default(),
-        }))
-    }
-
-    /// The merge [`Repo::merge_for_resolution`] made as `commit` from work based on `base`,
-    /// read back from the commit's two parents; `None` when it has not exactly two.
-    pub fn merge_at(&self, commit: &Oid, base: &Oid) -> Result<Option<MergeStart>> {
-        valid_oid(commit)?;
-        valid_oid(base)?;
-        let line = self.cmd(&["rev-list", "--parents", "-n", "1", &commit.0], true)?;
-        let ids: Vec<Oid> = parse::line(&line)?
-            .split_whitespace()
-            .map(|id| Oid(id.to_owned()))
-            .collect();
-        let [_, work, onto] = ids.as_slice() else {
-            return Ok(None);
-        };
-        let (_, conflicts) = self.marked_replay(base, onto, work)?;
-        Ok(Some(MergeStart {
-            commit: commit.clone(),
-            work: work.clone(),
-            onto: onto.clone(),
-            clean: conflicts.is_none(),
-            conflicts: conflicts.unwrap_or_default(),
-        }))
+        Ok(false)
     }
 
     /// `commit`'s tree with `paths` as they were at `base`: restored where `base` had a file
@@ -1573,8 +1556,61 @@ fn absolute(path: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// What of either side's changes since their merge base is missing from a merge's tree
+/// (`present`): a path one side added or changed and the other left alone must be there; one
+/// side changed and the other deleted is contested, and may go only with a reason; a path one
+/// side deleted (or renamed away) while the other left it alone may simply be gone.
+pub(crate) fn vanished(
+    ours: &[Change],
+    theirs: &[Change],
+    present: impl Fn(&str) -> bool,
+) -> Vec<Vanished> {
+    use std::collections::BTreeMap;
+    // Per side: the paths it now has (added, changed, renamed to) and those it removed.
+    let sides = |changes: &[Change]| {
+        let (mut has, mut deleted, mut renamed) =
+            (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+        for change in changes {
+            match &change.kind {
+                ChangeKind::Deleted => {
+                    deleted.insert(change.path.clone());
+                }
+                ChangeKind::Renamed { from } => {
+                    renamed.insert(from.clone());
+                    has.insert(change.path.clone());
+                }
+                _ => {
+                    has.insert(change.path.clone());
+                }
+            }
+        }
+        (has, deleted, renamed)
+    };
+    let (ours_has, ours_deleted, ours_renamed) = sides(ours);
+    let (theirs_has, theirs_deleted, theirs_renamed) = sides(theirs);
+    let mut gone = BTreeMap::new();
+    for (has, side, other_deleted, other_renamed) in [
+        (&ours_has, Side::Ours, &theirs_deleted, &theirs_renamed),
+        (&theirs_has, Side::Theirs, &ours_deleted, &ours_renamed),
+    ] {
+        for path in has {
+            // Renamed away by the other side: its changes went with the new name.
+            if present(path) || other_renamed.contains(path) {
+                continue;
+            }
+            gone.entry(path.clone()).or_insert(Vanished {
+                path: path.clone(),
+                side,
+                contested: other_deleted.contains(path),
+            });
+        }
+    }
+    gone.into_values().collect()
+}
+
 #[cfg(test)]
 mod tests {
+    use super::vanished;
     use crate::{Git, Oid};
     use std::{ffi::OsString, fs, path::PathBuf};
 
@@ -1647,6 +1683,94 @@ mod tests {
         assert_ne!(tree(&first), tree(&changed));
         // A tree is not a commit.
         assert!(repo.tree_of(&tree(&first).0).is_err());
+    }
+
+    #[test]
+    fn a_merge_is_audited_for_its_inputs_and_what_vanished() {
+        use crate::{Change, ChangeKind, Side, Vanished};
+        let (dir, git) = test_git("audit");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        let run = |args: &[&str]| {
+            repo.cmd(args, false).expect("git");
+        };
+        for file in ["shared.txt", "c.txt", "d.txt"] {
+            fs::write(root.join(file), "base\n").unwrap();
+        }
+        repo.commit_changes("Base", true).unwrap();
+        run(&["branch", "-M", "main"]);
+        run(&["checkout", "-q", "-b", "session"]);
+        fs::write(root.join("s.txt"), "s\n").unwrap();
+        fs::remove_file(root.join("c.txt")).unwrap();
+        fs::write(root.join("shared.txt"), "session\n").unwrap();
+        let ours = repo.commit_changes("Session", true).unwrap();
+        run(&["checkout", "-q", "main"]);
+        fs::write(root.join("m.txt"), "m\n").unwrap();
+        fs::write(root.join("c.txt"), "main changed\n").unwrap();
+        fs::remove_file(root.join("d.txt")).unwrap();
+        let theirs = repo.commit_changes("Main", true).unwrap();
+        run(&["checkout", "-q", "session"]);
+        // Not merged yet: nothing joins them.
+        let before = repo.audit_merge(&ours, &ours, &theirs).unwrap();
+        assert!(!before.merged);
+        // The merge: shared.txt conflicts (kept as the session's), c.txt is modify/delete
+        // (dropped), m.txt is left out by mistake; d.txt goes as main deleted it.
+        let _ = repo.run(&["merge", "-q", "--no-edit", "main"], false);
+        fs::write(root.join("shared.txt"), "both\n").unwrap();
+        run(&["rm", "-q", "--cached", "--ignore-unmatch", "c.txt"]);
+        let _ = fs::remove_file(root.join("c.txt"));
+        run(&["rm", "-q", "-f", "m.txt"]);
+        run(&["add", "-A"]);
+        run(&["commit", "-q", "--no-edit"]);
+        let merge = repo.resolve("HEAD").unwrap();
+        let audit = repo.audit_merge(&merge, &ours, &theirs).unwrap();
+        assert!(audit.merged);
+        assert_eq!(
+            audit.missing,
+            vec![
+                Vanished {
+                    path: "c.txt".into(),
+                    side: Side::Theirs,
+                    contested: true
+                },
+                Vanished {
+                    path: "m.txt".into(),
+                    side: Side::Theirs,
+                    contested: false
+                },
+            ]
+        );
+        assert!(audit.touched.contains(&"shared.txt".to_owned()));
+        // A correction commit after the merge: still merged, m.txt back.
+        fs::write(root.join("m.txt"), "m\n").unwrap();
+        let fixed = repo.commit_changes("Restore m.txt", true).unwrap();
+        let audit = repo.audit_merge(&fixed, &ours, &theirs).unwrap();
+        assert!(audit.merged);
+        assert_eq!(audit.missing.len(), 1, "{:?}", audit.missing);
+        // Only files neither side had are the merge's own: m.txt came whole from main.
+        assert_eq!(audit.touched, ["shared.txt"]);
+        // One side renamed a file the other changed: the change went with the new name.
+        let renamed_away = vanished(
+            &[Change {
+                path: "new.rs".into(),
+                kind: ChangeKind::Renamed {
+                    from: "old.rs".into(),
+                },
+                untracked: false,
+            }],
+            &[Change {
+                path: "old.rs".into(),
+                kind: ChangeKind::Modified,
+                untracked: false,
+            }],
+            |path| path == "new.rs",
+        );
+        assert_eq!(
+            renamed_away,
+            Vec::new(),
+            "a rename carries the other side's change"
+        );
     }
 
     #[test]

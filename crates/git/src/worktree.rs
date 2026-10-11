@@ -1,6 +1,6 @@
 use crate::{
-    Change, ChangeKind, CollisionKind, CommitOutcome, Error, Oid, PrepareOutcome, RebaseOutcome,
-    Repo, Result, SeriesOutcome,
+    Change, ChangeKind, CollisionKind, CommitOutcome, Error, Oid, RebaseOutcome, Repo, Result,
+    SeriesOutcome,
     command::{TempIndex, valid_oid, valid_path},
     parse,
     repo::TreeMerge,
@@ -11,31 +11,17 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    sync::Mutex,
 };
 
 /// A Brigadier-created task/session checkout. Mutating operations require an idle worker.
 #[derive(Debug)]
 pub struct Worktree {
     repo: Repo,
-    // Preparation stages the merged tree so previously tracked ignored additions stay visible.
-    // Retain worker-origin provenance for the litter guard despite the engine's staging.
-    prepared: Mutex<Option<Prepared>>,
-}
-
-#[derive(Debug)]
-struct Prepared {
-    head: Oid,
-    known: BTreeSet<String>,
-    untracked: BTreeSet<String>,
 }
 
 impl Worktree {
     pub(crate) fn new(repo: Repo) -> Self {
-        Self {
-            repo,
-            prepared: Mutex::new(None),
-        }
+        Self { repo }
     }
 
     /// Canonical checkout path.
@@ -76,14 +62,7 @@ impl Worktree {
     }
 
     fn untracked(&self) -> Result<BTreeSet<String>> {
-        let mut untracked = self.repo.status(false)?.untracked();
-        if let Some(prepared) = &*self.prepared.lock().unwrap_or_else(|e| e.into_inner())
-            && prepared.head == self.head()?
-        {
-            untracked.retain(|p| !prepared.known.contains(p) || prepared.untracked.contains(p));
-            untracked.extend(prepared.untracked.iter().cloned());
-        }
-        Ok(untracked)
+        Ok(self.repo.status(false)?.untracked())
     }
 
     /// All net worker changes against base, including intermediate commits and untracked files.
@@ -157,31 +136,6 @@ impl Worktree {
             .into_iter()
             .filter(|path| !at_base.contains(path) && !at_head.contains(path))
             .collect())
-    }
-
-    /// Fold all worker content since base onto onto before inclusion selection and review.
-    /// Conflicts are computed with merge-tree first and leave HEAD, index and files untouched.
-    /// A snapshot base subtracts the user's original uncommitted content from the worker delta.
-    pub fn prepare_candidate(&self, base: &Oid, onto: &Oid) -> Result<PrepareOutcome> {
-        valid_oid(base)?;
-        valid_oid(onto)?;
-        self.ensure_idle()?;
-        let original_head = self.head()?;
-        let untracked = self.untracked()?;
-        let (index, tree) = self.repo.capture()?;
-        match self.repo.replay_tree(base, onto, &tree)? {
-            TreeMerge::Conflicts(paths) => Ok(PrepareOutcome::Conflicts { paths }),
-            TreeMerge::Ready(merged) => {
-                let changes = self.repo.tree_changes(onto, &merged, &untracked)?;
-                self.install(&index, &tree, &merged, &original_head, onto, &merged)?;
-                *self.prepared.lock().unwrap_or_else(|e| e.into_inner()) = Some(Prepared {
-                    head: onto.clone(),
-                    known: changes.iter().map(|c| c.path.clone()).collect(),
-                    untracked,
-                });
-                Ok(PrepareOutcome::Prepared { changes })
-            }
-        }
     }
 
     fn ensure_idle(&self) -> Result<()> {
@@ -342,7 +296,6 @@ impl Worktree {
         }
         // Post-commit hooks may fail after the commit was successfully created.
         let diff_stat = self.repo.diff_stat(&parent, &commit)?;
-        *self.prepared.lock().unwrap_or_else(|e| e.into_inner()) = None;
         Ok(CommitOutcome::Committed { commit, diff_stat })
     }
 
@@ -395,7 +348,6 @@ impl Worktree {
                     TreeMerge::Conflicts(paths) => Ok(RebaseOutcome::Conflicts { paths }),
                     TreeMerge::Ready(working_tree) => {
                         self.install(&index, &content, &working_tree, candidate, &commit, &commit)?;
-                        *self.prepared.lock().unwrap_or_else(|e| e.into_inner()) = None;
                         Ok(RebaseOutcome::Rebased { commit, clean_fast })
                     }
                 }
@@ -512,7 +464,6 @@ impl Worktree {
             TreeMerge::Conflicts(paths) => Ok(SeriesOutcome::Conflicts { paths }),
             TreeMerge::Ready(working_tree) => {
                 self.install(&index, &content, &working_tree, &head, &tip, &tip)?;
-                *self.prepared.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 Ok(SeriesOutcome::Replayed {
                     tip,
                     commits,
@@ -571,55 +522,7 @@ impl Worktree {
             ],
             false,
         )?;
-        *self.prepared.lock().unwrap_or_else(|e| e.into_inner()) = None;
         Ok(Some(cleaned))
-    }
-
-    /// HEAD written again as a merge: the same tree, message and author, its parent first and
-    /// `parent` second. HEAD (and so its branch) moves to it with a CAS update; the index and
-    /// files stay as they are.
-    pub fn merge_parent(&self, parent: &Oid) -> Result<Oid> {
-        valid_oid(parent)?;
-        self.ensure_idle()?;
-        let head = self.head()?;
-        let first = self.repo.resolve(&format!("{}^", head.0))?;
-        let (message, author) = self.authored(&head)?;
-        let tree = self.repo.tree_of(&head.0)?;
-        let merge = self
-            .repo
-            .commit_tree_with(&tree, &[&first, parent], &message, &author)?;
-        self.move_head(&head, &merge)?;
-        Ok(merge)
-    }
-
-    /// A merge of `parent` into HEAD that keeps HEAD's tree, with git config's identity: HEAD
-    /// (and so its branch) moves to it with a CAS update; the index and files stay as they are.
-    pub fn commit_merge(&self, parent: &Oid, message: &str) -> Result<Oid> {
-        valid_oid(parent)?;
-        self.ensure_idle()?;
-        let head = self.head()?;
-        let tree = self.repo.tree_of(&head.0)?;
-        let merge = self
-            .repo
-            .commit_tree(&tree, &[&head, parent], message, false)?;
-        self.move_head(&head, &merge)?;
-        Ok(merge)
-    }
-
-    fn move_head(&self, head: &Oid, merge: &Oid) -> Result<()> {
-        self.repo.cmd(
-            &[
-                "update-ref",
-                "-m",
-                "Brigadier merge commit",
-                "HEAD",
-                &merge.0,
-                &head.0,
-            ],
-            false,
-        )?;
-        *self.prepared.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        Ok(())
     }
 
     /// Preserve all remaining tracked/untracked non-ignored work as one WIP commit. Plumbing
@@ -642,7 +545,6 @@ impl Worktree {
         }
         let commit = self.repo.commit_tree(&tree, &[&head], message, false)?;
         self.install(&index, &tree, &tree, &head, &commit, &commit)?;
-        *self.prepared.lock().unwrap_or_else(|e| e.into_inner()) = None;
         Ok(Some(commit))
     }
 

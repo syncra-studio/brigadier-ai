@@ -357,6 +357,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, a worker whose process ends (a crash, a kill, a restart) resumes itself in the same session instead of handing on to another model. [task-N stopped: died twice] means it ended again before reporting: tell the user what kills it (both exits are named), then message_worker it once the cause is fixed, or stop_task.",
         worker: "",
     },
+    Revision {
+        number: 3,
+        thread: "From now on, a merge task's worker runs `git merge` and commits the merge itself; Brigadier checks it (both sides merged, no marker, nothing missing unless listed under deleted) and moves the target. A merge that fails the check, or whose target moved meanwhile, goes back to the same worker, and lands on its own after its next report.",
+        worker: "From now on, a merge task's worker runs `git merge` and commits the merge itself, with any fix after it as a normal commit, and lists each file it removed on purpose under `deleted` with why; Brigadier no longer prepares the merge or builds the commit.",
+    },
 ];
 
 /// The instructions' current revision.
@@ -819,7 +824,7 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String 
             "review: review the change described below against the task and the repository's conventions. Look for bugs, missing verification, stray files and slop. Change nothing."
         }
         TaskKind::Merge => {
-            "merge: resolve the conflicts described below in this worktree, keeping both sides' intent, then verify."
+            "merge: merge the branch named below into this worktree's branch with git, resolve every conflict keeping both sides' intent, verify, and commit the merge."
         }
         TaskKind::Verify => {
             "verify: prove each \"done when\" criterion of the task with your own evidence, run the checks the task's brief asks for on this worktree, and report exactly what passed and failed. Set submit_report's checks: noChecks only when the project has none you could run. Fix nothing."
@@ -829,17 +834,29 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String 
         }
     };
     let write_rules = if task.kind.writes() {
-        // A merge worker runs no git command that changes anything: Brigadier builds the commit
-        // from the files (its brief).
-        let commits = if task.kind == TaskKind::Merge {
-            ""
+        // A merge worker merges and commits with git itself; Brigadier only checks it and moves
+        // the target (SESSION-FIXES-PLAN.md Q2).
+        let merge = task.kind == TaskKind::Merge;
+        let commits = if merge {
+            " Run the merge with git and commit it yourself, and any fix after it; never rebase, reset or amend the merge away, and never move any other branch."
         } else if task.route.choice.provider == brigadier_providers::ProviderKind::Codex {
             " Commit each finished step with a short plain message if you can; when your sandbox can't write git's files, leave the changes: Brigadier commits them when you ask for a review or report."
         } else {
             " Commit each finished step with a short plain message."
         };
+        let (leftovers, listed) = if merge {
+            (
+                "Only what you commit lands.",
+                "\n- List every file you changed in the report's `changes`, and every file you removed on purpose under `deleted`, with why.",
+            )
+        } else {
+            (
+                "What you leave uncommitted is committed for you when your work lands.",
+                "\n- List every file you changed, created or deleted in the report's `changes`: new files that aren't listed are left out when your work lands.",
+            )
+        };
         format!(
-            "\n- Work only inside this worktree, on its branch.{commits} Don't switch branches or touch other checkouts. What you leave uncommitted is committed for you when your work lands.\n- List every file you changed, created or deleted in the report's `changes`: new files that aren't listed are left out when your work lands.\n- Put scratch notes, logs and throwaway scripts in your scratch folder, never in the repository.\n- Don't write new tests unless the task asks for them. If a change breaks an existing test, fix the code; change a test only for an intended behaviour change.\n- Before you report, check your own work: format, lint, build, and the tests of what you touched.{role}",
+            "\n- Work only inside this worktree, on its branch.{commits} Don't switch branches or touch other checkouts. {leftovers}{listed}\n- Put scratch notes, logs and throwaway scripts in your scratch folder, never in the repository.\n- Don't write new tests unless the task asks for them. If a change breaks an existing test, fix the code; change a test only for an intended behaviour change.\n- Before you report, check your own work: format, lint, build, and the tests of what you touched.{role}",
             role = match task.role {
                 Some(WorkerRole::Lead) | None if task.kind == TaskKind::Implement => LEAD_STEPS,
                 _ => "",
@@ -1209,13 +1226,16 @@ mod tests {
         let verifier = worker(&task("claude", Some("verifier")));
         assert!(!verifier.contains("submit_outline"));
         assert!(verifier.contains("check your own work"));
-        // Brigadier commits a merge worker's resolution: its rules ask for no commit.
+        // A merge worker commits its merge itself, and lists what it removed on purpose.
         for provider in ["claude", "codex"] {
             let mut merge = task(provider, None);
             merge.kind = TaskKind::Merge;
             let merge = worker(&merge);
             assert!(!merge.contains("Commit each finished step"), "{merge}");
-            assert!(merge.contains("Work only inside this worktree, on its branch. Don't switch"));
+            assert!(merge.contains("Run the merge with git and commit it yourself"));
+            assert!(merge.contains("Only what you commit lands."));
+            assert!(merge.contains("under `deleted`, with why"));
+            assert!(!merge.contains("committed for you"));
         }
     }
 
@@ -1754,12 +1774,24 @@ mod environment_tests {
         assert_eq!(labels(&notes(&older, &now)), vec![REVISION_LABEL]);
         assert_eq!(
             revision_note(0, true),
-            Some(format!("[instructions] {}", REVISIONS[0].worker))
+            Some(format!(
+                "[instructions] {}\n{}",
+                REVISIONS[0].worker, REVISIONS[2].worker
+            ))
         );
         assert_eq!(revision_note(revision(), true), None);
+        // Revision 3: merge workers merge and commit with git themselves.
+        assert!(
+            REVISIONS[2]
+                .worker
+                .contains("runs `git merge` and commits the merge itself")
+        );
         // Revision 2: the thread hears that workers resume themselves; workers hear nothing.
         assert!(REVISIONS[1].thread.contains("[task-N stopped: died twice]"));
-        assert_eq!(revision_note(1, true), None);
+        assert_eq!(
+            revision_note(1, true),
+            Some(format!("[instructions] {}", REVISIONS[2].worker))
+        );
         // Revision 1: checks get no prefixes.
         assert!(
             REVISIONS[0]

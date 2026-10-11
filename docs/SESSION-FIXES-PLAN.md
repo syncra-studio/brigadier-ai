@@ -89,6 +89,12 @@ Everything else in THREAD-PLAN and THREAD-PARITY-PLAN stands.
    - Rewrite `merge_brief` and `base_merge_brief` for this.
    - Delete the pre-merge in `merge_start`, `base_merge_start` and `merge_for_resolution` / `merge_branch_for_resolution`
      in `crates/git`, once nothing calls them.
+   - **As built:** a subject merge's worktree branch starts at the conflicting task's work (its WIP commit, with
+     what its litter guard would leave out put back first: `Repo::work_without`) and merges the target in; a
+     no-subject merge's branch starts at the session tip and merges the base in. The task records what it merges
+     in (`TaskWorkspace.merge`: the commit and its name). The squash landing went with the pre-merge
+     (`prepare_candidate`, `merge_parent`, `commit_merge`, `unresolved_base_merge`). The worker instructions
+     changed for merges (commit with git, list `deleted`), with revision 3's note for open sessions.
 2. **The engine checks; it doesn't build.** A new `check_merge(worktree, tip, ours, theirs, report)` in
    `M/landing.rs` runs before a merge task lands:
    - **No conflict markers** in the tree: reuse `conflict_marker` (`:1848`) over the files the merge touched.
@@ -107,6 +113,12 @@ Everything else in THREAD-PLAN and THREAD-PARITY-PLAN stands.
    - **Fail:** nothing lands. The worker is resumed (Q4) with the exact list: "Missing from the merge: a.ts (from
      main), b.rs (from the session). Restore them or list them under deleted with why." A contested file is named
      as such: "c.ts: main changed it, the session deleted it. Keep a version, or list it under deleted with why."
+   - **As built:** `land_merge` (`M/landing.rs`) over `Repo::audit_merge` (`crates/git`). Markers are looked
+     for in the files the merge holds as neither side had them, so a file taken whole from one side (a fixture
+     with marker lines, say) never counts. Uncommitted work the report names refuses the landing too: only
+     what the worker committed lands. The worker hears the refusal through `message_worker` and its task stays
+     landing, so its next report lands on its own (the same path as a rebase's self-check). A second refusal
+     in a row goes to the thread instead, so a worker that can't fix it doesn't loop.
 3. **No litter guard on merges, and only the engine moves the target.** `move_commits` handles a
    `TaskKind::Merge` landing as a fast-forward of the target to the checked merge commit. The engine does this
    itself after `check_merge` passes (and, for the base, after the consent check). The worker commits only on its
@@ -118,6 +130,9 @@ Everything else in THREAD-PLAN and THREAD-PARITY-PLAN stands.
      lands. The same merge worker is resumed (Q4) against the new target: "`<target>` moved to <sha>; merge it in
      too, then build, test and submit again." `check_merge` and the affected checks then run again, with `ours` the
      new tip. No rebase of a merge, and no merge built by the engine.
+   - **As built:** the consent held over from a session merge that stopped at conflicts covers the branch tip
+     the no-subject merge task landed, when it landed on the tip the consent was held for (a fix committed on
+     top of the merge included); work landed meanwhile still needs a fresh yes, as before.
 4. **The consent check before merging into the base stays in the engine** (`finish_session`, `merge_consent`,
    `M/landing.rs:1378-1720`). When a session merge stops at conflicts (`:1497-1517`), the thread is told to delegate
    a merge task. That worker merges the base into the session branch as above. `finish_session` then merges on the

@@ -234,7 +234,7 @@ impl SessionManager {
                         target: Some(warm.target),
                         scratch: warm.scratch,
                         warmed: warm.warmed,
-                        base_merge: None,
+                        merge: None,
                     });
                 }
                 Ok(None) => "its session's branch changed",

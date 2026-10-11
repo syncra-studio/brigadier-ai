@@ -98,14 +98,15 @@ impl SessionManager {
                     }
                     (Some(reference), kind) => {
                         let subject = self.find_task(id, reference).await?;
-                        // A merge of the session's base lands only as a merge with the base.
-                        if kind == TaskKind::Merge
-                            && let Some(workspace) = &subject.workspace
-                            && workspace.base_merge.is_some()
-                        {
-                            return Err(Error::Invalid(super::landing::base_merge_conflict(
+                        // A merge is finished by its own worker.
+                        if kind == TaskKind::Merge && subject.kind == TaskKind::Merge {
+                            return Err(Error::Invalid(super::landing::merge_of_merge(
                                 subject.number,
-                                workspace.target.as_deref().unwrap_or_default(),
+                                subject
+                                    .workspace
+                                    .as_ref()
+                                    .and_then(|w| w.target.as_deref())
+                                    .unwrap_or_default(),
                             )));
                         }
                         Some(subject)
@@ -116,7 +117,7 @@ impl SessionManager {
                                 .into(),
                         ));
                     }
-                    // With no task, Brigadier merges the session's base into the session
+                    // With no task, the worker merges the session's base into the session
                     // branch: only a new worktree has a base, and a run's branch merges only
                     // its verified work.
                     (None, TaskKind::Merge) => {

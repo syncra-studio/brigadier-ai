@@ -333,20 +333,23 @@ pub struct TaskWorkspace {
     #[serde(default)]
     #[ts(skip)]
     pub warmed: Vec<String>,
-    /// A merge task with no subject: the base merged into the session branch.
+    /// A merge task: what it merges into its target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
-    pub base_merge: Option<BaseMerge>,
+    pub merge: Option<MergeInputs>,
 }
 
-/// Where a merge of the session's base into its branch started: the two-parent commit with
-/// conflict markers left in its files, and the base's tip it merged in, which the commit that
-/// lands gets as its second parent.
+/// What a merge task merges into its target (SESSION-FIXES-PLAN.md Q2): its worker runs the
+/// merge with git and commits it on its own branch; the landing checks that the target's tip
+/// and `incoming` are both merged and nothing of either vanished, then fast-forwards the
+/// target to it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BaseMerge {
-    pub start: String,
-    pub base_tip: String,
+pub struct MergeInputs {
+    /// The commit merged in: a conflicting task's work, or the session base's tip.
+    pub incoming: String,
+    /// Its name for the worker and the thread: "`main`", "task-3's work".
+    pub label: String,
 }
 
 /// A structured report, the only part of a worker's work that enters the orchestrator's
@@ -369,6 +372,10 @@ pub struct Report {
     /// What only the user can do.
     #[serde(default)]
     pub needs_user: Vec<String>,
+    /// For merge tasks: each file removed on purpose, with why ("path: why").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(skip)]
+    pub deleted: Vec<String>,
     /// For review tasks: the verdict.
     pub verdict: Option<ReviewVerdict>,
     /// For verify tasks: whether the project's checks passed.

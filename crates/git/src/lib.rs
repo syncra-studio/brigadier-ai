@@ -251,20 +251,35 @@ pub enum MergeOutcome {
     },
 }
 
-/// A branch merged into a task's work for a merge worker to finish ([`Repo::merge_for_resolution`]).
-#[derive(Debug, Clone)]
-pub struct MergeStart {
-    /// The two-parent commit holding the merged tree, conflict markers left in place.
-    pub commit: Oid,
-    /// Its first parent: the task's work, without the files left out.
-    pub work: Oid,
-    /// Its second parent: the branch tip merged in.
-    pub onto: Oid,
-    /// The merge had no conflict at all.
-    pub clean: bool,
-    /// Conflicted paths. Text conflicts carry markers; binary, mode, modify/delete and
-    /// file/directory conflicts don't. Empty for a conflict git can't pin to a path.
-    pub conflicts: Vec<String>,
+/// A merge worker's result checked against the sides it merged ([`Repo::audit_merge`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergeAudit {
+    /// Both sides are in its history, joined by a merge commit (or one already held the other).
+    pub merged: bool,
+    /// What of either side's changes is missing from its tree.
+    pub missing: Vec<Vanished>,
+    /// The files it holds as neither side had them (where a conflict's markers could be).
+    pub touched: Vec<String>,
+}
+
+/// A path a merge left out ([`MergeAudit::missing`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Vanished {
+    /// Repo-relative path.
+    pub path: String,
+    /// The side that added or changed it.
+    pub side: Side,
+    /// The other side deleted it: the merge could keep either version.
+    pub contested: bool,
+}
+
+/// One side of a merge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    /// The target's side.
+    Ours,
+    /// The side merged into it.
+    Theirs,
 }
 
 /// A final content change relative to a base commit.
@@ -294,21 +309,6 @@ pub struct Change {
     pub kind: ChangeKind,
     /// Never staged or committed in the worker's worktree.
     pub untracked: bool,
-}
-
-/// Result of folding worker work onto the current target tip.
-#[derive(Debug, Clone)]
-pub enum PrepareOutcome {
-    /// Worktree HEAD is onto, with the worker's net changes uncommitted.
-    Prepared {
-        /// Sorted changes for the litter guard and inclusion selection.
-        changes: Vec<Change>,
-    },
-    /// No checkout, index or ref was changed.
-    Conflicts {
-        /// Conflicted paths.
-        paths: Vec<String>,
-    },
 }
 
 /// Result of a normal git commit with repository hooks enabled.
