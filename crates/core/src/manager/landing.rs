@@ -793,18 +793,13 @@ impl SessionManager {
         // The task branches are fully on the target now; they were Brigadier's, so they go
         // too. A merge's conflicting task whose work was rebuilt without its litter landed
         // as that rebuild: a branch at a rewritten commit counts as merged once its
-        // replacement is.
-        let rebuilt: HashMap<Oid, Oid> = task
-            .workspace
-            .as_ref()
-            .and_then(|w| w.merge.as_ref())
-            .map(|m| {
-                m.rebuilt
-                    .iter()
-                    .map(|r| (Oid(r.from.clone()), Oid(r.to.clone())))
-                    .collect()
-            })
-            .unwrap_or_default();
+        // replacement (or the one that replaced it in turn, by a later merge) is.
+        let rebuilt: HashMap<Oid, Oid> = tasks
+            .iter()
+            .filter_map(|t| t.workspace.as_ref()?.merge.as_ref())
+            .flat_map(|m| &m.rebuilt)
+            .map(|r| (Oid(r.from.clone()), Oid(r.to.clone())))
+            .collect();
         for landed in &tasks {
             let branch = landed.workspace.as_ref().and_then(|w| w.branch.clone());
             let rebuilt = rebuilt.clone();
@@ -822,7 +817,7 @@ impl SessionManager {
                     let Some(tip) = repo.branch_tip(&branch).map_err(git_error)? else {
                         return Ok(());
                     };
-                    let landed = rebuilt.get(&tip).unwrap_or(&tip);
+                    let landed = landed_as(&tip, &rebuilt);
                     if let Some(into) = repo.branch_tip(&into).map_err(git_error)?
                         && repo.ancestor(landed, &into).map_err(git_error)?
                     {
@@ -2153,6 +2148,19 @@ fn commits_word(commits: u32) -> String {
     }
 }
 
+/// The commit `tip` landed as: itself, or what rebuilt it without its litter, followed through
+/// later rebuilds (each step at most once, so a cycle can't hold it).
+fn landed_as<'a>(tip: &'a Oid, rebuilt: &'a HashMap<Oid, Oid>) -> &'a Oid {
+    let mut landed = tip;
+    for _ in 0..rebuilt.len() {
+        match rebuilt.get(landed) {
+            Some(next) => landed = next,
+            None => break,
+        }
+    }
+    landed
+}
+
 /// What the litter guard left out, as a sentence (empty when nothing).
 fn litter_note(excluded: &[ExcludedFile]) -> String {
     if excluded.is_empty() {
@@ -2190,6 +2198,18 @@ fn keep_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tip_lands_as_its_last_rebuild() {
+        let oid = |c: char| Oid(c.to_string().repeat(40));
+        let rebuilt: HashMap<Oid, Oid> = [(oid('a'), oid('b')), (oid('b'), oid('c'))].into();
+        // Rebuilt by one merge's start, then again by a later merge's.
+        assert_eq!(landed_as(&oid('a'), &rebuilt), &oid('c'));
+        assert_eq!(landed_as(&oid('d'), &rebuilt), &oid('d'));
+        // A cycle ends.
+        let cycle: HashMap<Oid, Oid> = [(oid('a'), oid('b')), (oid('b'), oid('a'))].into();
+        landed_as(&oid('a'), &cycle);
+    }
 
     #[test]
     fn a_conflict_without_paths_still_offers_resolution_and_old_cards_load() {
