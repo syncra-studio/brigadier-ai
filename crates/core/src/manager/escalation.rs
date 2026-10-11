@@ -190,7 +190,11 @@ impl SessionManager {
         };
         if unattended {
             Settled::Answer(ApprovalDecision::Deny {
-                message: format!("{why}, and nobody is here to ask. Work around it, or report it."),
+                // The reviewer's reason is a sentence of its own, often with its full stop.
+                message: format!(
+                    "{}, and nobody is here to ask. Work around it, or report it.",
+                    why.trim_end_matches('.')
+                ),
             })
         } else {
             Settled::Ask(why)

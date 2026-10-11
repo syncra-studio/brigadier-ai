@@ -2372,7 +2372,7 @@ fn escalation_reviewer(turn: &super::Turn, asked: &Mutex<Vec<String>>) -> Option
         {
             r#"{"allow": false, "protected": true, "reason": "it deletes another session's work"}"#
         } else if turn.input.contains("```\nrm -rf ~/caches") {
-            r#"{"allow": false, "reason": "it deletes outside the project"}"#
+            r#"{"allow": false, "reason": "it deletes outside the project."}"#
         } else if turn.input.contains("```\nnpm publish") {
             "I can't tell."
         } else {
@@ -2640,7 +2640,7 @@ async fn an_unsettled_codex_escalation_is_a_card_unless_nobody_is_there() {
     }
     assert_eq!(
         reasons[0],
-        "Brigadier's reviewer would not allow it: it deletes outside the project"
+        "Brigadier's reviewer would not allow it: it deletes outside the project."
     );
     assert!(
         reasons[1].starts_with("Brigadier's reviewer gave no verdict"),
@@ -2681,7 +2681,8 @@ async fn an_unsettled_codex_escalation_is_a_card_unless_nobody_is_there() {
         };
         assert!(
             message.starts_with("Brigadier's reviewer")
-                && message.contains("nobody is here to ask"),
+                && message.contains("nobody is here to ask")
+                && !message.contains(".,"),
             "{message}"
         );
     }
