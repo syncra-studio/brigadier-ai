@@ -132,3 +132,11 @@ long command scope to check stacking and truncation. Hover or focus the session 
 its full scope. `?drive=1` exercises the session buttons and Enter/Esc and writes JSON into
 `#approvals-result`; `ApprovalRender.test.ts` checks it. IPC stays mocked and never reaches
 a daemon. This entry is absent from the production build.
+
+# Closing while hidden
+
+`/fixtures/hidden-exit.html` renders the app's dialog and popover with the page-hidden mark the app
+sets at startup. `?drive=1` closes each one while shown, while hidden with every animation paused
+(as a covered macOS window runs no frames), and while visible with animations paused (the control,
+which stays stuck), and writes JSON into `#hidden-exit-result`; `pageHidden.test.ts` checks it.
+This entry is absent from the production build.

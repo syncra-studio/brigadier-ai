@@ -101,6 +101,13 @@
   --animate-glyph-in: glyph-in 280ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+/* While nobody can see the page (data-page-hidden, see pageHidden.ts) a closing dialog, menu or
+   popover has no exit animation: WebKit runs no frames then, so the animation would never end and
+   Radix would keep it, overlay and all, until the window came back. */
+:root[data-page-hidden] [data-state="closed"] {
+  animation: none;
+}
+
 /* The thread's scroll element: the browser's own scroll anchoring is off (the thread keeps its
    place itself, see thread-scroll.ts), and focus scrolls keep clear of the floating footer. */
 @utility thread-scroll-padding {

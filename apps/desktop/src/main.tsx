@@ -7,6 +7,7 @@ import { appInfo } from "@/ipc/client";
 import { applyDensity, cachedDensity } from "@/lib/density";
 import { trackFocusInput } from "@/lib/focusRing";
 import { trackFullscreen } from "@/lib/fullscreen";
+import { trackPageHidden } from "@/lib/pageHidden";
 import { showStartupError, watchStartup } from "@/lib/splash";
 import { markStartup } from "@/lib/startup";
 import { startBridge } from "@/state/bridge";
@@ -19,6 +20,7 @@ try {
   // Density and platform are known before the first React paint, so nothing jumps.
   applyDensity(cachedDensity());
   trackFocusInput();
+  trackPageHidden();
   const info = await appInfo();
   document.documentElement.dataset.platform = info.platform;
   if (info.platform === "macos") {
