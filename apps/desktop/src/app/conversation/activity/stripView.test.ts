@@ -52,6 +52,18 @@ test("a worker counts as finished when it ended, not when it was last updated", 
   assert.equal(workersStrip([restored], replies, [ended(restored.id, 600)])?.stopped, 1);
 });
 
+test("with older messages not loaded, a worker that finished before them has its answer out of view", () => {
+  const old = task({ state: "done", requestId: "r1", updatedAtMs: 100 });
+  const recent = task({ state: "done", requestId: "r2", updatedAtMs: 800 });
+  // The newest page starts at 500: r1's answer is older, r2's isn't posted yet.
+  const page = lastReplies([reply("r3", 500), reply("r2", 600)]);
+  assert.deepEqual(workersStrip([old, recent], page, [], 500)?.rows, [recent.id]);
+  // With the whole history loaded, a missing answer is a missing answer.
+  assert.deepEqual(workersStrip([old, recent], page, [])?.rows, [old.id, recent.id]);
+  // A live worker shows whatever is loaded.
+  assert.equal(workersStrip([task({ requestId: "r1", createdAtMs: 1 })], page, [], 500)?.working, 1);
+});
+
 test("Stop all shows only while a worker runs or waits to run", () => {
   const landing = task({ state: "landing" });
   const ready = task({ state: "readyToLand" });

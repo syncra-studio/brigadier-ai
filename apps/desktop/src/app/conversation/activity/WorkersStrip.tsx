@@ -66,11 +66,16 @@ const StripRow = memo(function StripRow({ taskId }: { taskId: string }) {
 /** The Workers strip's view, live: `null` while it has nothing to show. */
 export function useWorkersStrip(conversationId: string): StripView | null {
   const items = useApp((s) => s.threads[conversationId]?.items);
+  const hasMore = useApp((s) => s.threads[conversationId]?.hasMore ?? false);
   const replies = useMemo(() => lastReplies(items ?? []), [items]);
+  const loadedFromMs = useMemo(
+    () => (hasMore && items && items.length > 0 ? Math.min(...items.map((message) => message.createdAtMs)) : null),
+    [hasMore, items],
+  );
   const json = useBoard((s) => {
     const board = s.board;
     if (board?.conversationId !== conversationId) return null;
-    const view = workersStrip(Object.values(board.tasks), replies, board.workerSteps);
+    const view = workersStrip(Object.values(board.tasks), replies, board.workerSteps, loadedFromMs);
     return view ? JSON.stringify(view) : null;
   });
   return useMemo(() => (json ? (JSON.parse(json) as StripView) : null), [json]);

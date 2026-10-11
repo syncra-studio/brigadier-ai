@@ -37,12 +37,15 @@ export function lastReplies(messages: readonly Message[]): Record<string, number
  * running or waiting, and those finished whose request's answer isn't posted yet. The answer is
  * the thread's reply for their request after the last of its workers finished, so the thread's
  * answer hides them, not a timer; finished workers stay in the side panel. A worker with no
- * request has no answer to wait for. `null` when there are none, so it hides.
+ * request has no answer to wait for. `loadedFromMs`, when older messages aren't loaded: the
+ * oldest loaded one's time; workers that finished before it have their answer out of view, so
+ * they count as answered. `null` when there are none, so it hides.
  */
 export function workersStrip(
   tasks: readonly Task[],
   replies: Readonly<Record<string, number>>,
   steps: readonly WorkerStep[],
+  loadedFromMs: number | null = null,
 ): StripView | null {
   const byAge = tasks.toSorted((a, b) => a.createdAtMs - b.createdAtMs || a.number - b.number);
   const live = byAge.filter((task) => !workerDone(task));
@@ -52,8 +55,13 @@ export function workersStrip(
     if (task.requestId === null || !workerDone(task)) continue;
     lastFinish.set(task.requestId, Math.max(lastFinish.get(task.requestId) ?? 0, finishedAtMs(task, steps)));
   }
-  const unanswered = (requestId: string | null) =>
-    requestId !== null && (busy.has(requestId) || (replies[requestId] ?? -1) <= (lastFinish.get(requestId) ?? 0));
+  const unanswered = (requestId: string | null) => {
+    if (requestId === null) return false;
+    if (busy.has(requestId)) return true;
+    const finishedAt = lastFinish.get(requestId) ?? 0;
+    if (loadedFromMs !== null && finishedAt < loadedFromMs) return false;
+    return (replies[requestId] ?? -1) <= finishedAt;
+  };
   const finished = byAge.filter((task) => workerDone(task) && unanswered(task.requestId));
   if (live.length + finished.length === 0) return null;
   const working = live.filter(workerWorking).length;
