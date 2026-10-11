@@ -252,7 +252,11 @@ impl SessionManager {
                 let mut attachments =
                     crate::heap(|| self.find_attachments(id, &args.attachments)).await?;
                 for image in mockup_images {
-                    if !attachments.iter().any(|given| given.id == image.id) {
+                    // Same bytes under another name are still that screen's `mockup-N` file.
+                    if !attachments
+                        .iter()
+                        .any(|given| given.id == image.id && given.name == image.name)
+                    {
                         attachments.push(image);
                     }
                 }

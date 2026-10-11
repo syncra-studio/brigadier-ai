@@ -2559,18 +2559,12 @@ impl SessionManager {
             let Ok(Some(bytes)) = self.core.store().blobs().get(hash).await else {
                 continue;
             };
-            let path = scratch
-                .join("attachments")
-                .join(safe_file_name(&attachment.name));
-            let target = path.clone();
-            let written = blocking(move || {
-                if let Some(parent) = target.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|err| Error::Invalid(err.to_string()))?;
-                }
-                std::fs::write(&target, bytes).map_err(|err| Error::Invalid(err.to_string()))
-            })
-            .await;
+            let dir = scratch.join("attachments");
+            let name = safe_file_name(&attachment.name);
+            let path = dir.join(&name);
+            // `message_worker` writes here while the worker runs: never through its links.
+            let written =
+                blocking(move || super::outputs::write_unfollowed(&dir, &name, &bytes)).await;
             if written.is_ok() {
                 files.push(InputFile {
                     path,

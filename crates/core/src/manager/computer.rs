@@ -1207,7 +1207,6 @@ fn wire_name(v: &impl serde::Serialize) -> Option<String> {
         .and_then(|v| v.as_str().map(str::to_owned))
 }
 
-/// The model's reply: the image first, then the text.
 /// Keeps an observed screenshot in the worker's outputs folder as `name` (a PNG), so its report
 /// brings it: the live captures a mockup's real work compares with the mockup (Q10). Returns
 /// the file name it was kept under.
@@ -1222,19 +1221,15 @@ async fn keep_screenshot(task: &Task, name: &str, png: Vec<u8>) -> Result<String
     if !name.to_ascii_lowercase().ends_with(".png") {
         name.push_str(".png");
     }
-    let path = super::outputs::outputs_dir(Path::new(&scratch)).join(&name);
-    super::blocking(move || {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|err| crate::Error::Invalid(err.to_string()))?;
-        }
-        std::fs::write(&path, png).map_err(|err| crate::Error::Invalid(err.to_string()))
-    })
-    .await
-    .map_err(|err| err.to_string())?;
+    let outputs = super::outputs::outputs_dir(Path::new(&scratch));
+    let kept = name.clone();
+    super::blocking(move || super::outputs::write_unfollowed(&outputs, &kept, &png))
+        .await
+        .map_err(|err| err.to_string())?;
     Ok(name)
 }
 
+/// The model's reply: the image first, then the text.
 fn reply_of(a: Answer) -> ToolReply {
     let reply = if a.reply.ok {
         ToolReply::ok(a.reply.text)

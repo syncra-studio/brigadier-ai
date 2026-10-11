@@ -45,6 +45,36 @@ pub(crate) fn outputs_dir(scratch: &Path) -> PathBuf {
     scratch.join(OUTPUTS_DIR)
 }
 
+/// Writes `name` in `dir`, a folder of the worker's scratch it can write in too, without
+/// following a link the worker put there: a linked folder is refused, and the file goes to a
+/// fresh temporary name first, then takes `name`'s place (a link there is replaced, never
+/// written through).
+pub(crate) fn write_unfollowed(dir: &Path, name: &str, bytes: &[u8]) -> crate::Result<()> {
+    use std::io::Write as _;
+    let invalid = |err: std::io::Error| crate::Error::Invalid(err.to_string());
+    std::fs::create_dir_all(dir).map_err(invalid)?;
+    if !std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir()) {
+        return Err(crate::Error::Invalid(format!(
+            "{} is a link; keep it a plain folder",
+            dir.display()
+        )));
+    }
+    let temp = dir.join(format!(".{name}.{}.part", std::process::id()));
+    let _ = std::fs::remove_file(&temp);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .map_err(invalid)?;
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    let placed = written.and_then(|()| std::fs::rename(&temp, dir.join(name)));
+    if placed.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    placed.map_err(invalid)
+}
+
 /// A file to store with a report.
 #[derive(Debug)]
 struct Found {
@@ -614,5 +644,45 @@ impl SessionManager {
             .get(hash)
             .await?
             .ok_or_else(|| Error::NotFound(format!("artifact {id}")))
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::write_unfollowed;
+
+    #[test]
+    fn a_write_replaces_a_planted_link_and_refuses_a_linked_folder() {
+        let root =
+            std::env::temp_dir().join(format!("brigadier-unfollowed-{}", uuid::Uuid::now_v7()));
+        let outside = root.join("outside.txt");
+        let dir = root.join("outputs");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&outside, "keep").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("live-1.png")).unwrap();
+        write_unfollowed(&dir, "live-1.png", b"png").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&outside).unwrap(),
+            "keep",
+            "the link's target is untouched"
+        );
+        let placed = std::fs::symlink_metadata(dir.join("live-1.png")).unwrap();
+        assert!(placed.is_file(), "the link was replaced by the file");
+        assert_eq!(std::fs::read(dir.join("live-1.png")).unwrap(), b"png");
+
+        let linked = root.join("linked");
+        std::os::unix::fs::symlink(root.join("elsewhere"), &linked).unwrap();
+        std::fs::create_dir_all(root.join("elsewhere")).unwrap();
+        assert!(write_unfollowed(&linked, "live-1.png", b"png").is_err());
+        assert!(
+            !root.join("elsewhere/live-1.png").exists(),
+            "nothing went through the linked folder"
+        );
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            1,
+            "no temporary file is left"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
