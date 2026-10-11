@@ -1403,6 +1403,38 @@ THREAD-PARITY §5). The user's answer: the gentlest way, a full start-over only 
 - **Notes, not restarts:** a session open on the phase-3 revision resumes with the phase-4 note and keeps its native
   session id. A session with no new tool hears the note with no CLI restart. 0 sessions start over.
 
+**Outcome (2026-10-11): built as below; one live check waits for a permission**
+- **Moved to phase 5, as the user approved:** the visible pills (the held merge's, with its Cancel, and the CI
+  watch's) and Q9.4's ticker. Phase 4 ships their daemon state, the `MergeHeld` / `MergeCancelled` /
+  `MergeStopped` / `CiWatch` steps and the `cancelMerge` IPC command; the live checks drove Cancel over IPC.
+- **The held merge, as built:**
+  - It is a stored `MergeHeld` orchestrator step, not a separate `MergePending` record.
+  - Its consent covers the branch tip it was held at, moved on by the session's own landings in whatever order they
+    record their moves. Other work on the branch needs a fresh yes (Q3.4).
+  - It comes due only once every landing's review has ended, including a review not stored yet. A message the
+    user wrote since the consent, still unread, holds it too; "wait", "no" or "Not yet" in it stops it.
+- **CI watch, as built:**
+  - `gh run list` raises `--limit` from 20 until every run fits (cap 640, then the result says it's incomplete), with
+    `attempt` among the fields, so a re-run between two polls is read again.
+  - The run commands name `HOST/OWNER/REPO`. The repository comes from the push URL (`git remote get-url --push`).
+  - A failed poll ends nothing; five failed `gh` calls in a row end it as "stopped".
+  - A watch cut off by a close or a restart reads "stopped". One row per repository, branch and sha.
+  - The 30-minute clock starts again at a request's last stored reply after a restart.
+- **A worker's dev build** opens on the debug build's shared data folder (`/tmp/brigadier-dev`): computer use's
+  `launch` takes no arguments, and it drives only a Brigadier the session launched. A data-folder field for
+  `launch` is the follow-up.
+- Item 10 (`ThreadScrollRender.test.ts`) was green on the phase's tree; nothing changed. Revisions 9–15 are phase
+  4's, and `CONTRACT` is unchanged.
+- **Open:**
+  - The UI request's live check of `Brigadier Dev.app` stopped at Screen Recording for the dev helper
+    `ai.brigadier.dev.computer-use`. It is ungranted as of this outcome.
+  - The late-event "Update:" line wasn't seen live: no late event changed an answer. Check it with phase 5's Update
+    row.
+  - Under Approve for me, each `git push` of the thread, a CI fix's re-push included, raises a sandbox-escalation
+    card. The escalation reviewer refuses pushes. Letting the watch consent cover the same-branch re-push needs a
+    decision.
+  - A `computer/launch` waiting on its approval card shows the worker nothing.
+
 **Risks.**
 - `gh` may be missing or logged out. `ci_status` says so; the thread says one line; it never blocks.
 - Some Claude review texts won't split into findings; anything unparsed is one finding (Q7).
