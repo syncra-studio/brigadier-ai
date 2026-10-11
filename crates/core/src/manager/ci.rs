@@ -1571,8 +1571,10 @@ exit "$code"
             };
             let (outcome, seen) = run_watch(&fake, timing).await;
             assert!(matches!(outcome, Outcome::NoRuns), "{outcome:?}");
+            // How many polls fit in the window depends on how fast gh starts: each said it
+            // waited.
+            assert!(!seen.is_empty());
             assert!(seen.iter().all(|p| p.waiting_for_first));
-            assert!(seen.len() > 3);
         }
 
         #[tokio::test]
