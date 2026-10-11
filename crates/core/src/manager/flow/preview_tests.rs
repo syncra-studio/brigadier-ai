@@ -281,8 +281,10 @@ async fn a_preview_that_ends_at_once_says_how() {
     flow.stop().await;
 }
 
-/// A preview the user stopped from its chip, or one that ended on its own, reaches the thread
-/// as a `[preview]` note with the user's next message, so it never answers "already running".
+/// A preview the user stopped from its chip reaches the thread as a `[preview]` note with the
+/// user's next message, so it never answers "already running"; one that ended on its own after
+/// its start answered "running" reaches it at once, with its last output line, to report in
+/// the same turn (SESSION-FIXES-PLAN.md Q9).
 #[tokio::test]
 async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
     let replies: Replies = Arc::default();
@@ -324,21 +326,38 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
     );
 
     // An end on its own, after the start answered.
-    flow.say("start sleep 2; exit 4").await;
-    flow.until("the preview to exit", |board| {
-        board
-            .previews
-            .values()
-            .any(|preview| matches!(preview.state, PreviewState::Exited { .. }))
+    flow.say("start sleep 2; echo 'Error: port 3000 is taken' >&2; exit 4")
+        .await;
+    let heard = inputs.clone();
+    flow.until("the thread to hear the exit", move |_| {
+        heard
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|input| input.contains("[preview ended: exit 4]"))
     })
     .await;
     flow.settled().await;
+    let ended = inputs
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|input| input.contains("[preview ended: exit 4]"))
+        .cloned()
+        .unwrap();
+    assert!(
+        ended.contains("Its last output line: Error: port 3000 is taken"),
+        "{ended}"
+    );
+    assert!(
+        ended.contains("Tell the user in this turn what failed"),
+        "{ended}"
+    );
     flow.say("And now?").await;
     flow.settled().await;
     let last = inputs.lock().unwrap().last().cloned().unwrap();
-    assert!(last.contains("ended on its own (exit 4)"), "{last}");
     assert!(
-        !last.contains("was stopped by the user"),
+        !last.contains("was stopped by the user") && !last.contains("ended on its own"),
         "told once: {last}"
     );
     let board = flow.board().await;

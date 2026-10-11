@@ -89,6 +89,16 @@ pub(crate) struct LivePreview {
     paused_members: Mutex<Vec<crate::machine::builds::Proc>>,
     /// Held while its record is read and written back, so a log snapshot can't undo its end.
     updating: tokio::sync::Mutex<()>,
+    /// Whether `start_preview` answered "running", and whether its end began: whichever
+    /// comes first decides who tells the thread of an end on its own (the start's answer,
+    /// or a message of its own).
+    start_told: Mutex<StartTold>,
+}
+
+#[derive(Default)]
+struct StartTold {
+    running: bool,
+    ending: bool,
 }
 
 impl LivePreview {
@@ -343,6 +353,7 @@ impl SessionManager {
             snapshot: Mutex::default(),
             paused_members: Mutex::default(),
             updating: tokio::sync::Mutex::default(),
+            start_told: Mutex::default(),
         });
         self.previews
             .lock()
@@ -382,10 +393,16 @@ impl SessionManager {
             return Err(err);
         }
         tracing::info!(conversation = %id, preview = %preview_id, pid, workdir = %workdir.display(), "preview started");
-        if tokio::time::timeout(START_WATCH, live.ended.cancelled())
+        let ended_at_once = tokio::time::timeout(START_WATCH, live.ended.cancelled())
             .await
             .is_ok()
-        {
+            || {
+                let mut told = live.start_told.lock().unwrap_or_else(|p| p.into_inner());
+                told.running = !told.ending;
+                told.ending
+            };
+        if ended_at_once {
+            live.ended.cancelled().await;
             return self
                 .preview_log(id, Some(&preview_id), Some(START_TAIL))
                 .await
@@ -574,7 +591,39 @@ impl SessionManager {
                 PreviewState::Exited { status, .. } => Some(format!("ended on its own ({status})")),
                 _ => None,
             };
-            if let (Some(told), Ok(conv)) = (told, self.conv(id)) {
+            // An end on its own after the start answered "running" is a failure the thread
+            // reports in the same turn (SESSION-FIXES-PLAN.md Q9): it hears it at once.
+            let running_told = {
+                let mut start = live.start_told.lock().unwrap_or_else(|p| p.into_inner());
+                start.ending = true;
+                start.running
+            };
+            if let (PreviewState::Exited { status, .. }, true) = (&state, running_told) {
+                let path = live.log.clone();
+                let last = blocking(move || Ok(read_log(&path).0))
+                    .await
+                    .map(|bytes| last_line(&bytes))
+                    .unwrap_or_default();
+                self.deliver(
+                    id,
+                    super::conversation::Envelope {
+                        kind: crate::work::InjectionKind::Report,
+                        label: format!("preview {}", preview.id),
+                        task_id: None,
+                        text: format!(
+                            "[preview ended: {status}] {} \"{}\" stopped on its own; it is not running now.{}\nTell the user in this turn what failed, with its key error line, and what you do about it.",
+                            preview.id,
+                            preview.name,
+                            if last.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" Its last output line: {last}")
+                            },
+                        ),
+                    },
+                )
+                .await;
+            } else if let (Some(told), Ok(conv)) = (told, self.conv(id)) {
                 conv.note(format!(
                     "[preview] {} \"{}\" {told}; it is not running now. Start it again if the user wants it.",
                     preview.id, preview.name
@@ -1147,6 +1196,7 @@ impl SessionManager {
                 snapshot: Mutex::default(),
                 paused_members: Mutex::default(),
                 updating: tokio::sync::Mutex::default(),
+                start_told: Mutex::default(),
             };
             self.end_preview(
                 &live,
@@ -1669,6 +1719,21 @@ fn tail(bytes: &[u8], lines: u32) -> String {
     out
 }
 
+/// The log's last line with text, trimmed to 300 characters.
+fn last_line(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let line = text
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    match line.char_indices().nth(300) {
+        Some((at, _)) => format!("{}…", &line[..at]),
+        None => line.to_owned(),
+    }
+}
+
 fn state_words(preview: &Preview) -> String {
     match &preview.state {
         PreviewState::Running => match preview.pid {
@@ -1746,6 +1811,7 @@ while True: time.sleep(0.03)
             snapshot: Mutex::default(),
             paused_members: Mutex::default(),
             updating: tokio::sync::Mutex::default(),
+            start_told: Mutex::default(),
         };
         flow.manager.signal_preview(&live, true).await.unwrap();
         let owner = preview_owner(&flow.conversation);
@@ -1865,6 +1931,7 @@ while True:
             snapshot: Mutex::default(),
             paused_members: Mutex::default(),
             updating: tokio::sync::Mutex::default(),
+            start_told: Mutex::default(),
         };
         flow.manager.signal_preview(&live, true).await.unwrap();
         assert!(stopped(detached));
@@ -1931,6 +1998,7 @@ while True:
             snapshot: Mutex::default(),
             paused_members: Mutex::new(vec![member]),
             updating: tokio::sync::Mutex::default(),
+            start_told: Mutex::default(),
         };
         let owner = preview_owner(&flow.conversation);
         let ledger = flow.manager.runtime.ledger();
@@ -1995,6 +2063,7 @@ while True:
             snapshot: Mutex::default(),
             paused_members: Mutex::new(vec![member]),
             updating: tokio::sync::Mutex::default(),
+            start_told: Mutex::default(),
         };
         let owner = preview_owner(&flow.conversation);
         let ledger = flow.manager.runtime.ledger();

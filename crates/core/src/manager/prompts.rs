@@ -104,6 +104,7 @@ How to work:
 How to talk to the user:
 - The user sees quiet worker lifecycle lines next to your replies and can open each worker's own thread. Don't announce what you delegated, don't repeat a task's spec, and don't restate reports.
 - Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show. This holds right after you delegate, too. Starting work that takes more than a moment, you may write one short opening line ("I'll check how tabs work, then ask you a few questions."); otherwise never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
+- Even while work runs, write one line for: a failure of what you started (a preview, a dev app, a build, a check you awaited), in the same turn: what failed, its key error line, what you do about it; work the user didn't ask for, before it starts ("Starting 3 fixes from the review; about 20 min."); and [status due]: what runs, why, roughly what's left. Never say something compiles or runs without checking its process, or having a worker look.
 - When the request's work is done, write one final answer: at most about five short lines of what changed and what to know. Then, if any, one line "To check: …" for what nobody could check and one "You'll need to: …" for what only the user can do (a key, an account). Then the full report (checks run, review findings, what wasn't tested) under a last heading `### Details`, shown folded. A decision goes on a card (ask_user, propose_merge, propose_plan), never in text.
 - {LATE_EVENT} Never repeat a closing or ask the merge again.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.
@@ -446,6 +447,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: 10,
         thread: "You now have ci_status and watch_ci. After your own `git push`, call ci_status and do what it says (ask once to watch, say in one line that CI can't be watched from here, or say nothing). On [ci … failed], fix it, push to the same branch and call watch_ci again without asking: the user's yes to watching covers that, nothing else.",
+        worker: "",
+    },
+    Revision {
+        number: 11,
+        thread: "From now on, even while work runs, write one line for: a failure of what you started (a preview, a dev app, a build, a check you awaited), in the same turn, with its key error line and what you do about it; work the user didn't ask for, before it starts (\"Starting 3 fixes from the review; about 20 min.\"); and [status due] (30 minutes with nothing new for the user): what runs, why, roughly what's left. A preview that stops on its own now reaches you at once as [preview ended: …]. Never say something compiles or runs without checking its process, or having a worker look.",
         worker: "",
     },
 ];
@@ -1797,6 +1803,11 @@ mod environment_tests {
             // A merge said while workers write is held, then due (SESSION-FIXES-PLAN.md Q3).
             assert!(text.contains("\"Merge it when done\" while workers write is consent"));
             assert!(text.contains("finish_session, never ask again; [merge waiting]"));
+            // Failures in the same turn, a status line when due, a sentence before
+            // unrequested work (Q9).
+            assert!(text.contains("Even while work runs, write one line for: a failure"));
+            assert!(text.contains("and [status due]: what runs, why, roughly what's left"));
+            assert!(text.contains("Never say something compiles or runs without checking"));
             // After its own push, the thread looks at CI (Q1).
             assert!(text.contains("After your own `git push`, call "));
             assert!(text.contains("push to the same branch and call "));
@@ -1815,12 +1826,13 @@ mod environment_tests {
         assert!(worktree.contains("call finish_session without user_words"));
         assert!(worktree.contains("that is their consent too"));
         assert!(!worktree.contains("there is no card"));
-        // Every byte is paid for on every call: it stays near 12 KiB, code rules included
+        // Every byte is paid for on every call: it stays under 14 KB, code rules included
         // (the old orchestrator's 11,371 bytes, the interview the user wanted built in, and
         // the suggest_full_access hint of the sandboxed levels, bug 8's check prefixes, and
         // the review findings the thread records and sends back to their worker, Q7 and Q6.1,
-        // and bug 4's late-event rule, Q3's held merge and Q1's CI watch).
-        assert!(codex.len() < 13_500, "{}", codex.len());
+        // and bug 4's late-event rule, Q3's held merge, Q1's CI watch and Q9's lines
+        // while work runs).
+        assert!(codex.len() < 13_950, "{}", codex.len());
     }
 
     #[test]

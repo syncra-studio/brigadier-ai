@@ -71,6 +71,7 @@ mod run;
 mod secrets;
 mod side_chat;
 mod sidecars;
+mod status;
 mod takeover;
 mod thread;
 mod thread_metrics;
@@ -303,6 +304,7 @@ impl SessionManager {
         manager.start_watchdog();
         manager.retry_waiting_on_provider_checks();
         manager.start_checkpoint_timer();
+        manager.start_status_timer();
         Ok(manager)
     }
 

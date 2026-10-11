@@ -1553,6 +1553,8 @@ mod resume_tests;
 #[cfg(test)]
 mod review_hold_tests;
 #[cfg(test)]
+mod status_tests;
+#[cfg(test)]
 mod takeover_tests;
 #[cfg(test)]
 mod tests;

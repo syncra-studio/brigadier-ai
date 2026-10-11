@@ -285,6 +285,8 @@ pub(crate) struct ConvLive {
     pub(super) merge_told: std::sync::Mutex<Option<(String, &'static str)>>,
     /// The CI watches it runs (`watch_ci`), ended when it closes.
     pub(super) ci_watches: std::sync::Mutex<Vec<tokio::task::AbortHandle>>,
+    /// When each request last showed the user something, and was last told `[status due]`.
+    pub(super) status: std::sync::Mutex<super::status::StatusClock>,
     /// The CLI session a turn on each provider resumes, as [`SessionManager::last_native_id`]
     /// last found it in the log, kept up to date as sessions start and reset.
     native_ids: std::sync::Mutex<NativeIds>,
@@ -319,6 +321,7 @@ impl ConvLive {
             merge_lock: tokio::sync::Mutex::new(()),
             merge_told: std::sync::Mutex::new(None),
             ci_watches: std::sync::Mutex::new(Vec::new()),
+            status: std::sync::Mutex::default(),
             native_ids: std::sync::Mutex::new(NativeIds::default()),
             #[cfg(test)]
             merge_pause: std::sync::Mutex::new(None),
@@ -2832,6 +2835,7 @@ impl SessionManager {
                         let mut state = conv.state.lock().await;
                         state.spoke.insert(request.clone());
                         state.narration.remove(request);
+                        conv.status.lock().unwrap().shown(request, now_ms());
                     }
                     if let Err(err) = self
                         .core
