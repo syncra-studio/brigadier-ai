@@ -106,7 +106,7 @@ export function AgentsStep({
         description={description}
       />
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6">
-        <div className="max-w-onboarding-agents mx-auto mt-14 mb-8 grid w-full grid-cols-2 gap-16">
+        <div className="max-w-onboarding-agents mx-auto mt-16 mb-8 grid w-full grid-cols-2 gap-16">
           {agents.map(({ provider, overview, state }) => (
             <AgentColumn
               key={provider}
@@ -135,17 +135,10 @@ export function AgentsStep({
   );
 }
 
-/** An agent's logo on its large tile. */
+/** An agent's logo, bare: large over its column, smaller at the head of its page. */
 function AgentMark({ provider, small = false }: { provider: ProviderKind; small?: boolean }) {
   return (
-    <span
-      className={cn(
-        "bg-muted/40 grid shrink-0 place-items-center border",
-        small ? "rounded-control size-10" : "size-agent-mark rounded-3xl",
-      )}
-    >
-      <ProviderGlyph provider={provider} className={small ? "size-icon-lg" : "size-12"} />
-    </span>
+    <ProviderGlyph provider={provider} className={cn("shrink-0", small ? "size-8" : "size-agent-mark")} />
   );
 }
 
@@ -166,7 +159,7 @@ function AgentColumn({
   return (
     <section className="flex min-w-0 flex-col items-center text-center">
       <AgentMark provider={provider} />
-      <h2 className="mt-5 text-xl font-medium">{label}</h2>
+      <h2 className="mt-8 text-xl font-medium">{label}</h2>
       <p className="text-muted-foreground mt-1.5 mb-6 text-sm">
         Work with your {ACCOUNT_OF[provider]} account.
       </p>

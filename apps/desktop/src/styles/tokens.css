@@ -92,7 +92,7 @@
  *               setup-card                    a setup card's minimum width in its auto-filled grid
  *               max-w-onboarding{,-agents,-detail}  the first-run setup's headings, its two
  *                                             agent columns, an agent's own page
- *               size-agent-mark               an agent's large logo tile in the setup
+ *               size-agent-mark               an agent's large logo in the setup
  *   Radii       rounded-control (buttons, inputs), rounded-surface (menus, popovers),
  *               rounded-dialog, rounded-thread (message bubbles), rounded-composer (the composer
  *               card), rounded-rail (the rail's top corners), rounded-menu (menus), rounded-tooltip,
@@ -371,7 +371,7 @@
   --browser-toolbar-columns: minmax(var(--spacing-browser-controls), 1fr) minmax(0, var(--spacing-browser-address)) minmax(var(--spacing-browser-controls), 1fr);
   --spacing-setup: min(60rem, calc(100dvh - 2rem));
   --spacing-setup-card: 13rem;
-  --spacing-agent-mark: 6.5rem;
+  --spacing-agent-mark: 4.5rem;
   --spacing-user-message: 22.5rem;
   /* Placeholder height for off-screen messages skipped by content-visibility. */
 
