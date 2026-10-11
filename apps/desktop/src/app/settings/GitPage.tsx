@@ -45,12 +45,12 @@ export const GIT_ROWS = {
   writer: {
     label: WRITER_LABEL,
     description:
-      "The model that writes a commit message when you press Generate in the Source panel.",
+      "The model that writes a commit message when you commit from the Source panel with the message left blank.",
   },
   commitStyle: {
     label: COMMIT_LABEL,
     description:
-      "How commit messages are written: the ones Generate writes and the agents’ own commits.",
+      "How commit messages are written: the ones Brigadier writes for you and the agents’ own commits.",
   },
   commitInstructions: {
     label: "Commit instructions",
@@ -364,7 +364,7 @@ function BranchPrefixRow() {
         autoCorrect="off"
         placeholder="No prefix"
         aria-invalid={problem ? true : undefined}
-        className="border-input bg-popover h-control-md rounded-control text-label w-40 px-2.5 font-mono"
+        className="border-input bg-popover h-control-md rounded-control text-label w-56 px-2.5"
         onChange={(event) => setTyped(event.target.value)}
         onBlur={commit}
         onKeyDown={(event) => {

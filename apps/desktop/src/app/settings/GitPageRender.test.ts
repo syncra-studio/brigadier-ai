@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { renderFixturePage } from "@/fixtures/headless";
 
 const AUTOMATIC = "A fast, light model Brigadier picks for each message. When an agent is out of quota, another one writes.";
-const WRITER = "The model that writes a commit message when you press Generate in the Source panel.";
+const WRITER = "The model that writes a commit message when you commit from the Source panel with the message left blank.";
 
 // The real page in Chromium over a faked daemon: the writer model and its Automatic choice, the
 // styles, an instructions box that saves on ⌘S, once typing pauses and as it goes, and the
