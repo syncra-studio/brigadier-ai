@@ -1,13 +1,20 @@
-//! A Claude thread's `run_unsandboxed` under Approve for me (THREAD-PLAN.md Q4, Q6).
+//! Brigadier's own reviewer of a request to go beyond a sandbox, under Approve for me
+//! (THREAD-PLAN.md Q4, Q6).
 //!
-//! Claude's own auto mode declines every command that asks to leave its sandbox, and Codex's
-//! auto-reviewer only sees Codex's own shell. So for a Claude thread at Approve for me,
-//! Brigadier decides: a one-shot reviewer on the thread's vendor (read-only, no tools, nobody to
-//! ask) reads the command and answers in JSON. It allows the command unless it pushes,
-//! publishes or deploys, uses credentials, spends money, or deletes or writes outside the
-//! work; an allowed command runs once and is logged as decided for the user. Anything else (an
-//! unsafe verdict, no verdict, a reviewer that couldn't run) becomes a card the call waits on,
-//! as under Ask for approval. The reviewer's tokens are metered as their own step.
+//! - **A Claude thread's `run_unsandboxed`.** Claude's own auto mode declines every command
+//!   that asks to leave its sandbox, so Brigadier decides. An allowed command runs once and is
+//!   logged as decided for the user. Anything else (an unsafe verdict, no verdict, a reviewer
+//!   that couldn't run) becomes a card the call waits on, as under Ask for approval.
+//! - **A Codex session's escalations** (its thread's and its workers'). Codex's auto-reviewer
+//!   doesn't get the rule to keep off other sessions' work (codex-cli 0.162.1 ignores
+//!   `auto_review.extra_policy`, SESSION-FIXES-PLAN bug 6, "Gap left"), so Codex sends them to
+//!   Brigadier (`approvalsReviewer: user`). What the reviewer doesn't allow is declined to the
+//!   model with its reason, as Approve for me declines what a CLI's own reviewer can't settle.
+//!
+//! The reviewer is a one-shot session (read-only, no tools, nobody to ask) that reads the
+//! request, with the session's protected set as a rule, and answers in JSON. It allows the
+//! request unless it pushes, publishes or deploys, uses credentials, spends money, or deletes
+//! or writes outside the work. Its tokens are metered as their own step.
 
 use std::path::Path;
 use std::time::Duration;
@@ -16,6 +23,7 @@ use brigadier_providers::{
     Access, AllowedModels, ApprovalDecision, ApprovalKind, ApprovalRequest, Origin, ProviderEvent,
     ProviderKind, Role, SessionSpec, Started, ToolSet, TurnInput, TurnStatus,
 };
+use brigadier_sandbox::Protection;
 use serde::Deserialize;
 
 use super::SessionManager;
@@ -37,7 +45,7 @@ pub(crate) const OWN_APPROVAL: &str = "brigadier-escalation:";
 /// Under which owner the reviewer's tokens are counted ([`super::usage`] reads the prefix).
 pub(crate) const ESCALATION_OWNER: &str = "escalation:";
 
-const ROLE: &str = "You review one shell command a coding agent wants to run outside its sandbox, on the user's behalf, while the user is away. You have no tools: decide from the command alone.\n\nAllow it unless it does any of these: pushes to a remote, publishes or releases anything, deploys, uses or reads credentials, tokens or keys, spends money, or deletes or writes outside the project's folder and its own temporary folders. Network reads (downloads, package installs), builds, tests and starting local servers are fine.\n\nReply with one line of JSON and nothing else: {\"allow\": true or false, \"reason\": \"one short sentence\"}.";
+const ROLE: &str = "You review one request of a coding agent to go beyond its sandbox (a shell command to run outside it, files to write, or wider permissions), on the user's behalf, while the user is away. You have no tools: decide from the request alone.\n\nAllow it unless it does any of these: pushes to a remote, publishes or releases anything, deploys, uses or reads credentials, tokens or keys, spends money, or deletes or writes outside the project's folder and its own temporary folders. Network reads (downloads, package installs), builds, tests and starting local servers are fine.\n\nReply with one line of JSON and nothing else: {\"allow\": true or false, \"reason\": \"one short sentence\"}.";
 
 #[derive(Deserialize)]
 struct Verdict {
@@ -56,10 +64,14 @@ impl SessionManager {
         command: &str,
         workdir: &Path,
         workspace: Option<&Path>,
-        protection: &brigadier_sandbox::Protection,
+        protection: &Protection,
     ) -> Result<()> {
+        let request = format!(
+            "The command runs in: {}\nThe command:\n```\n{command}\n```",
+            workdir.display()
+        );
         let verdict = self
-            .review_escalation(id, command, workdir, workspace, protection)
+            .review_escalation(id, &request, workspace, protection)
             .await;
         let why = match verdict {
             Ok(verdict) if verdict.allow => {
@@ -113,14 +125,58 @@ impl SessionManager {
         }
     }
 
-    /// The reviewer's verdict on `command`.
+    /// How a Codex session at Approve for me answers `request`, a request to go beyond its
+    /// sandbox: what Brigadier's reviewer allows, with the session's `protection` as a rule
+    /// (logged as decided for the user), else declined with the reason. `workspace`: the
+    /// session's own folder.
+    pub(crate) async fn settle_codex_escalation(
+        &self,
+        id: &ConversationId,
+        request: &ApprovalRequest,
+        workspace: Option<&Path>,
+        protection: &Protection,
+    ) -> ApprovalDecision {
+        let what = describe(request);
+        match self
+            .review_escalation(id, &what, workspace, protection)
+            .await
+        {
+            Ok(verdict) if verdict.allow => {
+                let asked = self.request_for(id, None).await;
+                self.decided_for_you(
+                    id,
+                    asked,
+                    DecisionSource::Orchestrator,
+                    format!("Went beyond the sandbox: {}", summary(request)),
+                    format!("Brigadier's reviewer allowed it: {}", verdict.reason),
+                )
+                .await;
+                ApprovalDecision::Allow
+            }
+            Ok(verdict) => ApprovalDecision::Deny {
+                message: format!(
+                    "Brigadier's reviewer would not allow it: {}",
+                    verdict.reason
+                ),
+            },
+            Err(err) => {
+                tracing::warn!(conversation = %id, error = %err, "the escalation reviewer gave no verdict");
+                ApprovalDecision::Deny {
+                    message: format!(
+                        "Declined: Brigadier's reviewer gave no verdict ({err}). Work around it, or report it."
+                    ),
+                }
+            }
+        }
+    }
+
+    /// The reviewer's verdict on `request` (what is asked, and where).
     async fn review_escalation(
         &self,
         id: &ConversationId,
-        command: &str,
-        workdir: &Path,
+        request: &str,
         workspace: Option<&Path>,
-        protection: &brigadier_sandbox::Protection,
+        protection: &Protection,
     ) -> std::result::Result<Verdict, String> {
         let counted_as = TaskId(format!("{ESCALATION_OWNER}{}", uuid::Uuid::now_v7()));
         let owner = counted_as.0.clone();
@@ -165,9 +221,8 @@ impl SessionManager {
                 mut events,
             }) => {
                 let mut prompt = format!(
-                    "The project's folder: {}\nThe command runs in: {}\nThe command:\n```\n{command}\n```",
+                    "The project's folder: {}\n{request}",
                     workspace.map_or_else(|| "(none)".into(), |path| path.display().to_string()),
-                    workdir.display()
                 );
                 // What the session's sandbox keeps it from (PLAN bug 6), which a command
                 // outside it would reach.
@@ -235,6 +290,46 @@ impl SessionManager {
         };
         self.runtime.ledger().dispose(&owner).await;
         verdict(&reply?)
+    }
+}
+
+/// A CLI's request to go beyond its sandbox as the reviewer reads it.
+fn describe(request: &ApprovalRequest) -> String {
+    let mut text = String::new();
+    if let Some(cwd) = &request.cwd {
+        text.push_str(&format!("It runs in: {cwd}\n"));
+    }
+    match request.kind {
+        ApprovalKind::Command => text.push_str("It asks to run this command outside its sandbox"),
+        ApprovalKind::FileChange => text.push_str("It asks to write files outside its sandbox"),
+        ApprovalKind::Permissions => text.push_str("It asks for wider permissions"),
+        ApprovalKind::Tool => text.push_str(&format!("It asks to use {}", request.tool)),
+    }
+    if let Some(reason) = &request.reason {
+        text.push_str(&format!(" (its reason: {reason})"));
+    }
+    text.push(':');
+    if let Some(command) = &request.command {
+        text.push_str(&format!("\n```\n{command}\n```"));
+    }
+    for path in &request.paths {
+        text.push_str(&format!("\n- {path}"));
+    }
+    if request.command.is_none()
+        && let Some(input) = &request.input
+    {
+        text.push_str(&format!("\n```\n{input}\n```"));
+    }
+    text
+}
+
+/// One line on what was allowed, for the decisions log.
+fn summary(request: &ApprovalRequest) -> String {
+    match (&request.command, request.paths.first(), &request.input) {
+        (Some(command), _, _) => command.clone(),
+        (None, Some(path), _) => format!("write {path}"),
+        (None, None, Some(input)) => input.clone(),
+        (None, None, None) => request.tool.clone(),
     }
 }
 

@@ -24,7 +24,9 @@ use std::sync::Arc;
 
 use brigadier_git::Oid;
 use brigadier_providers::policy::Route as PolicyRoute;
-use brigadier_providers::{Access, ApprovalDecision, ApprovalRequest, ProviderEvent, ProviderKind};
+use brigadier_providers::{
+    Access, ApprovalDecision, ApprovalRequest, Decider, ProviderEvent, ProviderKind,
+};
 
 use super::conversation::{Cli, ConvLive};
 use super::{SessionManager, blocking, git_error};
@@ -85,6 +87,17 @@ impl ThreadLaunch {
         self.permission != now.permission
             || self.workspace.as_ref().map(|w| &w.path) != now.workspace.as_ref().map(|w| &w.path)
     }
+}
+
+/// Whether Brigadier's own reviewer settles a thread CLI's requests to go beyond its sandbox:
+/// a Codex thread at Approve for me in a sandbox (`approvalsReviewer: user`, see
+/// [`super::escalation`]). A Claude thread's run in its CLI's auto mode instead.
+fn brigadier_reviews(provider: ProviderKind, launch: Option<&ThreadLaunch>) -> bool {
+    provider == ProviderKind::Codex
+        && launch.is_some_and(|launch| {
+            launch.permission == PermissionLevel::ApproveForMe
+                && !matches!(launch.access, Access::Full | Access::ReadOnly)
+        })
 }
 
 impl SessionManager {
@@ -341,6 +354,25 @@ impl SessionManager {
             PolicyRoute::Deny => ApprovalDecision::Deny {
                 message: "This session may not do that.".into(),
             },
+            // A Codex thread at Approve for me: Brigadier's reviewer settles it
+            // (`super::escalation`), while the CLI waits.
+            PolicyRoute::AskUser if brigadier_reviews(cli.provider, cli.launch.as_ref()) => {
+                let manager = self.arc();
+                let (conv, cli) = (conv.clone(), cli.clone());
+                self.spawn(async move {
+                    let Some(launch) = cli.launch.as_ref() else {
+                        return;
+                    };
+                    let workspace = launch.workspace.as_ref().map(|w| w.path.as_path());
+                    let decision = manager
+                        .settle_codex_escalation(&conv.id, &request, workspace, &launch.protection)
+                        .await;
+                    manager
+                        .answer_thread(&conv, &cli, request, decision, Decider::Policy)
+                        .await;
+                });
+                return;
+            }
             PolicyRoute::AskUser => {
                 if let Err(err) = self
                     .open_approval(&conv.id, None, ApprovalSubject::Cli { request })
@@ -351,6 +383,19 @@ impl SessionManager {
                 return;
             }
         };
+        self.answer_thread(conv, cli, request, decision, decider)
+            .await;
+    }
+
+    /// Gives the thread's CLI Brigadier's answer to its request.
+    async fn answer_thread(
+        &self,
+        conv: &Arc<ConvLive>,
+        cli: &Arc<Cli>,
+        request: ApprovalRequest,
+        decision: ApprovalDecision,
+        decider: Decider,
+    ) {
         self.pass_unsandboxed(&conv.id, &request, &decision);
         if let Err(err) = cli
             .session

@@ -2348,3 +2348,125 @@ async fn a_cold_thread_over_150k_is_reborn_with_every_decision_whole() {
     }
     flow.stop().await;
 }
+
+/// A request a script's CLI asked, and the answer it got.
+type Asked = (String, Option<ApprovalDecision>);
+
+/// Brigadier's escalation reviewer in a script: refuses what deletes a branch or a worktree,
+/// allows the rest, and keeps what it was asked.
+fn escalation_reviewer(turn: &super::Turn, asked: &Mutex<Vec<String>>) -> Option<Reply> {
+    if !turn
+        .prompt
+        .starts_with("You review one request of a coding agent")
+    {
+        return None;
+    }
+    asked.lock().unwrap().push(turn.input.clone());
+    Some(Reply::text(
+        // The command itself, not the rule (which names such commands too).
+        if turn.input.contains("```\ngit branch -D")
+            || turn.input.contains("```\ngit worktree remove")
+        {
+            r#"{"allow": false, "reason": "it deletes another session's work"}"#
+        } else {
+            r#"{"allow": true, "reason": "a network read"}"#
+        },
+    ))
+}
+
+/// Codex at Approve for me: its thread's and its workers' requests to leave the sandbox reach
+/// Brigadier, whose reviewer settles them with the session's protected set. What it refuses is
+/// declined to the model with the reason, never a card; what it allows goes through.
+#[tokio::test]
+async fn brigadiers_reviewer_settles_a_codex_sessions_escalations_at_approve_for_me() {
+    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+    let decisions: Arc<Mutex<Vec<Asked>>> = Arc::default();
+    let (reviewer_log, log) = (asked.clone(), decisions.clone());
+    let flow = Flow::start(
+        "codex-reviewed",
+        Options {
+            permission: PermissionLevel::ApproveForMe,
+            thread: ProviderKind::Codex,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let (asked, log) = (reviewer_log.clone(), log.clone());
+            async move {
+                if let Some(reply) = escalation_reviewer(&turn, &asked) {
+                    return reply;
+                }
+                let ask = async |who: &str, command: &str| {
+                    let decision = turn.ask_approval(command, "git").await;
+                    log.lock()
+                        .unwrap()
+                        .push((format!("{who}: {command}"), decision));
+                };
+                if turn.is_orchestrator() {
+                    if turn.input.contains("[task-1") {
+                        return Reply::text("[quiet]");
+                    }
+                    ask("thread", "git branch -D brigadier/other").await;
+                    ask("thread", "curl https://example.com").await;
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "high", "title": "Tidy up", "kind": "implement",
+                                   "spec": "Tidy up.", "provider": "codex"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                ask("worker", "git worktree remove --force /elsewhere").await;
+                ask("worker", "curl https://example.com/worker").await;
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Clean up everything.").await;
+    flow.until("four requests settled", |_| {
+        decisions.lock().unwrap().len() >= 4
+    })
+    .await;
+
+    let decisions = decisions.lock().unwrap().clone();
+    let refused = |message: &str| {
+        message.starts_with(
+            "Brigadier's reviewer would not allow it: it deletes another session's work",
+        )
+    };
+    for (asked, decision) in &decisions {
+        match decision {
+            Some(ApprovalDecision::Deny { message }) => {
+                assert!(asked.contains("-D") || asked.contains("remove"), "{asked}");
+                assert!(refused(message), "{message}");
+            }
+            Some(ApprovalDecision::Allow) => assert!(asked.contains("curl"), "{asked}"),
+            other => panic!("{asked}: {other:?}"),
+        }
+    }
+    let asked = asked.lock().unwrap().clone();
+    // (The worker's next turn, a nudge to report, asks again.)
+    assert!(
+        asked.len() >= 4,
+        "the reviewer saw each request: {:#?}",
+        asked
+            .iter()
+            .map(|input| input.split("```").nth(1))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        asked
+            .iter()
+            .all(|input| input.contains("Never allow a command, even one the user asked for")),
+        "the protected set reaches the reviewer: {asked:#?}"
+    );
+    let board = flow.board().await;
+    assert!(
+        board.approvals.is_empty(),
+        "no card: {:#?}",
+        board.approvals
+    );
+    flow.stop().await;
+}

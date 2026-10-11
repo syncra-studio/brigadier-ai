@@ -135,6 +135,9 @@ struct TaskLiveState {
     outputs: Option<PathBuf>,
     stopping: bool,
     access: Option<Access>,
+    /// Brigadier's reviewer settles the CLI's requests to go beyond its sandbox (a Codex worker
+    /// at Approve for me, [`super::escalation`]), with what the session may never write.
+    reviewed: Option<brigadier_sandbox::Protection>,
     /// Where the worker's CLI runs (a command without its own cwd runs here).
     cwd: Option<PathBuf>,
     /// The task's worktree, whose file changes the user may allow for the session.
@@ -1596,6 +1599,10 @@ impl SessionManager {
             .worker_session(task, subject, origin, Some(&mut first), &owner)
             .await?;
         let provider = task.route.choice.provider;
+        let reviewed = (provider == ProviderKind::Codex
+            && spec.auto_review
+            && !matches!(spec.access, Access::Full | Access::ReadOnly))
+        .then(|| spec.protection.clone());
         let account = self.runtime.account_for(&task.route.choice);
         let Started { session, events } =
             match self.runtime.start_hosted(&owner, &account, spec).await {
@@ -1641,6 +1648,7 @@ impl SessionManager {
             }
             state.cli = Some(cli.clone());
             state.access = Some(access);
+            state.reviewed = reviewed;
             state.cwd = Some(cwd);
             state.worktree = worktree;
             state.outputs = Some(outputs);
@@ -2753,11 +2761,12 @@ impl SessionManager {
         cli: &Arc<Cli>,
         mut request: ApprovalRequest,
     ) {
-        let (access, worktree) = {
+        let (access, worktree, reviewed) = {
             let state = live.state.lock().await;
             (
                 state.access.clone().unwrap_or(Access::ReadOnly),
                 state.worktree.clone(),
+                state.reviewed.clone(),
             )
         };
         let (route, decider) = self.approval_route(
@@ -2767,6 +2776,33 @@ impl SessionManager {
             worktree.as_deref(),
         );
         match route {
+            // A Codex worker at Approve for me: Brigadier's reviewer settles it, while the CLI
+            // waits.
+            PolicyRoute::AskUser if let Some(protection) = reviewed => {
+                let manager = self.arc();
+                let (live, cli) = (live.clone(), cli.clone());
+                self.spawn(async move {
+                    let decision = manager
+                        .settle_codex_escalation(
+                            &live.conversation_id,
+                            &request,
+                            worktree.as_deref(),
+                            &protection,
+                        )
+                        .await;
+                    if let Err(err) = cli
+                        .session
+                        .answer(request.id.clone(), decision.clone())
+                        .await
+                    {
+                        tracing::warn!(task = %live.id, error = %err, "could not answer an approval");
+                        return;
+                    }
+                    manager
+                        .record_worker_resolution(&live.id, request.id, decision, Decider::Policy)
+                        .await;
+                });
+            }
             PolicyRoute::Allow | PolicyRoute::Deny => {
                 let decision = if route == PolicyRoute::Allow {
                     ApprovalDecision::Allow
