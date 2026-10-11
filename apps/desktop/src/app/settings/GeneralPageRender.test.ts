@@ -34,6 +34,7 @@ test("General: its sections and rows, and every new setting saved for real", { t
   assert.deepEqual(
     seen.rows.map((row) => row.setting),
     [
+      "Your name",
       "Density",
       "When the sidebar is closed",
       "Send shortcut",
@@ -86,7 +87,7 @@ test("General: its sections and rows, and every new setting saved for real", { t
 
 test("General: notifications off point to System Settings, and Open at login waits for approval", { timeout: 60000 }, async (t) => {
   const seen = await render(t, "notifications=off&login=needsApproval");
-  const notifications = seen.rows.slice(5, 8);
+  const notifications = seen.rows.slice(6, 9);
   assert.deepEqual(notifications, [
     { setting: "Notifications are off", helper: "Turn them on in System Settings to use the options below", dimmed: false },
     { setting: "Notify when a session finishes", helper: "A notification when a chat or session is done", dimmed: true },

@@ -77,6 +77,7 @@ import { OpenFileContext } from "@/components/assistant-ui/file-links";
 import { Thread, type ThreadComponents } from "@/components/assistant-ui/thread";
 import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
 import { Button } from "@/components/ui/button";
+import { useNow } from "@/hooks/use-now";
 import type {
   AttachmentRef,
   Mention,
@@ -870,10 +871,18 @@ export function ConversationView({
   );
 }
 
-/** The hero over a new chat: a faint mark over "What should we build in {project}?".
- * A side chat says what it is for instead. */
+/** "Good morning" from five until noon, "Good afternoon" until six, else "Good evening". */
+function greeting(now: number): string {
+  const hour = new Date(now).getHours();
+  return hour < 5 || hour >= 18 ? "Good evening" : hour < 12 ? "Good morning" : "Good afternoon";
+}
+
+/** The hero over a new chat: a faint mark, a greeting by name once it's known, over "What
+ * should we build in {project}?". A side chat says what it is for instead. */
 const Welcome: FC = () => {
   const { selection, embedded } = useContext(ViewContext);
+  const name = useApp((s) => s.settings.userName);
+  const now = useNow(name ? 60_000 : null);
   const project = useApp((s) =>
     selection.type === "draft" && selection.kind === "session"
       ? (s.projects[selection.projectId] ?? null)
@@ -892,6 +901,11 @@ const Welcome: FC = () => {
         spinOnHover
         className="text-foreground size-16 opacity-60 transition-opacity duration-300 hover:opacity-100 motion-reduce:transition-none"
       />
+      {name && (
+        <p className="text-muted-foreground -mb-3 px-2 text-center text-base">
+          {greeting(now)}, {name}
+        </p>
+      )}
       <h1 className="font-display tracking-hero text-hero px-2 text-center font-normal">
         {project ? (
           <>
