@@ -124,6 +124,8 @@ pub struct Cookies {
     pub unreadable: usize,
     /// The domains of the unreadable cookies whose domain could be read, one per cookie.
     pub unreadable_domains: Vec<String>,
+    /// The domains of the partitioned cookies, one per cookie.
+    pub partitioned_domains: Vec<String>,
 }
 
 /// One visit to a page.

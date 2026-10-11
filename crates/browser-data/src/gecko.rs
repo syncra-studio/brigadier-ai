@@ -282,6 +282,9 @@ pub(crate) fn read_cookies(dir: &Path, now_unix: i64) -> Result<Cookies, Error> 
         let partitioned_attr = row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0;
         if partitioned_attr || origin.is_some_and(|origin| !origin.is_empty()) {
             out.partitioned += 1;
+            if let Ok(Some(host)) = row.get::<_, Option<String>>(2) {
+                out.partitioned_domains.push(host);
+            }
             continue;
         }
         let (Ok(Some(name)), Ok(Some(value)), Ok(Some(host))) = (

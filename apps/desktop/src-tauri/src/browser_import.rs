@@ -314,9 +314,10 @@ fn cookie_failure(error: &Error, browser: &str) -> (ImportFailure, String) {
 #[derive(Debug, Default)]
 struct Merged {
     cookies: Vec<Cookie>,
-    /// Left out before writing: expired, partitioned or unreadable.
+    /// Left out before writing: partitioned or unreadable. Expired cookies aren't counted:
+    /// they are gone from the other browser too.
     skipped: usize,
-    /// The domains of the unreadable ones, one per cookie.
+    /// The domains of the skipped ones, one per cookie.
     domains: Vec<String>,
 }
 
@@ -324,7 +325,8 @@ fn merge(reads: Vec<Cookies>) -> Merged {
     let mut merged = Merged::default();
     let mut at: HashMap<(String, String, String), usize> = HashMap::new();
     for read in reads {
-        merged.skipped += read.expired + read.partitioned + read.unreadable;
+        merged.skipped += read.partitioned + read.unreadable;
+        merged.domains.extend(read.partitioned_domains);
         merged.domains.extend(read.unreadable_domains);
         for cookie in read.cookies {
             let key = (
@@ -609,6 +611,7 @@ mod tests {
             partitioned: 1,
             unreadable: 1,
             unreadable_domains: vec![".x.com".into()],
+            partitioned_domains: vec!["p.com".into()],
         };
         let personal = Cookies {
             cookies: vec![
@@ -632,8 +635,8 @@ mod tests {
                 ("only-personal", "2")
             ]
         );
-        assert_eq!(merged.skipped, 5);
-        assert_eq!(merged.domains, [".x.com", "y.com"]);
+        assert_eq!(merged.skipped, 3);
+        assert_eq!(merged.domains, ["p.com", ".x.com", "y.com"]);
     }
 
     #[test]

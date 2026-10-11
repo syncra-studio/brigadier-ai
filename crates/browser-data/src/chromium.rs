@@ -473,6 +473,7 @@ pub(crate) fn read_cookies(
         let top_frame: Option<String> = row.get(10)?;
         if top_frame.is_some_and(|key| !key.is_empty()) {
             out.partitioned += 1;
+            out.partitioned_domains.push(host);
             continue;
         }
         let plain: Option<String> = row.get(2).ok().flatten();
