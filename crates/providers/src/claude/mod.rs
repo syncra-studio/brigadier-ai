@@ -63,10 +63,12 @@ const COMPACT_SINCE: &str = "2.1.282";
 /// Built-in tools a worker's lean start leaves out ([`ToolSet::Lean`]): scheduling, background
 /// agents and messaging, worktrees (Brigadier manages them), notebooks and the like. Each tool's
 /// description is part of every request; without these a worker starts at about 10k tokens
-/// instead of 15k (measured on 2.1.285). Skills, subagents, web and tool search stay.
+/// instead of 15k (measured on 2.1.285). Subagents, web and tool search stay. A worker asks
+/// through Brigadier's ask_orchestrator, never Claude's own question or plan-mode tools
+/// (SESSION-FIXES-PLAN.md Q6.5; the three names checked in 2.1.296).
 const LEAN_DENIED_TOOLS: &str = "Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,\
 RemoteTrigger,PushNotification,DesignSync,ReportFindings,EnterWorktree,ExitWorktree,ListAgents,\
-SendMessage,TaskStop,Monitor,NotebookEdit";
+SendMessage,TaskStop,Monitor,NotebookEdit,AskUserQuestion,EnterPlanMode,ExitPlanMode";
 /// Claude's built-in tool that starts a sub-agent (`Task` is its older name).
 const SUB_AGENT_TOOLS: &str = "Agent,Task";
 /// A thread's built-in tools ([`ToolSet::Thread`]): no sub-agents (`Agent`/`Task`) and nothing
@@ -722,6 +724,17 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
             },
         },
     });
+    // A worker or a thread needs none of what ships with Claude Code for a person at the
+    // keyboard, and each of it is in every request or connects at start: bundled skills and
+    // workflows, claude.ai's MCP connectors, the Artifact tool, Remote Control
+    // (SESSION-FIXES-PLAN.md Q6.5). Each key is in 2.1.296's settings schema; `enableArtifact:
+    // false` replaces the deprecated `disableArtifact`, and set in `--settings` it wins.
+    if matches!(spec.tools, ToolSet::Lean | ToolSet::Thread) {
+        settings["disableBundledSkills"] = json!(true);
+        settings["disableClaudeAiConnectors"] = json!(true);
+        settings["enableArtifact"] = json!(false);
+        settings["disableRemoteControl"] = json!(true);
+    }
     // The models the session and its sub-agents may run on (a sub-agent asking for another
     // steps down to an allowed one).
     if let SubAgents::Only(ids) = sub_agents {
@@ -2507,6 +2520,41 @@ mod tests {
             settings["sandbox"]["filesystem"]["denyWrite"],
             json!(paths(&[cwd.path().to_owned(), checkout.clone()]))
         );
+    }
+
+    /// SESSION-FIXES-PLAN.md Q6.5: workers and threads start without what ships for a person
+    /// at the keyboard, and workers can't open Claude's own questions or plan mode.
+    #[test]
+    fn workers_and_threads_start_without_bundled_extras_and_workers_without_questions() {
+        let cwd = Temp::new();
+        let cwd = cwd.path();
+        for tools in [ToolSet::Lean, ToolSet::Thread] {
+            let session = SessionSpec {
+                tools,
+                ..spec(cwd, &[])
+            };
+            let settings = settings(&session, cwd, &SubAgents::Any, false);
+            assert_eq!(settings["disableBundledSkills"], json!(true));
+            assert_eq!(settings["disableClaudeAiConnectors"], json!(true));
+            assert_eq!(settings["enableArtifact"], json!(false));
+            assert_eq!(settings["disableRemoteControl"], json!(true));
+        }
+        for tools in [ToolSet::Default, ToolSet::Web, ToolSet::Review] {
+            let session = SessionSpec {
+                tools,
+                ..spec(cwd, &[])
+            };
+            assert!(
+                settings(&session, cwd, &SubAgents::Any, false)
+                    .get("disableBundledSkills")
+                    .is_none()
+            );
+        }
+        let worker = spec(cwd, &[]);
+        let denied = denied_tools(&worker, &SubAgents::Any).unwrap();
+        for tool in ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"] {
+            assert!(denied.split(',').any(|name| name == tool), "{denied}");
+        }
     }
 
     #[test]
