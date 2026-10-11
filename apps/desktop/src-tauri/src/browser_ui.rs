@@ -20,11 +20,10 @@ use objc2::runtime::{AnyObject, NSObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{NSModalResponseOK, NSSavePanel};
 use objc2_foundation::{
-    MainThreadMarker, NSArray, NSDate, NSHTTPCookie, NSHTTPCookieDiscard, NSHTTPCookieDomain,
-    NSHTTPCookieExpires, NSHTTPCookieName, NSHTTPCookiePath, NSHTTPCookiePropertyKey,
-    NSHTTPCookieSameSiteLax, NSHTTPCookieSameSitePolicy, NSHTTPCookieSameSiteStrict,
-    NSHTTPCookieSecure, NSHTTPCookieValue, NSMutableDictionary, NSObjectProtocol, NSSet, NSString,
-    NSURL, NSUUID, ns_string,
+    MainThreadMarker, NSArray, NSDate, NSHTTPCookie, NSHTTPCookieDomain, NSHTTPCookieExpires,
+    NSHTTPCookieName, NSHTTPCookiePath, NSHTTPCookiePropertyKey, NSHTTPCookieSameSiteLax,
+    NSHTTPCookieSameSitePolicy, NSHTTPCookieSameSiteStrict, NSHTTPCookieSecure, NSHTTPCookieValue,
+    NSMutableDictionary, NSObjectProtocol, NSSet, NSString, NSURL, NSUUID, ns_string,
 };
 use objc2_web_kit::{
     WKFrameInfo, WKMediaCaptureType, WKNavigationAction, WKOpenPanelParameters,
@@ -305,12 +304,18 @@ pub fn save_path(suggested: &std::path::Path) -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(path.to_string()))
 }
 
+/// How long an imported session cookie lasts: 400 days, the longest any cookie may live in
+/// Chromium.
+const SESSION_COOKIE_LIFETIME_SECS: u64 = 400 * 24 * 60 * 60;
+
 /// `cookie` as WebKit takes it, built from its properties much as wry 0.55.1 does
 /// (`cookie_into_wkwebview`). "HttpOnly" has no Foundation key constant, so it goes in by name,
 /// and only when true (wry also sets it to "FALSE", which Foundation reads as HttpOnly);
 /// SameSite uses `NSHTTPCookieSameSitePolicy`. A domain with a leading dot is sent to its
-/// subdomains too; without one only to that host. `None` when Foundation refuses the
-/// properties.
+/// subdomains too; without one only to that host. A session cookie gets an expiry
+/// [`SESSION_COOKIE_LIFETIME_SECS`] away: WebKit keeps one without an expiry in memory only, so
+/// it would be gone at the next launch, while the browser it came from restores it with the
+/// session and keeps the sign-in. `None` when Foundation refuses the properties.
 fn ns_cookie(cookie: &brigadier_browser_data::Cookie) -> Option<Retained<NSHTTPCookie>> {
     use brigadier_browser_data::SameSite;
     let truth = |on: bool| {
@@ -347,7 +352,11 @@ fn ns_cookie(cookie: &brigadier_browser_data::Cookie) -> Option<Retained<NSHTTPC
                 let expires = NSDate::dateWithTimeIntervalSince1970(at as f64);
                 properties.insert(NSHTTPCookieExpires, &*expires);
             }
-            None => properties.insert(NSHTTPCookieDiscard, truth(true)),
+            None => {
+                let expires =
+                    NSDate::dateWithTimeIntervalSinceNow(SESSION_COOKIE_LIFETIME_SECS as f64);
+                properties.insert(NSHTTPCookieExpires, &*expires);
+            }
         }
         if cookie.secure {
             properties.insert(NSHTTPCookieSecure, truth(true));
@@ -484,5 +493,43 @@ pub fn set_cookies(
         // SAFETY: a live cookie store, a valid cookie and a block WebKit copies, on the main
         // thread.
         unsafe { store.setCookie_completionHandler(cookie, Some(&block)) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cookie(expires_unix: Option<i64>) -> brigadier_browser_data::Cookie {
+        brigadier_browser_data::Cookie {
+            name: "sid".into(),
+            value: "1".into(),
+            domain: ".example.com".into(),
+            host_only: false,
+            path: "/".into(),
+            expires_unix,
+            secure: true,
+            http_only: true,
+            same_site: None,
+        }
+    }
+
+    #[test]
+    fn a_session_cookie_is_kept_past_a_relaunch() {
+        let built = ns_cookie(&cookie(None)).expect("Foundation takes the cookie");
+        let (session_only, expires) = (built.isSessionOnly(), built.expiresDate());
+        assert!(!session_only);
+        let left = expires.expect("an expiry").timeIntervalSinceNow();
+        let lifetime = SESSION_COOKIE_LIFETIME_SECS as f64;
+        assert!(left > lifetime - 60.0 && left <= lifetime, "{left}");
+    }
+
+    #[test]
+    fn a_cookie_keeps_its_own_expiry() {
+        // Within Foundation's own 400-day cap, which shortens any later expiry.
+        let at = NSDate::now().timeIntervalSince1970().floor() as i64 + 30 * 24 * 60 * 60;
+        let built = ns_cookie(&cookie(Some(at))).expect("Foundation takes the cookie");
+        let expires = built.expiresDate().expect("an expiry");
+        assert_eq!(expires.timeIntervalSince1970(), at as f64);
     }
 }
