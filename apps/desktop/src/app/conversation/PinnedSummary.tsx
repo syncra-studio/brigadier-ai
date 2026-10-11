@@ -806,14 +806,18 @@ function ReviewLineRow({ line }: { line: ReviewLine }) {
       {open && (
         <ul data-slot="review-findings" className="flex flex-col gap-1.5 ps-9 pe-3 pt-1 pb-2 text-sm">
           {line.findings.map((finding) => (
-            <li key={finding.id} className="flex min-w-0 flex-col">
-              <span className="flex min-w-0 items-baseline gap-1.5">
-                <span className="text-muted-foreground shrink-0 font-mono text-xs">{finding.id}</span>
-                <span className="text-foreground/90 min-w-0 wrap-break-word">{finding.title}</span>
-              </span>
-              <span className={cn("text-xs wrap-break-word", finding.open ? "text-foreground/80" : "text-muted-foreground")}>
-                {finding.status}
-                {finding.location && <span className="text-muted-foreground font-mono"> · {finding.location}</span>}
+            <li key={finding.id} className="flex min-w-0 items-baseline gap-1.5">
+              <span className="text-muted-foreground shrink-0 font-mono text-xs">{finding.id}</span>
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="text-foreground/90 wrap-break-word">{finding.title}</span>
+                <span className={cn("text-xs wrap-break-word", finding.open ? "text-foreground/80" : "text-muted-foreground")}>
+                  {finding.status}
+                </span>
+                {finding.location && (
+                  <span title={finding.location} className="text-muted-foreground truncate font-mono text-xs">
+                    {finding.location}
+                  </span>
+                )}
               </span>
             </li>
           ))}
