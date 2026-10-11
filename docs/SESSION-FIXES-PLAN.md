@@ -969,8 +969,11 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
      reaches the reviewer but replaces its whole built-in Security Policy section, so it isn't used either. So a
      Codex session's escalations always go to Brigadier (`approvalsReviewer: user`, documented in the app-server's
      JSON Schema of 0.162.1). At Approve for me Brigadier's own reviewer settles them, with this rule in its prompt,
-     for the thread and its workers alike. What it doesn't allow (or a reviewer with no verdict) is declined to the
-     model with the reason, never a card, as Approve for me declines what a CLI's own reviewer can't settle (the
+     for the thread and its workers alike, before any "Allow … for this session" grant could answer them. It reads
+     the whole request: such a session opts into the app-server's experimental API, whose command approvals carry
+     the folders and network asked for (`additionalPermissions`). A refusal under this rule is always declined to
+     the model with the reason. Any other refusal, or no verdict (as for a user with Codex alone), is the user's card
+     with the reviewer's word, or declined with the reason while an overnight run has nobody to ask (the
      Delegator's decision, 2026-10-11). `extra_policy` is no longer set.
    - Whatever the approver, the rule binds a model, not the OS. An approver that ignores it still lets the command
      through.
