@@ -88,6 +88,19 @@ pub enum BrowserEvent {
     Blocked { url: String },
 }
 
+/// The user's Settings › Browser choices the shell acts on itself, sent at start and on every
+/// change.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserOptions {
+    /// The built-in browser exists. Off, the shell makes no page and drops those it has.
+    pub enabled: bool,
+    /// Where downloads go; empty: the system's Downloads folder.
+    pub downloads_dir: String,
+    /// Ask where to save each download.
+    pub ask_downloads: bool,
+}
+
 /// Where the Browser tab's page sits in the window, in CSS pixels from its top left.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

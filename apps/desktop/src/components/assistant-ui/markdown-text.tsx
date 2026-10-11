@@ -24,7 +24,8 @@ import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
-import { openUrl, revealPath } from "@/ipc/client";
+import { revealPath } from "@/ipc/client";
+import { openLink } from "@/state/links";
 import { cn } from "@/lib/utils";
 import { toast } from "@/state/toasts";
 
@@ -151,7 +152,7 @@ const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, children })
   );
 };
 
-/** Web links open in the browser; anything else that isn't a page is a file. */
+/** Web links open where Settings › Browser say; anything else that isn't a page is a file. */
 const Link: FC<React.ComponentProps<"a">> = ({ className, href, children, ...props }) => {
   if (href && !/^(https?:|mailto:|#)/i.test(href)) {
     return <FileChip href={href}>{children}</FileChip>;
@@ -168,7 +169,7 @@ const Link: FC<React.ComponentProps<"a">> = ({ className, href, children, ...pro
           document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ block: "start" });
         } else if (/^https?:/i.test(href)) {
           // Only web pages: a model's link must not launch other handlers (mailto: included).
-          openUrl(href).catch(failed);
+          openLink(href, { agent: true }).catch(failed);
         }
       }}
       className={cn(

@@ -691,6 +691,7 @@ fn main() {
             reveal_path,
             set_running_chats,
             set_key_capture,
+            browser::browser_configure,
             browser::browser_open,
             browser::browser_navigate,
             browser::browser_place,

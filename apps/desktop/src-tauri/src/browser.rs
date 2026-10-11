@@ -11,7 +11,10 @@
 //! when the tab closes. Linux has no embedded page (Tauri's window there is a GTK box a child
 //! can't be laid over); its tab opens pages in the system browser.
 
-use brigadier_ipc::app::{BrowserBounds, BrowserEvent};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use brigadier_ipc::app::{BrowserBounds, BrowserEvent, BrowserOptions};
 use brigadier_ipc::protocol::{ErrorCode, IpcError};
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 use std::time::{Duration, Instant};
@@ -441,6 +444,45 @@ mod embedded {
     pub fn close_all() {}
 }
 
+/// Whether the built-in browser exists (Settings › Browser): on until the app says otherwise.
+static ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// The user's download choices, as the app last sent them.
+static DOWNLOADS: Mutex<Option<BrowserOptions>> = Mutex::new(None);
+
+/// Refuses a page while the browser is off: whatever asks, nothing opens in it.
+fn enabled() -> Result<(), IpcError> {
+    if ENABLED.load(Ordering::Acquire) {
+        Ok(())
+    } else {
+        Err(IpcError {
+            code: ErrorCode::Invalid,
+            message: "Brigadier's browser is off (Settings › Browser)".into(),
+        })
+    }
+}
+
+/// The app's Settings › Browser choices: off drops every tab's page and the browser's menu
+/// items; the download choices apply to the next download.
+#[tauri::command]
+pub fn browser_configure(app: tauri::AppHandle, options: BrowserOptions) {
+    let was = ENABLED.swap(options.enabled, Ordering::AcqRel);
+    if !options.enabled {
+        embedded::close_all();
+    }
+    if was != options.enabled {
+        #[cfg(target_os = "macos")]
+        if let Err(err) = crate::shell::browser_menu(&app, options.enabled) {
+            tracing::warn!(error = %err, "could not change the browser's menu items");
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = &app;
+    *DOWNLOADS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(options);
+}
+
 fn web_page_only(url: &str) -> Result<(), IpcError> {
     if web_page(url) {
         Ok(())
@@ -462,6 +504,7 @@ pub fn browser_open(
     bounds: BrowserBounds,
     events: Channel<BrowserEvent>,
 ) -> Result<(), IpcError> {
+    enabled()?;
     web_page_only(&url)?;
     embedded::open(&app, id, url, bounds, events)
 }
@@ -469,6 +512,7 @@ pub fn browser_open(
 /// Shows `url` in the tab `id`'s webview, at `bounds`.
 #[tauri::command]
 pub fn browser_navigate(id: String, url: String, bounds: BrowserBounds) -> Result<(), IpcError> {
+    enabled()?;
     web_page_only(&url)?;
     embedded::navigate(&id, &url, bounds)
 }
@@ -499,6 +543,14 @@ pub fn browser_close(id: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nothing_opens_while_the_browser_is_off() {
+        ENABLED.store(false, Ordering::Release);
+        assert!(enabled().is_err());
+        ENABLED.store(true, Ordering::Release);
+        assert!(enabled().is_ok());
+    }
 
     fn offer(limit: &mut FaviconLimit, data_url: &str, now: Instant) -> FaviconStep {
         limit.offer("https://example.com/".into(), data_url.into(), now)

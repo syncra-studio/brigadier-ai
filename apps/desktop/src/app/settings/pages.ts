@@ -2,6 +2,7 @@ import {
   Archive,
   Branch,
   Cursor,
+  Globe,
   KeyboardShortcut,
   Mic,
   Robot,
@@ -14,6 +15,7 @@ import {
 import { lazy, type ComponentType, type SVGProps } from "react";
 
 import { ARCHIVED_ROWS, ArchivedPage } from "@/app/settings/ArchivedPage";
+import { BROWSER_ROWS, BrowserPage } from "@/app/settings/BrowserPage";
 import { COMPUTER_USE_ROWS, ComputerUsePage } from "@/app/settings/ComputerUsePage";
 import { CONFIGURATION_ROWS, ConfigurationPage } from "@/app/settings/ConfigurationPage";
 import { GENERAL_ROWS, GeneralPage } from "@/app/settings/GeneralPage";
@@ -112,6 +114,14 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "Personal",
     component: StoragePage,
     rows: Object.values(STORAGE_ROWS),
+  },
+  {
+    id: "browser",
+    label: "Browser",
+    icon: Globe,
+    group: "Personal",
+    component: BrowserPage,
+    rows: Object.values(BROWSER_ROWS),
   },
   {
     id: "configuration",

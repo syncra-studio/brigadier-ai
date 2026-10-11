@@ -2,7 +2,7 @@ import { forgetDocument, request } from "@/ipc/client";
 import type { Conversation, TerminalInfo } from "@/ipc/generated";
 import { closePage, useBrowsers } from "@/state/browsers";
 import { discardDocument } from "@/state/documentDrafts";
-import { changeSessionTab, discardTab, onDiscardTab, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
+import { changeSessionTab, discardTab, dropBrowserTabs, onDiscardTab, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { abandonedSideChats } from "@/state/sideChats";
 
@@ -66,6 +66,16 @@ useSessionTabs.subscribe((state, before) => {
     }
   }
 });
+
+// Off (Settings › Browser), the built-in browser doesn't exist: its tabs go, with their pages.
+let browserOn = true;
+function followBrowserSetting(on: boolean): void {
+  if (on === browserOn) return;
+  browserOn = on;
+  if (!on) dropBrowserTabs();
+}
+followBrowserSetting(useApp.getState().settings.browserEnabled);
+useApp.subscribe(({ settings }) => followBrowserSetting(settings.browserEnabled));
 
 useBrowsers.subscribe(({ pages }) => {
   for (const [id, session] of Object.entries(useSessionTabs.getState().sessions)) {

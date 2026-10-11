@@ -5,6 +5,7 @@ import type {
   BridgeEvent,
   BrowserBounds,
   BrowserEvent,
+  BrowserOptions,
   ConventionsExport,
   IpcError,
   RunningChat,
@@ -209,6 +210,11 @@ export function browserGo(
   action: "back" | "forward" | "reload" | "stop",
 ): Promise<void> {
   return invoke("browser_go", { id, action });
+}
+
+/** Tells the shell the user's Settings › Browser choices it acts on itself. */
+export function browserConfigure(options: BrowserOptions): Promise<void> {
+  return invoke("browser_configure", { options });
 }
 
 /** Drops the Browser tab's page and all it stored. */

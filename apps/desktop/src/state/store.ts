@@ -36,7 +36,8 @@ export type SettingsPageId =
   | "inspector"
   | "archived"
   | "shortcuts"
-  | "voice";
+  | "voice"
+  | "browser";
 
 /**
  * What the main area shows. Drafts become real conversations on their first message. Settings

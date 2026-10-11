@@ -37,6 +37,7 @@ export type { BridgeEvent } from "./BridgeEvent";
 export type { BriefingSection } from "./BriefingSection";
 export type { BrowserBounds } from "./BrowserBounds";
 export type { BrowserEvent } from "./BrowserEvent";
+export type { BrowserOptions } from "./BrowserOptions";
 export type { Budget } from "./Budget";
 export type { BudgetCheck } from "./BudgetCheck";
 export type { BudgetId } from "./BudgetId";

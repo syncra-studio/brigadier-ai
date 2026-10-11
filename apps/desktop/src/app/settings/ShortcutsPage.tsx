@@ -23,7 +23,8 @@ type Search = { type: "words"; words: string } | { type: "press"; press: string 
 export function ShortcutsPage() {
   const mac = useApp((s) => s.info?.platform === "macos");
   const [search, setSearch] = useState<Search>({ type: "words", words: "" });
-  const all = shortcutsFor(mac);
+  const browser = useApp((s) => s.settings.browserEnabled);
+  const all = shortcutsFor(mac, browser);
   const shown =
     search.type === "press"
       ? searchShortcuts(all, { press: search.press }, mac)

@@ -143,3 +143,11 @@ test("search finds shortcuts by words and by a key press", () => {
   assert.deepEqual(ids(searchShortcuts(shortcutsFor(false), { press: "⌃T" }, false)), ["new-tab"]);
   assert.deepEqual(ids(searchShortcuts(shortcutsFor(false), { press: "⌃`" }, false)), ["new-terminal"]);
 });
+
+const shortcutIds = (browser: boolean) => shortcutsFor(true, browser).map((shortcut) => shortcut.id);
+
+test("off, the built-in browser's shortcuts are gone", () => {
+  assert.ok(shortcutIds(true).includes("new-browser") && shortcutIds(true).includes("address"));
+  assert.ok(!shortcutIds(false).includes("new-browser") && !shortcutIds(false).includes("address"));
+  assert.equal(shortcutIds(true).length - shortcutIds(false).length, 2);
+});

@@ -9,7 +9,7 @@ import {
 } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
-import { browserAddress, webAddress } from "./browserAddress";
+import { browserAddress, shownAddress, webAddress } from "./browserAddress";
 
 import {
   DropdownMenu,
@@ -25,6 +25,7 @@ import {
   openPage,
   useBrowsers,
 } from "@/state/browsers";
+import { useBrowserOn } from "@/state/links";
 import { useApp } from "@/state/store";
 import { cn } from "@/lib/utils";
 import { toast } from "@/state/toasts";
@@ -105,13 +106,16 @@ export function BrowserTab({
   const area = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLInputElement>(null);
   const [typed, setTyped] = useState<string | null>(null);
+  const [focused, setFocused] = useState(false);
+  const fullUrl = useApp((s) => s.settings.browserFullUrl);
   const made = page !== undefined;
+  const browserOn = useBrowserOn();
   useEffect(() => {
-    if (!embedded || !active || !initialUrl || made || !area.current) return;
+    if (!browserOn || !embedded || !active || !initialUrl || made || !area.current) return;
     void openPage(conversationId, initialUrl, pageBounds(area.current)).catch(
       failed,
     );
-  }, [conversationId, initialUrl, made, active, embedded]);
+  }, [conversationId, initialUrl, made, active, embedded, browserOn]);
 
   // Keep the page over this tab's area, and hide it when the tab goes or is covered.
   useEffect(() => {
@@ -249,14 +253,20 @@ export function BrowserTab({
               // ⌘T opens the tab to type an address at once.
               // oxlint-disable-next-line jsx-a11y/no-autofocus
               autoFocus={active && !made}
-              value={typed ?? page?.url ?? ""}
+              value={typed ?? (focused ? page?.url ?? "" : shownAddress(page?.url ?? "", fullUrl))}
               placeholder="Search or enter a URL"
               aria-label="Address"
               spellCheck={false}
               autoCapitalize="off"
               autoCorrect="off"
               onChange={(event) => setTyped(event.target.value)}
-              onFocus={(event) => event.target.select()}
+              onFocus={(event) => {
+                setFocused(true);
+                // The whole URL replaces the site first, then is selected.
+                const input = event.target;
+                requestAnimationFrame(() => input.select());
+              }}
+              onBlur={() => setFocused(false)}
               onKeyDown={(event) => {
                 if (event.key === "Escape" && typed !== null) {
                   event.stopPropagation();

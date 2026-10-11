@@ -129,9 +129,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "commit", name: "Commit", line: "Commit with the message typed", area: "Files and browser", keys: ["⌘⏎"] },
 ];
 
-/** The shortcuts this platform has. */
-export function shortcutsFor(mac: boolean): Shortcut[] {
-  return SHORTCUTS.filter((shortcut) => mac || !shortcut.macOnly);
+/** The built-in browser's shortcuts, gone while it is off (Settings › Browser). */
+export const BROWSER_SHORTCUTS: ReadonlySet<string> = new Set(["new-browser", "address"]);
+
+/** The shortcuts this platform has, with the browser's only while it is on. */
+export function shortcutsFor(mac: boolean, browser = true): Shortcut[] {
+  return SHORTCUTS.filter((shortcut) => (mac || !shortcut.macOnly) && (browser || !BROWSER_SHORTCUTS.has(shortcut.id)));
 }
 
 export type Stroke = { ctrl: boolean; alt: boolean; shift: boolean; cmd: boolean; key: string };

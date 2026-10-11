@@ -324,6 +324,62 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// The Panes menu's items that belong to the built-in browser, each after the item it follows.
+#[cfg(target_os = "macos")]
+const BROWSER_ITEMS: [(&str, &str, &str, &str); 2] = [
+    (
+        "pane:new-browser",
+        "New browser tab",
+        "CmdOrCtrl+Shift+B",
+        "pane:new",
+    ),
+    (
+        "pane:address",
+        "Focus browser address",
+        "CmdOrCtrl+L",
+        "pane:reopen",
+    ),
+];
+
+/// Takes the browser's items out of the Panes menu (Settings › Browser off), or puts them
+/// back.
+#[cfg(target_os = "macos")]
+pub fn browser_menu(app: &AppHandle, on: bool) -> tauri::Result<()> {
+    let Some(menu) = app.menu() else {
+        return Ok(());
+    };
+    let Some(panes) = menu.items()?.into_iter().find_map(|item| {
+        item.as_submenu()
+            .filter(|submenu| submenu.text().is_ok_and(|text| text == "Panes"))
+            .cloned()
+    }) else {
+        return Ok(());
+    };
+    for (id, title, accelerator, after) in BROWSER_ITEMS {
+        let items = panes.items()?;
+        let at = items.iter().position(|item| item.id() == id);
+        match (on, at) {
+            (false, Some(_)) => {
+                if let Some(item) = panes.get(id) {
+                    panes.remove(&item)?;
+                }
+            }
+            (true, None) => {
+                let position = items
+                    .iter()
+                    .position(|item| item.id() == after)
+                    .map_or(items.len(), |at| at + 1);
+                let item = MenuItemBuilder::with_id(id, title)
+                    .accelerator(accelerator)
+                    .build(app)?;
+                panes.insert(&item, position)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Closing the window hides it when the menu-bar item can bring it back; without one (a
 /// desktop with no tray host) closing quits.
 pub fn close_main(app: &AppHandle) {
