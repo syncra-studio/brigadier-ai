@@ -32,6 +32,7 @@ impl SessionManager {
     pub async fn uninstall_survey(&self) -> Result<(Vec<RemovalWorktree>, Vec<RemovalBranch>)> {
         let catalog = self.core.catalog();
         let mut records: Vec<BranchRecord> = Vec::new();
+        let owned = self.runtime.ledger().branch_ownership();
         let mut worktrees: Vec<PathBuf> = self
             .runtime
             .ledger()
@@ -46,7 +47,12 @@ impl SessionManager {
         for conversation in &catalog.conversations {
             let board = self.core.board(&conversation.id).await.unwrap_or_default();
             let tasks = board.sorted_tasks();
-            records.extend(branch_records(conversation, &tasks, board.runs.values()));
+            records.extend(branch_records(
+                &owned,
+                conversation,
+                &tasks,
+                board.runs.values(),
+            ));
             if let Some(Setup::Session {
                 environment:
                     Environment::NewWorktree {
@@ -71,7 +77,7 @@ impl SessionManager {
                 .map(|(repo, kept)| BranchRecord::kept(repo, kept)),
         );
         let git = self.git.clone();
-        blocking(move || Ok(survey(&git, worktrees, records))).await
+        blocking(move || Ok(survey(&git, &owned, worktrees, records))).await
     }
 
     /// Stops everything and removes what every conversation created. Transcripts and the
@@ -141,8 +147,8 @@ impl SessionManager {
         branches: Vec<RemovalBranch>,
         picked: Vec<BranchChoice>,
     ) -> (Vec<RemovalBranch>, Vec<String>) {
-        let git = self.git.clone();
-        blocking(move || Ok(settle_branches(&git, branches, &picked)))
+        let (git, owned) = (self.git.clone(), self.runtime.ledger().branch_ownership());
+        blocking(move || Ok(settle_branches(&git, &owned, branches, &picked)))
             .await
             .unwrap_or_else(|err| (Vec::new(), vec![err.to_string()]))
     }

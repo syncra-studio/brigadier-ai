@@ -494,14 +494,15 @@ impl SessionManager {
             ..
         }) = &setup
         {
-            let (git, repo, branch, from) =
+            let (git, at, made, from) =
                 (self.git.clone(), repo.clone(), branch.clone(), from.clone());
             blocking(move || {
-                let repo = git.open(Path::new(&repo)).map_err(git_error)?;
+                let repo = git.open(Path::new(&at)).map_err(git_error)?;
                 let start = repo.branch_commit(&from).map_err(git_error)?;
-                repo.create_branch(&branch, &start).map_err(git_error)
+                repo.create_branch(&made, &start).map_err(git_error)
             })
             .await?;
+            self.note_branch_made(Path::new(repo), branch).await;
         }
         let id = ConversationId::generate();
         let (prefix, _) = self.branch_prefix_of(project_id.as_ref());

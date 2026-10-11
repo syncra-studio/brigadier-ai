@@ -65,12 +65,21 @@ pub struct BranchOwnership {
 impl BranchOwnership {
     /// Whether `name` in the repository at `repo` is Brigadier's.
     pub fn owns(&self, repo: &std::path::Path, name: &str) -> bool {
+        let made = |repo: &std::path::Path| {
+            self.made
+                .contains(&(repo.to_string_lossy().into_owned(), name.to_owned()))
+        };
         name.starts_with("brigadier/")
             || name.starts_with("overnight/")
-            || self
-                .made
-                .contains(&(repo.to_string_lossy().into_owned(), name.to_owned()))
+            || made(repo)
+            || made(&repo_key(repo))
     }
+}
+
+/// The path a branch record keeps its repository by: the real one where it resolves, so a
+/// link or a trailing `/` names the same repository.
+fn repo_key(repo: &std::path::Path) -> PathBuf {
+    std::fs::canonicalize(repo).unwrap_or_else(|_| repo.to_owned())
 }
 
 /// A CLI session Brigadier started, as its ledger recorded it.
@@ -549,7 +558,10 @@ impl CleanupLedger {
 
     /// Records that Brigadier created `branch` in `repo`, once.
     pub async fn record_branch_made(&self, repo: &std::path::Path, branch: &str) -> Result<()> {
-        let key = (repo.to_string_lossy().into_owned(), branch.to_owned());
+        let key = (
+            repo_key(repo).to_string_lossy().into_owned(),
+            branch.to_owned(),
+        );
         if !self.state().made.insert(key.clone()) {
             return Ok(());
         }

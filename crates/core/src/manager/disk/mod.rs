@@ -31,6 +31,7 @@ use brigadier_sandbox::removal::{self, Bound};
 use brigadier_store::{Compacted, DbSpace};
 
 use super::{SessionManager, blocking, git_error};
+use crate::ledger::BranchOwnership;
 use crate::model::{
     Conversation, ConversationId, Environment, KeptBranch, Lifecycle, Project, Setup, streams,
 };
@@ -154,6 +155,8 @@ struct Records {
     running: HashSet<ConversationId>,
     /// Every CLI session this data directory ever started.
     native: HashMap<String, crate::ledger::NativeSession>,
+    /// The branches Brigadier's records prove its own.
+    owned: BranchOwnership,
 }
 
 impl Records {
@@ -425,6 +428,7 @@ impl SessionManager {
             kept: self.kept_branches().await?,
             running,
             native: self.runtime.ledger().native_sessions(),
+            owned: self.runtime.ledger().branch_ownership(),
         })
     }
 
@@ -644,9 +648,9 @@ impl SessionManager {
                 branch,
                 merged,
             } => {
-                let git = self.git.clone();
+                let (git, owned) = (self.git.clone(), self.runtime.ledger().branch_ownership());
                 blocking(move || {
-                    delete_branch_checked(&git, &repo, &branch, merged)?;
+                    delete_branch_checked(&git, &owned, &repo, &branch, merged)?;
                     Ok(Cleaned::default())
                 })
                 .await
@@ -920,21 +924,17 @@ fn stranded(git: &brigadier_git::Git, path: &Path) -> bool {
         .unwrap_or(true)
 }
 
-/// Whether Brigadier names branches like this: a session's or worker's `brigadier/…`, or an
-/// overnight run's `overnight/…`.
-pub(super) fn brigadier_branch(name: &str) -> bool {
-    name.starts_with("brigadier/") || name.starts_with("overnight/")
-}
-
 /// Deletes a Brigadier branch at the tip it was listed with, if it is still Brigadier's to
-/// delete: its name, its tip, not checked out, and still merged if it was listed as merged.
+/// delete: Brigadier's by its records, at its tip, not checked out, and still merged if it was
+/// listed as merged.
 pub(super) fn delete_branch_checked(
     git: &brigadier_git::Git,
+    owned: &BranchOwnership,
     repo: &Path,
     branch: &KeptBranch,
     merged: bool,
 ) -> Result<()> {
-    if !brigadier_branch(&branch.name) {
+    if !owned.owns(repo, &branch.name) {
         return Err(Error::Invalid(format!(
             "{} is not one of Brigadier's branches",
             branch.name
@@ -968,12 +968,13 @@ pub(super) fn delete_branch_checked(
 /// Worktrees in `leaving` are about to go, so a branch checked out only there is free.
 pub(super) fn branch_standing(
     repo: &brigadier_git::Repo,
+    owned: &BranchOwnership,
     name: &str,
     target: &str,
     recorded: Option<&str>,
     leaving: &[PathBuf],
 ) -> Option<crate::storage::RemovalBranch> {
-    if !brigadier_branch(name) {
+    if !owned.owns(repo.root(), name) {
         return None;
     }
     let tip = repo.branch_tip(name).ok()??;
@@ -1550,8 +1551,14 @@ impl Scanner<'_> {
             let Ok(repo) = self.git.open(&repo_path) else {
                 continue;
             };
-            let Some(standing) = branch_standing(&repo, &name, &target, recorded.as_deref(), &[])
-            else {
+            let Some(standing) = branch_standing(
+                &repo,
+                &self.records.owned,
+                &name,
+                &target,
+                recorded.as_deref(),
+                &[],
+            ) else {
                 continue;
             };
             if standing.checked_out {

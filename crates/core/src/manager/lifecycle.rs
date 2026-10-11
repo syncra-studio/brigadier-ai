@@ -682,7 +682,12 @@ impl SessionManager {
         // The session worktree is gone. The branch stays while it holds work the base does
         // not have; a restored session creates it again from the base otherwise.
         let mut deleted_branch = false;
-        if branch.starts_with("brigadier/") {
+        if self
+            .runtime
+            .ledger()
+            .branch_ownership()
+            .owns(Path::new(&repo), &branch)
+        {
             let (git, repo, branch, base) = (
                 self.git.clone(),
                 PathBuf::from(&repo),
@@ -970,7 +975,11 @@ impl SessionManager {
                 .filter_map(|task| task.workspace.as_ref().and_then(|w| w.branch.clone()))
                 .collect();
             if let Environment::NewWorktree { branch, .. } = environment
-                && branch.starts_with("brigadier/")
+                && self
+                    .runtime
+                    .ledger()
+                    .branch_ownership()
+                    .owns(Path::new(repo), branch)
             {
                 branches.push(branch.clone());
             }
@@ -999,6 +1008,7 @@ impl SessionManager {
         }
         if !delete_branches && record_kept {
             self.record_left_branches(super::project_removal::branch_records(
+                &self.runtime.ledger().branch_ownership(),
                 &conversation,
                 &tasks,
                 &runs,

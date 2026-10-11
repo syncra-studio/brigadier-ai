@@ -14,8 +14,9 @@ use std::path::{Path, PathBuf};
 use brigadier_providers::Artifact;
 use brigadier_sandbox::removal;
 
-use super::disk::{branch_standing, brigadier_branch, delete_branch_checked, same_path_in};
+use super::disk::{branch_standing, delete_branch_checked, same_path_in};
 use super::{SessionManager, blocking};
+use crate::ledger::BranchOwnership;
 use crate::model::{Conversation, ConversationId, Environment, KeptBranch, ProjectId, Setup};
 use crate::overnight::OvernightRun;
 use crate::storage::{
@@ -87,10 +88,10 @@ impl SessionManager {
         self.core.forget_project(id.clone()).await?;
         tracing::info!(project = %id, "project removed");
 
-        let git = self.git.clone();
+        let (git, owned) = (self.git.clone(), self.runtime.ledger().branch_ownership());
         let branches = plan.preview.branches;
         let (kept, mut failures) =
-            blocking(move || Ok(settle_branches(&git, branches, &delete))).await?;
+            blocking(move || Ok(settle_branches(&git, &owned, branches, &delete))).await?;
         self.record_kept(&kept).await;
 
         let brain_trashed_bytes = if keep_brain {
@@ -128,7 +129,7 @@ impl SessionManager {
     /// Records the Brigadier branches a deleted conversation left behind as kept, as they stand
     /// now, so Storage can offer them later.
     pub(super) async fn record_left_branches(&self, records: Vec<BranchRecord>) {
-        let git = self.git.clone();
+        let (git, owned) = (self.git.clone(), self.runtime.ledger().branch_ownership());
         let standing = blocking(move || {
             let mut seen = HashSet::new();
             Ok(records
@@ -136,7 +137,7 @@ impl SessionManager {
                 .filter(|record| seen.insert((record.repo.clone(), record.name.clone())))
                 .filter_map(|record| {
                     let repo = git.open(&record.repo).ok()?;
-                    branch_standing(&repo, &record.name, &record.target, None, &[])
+                    branch_standing(&repo, &owned, &record.name, &record.target, None, &[])
                 })
                 .collect::<Vec<_>>())
         })
@@ -174,6 +175,7 @@ impl SessionManager {
     /// session's): they become a WIP commit on its branch before the worktree goes.
     pub async fn preview_delete(&self, ids: &[ConversationId]) -> Vec<UnlandedBranch> {
         let mut records = Vec::new();
+        let owned = self.runtime.ledger().branch_ownership();
         let mut worktrees = Vec::new();
         for id in ids {
             let Ok(conversation) = self.core.conversation(id) else {
@@ -181,7 +183,12 @@ impl SessionManager {
             };
             let board = self.core.board(id).await.unwrap_or_default();
             let tasks = board.sorted_tasks();
-            records.extend(branch_records(&conversation, &tasks, board.runs.values()));
+            records.extend(branch_records(
+                &owned,
+                &conversation,
+                &tasks,
+                board.runs.values(),
+            ));
             if let Some(Setup::Session {
                 environment:
                     Environment::NewWorktree {
@@ -231,6 +238,7 @@ impl SessionManager {
         let mut working = Vec::new();
         let mut worktrees: Vec<PathBuf> = Vec::new();
         let mut records = Vec::new();
+        let owned = self.runtime.ledger().branch_ownership();
         for conversation in catalog
             .conversations
             .iter()
@@ -252,7 +260,12 @@ impl SessionManager {
                     running,
                 });
             }
-            records.extend(branch_records(conversation, &tasks, board.runs.values()));
+            records.extend(branch_records(
+                &owned,
+                conversation,
+                &tasks,
+                board.runs.values(),
+            ));
             if let Some(Setup::Session {
                 environment:
                     Environment::NewWorktree {
@@ -299,7 +312,7 @@ impl SessionManager {
         }
         let (git, brain) = (self.git.clone(), self.project_brain_dir(id));
         let (worktrees, branches, brain_bytes) = blocking(move || {
-            let (worktrees, branches) = survey(&git, worktrees, records);
+            let (worktrees, branches) = survey(&git, &owned, worktrees, records);
             Ok((worktrees, branches, removal::allocated_size(&brain)))
         })
         .await?;
@@ -336,6 +349,7 @@ impl SessionManager {
 /// changes, and each branch against the branch its work goes to.
 pub(super) fn survey(
     git: &brigadier_git::Git,
+    owned: &BranchOwnership,
     mut worktrees: Vec<PathBuf>,
     records: Vec<BranchRecord>,
 ) -> (Vec<RemovalWorktree>, Vec<RemovalBranch>) {
@@ -368,6 +382,7 @@ pub(super) fn survey(
         };
         let Some(mut standing) = branch_standing(
             &repo,
+            owned,
             &record.name,
             &record.target,
             record.tip.as_deref(),
@@ -474,6 +489,7 @@ fn unlanded(
 /// failed.
 pub(super) fn settle_branches(
     git: &brigadier_git::Git,
+    owned: &BranchOwnership,
     branches: Vec<RemovalBranch>,
     picked: &[BranchChoice],
 ) -> (Vec<RemovalBranch>, Vec<String>) {
@@ -490,7 +506,7 @@ pub(super) fn settle_branches(
                 target: branch.target.clone(),
                 tip: branch.tip.clone(),
             };
-            match delete_branch_checked(git, repo, &listed, branch.merged) {
+            match delete_branch_checked(git, owned, repo, &listed, branch.merged) {
                 Ok(()) => continue,
                 Err(err) => failures.push(format!("{} stays: {err}", branch.name)),
             }
@@ -499,7 +515,7 @@ pub(super) fn settle_branches(
         if let Some(now) = git
             .open(repo)
             .ok()
-            .and_then(|repo| branch_standing(&repo, &branch.name, &branch.target, None, &[]))
+            .and_then(|repo| branch_standing(&repo, owned, &branch.name, &branch.target, None, &[]))
         {
             kept.push(now);
         }
@@ -510,6 +526,7 @@ pub(super) fn settle_branches(
 /// The Brigadier branches a conversation created: its session branch, its tasks' branches and
 /// its overnight runs' branches, each with the branch its work goes to.
 pub(super) fn branch_records<'r>(
+    owned: &BranchOwnership,
     conversation: &Conversation,
     tasks: &[Task],
     runs: impl IntoIterator<Item = &'r OvernightRun>,
@@ -545,6 +562,6 @@ pub(super) fn branch_records<'r>(
             let workspace = run.workspace.as_ref()?;
             Some(record(&workspace.branch, &workspace.base))
         }))
-        .filter(|record| brigadier_branch(&record.name))
+        .filter(|record| owned.owns(&record.repo, &record.name))
         .collect()
 }

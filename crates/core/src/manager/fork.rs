@@ -419,17 +419,27 @@ impl SessionManager {
                     },
                     format!("{prefix}{}/fork", id.short()),
                 );
-                blocking(move || {
+                let at = repo.clone();
+                let (environment, made) = blocking(move || {
                     let repo = git.open(Path::new(&repo)).map_err(git_error)?;
                     if let Some(branch) = same
                         && repo.branch_tip(&branch).map_err(git_error)? == Some(start.clone())
                     {
-                        return Ok(Environment::LocalCheckout { branch });
+                        return Ok((Environment::LocalCheckout { branch }, None));
                     }
                     repo.create_branch(&name, &start).map_err(git_error)?;
-                    Ok(Environment::LocalCheckout { branch: name })
+                    Ok((
+                        Environment::LocalCheckout {
+                            branch: name.clone(),
+                        },
+                        Some(name),
+                    ))
                 })
-                .await
+                .await?;
+                if let Some(name) = made {
+                    self.note_branch_made(Path::new(&at), &name).await;
+                }
+                Ok(environment)
             }
         }
     }
