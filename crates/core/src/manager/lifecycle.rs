@@ -119,6 +119,9 @@ impl SessionManager {
                     }
                     // Its worktree is intact; the worker resumes when sent back to work.
                     TaskState::Reported | TaskState::ReadyToLand if task.kind.writes() => continue,
+                    // Stopped for dying twice: its worktree and session stay, for message_worker
+                    // once the cause is fixed (SESSION-FIXES-PLAN.md Q4). Nothing resumes it.
+                    TaskState::Blocked if task.deaths.len() >= 2 => continue,
                     // No CLI ran; it waits for quota as before.
                     TaskState::Paused if task.quota_wait.is_some() => {
                         self.keep_waiting(&task).await;

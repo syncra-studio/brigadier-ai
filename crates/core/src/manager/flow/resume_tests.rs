@@ -119,7 +119,7 @@ async fn a_worker_killed_mid_turn_resumes_its_own_session_and_reports() {
 async fn a_worker_that_dies_twice_before_reporting_stops_with_both_exits_named() {
     let told = Arc::new(std::sync::Mutex::new(String::new()));
     let heard = told.clone();
-    let flow = Flow::start(
+    let mut flow = Flow::start(
         "worker-dies-twice",
         Options::default(),
         script(move |turn| {
@@ -162,6 +162,19 @@ async fn a_worker_that_dies_twice_before_reporting_stops_with_both_exits_named()
     })
     .await;
     assert!(told.lock().unwrap().contains(&reason));
+    // A restart keeps it as it stopped, for message_worker: blocked, its worktree there.
+    let worktree = task
+        .workspace
+        .as_ref()
+        .and_then(|workspace| workspace.worktree.clone())
+        .expect("its worktree");
+    flow.restart().await;
+    let tasks = flow.core.tasks(&flow.conversation).await.unwrap();
+    let kept = tasks.iter().find(|t| t.id == task.id).expect("the task");
+    assert_eq!(kept.state, TaskState::Blocked);
+    assert_eq!(kept.deaths.len(), 2);
+    assert!(std::path::Path::new(&worktree).is_dir(), "{worktree}");
+    assert_eq!(worker_starts(&flow).len(), 2, "nothing resumed it");
     flow.stop().await;
 }
 
