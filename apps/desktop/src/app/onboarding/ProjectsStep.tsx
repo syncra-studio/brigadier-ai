@@ -23,10 +23,6 @@ const SUGGESTED_WITHIN_MS = 30 * 86_400_000;
 const CARD_GRID =
   "grid grid-cols-[repeat(auto-fill,minmax(var(--spacing-setup-card),1fr))] gap-2.5";
 
-function skip(): void {
-  void finishOnboarding().catch((error: unknown) => console.error(error));
-}
-
 /** The corner check on a card that is chosen. */
 function CardCheck({ className, label }: { className: string; label: string }) {
   return (
@@ -231,21 +227,14 @@ export function ProjectsStep({ onBack }: { onBack: () => void }) {
       <StepFooter
         onBack={onBack}
         primary={{
-          label: busy ? "Adding…" : `Add ${count} ${count === 1 ? "project" : "projects"}`,
+          label: busy
+            ? "Adding…"
+            : count === 0
+              ? "Continue without projects"
+              : `Add ${count} ${count === 1 ? "project" : "projects"}`,
           onClick: () => void add(),
-          disabled: count === 0,
           busy,
         }}
-        note={
-          <button
-            type="button"
-            disabled={busy}
-            onClick={skip}
-            className="hover:text-foreground underline-offset-4 hover:underline disabled:opacity-50"
-          >
-            Skip for now
-          </button>
-        }
       />
     </div>
   );

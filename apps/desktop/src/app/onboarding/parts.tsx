@@ -1,9 +1,9 @@
-import { ArrowLeft, ArrowRight } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, type RefObject, useEffect, useRef } from "react";
 
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
 import { DialogTitle } from "@/components/ui/dialog";
+import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/state/store";
 
@@ -50,8 +50,8 @@ export function StepHeader({
 }
 
 /**
- * The footer: Back, then the step's action (also on ⌘⏎, Ctrl ⏎ elsewhere), and a quiet line
- * under them.
+ * The footer: Back (also on ⌘[, Alt ← elsewhere), then the step's action (also on ⌘⏎, Ctrl ⏎
+ * elsewhere), each showing its keys, and a quiet line under them.
  */
 export function StepFooter({
   onBack,
@@ -69,6 +69,8 @@ export function StepFooter({
   const blocked = !primary || primary.disabled === true || primary.busy === true;
   const primaryRef = useFocusOnMount<HTMLButtonElement>();
 
+  const backBlocked = primary?.busy === true;
+
   useEffect(() => {
     if (!onClick) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -80,13 +82,34 @@ export function StepFooter({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [mac, onClick, blocked]);
 
+  useEffect(() => {
+    if (!onBack) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const back = mac
+        ? event.metaKey && event.key === "["
+        : event.altKey && event.key === "ArrowLeft";
+      if (!back || event.repeat) return;
+      event.preventDefault();
+      if (!backBlocked) onBack();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [mac, onBack, backBlocked]);
+
   return (
     <footer className="flex shrink-0 flex-col items-center gap-3 px-8 pt-4 pb-8">
       <div className="flex items-center gap-2.5">
         {onBack && (
-          <Button size="lg" variant="outline" disabled={primary?.busy} onClick={onBack} className="gap-2">
-            <ArrowLeft />
+          <Button
+            size="lg"
+            variant="outline"
+            aria-keyshortcuts={mac ? "Meta+BracketLeft" : "Alt+ArrowLeft"}
+            disabled={backBlocked}
+            onClick={onBack}
+            className="gap-2"
+          >
             {backLabel}
+            <Kbd>{mac ? "⌘[" : "Alt ←"}</Kbd>
           </Button>
         )}
         {primary && (
@@ -100,7 +123,7 @@ export function StepFooter({
           >
             {primary.busy && <Spinner className="animate-spin" />}
             {primary.label}
-            <ArrowRight />
+            <Kbd>{mac ? "⌘⏎" : "Ctrl ⏎"}</Kbd>
           </Button>
         )}
       </div>

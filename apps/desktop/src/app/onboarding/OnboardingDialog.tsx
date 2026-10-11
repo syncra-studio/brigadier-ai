@@ -6,14 +6,7 @@ import { ProjectsStep } from "@/app/onboarding/ProjectsStep";
 import { Welcome } from "@/app/onboarding/Welcome";
 import { preloadWelcomeSound } from "@/app/onboarding/welcomeSound";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import {
   Tooltip,
   TooltipContent,
@@ -28,15 +21,16 @@ import { useApp } from "@/state/store";
 
 type Step = "intro" | "name" | "agents" | "projects";
 
-function skip(): void {
+/** Closes a run of the setup opened from Settings. */
+function close(): void {
   void finishOnboarding().catch((error: unknown) => console.error(error));
 }
 
 /**
  * The first launch: a welcome intro with its sound, the name to call the user by, the coding
  * agents Brigadier works through, then the projects to start with. It fills the window and
- * shows until finished or skipped once; Settings can open it again, at the agents. Escape
- * (once the intro has played, and outside an agent's own page) asks before skipping.
+ * shows until finished; it can't be skipped. Settings can open it again, at the agents, and
+ * that run can be closed (its X, or Escape outside an agent's own page).
  */
 export function OnboardingDialog() {
   const catalogLoaded = useApp((s) => s.catalogLoaded);
@@ -47,8 +41,6 @@ export function OnboardingDialog() {
   // Not under the startup screen: it would take focus there, unseen.
   const revealed = useRevealed();
   const open = revealed && catalogLoaded && !smoke && (!onboarded || reopened);
-  const [confirmSkip, setConfirmSkip] = useState(false);
-  const keepGoing = useRef<HTMLButtonElement>(null);
   // Takes Escape first when a step has something of its own to close.
   const escape = useRef<(() => boolean) | null>(null);
   const onEscape = useCallback((handler: (() => boolean) | null) => {
@@ -83,41 +75,10 @@ export function OnboardingDialog() {
           onEscapeKeyDown={(event) => {
             event.preventDefault();
             if (escape.current?.()) return;
-            setConfirmSkip(true);
+            if (reopened) close();
           }}
         >
-          {open && <Onboarding onEscape={onEscape} onSkip={() => setConfirmSkip(true)} />}
-          <Dialog open={confirmSkip} onOpenChange={setConfirmSkip}>
-            <DialogContent
-              showCloseButton={false}
-              className="max-w-xs"
-              // Keep going takes the focus, so Enter doesn't skip the setup (the dialog would
-              // otherwise focus Skip, its first button).
-              onOpenAutoFocus={(event) => {
-                event.preventDefault();
-                keepGoing.current?.focus();
-              }}
-            >
-              <DialogHeader>
-                <DialogTitle>Skip setup?</DialogTitle>
-                <DialogDescription>You can run it again from Settings.</DialogDescription>
-              </DialogHeader>
-              <DialogFooter>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setConfirmSkip(false);
-                    skip();
-                  }}
-                >
-                  Skip
-                </Button>
-                <Button ref={keepGoing} onClick={() => setConfirmSkip(false)}>
-                  Keep going
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
+          {open && <Onboarding onEscape={onEscape} />}
         </DialogContent>
       </Dialog>
     </>
@@ -131,13 +92,7 @@ function firstStep(reopened: boolean, introSeen: boolean, userName: string): Ste
   return userName ? "agents" : "name";
 }
 
-function Onboarding({
-  onEscape,
-  onSkip,
-}: {
-  onEscape: (handler: (() => boolean) | null) => void;
-  onSkip: () => void;
-}) {
+function Onboarding({ onEscape }: { onEscape: (handler: (() => boolean) | null) => void }) {
   const userName = useApp((s) => s.settings.userName);
   // A run from Settings: they've met already.
   const reopened = useOnboarding((s) => s.reopened);
@@ -158,7 +113,7 @@ function Onboarding({
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
-      {step !== "intro" && <TopBar step={step} reached={reached} onStep={go} onSkip={onSkip} />}
+      {step !== "intro" && <TopBar step={step} reached={reached} onStep={go} closable={reopened} />}
       {step === "intro" || step === "name" ? (
         <Welcome
           step={step}
@@ -200,18 +155,18 @@ const STEP_LABELS: Record<Step, string> = {
 
 /**
  * The strip along the top: the window drags by it, a dot per step (the current one longest;
- * steps already reached can be revisited) and Skip at the end.
+ * steps already reached can be revisited) and, on a run from Settings, Close at the end.
  */
 function TopBar({
   step,
   reached,
   onStep,
-  onSkip,
+  closable,
 }: {
   step: Step;
   reached: number;
   onStep: (step: Step) => void;
-  onSkip: () => void;
+  closable: boolean;
 }) {
   const current = STEPS.indexOf(step);
   return (
@@ -248,15 +203,17 @@ function TopBar({
           })}
         </nav>
       </TooltipProvider>
-      <Button
-        size="icon-sm"
-        variant="ghost"
-        aria-label="Skip setup"
-        onClick={onSkip}
-        className="text-muted-foreground hover:text-foreground justify-self-end"
-      >
-        <X />
-      </Button>
+      {closable && (
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label="Close setup"
+          onClick={close}
+          className="text-muted-foreground hover:text-foreground justify-self-end"
+        >
+          <X />
+        </Button>
+      )}
     </div>
   );
 }

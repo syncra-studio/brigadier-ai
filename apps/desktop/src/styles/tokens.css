@@ -874,9 +874,9 @@
   --intro-continue: 5.8s;
   --intro-text-in: 0.7s;
   --intro-ease: cubic-bezier(0.22, 1, 0.36, 1);
-  --intro-mark-size: 7.5rem;
+  --intro-mark-size: 8.5rem;
   /* The mark's resting size above the heading and the name field, as a scale of the above. */
-  --intro-mark-rest: 0.5;
+  --intro-mark-rest: 0.7;
   --intro-glow: color-mix(in oklab, var(--foreground) 9%, transparent);
   --intro-glow-size: 34rem;
   /* A step of the setup coming in: its lines rise this far, this far apart. */
@@ -884,5 +884,7 @@
   --onboarding-rise: 0.5rem;
   --onboarding-stagger: 50ms;
   --onboarding-heading: clamp(1.75rem, 3vw, 2.5rem);
+  /* The welcome's heading and the name's question, larger than a step's. */
+  --welcome-heading: clamp(2.25rem, 4.5vw, 3.25rem);
   --onboarding-heading-tracking: -0.035em;
 }

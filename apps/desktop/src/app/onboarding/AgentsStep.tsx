@@ -121,7 +121,7 @@ export function AgentsStep({
           <div className="bg-muted/25 rounded-surface max-w-onboarding-agents mx-auto flex w-full items-center gap-3 border px-4 py-3">
             <ExclamationMarkCircle className="text-warning size-icon-md shrink-0" />
             <p className="min-w-0 flex-1 text-sm">
-              Sessions need at least one agent that is signed in. You can also set this up later.
+              Sign in to at least one agent to continue: sessions run through it.
             </p>
             <Button size="sm" variant="ghost" disabled={recheck.busy} onClick={() => recheck.run(checkAgents)}>
               <Reload />
@@ -130,7 +130,11 @@ export function AgentsStep({
           </div>
         )}
       </div>
-      <StepFooter onBack={onBack} primary={{ label: "Continue", onClick: onContinue }} note={MORE_LATER} />
+      <StepFooter
+        onBack={onBack}
+        primary={{ label: "Continue", onClick: onContinue, disabled: ready === 0 }}
+        note={MORE_LATER}
+      />
     </div>
   );
 }

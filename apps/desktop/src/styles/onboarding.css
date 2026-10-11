@@ -16,7 +16,7 @@
   inset: 0;
   overflow: hidden;
   /* Where the mark rests above the heading and the name field. */
-  --welcome-mark-rest: translateY(-4.75rem) scale(var(--intro-mark-rest));
+  --welcome-mark-rest: translateY(-5.5rem) scale(var(--intro-mark-rest));
 }
 
 .welcome-glow {
@@ -58,7 +58,7 @@
 /* The heading, its line, or the name form: below the mark's rest, centred. */
 .welcome-copy {
   position: absolute;
-  top: calc(50% - 1.75rem);
+  top: calc(50% - 1rem);
   left: 0;
   right: 0;
   margin-inline: auto;
@@ -70,8 +70,8 @@
 }
 
 .welcome-heading {
-  font-size: var(--onboarding-heading);
-  line-height: 1.2;
+  font-size: var(--welcome-heading);
+  line-height: 1.15;
   letter-spacing: var(--onboarding-heading-tracking);
   font-weight: 500;
 }

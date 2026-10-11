@@ -1,4 +1,3 @@
-import { ArrowRight } from "@openai/apps-sdk-ui/components/Icon";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 
 import { errorText } from "@/app/dialogs/fields";
@@ -9,6 +8,7 @@ import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
 import { DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Kbd } from "@/components/ui/kbd";
 
 /** How long the intro waits for its sound to load before it starts without it. */
 const SOUND_WAIT_MS = 1500;
@@ -111,7 +111,7 @@ export function Welcome({
     return () => timers.forEach(clearTimeout);
   }, [started, settled]);
 
-  // Escape during the intro shows its end, before the dialog would ask about skipping setup.
+  // Escape during the intro shows its end.
   useEffect(() => {
     if (step !== "intro" || settled) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -199,7 +199,7 @@ function ContinueButton({
     >
       {busy && <Spinner className="animate-spin" />}
       Continue
-      <ArrowRight />
+      <Kbd>⏎</Kbd>
     </Button>
   );
 }
