@@ -219,10 +219,11 @@ pub fn cold_rebirth_min_tokens(provider: ProviderKind, window: Option<i64>) -> i
 }
 
 /// The most context a worker carries before it is handed over to a fresh session.
-const WORKER_HANDOFF_MAX_TOKENS: i64 = 300_000;
+const WORKER_HANDOFF_MAX_TOKENS: i64 = 200_000;
 
-/// The worker context at which a worker is handed over to a fresh session (PLAN.md §7): 300k
-/// tokens or 70% of its model's context window, whichever comes first. A debug build takes
+/// The worker context at which a worker is handed over to a fresh session (PLAN.md §7): 200k
+/// tokens (SESSION-FIXES-PLAN.md Q6.4) or 70% of its model's context window, whichever comes
+/// first. A debug build takes
 /// `BRIGADIER_WORKER_HANDOFF_TOKENS`, so a hand-off can be tried on a small task.
 pub fn worker_handoff_tokens(window: Option<i64>) -> i64 {
     if cfg!(debug_assertions)
@@ -342,15 +343,15 @@ mod tests {
     }
 
     #[test]
-    fn a_worker_hands_over_at_300k_or_70_percent_of_its_window_and_again_after() {
+    fn a_worker_hands_over_at_200k_or_70_percent_of_its_window_and_again_after() {
         if std::env::var_os("BRIGADIER_WORKER_HANDOFF_TOKENS").is_some() {
             return;
         }
-        assert_eq!(worker_handoff_tokens(Some(1_000_000)), 300_000);
+        assert_eq!(worker_handoff_tokens(Some(1_000_000)), 200_000);
         assert_eq!(worker_handoff_tokens(Some(272_000)), 190_400);
         assert_eq!(worker_handoff_tokens(None), 140_000);
         // No limit on how many: a successor that started small hands over again.
-        assert!(worker_handoff_due(300_000, Some(30_000), 300_000));
+        assert!(worker_handoff_due(200_000, Some(30_000), 200_000));
     }
 
     #[test]
