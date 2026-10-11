@@ -1,8 +1,12 @@
-/** Settings › Browser over a faked shell and daemon: the rows, Import…, Clear, the sub-views, off. */
+/**
+ * Settings › Browser and Import Browser Data over a faked shell and daemon: the rows, Import…,
+ * Clear, the sub-views, off, and Import while off.
+ */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { BrowserImportPage } from "@/app/settings/BrowserImportPage";
 import { BrowserPage } from "@/app/settings/BrowserPage";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
@@ -17,11 +21,12 @@ import type {
 import { useApp } from "@/state/store";
 
 /*
- * ?drive=1 reads the page, imports from a profile (after trying one whose browser is open and
- * one macOS keeps locked), clears browsing data, filters the history, opens the downloads and
- * the site settings, turns the browser off, and writes what it saw to #browser-result
- * (BrowserPageRender.test.ts reads it). ?view=import|clear|history|downloads|sites|off opens
- * that state and stays, for screenshots.
+ * ?drive=1 reads the page, opens Import Browser Data and imports from a profile (after trying one
+ * whose browser is open and one macOS keeps locked), clears browsing data, filters the history,
+ * opens the downloads and the site settings, turns the browser off, reads Import Browser Data
+ * while it is off and follows its link back, and writes what it saw to #browser-result
+ * (BrowserPageRender.test.ts reads it). ?view=import|clear|history|downloads|sites|off|import-page|import-off
+ * opens that state and stays, for screenshots.
  */
 const params = new URLSearchParams(location.search);
 document.documentElement.dataset.density = params.get("density") === "compact" ? "compact" : "normal";
@@ -35,7 +40,8 @@ if (params.has("drive")) {
 useApp.setState((state) => ({
   info: { ...state.info, platform: "macos" } as typeof state.info,
   connection: { ...state.connection, status: "connected" } as typeof state.connection,
-  settings: { ...state.settings, browserEnabled: params.get("view") !== "off" },
+  settings: { ...state.settings, browserEnabled: !params.get("view")?.endsWith("off") },
+  selection: { type: "settings", page: params.get("view")?.startsWith("import") ? "browserImport" : "browser" },
 }));
 
 function profile(id: string, browser: string, fields: Partial<ImportProfile> = {}): ImportProfile {
@@ -158,6 +164,8 @@ const settings = () => useApp.getState().settings;
 /** The step that opens a `?view=` state. */
 const VIEWS: Record<string, () => void> = {
   import: () => button("Import…")?.click(),
+  "import-page": () => {},
+  "import-off": () => {},
   clear: () => button("Clear browsing data")?.click(),
   history: () => all<HTMLButtonElement>('[data-setting="Browsing history"] button')[0]?.click(),
   downloads: () => all<HTMLButtonElement>('[data-setting="Download history"] button')[0]?.click(),
@@ -166,6 +174,7 @@ const VIEWS: Record<string, () => void> = {
 };
 
 function Fixture() {
+  const shown = useApp((s) => (s.selection.type === "settings" ? s.selection.page : null));
   const [result, setResult] = useState("");
   useEffect(() => {
     const view = params.get("view");
@@ -188,6 +197,10 @@ function Fixture() {
       },
       () => {
         seen.webLinksIn = settings().webLinksIn;
+        useApp.setState({ selection: { type: "settings", page: "browserImport" } });
+      },
+      () => {
+        seen.importPage = { ...page(), note: all("main p").map(text), importable: !button("Import…")?.disabled };
         button("Import…")?.click();
       },
       // The profiles load: an open browser isn't picked first.
@@ -228,6 +241,7 @@ function Fixture() {
       () => {
         seen.imported = dialogTexts();
         button("Done")?.click();
+        useApp.setState({ selection: { type: "settings", page: "browser" } });
       },
       () => button("Clear browsing data")?.click(),
       () => {
@@ -272,6 +286,18 @@ function Fixture() {
       () => button("Browser", document.querySelector('[data-slot="settings-row"]') ?? document)?.click(),
       () => {
         seen.off = { ...page(), enabled: settings().browserEnabled, note: all("main p").map(text) };
+        useApp.setState({ selection: { type: "settings", page: "browserImport" } });
+      },
+      () => {
+        seen.importOff = {
+          ...page(),
+          note: text(document.querySelector('[data-slot="browser-off"]')),
+          importable: !button("Import…")?.disabled,
+        };
+        button("Settings › Browser")?.click();
+      },
+      () => {
+        seen.linkedTo = useApp.getState().selection;
         seen.asked = asked;
         setResult(JSON.stringify(seen));
       },
@@ -298,7 +324,7 @@ function Fixture() {
       <div className="bg-background text-foreground flex h-screen">
         <main className="flex h-full min-w-0 flex-1">
           <div className="min-w-0 flex-1">
-            <BrowserPage />
+            {shown === "browserImport" ? <BrowserImportPage /> : <BrowserPage />}
           </div>
         </main>
       </div>

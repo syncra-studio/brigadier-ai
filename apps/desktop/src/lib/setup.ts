@@ -241,7 +241,7 @@ export function completeChoice(groups: readonly ModelGroup[], choice: ModelChoic
 
 /**
  * A new session's permission level: the draft's own pick, else the default from Settings >
- * Configurations. Projects don't remember one (an earlier version's remembered level is ignored).
+ * Configuration. Projects don't remember one (an earlier version's remembered level is ignored).
  */
 export function resolvePermission(explicit: PermissionLevel | null, settings: Settings): PermissionLevel {
   return explicit ?? settings.defaultPermission;

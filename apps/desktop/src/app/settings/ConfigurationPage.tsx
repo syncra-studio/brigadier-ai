@@ -65,7 +65,7 @@ const levelRow = (level: PermissionLevel) => ({
   target: PERMISSION_LABEL,
 });
 
-/** The Configurations page's rows, for the page and for Settings search. */
+/** The Configuration page's rows, for the page and for Settings search. */
 export const CONFIGURATION_ROWS = {
   sessionModel: {
     label: "Model for sessions",
@@ -132,7 +132,7 @@ export function ConfigurationPage() {
 
   return (
     <SettingsPage
-      title="Configurations"
+      title="Configuration"
       description="How Brigadier’s sessions and chats work for you. A project remembers its own model and level, which win over these."
     >
       <SettingsSection title="Models">

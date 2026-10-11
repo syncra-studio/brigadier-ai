@@ -13,9 +13,10 @@ const settings = (browserEnabled: boolean) => ({
   updateSettings: { browserEnabled, webLinksIn: "brigadier", localLinksIn: "brigadier", browserFullUrl: false },
 });
 
-// The real page in Chromium over a faked shell: its rows, where links open, Import… from each
-// kind of browser (one open, one macOS keeps locked, one behind the Keychain, one that just
-// copies), Clear browsing data, the history and its filter, downloads, site settings, and off.
+// The real pages in Chromium over a faked shell: Browser's rows, where links open, Import Browser
+// Data's Import… from each kind of browser (one open, one macOS keeps locked, one behind the
+// Keychain, one that just copies), Clear browsing data, the history and its filter, downloads,
+// site settings, off, and Import Browser Data while the browser is off.
 test("browser settings: rows, import, clear, history, downloads, sites, off", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "browser.html?drive=1", "browser-result", 20000)) as Record<string, unknown>;
   assert.deepEqual(seen.on, {
@@ -34,12 +35,20 @@ test("browser settings: rows, import, clear, history, downloads, sites, off", { 
       "Site settings",
     ],
   });
-  assert.equal(seen.importButton, true);
+  // Import has a page of its own now.
+  assert.equal(seen.importButton, false);
   // Web links open in the default browser and local ones in Brigadier's, until changed.
   assert.deepEqual(seen.links, ["Your default browser", "Brigadier's browser"]);
   assert.deepEqual(seen.linkChoices, ["Brigadier's browser", "Your default browser"]);
   assert.equal(seen.webLinksIn, "brigadier");
 
+  assert.deepEqual(seen.importPage, {
+    title: "Import Browser Data",
+    sections: [],
+    rows: ["Import from your browser"],
+    note: ["Bring what another browser keeps into Brigadier's built-in browser."],
+    importable: true,
+  });
   // Import starts on a browser that isn't open, and says what macOS will ask.
   assert.deepEqual(seen.importOpen, {
     title: "Import from your browser",
@@ -110,6 +119,17 @@ test("browser settings: rows, import, clear, history, downloads, sites, off", { 
       "The built-in browser is off: links open in your default browser, and agents are told it isn't there.",
     ],
   });
+
+  // Off, there is nothing to import into: Import waits, a line says why, and its link goes to
+  // Settings › Browser.
+  assert.deepEqual(seen.importOff, {
+    title: "Import Browser Data",
+    sections: [],
+    rows: ["Import from your browser"],
+    note: "The built-in browser is off, so there is nothing to import into. Turn it on in Settings › Browser.",
+    importable: false,
+  });
+  assert.deepEqual(seen.linkedTo, { type: "settings", page: "browser" });
 
   // What reached the shell and the daemon, in order.
   assert.deepEqual(seen.asked, [

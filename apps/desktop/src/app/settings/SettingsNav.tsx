@@ -6,6 +6,7 @@ import {
 import { useState } from "react";
 
 import {
+  groupTitle,
   searchSettings,
   SETTINGS_GROUPS,
   shownSettingsPages,
@@ -124,7 +125,7 @@ export function SettingsNav() {
           )
         ) : (
           SETTINGS_GROUPS.map((group) => (
-            <NavSection key={group} title={group}>
+            <NavSection key={group} title={groupTitle(group)}>
               <NavList>
                 {pages.filter((page) => page.group === group).map((page) => {
                   const Icon = page.icon;

@@ -11,7 +11,7 @@ Today the main session is a pure orchestrator. It is a CLI session with no tools
 The target is one long-lived CLI session that works like a person running `/delegator` in cmux:
 - It reads, runs and previews things itself. It makes tiny edits itself and hands everything else to warm workers that start with a context pack.
 - It decides when an outline, a verifier or a deeper review is worth it.
-- Every landed change gets one non-blocking, one-shot review from the other vendor. (Since 2026-10-11 the user can turn the reviews off: Settings → Configurations → "Review the work", on by default. Off, no review starts — landings, the thread's commits, outlines, `review_code`, `review_plan`, verifiers — and nothing waits for one; running sessions hear it as a `[settings]` note.)
+- Every landed change gets one non-blocking, one-shot review from the other vendor. (Since 2026-10-11 the user can turn the reviews off: Settings → Configuration → "Review the work", on by default. Off, no review starts — landings, the thread's commits, outlines, `review_code`, `review_plan`, verifiers — and nothing waits for one; running sessions hear it as a `[settings]` note.)
 
 **Success test (Q3)** is an A/B against a plain cmux `/delegator` session on two real requests:
 - **T1:** the "Sidebar hide mode" request, from base `59a60afb`.

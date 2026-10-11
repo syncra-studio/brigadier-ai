@@ -214,19 +214,23 @@ Recordings are scrubbed of personal data as they are written. The fixtures in
 
 ## Settings
 
-Configurations, Providers, Usage and Storage are covered where they come up above. A few more
-pages:
+Settings' sidebar groups its pages: Personal (General, Voice, Configuration, Keyboard shortcuts),
+Agents (Providers, Usage, Git, Computer use), Browser & Data (Browser, Import Browser Data) and
+System (Storage, Inspector), then Archived chats on its own at the end. Configuration, Providers,
+Usage and Storage are covered where they come up above. A few more pages:
 
 - **Browser.** A switch turns Brigadier's own embedded browser on or off; off, it's absent
   everywhere and agents are told. On: where to open web links (default: your own browser) and
-  local dev URLs (default: Brigadier's browser); Show full URL in the address bar; Import…
-  (cookies and history from Safari and Chromium- or Gecko-based browsers, once; needs Keychain
-  access for Safari's cookies and Full Disk Access for a Firefox-family profile macOS keeps from
-  other apps); Clear browsing data by time range; Browsing history, filterable by who opened the
+  local dev URLs (default: Brigadier's browser); Show full URL in the address bar; Clear browsing
+  data by time range; Browsing history, filterable by who opened the
   page (All, an agent, or you); Downloads (save location, or ask each time, and a download
   history); and, under Advanced, per-site camera and microphone choices (Ask, Allow, Block). Data
   lives in a WebKit store per data folder, plus `<data>/browser/browser.sqlite` for history,
   downloads and site choices.
+- **Import Browser Data** (macOS). Import… copies cookies and history from Safari and Chromium- or
+  Gecko-based browsers into the built-in browser, once; it needs Keychain access for a Chromium
+  browser's cookies and Full Disk Access for Safari or a Firefox-family profile macOS keeps from
+  other apps. While the browser is off, Import waits and the page links to Settings › Browser.
 - **Git.** Which CLI writes commits, commit-message instructions (follow the repository's own
   style, Conventional Commits, or custom instructions), pull-request instructions, the branch
   prefix Brigadier uses for its own branches, and a switch to leave out AI co-author lines.
@@ -243,7 +247,7 @@ plans, delegates tasks, answers workers' questions, accepts or rejects reports a
 session; only messages, reports, decisions and tool results enter its context, which the
 Inspector's **Orchestrator** tab shows. Workers run in their own worktrees under Brigadier's data
 directory, report through the same server, and never block the orchestrator. Every accepted
-write task gets one review by the other vendor in the background (Settings → Configurations →
+write task gets one review by the other vendor in the background (Settings → Configuration →
 "Review the work", on by default; off, no review starts and nothing waits for one), and lands as one commit (with your git identity) on
 your checked-out branch (local checkout) or on the session branch `brigadier/<session>/session`
 (new worktree), which lands on its base when the session finishes. Landing into your checkout is
@@ -399,7 +403,7 @@ nothing outside the project.
   changes, they are marked stale and answered as "may be outdated".
 - **Skeleton pass and enrichment.** After a project's first scan the cheapest model maps its
   modules, stack, conventions and build/run/verify recipe, read-only and sandboxed. With
-  Settings → Configurations → Advanced → "Use spare quota to deepen the Brain" (on by default), quota that would expire
+  Settings → Configuration → Advanced → "Use spare quota to deepen the Brain" (on by default), quota that would expire
   unused (a usage window resetting within the hour with 40% left, the provider idle for 10
   minutes) refreshes stale nodes and fills gaps; it stops as soon as your own work starts.
 - **Rebirth.** The orchestrator never compacts its context. Past about 150k tokens its session
@@ -410,7 +414,7 @@ nothing outside the project.
   work (the handoff note and the swap) apart from the wait for the next turn.
 - **Personal Brain.** Preferences that hold in every project, from the orchestrator or from a
   Chat (`save_memory`, shown as Memory chips), are given to new orchestrators and Chats.
-  Settings → Configurations → Memories lists them. A project's conventions can be exported to a marked section of its
+  Settings → Configuration → Memories lists them. A project's conventions can be exported to a marked section of its
   `AGENTS.md`.
 
 Files: `brains/<project>/brain.sqlite` and `index.sqlite`, `brains/personal.sqlite`, and the

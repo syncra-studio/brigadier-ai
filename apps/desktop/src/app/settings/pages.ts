@@ -2,6 +2,7 @@ import {
   Archive,
   Branch,
   Cursor,
+  Download,
   Globe,
   KeyboardShortcut,
   Mic,
@@ -15,6 +16,7 @@ import {
 import { lazy, type ComponentType, type SVGProps } from "react";
 
 import { ARCHIVED_ROWS, ArchivedPage } from "@/app/settings/ArchivedPage";
+import { BROWSER_IMPORT_ROWS, BrowserImportPage } from "@/app/settings/BrowserImportPage";
 import { BROWSER_ROWS, BrowserPage } from "@/app/settings/BrowserPage";
 import { COMPUTER_USE_ROWS, ComputerUsePage } from "@/app/settings/ComputerUsePage";
 import { CONFIGURATION_ROWS, ConfigurationPage } from "@/app/settings/ConfigurationPage";
@@ -25,7 +27,7 @@ import { VOICE_ROWS, VoicePage } from "@/app/settings/VoicePage";
 import { SHORTCUTS_ROWS, ShortcutsPage } from "@/app/settings/ShortcutsPage";
 import { PROVIDERS_ROWS, ProvidersPage } from "@/app/providers/ProvidersPage";
 import { computerUseAvailable } from "@/state/computerAccess";
-import type { SettingsPageId } from "@/state/store";
+import { type SettingsPageId, useApp } from "@/state/store";
 
 /**
  * The pages of Settings, in the order the navigation lists them, each in its group. A page's
@@ -40,7 +42,8 @@ export type SettingsRowCopy = {
   readonly target?: string;
 };
 
-export type SettingsGroup = "Personal" | "Agents" | "System";
+/** A group of the navigation; "end" is the last, set apart by its gap alone, without a title. */
+export type SettingsGroup = "Personal" | "Agents" | "Browser & Data" | "System" | "end";
 
 export type SettingsPageEntry = {
   id: SettingsPageId;
@@ -80,7 +83,12 @@ const USAGE_ROWS: readonly SettingsRowCopy[] = [
   { label: "Usage windows", description: "How much of each agent's usage is left." },
 ];
 
-export const SETTINGS_GROUPS: readonly SettingsGroup[] = ["Personal", "Agents", "System"];
+export const SETTINGS_GROUPS: readonly SettingsGroup[] = ["Personal", "Agents", "Browser & Data", "System", "end"];
+
+/** A group's title in the navigation; the last group has none. */
+export function groupTitle(group: SettingsGroup): string | undefined {
+  return group === "end" ? undefined : group;
+}
 
 export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   {
@@ -92,14 +100,6 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     rows: Object.values(GENERAL_ROWS),
   },
   {
-    id: "archived",
-    label: "Archived chats",
-    icon: Archive,
-    group: "Personal",
-    component: ArchivedPage,
-    rows: Object.values(ARCHIVED_ROWS),
-  },
-  {
     id: "voice",
     label: "Voice",
     icon: Mic,
@@ -108,25 +108,9 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     rows: Object.values(VOICE_ROWS),
   },
   {
-    id: "storage",
-    label: "Storage",
-    icon: Storage,
-    group: "Personal",
-    component: StoragePage,
-    rows: Object.values(STORAGE_ROWS),
-  },
-  {
-    id: "browser",
-    label: "Browser",
-    icon: Globe,
-    group: "Personal",
-    component: BrowserPage,
-    rows: Object.values(BROWSER_ROWS),
-  },
-  {
     id: "configuration",
-    label: "Configurations",
-    formerly: ["Conversations", "Personalization"],
+    label: "Configuration",
+    formerly: ["Configurations", "Conversations", "Personalization"],
     icon: SettingsSlider,
     group: "Personal",
     component: ConfigurationPage,
@@ -141,14 +125,6 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     rows: SHORTCUTS_ROWS,
   },
   {
-    id: "usage",
-    label: "Usage",
-    icon: Usage,
-    group: "Personal",
-    component: UsagePage,
-    rows: USAGE_ROWS,
-  },
-  {
     id: "providers",
     label: "Providers",
     formerly: ["Accounts", "Routing"],
@@ -156,6 +132,14 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "Agents",
     component: ProvidersPage,
     rows: Object.values(PROVIDERS_ROWS),
+  },
+  {
+    id: "usage",
+    label: "Usage",
+    icon: Usage,
+    group: "Agents",
+    component: UsagePage,
+    rows: USAGE_ROWS,
   },
   {
     id: "git",
@@ -176,12 +160,46 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     shown: computerUseAvailable,
   },
   {
+    id: "browser",
+    label: "Browser",
+    icon: Globe,
+    group: "Browser & Data",
+    component: BrowserPage,
+    rows: Object.values(BROWSER_ROWS),
+  },
+  {
+    id: "browserImport",
+    label: "Import Browser Data",
+    icon: Download,
+    group: "Browser & Data",
+    component: BrowserImportPage,
+    rows: Object.values(BROWSER_IMPORT_ROWS),
+    // Importing reads other browsers' macOS profiles into WebKit's store: macOS only.
+    shown: () => useApp.getState().info?.platform === "macos",
+  },
+  {
+    id: "storage",
+    label: "Storage",
+    icon: Storage,
+    group: "System",
+    component: StoragePage,
+    rows: Object.values(STORAGE_ROWS),
+  },
+  {
     id: "inspector",
     label: "Inspector",
     icon: Terminal,
     group: "System",
     component: InspectorPage,
     rows: INSPECTOR_ROWS,
+  },
+  {
+    id: "archived",
+    label: "Archived chats",
+    icon: Archive,
+    group: "end",
+    component: ArchivedPage,
+    rows: Object.values(ARCHIVED_ROWS),
   },
 ];
 

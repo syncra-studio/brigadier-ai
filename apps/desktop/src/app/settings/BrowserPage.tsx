@@ -5,7 +5,6 @@ import { useState } from "react";
 import { useAction } from "@/app/conversation/useAction";
 import { BrowserDownloads } from "@/app/settings/BrowserDownloads";
 import { BrowserHistory } from "@/app/settings/BrowserHistory";
-import { BrowserImportDialog } from "@/app/settings/BrowserImportDialog";
 import { BrowserSiteSettings } from "@/app/settings/BrowserSiteSettings";
 import { ClearBrowsingDataDialog } from "@/app/settings/ClearBrowsingDataDialog";
 import {
@@ -62,12 +61,6 @@ export const BROWSER_ROWS = {
     label: "Download history",
     description: "View the files you downloaded in the built-in browser.",
   },
-  import: {
-    label: "Import from your browser",
-    description: "Bring over cookies and browsing history from Safari, Chrome, Arc, Firefox and other browsers.",
-    // The Import… button sits in the General section's header.
-    target: "General",
-  },
   sites: {
     label: "Site settings",
     description: "Which sites may use your camera and microphone in the built-in browser.",
@@ -97,7 +90,6 @@ export function BrowserPage() {
   const setView = (next: SubView | "page") => setOpened(next === "page" ? null : { view: next, under: shown });
   const [clearing, setClearing] = useState(false);
   const [cleared, setCleared] = useState(0);
-  const [importing, setImporting] = useState(false);
   const clearDialog = (
     <ClearBrowsingDataDialog
       open={clearing}
@@ -125,10 +117,7 @@ export function BrowserPage() {
         {!on && <p className="text-foreground/65 px-1 text-xs">{OFF_NOTE}</p>}
       </SettingsSection>
       {on && embedded && (
-        <SettingsSection
-          title="General"
-          actions={mac && <SettingsButton onClick={() => setImporting(true)}>Import…</SettingsButton>}
-        >
+        <SettingsSection title="General">
           <SettingsCard>
             <LinkRow setting="webLinksIn" row={BROWSER_ROWS.webLinks} />
             <LinkRow setting="localLinksIn" row={BROWSER_ROWS.localLinks} />
@@ -163,7 +152,6 @@ export function BrowserPage() {
         </SettingsSection>
       )}
       {clearDialog}
-      {mac && <BrowserImportDialog open={importing} onOpenChange={setImporting} />}
     </SettingsPage>
   );
 }
