@@ -89,8 +89,9 @@ Everything else in THREAD-PLAN and THREAD-PARITY-PLAN stands.
    - Rewrite `merge_brief` and `base_merge_brief` for this.
    - Delete the pre-merge in `merge_start`, `base_merge_start` and `merge_for_resolution` / `merge_branch_for_resolution`
      in `crates/git`, once nothing calls them.
-   - **As built:** a subject merge's worktree branch starts at the conflicting task's work (its WIP commit, with
-     what its litter guard would leave out put back first: `Repo::work_without`) and merges the target in; a
+   - **As built:** a subject merge's worktree branch starts at the conflicting task's work (its WIP commit, each
+     of its commits rebuilt without what its litter guard would leave out, so no litter reaches the landed
+     history: `Repo::work_without`) and merges the target in; a
      no-subject merge's branch starts at the session tip and merges the base in. The task records what it merges
      in (`TaskWorkspace.merge`: the commit and its name). The squash landing went with the pre-merge
      (`prepare_candidate`, `merge_parent`, `commit_merge`, `unresolved_base_merge`). The worker instructions
@@ -269,9 +270,10 @@ Everything else in THREAD-PLAN and THREAD-PARITY-PLAN stands.
    report between) stops with `blocked_reason` set to the two exits (code or signal, the last stderr line) and the
    thread is told `[task-N stopped: died twice] …`. The thread tells the user.
    - **As built:** "stops" is `TaskState::Blocked` with that reason, its worktree and session kept, so
-     `message_worker` resumes it once the cause is fixed (and clears its deaths) and `stop_task` ends it. The CLI's
-     exit now carries its signal (`ProviderEvent::Exited.signal`). The thread's instructions gained no line (its
-     byte budget is spent); the message names what to do, and revision 2's note tells open threads.
+     `message_worker` resumes it once the cause is fixed (and clears its deaths) and `stop_task` ends it. A restart
+     keeps it so, and resumes nothing (`recover`). The CLI's exit now carries its signal
+     (`ProviderEvent::Exited.signal`). The thread's instructions gained no line (its byte budget is spent); the
+     message names what to do, and revision 2's note tells open threads.
 5. **Check results stay cached per tree.** `check_results` already keys by tree and command. Bug 8 makes the command
    key canonical, so a resumed worker's re-run of a passed check answers from the cache.
 6. **Its row** reads "Interrupted — resuming" while the resumed CLI starts (`C/workerPresentation.ts` state words).
