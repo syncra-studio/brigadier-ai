@@ -250,10 +250,13 @@ impl Board {
                     known.kind = step.kind;
                     return;
                 }
-                // A CI watch's updates stay where it started.
-                if let crate::work::OrchestratorStepKind::CiWatch { sha, branch, .. } = &step.kind
+                // A CI watch's updates stay where it started: one row per repository, branch
+                // and sha, since the same push may go to two repositories.
+                if let crate::work::OrchestratorStepKind::CiWatch {
+                    repo, sha, branch, ..
+                } = &step.kind
                     && let Some(known) = self.orchestrator_steps.iter_mut().find(|known| {
-                        matches!(&known.kind, crate::work::OrchestratorStepKind::CiWatch { sha: s, branch: b, .. } if s == sha && b == branch)
+                        matches!(&known.kind, crate::work::OrchestratorStepKind::CiWatch { repo: r, sha: s, branch: b, .. } if r == repo && s == sha && b == branch)
                     })
                 {
                     known.kind = step.kind;
@@ -511,5 +514,55 @@ mod thinking_tests {
         .unwrap();
         board.apply(&old, 9);
         assert_eq!(board.streaming.unwrap().text, "Hello");
+    }
+}
+
+#[cfg(test)]
+mod ci_tests {
+    use super::*;
+    use crate::work::{OrchestratorStep, OrchestratorStepKind};
+
+    fn watch(repo: &str, result: Option<&str>) -> DomainEvent {
+        DomainEvent::OrchestratorStepped {
+            step: OrchestratorStep {
+                request_id: None,
+                kind: OrchestratorStepKind::CiWatch {
+                    repo: repo.into(),
+                    branch: "main".into(),
+                    sha: "97c298d5".into(),
+                    waiting: false,
+                    runs: Vec::new(),
+                    result: result.map(str::to_owned),
+                },
+                at_ms: 0,
+                position: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn a_ci_watch_is_one_row_per_repository_branch_and_sha() {
+        let mut board = Board::default();
+        board.apply(&watch("o/fork", None), 1);
+        board.apply(&watch("o/upstream", None), 2);
+        board.apply(&watch("o/fork", Some("failed")), 3);
+        board.apply(&watch("o/upstream", Some("passed")), 4);
+        let rows: Vec<(String, Option<String>, i64)> = board
+            .orchestrator_steps
+            .iter()
+            .filter_map(|step| match &step.kind {
+                OrchestratorStepKind::CiWatch { repo, result, .. } => {
+                    Some((repo.clone(), result.clone(), step.position))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("o/fork".into(), Some("failed".into()), 1),
+                ("o/upstream".into(), Some("passed".into()), 2),
+            ]
+        );
     }
 }
