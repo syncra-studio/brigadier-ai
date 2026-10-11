@@ -255,7 +255,10 @@ export function StorageBody({
         </SettingsCard>
       </div>
 
-      <SettingsAdvanced description="Choose items yourself, and see disk use per project.">
+      <SettingsAdvanced
+        description="Choose items yourself, and see disk use per project."
+        labels={[STORAGE_ROWS.choose.label, STORAGE_ROWS.usage.label]}
+      >
         <SettingsCard>
           <SettingsRow label={STORAGE_ROWS.choose.label} description={STORAGE_ROWS.choose.description}>
             <SettingsButton disabled={!report || cleaning} onClick={() => setChoosing(true)}>

@@ -3,7 +3,8 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { StoragePage } from "@/app/settings/StoragePage";
+import { revealSetting } from "@/app/settings/reveal";
+import { STORAGE_ROWS, StoragePage } from "@/app/settings/StoragePage";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { CleanItem, Request, StorageReport } from "@/ipc/generated";
 import { useApp } from "@/state/store";
@@ -172,10 +173,11 @@ function Fixture() {
       },
       () => {
         seen.afterDone = { dialog: dialog() !== null, scans };
-        button("Advanced")?.click();
-        all<HTMLButtonElement>('[data-slot="settings-advanced"] > button')[0]?.click();
+        // A search result inside Advanced opens it.
+        revealSetting(STORAGE_ROWS.usage.label);
       },
       () => {
+        seen.revealed = q('[data-slot="settings-advanced"]')?.dataset.state;
         button("Choose…")?.click();
       },
       () => {
