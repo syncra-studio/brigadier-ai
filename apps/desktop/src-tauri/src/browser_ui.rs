@@ -22,6 +22,7 @@ use objc2_app_kit::{NSModalResponseOK, NSSavePanel};
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSDate, NSHTTPCookie, NSHTTPCookieDiscard, NSHTTPCookieDomain,
     NSHTTPCookieExpires, NSHTTPCookieName, NSHTTPCookiePath, NSHTTPCookiePropertyKey,
+    NSHTTPCookieSameSiteLax, NSHTTPCookieSameSitePolicy, NSHTTPCookieSameSiteStrict,
     NSHTTPCookieSecure, NSHTTPCookieValue, NSMutableDictionary, NSObjectProtocol, NSSet, NSString,
     NSURL, NSUUID, ns_string,
 };
@@ -244,11 +245,18 @@ pub fn remove_data(
     let since = since_ms.map_or(0.0, |ms| ms as f64 / 1000.0);
     let date = NSDate::dateWithTimeIntervalSince1970(since);
     let done = once(done);
-    let block = RcBlock::new(move || done(true));
+    let store = data_store(identifier, mtm);
+    // The block holds the store until WebKit is done: an operation of a store that is gone
+    // ends early, with nothing done.
+    let kept = store.clone();
+    let block = RcBlock::new(move || {
+        let _ = &kept;
+        done(true);
+    });
     // SAFETY: a live data store, WebKit's own type names and a block that outlives the call
     // (WebKit copies it), on the main thread.
     unsafe {
-        data_store(identifier, mtm).removeDataOfTypes_modifiedSince_completionHandler(
+        store.removeDataOfTypes_modifiedSince_completionHandler(
             &data_types(site_data, cache),
             &date,
             &block,
@@ -264,15 +272,16 @@ pub fn count_sites(identifier: [u8; 16], done: impl FnOnce(Option<usize>) + 'sta
         return;
     };
     let done = once(done);
+    let store = data_store(identifier, mtm);
+    // Held until WebKit answers, as in `remove_data`.
+    let kept = store.clone();
     let block = RcBlock::new(move |records: NonNull<NSArray<WKWebsiteDataRecord>>| {
+        let _ = &kept;
         // SAFETY: WebKit passes a valid array for the call's duration.
         done(Some(unsafe { records.as_ref() }.count()));
     });
     // SAFETY: as in `remove_data`.
-    unsafe {
-        data_store(identifier, mtm)
-            .fetchDataRecordsOfTypes_completionHandler(&data_types(true, false), &block);
-    }
+    unsafe { store.fetchDataRecordsOfTypes_completionHandler(&data_types(true, false), &block) };
 }
 
 /// Asks where to save a download, starting at `suggested` (its folder and name): the path
@@ -296,10 +305,12 @@ pub fn save_path(suggested: &std::path::Path) -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(path.to_string()))
 }
 
-/// `cookie` as WebKit takes it, built from its properties as wry 0.55.1 does
-/// (`cookie_into_wkwebview`): "HttpOnly" and "SameSite" have no Foundation key constants, so
-/// they go in by name. A domain with a leading dot is sent to its subdomains too; without one
-/// only to that host. `None` when Foundation refuses the properties.
+/// `cookie` as WebKit takes it, built from its properties much as wry 0.55.1 does
+/// (`cookie_into_wkwebview`). "HttpOnly" has no Foundation key constant, so it goes in by name,
+/// and only when true (wry also sets it to "FALSE", which Foundation reads as HttpOnly);
+/// SameSite uses `NSHTTPCookieSameSitePolicy`. A domain with a leading dot is sent to its
+/// subdomains too; without one only to that host. `None` when Foundation refuses the
+/// properties.
 fn ns_cookie(cookie: &brigadier_browser_data::Cookie) -> Option<Retained<NSHTTPCookie>> {
     use brigadier_browser_data::SameSite;
     let truth = |on: bool| {
@@ -343,11 +354,22 @@ fn ns_cookie(cookie: &brigadier_browser_data::Cookie) -> Option<Retained<NSHTTPC
         }
         properties
     };
-    properties.insert(ns_string!("HttpOnly"), truth(cookie.http_only));
-    match cookie.same_site {
-        Some(SameSite::Lax) => properties.insert(ns_string!("SameSite"), ns_string!("lax")),
-        Some(SameSite::Strict) => properties.insert(ns_string!("SameSite"), ns_string!("strict")),
-        _ => {}
+    // Foundation reads a cookie as HttpOnly when the key is there at all, whatever its value,
+    // so it is set only for one that is.
+    if cookie.http_only {
+        properties.insert(ns_string!("HttpOnly"), truth(true));
+    }
+    // SAFETY: Foundation's exported constants (macOS 10.15 and later), read only.
+    unsafe {
+        match cookie.same_site {
+            Some(SameSite::Lax) => {
+                properties.insert(NSHTTPCookieSameSitePolicy, NSHTTPCookieSameSiteLax);
+            }
+            Some(SameSite::Strict) => {
+                properties.insert(NSHTTPCookieSameSitePolicy, NSHTTPCookieSameSiteStrict);
+            }
+            _ => {}
+        }
     }
     // SAFETY: a dictionary of Foundation's cookie properties, as the method expects.
     unsafe { NSHTTPCookie::cookieWithProperties(&properties) }
@@ -388,8 +410,11 @@ pub fn set_cookies(
         done(Vec::new());
         return;
     };
+    // The cookie store points only weakly at its data store, and ends its work early once
+    // that is gone: the data store is held until the cookies are read back.
+    let data = data_store(identifier, mtm);
     // SAFETY: a property read on a live data store, on the main thread.
-    let store = unsafe { data_store(identifier, mtm).httpCookieStore() };
+    let store = unsafe { data.httpCookieStore() };
     let built: Vec<Option<Retained<NSHTTPCookie>>> = cookies.iter().map(ns_cookie).collect();
     let total = built.iter().flatten().count();
     let check = {
@@ -397,6 +422,7 @@ pub fn set_cookies(
         let done = once(done);
         move || {
             let block = RcBlock::new(move |found: NonNull<NSArray<NSHTTPCookie>>| {
+                let _ = &data;
                 // SAFETY: WebKit passes a valid array for the call's duration.
                 let found = unsafe { found.as_ref() };
                 let stored: std::collections::HashSet<_> = found
