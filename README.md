@@ -219,6 +219,15 @@ Agents (Providers, Usage, Git, Computer use), Browser & Data (Browser, Import Br
 System (Storage, Inspector), then Archived chats on its own at the end. Configuration, Providers,
 Usage and Storage are covered where they come up above. A few more pages:
 
+- **General.** Appearance (density, and what stays when the sidebar is closed); Composer (the
+  send shortcut, Enter or ⌘Enter; whether a message sent while an agent works queues or steers
+  into the answer by default, the send key with ⌘ or ⇧⌘ doing the other for one message; the
+  context window ring); Notifications (when a finished chat or session notifies: only while
+  Brigadier is in the background, always or never; whether approvals and questions do; a row
+  pointing to System Settings while notifications are off); Power (keeping the computer awake,
+  with the lid closed too, hibernating idle chats, and Open at login: a login item on macOS, the
+  Run key on Windows, an XDG autostart entry on Linux); About (the version, the open source
+  licenses, Run setup again).
 - **Browser.** A switch turns Brigadier's own embedded browser on or off; off, it's absent
   everywhere and agents are told. On: where to open web links (default: your own browser) and
   local dev URLs (default: Brigadier's browser); Show full URL in the address bar; Clear browsing
