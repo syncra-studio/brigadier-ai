@@ -73,6 +73,12 @@ export function OnboardingDialog() {
           aria-describedby={undefined}
           className="bg-background start-0 top-0 flex h-full w-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none p-0 ring-0 rtl:translate-x-0"
           onInteractOutside={(event) => event.preventDefault()}
+          // The setup holds the focus itself until a step focuses its own control (parts.tsx
+          // useFocusOnMount): the first step dot would take it and flash its tooltip.
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            (event.currentTarget as HTMLElement | null)?.focus();
+          }}
           onEscapeKeyDown={(event) => {
             event.preventDefault();
             if (escape.current?.()) return;
@@ -123,6 +129,8 @@ function Onboarding({
   onSkip: () => void;
 }) {
   const userName = useApp((s) => s.settings.userName);
+  // A run from Settings: they've met already.
+  const reopened = useOnboarding((s) => s.reopened);
   const [step, setStep] = useState<Step>(() => {
     const { settings } = useApp.getState();
     return firstStep(useOnboarding.getState().reopened, settings.introSeen, settings.userName);
@@ -159,7 +167,7 @@ function Onboarding({
         />
       ) : step === "agents" ? (
         <AgentsStep
-          name={userName}
+          name={reopened ? "" : userName}
           onEscape={onEscape}
           onBack={() => go("name")}
           onContinue={() => go("projects")}
