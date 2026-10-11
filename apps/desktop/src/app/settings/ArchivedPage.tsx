@@ -106,7 +106,7 @@ export function ArchivedPage() {
       {/* The toolbar stays in view over the list; the groups follow it. */}
       <div className="flex flex-col">
         {archived.length > 0 && (
-          <div className="bg-background sticky top-0 z-10 -mt-5 flex flex-col gap-3 pt-5 pb-2">
+          <div className="bg-background before:bg-background sticky top-settings-band z-10 -mt-5 flex flex-col gap-3 pt-5 pb-2 before:absolute before:inset-x-0 before:bottom-full before:h-settings-band">
             <div className="flex items-center gap-2">
               <SettingsSearch
                 label="Search archived chats"

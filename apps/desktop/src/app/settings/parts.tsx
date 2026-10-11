@@ -61,19 +61,27 @@ export function SettingsPage({
 }) {
   return (
     <div data-slot="settings-page" className="flex h-full flex-col">
-      {/* The page's toolbar strip, for dragging the window. */}
-      <div data-tauri-drag-region className="h-page-toolbar shrink-0" />
       <div
         className={cn(
           "min-h-0 flex-1",
           scrollable ? "overflow-y-auto [scrollbar-gutter:stable]" : "flex flex-col overflow-hidden",
         )}
       >
+        {/* The band under the titlebar's strip and over the title, for dragging the window.
+            Scrolling, the page passes under it to the top edge rather than being cut off below
+            it; the wheel over it still scrolls the page. */}
+        <div
+          data-tauri-drag-region
+          className={cn(
+            "h-settings-band shrink-0",
+            scrollable && "sticky top-0 z-20 -mb-settings-band",
+          )}
+        />
         <div
           className={cn(
-            "mx-auto flex w-full flex-col px-5 pt-4",
+            "mx-auto flex w-full flex-col px-5",
             wide ? "max-w-settings-wide" : "max-w-settings",
-            scrollable ? "pb-12" : "min-h-0 flex-1",
+            scrollable ? "pt-settings-top pb-12" : "min-h-0 flex-1 pt-4",
           )}
         >
           {back && (
