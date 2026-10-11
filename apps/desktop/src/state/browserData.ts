@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { BrowserVisit, HistoryFilter } from "@/ipc/generated";
+import type { BrowserClear, BrowserVisit, HistoryFilter } from "@/ipc/generated";
 
 /*
  * What the built-in browser remembers (its history, downloads and site choices, kept by the
@@ -60,4 +60,28 @@ export function byDay<T extends { atMs: number }>(items: readonly T[], nowMs: nu
     else days.push({ key, label: dayLabel(item.atMs, nowMs), items: [item] });
   }
   return days;
+}
+
+/** Removes what Clear browsing data picked. */
+export function clearBrowsingData(clear: BrowserClear): Promise<void> {
+  return invoke("browser_clear", { clear });
+}
+
+/** How many sites the browser keeps cookies or other data for; null where it can't tell. */
+export function siteDataCount(): Promise<number | null> {
+  return invoke<number | null>("browser_site_count");
+}
+
+export type ClearRange = "hour" | "day" | "week" | "month" | "all";
+
+const RANGE_MS: Record<Exclude<ClearRange, "all">, number> = {
+  hour: 3_600_000,
+  day: 86_400_000,
+  week: 7 * 86_400_000,
+  month: 28 * 86_400_000,
+};
+
+/** Where a cleared time range starts; null: all time. */
+export function rangeStart(range: ClearRange, nowMs: number): number | null {
+  return range === "all" ? null : nowMs - RANGE_MS[range];
 }

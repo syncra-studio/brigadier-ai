@@ -61,7 +61,16 @@ const EMPTY: Record<HistoryFilter, string> = {
  * Settings › Browser › Browsing history: a search and a filter (All, Agent: pages in tabs an
  * agent's link or preview opened; Other: the rest) over the pages, by day, newest first.
  */
-export function BrowserHistory({ onBack, onClear }: { onBack: () => void; onClear?: () => void }) {
+export function BrowserHistory({
+  onBack,
+  onClear,
+  cleared = 0,
+}: {
+  onBack: () => void;
+  onClear?: () => void;
+  /** Counts the clears since the page opened: each one reads the history again. */
+  cleared?: number;
+}) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<HistoryFilter>("all");
   const [visits, setVisits] = useState<BrowserVisit[] | null>(null);
@@ -85,7 +94,9 @@ export function BrowserHistory({ onBack, onClear }: { onBack: () => void; onClea
       current = false;
       clearTimeout(timer);
     };
-  }, [query, filter]);
+    // `cleared` reads the history again after a clear.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
+  }, [query, filter, cleared]);
 
   const loadMore = () => {
     const last = visits?.at(-1);

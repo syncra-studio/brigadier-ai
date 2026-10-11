@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { byDay, dayLabel, siteOf } from "@/state/browserData";
+import { byDay, dayLabel, rangeStart, siteOf } from "@/state/browserData";
 
 const at = (y: number, m: number, d: number, h = 12) => new Date(y, m - 1, d, h).getTime();
 
@@ -31,4 +31,11 @@ test("visits newest first fall into one group per day", () => {
     days.map((day) => [day.label, day.items.map((item) => item.id)]),
     [["Today", [0, 1]], [new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(at(2026, 10, 9)), [2, 3]]],
   );
+});
+
+test("a cleared range starts that long ago; all time has no start", () => {
+  const now = at(2026, 10, 11);
+  assert.equal(rangeStart("hour", now), now - 3_600_000);
+  assert.equal(rangeStart("month", now), now - 28 * 86_400_000);
+  assert.equal(rangeStart("all", now), null);
 });

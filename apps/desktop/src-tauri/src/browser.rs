@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use brigadier_ipc::app::{
-    BrowserBounds, BrowserEvent, BrowserOptions, BrowserVisit, HistoryFilter,
+    BrowserBounds, BrowserClear, BrowserEvent, BrowserOptions, BrowserVisit, HistoryFilter,
 };
 use brigadier_ipc::protocol::{ErrorCode, IpcError};
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
@@ -622,6 +622,82 @@ pub fn browser_history(
 pub fn browser_history_remove(ids: Vec<i64>) -> Result<(), IpcError> {
     browser_store::with(|store| store.remove_visits(&ids))
         .ok_or_else(|| failed("the browser's history can't be changed now"))
+}
+
+/// Runs `action` with the browser's data store on the main thread, and waits for its answer.
+#[cfg(target_os = "macos")]
+async fn on_store<T: Send + 'static>(
+    app: &tauri::AppHandle,
+    action: impl FnOnce([u8; 16], Box<dyn FnOnce(T)>) + Send + 'static,
+) -> Result<T, IpcError> {
+    let identifier = data_dir()
+        .map(store_identifier)
+        .ok_or_else(|| failed("the browser has no data folder yet"))?;
+    let (sent, answer) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        action(
+            identifier,
+            Box::new(move |value| {
+                let _ = sent.send(value);
+            }),
+        );
+    })
+    .map_err(|err| failed(err.to_string()))?;
+    answer
+        .await
+        .map_err(|_| failed("the browser's data store didn't answer"))
+}
+
+/// Settings › Browser › Clear browsing data: removes what `clear` picks, changed since its
+/// time. Cookies, site data and the cache are WebKit's (macOS only; elsewhere the page doesn't
+/// offer them); history, download history and site choices are the browser's own.
+#[tauri::command]
+pub async fn browser_clear(app: tauri::AppHandle, clear: BrowserClear) -> Result<(), IpcError> {
+    let since = clear.since_ms;
+    let kept = browser_store::with(|store| {
+        if clear.history {
+            store.clear_history(since)?;
+        }
+        if clear.downloads {
+            store.remove_downloads(None, since)?;
+        }
+        if clear.sites {
+            store.clear_sites(since)?;
+        }
+        Ok(())
+    });
+    if (clear.history || clear.downloads || clear.sites) && kept.is_none() {
+        return Err(failed("the browser's history can't be changed now"));
+    }
+    #[cfg(target_os = "macos")]
+    if clear.cookies || clear.cache {
+        let (site_data, cache) = (clear.cookies, clear.cache);
+        let done = on_store(&app, move |identifier, done| {
+            crate::browser_ui::remove_data(identifier, site_data, cache, since, done);
+        })
+        .await?;
+        if !done {
+            return Err(failed("the browser's data couldn't be cleared"));
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = &app;
+    Ok(())
+}
+
+/// How many sites the browser keeps cookies or other data for (macOS; `None` elsewhere).
+#[tauri::command]
+pub async fn browser_site_count(app: tauri::AppHandle) -> Result<Option<u32>, IpcError> {
+    #[cfg(target_os = "macos")]
+    {
+        let count = on_store(&app, crate::browser_ui::count_sites).await?;
+        Ok(count.map(|count| u32::try_from(count).unwrap_or(u32::MAX)))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = &app;
+        Ok(None)
+    }
 }
 
 /// Drops every tab's page (on the main thread): the app's own page started again.

@@ -700,7 +700,9 @@ fn main() {
             browser::browser_go,
             browser::browser_close,
             browser::browser_history,
-            browser::browser_history_remove
+            browser::browser_history_remove,
+            browser::browser_clear,
+            browser::browser_site_count
         ])
         .build(context)
         .unwrap_or_else(|err| {

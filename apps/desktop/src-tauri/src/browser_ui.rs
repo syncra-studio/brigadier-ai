@@ -5,18 +5,29 @@
 //! for the app's page, but a web page in the Browser tab must never listen or watch, so the
 //! tab's webview gets this delegate instead: it denies media capture, sends popups
 //! (`window.open`, `target=_blank`) to the system browser, and leaves the file picker to wry's
-//! delegate as before. Talking to WebKit through objc2 needs `unsafe`; every use says why it
+//! delegate as before. It also reaches the browser's saved WebKit data store (clearing it,
+//! counting its sites). Talking to WebKit through objc2 needs `unsafe`; every use says why it
 //! holds.
 
-use block2::DynBlock;
+use std::cell::RefCell;
+use std::ptr::NonNull;
+
+use block2::{DynBlock, RcBlock};
 use objc2::rc::Retained;
 use objc2::runtime::{NSObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
-use objc2_foundation::{MainThreadMarker, NSArray, NSObjectProtocol, NSURL};
+use objc2_foundation::{
+    MainThreadMarker, NSArray, NSDate, NSObjectProtocol, NSSet, NSString, NSURL, NSUUID,
+};
 use objc2_web_kit::{
     WKFrameInfo, WKMediaCaptureType, WKNavigationAction, WKOpenPanelParameters,
     WKPermissionDecision, WKSecurityOrigin, WKUIDelegate, WKWebView, WKWebViewConfiguration,
-    WKWindowFeatures,
+    WKWebsiteDataRecord, WKWebsiteDataStore, WKWebsiteDataTypeCookies, WKWebsiteDataTypeDiskCache,
+    WKWebsiteDataTypeFetchCache, WKWebsiteDataTypeFileSystem, WKWebsiteDataTypeHashSalt,
+    WKWebsiteDataTypeIndexedDBDatabases, WKWebsiteDataTypeLocalStorage, WKWebsiteDataTypeMediaKeys,
+    WKWebsiteDataTypeMemoryCache, WKWebsiteDataTypeSearchFieldRecentSearches,
+    WKWebsiteDataTypeServiceWorkerRegistrations, WKWebsiteDataTypeSessionStorage,
+    WKWebsiteDataTypeWebSQLDatabases, WKWindowFeatures,
 };
 use wry::WebViewExtMacOS;
 
@@ -139,5 +150,102 @@ pub fn install(webview: &wry::WebView, on_popup: impl Fn(String) + 'static) -> B
     unsafe { view.setUIDelegate(Some(ProtocolObject::from_ref(&*delegate))) };
     BrowserUi {
         _delegate: delegate,
+    }
+}
+
+/// The browser's saved data store, by the identifier its webviews were built with.
+fn data_store(identifier: [u8; 16], mtm: MainThreadMarker) -> Retained<WKWebsiteDataStore> {
+    // SAFETY: a class method taking a non-zero UUID (the identifier is a hash, never all zero
+    // in practice; WebKit throws only for the nil UUID), on the main thread.
+    unsafe { WKWebsiteDataStore::dataStoreForIdentifier(&NSUUID::from_bytes(identifier), mtm) }
+}
+
+/// WebKit's names for what a site keeps (`site_data`) and for its caches (`cache`). Every one is
+/// in macOS 14, the app's oldest.
+fn data_types(site_data: bool, cache: bool) -> Retained<NSSet<NSString>> {
+    // SAFETY: WebKit's exported constant strings, read only.
+    let names: Vec<&NSString> = unsafe {
+        let mut names = Vec::new();
+        if site_data {
+            names.extend([
+                WKWebsiteDataTypeCookies,
+                WKWebsiteDataTypeLocalStorage,
+                WKWebsiteDataTypeSessionStorage,
+                WKWebsiteDataTypeIndexedDBDatabases,
+                WKWebsiteDataTypeWebSQLDatabases,
+                WKWebsiteDataTypeServiceWorkerRegistrations,
+                WKWebsiteDataTypeFileSystem,
+                WKWebsiteDataTypeSearchFieldRecentSearches,
+                WKWebsiteDataTypeMediaKeys,
+                WKWebsiteDataTypeHashSalt,
+            ]);
+        }
+        if cache {
+            names.extend([
+                WKWebsiteDataTypeDiskCache,
+                WKWebsiteDataTypeMemoryCache,
+                WKWebsiteDataTypeFetchCache,
+            ]);
+        }
+        names
+    };
+    NSSet::from_slice(&names)
+}
+
+/// A WebKit completion block that runs `done` once.
+fn once<A>(done: impl FnOnce(A) + 'static) -> impl Fn(A) + 'static {
+    let done = RefCell::new(Some(done));
+    move |value| {
+        if let Some(done) = done.borrow_mut().take() {
+            done(value);
+        }
+    }
+}
+
+/// Removes the browser's site data (cookies, storage, databases, service workers) and/or its
+/// caches changed since `since_ms` (all of it with none), then calls `done`. On the main thread
+/// only: `done` gets `false` anywhere else.
+pub fn remove_data(
+    identifier: [u8; 16],
+    site_data: bool,
+    cache: bool,
+    since_ms: Option<i64>,
+    done: impl FnOnce(bool) + 'static,
+) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        done(false);
+        return;
+    };
+    let since = since_ms.map_or(0.0, |ms| ms as f64 / 1000.0);
+    let date = NSDate::dateWithTimeIntervalSince1970(since);
+    let done = once(done);
+    let block = RcBlock::new(move || done(true));
+    // SAFETY: a live data store, WebKit's own type names and a block that outlives the call
+    // (WebKit copies it), on the main thread.
+    unsafe {
+        data_store(identifier, mtm).removeDataOfTypes_modifiedSince_completionHandler(
+            &data_types(site_data, cache),
+            &date,
+            &block,
+        );
+    }
+}
+
+/// Counts the sites (domains) the browser keeps cookies or other site data for, then calls
+/// `done` with it (`None` off the main thread).
+pub fn count_sites(identifier: [u8; 16], done: impl FnOnce(Option<usize>) + 'static) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        done(None);
+        return;
+    };
+    let done = once(done);
+    let block = RcBlock::new(move |records: NonNull<NSArray<WKWebsiteDataRecord>>| {
+        // SAFETY: WebKit passes a valid array for the call's duration.
+        done(Some(unsafe { records.as_ref() }.count()));
+    });
+    // SAFETY: as in `remove_data`.
+    unsafe {
+        data_store(identifier, mtm)
+            .fetchDataRecordsOfTypes_completionHandler(&data_types(true, false), &block);
     }
 }

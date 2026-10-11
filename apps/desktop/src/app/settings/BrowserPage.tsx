@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { BrowserHistory } from "@/app/settings/BrowserHistory";
+import { ClearBrowsingDataDialog } from "@/app/settings/ClearBrowsingDataDialog";
 import {
   SettingsButton,
   SettingsCard,
@@ -36,6 +37,10 @@ export const BROWSER_ROWS = {
     label: "Show full URL",
     description: "Include the path, query, and fragment in the address bar.",
   },
+  data: {
+    label: "Browsing data",
+    description: "Clear the built-in browser's history, cookies, site data, cache and download history.",
+  },
   history: {
     label: "Browsing history",
     description: "View and remove pages you visited in the built-in browser.",
@@ -54,8 +59,26 @@ const TARGETS = [
 export function BrowserPage() {
   const on = useApp((s) => s.settings.browserEnabled);
   const embedded = useApp((s) => s.info?.platform !== "linux");
+  const mac = useApp((s) => s.info?.platform === "macos");
   const [view, setView] = useState<"page" | "history">("page");
-  if (on && embedded && view === "history") return <BrowserHistory onBack={() => setView("page")} />;
+  const [clearing, setClearing] = useState(false);
+  const [cleared, setCleared] = useState(0);
+  const clearDialog = (
+    <ClearBrowsingDataDialog
+      open={clearing}
+      onOpenChange={setClearing}
+      siteData={mac}
+      onCleared={() => setCleared((count) => count + 1)}
+    />
+  );
+  if (on && embedded && view === "history") {
+    return (
+      <>
+        <BrowserHistory onBack={() => setView("page")} onClear={() => setClearing(true)} cleared={cleared} />
+        {clearDialog}
+      </>
+    );
+  }
   return (
     <SettingsPage title="Browser" description={PAGE_DESCRIPTION}>
       <SettingsSection>
@@ -70,12 +93,16 @@ export function BrowserPage() {
             <LinkRow setting="webLinksIn" row={BROWSER_ROWS.webLinks} />
             <LinkRow setting="localLinksIn" row={BROWSER_ROWS.localLinks} />
             <SwitchSetting setting="browserFullUrl" row={BROWSER_ROWS.fullUrl} />
+            <SettingsRow label={BROWSER_ROWS.data.label} description={BROWSER_ROWS.data.description}>
+              <SettingsButton onClick={() => setClearing(true)}>Clear browsing data</SettingsButton>
+            </SettingsRow>
             <SettingsRow label={BROWSER_ROWS.history.label} description={BROWSER_ROWS.history.description}>
               <SettingsButton onClick={() => setView("history")}>Manage</SettingsButton>
             </SettingsRow>
           </SettingsCard>
         </SettingsSection>
       )}
+      {clearDialog}
     </SettingsPage>
   );
 }
