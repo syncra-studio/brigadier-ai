@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Per-worker token and habit metrics of one conversation, from a Brigadier data dir
 (SESSION-FIXES-PLAN.md §3 Q6.7). Rebuilt from routing.sqlite `turn_usage` and the worker event
-streams in brigadier.db; both are opened read-only (`?mode=ro`, or `immutable=1` for a stopped
-daemon's WAL database), so it is safe on any data dir.
+streams in brigadier.db, opened read-only (`?mode=ro`), so it is safe on any data dir. A data dir
+whose daemon has stopped can be read with `--snapshot` (SQLite's `immutable=1`), never a live one.
 
 Per worker (a task; reviews and the thread are listed apart):
 - calls: model calls, one `contextSize` event each (a Claude turn's closing repeat is dropped);
@@ -16,21 +16,26 @@ Per worker (a task; reviews and the thread are listed apart):
 Then the conversation's totals per provider over everything it ran (thread, workers, reviews and
 its project's Brain jobs in the window), and the elapsed time from the request to its answer.
 
-usage: worker_tokens.py <arm-dir> [end_ms] [--json out]
+usage: worker_tokens.py <arm-dir> [end_ms] [--snapshot] [--json out]
          (an A/B arm: <arm>/data, conversation and t0 from <arm>/start.json)
-       worker_tokens.py --data DIR --conversation ID [--from MS] [--to MS] [--json out]"""
+       worker_tokens.py --data DIR --conversation ID [--from MS] [--to MS] [--snapshot] [--json out]"""
 import argparse, collections, glob, json, os, sqlite3, sys
 
 FIELDS = ("input", "cached_input", "cache_write", "output")
 BRAIN_HEADING = "What the Brain knows about this"
 
 
-def connect(path):
+def connect(path, snapshot):
+    """Read-only. `immutable=1` (no locking, no change detection) only for a snapshot whose
+    daemon has stopped (`--snapshot`); a live database that can't be opened `?mode=ro` fails."""
+    if snapshot:
+        return sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
     db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
         db.execute("PRAGMA schema_version").fetchone()
-    except sqlite3.OperationalError:  # a WAL database whose daemon is gone has no -shm to open read-only
-        db = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
+    except sqlite3.OperationalError as error:
+        sys.exit(f"worker_tokens: can't read {path} read-only ({error}); if its daemon has stopped, "
+                 "pass --snapshot")
     return db
 
 
@@ -68,6 +73,7 @@ def main():
     ap.add_argument("--conversation")
     ap.add_argument("--from", dest="start", type=int)
     ap.add_argument("--to", type=int)
+    ap.add_argument("--snapshot", action="store_true", help="the data dir's daemon has stopped")
     ap.add_argument("--json")
     a = ap.parse_args()
     if a.arm:
@@ -80,8 +86,8 @@ def main():
     start = start or 0
     end = end or 2**62
 
-    events = connect(os.path.join(data, "brigadier.db"))
-    usage = connect(os.path.join(data, "routing.sqlite"))
+    events = connect(os.path.join(data, "brigadier.db"), a.snapshot)
+    usage = connect(os.path.join(data, "routing.sqlite"), a.snapshot)
 
     # Usage rows: the thread (no task), reviews (`review:` ids) and workers (tasks).
     rows = collections.defaultdict(collections.Counter)
@@ -128,7 +134,7 @@ def main():
     brains = glob.glob(os.path.join(data, "brains", "*", "brain.sqlite"))
     learned = collections.Counter()
     for path in brains:
-        brain = connect(path)
+        brain = connect(path, a.snapshot)
         for task, n in brain.execute("SELECT task_id, COUNT(DISTINCT node_id) FROM node_sources "
                                      "WHERE task_id IS NOT NULL GROUP BY task_id"):
             learned[task] += n
