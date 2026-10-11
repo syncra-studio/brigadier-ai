@@ -232,3 +232,34 @@ fn safari_is_listed_when_only_the_app_exists() {
     );
     assert!(!profiles[0].has_cookies && !profiles[0].has_history && profiles[0].readable);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_gecko_browser_whose_folder_macos_keeps_locked_is_listed_unreadable() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let apps = tempfile::tempdir().unwrap();
+    let ini = home
+        .path()
+        .join("Library/Application Support/Firefox/profiles.ini");
+    mkdirs(ini.parent().unwrap());
+    std::fs::write(
+        &ini,
+        "[Profile0]\nName=default-release\nIsRelative=1\nPath=Profiles/abcd\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&ini, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // Running as root reads it anyway; nothing to check then.
+    if std::fs::read(&ini).is_ok() {
+        return;
+    }
+    let profiles = discover_in(home.path(), &[apps.path()]);
+    std::fs::set_permissions(&ini, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(
+        summary(&profiles),
+        [("firefox/locked", "Firefox", "Default")]
+    );
+    let firefox = &profiles[0];
+    assert_eq!(firefox.family, Family::Gecko);
+    assert!(firefox.has_cookies && firefox.has_history && !firefox.readable && firefox.is_default);
+}

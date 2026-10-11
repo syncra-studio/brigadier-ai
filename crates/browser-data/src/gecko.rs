@@ -163,8 +163,28 @@ pub(crate) fn parse_profiles_ini(text: &str) -> (Vec<IniProfile>, Option<String>
 }
 
 fn root_profiles(root: &Path, browser: &str, key: &str, app: Option<PathBuf>) -> Vec<Profile> {
-    let Ok(text) = std::fs::read_to_string(root.join("profiles.ini")) else {
-        return Vec::new();
+    let text = match std::fs::read_to_string(root.join("profiles.ini")) {
+        Ok(text) => text,
+        // macOS may keep a browser's folder from other apps (Firefox's, on macOS 27): the file
+        // is there but can't be read. The browser is still listed, unreadable, so the import
+        // asks for Full Disk Access instead of leaving it out.
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            return vec![Profile {
+                id: format!("{key}/locked"),
+                browser: browser.to_owned(),
+                name: "Default".to_owned(),
+                family: Family::Gecko,
+                app_path: app,
+                keychain_service: None,
+                keychain_account: None,
+                has_cookies: true,
+                has_history: true,
+                readable: false,
+                is_default: true,
+                dir: root.to_owned(),
+            }];
+        }
+        Err(_) => return Vec::new(),
     };
     let (entries, install_default) = parse_profiles_ini(&text);
     let mut profiles = Vec::new();
