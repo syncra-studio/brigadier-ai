@@ -90,8 +90,7 @@ How to work:
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
 - Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect. {CHECK_PREFIXES}
 - You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
-- Land finished work with land_phase (a phase isn't needed). What it left unfixed goes to a fix task (role fix, subject that task) or, when only the user can settle it, on a card (ask_user).
-- Every landing and every commit of your own gets one review by the other vendor in the background; nothing waits for it, and a tip already reviewed isn't reviewed again. Its findings arrive as a [review …] message, maybe after your answer or a merge: fix what you agree with (a fix worker, or a tiny fix) and say why not for the rest. Record what became of each finding with record_findings, all in one call (fixed in task-N, open, or dismissed and why): the review line and finish_session show only what you record.
+- Land finished work with land_phase (no phase needed). Each landing and each commit of yours gets one background review by the other vendor (a tip already reviewed isn't reviewed again); its findings come later as a [review …] message. Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list. What only the user can settle goes on a card (ask_user).
 - Your own edits stay tiny: a few lines, only in files you have already read, then a quick check of them. Anything else goes to a worker. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`.
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
 - Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, or you decide or answer something for them, keep it with remember (personal: true for a preference that holds in every project), silently; outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision. code_search, code_refs and project_map find code faster than grepping.
@@ -366,6 +365,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         number: 4,
         thread: "You now have record_findings: after a [review …] message, record what became of each finding, by the id the message lists (R3.2), all in one call: fixed in task-N, open, or dismissed and why. Brigadier no longer counts findings for you: the review line and finish_session show only what you record.",
         worker: "",
+    },
+    Revision {
+        number: 5,
+        thread: "From now on, a landed worker's session is kept until its review's findings settle. Send the findings you record as open back to that worker, all in one fix task (role fix, subject the landed task): it resumes the worker's own session, in its worktree made again. A fix's landing gets no review of its own, only one re-check of the findings you record with `high`; what is still open after that goes to the user as a list in your answer, never to another fix round.",
+        worker: "From now on, after your work lands, its review's findings may come back to you in this same session as a new task: fix them in the worktree it names, commit, and report as usual.",
     },
 ];
 
@@ -752,7 +756,7 @@ const WORKER_VOICE: &str = "
 - Code, comments, docs and files in your outputs folder follow the project's style, not these rules.";
 
 /// What a lead does besides building: its outline when the work is big, and its own review.
-const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. As soon as your work is committed, call review_code once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks, and its findings arrive as a message. Fix each finding you agree with and say why for those you don't. Once your checks pass and the review is clean, or its findings are fixed and the checks they touch rerun, call submit_report at once: no more verifying, re-reading or screenshots after that.";
+const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. As soon as your work is committed, call review_code once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks, and its findings arrive as a message. Fix each finding you agree with and say why for those you don't. Once your checks pass and the review is clean, or its findings are fixed and the checks they touch rerun, call submit_report at once: no more verifying, re-reading or screenshots after that.\n- After your work lands, the findings of its review that the orchestrator keeps open may come back to you in this same session, as a new task.";
 
 /// A worker's pointer to the code index tools (PLAN.md §7).
 const WORKER_CODE_TOOLS: &str = "
@@ -1533,8 +1537,9 @@ mod environment_tests {
         assert!(!worktree.contains("there is no card"));
         // Every byte is paid for on every call: it stays near 12 KiB, code rules included
         // (the old orchestrator's 11,371 bytes, the interview the user wanted built in, and
-        // the suggest_full_access hint of the sandboxed levels, and bug 8's check prefixes).
-        assert!(codex.len() < 12_500, "{}", codex.len());
+        // the suggest_full_access hint of the sandboxed levels, bug 8's check prefixes, and
+        // the review findings the thread records and sends back to their worker, Q7 and Q6.1).
+        assert!(codex.len() < 12_750, "{}", codex.len());
     }
 
     #[test]
@@ -1831,6 +1836,47 @@ mod environment_tests {
             true,
         );
         assert!(prompt.contains("Record what became of each finding with record_findings"));
+    }
+
+    /// SESSION-FIXES-PLAN.md Q6.1: a thread and a worker told the revision before review
+    /// fixes resume landed workers hear exactly that note; the prompts say it too.
+    #[test]
+    fn the_resumed_fix_revision_reaches_open_threads_and_workers() {
+        let added = REVISIONS
+            .iter()
+            .find(|revision| {
+                revision
+                    .thread
+                    .starts_with("From now on, a landed worker's session is kept")
+            })
+            .expect("the review-fix revision");
+        let before = added.number - 1;
+        assert!(
+            revision_note(before, false)
+                .unwrap()
+                .starts_with(&format!("[instructions] {}", added.thread))
+        );
+        assert!(
+            revision_note(before, true)
+                .unwrap()
+                .starts_with(&format!("[instructions] {}", added.worker))
+        );
+        assert!(added.worker.contains("in this same session as a new task"));
+        let prompt = thread(
+            &session("fullAccess"),
+            None,
+            &[],
+            None,
+            Some("/work/session @ brigadier/flow"),
+            ProviderKind::Claude,
+            true,
+        );
+        assert!(prompt.contains(
+            "a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session"
+        ));
+        assert!(prompt.contains("its landing gets only a re-check of the high ones"));
+        assert!(prompt.contains("goes to the user as a list"));
+        assert!(LEAD_STEPS.contains("may come back to you in this same session"));
     }
 
     #[test]

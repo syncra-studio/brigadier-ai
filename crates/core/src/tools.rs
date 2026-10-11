@@ -148,8 +148,9 @@ pub struct DelegateTask {
     /// For `review` tasks: the task whose candidate commit is reviewed, e.g. "task-2". For
     /// `merge` tasks: the task whose work conflicts with the branch it lands on; none to merge
     /// the session's base into the session branch (finish_session says when). For a `fix`:
-    /// the task whose work it fixes (the phase's verifier); it continues from that work and
-    /// lands it with its own.
+    /// the task whose work it fixes. Of a phase's verifier, it continues from that work and
+    /// lands it with its own; of a landed task, it takes that task's open review findings and
+    /// resumes its worker's session.
     #[serde(default)]
     pub subject: Option<String>,
     /// For `operate`: the app, dev build path or URL to work in, and the window if known.
@@ -180,7 +181,7 @@ pub struct DelegateTask {
     pub phase: Option<u32>,
     /// Its part in the request: "lead" (one per phase, the default for implement tasks),
     /// "parallel" (a stream of its own files next to the lead) or "fix" (what a phase's
-    /// verifier left).
+    /// verifier left, or the open review findings of a landed task).
     #[serde(default)]
     pub role: Option<WorkerRole>,
 }

@@ -1001,6 +1001,21 @@ impl SessionManager {
             }
         };
         let waits = wait.is_some();
+        // A fix of landed work resumes its worker's session: on the account it ran on, from
+        // the instructions it last heard (SESSION-FIXES-PLAN.md Q6.1).
+        let resumed = subject.as_ref().filter(|subject| {
+            extra.role == Some(WorkerRole::Fix)
+                && subject.landed.is_some()
+                && subject.review_hold.is_some()
+        });
+        let mut route = route;
+        if let Some(subject) = resumed
+            && route.choice.provider == subject.route.choice.provider
+            && route.choice.model == subject.route.choice.model
+        {
+            route.choice.account = subject.route.choice.account.clone();
+        }
+        let told_revision = resumed.and_then(|subject| subject.told_revision);
         let number = self.core.next_task_number(conversation_id).await?;
         // A plan's reviewer belongs to the plan's request, even when a restart reopens an
         // older plan's review after newer requests.
@@ -1104,8 +1119,9 @@ impl SessionManager {
             messages: Vec::new(),
             rework_rounds: 0,
             native_session: None,
-            told_revision: None,
+            told_revision,
             deaths: Vec::new(),
+            review_hold: None,
             resuming: false,
             takeover: None,
             trial_slot: waits && trial_slot,
@@ -1159,9 +1175,33 @@ impl SessionManager {
             .await?;
         let owner = format!("task:{}", task.id);
         let took_prewarm = self.prewarms.took(&task.id);
-        let workspace = self
-            .prepare_workspace(&owner, &task, subject.as_ref())
-            .await?;
+        // A fix of landed work's review findings resumes the session that did the work, in a
+        // worktree made again where it was (SESSION-FIXES-PLAN.md Q6.1).
+        let held = subject
+            .as_ref()
+            .filter(|subject| super::review_hold::fixes_held(&task, subject));
+        let mut resume = None;
+        let workspace = match held {
+            Some(held) => match self.prepare_fix_workspace(&owner, &task, held).await {
+                Ok(workspace) => {
+                    let same_model = task.route.choice.provider == held.route.choice.provider
+                        && task.route.choice.model == held.route.choice.model;
+                    if same_model {
+                        resume = self.held_session(held).await;
+                    }
+                    workspace
+                }
+                Err(err) => {
+                    tracing::warn!(task = %task.id, error = %err, "a fix starts a fresh session: the landed work's worktree couldn't be made again");
+                    self.prepare_workspace(&owner, &task, subject.as_ref())
+                        .await?
+                }
+            },
+            None => {
+                self.prepare_workspace(&owner, &task, subject.as_ref())
+                    .await?
+            }
+        };
         let task = self
             .update_task(&conversation_id, &task.id, |t| {
                 t.workspace = Some(TaskWorkspace {
@@ -1181,6 +1221,48 @@ impl SessionManager {
             .await?;
         let files = self.worker_files(&task, &workspace.scratch).await;
         drop(fence);
+        if let Some(native_id) = resume {
+            let task = self
+                .update_task(&conversation_id, &task.id, |t| {
+                    t.native_session = Some(native_id.clone());
+                })
+                .await?;
+            let mut text = super::review_hold::workspace_line(
+                &workspace
+                    .worktree
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+                workspace.branch.as_deref().unwrap_or_default(),
+                workspace
+                    .base
+                    .as_ref()
+                    .expect("a fix's workspace has a base"),
+                &workspace.scratch.display().to_string(),
+            );
+            text.push_str("\n\n");
+            text.push_str(&task.spec);
+            for message in &task.messages {
+                text.push_str("\n\n");
+                text.push_str(message);
+            }
+            let resumed = self
+                .launch_worker(
+                    live,
+                    &task,
+                    subject.as_ref(),
+                    Origin::Resume { native_id },
+                    TurnInput::with_files(text, files.clone()),
+                )
+                .await;
+            match resumed {
+                Ok(()) => return Ok(()),
+                // Its session is gone after all: a fresh one starts from the report below.
+                Err(err) => {
+                    tracing::warn!(task = %task.id, error = %err, "a fix starts a fresh session: the landed worker's session couldn't be resumed");
+                }
+            }
+        }
         // What the thread already read goes with its first message (THREAD-PLAN.md Q8 lever 1).
         let pack = match &workspace.worktree {
             Some(worktree) => self.context_pack(&task, worktree).await,
@@ -1191,6 +1273,17 @@ impl SessionManager {
             Some(pack) => format!("{pack}\n\nStart the task."),
             None => String::from("Start the task."),
         };
+        // A fix of landed work whose session can't be resumed starts from its worker's report.
+        if let Some(fixed) = subject
+            .as_ref()
+            .filter(|s| task.role == Some(WorkerRole::Fix) && s.landed.is_some())
+            && let Some(report) = &fixed.report
+        {
+            text.push_str(&format!(
+                "\n\nThe work you fix is task-{}'s, which landed. Its worker's report:\n{}",
+                fixed.number, report.summary
+            ));
+        }
         if !task.messages.is_empty() {
             text.push_str("\n\nLater instructions from the orchestrator, oldest first:\n");
             for message in &task.messages {
@@ -4166,6 +4259,10 @@ impl SessionManager {
         }
         if drop_branch {
             self.drop_task_branch(task).await;
+        }
+        // A fix of landed work ended: the batch it fixed settles.
+        if task.role == Some(WorkerRole::Fix) {
+            self.settle_fixed(task).await;
         }
         self.tasks_lock().remove(&task.id);
     }

@@ -47,6 +47,9 @@ pub enum Subject<'a> {
     /// A lead's outline of work not started yet, against its brief; the checkout holds the
     /// code it starts from.
     Plan { brief: &'a str, outline: &'a str },
+    /// The commits after `base` that fix earlier findings: one targeted re-check of whether
+    /// they are fixed, and of what the fix broke.
+    Recheck { base: &'a str, findings: &'a str },
 }
 
 /// What a review came to.
@@ -74,14 +77,26 @@ pub fn claude_prompt(subject: Subject<'_>) -> String {
             "Review the change in this checkout: `git diff {base}...HEAD`, made of the commits in `git log {base}..HEAD`. Read the whole diff and the code around it. Find what is wrong: bugs, a caller or contract the change breaks, missing error handling, a security problem, stray files, needless scope. Run only `git diff`, `git log` and `git show`; don't build or run tests.\n\n{FINDINGS_FORMAT}"
         ),
         Subject::Plan { .. } => plan_prompt(subject),
+        Subject::Recheck { .. } => recheck_prompt(subject),
     }
+}
+
+/// The prompt for the re-check of a fix of high-severity findings, for either vendor.
+fn recheck_prompt(subject: Subject<'_>) -> String {
+    let (base, findings) = match subject {
+        Subject::Recheck { base, findings } => (base, findings),
+        _ => ("", ""),
+    };
+    format!(
+        "Re-check a fix. The commits in `git log {base}..HEAD` fix these findings of an earlier review:\n{findings}\n\nRead `git diff {base}...HEAD` and the code around it. Say whether each finding is fixed, and find what the fix itself broke. Report only what is still wrong or newly wrong; a finding that is fixed needs no line. Run only `git diff`, `git log` and `git show`; don't build or run tests.\n\n{FINDINGS_FORMAT}"
+    )
 }
 
 /// The prompt for a review of an outline, for either vendor.
 fn plan_prompt(subject: Subject<'_>) -> String {
     let (brief, outline) = match subject {
         Subject::Plan { brief, outline } => (brief, outline),
-        Subject::Code { .. } => ("", ""),
+        _ => ("", ""),
     };
     format!(
         "Review this outline before any code is written. It is advisory: the orchestrator weighs your findings against the brief, and the work may already have started when they arrive.\n\nThe brief:\n{brief}\n\nThe outline:\n{outline}\n\nRead the code the outline names (precise reads, line ranges). Find what would make the work fail or miss its brief: a wrong assumption about the code, a missed caller or file, a step in the wrong order, a \"done when\" it can't check for real, needless scope. Change nothing.\n\n{FINDINGS_FORMAT}"
@@ -110,7 +125,7 @@ pub fn codex_args(subject: Subject<'_>, model: Option<&str>, output: &Path) -> V
         // `exec review` takes no prompt together with `--base`.
         Subject::Code { base } => args.extend(["--base".into(), base.to_owned()]),
         // The prompt comes on stdin.
-        Subject::Plan { .. } => args.push("-".into()),
+        Subject::Plan { .. } | Subject::Recheck { .. } => args.push("-".into()),
     }
     args
 }
@@ -327,8 +342,13 @@ async fn run_codex_review(
     if let Err(err) = recorded {
         tracing::warn!(pid = process.pid(), error = %err, "could not record a review's process");
     }
-    if let Subject::Plan { .. } = run.subject
-        && let Err(err) = process.write_line(&plan_prompt(run.subject)).await
+    let prompt = match run.subject {
+        Subject::Plan { .. } => Some(plan_prompt(run.subject)),
+        Subject::Recheck { .. } => Some(recheck_prompt(run.subject)),
+        Subject::Code { .. } => None,
+    };
+    if let Some(prompt) = prompt
+        && let Err(err) = process.write_line(&prompt).await
     {
         process.shutdown(EXIT_GRACE).await;
         return Err(format!("Codex didn't take the review: {err}"));
@@ -1001,5 +1021,20 @@ exit 1"#
             outline: "1. Parse it.",
         });
         assert!(plan.contains("Add a flag.") && plan.contains("1. Parse it."));
+    }
+
+    #[test]
+    fn a_recheck_names_its_range_and_findings_and_codex_reads_it_from_stdin() {
+        let subject = Subject::Recheck {
+            base: "abc123",
+            findings: "R2.1: [P1] Old notes no longer load — NOTES.md:1",
+        };
+        let prompt = claude_prompt(subject);
+        assert!(prompt.contains("git log abc123..HEAD"));
+        assert!(prompt.contains("R2.1: [P1] Old notes no longer load"));
+        assert!(prompt.contains("No findings."));
+        let args = codex_args(subject, None, Path::new("/data/review.md"));
+        assert!(!args.iter().any(|arg| arg == "review" || arg == "--base"));
+        assert_eq!(args.last().map(String::as_str), Some("-"));
     }
 }

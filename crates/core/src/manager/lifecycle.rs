@@ -565,6 +565,8 @@ impl SessionManager {
                 self.dispose_task(&task, TaskState::Stopped).await;
             }
         }
+        // What landed workers kept for their reviews' findings goes too.
+        self.settle_all_holds(id).await;
         let (owner, _) = conversation_owner(conversation);
         self.grants.revoke_owner(&owner);
         let mut owners = vec![

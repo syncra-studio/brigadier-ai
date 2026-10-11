@@ -192,7 +192,37 @@ impl SessionManager {
                         )));
                     }
                 };
-                let pin = pin(args.provider.as_deref(), args.model, Some(effort))?;
+                // A fix of landed work resumes the worker that did it, on its model; one fix
+                // at a time resumes a session (SESSION-FIXES-PLAN.md Q6.1).
+                let held = subject.as_ref().filter(|subject| {
+                    role == Some(WorkerRole::Fix)
+                        && subject.landed.is_some()
+                        && subject.review_hold.is_some()
+                });
+                if let Some(held) = held
+                    && let Some(fix) = crate::heap(|| self.core.board(id))
+                        .await?
+                        .tasks
+                        .values()
+                        .find(|task| {
+                            !task.state.is_final()
+                                && task.role == Some(WorkerRole::Fix)
+                                && task.subject.as_ref() == Some(&held.id)
+                        })
+                {
+                    return Err(Error::Invalid(format!(
+                        "task-{} fixes task-{}'s findings already: send it more with message_worker",
+                        fix.number, held.number
+                    )));
+                }
+                let pin = match held {
+                    Some(held) => Some(brigadier_router::Pin {
+                        provider: Some(held.route.choice.provider),
+                        model: held.route.choice.model.clone(),
+                        effort: Some(effort),
+                    }),
+                    None => pin(args.provider.as_deref(), args.model, Some(effort))?,
+                };
                 let areas = task_areas(&args.areas)?;
                 let floor = match args.quality.as_deref().map(str::trim) {
                     None | Some("" | "normal") => None,

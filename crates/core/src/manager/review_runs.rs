@@ -57,6 +57,8 @@ struct NewReview {
     repo: PathBuf,
     /// A plan review's brief and outline.
     plan: Option<(String, String)>,
+    /// A re-check's findings: the commits fix them (SESSION-FIXES-PLAN.md Q6.1).
+    recheck: Option<String>,
 }
 
 /// The cleanup-ledger owner of a review's checkout and processes; also the task its tokens
@@ -226,6 +228,7 @@ impl SessionManager {
             }
         };
         let author = self.phase_author(task).await;
+        let landed = tip.0.clone();
         let started = self
             .start_review(NewReview {
                 conversation_id: task.conversation_id.clone(),
@@ -241,6 +244,74 @@ impl SessionManager {
                 notify: ReviewFor::Orchestrator,
                 repo,
                 plan: None,
+                recheck: None,
+            })
+            .await;
+        match started {
+            Ok((review, true)) if matches!(review.state, ReviewState::Failed { .. }) => {
+                self.tell_review(&review, None).await;
+                self.settle_review_batch(&task.conversation_id, &review.tip)
+                    .await;
+            }
+            // The range was reviewed before it landed, for its worker, who weighed the
+            // findings: none come back to the thread now.
+            Ok((review, false)) if review.state != ReviewState::Running => {
+                self.settle_review_batch(&task.conversation_id, &review.tip)
+                    .await;
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(task = %task.id, error = %err, "a landing could not be reviewed");
+                self.settle_review_batch(&task.conversation_id, &landed)
+                    .await;
+            }
+        }
+    }
+
+    /// The one targeted re-check of `fix`'s landing, `from..tip`, when the thread marked a
+    /// finding of the review of `subject`'s landing high: whether those findings are fixed,
+    /// and what the fix broke. None otherwise (SESSION-FIXES-PLAN.md Q6.1).
+    pub(crate) async fn recheck_fix(&self, fix: &Task, subject: &Task, from: Oid, tip: Oid) {
+        let Ok(board) = self.core.board(&fix.conversation_id).await else {
+            return;
+        };
+        let high: Vec<Finding> = board
+            .reviews
+            .values()
+            .filter(|review| {
+                review.kind == ReviewKind::Code && Some(&review.tip) == subject.landed.as_ref()
+            })
+            .flat_map(|review| &review.items)
+            .filter(|item| item.high && !matches!(item.status, FindingStatus::Dismissed { .. }))
+            .cloned()
+            .collect();
+        if high.is_empty() {
+            return;
+        }
+        let repo = match self.task_repo(fix) {
+            Ok(repo) => repo,
+            Err(err) => {
+                tracing::warn!(task = %fix.id, error = %err, "a fix could not be re-checked");
+                return;
+            }
+        };
+        let author = self.phase_author(fix).await;
+        let started = self
+            .start_review(NewReview {
+                conversation_id: fix.conversation_id.clone(),
+                request_id: fix.request_id.clone(),
+                task_id: Some(fix.id.clone()),
+                kind: ReviewKind::Code,
+                base: from,
+                tip,
+                author: Author {
+                    provider: author.route.choice.provider,
+                    model: author.route.choice.model.clone(),
+                },
+                notify: ReviewFor::Orchestrator,
+                repo,
+                plan: None,
+                recheck: Some(listed(&high)),
             })
             .await;
         match started {
@@ -249,7 +320,7 @@ impl SessionManager {
             }
             Ok(_) => {}
             Err(err) => {
-                tracing::warn!(task = %task.id, error = %err, "a landing could not be reviewed");
+                tracing::warn!(task = %fix.id, error = %err, "a fix could not be re-checked");
             }
         }
     }
@@ -276,6 +347,7 @@ impl SessionManager {
                 notify: ReviewFor::Orchestrator,
                 repo,
                 plan: None,
+                recheck: None,
             })
             .await;
         match started {
@@ -322,6 +394,7 @@ impl SessionManager {
                 notify: ReviewFor::Orchestrator,
                 repo,
                 plan: Some((brief, outline.to_owned())),
+                recheck: None,
             })
             .await;
         match started {
@@ -373,6 +446,7 @@ impl SessionManager {
                 notify: ReviewFor::Orchestrator,
                 repo: workspace.repo,
                 plan: Some((args.brief, args.plan)),
+                recheck: None,
             })
             .await?;
         let reviewer = review.reviewer.label();
@@ -486,6 +560,7 @@ impl SessionManager {
                 },
                 repo,
                 plan: None,
+                recheck: None,
             })
             .await?;
         let reviewer = review.reviewer.label();
@@ -591,7 +666,14 @@ impl SessionManager {
                 Err(brigadier_review::STOPPED.to_owned())
             } else {
                 manager
-                    .run_review(&started, &new.repo, new.plan.as_ref(), effort, stop)
+                    .run_review(
+                        &started,
+                        &new.repo,
+                        new.plan.as_ref(),
+                        new.recheck.as_deref(),
+                        effort,
+                        stop,
+                    )
                     .await
             };
             manager
@@ -658,6 +740,7 @@ impl SessionManager {
         review: &ReviewRun,
         repo: &Path,
         plan: Option<&(String, String)>,
+        recheck: Option<&str>,
         effort: Option<String>,
         stop: tokio_util::sync::CancellationToken,
     ) -> std::result::Result<Review, String> {
@@ -683,8 +766,10 @@ impl SessionManager {
             Err(why) => Err(why),
             Ok(()) if stop.is_cancelled() => Err(brigadier_review::STOPPED.to_owned()),
             Ok(()) => {
-                self.review_in(review, &owner, &checkout, &scratch, plan, effort, stop)
-                    .await
+                self.review_in(
+                    review, &owner, &checkout, &scratch, plan, recheck, effort, stop,
+                )
+                .await
             }
         };
         let leftovers = self.runtime.ledger().dispose(&owner).await;
@@ -757,12 +842,17 @@ impl SessionManager {
         checkout: &Path,
         scratch: &Path,
         plan: Option<&(String, String)>,
+        recheck: Option<&str>,
         effort: Option<String>,
         stop: tokio_util::sync::CancellationToken,
     ) -> std::result::Result<Review, String> {
-        let subject = match plan {
-            Some((brief, outline)) => Subject::Plan { brief, outline },
-            None => Subject::Code { base: &review.base },
+        let subject = match (plan, recheck) {
+            (Some((brief, outline)), _) => Subject::Plan { brief, outline },
+            (None, Some(findings)) => Subject::Recheck {
+                base: &review.base,
+                findings,
+            },
+            (None, None) => Subject::Code { base: &review.base },
         };
         if self.reviews_hosted(review.reviewer) {
             return tokio::select! {
@@ -1011,6 +1101,13 @@ impl SessionManager {
                 .await;
         }
         self.tell_review(&ended, text.as_deref()).await;
+        // Nothing comes back from a landing's review that found nothing or couldn't run.
+        if ended.kind == ReviewKind::Code
+            && matches!(ended.state, ReviewState::Clean | ReviewState::Failed { .. })
+        {
+            self.settle_review_batch(&ended.conversation_id, &ended.tip)
+                .await;
+        }
     }
 
     /// Hands a review's outcome to whoever asked: the worker while it still works, else the
@@ -1259,6 +1356,17 @@ impl SessionManager {
         for review in &changed {
             self.store_review(review).await?;
         }
+        drop(_held);
+        // A review the thread left nothing open of has no fix to come back for.
+        for review in &changed {
+            if review.kind == ReviewKind::Code
+                && review.items.iter().all(|item| {
+                    !matches!(item.status, FindingStatus::New | FindingStatus::Open { .. })
+                })
+            {
+                self.settle_review_batch(conversation_id, &review.tip).await;
+            }
+        }
         let unrecorded: Vec<String> = changed
             .iter()
             .flat_map(|review| &review.items)
@@ -1329,6 +1437,9 @@ impl SessionManager {
             // Its worker was stopped by the restart: the orchestrator hears it instead.
             review.notify = ReviewFor::Orchestrator;
             self.tell_review(&review, None).await;
+            if review.kind == ReviewKind::Code {
+                self.settle_review_batch(conversation_id, &review.tip).await;
+            }
         }
     }
 

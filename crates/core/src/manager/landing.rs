@@ -743,11 +743,36 @@ impl SessionManager {
         {
             held.merged = Some(new_tip.clone());
         }
+        // A fix of landed work's review findings gets no review of its own, only the
+        // targeted re-check of a finding the thread marked high (SESSION-FIXES-PLAN.md Q6.1).
+        let fixed = match (&task.role, &task.subject) {
+            (Some(crate::work::WorkerRole::Fix), Some(subject)) => self
+                .task_by_id(&task.conversation_id, subject)
+                .await
+                .ok()
+                .filter(|subject| subject.landed.is_some()),
+            _ => None,
+        };
+        // Otherwise the landed workers stay resumable for their review's findings, kept
+        // before the review starts so that its end always finds them.
+        let mut held = std::collections::HashSet::new();
+        if fixed.is_none() {
+            for landed in &tasks {
+                if self.hold_for_review(landed, target).await {
+                    held.insert(landed.id.clone());
+                }
+            }
+        }
         // Its one review, by the other vendor, starts now and runs on its own.
         {
             let manager = self.arc();
             let (task, from, tip) = (task.clone(), from.clone(), new_tip.clone());
-            self.spawn(async move { manager.review_landing(&task, from, tip).await });
+            match fixed {
+                Some(subject) => {
+                    self.spawn(async move { manager.recheck_fix(&task, &subject, from, tip).await })
+                }
+                None => self.spawn(async move { manager.review_landing(&task, from, tip).await }),
+            }
         }
         for landed in &tasks {
             let updated = self
@@ -804,6 +829,8 @@ impl SessionManager {
             let branch = landed.workspace.as_ref().and_then(|w| w.branch.clone());
             let rebuilt = rebuilt.clone();
             self.dispose_task(landed, TaskState::Landed).await;
+            // A held branch goes when its batch settles.
+            let branch = branch.filter(|_| !held.contains(&landed.id));
             if let (Some(branch), Ok(repo)) = (branch, self.task_repo(landed)) {
                 self.forget_branch(&repo, &branch);
                 let git = self.git.clone();
@@ -1565,6 +1592,8 @@ impl SessionManager {
         // The session's work is merged: what showed it stops, and its worktree and branch go
         // (THREAD-PLAN.md Q9).
         self.stop_previews(id, "the session was merged").await;
+        // The landed workers kept for their reviews' findings are done with too.
+        self.settle_all_holds(id).await;
         let released = self.release_merged_session(id).await;
         Ok(format!(
             "[finished] As the user asked: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{reviews}{released}",

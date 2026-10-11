@@ -832,6 +832,11 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(skip)]
     pub deaths: Vec<String>,
+    /// Landed, with its CLI session and branch kept for its review's findings: the branch it
+    /// landed on. Cleared when the batch settles (SESSION-FIXES-PLAN.md Q6.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub review_hold: Option<String>,
     /// While its CLI session starts again after it was interrupted.
     #[serde(default)]
     pub resuming: bool,
