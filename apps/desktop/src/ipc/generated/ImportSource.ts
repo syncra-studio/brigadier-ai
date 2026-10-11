@@ -21,7 +21,8 @@ name: string, family: ImportFamily,
  */
 icon: string | null, state: ImportState, 
 /**
- * Its profiles, the default first; empty unless the state is ready.
+ * Its profiles that keep cookies, the default first; empty unless it is ready or needs
+ * Keychain access.
  */
 profiles: Array<ImportSourceProfile>, 
 /**
