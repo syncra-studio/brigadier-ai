@@ -1051,7 +1051,7 @@ impl super::SessionManager {
         // The user's yes to watching it: carried on from the watch whose fix this is, or the
         // card they answered since they last wrote.
         let board = self.core.board(id).await?;
-        let spoke = self.latest_user_message_at(id, &board).await?;
+        let spoke = self.user_wrote_at(id, &board).await?;
         let consent = watch_consent(&board, &repo, &branch, spoke);
         self.ci_row(
             id,

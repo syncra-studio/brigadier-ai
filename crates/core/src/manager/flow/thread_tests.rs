@@ -2835,3 +2835,91 @@ async fn a_ci_fixs_push_under_the_users_yes_to_watching_goes_through_and_then_as
         .unwrap();
     flow.stop().await;
 }
+
+/// A message the user queues while the CI fix's turn runs ends their yes to watching CI as a
+/// sent one does: the fix's push is their card again, and the reviewer isn't told of the yes.
+#[tokio::test]
+async fn a_message_queued_while_a_ci_fix_runs_ends_the_yes_its_push_would_go_under() {
+    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+    let pushes = Arc::new(tokio::sync::Semaphore::new(0));
+    let (reviewer_log, gate) = (asked.clone(), pushes.clone());
+    let flow = Flow::start(
+        "ci-repush-queued",
+        Options {
+            permission: PermissionLevel::ApproveForMe,
+            thread: ProviderKind::Codex,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let (asked, gate) = (reviewer_log.clone(), gate.clone());
+            async move {
+                if turn
+                    .prompt
+                    .starts_with("You review one request of a coding agent")
+                {
+                    asked.lock().unwrap().push(turn.input.clone());
+                    return Reply::text(
+                        if turn
+                            .input
+                            .contains("the user answered \u{201c}Watch\u{201d}")
+                        {
+                            r#"{"allow": true, "reason": "a CI fix to the watched branch"}"#
+                        } else {
+                            r#"{"allow": false, "reason": "it pushes to a remote"}"#
+                        },
+                    );
+                }
+                if turn.is_orchestrator() && turn.input.contains("Fix CI.") {
+                    gate.acquire().await.unwrap().forget();
+                    turn.ask_approval("git push origin fix", "git").await;
+                }
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+    git(
+        &flow.repo,
+        &["remote", "add", "origin", "git@github.com:o/n.git"],
+    );
+    flow.say("Fix CI.").await;
+    flow.until("the turn runs", |board| {
+        board.run == crate::work::RunState::Running
+    })
+    .await;
+    let consent = crate::work::CiConsent {
+        card: crate::model::CardId("card-1".into()),
+        question: "Watch CI for 97c298d5?".into(),
+        answer: "Watch".into(),
+        answered_at_ms: crate::now_ms(),
+    };
+    flow.manager
+        .orchestrator_step(
+            &flow.conversation,
+            OrchestratorStepKind::CiWatch {
+                repo: "o/n".into(),
+                branch: "fix".into(),
+                sha: "aaaa1111".into(),
+                waiting: false,
+                runs: Vec::new(),
+                result: Some("failed".into()),
+                consent: Some(consent),
+            },
+        )
+        .await;
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    flow.say("Wait, don't push anything yet.").await;
+    flow.until("the message waits", |board| !board.queue.items.is_empty())
+        .await;
+    pushes.add_permits(1);
+    flow.until("the push's card", |board| {
+        board
+            .approvals
+            .values()
+            .any(|approval| approval.state == CardState::Pending)
+    })
+    .await;
+    let seen = asked.lock().unwrap()[0].clone();
+    assert!(!seen.contains("the user answered"), "{seen}");
+    flow.stop().await;
+}

@@ -346,7 +346,7 @@ impl SessionManager {
         workspace: Option<&Path>,
     ) -> Option<String> {
         let board = self.core.board(id).await.ok()?;
-        let spoke = self.latest_user_message_at(id, &board).await.ok()?;
+        let spoke = self.user_wrote_at(id, &board).await.ok()?;
         let consents = super::ci::live_ci_consents(&board, spoke);
         if consents.is_empty() {
             return None;
